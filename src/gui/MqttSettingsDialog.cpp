@@ -395,7 +395,11 @@ void MqttSettingsDialog::loadPasswordFromKeychain()
 {
 #ifdef HAVE_KEYCHAIN
     auto& settings = AppSettings::instance();
-    const QString legacy = settings.value(legacyMqttPasswordSettingKey()).toString();
+    // A password diverted by the XML import (RFC #4603) normally reaches the
+    // keychain during the import; the session vault covers a failed write.
+    QString legacy = settings.takeSessionCredential(mqttKeychainKey());
+    if (legacy.isEmpty())
+        legacy = settings.value(legacyMqttPasswordSettingKey()).toString();
     if (!legacy.isEmpty()) {
         m_passEdit->setText(legacy);
         auto* job = new QKeychain::WritePasswordJob(mqttKeychainService());
@@ -433,10 +437,16 @@ void MqttSettingsDialog::loadPasswordFromKeychain()
     });
     job->start();
 #else
-    const QString legacy = AppSettings::instance().value(legacyMqttPasswordSettingKey()).toString();
+    // No keychain: session-only (RFC #4603 — credentials never persist in the
+    // settings store). take + set keeps it available for later dialog opens.
+    auto& settings = AppSettings::instance();
+    QString legacy = settings.takeSessionCredential(mqttKeychainKey());
+    if (legacy.isEmpty())
+        legacy = settings.value(legacyMqttPasswordSettingKey()).toString();
     if (!legacy.isEmpty()) {
-        qCWarning(lcMqtt) << "MqttSettingsDialog: HAVE_KEYCHAIN not set - MQTT password "
-                             "remains in plaintext AppSettings";
+        settings.setSessionCredential(mqttKeychainKey(), legacy);
+        qCWarning(lcMqtt) << "MqttSettingsDialog: HAVE_KEYCHAIN not set - MQTT "
+                             "password is session-only";
         m_passEdit->setText(legacy);
     }
 #endif
@@ -475,9 +485,13 @@ void MqttSettingsDialog::savePasswordToKeychain(const QString& password)
     });
     job->start();
 #else
-    qCWarning(lcMqtt) << "MqttSettingsDialog: HAVE_KEYCHAIN not set - falling back to "
-                         "plaintext AppSettings for MQTT password";
-    AppSettings::instance().setValue(legacyMqttPasswordSettingKey(), password);
+    // No keychain: session-only (RFC #4603 — never a plaintext copy in the
+    // settings store). Any stale legacy row is cleared while we're here.
+    qCWarning(lcMqtt) << "MqttSettingsDialog: HAVE_KEYCHAIN not set - MQTT "
+                         "password is session-only and must be re-entered "
+                         "next launch";
+    AppSettings::instance().setSessionCredential(mqttKeychainKey(), password);
+    AppSettings::instance().remove(legacyMqttPasswordSettingKey());
     AppSettings::instance().save();
 #endif
 }

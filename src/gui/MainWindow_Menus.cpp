@@ -36,6 +36,7 @@
 #include "MidiMappingDialog.h"
 #include "ProfileImportExportDialog.h"
 #include "ProfileManagerDialog.h"
+#include "SettingsBrowserDialog.h"
 #include "ThemeEditorDialog.h"
 #include "TxBandDialog.h"
 #include "UlanziDialMapperDialog.h"
@@ -80,6 +81,8 @@ void MainWindow::buildMenuBar()
     auto* fileMenu = menuBar()->addMenu("&File");
 
     auto* waveformsAct = fileMenu->addAction("Waveforms...");
+    m_waveformsAction = waveformsAct;   // hidden by applyCapabilitiesToUi()
+                                       // on a radio with no installable waveforms
     waveformsAct->setMenuRole(QAction::NoRole);
     connect(waveformsAct, &QAction::triggered, this, [this] {
         showOrRaisePersistent(m_waveformsDialog, &m_radioModel);
@@ -499,6 +502,8 @@ void MainWindow::buildMenuBar()
         connect(dlg, &QDialog::finished, this, refreshSpots);  // refresh on close
     });
     auto* multiFlexAction = settingsMenu->addAction("multiFLEX...");
+    m_multiFlexAction = multiFlexAction;   // hidden by applyCapabilitiesToUi()
+                                           // on a single-client backend
     connect(multiFlexAction, &QAction::triggered,
             this, &MainWindow::showMultiFlexDialog);
     // m_titleBar connect deferred — see after TitleBar creation (~line 2530)
@@ -613,6 +618,13 @@ void MainWindow::buildMenuBar()
     connect(dspAction, &QAction::triggered, this, [this] {
         ensureAetherDspDialog();
     });
+
+    auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
+    settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
+                                                          // title — macOS #883
+    connect(settingsBrowserAction, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_settingsBrowserDialog);
+    });
     // RX chain DSP tile double-click also opens the full AetherDSP
     // Settings dialog — same entry point as the Settings menu action.
     if (m_appletPanel && m_appletPanel->clientChainApplet()) {
@@ -674,6 +686,8 @@ void MainWindow::buildMenuBar()
     }
 #else
     auto* autoDaxAction = settingsMenu->addAction("Autostart DAX with AetherSDR");
+    m_autoDaxAction = autoDaxAction;   // hidden by applyCapabilitiesToUi() on a
+                                       // radio that reports no DAX streams
     autoDaxAction->setCheckable(true);
     autoDaxAction->setChecked(
         AppSettings::instance().value("AutoStartDAX", "False").toString() == "True");

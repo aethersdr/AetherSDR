@@ -294,6 +294,69 @@ int main()
         return fail("AGC command formatting is wrong");
     }
 
+    // #4423: Flex reports the CW passband symmetric about the carrier (e.g.
+    // -400..400, confirmed from a real session log) and applies the sidetone
+    // pitch as a DSP shift AFTER that filter. The Kiwi has no such shift:
+    // 'freq' is the BFO and low_cut/high_cut are relative to it, so sending
+    // freq=carrier with an unshifted passband puts the carrier at 0 Hz (a DC
+    // thump, not a tone). Both the BFO and the passband must move by the
+    // pitch so the carrier lands audibly inside it.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 600)
+            != QStringLiteral("SET mod=cw low_cut=200 high_cut=1000 freq=6999.400")
+        || formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 0)
+            != QStringLiteral("SET mod=cw low_cut=-400 high_cut=400 freq=7000.000")
+        || formatSoundTuneCommand(QStringLiteral("usb"), 100, 2900, 7000.0, 600)
+            != QStringLiteral("SET mod=usb low_cut=100 high_cut=2900 freq=7000.000")
+        || formatSoundTuneCommand(QStringLiteral("lsb"), -2900, -100, 7000.0, 600)
+            != QStringLiteral("SET mod=lsb low_cut=-2900 high_cut=-100 freq=7000.000")) {
+        return fail("sound tune command formatting is wrong");
+    }
+
+    // A pitch near the top of TransmitModel's 100-6000 Hz CW pitch range
+    // would otherwise slide high_cut past the Kiwi's ~6 kHz audio Nyquist,
+    // putting the tone at the very edge of (or past) the passband and
+    // reproducing #4423's silence with a different root cause. The shift
+    // must clamp so high_cut never exceeds kKiwiMaxAudioBandwidthHz.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 6000)
+        != QStringLiteral("SET mod=cw low_cut=5200 high_cut=6000 freq=6994.400")) {
+        return fail("sound tune command should clamp CW shift to the Kiwi audio Nyquist");
+    }
+
+    // kiwiMode() collapses CWU/CWL to "cw", so the sideband must be plumbed
+    // in separately. In CWL the Flex listens below the carrier, so the Kiwi
+    // shift must mirror CWU: BFO moves up (freq increases) and the passband
+    // slides down, landing the tone at -cwPitchHz instead of +cwPitchHz, so
+    // adjacent-signal rejection matches which side of the carrier the Flex
+    // itself demodulates.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 600,
+                               /*cwLowerSideband=*/true)
+            != QStringLiteral("SET mod=cw low_cut=-1000 high_cut=-200 freq=7000.600")
+        || formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 6000,
+                                  /*cwLowerSideband=*/true)
+            != QStringLiteral("SET mod=cw low_cut=-6000 high_cut=-5200 freq=7005.600")) {
+        return fail("sound tune command should mirror the CW shift for CWL");
+    }
+
+    // The Nyquist clamp must track the caller's actual negotiated sound-
+    // stream rate, not a fixed ~12 kHz assumption — the Kiwi renegotiates
+    // audio_rate per connection (8-48 kHz), so a receiver running at a
+    // lower rate has a lower Nyquist than kKiwiMaxAudioBandwidthHz.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 3800,
+                               /*cwLowerSideband=*/false, /*maxAudioBandwidthHz=*/4000)
+        != QStringLiteral("SET mod=cw low_cut=3200 high_cut=4000 freq=6996.400")) {
+        return fail("sound tune command should clamp CW shift to the caller's negotiated Nyquist");
+    }
+
+    // A passband already outside the negotiated Nyquist (e.g. a filter
+    // width that predates a rate renegotiation) must leave the shift at
+    // zero rather than flip sign on a negative headroom and push the
+    // passband further out of range.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -4500, 4500, 7000.0, 600,
+                               /*cwLowerSideband=*/false, /*maxAudioBandwidthHz=*/4000)
+        != QStringLiteral("SET mod=cw low_cut=-4500 high_cut=4500 freq=7000.000")) {
+        return fail("sound tune command should floor a negative Nyquist headroom at zero shift");
+    }
+
     const QVector<MsgToken> msgTokens = parseMsgTokens(
         QStringLiteral("MSG wb_only password_timeout inactivity_timeout=15 "
                        "kiwi_kick=1%2coperator%20request badp=5 =ignored"));

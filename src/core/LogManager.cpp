@@ -85,6 +85,22 @@ LogManager::LogManager()
         {"aether.qrz",        "QRZ Lookup",   "QRZ.com callsign lookups: session, cache, CW callsign spotting, photos"},
         {"aether.clock",      "AetherClock",  "WWV/WWVB time-signal decoder: state transitions, per-second alignment, frame decodes, voter verdicts"},
         {"aether.hl2",        "Hermes-Lite 2", "HL2 backend: band changes, J16 companion-filter selection, LNA gain, and radio health telemetry"},
+        // Registered so the TRANSMIT telemetry is reachable at all. The category
+        // is declared locally in Hl2Backend.cpp and was never listed here, so
+        // applyFilterRules()'s blanket "aether.*.debug=false" switched it off and
+        // no UI toggle could switch it back on. What that hid is the TX IQ FIFO
+        // depth plus its underflow/overflow flags — which the backend's own
+        // comment calls "the most important number in the protocol" and "what
+        // distinguishes 'the audio is wrong' from 'the audio never arrived'".
+        // An underflow is exactly what a mid-transmission click sounds like,
+        // and it was undiagnosable from a log file.
+        // SEPARATE TOGGLE from "Hermes-Lite 2", deliberately: the FIFO depth is
+        // sampled per telemetry frame, so this is high-rate next to the rest of
+        // the HL2 category and is not something to leave on by default. Said
+        // explicitly in the description because the two labels otherwise read as
+        // one control, and someone chasing transmit telemetry will tick the
+        // wrong box and conclude the logging is still broken.
+        {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry: TX IQ FIFO depth with underflow/overflow flags, and forward/reflected power counts. Separate toggle — ticking \"Hermes-Lite 2\" does NOT enable this (high-rate)"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
@@ -137,8 +153,27 @@ void LogManager::applyFilterRules()
     rules << "aether.*.debug=false";
     rules << "aether.audio.summary.info=true";
     for (const auto& c : m_categories) {
-        if (c.enabled)
+        if (c.enabled) {
             rules << QString("%1.debug=true").arg(c.id);
+            // …and info, which is NOT implied by enabling debug.
+            //
+            // Qt filter rules are per-LEVEL, not a threshold: "x.debug=true"
+            // turns on debug and leaves every other level at the category's
+            // declared default. Most categories here are declared
+            // Q_LOGGING_CATEGORY(…, QtWarningMsg), so their info tier was off
+            // and no UI toggle could reach it — ticking the category produced
+            // its DEBUG messages while silently withholding its INFO ones,
+            // which are the more important half.
+            //
+            // Found while trying to diagnose transmit clicking from a user log:
+            // TciServer::logTxAudioSummary() is a qCInfo(lcCat) carrying
+            // blocks / requested48k / effective48k / peak / rms / clips — the
+            // numbers that answer "is the TX feed underrunning?" — and it had
+            // never once appeared in a log file. Neither had the 16 qCInfo
+            // calls on lcDax. Two dozen categories are declared QtWarningMsg,
+            // so this was most of the codebase's INFO logging.
+            rules << QString("%1.info=true").arg(c.id);
+        }
     }
     QLoggingCategory::setFilterRules(rules.join('\n'));
 }

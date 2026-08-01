@@ -27,8 +27,10 @@ class TokenEditorWidget;
 //     themeChanged() and live-repaints every widget registered through
 //     applyStyleSheet().
 //   * "Save As…" prompts for a name and writes m_tokens to
-//     ~/.config/AetherSDR/themes/<name>.json via saveCurrentThemeAs().
-//     The new theme is registered + made active immediately.
+//     <GenericConfigLocation>/AetherSDR/themes/<name>.json via
+//     saveCurrentThemeAs() — `~/.config` on Linux, `%LOCALAPPDATA%` on
+//     Windows, `~/Library/Preferences` on macOS.  The new theme is
+//     registered + made active immediately.
 //
 // Deferred to follow-on PRs:
 //   * Inspector mode (click-on-widget to find tokens that paint it)

@@ -49,6 +49,13 @@ public:
 
     ClockAlignmentWidget* alignmentWidget() const { return m_scope; }
 
+    // DAX-surface gate, driven by AppletPanel::setDaxStreamsVisible (i.e. by
+    // RadioCapabilities::hasDaxStreams). On a radio with no DAX plane the
+    // chooser cannot do anything and the amber "no DAX channel" banner names
+    // a cause that is not the cause — while audio flows fine over the
+    // seam-native feed. Hiding both is what makes the applet honest there.
+    void setDaxControlsVisible(bool visible);
+
 public slots:
     // AppletPanel::setSlice forwarding (per-applet, explicit).
     void setSlice(SliceModel* slice);
@@ -116,6 +123,7 @@ private:
     QPushButton* m_drawerToggle{nullptr};
     GuardedComboBox* m_presetCombo{nullptr};
     GuardedComboBox* m_daxCombo{nullptr};  // DAX chooser for the selected slice
+    bool m_daxControlsVisible{true};       // false = radio declares no DAX plane
     QPushButton* m_tuneButton{nullptr};
     QPushButton* m_startStopButton{nullptr};
     QLabel* m_presetNote{nullptr};  // per-preset dial note (+ WWVB AGC note)

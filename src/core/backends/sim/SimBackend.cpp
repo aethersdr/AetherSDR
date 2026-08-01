@@ -173,7 +173,17 @@ void SimBackend::onAudioTick()
         const QVector<float> frame = m_keyed
             ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
             : m_audio.mixFrame();
-        emit audioFrameReady(toStereoBytes(frame));
+        const QByteArray stereo = toStereoBytes(frame);
+        emit audioFrameReady(stereo);
+        // Per-slice audio too, on this backend's single slice.
+        //
+        // Not optional: the TCI receiver channels are fed from
+        // sliceAudioFrameReady, because the mixed feed cannot say which slice a
+        // buffer belongs to. That routing used to be a hardcoded "channel 1"
+        // fed from audioFrameReady, which worked only while every in-process
+        // backend had exactly one receiver. Demo mode still does — but it has to
+        // SAY so, or TCI audio in demo mode goes silent.
+        emit sliceAudioFrameReady(kSliceId, stereo);
 
         // A panadapter row a few times a second (not every audio frame — the
         // display updates far slower than audio). ~20 fps at the 5.33 ms frame ≈
@@ -294,6 +304,18 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
+    // The simulator has no profile store to list, load or save into.
+    caps.hasProfiles = false;
+    // Synthetic audio only; nothing to route to a virtual device.
+    caps.hasDaxStreams = false;
+    caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
+    caps.hasWaveforms = false;
+    caps.hasMultiClientSessions = false;
+    caps.hasGpsLocation = false;         // synthetic radio has no position source
+    caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
+    // The demo radio regenerates its synthetic scene on every connect; there
+    // is no operating state worth resurrecting across sessions.
+    caps.clientSettingsDomains = {};
     return caps;
 }
 

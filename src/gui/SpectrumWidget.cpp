@@ -1094,9 +1094,9 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
             state.waterfallHistory.allocatedBytes());
         cachedWaterfallHistoryBytes += static_cast<quint64>(
             state.waterfallSupplementalHistory.allocatedBytes());
-        dssFixedBytes += state.dss.fixedStorageBytes();
-        dssHistoryBytes += state.dss.historyStorageBytes();
-        dssCacheBytes += state.dss.cacheStorageBytes();
+        dssFixedBytes += state.dss->fixedStorageBytes();
+        dssHistoryBytes += state.dss->historyStorageBytes();
+        dssCacheBytes += state.dss->cacheStorageBytes();
         ++dssRendererCount;
     };
     accountState(m_nativeWaterfallState);
@@ -1788,12 +1788,12 @@ QVariantMap SpectrumWidget::traceDebugSnapshot()
     m[QStringLiteral("dssRows")] = m_dss.visibleRowCount();
     m[QStringLiteral("dssCapacityRows")] = m_dss.rows();
     const DssRenderer& flexDss =
-        m_kiwiSdrWaterfallActive ? m_nativeWaterfallState.dss : m_dss;
+        m_kiwiSdrWaterfallActive ? *m_nativeWaterfallState.dss : m_dss;
     m[QStringLiteral("flexDssRows")] = flexDss.visibleRowCount();
     const WaterfallStreamState* kiwiState = activeKiwiWaterfallStateConst();
     m[QStringLiteral("kiwiDssRows")] = m_kiwiSdrWaterfallActive
         ? m_dss.visibleRowCount()
-        : (kiwiState ? kiwiState->dss.visibleRowCount() : 0);
+        : (kiwiState ? kiwiState->dss->visibleRowCount() : 0);
 
     m[QStringLiteral("kiwiDisplayRangeValid")] = m_kiwiSdrDisplayRangeValid;
     m[QStringLiteral("kiwiDisplayRangeAutoRange")] =
@@ -2882,7 +2882,7 @@ void SpectrumWidget::prepareForFftPixelScaleChange()
     // rejects ambiguous in-flight rows; only its temporal filter inputs need
     // resetting. Keep Kiwi state untouched when the hidden Flex decoder changes.
     DssRenderer& flexDss = m_kiwiSdrWaterfallActive
-        ? m_nativeWaterfallState.dss
+        ? *m_nativeWaterfallState.dss
         : m_dss;
     flexDss.resetInputSmoothing();
 }
@@ -4491,11 +4491,11 @@ void SpectrumWidget::setSpectrumRenderMode(int mode) {
             ensureWaterfallHistory();
         } else {
             m_dss.setHistoryCapacityRows(0);
-            m_nativeWaterfallState.dss.setHistoryCapacityRows(0);
-            m_kiwiWaterfallState.dss.setHistoryCapacityRows(0);
+            m_nativeWaterfallState.dss->setHistoryCapacityRows(0);
+            m_kiwiWaterfallState.dss->setHistoryCapacityRows(0);
             for (auto it = m_kiwiProfileWaterfallStates.begin();
                  it != m_kiwiProfileWaterfallStates.end(); ++it) {
-                it->dss.setHistoryCapacityRows(0);
+                it->dss->setHistoryCapacityRows(0);
             }
         }
         // Force a full rebuild of the 3DSS surface + its GPU texture, and the
@@ -6174,7 +6174,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
     updated.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
     updated.kiwiLastWaterfallFrameValid = m_kiwiSdrLastWaterfallFrameValid;
-    updated.dss = std::move(m_dss);
+    *updated.dss = std::move(m_dss);
     updated.kiwiDisplayFloorDbm = m_kiwiSdrDisplayFloorDbm;
     updated.kiwiDisplayCeilDbm = m_kiwiSdrDisplayCeilDbm;
     updated.kiwiDisplayRangeValid = m_kiwiSdrDisplayRangeValid;
@@ -6208,7 +6208,7 @@ void SpectrumWidget::discardRetainedHistory(WaterfallStreamState& state)
     state.historySupplementalBwMhz.clear();
     state.rowsSinceRateChange = 0;
     state.live = true;
-    state.dss.setHistoryCapacityRows(0);
+    state.dss->setHistoryCapacityRows(0);
 }
 
 void SpectrumWidget::restoreCurrentWaterfallStreamState()
@@ -6306,7 +6306,7 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_kiwiSdrLastWaterfallCenterMhz = restored.kiwiLastWaterfallCenterMhz;
     m_kiwiSdrLastWaterfallBandwidthMhz = restored.kiwiLastWaterfallBandwidthMhz;
     m_kiwiSdrLastWaterfallFrameValid = restored.kiwiLastWaterfallFrameValid;
-    m_dss = std::move(restored.dss);
+    m_dss = std::move(*restored.dss);
     m_kiwiSdrDisplayFloorDbm = restored.kiwiDisplayFloorDbm;
     m_kiwiSdrDisplayCeilDbm = restored.kiwiDisplayCeilDbm;
     m_kiwiSdrDisplayRangeValid = restored.kiwiDisplayRangeValid;
@@ -11417,8 +11417,8 @@ void SpectrumWidget::pushDssRowForWaterfallStream(bool kiwiStream,
     }
 
     DssRenderer& dss = kiwiStream
-        ? activeKiwiWaterfallState().dss
-        : m_nativeWaterfallState.dss;
+        ? *activeKiwiWaterfallState().dss
+        : *m_nativeWaterfallState.dss;
     const bool live = kiwiStream
         ? activeKiwiWaterfallState().live
         : m_nativeWaterfallState.live;

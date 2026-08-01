@@ -95,13 +95,21 @@ void testUnkeyTransientDoesNotLatchWarning()
     report("stable dummy-load sample is healthy",
            statusText(applet) == QStringLiteral("OK"), statusText(applet));
 
-    // MeterModel deliberately retains a slowly-decaying display power, while
-    // directionalPowerMetersChanged carries the near-zero instantaneous power.
-    // The SWR value is not physically meaningful during this unkey packet.
+    // 0.001 W is what a radio with no carrier reports: 0 dBm through
+    // 10^(dBm/10)/1000. MeterModel snaps the display power to zero there rather
+    // than decaying towards it (#4540), so the applet correctly stops calling
+    // the sample active and parks at IDLE. The SWR riding that packet is not
+    // physically meaningful, and what this case guards is that it cannot latch
+    // a WATCH or GROUND? verdict on the way out — IDLE proves that, since a
+    // warning state would have to have qualified on power first.
+    //
+    // Before #4540 the smoothed power lingered for ~3 s after unkey, which kept
+    // the sample active and left the pill reading OK; the guard was written
+    // against that behaviour. The no-false-warning intent is unchanged.
     sendMeters(model, 0.001f, 3.50f);
     processEventsFor(320);  // headroom over the 4-frame settle for loaded runners
     report("unkey SWR transient does not latch HLTH warning",
-           statusText(applet) == QStringLiteral("OK"), statusText(applet));
+           statusText(applet) == QStringLiteral("IDLE"), statusText(applet));
 }
 
 void testKeyTransientDoesNotPoisonBaseline()

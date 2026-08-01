@@ -508,9 +508,21 @@ void HealthApplet::setMeterModel(MeterModel* model)
     // break this — keep them co-emitted, or gate on an explicit instantaneous
     // timestamp here. (#4243)
     connect(m_model, &MeterModel::txMetersChanged,
-            this, &HealthApplet::updateRadioMeters);
+            this, [this](float fwd, float swr, bool swrValid) {
+        // Absent -> NaN: finiteOr() in cacheMeters() is this applet's absent
+        // handler, and swrSampleUpdatedAtMs stays honest via the model. The
+        // clamp semantics themselves are #4538's to consolidate.
+        updateRadioMeters(fwd, swrValid ? swr
+                                        : std::numeric_limits<float>::quiet_NaN());
+    });
     connect(m_model, &MeterModel::directionalPowerMetersChanged,
-            this, &HealthApplet::updateRadioDirectionalMeters);
+            this, [this](float fwd, float refl, float swr, bool swrValid,
+                         bool reflMeasured) {
+        updateRadioDirectionalMeters(
+            fwd, refl,
+            swrValid ? swr : std::numeric_limits<float>::quiet_NaN(),
+            reflMeasured);
+    });
     connect(m_model, &MeterModel::tgxlMetersChanged,
             this, &HealthApplet::updateTunerMeters);
     connect(m_model, &MeterModel::ampMetersChanged,

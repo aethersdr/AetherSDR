@@ -55,8 +55,10 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <utility>
 
 // Best-effort value extraction for common control types.
@@ -1123,6 +1125,113 @@ QJsonObject err(const QString& msg)
                        {QStringLiteral("error"), msg}};
 }
 
+// Render a frequency for an error message the way the caller typed it.
+//
+// 'f' with a fixed decimal count is wrong in both directions here: rounding a
+// rejected value to whole MHz makes 105000.4 report as "105000, above the
+// 105000 MHz ceiling", and printing a tiny one in full gives 300 leading zeros.
+// 'g' with 15 significant digits keeps every realistic value in plain notation
+// (it only goes exponential below 1e-5 or above 1e15, which is exactly where
+// plain notation stops being readable), and 15 digits stays inside double's
+// exact range so no rounding artifacts leak into a user-facing string.
+QString formatMhz(double mhz)
+{
+    return QString::number(mhz, 'g', 15);
+}
+
+// The tunable range shared by every verb documented in MHz.
+//
+// FLOOR — below anything a supported radio tunes. Matches the floor typed
+// frequency entry already applies to the same value (VfoWidget.cpp /
+// RxApplet.cpp, `freqMhz >= 0.001`), so the bridge and the VFO field agree on
+// what is too small rather than the bridge passing values the GUI would refuse.
+// This is NOT a unit guard and does not pretend to be one: GHz-for-MHz on HF
+// (`0.0142` meaning 14.2 MHz) lands at 14.2 kHz, a plausible VLF frequency
+// rather than a diagnosable mistake. What it stops is nonsense (`1e-300`)
+// reaching setFrequency() and the radio.
+//
+// CEILING — Hz passed to an MHz verb. A value above anything AetherSDR can tune
+// is a unit mistake rather than an ambitious request, and saying so beats
+// silently doing nothing: the radio ignores an out-of-band target, the verb
+// reports ok:true, and the caller goes on to key on the previous band. (#4550)
+// It is NOT auto-converted — guessing the caller's intent would make 14200000
+// mean 14.2 MHz here and something else in every other frequency verb.
+//
+// The ceiling is 10x the top of the band table (BandDefs.h — 3cm ends at
+// 10500), so it clears any real transverter setup with an order of magnitude to
+// spare while still catching the whole family of Hz-for-MHz mistakes —
+// including the ones a 1 THz threshold let through, such as `500000` for
+// 500 kHz, which would otherwise fall past the guard and land back in the
+// silent no-op this refusal exists to prevent.
+//
+// It is deliberately LOOSER than the 50000.0 MHz cap typed frequency entry
+// applies on XVTR (VfoWidget.cpp / RxApplet.cpp): the GUI cap is a limit on
+// what a human can dial, while this one only has to be high enough that no real
+// request trips it. Neither is "the" tuning limit — if one ever becomes the
+// authority, the other should be derived from it rather than re-guessed.
+//
+// kHz-for-MHz (e.g. `14200` for 20m) deliberately PASSES: that value is
+// indistinguishable from a legitimate microwave request (14.2 GHz sits inside
+// the transverter headroom this ceiling exists to protect), and refusing the
+// range would break real 24/47/76 GHz operation. A band-table lookup was
+// considered and rejected for the same reason — XVTR RF frequency is
+// user-configurable beyond the table. Decided, not overlooked.
+constexpr double kMinTunableMhz = 0.001;
+constexpr double kMaxTunableMhz = 105'000.0;
+
+// Top of the radio spectrum. Between kMaxTunableMhz and here an over-ceiling
+// value is genuinely ambiguous rather than obviously Hz — see below.
+constexpr double kSpectrumTopMhz = 300'000.0;
+
+// Validate the frequency argument of a verb documented in MHz.
+//
+// Returns the refusal to hand straight back to the caller, or std::nullopt when
+// `value` is a plausible request — in which case `mhz` holds the parsed
+// frequency. `verb` names the caller so every message is actionable.
+//
+// ONE definition, used by every MHz-taking verb. Three of them need this rule —
+// `tune`, `targettune` and `pan center` — and three copies of a threshold is how
+// they drift apart. Parsing lives in here too, so no verb can reintroduce the
+// non-finite hole by hand: QString::toDouble() accepts "nan" and "inf", and NaN
+// in particular sails past every range check below (NaN <= 0, NaN < floor and
+// NaN > ceiling are all false), so it has to be refused by name, before any
+// comparison is reached, with a message about the value itself rather than a
+// unit mistake it isn't.
+std::optional<QJsonObject> refuseUntunableMhz(const QString& verb,
+                                              const QString& value, double& mhz)
+{
+    bool parsed = false;
+    mhz = value.toDouble(&parsed);
+    if (!parsed || !std::isfinite(mhz) || mhz <= 0)
+        return err(verb
+                   + QStringLiteral(" requires a positive finite frequency in MHz"));
+    if (mhz < kMinTunableMhz)
+        return err(verb + QStringLiteral(" requires at least ")
+                   + formatMhz(kMinTunableMhz) + QStringLiteral(" MHz — got ")
+                   + formatMhz(mhz));
+    if (mhz > kMaxTunableMhz) {
+        // Above the ceiling but below the top of the spectrum is genuinely
+        // ambiguous: it reads as an Hz-for-MHz mistake OR as a real millimetre-
+        // wave allocation entered correctly in MHz (122.25 / 134 / 241 GHz).
+        // Refuse either way, but present both readings — telling someone
+        // dialling a 122 GHz transverter "did you mean 0.122250?" would be
+        // confidently wrong, which is the failure mode this messaging exists to
+        // avoid.
+        if (mhz <= kSpectrumTopMhz)
+            return err(verb + QStringLiteral(" takes MHz — got ") + formatMhz(mhz)
+                       + QStringLiteral(", above the ") + formatMhz(kMaxTunableMhz)
+                       + QStringLiteral(" MHz ceiling. If that was Hz, resend as ")
+                       + QString::number(mhz / 1.0e6, 'f', 6)
+                       + QStringLiteral("; if it is a millimetre-wave frequency in "
+                                        "MHz, it is beyond what AetherSDR can tune"));
+        return err(verb + QStringLiteral(" takes MHz, not Hz — got ") + formatMhz(mhz)
+                   + QStringLiteral(" (did you mean ")
+                   + QString::number(mhz / 1.0e6, 'f', 6)
+                   + QStringLiteral("?)"));
+    }
+    return std::nullopt;
+}
+
 QJsonObject deferredResponse()
 {
     return QJsonObject{{QStringLiteral("_deferred"), true}};
@@ -1900,7 +2009,12 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
          age(m->reflectedPowerUpdatedAtMs())},
         {QStringLiteral("reflectedPowerMeasured"),
          m->hasRecentReflectedPower(500)},
-        {QStringLiteral("swr"),             m->swr()},
+        // Null rather than a stale ratio, matching the SWR entry in `all` and
+        // the fwdPower/reflectedPower pair above — a client reading this scalar
+        // must not get a different answer from the one reading the array
+        // (#4533). swrAgeMs is still reported so a consumer can see WHY.
+        {QStringLiteral("swr"),
+         m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          m->paTemp()},             // °C
         {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
@@ -1912,7 +2026,10 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("compLevel"),       m->compLevel()},          // dB compression
         {QStringLiteral("hasCompression"),  m->hasCompressionMeterValue()},
         {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
-        {QStringLiteral("txMetersFresh"),   m->hasRecentTxMeters(2000)},
+        // Same constant the SWR gate uses, so "the TX meters are fresh" and "the
+        // SWR is live" cannot drift apart as two different literals.
+        {QStringLiteral("txMetersFresh"),
+         m->hasRecentTxMeters(MeterModel::kTxMeterStaleMs)},
         {QStringLiteral("txMetersAgeMs"),   age(m->txMetersUpdatedAtMs())},
         {QStringLiteral("all"),             all},                     // every meter + age_ms + reliability
     };
@@ -2853,12 +2970,17 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doTestTone(a.action, a.value);
             });
 
-        add("pan", {}, "pan <create|add|remove|close|center> [value]",
-            parseActionValue,
+        // parseActionRest, not parseActionValue: `pan rfgain <panId> <dB>` needs
+        // BOTH remaining tokens. parseActionValue keeps only the first, so the dB
+        // was dropped and the two-argument form could never work — doPan()'s
+        // rfgain branch already splits the joined value and handles both shapes,
+        // so the handler was right and only the parser choice was wrong.
+        add("pan", {}, "pan <create|add|remove|close|center|rfgain> [value]",
+            parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "pan requires an action (create|add|remove|close|center)"));
+                        "pan requires an action (create|add|remove|close|center|rfgain)"));
                 return s.doPan(a.action, a.value);
             });
 
@@ -5189,18 +5311,36 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     if (a == QLatin1String("ip")) {
-        const QString target = arg.trimmed();
-        if (target.isEmpty()) {
+        // connect ip <host-or-ip> [flex|hl2]
+        // The optional family picks which wire protocol to probe. Omitted keeps
+        // whatever the connect dialog's radio-type selector is set to, so every
+        // pre-existing `connect ip <addr>` script keeps working.
+        static const QRegularExpression ipTokenSep(QStringLiteral("\\s+"));
+        const QStringList ipTokens = arg.trimmed().split(ipTokenSep,
+                                                         Qt::SkipEmptyParts);
+        if (ipTokens.isEmpty()) {
             return err(QStringLiteral("connect ip requires a host or IP address"));
+        }
+        const QString target = ipTokens.first();
+        QString family;
+        if (ipTokens.size() > 1) {
+            family = ipTokens.at(1).toLower();
+            if (family != QLatin1String("flex") && family != QLatin1String("hl2")) {
+                return err(QStringLiteral("connect ip radio type must be flex or hl2, got '%1'")
+                               .arg(ipTokens.at(1)));
+            }
+        }
+        if (ipTokens.size() > 2) {
+            return err(QStringLiteral("connect ip takes at most <host-or-ip> [flex|hl2]"));
         }
 
         QPointer<QObject> guard(conn->asQObject());
-        QTimer::singleShot(0, qApp, [guard, conn, target] {
+        QTimer::singleShot(0, qApp, [guard, conn, target, family] {
             if (!guard) {
                 return;
             }
             QString error;
-            if (!conn->automationConnectByIp(target, &error)) {
+            if (!conn->automationConnectByIp(target, family, &error)) {
                 qCWarning(lcAutomation).noquote()
                     << "connect ip failed after scheduling:" << error;
             }
@@ -5209,6 +5349,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
             {QStringLiteral("ok"), true},
             {QStringLiteral("connect"), QStringLiteral("ip")},
             {QStringLiteral("target"), target},
+            {QStringLiteral("family"), family.isEmpty() ? QStringLiteral("dialog") : family},
             {QStringLiteral("requested"), true},
             {QStringLiteral("deferred"), true},
         };
@@ -5668,11 +5809,22 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
     if (action == QLatin1String("select")) {
         bool okId = false;
         const int id = arg.toInt(&okId);
-        if (!okId || !radio->slice(id))
+        SliceModel* s = okId ? radio->slice(id) : nullptr;
+        if (!s)
             return err(QStringLiteral("slice select requires a valid slice id"));
-        radio->sendCommand(QStringLiteral("slice set %1 active=1").arg(id));
+        // Through the SliceModel setter, not raw wire text. This used to send
+        // `slice set N active=1` straight at the connection, which is Flex text
+        // a seam backend never sees — so on a Hermes-Lite 2 the verb reported ok
+        // and selected nothing. setActive() emits the identical command for a
+        // Flex AND the operator-issued signal a seam backend needs, so this is
+        // strictly the same behaviour there and correct behaviour here.
+        //
+        // Same reasoning as `slice tx` immediately below, which already routes
+        // through the model for exactly this reason.
+        s->setActive(true);
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("select")},
-                           {QStringLiteral("id"), id}};
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("active"), s->isActive()}};
     }
     if (action == QLatin1String("tx")) {
         // Make slice <id> the TX slice — the literal external-split transition
@@ -6100,10 +6252,10 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
-    bool okF = false;
-    const double mhz = value.toDouble(&okF);
-    if (!okF || mhz <= 0)
-        return err(QStringLiteral("tune requires a positive frequency in MHz"));
+    // Parse and range-check the value — see refuseUntunableMhz().
+    double mhz = 0.0;
+    if (const auto refusal = refuseUntunableMhz(QStringLiteral("tune"), value, mhz))
+        return *refusal;
 
     int sliceId = -1;  // -1 = active slice
     if (!id.isEmpty()) {
@@ -6140,6 +6292,18 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
         return err(QStringLiteral("refused: slice ") + s->letter() + QStringLiteral(" is VFO-locked"));
 
     s->setFrequency(mhz);
+    // The reply echoes the REQUEST, and cannot do better from here.
+    //
+    // Confirming what the radio actually took would need a read-back, and there
+    // is nothing to read: SliceModel::setFrequency() assigns m_frequency = mhz
+    // before it sends `slice tune`, so the model holds the request by
+    // construction and the radio's real value only arrives later,
+    // asynchronously, in applyStatus(). An echo is at least honest about being
+    // an acknowledgement rather than a confirmation. Closing the gap properly
+    // means waiting on that status update — a different change, and one that
+    // has to be made in MainWindow::automationTune (the handler installed by
+    // MainWindow_Session.cpp), which is the path the shipping app actually
+    // takes (see the m_tuneHandler dispatch above).
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
                        {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
 }
@@ -6188,12 +6352,13 @@ QJsonObject AutomationServer::doSimFault(const QString& fault, const QString& ar
 
 QJsonObject AutomationServer::doTargetTune(const QString& value)
 {
-    bool okFrequency = false;
-    const double mhz = value.toDouble(&okFrequency);
-    if (!okFrequency || mhz <= 0.0) {
-        return err(QStringLiteral(
-            "targettune requires a positive frequency in MHz"));
-    }
+    // Validated BEFORE the handler dispatch, so the guard applies on the path
+    // the shipping app takes: MainWindow_Session.cpp installs the targettune
+    // handler unconditionally at session setup (right beside setTuneHandler),
+    // so a guard below the dispatch would be dead code in the shipping app.
+    double mhz = 0.0;
+    if (const auto refusal = refuseUntunableMhz(QStringLiteral("targettune"), value, mhz))
+        return *refusal;
     if (!m_targetTuneHandler) {
         return err(QStringLiteral("target tune handler is unavailable"));
     }
@@ -7895,12 +8060,47 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
     }
 
     if (action == QLatin1String("center")) {
-        bool okF = false; const double mhz = arg.toDouble(&okF);
-        if (!okF || mhz <= 0)
-            return err(QStringLiteral("pan center requires a positive frequency in MHz"));
+        // Same contract as `tune` — see refuseUntunableMhz(). It matters more
+        // here: RadioModel::setPanCenter() clamps only the LOW edge, so an
+        // out-of-range centre is optimistically stored and advertised over TCI
+        // (`dds:`) even though the radio rejects it — the same silent no-op as
+        // #4550, one verb over.
+        double mhz = 0.0;
+        if (const auto refusal = refuseUntunableMhz(QStringLiteral("pan center"), arg, mhz))
+            return *refusal;
         radio->setPanCenter(mhz);
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("center")},
                            {QStringLiteral("centerMhz"), mhz}, {QStringLiteral("requested"), true}};
+    }
+
+    if (action == QLatin1String("rfgain")) {
+        // `pan rfgain <dB>` or `pan rfgain <panId> <dB>`.
+        //
+        // Added because the control itself lives in the SpectrumOverlayMenu,
+        // which is hidden until the operator opens it — so the only way to
+        // exercise RF gain from a script was to drive a popup. On a radio where
+        // the preamp is RADIO-WIDE (the HL2's single AD9866 behind every DDC)
+        // the thing worth asserting is that one change reaches EVERY pan, and
+        // that is exactly what could not be tested before.
+        const QStringList parts = arg.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral("pan rfgain requires a gain in dB"));
+        bool okG = false;
+        const QString panId = (parts.size() > 1) ? parts.first() : QString();
+        const int gain = parts.last().toInt(&okG);
+        if (!okG)
+            return err(QStringLiteral("pan rfgain requires an integer gain in dB"));
+        const QString target = panId.isEmpty()
+                                   ? (radio->activePanadapter()
+                                          ? radio->activePanadapter()->panId()
+                                          : QString())
+                                   : panId;
+        if (target.isEmpty())
+            return err(QStringLiteral("pan rfgain: no panadapter to address"));
+        radio->setPanRfGainFor(target, gain);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("rfgain")},
+                           {QStringLiteral("panId"), target},
+                           {QStringLiteral("gain"), gain}, {QStringLiteral("requested"), true}};
     }
 
     if (action == QLatin1String("close") || action == QLatin1String("remove")) {
@@ -7962,7 +8162,7 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
     }
 
     return err(QStringLiteral("unknown pan action: ") + action
-               + QStringLiteral(" (create|add|remove|close|center)"));
+               + QStringLiteral(" (create|add|remove|close|center|rfgain)"));
 }
 
 // ── Panadapter layout (bridge test hook) ────────────────────────────────────

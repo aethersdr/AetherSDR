@@ -14,6 +14,7 @@
 #include "core/backends/MeterDef.h"
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
@@ -68,8 +69,40 @@ public:
     // ---- identity & capability (feeds the protocol `welcome`, §4.1) ----
     virtual RadioCapabilities capabilities() const = 0;
 
+    // True when this backend delivers demodulated RX audio over the seam
+    // (audioFrameReady below) rather than through a Flex PanadapterStream.
+    //
+    // This is the gate the RX-audio wiring keys off, and it is deliberately a
+    // question about THIS backend rather than a list of family names. Every
+    // previous version of that decision was a `dynamic_cast<SimBackend*>` or an
+    // `m_family != "flex"`, and each one had to be found and updated when a
+    // backend was added — the double-feed buzz (#4490) is what happens when one
+    // is missed: the sim's frames arrived over both routes and the engine
+    // consumed at double rate, measured 48043 Hz against a nominal 24000.
+    //
+    // Note this is NOT "has no PanadapterStream". The sim has BOTH: a stream
+    // carrying the old shim's synthetic scene, and real demodulated audio over
+    // the seam. It answers true because the seam is the one that is real.
+    virtual bool ownsRxAudio() const { return false; }
+
     // ---- connection lifecycle ----
+    // Typed restore handoff (RFC #4603 proposal B): called by RadioModel
+    // BEFORE connectRadio(), and only when this backend's declared
+    // clientSettingsDomains is non-empty. The backend stashes what it wants
+    // and applies it during connect/initial-push, validating its own
+    // extension document at this boundary (Principle VII). Default no-op —
+    // a radio-authoritative backend (Flex) never sees restored state.
+    virtual void applyRestoredState(const RestoredRadioState& state)
+    {
+        Q_UNUSED(state);
+    }
     virtual void connectRadio(const RadioConnectRequest& request) = 0;
+    // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend whose
+    // declared clientSettingsDomains is non-empty reports its operating state
+    // here on demand, and emits operatingStateChanged() (see signals) when it
+    // moves. RadioModel debounces the signal and persists the snapshot via
+    // RadioStateMemory::store — the backend never touches the settings store.
+    virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
 
@@ -159,6 +192,72 @@ public:
         Q_UNUSED(fps);
     }
 
+    // ---- per-slice audio ----
+    //
+    // A Flex mixes its slices ON THE RADIO, so these are wire commands to it and
+    // these defaults are never reached. A backend that demodulates on this host
+    // has to apply them in its own mixer, and without that the operator's mute
+    // moves the fader while the audio keeps playing.
+    //
+    // gain and pan are 0..100 to match SliceModel's own range (pan: 0 left,
+    // 50 centre, 100 right) rather than introducing a second scale at the seam.
+    virtual void setSliceAudioMute(int sliceId, bool mute)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(mute);
+    }
+    virtual void setSliceAudioGain(int sliceId, int gainPercent)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(gainPercent);
+    }
+    virtual void setSliceAudioPan(int sliceId, int panPercent)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(panPercent);
+    }
+
+    // Move transmit to this slice. A radio with one transmitter and several
+    // receivers has to MOVE it — retarget the TX oscillator, mode and passband —
+    // rather than set a per-slice flag, so this is a verb and not a setter with
+    // a bool. There is no "stop being the TX slice": transmit always lives
+    // somewhere, and it is cleared only by another slice taking it.
+    virtual void setTxSlice(int sliceId) { Q_UNUSED(sliceId); }
+
+    // Make this the ACTIVE slice — the one the client's shared controls act on.
+    // Distinct from setTxSlice: listening on one slice while transmitting on
+    // another is normal, so selecting a pane must not drag transmit with it.
+    //
+    // A Flex arbitrates this itself (`slice set N active=1`) and echoes the
+    // deselection of the previous slice back, so this default is never reached
+    // there. A backend with no such echo has to clear the old one itself, or
+    // every slice ever selected stays active and "the active slice" stops being
+    // a single answer.
+    virtual void setActiveSlice(int sliceId) { Q_UNUSED(sliceId); }
+
+    // ---- panadapter lifecycle ----
+    //
+    // Bring up / tear down a panadapter (and, on a backend where a pan IS a
+    // receiver, the receiver behind it). Return true if the backend took
+    // ownership of the request; the new or removed pan is then reported through
+    // the normal signals — panCenterBandwidthChanged and sliceChanged for a
+    // creation, panRemoved for a teardown — exactly as at connect.
+    //
+    // Default FALSE, meaning "not mine". A Flex creates pans with its own wire
+    // commands (`display panafall create`) and RadioModel keeps doing that; only
+    // a backend that owns its own receivers needs these.
+    //
+    // Deliberately NOT a count setter. "Add a panadapter" is the operator's
+    // actual intent and it is what the UI offers; a setReceiverCount(n) would
+    // make every caller compute n from the current state and race anything else
+    // that changed it.
+    virtual bool createPanadapter() { return false; }
+    virtual bool removePanadapter(const QString& panId)
+    {
+        Q_UNUSED(panId);
+        return false;
+    }
+
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
     // the engine guard (RFC §6, single-holder lock + capability check); the
     // backend only translates an already-authorized intent to its mechanism
@@ -166,11 +265,22 @@ public:
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
 
-    // Tune carrier on/off.
+    // Tune carrier on/off, at the operator's TUNE power (percent, 0..100).
     //
     // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
     // to do here. A backend that generates its own carrier implements it.
-    virtual void setTune(bool on) { Q_UNUSED(on); }
+    //
+    // tunePowerPercent is passed because a host-modulated backend has no other
+    // route to it: it raises its own carrier and sets its own drive, so without
+    // the value here it can only transmit at whatever setTxPower() last pushed —
+    // the RF Power slider. That made TUNE key at FULL power for anyone running
+    // RF 100 / Tune 10, which is the opposite of what the control is for.
+    // Defaulted so existing implementations stay source-compatible.
+    virtual void setTune(bool on, int tunePowerPercent = -1)
+    {
+        Q_UNUSED(on);
+        Q_UNUSED(tunePowerPercent);
+    }
 
     // Transmit power as a percentage, 0..100.
     //
@@ -260,6 +370,12 @@ signals:
     // the backend populates only the fields the wire reported, the model applies
     // exactly those. Replaces the prior stringly-keyed QVariantMap payload.
     void sliceChanged(int sliceId, const SliceDelta& delta);
+    // On a backend where a slice IS a receiver, closing the receiver has to
+    // retire BOTH this and panRemoved. Emitting only panRemoved left the
+    // SliceModel behind, still naming a pan id that no longer existed — and
+    // nothing looked broken until the next create, when the capacity guard
+    // compared a slice count that never fell against maxSlices() and reported
+    // "Slice capacity is full" on a radio with one receiver running.
     void sliceRemoved(int sliceId);
     void meterUpdate(const QString& meterId, double value);
 
@@ -321,6 +437,42 @@ signals:
     void panCenterBandwidthChanged(const QString& panId,
                                    double centerMhz, double bandwidthMhz);
 
+    // A pan the backend owned is GONE. Emitted after removePanadapter() has
+    // actually torn the receiver down, so the model removes the pane only once
+    // the thing behind it has stopped — never optimistically, which would leave
+    // a receiver streaming into a pane nobody is listening to.
+    void panRemoved(const QString& panId);
+
+    // ONE SLICE's demodulated RX audio, tagged with the slice it came from.
+    //
+    // The sibling of audioFrameReady, which is the SPEAKER feed — already mixed
+    // down to a single stream, with per-slice mute, level and balance applied.
+    // That is the right shape for the speaker and the wrong shape for every
+    // per-slice consumer: a TCI receiver channel, a decoder, a recorder. They
+    // each need one slice's audio, and asking them to un-mix a sum is not
+    // possible.
+    //
+    // Emitted PRE-mute, PRE-gain and PRE-balance, deliberately. On a Flex these
+    // consumers are fed by DAX, which is a separate plane from the speaker —
+    // muting a slice silences the monitor and the DAX stream a decoder is using
+    // keeps flowing. Applying the speaker's mute here would make muting a slice
+    // stop WSJT-X decoding on it, which is not what the control means.
+    //
+    // Flex does NOT emit this: its per-slice audio already arrives as DAX
+    // channels, which are per-slice by construction. Only a backend that
+    // demodulates in this process has to say which slice a buffer belongs to.
+    void sliceAudioFrameReady(int sliceId, const QByteArray& pcm);
+
+
+    // The pan's front end is WIDE: the hardware band filter cannot serve every
+    // active receiver at once, so it has been bypassed. On a Flex this is what
+    // a pan sharing an ADC across bands reports; on an HL2 it is the
+    // agree-or-bypass policy in applyBandFilter() becoming visible.
+    //
+    // Radio-wide in cause but reported PER PAN, because that is where the
+    // operator sees it and because a future radio could bypass per receiver.
+    void panWideChanged(const QString& panId, bool wide);
+
     // Panadapter display level range (universal — the Y-axis geometry that
     // pairs with center/bandwidth's X-axis). Unlike center/bandwidth, dBm is
     // signed, so the "unchanged" sentinel for an omitted field is NaN, not a
@@ -351,6 +503,11 @@ signals:
     // range/step are family-specific and reported via RadioCapabilities). The
     // backend decodes it from vendor status; RadioModel drives the pan.
     void panRfGainChanged(const QString& panId, int gain);
+    // Operating state moved (frequency, mode, passband, rate, gain, drive) —
+    // fetch it with currentOperatingState(). Emitted only by backends with a
+    // non-empty clientSettingsDomains declaration; rate-limiting is the
+    // subscriber's job (RadioModel debounces).
+    void operatingStateChanged();
 
     // The RF-gain range and step this pan actually offers, in dB.
     //

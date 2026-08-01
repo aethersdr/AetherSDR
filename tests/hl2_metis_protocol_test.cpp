@@ -47,9 +47,38 @@ static std::vector<std::uint8_t> makeEp6(std::uint32_t seq)
     for (std::size_t fs : {std::size_t{8}, std::size_t{8 + kFrameSize}}) {
         pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;        // SYNC
         std::uint8_t* payload = pkt.data() + fs + 8;       // after SYNC(3)+C&C(5)
-        for (std::size_t k = 0; k + kRxSampleBytes <= kFramePayload; k += kRxSampleBytes, ++n) {
+        const std::size_t rb = ep6RoundBytes(1);
+        for (std::size_t k = 0; k + rb <= kFramePayload; k += rb, ++n) {
             put24be(payload + k, 100 * n);                 // I
             put24be(payload + k + 3, -(100 * n + 1));      // Q
+        }
+    }
+    return pkt;
+}
+
+// Build a synthetic EP6 packet for `numRx` receivers. Round r of receiver rx
+// carries I = 1000*rx + r, Q = -(1000*rx + r) — so a demux that slips by one
+// receiver, or that walks the zero padding, produces values from the wrong
+// stream rather than something that merely looks plausible.
+static std::vector<std::uint8_t> makeEp6Multi(int numRx)
+{
+    std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
+    pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
+    const std::size_t rb = ep6RoundBytes(numRx);
+    int round = 0;
+    for (std::size_t fs : {std::size_t{8}, std::size_t{8 + kFrameSize}}) {
+        pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;        // SYNC
+        std::uint8_t* payload = pkt.data() + fs + 8;
+        for (std::size_t k = 0; k + rb <= kFramePayload; k += rb, ++round) {
+            for (int rx = 0; rx < numRx; ++rx) {
+                std::uint8_t* s = payload + k + static_cast<std::size_t>(rx) * kRxIqBytes;
+                put24be(s, 1000 * rx + round);
+                put24be(s + 3, -(1000 * rx + round));
+            }
+            // The 2 mic bytes closing the round get a non-zero marker: if the
+            // decoder ever mistook them for IQ the values would show up.
+            payload[k + rb - 2] = 0x5A;
+            payload[k + rb - 1] = 0xA5;
         }
     }
     return pkt;
@@ -175,17 +204,29 @@ int main()
             reply[3 + i] = static_cast<std::uint8_t>(0x10 + i);       // MAC
         reply[9] = 0x4A;                                              // gateware
         reply[10] = 0x06;                                            // board id: HL2
-        reply[20] = 0x02;                                           // receiver count
+        // Receiver count is at offset 0x13 = 19. The two neighbours are filled
+        // with DIFFERENT, plausible values on purpose: this assertion used to
+        // write the count at 20 and read it back from 20, so it agreed with an
+        // implementation that was off by one and could never have caught it.
+        //
+        // Offset 20 is {BANDSCOPE_BITS, BOARD[5:0]} — 0x45 is a build-5 board
+        // with the wideband bits set, which is exactly the kind of value that
+        // reads as a believable receiver count.
+        reply[19] = 0x04;                                          // receiver count (0x13)
+        reply[20] = 0x45;                                          // NOT the count
+        reply[18] = 0x77;                                          // NOT the count
         const auto r = parseDiscoveryReply(reply);
         check(r.has_value(), "valid discovery reply parses");
         check(r && r->isHermesLite2(), "board 0x06 -> Hermes-Lite 2");
         check(r && r->mac[0] == 0x10 && r->mac[5] == 0x15, "MAC parsed");
         check(r && r->gatewareVersion == 0x4A, "gateware byte parsed");
-        check(r && r->numRx == 0x02, "receiver count (byte 20) parsed");
+        check(r && r->numRx == 0x04, "receiver count read from offset 0x13 (19)");
+        check(r && r->numRx != 0x45, "not offset 20 — that is the board/bandscope byte");
+        check(r && r->numRx != 0x77, "not offset 18");
         check(r && !r->streaming, "status 0x02 -> not streaming");
         reply[2] = 0x03;
         check(parseDiscoveryReply(reply)->streaming, "status 0x03 -> streaming (busy)");
-        // Short replies omit byte 20 — numRx must fall back to 0, not read OOB.
+        // A reply that stops before offset 19 must fall back to 0, not read OOB.
         std::array<std::uint8_t, 11> shortReply{};
         shortReply[0] = 0xEF; shortReply[1] = 0xFE; shortReply[2] = 0x02;
         shortReply[10] = 0x06;
@@ -214,11 +255,140 @@ int main()
 
         std::vector<std::complex<float>> iq;
         const int n = ep6Samples(pkt, iq);
-        check(n == kSamplesPerPacket && iq.size() == 126, "EP6 yields 126 samples (2x63)");
+        check(n == ep6SamplesPerPacket(1) && iq.size() == 126, "EP6 yields 126 samples (2x63)");
         const float s = 1.0f / static_cast<float>(kFullScale);
         check(approx(iq[0].real(), 0.0f) && approx(iq[0].imag(), -1.0f * s), "sample 0 I/Q");
         check(approx(iq[5].real(), 500.0f * s) && approx(iq[5].imag(), -501.0f * s), "sample 5 I/Q");
         check(approx(iq[125].real(), 12500.0f * s), "last sample I decoded");
+    }
+
+    // ---- EP6 payload geometry at N receivers ----
+    //
+    // These numbers come from the gateware, not from us: usopenhpsdr1.v emits
+    // whole rounds while another fits and then zero-PADS the rest of the frame
+    // (MIC0 -> `(byte_no[8:0] > round_bytes) ? RXDATA2 : PAD`). So the count is
+    // a floor division, and only N=1 and N=2 happen to divide 504 exactly.
+    // Getting this wrong does not fail loudly — it decodes padding as samples.
+    {
+        check(ep6RoundBytes(1) == 8 && ep6RoundBytes(2) == 14
+              && ep6RoundBytes(3) == 20 && ep6RoundBytes(4) == 26,
+              "round is 6*numRx + 2 bytes");
+        check(ep6RoundsPerFrame(1) == 63, "1 RX: 63 rounds, 504 bytes, no padding");
+        check(ep6RoundsPerFrame(2) == 36, "2 RX: 36 rounds, 504 bytes, no padding");
+        check(ep6RoundsPerFrame(3) == 25, "3 RX: 25 rounds, 500 bytes, 4 padding");
+        check(ep6RoundsPerFrame(4) == 19, "4 RX: 19 rounds, 494 bytes, 10 padding");
+        check(ep6SamplesPerPacket(4) == 38, "4 RX: 38 samples per receiver per packet");
+        // The per-receiver sample count FALLS as receivers are added; a caller
+        // that keeps treating 126 as a constant overruns its own buffers.
+        check(ep6SamplesPerPacket(4) < ep6SamplesPerPacket(1),
+              "samples per receiver fall as receivers are added");
+        // numRx = 0 must not divide by zero or return something enormous.
+        check(ep6RoundBytes(0) == ep6RoundBytes(1), "numRx < 1 clamps to 1");
+    }
+
+    // ---- link budget: which (rate, receiver-count) pairs are deliverable ----
+    //
+    // The HL2's ethernet is 100BASE-T and BOTH axes cost bandwidth: adding a
+    // receiver shrinks the per-receiver payload of a fixed-size packet, so the
+    // radio sends more packets. Four receivers at 384 kHz is ~89 Mbit/s of wire
+    // traffic, which does not fail cleanly — it drops, and a dropped EP6 packet
+    // is a gap in every panadapter at once.
+    {
+        check(ep6BitsPerSecond(48000, 1) < 4.0e6, "1 RX at 48k is ~3.3 Mbit/s");
+        check(ep6BitsPerSecond(384000, 4) > 85.0e6, "4 RX at 384k exceeds 85 Mbit/s");
+        check(ep6BitsPerSecond(384000, 4) > ep6BitsPerSecond(384000, 1),
+              "receivers cost bandwidth even at a fixed sample rate");
+
+        check(maxReceiversAtRate(48000, 4) == 4, "48k carries 4 receivers");
+        check(maxReceiversAtRate(96000, 4) == 4, "96k carries 4 receivers");
+        check(maxReceiversAtRate(192000, 4) == 4, "192k carries 4 receivers");
+        check(maxReceiversAtRate(384000, 4) == 3, "384k carries only 3 receivers");
+        check(maxReceiversAtRate(384000, 1) == 1, "hardMax is respected");
+        // Never returns zero: a rate too fast for even one receiver must still
+        // give a runnable radio rather than a configuration with no receivers.
+        check(maxReceiversAtRate(10'000'000, 4) >= 1, "always admits at least one receiver");
+    }
+
+    // ---- EP6 demux across N receivers ----
+    {
+        for (const int numRx : {1, 2, 3, 4}) {
+            const auto pkt = makeEp6Multi(numRx);
+            std::vector<std::vector<std::complex<float>>> out(static_cast<std::size_t>(numRx));
+            const int n = ep6SamplesMulti(pkt, out);
+            check(n == ep6SamplesPerPacket(numRx), "demux returns samples per receiver");
+
+            const float s = 1.0f / static_cast<float>(kFullScale);
+            bool allOk = true;
+            for (int rx = 0; rx < numRx && allOk; ++rx) {
+                const auto& v = out[static_cast<std::size_t>(rx)];
+                if (static_cast<int>(v.size()) != n) { allOk = false; break; }
+                for (int r = 0; r < n; ++r) {
+                    // Round index restarts per frame in the builder's `round`
+                    // counter only across the whole packet, so expected value is
+                    // simply the running round number.
+                    const float want = static_cast<float>(1000 * rx + r) * s;
+                    if (!approx(v[static_cast<std::size_t>(r)].real(), want)
+                        || !approx(v[static_cast<std::size_t>(r)].imag(), -want)) {
+                        allOk = false;
+                        break;
+                    }
+                }
+            }
+            check(allOk, "every receiver's samples decode to its own stream");
+        }
+    }
+
+    // ---- demux refuses a receiver count it cannot honour ----
+    {
+        const auto pkt = makeEp6Multi(2);
+        std::vector<std::vector<std::complex<float>>> none;
+        check(ep6SamplesMulti(pkt, none) == -1, "empty output span is rejected");
+        std::vector<std::vector<std::complex<float>>> tooMany(kMaxReceivers + 1);
+        check(ep6SamplesMulti(pkt, tooMany) == -1, "more than kMaxReceivers is rejected");
+    }
+
+    // ---- per-receiver NCO registers ----
+    //
+    // RX1..RX7 are registers 0x02..0x08, and C0 is the address shifted left one
+    // because C0 bit 0 is MOX. An encoder that forgot the shift would write the
+    // TX NCO (0x01) when asked for RX1.
+    {
+        check(ccRxFreq(0, 7'200'000)[0] == kC0Rx1Freq, "RX1 -> C0 0x04 (addr 0x02)");
+        check(ccRxFreq(1, 7'200'000)[0] == 0x06, "RX2 -> C0 0x06 (addr 0x03)");
+        check(ccRxFreq(2, 7'200'000)[0] == 0x08, "RX3 -> C0 0x08 (addr 0x04)");
+        check(ccRxFreq(3, 7'200'000)[0] == 0x0A, "RX4 -> C0 0x0A (addr 0x05)");
+        check(ccRxFreq(6, 7'200'000)[0] == 0x10, "RX7 -> C0 0x10 (addr 0x08)");
+        for (int rx = 0; rx <= 6; ++rx) {
+            check((ccRxFreq(rx, 7'200'000)[0] & 0x01) == 0,
+                  "every RX NCO C0 is even (MOX=0, cannot key)");
+            check(ccRxFreq(rx, 7'200'000)[0] != kC0TxFreq,
+                  "no RX NCO collides with the TX NCO register");
+        }
+        // The payload is plain Hz, big-endian, and identical across receivers.
+        const Cc a = ccRxFreq(0, 14'074'000);
+        const Cc b = ccRxFreq(3, 14'074'000);
+        check(a[1] == b[1] && a[2] == b[2] && a[3] == b[3] && a[4] == b[4],
+              "frequency payload does not depend on the receiver index");
+        check(ccRx1Freq(14'074'000)[0] == a[0] && ccRx1Freq(14'074'000)[4] == a[4],
+              "ccRx1Freq is ccRxFreq(0, ...)");
+        // Out of range clamps into the encodable run rather than walking off it.
+        check(ccRxFreq(99, 1)[0] == ccRxFreq(6, 1)[0], "rxIndex clamps at RX7");
+        check(ccRxFreq(-1, 1)[0] == ccRxFreq(0, 1)[0], "negative rxIndex clamps at RX1");
+    }
+
+    // ---- receiver count is a FOUR-bit field at DATA[6:3] ----
+    {
+        check(ccConfig(SampleRate::R48k, 4)[4] == (0x04 | (3 << 3)), "4 RX encodes as 3");
+        check(ccConfig(SampleRate::R48k, 8)[4] == (0x04 | (7 << 3)), "8 RX encodes as 7");
+        // The old 3-bit mask wrapped here: 9 RX (code 8) became code 0, i.e. ONE
+        // receiver, and the radio would have streamed a layout nobody expected.
+        check(ccConfig(SampleRate::R48k, 9)[4] == (0x04 | (8 << 3)), "9 RX encodes as 8, not 0");
+        check(ccConfig(SampleRate::R48k, 12)[4] == (0x04 | (11 << 3)), "12 RX encodes as 11");
+        check(ccConfig(SampleRate::R48k, 99)[4] == (0x04 | (11 << 3)), "over-max clamps to 12");
+        check(ccConfig(SampleRate::R48k, 0)[4] == 0x04, "under-min clamps to 1");
+        // The count must not bleed into the sample rate, which shares C1/C4.
+        check(ccConfig(SampleRate::R384k, 12)[1] == (0x40 | 0x03),
+              "receiver count leaves the sample rate untouched");
     }
 
     // ---- negative / sign-extension edge: I = -8388608 (24-bit min) ----
@@ -262,7 +432,7 @@ int main()
             pay[3] = 0x80; pay[4] = 0x00; pay[5] = 0x00;     // Q = -full scale
         }
         std::vector<std::complex<float>> out;
-        check(ep6Samples(pkt, out) == kSamplesPerPacket, "full-scale packet decodes");
+        check(ep6Samples(pkt, out) == ep6SamplesPerPacket(1), "full-scale packet decodes");
         check(out[0].real() == 1.0f, "0x7FFFFF normalises to exactly +1.0");
         // -0x800000 is one count larger in magnitude than +0x7FFFFF, so it maps
         // just past -1.0. That asymmetry is inherent to two's complement.

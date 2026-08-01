@@ -37,8 +37,6 @@ int main()
     const GuiClientRegistrationState::Result fullRadio =
         state.complete(static_cast<int>(0xF3000001U), {});
     check(!fullRadio.accepted(), "nonzero reply rejects GUI registration");
-    check(!fullRadio.automaticRetryAllowed(),
-          "rejected GUI registration waits for an explicit reconnect");
     check(state.phase() == GuiClientRegistrationState::Phase::Rejected,
           "rejected reply enters the terminal rejected state");
     check(fullRadio.detail

@@ -166,7 +166,8 @@ that should have changed → `grab_widget` for a visual check.
 **Access token.** Enabling the bridge in Radio Setup → Network mints a
 random token (stored in your OS secret store via QtKeychain — macOS
 Keychain / Windows Credential Manager / libsecret-KWallet, never in the
-plaintext settings file). Copy it into your assistant's MCP config as the
+settings store — RFC #4603 bans credentials from it outright). Copy it
+into your assistant's MCP config as the
 `AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
 verb except `ping` without a matching token. Headless/CI can supply the
 token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
@@ -1077,6 +1078,48 @@ belongs to another client` when another client owns it (Multi-Flex). To
 recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
+**The value is MHz.** Passing Hz is refused rather than converted:
+
+```json
+→ {"cmd":"tune","value":"14200000"}
+← {"ok":false,"error":"tune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)"}
+```
+
+The threshold is 105000 (ten times the top of the band table), so any value a
+transverter could plausibly need still passes. It is deliberately not
+auto-corrected: `14200000` would have to mean 14.2 MHz here and something else
+in every other frequency verb.
+
+Four refusals guard the value, and the wording differs on purpose. The same
+four — same thresholds, one shared helper, the verb's own name in the message
+— also guard [`targettune`](#targettune) and [`pan center`](#pan):
+
+| input | reply |
+|---|---|
+| `> 300000` | `tune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)` |
+| `> 105000`, `<= 300000` | `tune takes MHz — got 122250, above the 105000 MHz ceiling. If that was Hz, resend as 0.122250; if it is a millimetre-wave frequency in MHz, it is beyond what AetherSDR can tune` |
+| `< 0.001` | `tune requires at least 0.001 MHz — got 1e-300` |
+| `nan`, `inf`, `-inf`, `0`, negatives, unparseable | `tune requires a positive finite frequency in MHz` |
+
+The second row exists because that window is genuinely ambiguous — an Hz
+mistake, or a real millimetre-wave allocation (122.25 / 134 / 241 GHz) entered
+correctly in MHz — so the reply offers both readings rather than asserting a
+conversion. `nan` and `inf` get their own row because `"nan"` parses as a number
+and fails every range comparison, so it would otherwise pass the guard entirely.
+
+**kHz-for-MHz is accepted**, not refused: `tune 14200` is indistinguishable from
+a 14.2 GHz transverter request, which is inside the headroom the ceiling exists
+to protect. It reaches the radio and, if 14.2 GHz is out of range, becomes the
+same silent no-op described below — so a client that might send kHz should
+verify with [`get slices`](#get).
+
+Note `ok:true` is an **acknowledgement, not a confirmation** — `tune` echoes the
+frequency you asked for. The slice model records a tune optimistically and the
+radio's own value arrives asynchronously afterwards, so a request the radio
+rejects or clamps still returns `ok:true` with the requested value echoed back.
+Read the frequency back with [`get slices`](#get) if you need to know where the
+radio actually landed.
+
 ### `targettune`
 Tune through the same absolute-target policy used by typed frequency entry and
 other commanded jumps. Unlike `tune`, this can preselect a different band stack
@@ -1089,6 +1132,18 @@ sweep guards.
 ← {"ok":true,"targetTune":146.52,"sliceId":0,"letter":"A"}
 ```
 
+**The value is MHz.** The [four refusals listed under `tune`](#tune) apply here
+unchanged — same thresholds, same shared helper, `targettune` in the message:
+
+```json
+→ {"cmd":"targettune","value":"14200000"}
+← {"ok":false,"error":"targettune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)"}
+```
+
+`ok:true` carries the same caveat as `tune`: it is an acknowledgement that the
+request was accepted and dispatched, not a confirmation that the radio landed
+there. Read the frequency back with [`get slices`](#get) if you need to know.
+
 ### `memory`
 Recall a radio memory through `MainWindow::activateMemorySpot()`, including its
 cross-band preselection and delayed reveal behavior. The optional `panId`
@@ -1099,6 +1154,18 @@ only.
 → {"cmd":"memory","action":"activate","value":"12 0x40000000"}
 ← {"ok":true,"memory":"activate","index":12,"panId":"0x40000000"}
 ```
+
+Works the same whether the slots live in the radio (Flex) or in the host-side
+memory bank (`LocalMemoryBank`, used by HL2/Kiwi/demo and whenever no radio is
+connected). On the local bank there is no radio-side `memory apply`, so
+`RadioModel::recallLocalMemory()` applies the stored channel to the active slice
+through SliceModel's operator-issue setters — the same path the panel controls
+use, so the write reaches the radio through the backend seam.
+
+`activate` is currently the only action. Saving, listing, and removing memories
+still require driving the GUI (the Memory dialog's Import/Export use NATIVE file
+dialogs, which the bridge cannot reach at all) — see the verb suggestions at the
+end of this document.
 
 ### `slice`
 Slice lifecycle, mode, diversity, Center Lock, Slice Link, TX assignment,
@@ -1580,7 +1647,7 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 | `action` | `value` | effect |
 |---|---|---|
 | `create` (alias `add`) | — | create a new panadapter (panafall). The only UI path is an unaddressable label. |
-| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). |
+| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | close pan(s). Sends `display pan remove` **and** `display panafall remove`, so a panafall-created pan closes without the slice-removal workaround. A single target won't close the last pan; `all` will. |
 
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
@@ -1755,6 +1822,7 @@ connect hide
 connect local first
 connect local serial 1234-5678
 connect ip 10.0.0.25
+connect ip 192.168.1.21 hl2
 connect wait 30000
 disconnect
 ```
@@ -1765,10 +1833,22 @@ so `connect show` is safe when the dialog is already open. `connect local first`
 captures the first currently discovered local radio's serial before scheduling
 the request, so the response and deferred connect target stay consistent.
 `connect local serial <serial>` selects by discovery serial. `connect ip
-<host-or-ip>` uses the manual **Connect by IP** probe path; if the probe finds a
-radio, the panel emits its normal `connectRequested` signal and `MainWindow`
-performs the standard Multi-Flex/client-slot checks before `RadioModel`
-connects. `connect wait <timeout_ms>` holds that request's response until
+<host-or-ip> [flex|hl2]` uses the manual **Connect by IP** probe path; if the
+probe finds a radio, the panel emits its normal `connectRequested` signal and
+`MainWindow` performs the standard Multi-Flex/client-slot checks before
+`RadioModel` connects.
+
+The optional radio type selects which wire protocol to probe, matching the
+dialog's **Radio type** dropdown: `flex` opens the TCP/4992 command plane, `hl2`
+sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024. The two are
+disjoint — a Hermes-Lite 2 never answers the Flex probe and vice versa — so an
+address is only reached with the right type. Omit it and the dialog's current
+selection is used, which keeps every existing `connect ip <addr>` script
+working; the response echoes `"family"` as the requested type or `"dialog"`.
+A directed HL2 probe is the only way to reach a Hermes-Lite 2 that discovery
+broadcasts cannot see (VPN, routed subnet), and it is bounded at ~600 ms.
+
+`connect wait <timeout_ms>` holds that request's response until
 `RadioModel::connectionStateChanged(true)` or timeout, which is the preferred
 unattended "request then assert" flow.
 
@@ -2666,7 +2746,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center> [value] |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain> [value] |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
@@ -2689,3 +2769,32 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |
 
 <!-- END GENERATED VERB TABLE -->
+
+---
+
+## Suggested verbs
+
+Gaps found while proving a feature against real hardware, kept here so the next
+person hits a note instead of the wall.
+
+### `memory save|list|remove`
+
+`memory` can only `activate`. Everything else about a memory channel has to be
+driven through the GUI: quick-save is a modal dialog whose QLineEdit has no
+`objectName` (it is reachable only via the scoped `QDialog/QLineEdit` form), and
+the Memory dialog's **Import…/Export… open NATIVE file dialogs, which the bridge
+cannot drive at all**. So the CSV round trip — the thing most likely to regress,
+because it is a chained `create`→`set` per record — has no automated proof at
+the GUI level today.
+
+Proposed:
+
+| Verb | Purpose |
+|---|---|
+| `memory save <name>` | Save the active slice as a memory; returns the new index. Covers `createMemoryFromSlice()` without the modal. |
+| `memory list` | Dump the memory cache as JSON — lets a test assert on channels without screenshotting a table. |
+| `memory remove <index>` | Delete a slot; makes tests self-cleaning instead of leaving channels in the operator's bank. |
+| `memory import <path>` / `memory export <path>` | Take a path directly, bypassing the native file dialog. The only way to get the CSV flows under automation. |
+
+All four are RX/config, no TX gate. `memory list` in particular would have
+replaced several screenshots in this feature's verification.

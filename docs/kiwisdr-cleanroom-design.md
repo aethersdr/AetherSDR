@@ -444,6 +444,61 @@ with NR2 disabled; they must not be collapsed into the legacy applet Kiwi
 output buffer, because the final mixer only treats that buffer as active when
 the applet-level Kiwi Audio toggle is enabled.
 
+## Transmit Gate For Managed Kiwi Sources
+
+The transmit mute is **presentation-only** for managed Kiwi antenna sources
+(#4380). The websocket, the jitter buffer, the drain, and the NR/DSP chain all
+keep running through TX; only the source's contribution at the final mix is
+ramped to zero over 8 ms. Nothing is dropped at the feed and no buffer is
+wiped, so unkey rejoins the live stream instead of re-priming a jitter buffer
+and letting NR re-converge from cold. The gate closes on the same TX-mute
+latch the rest of the client uses (`KiwiSdrTxMutePolicy.h`), which masks the
+radio's interlock term through our own unkey tail and bounds that mask with a
+watchdog so a foreign transmission still re-engages the mute.
+
+Two per-profile options ride on that gate. Both live in the profile's nested
+JSON object alongside `autoConnect` (Principle V — no new flat settings keys),
+and both are off by default:
+
+- **Keep audio during TX** (`keepAudioDuringTx`) — leave the gate open, so
+  this receiver stays audible while transmitting. For a receiver that cannot
+  hear your own signal, or when you want to monitor yourself deliberately.
+- **Resume audio after TX delay** (`resumeAudioAfterTxDelay`) — hold the gate
+  closed *past* unkey for this receiver's measured stream delay, so playback
+  resumes on audio the Kiwi received after the transmission ended rather than
+  on the operator's own delayed TX tail. Only meaningful for a receiver in
+  range of your own signal; inert (and disabled in the UI) while
+  **Keep audio during TX** is on, since a source that stays audible through TX
+  has nothing to resume.
+
+The hold length is computed by `kiwiSdrResumeHoldMs()` as **ingest lag +
+applied presentation holdback + a 250 ms guard**, clamped to 250–6000 ms:
+
+- *Ingest lag* prefers the Receive Sync measurement of when this Kiwi's audio
+  arrives relative to the Flex stream — but only for the profile the estimate
+  was actually measured against, and only while that estimate maintains the
+  same lock the sync engine itself requires before acting on it
+  (`kiwiSdrResumeHoldIngestLag()`). Otherwise `baseLatencyMs` stands in as a
+  rough proxy with no measured tie to this receiver's chain.
+- *Applied presentation holdback* must be the figure the mix is really playing
+  this source behind arrival — the one
+  `AudioEngine::setReceivePresentationDelays()` derives through
+  `receivePresentationExternalKiwiDelayMs()`. Under AutoAssist a source that
+  is not the delay target is played with **no** holdback; adding one anyway
+  would run the hold long and swallow real post-TX audio, because the pipeline
+  keeps draining (zeroed at the mix) through the hold rather than queueing.
+- The hold is recomputed at every key-down, so the deadline armed at the
+  coming unkey uses the freshest estimate. Re-keying inside a hold re-closes
+  the gate and re-arms from the new unkey; clearing the option disarms an
+  in-flight deadline instead of stranding it.
+
+Presentation telemetry — RX level meter, scopes, EQ FFT tap — mirrors the
+gate's closed window exactly, including the resume hold, so meters do not
+bounce with audio the operator cannot hear. The receive-sync correlator feed
+is suppressed on the same condition: feeding ramp-zeroed Kiwi chunks into
+GCC-PHAT against a live one-sided Flex stream would degrade the very estimate
+the hold is derived from.
+
 ## Source Provenance
 
 - The original KiwiSDR receive-path implementation used no KiwiSDR source code,

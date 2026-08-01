@@ -66,6 +66,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool micChanged = false;
     bool phoneChanged = false;
     bool filterCutoffChanged = false;
+    bool cwPitchChanged_ = false;
 
     // ── Core transmit ──
     // rf_power / tune_power emit inline (like max_power_level below): the
@@ -114,7 +115,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
 
     // ── CW ──
     phoneChanged |= assign(d.cwSpeed, m_cwSpeed);
-    phoneChanged |= assign(d.cwPitch, m_cwPitch);
+    if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
     phoneChanged |= assign(d.cwDelay, m_cwDelay);
     phoneChanged |= assign(d.cwSidetone, m_cwSidetone);
@@ -147,6 +148,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (micChanged) emit micStateChanged();
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
+    if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
 
     // ── ATU (own emit; model owns the enum parse) ──
     {
@@ -634,6 +636,7 @@ void TransmitModel::setCwPitch(int hz)
     if (m_cwPitch != hz) {
         m_cwPitch = hz;  // update local cache so rapid steppers accumulate
         emit phoneStateChanged();
+        emit cwPitchChanged(hz);
     }
     emit commandReady(QString("cw pitch %1").arg(hz));
 }

@@ -340,6 +340,14 @@ void TxApplet::buildUI()
         m_apdRow = new QWidget;
         m_apdRow->setLayout(row);
         vbox->addWidget(m_apdRow);
+        // Apply the initial state instead of leaving the row in QWidget's
+        // default-visible state. m_apdConfigurable starts false — no radio has
+        // said otherwise — and until this call neither of updateApdVisibility()'s
+        // two inputs had fired, so a cold launch showed a live-looking APD button
+        // and Active/Cal/Avail indicators with nothing behind them. That also made
+        // cold start disagree with post-disconnect, where resetState() clears
+        // apdConfigurable and the row correctly goes away.
+        updateApdVisibility();
     }
 
     outer->addWidget(body);
@@ -619,11 +627,14 @@ void TxApplet::syncAtuIndicators()
     }
 }
 
-void TxApplet::updateMeters(float fwdPower, float swr)
+void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
 {
     m_smoothedPower = fwdPower;
     static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
-    static_cast<HGauge*>(m_swrGauge)->setValue(swr);
+    // Absent SWR parks the gauge at its 1.0 rest position; a raw 0.0 would
+    // read as an off-scale value, and holding the last ratio is exactly the
+    // stale display #4533 removed.
+    static_cast<HGauge*>(m_swrGauge)->setValue(swrValid ? swr : 1.0f);
 }
 
 void TxApplet::updatePeakPower(float fwdPowerInstant)

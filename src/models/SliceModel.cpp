@@ -675,6 +675,12 @@ void SliceModel::setDiguOffset(int hz)
 void SliceModel::setTxSlice(bool on)
 {
     sendCommand(QString("slice set %1 tx=%2").arg(m_id).arg(on ? 1 : 0));
+    // Only the REQUEST to take transmit is forwarded. There is no "stop being
+    // the TX slice" on a radio with one transmitter — transmit always lives
+    // somewhere — so a backend is told which slice should own it, never that
+    // one should stop. Clearing is what the operator does by choosing another.
+    if (on)
+        emit txSliceCommandIssued();
 }
 
 void SliceModel::setActive(bool on)
@@ -690,6 +696,10 @@ void SliceModel::setActive(bool on)
             emit activeChanged(true);
         }
         sendCommand(QString("slice set %1 active=1").arg(m_id));
+        // For a backend that never sees the wire text above. It also has to
+        // CLEAR the previously active slice, which on a Flex arrives as a status
+        // echo and here has no other way of happening.
+        emit activeSliceCommandIssued();
     }
 }
 
@@ -773,6 +783,9 @@ void SliceModel::setAudioGain(float gain)
     m_audioGain = gain;
     emit commandReady(QString("slice set %1 audio_level=%2")
         .arg(m_id).arg(static_cast<int>(gain)));
+    // Operator-issued, for a backend that mixes slice audio on THIS host and
+    // never sees the Flex wire text above. See audioGainCommandIssued.
+    emit audioGainCommandIssued(static_cast<int>(gain));
     emit audioGainChanged(m_audioGain);
 }
 
@@ -799,6 +812,7 @@ void SliceModel::setAudioMute(bool mute)
     if (m_audioMute == mute) return;
     m_audioMute = mute;
     sendCommand(QString("slice set %1 audio_mute=%2").arg(m_id).arg(mute ? 1 : 0));
+    emit audioMuteCommandIssued(m_audioMute);
     if (audioMute() != previousVisibleMute) {
         emit audioMuteChanged(audioMute());
     }
@@ -961,6 +975,7 @@ void SliceModel::setAudioPan(int pan)
     if (m_audioPan == pan) return;
     m_audioPan = pan;
     sendCommand(QString("slice set %1 audio_pan=%2").arg(m_id).arg(pan));
+    emit audioPanCommandIssued(pan);
     emit audioPanChanged(pan);
 }
 
@@ -1438,6 +1453,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit fmDeviationChanged(m_fmDeviation);
     }
 
+    // (applyRecalledStepHz is defined next to the status decode on purpose: the
+    // two are the only writers of m_stepHz, and a future edit to one should see
+    // the other.)
     if (d.step.has_value() || d.stepList.has_value()) {
         bool changed = false;
         if (d.step.has_value()) {
@@ -1463,6 +1481,23 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit frequencyChanged(m_frequency);
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
+}
+
+void SliceModel::applyRecalledStepHz(int hz)
+{
+    // Host-bank recall only — see the header for why this is the one sanctioned
+    // client-side write of a radio-authoritative field.
+    //
+    // No command is emitted: there is no wire to send it over on a backend
+    // without a command plane, which is exactly why the recalled step was being
+    // lost. stepChanged() is what the tuning-step control and the tuning wheel
+    // listen to, so the value takes effect in the UI just as a radio-sourced one
+    // would, and a later status update from a radio that does own the field
+    // still wins by overwriting it.
+    if (hz <= 0 || hz == m_stepHz)
+        return;
+    m_stepHz = hz;
+    emit stepChanged(m_stepHz, m_stepList);
 }
 
 QStringList SliceModel::drainPendingCommands()

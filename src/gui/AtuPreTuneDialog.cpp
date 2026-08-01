@@ -205,8 +205,8 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
         // forward power — track the most recent reading > 1.001 so we
         // report the settled post-tune SWR, not the reset artifact. (#2624)
         connect(&m_radio->meterModel(), &MeterModel::txMetersChanged,
-                this, [this](float, float swr) {
-            if (m_swrTracking && swr > 1.001f)
+                this, [this](float, float swr, bool swrValid) {
+            if (m_swrTracking && swrValid && swr > 1.001f)
                 m_tuneLastSwr = swr;
         });
     }

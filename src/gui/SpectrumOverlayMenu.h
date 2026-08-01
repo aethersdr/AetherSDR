@@ -81,6 +81,15 @@ public:
     // Connect/disconnect the ANT panel to a slice model.
     void setSlice(SliceModel* slice);
     void setWnbState(bool on, int level);
+    // Show/hide the whole WNB row (button + level slider + readout) based on
+    // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
+    void setRadioSideDspAvailable(bool available);
+    // Whether this radio has DAX audio/IQ channels at all
+    // (RadioCapabilities::hasDaxStreams). Hides the per-pan DAX button and its
+    // panel: the channel selectors reach a radio-side routing feature that a
+    // backend without DAX simply does not have, so on an HL2 they were live
+    // controls wired to nothing.
+    void setDaxStreamsAvailable(bool available);
     void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step);
@@ -288,6 +297,7 @@ private:
     QPushButton* m_loopBBtn{nullptr};
     QSlider*     m_rfGainSlider{nullptr};
     QLabel*      m_rfGainLabel{nullptr};
+    QWidget*     m_wnbRow{nullptr};   // container for the whole WNB row
     QPushButton* m_wnbBtn{nullptr};
     QSlider*     m_wnbSlider{nullptr};
     QLabel*      m_wnbLabel{nullptr};

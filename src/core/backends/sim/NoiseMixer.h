@@ -145,7 +145,10 @@ private:
     std::map<Channel, ChannelState> m_ch;
 
     // phase counters (deterministic tone/buzz generators)
-    long m_cwPhase = 0, m_plPhase = 0;
+    qint64 m_cwPhase = 0;      // sample counter; long overflows in ~25 h on LLP64
+    int    m_cwSpan  = 0;      // current schedule span (persistent, no per-sample rescan)
+    double m_cwPos   = 0.0;    // last in-cycle position, for wrap detection
+    long m_plPhase = 0;
     // Voice playback: the bundled speech clip's samples (mono float, 24 kHz),
     // loaded once, and the loop read position.
     std::vector<float> m_voiceSamples;

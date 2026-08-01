@@ -24,7 +24,9 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   models directly, and that remains correct until it lands.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
-  Mechanical migration tooling is the prerequisite work.
+  The storage layer moved to SQLite (RFC #4603); new radio-scoped
+  configuration lands as versioned feature documents in `radio_settings`,
+  and legacy flat keys migrate feature-by-feature.
 - **TX DSP chain visual rebuild** — stage-per-applet chain with the
   visual `CHAIN` widget as the primary entry point.
 - **Flathub submission** — the AppStream metainfo and manpage landed in
@@ -38,6 +40,12 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   there means wider mode coverage, panadapter/waterfall parity with the Flex
   path, and hardening the raw-IQ DSP chain (HL2 ships raw IQ, so the client does
   all the tune/decimate/demodulate work a Flex does on-radio).
+  **Multi-receiver** is now in: the shipping gateware exposes four DDCs behind
+  its single ADC, and the backend runs up to four independent slices and
+  panadapters, opted into and remembered. Both axes draw on one 100BASE-T link,
+  so four receivers are available through 192 kHz and three at 384 kHz. Still to
+  prove on real hardware — the simulator's scene does not follow the NCO, so
+  independent tuning is confirmed only at the register level.
 - **KiwiSDR follow-ups** — WebSDR / OpenWebRX support on top of the shipped
   public-receiver browser (per-receiver passwords, idle-release, and
   waterfall polish already landed in v26.7.2).

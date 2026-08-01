@@ -77,23 +77,41 @@ Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
 {
     const auto c1 = static_cast<std::uint8_t>((static_cast<std::uint8_t>(rate) & 0x03) | kConfigMercury);
     if (numRx < 1) numRx = 1;
-    if (numRx > 8) numRx = 8;
+    if (numRx > kMaxReceivers) numRx = kMaxReceivers;
     // Open collector outputs are DATA[23:17] == C2[7:1]. The one-bit shift is
     // the whole reason this cannot be a straight assignment: DATA[16] is not
     // part of the field, and writing the byte unshifted would put the 160 m
     // relay's bit there and every real selection one filter too low.
     const auto c2 = static_cast<std::uint8_t>((ocFilterByte & 0x7F) << 1);
-    const auto c4 = static_cast<std::uint8_t>(kConfigDuplex | (((numRx - 1) & 0x07) << 3));
+    // Receiver count is DATA[6:3] — a FOUR-bit field (0000=1 .. 1011=12), so the
+    // mask is 0x0F. It was 0x07 while only one receiver ever ran, which silently
+    // capped the encodable count at 8 and would have wrapped 9..12 into 1..4.
+    const auto c4 = static_cast<std::uint8_t>(kConfigDuplex | (((numRx - 1) & 0x0F) << 3));
     return {kC0Config, c1, c2, 0x00, c4};
 }
 
-Cc ccRx1Freq(std::uint32_t hz) noexcept
+Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept
 {
-    return {kC0Rx1Freq,
+    // RX1 is register 0x02 and the receivers are contiguous from there: RX2..RX7
+    // at 0x03..0x08. C0 is the address shifted left one, because C0 bit 0 is MOX.
+    //
+    // RX8..RX12 live at 0x12..0x16 and are NOT contiguous with this run — they
+    // are deliberately not encoded here rather than being reached by arithmetic
+    // that happens to be wrong past RX7. kMaxReceivers is 12 for the config
+    // field; this encoder answers for the seven the shipping gateware can use.
+    if (rxIndex < 0) rxIndex = 0;
+    if (rxIndex > 6) rxIndex = 6;
+    const auto c0 = static_cast<std::uint8_t>(kC0Rx1Freq + (rxIndex << 1));
+    return {c0,
             static_cast<std::uint8_t>((hz >> 24) & 0xFF),
             static_cast<std::uint8_t>((hz >> 16) & 0xFF),
             static_cast<std::uint8_t>((hz >> 8) & 0xFF),
             static_cast<std::uint8_t>(hz & 0xFF)};
+}
+
+Cc ccRx1Freq(std::uint32_t hz) noexcept
+{
+    return ccRxFreq(0, hz);
 }
 
 Cc ccRxGain(int db) noexcept
@@ -145,7 +163,7 @@ void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
     std::size_t consumed = 0;
     for (const std::size_t fs : frameStarts) {
         std::uint8_t* payload = pkt.data() + fs + 8;     // after SYNC(3) + C&C(5)
-        for (std::size_t k = 0; k + kRxSampleBytes <= kFramePayload; k += kRxSampleBytes) {
+        for (std::size_t k = 0; k + kTxSampleBytes <= kFramePayload; k += kTxSampleBytes) {
             // payload[k+0..3] is the Hermes headphone-audio slot. On the first
             // sample of each frame it is EADDR (extended address, base 0x3f),
             // NOT audio. We never write it, so it stays zero from ep2Packet's
@@ -280,10 +298,32 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
         r.mac[i] = pkt[3 + i];
     r.gatewareVersion = pkt[9];
     r.boardId = pkt[10];
-    // Byte 20 carries the board's receiver count on full-length replies. Short
-    // replies omit it; leave 0 so callers fall back to a single receiver.
-    if (pkt.size() > 20)
-        r.numRx = pkt[20];
+    // OFFSET 19 (0x13), not 20. This was off by one, and the byte it was
+    // actually reading is a real field with plausible values — so the error
+    // could not show up as an obviously wrong answer.
+    //
+    // Settled against all three tiers of the source-precedence ladder, which
+    // agree:
+    //
+    //   gateware  usopenhpsdr1.v emits the discovery reply from a DOWN-counting
+    //             state, so the packet offset is 0x3B - state. Anchor it on two
+    //             knowns — `6'h32: VERSION_MAJOR` is offset 9 and `6'h31:
+    //             idhermeslite ? 8'h06 : 8'h01` is offset 10, both fixed by the
+    //             map below — and `6'h28: ... NR` lands at 0x3B-0x28 = 0x13.
+    //   wiki      discovery map, offset 0x13 = "Number of hardware receivers".
+    //   hpsdrsim  writes `buffer[19] = 4` for a Hermes-Lite 2.
+    //
+    // Offset 20 (0x14) is `{BANDSCOPE_BITS, BOARD[5:0]}` — the wideband format
+    // in [7:6] and the board build id in [5:0]. On a build-5 board with the
+    // wideband bits set that reads as a receiver count in the dozens, which the
+    // caller then clamps to the register maximum. So the old code did not fail
+    // loudly on real hardware; it quietly authorised more receivers than the
+    // board has, and the extra ones stream correctly framed, correctly paced,
+    // all-ZERO IQ — indistinguishable from a dead antenna.
+    //
+    // Short replies omit it; leave 0 so callers apply their own default.
+    if (pkt.size() > 19)
+        r.numRx = pkt[19];
     return r;
 }
 
@@ -314,26 +354,59 @@ std::optional<std::uint32_t> ep6Seq(std::span<const std::uint8_t> pkt) noexcept
     return readBe32(pkt.data() + 4);
 }
 
-int ep6Samples(std::span<const std::uint8_t> pkt, std::vector<std::complex<float>>& out) noexcept
+namespace {
+
+// Shared round walker for both ep6Samples() and ep6SamplesMulti().
+//
+// Returns rounds appended (== samples per receiver), or -1 on a bad header.
+// `sink(rx, i, q)` is called for each receiver within each round.
+template <typename Sink>
+int ep6DecodeRounds(std::span<const std::uint8_t> pkt, int numRx, Sink&& sink) noexcept
 {
     if (!isEp6Header(pkt))
         return -1;
     constexpr float kInvFullScale = 1.0f / static_cast<float>(kFullScale);
-    int appended = 0;
+    const std::size_t roundBytes = ep6RoundBytes(numRx);
+    int rounds = 0;
     const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
     for (const std::size_t fs : frameStarts) {
         const std::uint8_t* frame = pkt.data() + fs;
         if (frame[0] != kSync || frame[1] != kSync || frame[2] != kSync)
             continue;                                    // skip a corrupt frame, keep the good one
         const std::uint8_t* payload = frame + 8;         // after SYNC(3) + C&C(5)
-        for (std::size_t k = 0; k + kRxSampleBytes <= kFramePayload; k += kRxSampleBytes) {
-            const float i = static_cast<float>(decode24be(payload + k)) * kInvFullScale;
-            const float q = static_cast<float>(decode24be(payload + k + 3)) * kInvFullScale;
-            out.emplace_back(i, q);                       // payload[k+6..7] = mic, ignored
-            ++appended;
+        // `k + roundBytes <= kFramePayload` is the host-side mirror of the
+        // gateware's own "is there room for another round?" test, so the loop
+        // stops exactly where the hardware switched to zero padding. Reading the
+        // pad as samples would inject a burst of digital silence per packet.
+        for (std::size_t k = 0; k + roundBytes <= kFramePayload; k += roundBytes) {
+            for (int rx = 0; rx < numRx; ++rx) {
+                const std::uint8_t* s = payload + k + static_cast<std::size_t>(rx) * kRxIqBytes;
+                sink(rx,
+                     static_cast<float>(decode24be(s)) * kInvFullScale,
+                     static_cast<float>(decode24be(s + 3)) * kInvFullScale);
+            }
+            ++rounds;   // the round's trailing 2 mic bytes are ignored
         }
     }
-    return appended;
+    return rounds;
+}
+
+}  // namespace
+
+int ep6Samples(std::span<const std::uint8_t> pkt, std::vector<std::complex<float>>& out) noexcept
+{
+    return ep6DecodeRounds(pkt, 1, [&out](int, float i, float q) { out.emplace_back(i, q); });
+}
+
+int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
+                    std::span<std::vector<std::complex<float>>> out) noexcept
+{
+    const int numRx = static_cast<int>(out.size());
+    if (numRx < 1 || numRx > kMaxReceivers)
+        return -1;
+    return ep6DecodeRounds(pkt, numRx, [&out](int rx, float i, float q) {
+        out[static_cast<std::size_t>(rx)].emplace_back(i, q);
+    });
 }
 
 }  // namespace AetherSDR::hl2

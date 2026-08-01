@@ -22,6 +22,15 @@ struct KiwiSdrAntennaProfile {
     QString name;
     QString endpoint;
     bool autoConnect{false};
+    // Keep this receiver's audio audible while the radio transmits (the
+    // stream itself always keeps flowing during TX; this only opens the
+    // transmit gate at the audio mix). Default off: muted during TX.
+    bool keepAudioDuringTx{false};
+    // Hold the post-TX unmute for the receiver's stream latency so the
+    // resume lands on audio received after unkey (suppresses hearing your
+    // own delayed TX tail on an in-range receiver). No effect when
+    // keepAudioDuringTx is set.
+    bool resumeAudioAfterTxDelay{false};
     bool waterfallAutoScale{true};
     int waterfallMinDbm{-110};
     int waterfallMaxDbm{-10};
@@ -97,17 +106,17 @@ public slots:
                               int filterLowHz, int filterHighHz,
                               const QString& panId, double centerMhz,
                               double bandwidthMhz, int lineDurationMs,
-                              const QString& bandName);
+                              const QString& bandName, int cwPitchHz);
     void assignSliceToProfile(int sliceId, const QString& profileId,
                               double frequencyMhz, const QString& mode,
                               int filterLowHz, int filterHighHz,
                               const QString& panId,
-                              const QString& bandName);
+                              const QString& bandName, int cwPitchHz);
     void clearSliceAssignment(int sliceId);
     void updateSliceTracking(int sliceId, double frequencyMhz,
                              const QString& mode, int filterLowHz,
                              int filterHighHz, const QString& panId,
-                             const QString& bandName);
+                             const QString& bandName, int cwPitchHz);
     void updateWaterfallView(int sliceId, const QString& panId,
                              double centerMhz, double bandwidthMhz,
                              int lineDurationMs);
