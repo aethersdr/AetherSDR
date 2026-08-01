@@ -61,8 +61,10 @@ public:
     explicit LocalMemoryBank(QObject* parent = nullptr);
     ~LocalMemoryBank() override;
 
-    // Defaults to LocalMemoryStore::defaultFilePath(). Setting it drops the
-    // loaded state so the next load() reads the new file.
+    // The LEGACY import source (RFC #4603 PR 6: the bank lives in the
+    // settings database now; the file is read once as a frozen import source
+    // when no document exists). Defaults to LocalMemoryStore::defaultFilePath().
+    // Setting it drops the loaded state so the next load() re-evaluates.
     void setFilePath(const QString& path);
     QString filePath() const { return m_filePath; }
 
@@ -106,10 +108,10 @@ signals:
 private:
     int allocateSlot() const;
     void scheduleSave();
-    // Concurrent-writer detection: snapshot the file's identity at load and
-    // after each save, and compare before the next save. Best-effort, not a
-    // lock — see flush().
-    void rememberFileState();
+    // Concurrent-writer detection, database edition: the document's savedAt
+    // stamp is snapshotted at load and after each of our own writes, and
+    // compared before the next write. Best-effort, not a lock — see flush().
+    void rememberDocumentState();
     bool foreignWriteDetected() const;
 
     QString m_filePath;
@@ -118,15 +120,13 @@ private:
     QString m_lastError;
     // The read has been attempted (latches; nothing re-reads).
     bool m_loaded{false};
-    // The file was understood, so replacing it wholesale is safe. False for a
-    // file this build cannot read — see load(), which explains why these must
-    // be two flags and not one.
+    // The stored bank (document or legacy file) was understood, so replacing
+    // it wholesale is safe. False for a bank this build cannot read — see
+    // load(), which explains why these must be two flags and not one.
     bool m_writable{true};
     bool m_dirty{false};
-    // File identity as of the last read or our own last write.
-    bool m_seenExists{false};
-    QDateTime m_seenMtime;
-    qint64 m_seenSize{-1};
+    // The document's savedAt as of the last read or our own last write.
+    QString m_seenSavedAt;
 };
 
 }  // namespace AetherSDR

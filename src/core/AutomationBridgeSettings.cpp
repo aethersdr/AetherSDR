@@ -120,7 +120,12 @@ void AutomationBridgeSettings::loadToken(QObject* ctx,
 
 #ifdef HAVE_KEYCHAIN
     auto& s = AppSettings::instance();
-    const QString legacy = s.value(kLegacyTokenKey).toString();
+    // A token diverted by the XML import normally reaches the keychain during
+    // the import itself; the session vault covers the case where that write
+    // failed — the token still works this session and the write retries here.
+    QString legacy = s.takeSessionCredential(keychainKey());
+    if (legacy.isEmpty())
+        legacy = s.value(kLegacyTokenKey).toString();
     if (!legacy.isEmpty()) {
         // One-shot migrate the old plaintext token into the OS secret store,
         // then drop the plaintext copy. Hand the caller the value immediately.
@@ -158,10 +163,18 @@ void AutomationBridgeSettings::loadToken(QObject* ctx,
     });
     job->start();
 #else
-    const QString legacy = AppSettings::instance().value(kLegacyTokenKey).toString();
-    if (!legacy.isEmpty())
-        qWarning() << "AutomationBridge: HAVE_KEYCHAIN not set - token remains in "
-                      "plaintext AppSettings";
+    // No keychain: the token is session-only (RFC #4603 — credentials never
+    // persist in the settings store). The XML import parks a legacy token in
+    // the session vault; consume it from there, else fall back to any
+    // legacy plaintext copy still in memory from a pre-migration store.
+    QString legacy = AppSettings::instance().takeSessionCredential(keychainKey());
+    if (legacy.isEmpty())
+        legacy = AppSettings::instance().value(kLegacyTokenKey).toString();
+    if (!legacy.isEmpty()) {
+        AppSettings::instance().setSessionCredential(keychainKey(), legacy);
+        qWarning() << "AutomationBridge: HAVE_KEYCHAIN not set - token is "
+                      "session-only and must be re-paired next launch";
+    }
     cb(legacy);
 #endif
 }

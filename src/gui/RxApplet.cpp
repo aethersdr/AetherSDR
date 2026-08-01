@@ -323,14 +323,9 @@ RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
         "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; }"
         "QSlider::sub-page:vertical   { background: {{color.slider.foreground}}; }");
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    // Recall the last user-chosen Manual squelch threshold from prior
-    // sessions.  Auto mode clobbers the slice's squelchLevel with
-    // algorithm-suggested values, so the radio can't be relied on to
-    // preserve the operator's manual preference across mode cycles or
-    // launches — we persist it client-side.
-    m_sqlManualLevel = std::clamp(
-        AppSettings::instance().value("LastManualSquelchLevel", "20").toInt(),
-        0, 100);
+    // m_sqlManualLevel is only the fallback for when no slice is attached;
+    // it takes its class-default (20) here. Squelch is radio-authoritative
+    // (AGENTS.md "do NOT persist") — no AppSettings seed (#4592).
     m_accessibleFrequencyTimer.setSingleShot(true);
     connect(&m_accessibleFrequencyTimer, &QTimer::timeout, this, [this]() {
         if (!QAccessible::isActive() || !m_freqLabel) {
@@ -1345,11 +1340,11 @@ void RxApplet::cycleSqlMode()
 //
 // VfoWidget hosts a second SQL button+slider that must show the same
 // mode and value as the one in RxApplet.  These helpers let it pipe its
-// own user events through RxApplet's existing state machine so all the
-// persistence (AppSettings LastManualSquelchLevel / AutoSqlMarginDb),
-// algorithm enable/disable, and the manual-level cache live in exactly
-// one place.  RxApplet emits sqlModeChanged / autoSqlMarginDbChanged
-// back so VfoWidget can refresh its UI.
+// own user events through RxApplet's existing state machine so the
+// persistence (AppSettings AutoSqlMarginDb), algorithm enable/disable,
+// and the per-slice manual-level cache (SliceModel::manualSquelchLevel,
+// #4592) live in exactly one place.  RxApplet emits sqlModeChanged /
+// autoSqlMarginDbChanged back so VfoWidget can refresh its UI.
 
 void RxApplet::cycleSqlModeExternal()
 {
@@ -1400,19 +1395,15 @@ void RxApplet::setManualSqlLevelForCurrentSurface(int level)
         return;
     }
 
-    // Per-slice (#3326): the attached slice keeps its own threshold. The
-    // shared m_sqlManualLevel / AppSettings key still get updated too, but
-    // only as the seed a NEWLY created slice starts from when the radio's
-    // status carries no squelch_level of its own — see RadioModel.cpp's
-    // SliceModel construction — not a live cross-slice value read back here.
+    // Per-slice (#3326): the attached slice keeps its own threshold.
+    // m_sqlManualLevel is refreshed unconditionally too (#4592), not just
+    // when no slice is attached, so the no-slice fallback tracks the
+    // operator's last choice instead of freezing at whatever it held the
+    // first time a slice attached.
     if (m_slice) {
         m_slice->setManualSquelchLevel(clamped);
-    } else {
-        m_sqlManualLevel = clamped;
     }
-    auto& s = AppSettings::instance();
-    s.setValue("LastManualSquelchLevel", QString::number(clamped));
-    s.save();
+    m_sqlManualLevel = clamped;
 }
 
 void RxApplet::setSqlSliderValueExternal(int v)
@@ -1472,14 +1463,29 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     if (wasAuto != nowAuto)
         emit sqlAutoChanged(nowAuto);
 
+    // Re-gate the slice's status-echo handler on EVERY mode change, not only
+    // the Auto edges: an echoed level counts as the operator's manual choice
+    // only while we are in Manual.  Gating on `wasAuto != nowAuto` alone
+    // would miss Off↔Manual entirely (wasAuto == nowAuto there), and would
+    // leave the gate open across Auto→Off — the leg every return from Auto
+    // to Manual goes through, since cycleSqlMode() runs Off→Manual→Auto→Off
+    // (#4592).
+    if (m_slice) m_slice->setSquelchEchoIsManual(m == SqlMode::Manual);
+
     // Manual / Auto both want the radio squelch ON. Use the same model-backed
     // value that applySqlModeVisuals() displays so the first Kiwi command
     // cannot diverge from the slider/overlay before the operator drags it.
+    //
+    // Only Auto sends the dB margin: it is a 5–20 dB offset from the noise
+    // floor, not a 0–100 threshold.  Since #4592 dropped the client-side
+    // copy, the radio's own squelch_level is the only surviving record of
+    // the operator's manual threshold across a reconnect — writing the
+    // margin there on the way to Off would destroy it (Principle II).
     if (propagateToRadio && m_slice) {
         const bool sqOn = (m != SqlMode::Off);
-        const int level = (m == SqlMode::Manual)
-            ? sqlManualLevel()
-            : autoSqlMarginDb();
+        const int level = (m == SqlMode::Auto)
+            ? autoSqlMarginDb()
+            : sqlManualLevel();
         m_slice->setSquelch(sqOn, level);
     }
 }
@@ -1874,6 +1880,7 @@ void RxApplet::setKiwiSdrManager(KiwiSdrManager* manager)
                 applySqlModeVisuals();
                 emit sqlModeChanged(static_cast<int>(m_sqlMode));
                 emit sqlAutoChanged(m_sqlMode == SqlMode::Auto);
+                m_slice->setSquelchEchoIsManual(m_sqlMode == SqlMode::Manual);
             }
         });
     }
@@ -2320,6 +2327,11 @@ void RxApplet::connectSlice(SliceModel* s)
     }
     emit sqlModeChanged(static_cast<int>(m_sqlMode));
     emit sqlAutoChanged(m_sqlMode == SqlMode::Auto);
+    // Explicit re-sync on every (re)attach: setSqlMode() above is a no-op
+    // when the mode it computed already matches m_sqlMode, so a freshly
+    // connected slice can arrive with the gate at its class default rather
+    // than this applet's actual mode (#4592).
+    s->setSquelchEchoIsManual(m_sqlMode == SqlMode::Manual);
     emit squelchStateChanged(s->receiveSquelchOn(), s->receiveSquelchLevel());
     // AF gain → radio's per-slice audio_level
     {
@@ -2448,6 +2460,13 @@ void RxApplet::disconnectSlice(SliceModel* s)
 {
     s->disconnect(this);
     m_savedSquelchOn = false;
+    // No surface owns this slice's SQL mode once it's detached (review on
+    // #4592), so fall back to the class default: treat echoes as manual.
+    // Leaving the gate closed would permanently deafen a later-reclaimed or
+    // reattached slice to genuine manual changes — the same silent-overwrite
+    // class in the opposite direction, and precisely the non-active-slice
+    // leak #4592 part 1 set out to close.
+    s->setSquelchEchoIsManual(true);
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────

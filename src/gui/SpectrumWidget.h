@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <memory>
 #include <QHash>
 #include <QWidget>
 #include <QPushButton>
@@ -915,6 +916,33 @@ private:
     void schedulePanDragSettleUpdate();
     void scheduleFrequencyRangeSettleUpdate(double centerMhz, double bandwidthMhz);
     void finishFrequencyRangeSettleUpdate();
+    // Deep-copies its DssRenderer on copy but stays a cheap pointer move on
+    // move, so WaterfallStreamState keeps the value semantics QHash's
+    // copy-on-write detach expects: relocating entries on rehash never
+    // aliases two profile states onto one DssRenderer the way a bare
+    // shared_ptr<DssRenderer> would. Const accessors also restore the const
+    // propagation a raw shared_ptr member loses through
+    // `const WaterfallStreamState&`.
+    class DeepCopyDssPtr {
+    public:
+        DeepCopyDssPtr() : m_ptr(std::make_shared<DssRenderer>()) {}
+        DeepCopyDssPtr(const DeepCopyDssPtr& other)
+            : m_ptr(std::make_shared<DssRenderer>(*other.m_ptr)) {}
+        DeepCopyDssPtr(DeepCopyDssPtr&&) noexcept = default;
+        DeepCopyDssPtr& operator=(const DeepCopyDssPtr& other) {
+            m_ptr = std::make_shared<DssRenderer>(*other.m_ptr);
+            return *this;
+        }
+        DeepCopyDssPtr& operator=(DeepCopyDssPtr&&) noexcept = default;
+
+        DssRenderer& operator*() { return *m_ptr; }
+        const DssRenderer& operator*() const { return *m_ptr; }
+        DssRenderer* operator->() { return m_ptr.get(); }
+        const DssRenderer* operator->() const { return m_ptr.get(); }
+
+    private:
+        std::shared_ptr<DssRenderer> m_ptr;
+    };
     struct WaterfallStreamState {
         QImage waterfall;
         QImage waterfallSupplemental;
@@ -942,7 +970,21 @@ private:
         double kiwiLastWaterfallCenterMhz{0.0};
         double kiwiLastWaterfallBandwidthMhz{0.0};
         bool kiwiLastWaterfallFrameValid{false};
-        DssRenderer dss;
+        // Heap-indirected (#4595): DssRenderer embeds four fixed-size
+        // std::array<std::array<...>> row buffers (~800KB total). Storing it
+        // by value here meant every stack-local WaterfallStreamState — e.g.
+        // restoreCurrentWaterfallStreamState()'s `restored` / `updated` —
+        // materialized a full ~800KB copy on the stack just to move-construct
+        // it, which could exhaust a thread's stack on its own. DeepCopyDssPtr
+        // (not a bare shared_ptr) because m_kiwiProfileWaterfallStates is a
+        // QHash<QString, WaterfallStreamState>, and QHash's internal
+        // rehash/detach needs the value type to stay copy-constructible; every
+        // real use in this file is std::move(), so the only implicit copy is
+        // QHash relocating entries on rehash, which now deep-copies the
+        // renderer exactly as a by-value DssRenderer member would have —
+        // no aliasing between profile states. Always non-null: default-
+        // constructed here and on every reset via `= WaterfallStreamState{}`.
+        DeepCopyDssPtr dss;
         float kiwiDisplayFloorDbm{-110.0f};
         float kiwiDisplayCeilDbm{-10.0f};
         bool kiwiDisplayRangeValid{false};
@@ -959,6 +1001,9 @@ private:
         quint64 dssMeshRowGenUploaded{~0ull};
 #endif
     };
+    // #4595: this type is materialized as a stack local by save/restore; keep
+    // large fixed buffers behind indirection so this can't silently regress.
+    static_assert(sizeof(WaterfallStreamState) < 16 * 1024);
     void clearCurrentWaterfallRows();
     void resetKiwiSdrWaterfallDisplayRange();
     void resetCurrentWaterfallRowsForSize(const QSize& waterfallSize,

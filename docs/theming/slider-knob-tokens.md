@@ -87,6 +87,13 @@ no slider/knob entries in their on-disk JSON still get the canonical
 look + per-applet differentiation.  The bundled themes' JSON
 re-asserts the same values via primitive aliases (idempotent).
 
+> **Since #3184 the seed is GENERATED, not hand-written.**
+> `tools/gen_theme_seed.py` emits `src/core/ThemeSeedGenerated.cpp`
+> from `resources/themes/default-dark.json`, resolving `{primitive}`
+> aliases to concrete values.  Everything above still describes what
+> the seed *contains*; it no longer describes how it gets there.  Add
+> tokens to the JSON and run the generator — never by hand.
+
 ## The QSS migration
 
 Two surfaces in `gui/Theme.h`:
@@ -184,11 +191,14 @@ When carving the next control type out (toggles, spinboxes, …):
 1. **Define the namespace.**  Match the slider/knob shape:
    `color.<type>.background`, `.foreground`, `.handle`, each with a
    `.disabled` variant.
-2. **Seed both layers.**
-   - Add JSON entries to both bundled themes' root scope, aliased to
-     primitives.
-   - Add raw-hex root entries to `seedBuiltinDefaults()` for forked
-     user themes that pre-date the new namespace.
+2. **Add the tokens to both bundled themes' root scope**, aliased to
+   primitives, then run `python tools/gen_theme_seed.py` and commit
+   the regenerated `src/core/ThemeSeedGenerated.cpp`.  That is what
+   seeds the compiled fallback for forked user themes that pre-date
+   the new namespace — do **not** hand-add entries to
+   `seedBuiltinDefaults()`, which is the dual source of truth #3184
+   removed.  `tools/check_theme_seed.py --strict` fails the PR if you
+   forget the regeneration step.
 3. **Migrate the QSS or paint code.**
    - QSS-styled controls (`QToolButton`, `QSpinBox`, …): swap the
      borrowed tokens in `Theme.h`'s `appStylesheetTemplate` and any
@@ -199,8 +209,9 @@ When carving the next control type out (toggles, spinboxes, …):
      `tm.color(widget, token)` overload.
 4. **Optional: per-applet overrides.**  Add nested-scope JSON
    entries under `scopes.applet.scopes.<name>` for the applets that
-   should differ, and seed them in `seedBuiltinDefaults()` for
-   pre-existing user themes.
+   should differ.  The generator picks nested scopes up automatically
+   and emits them through `seedScopedToken()`, so pre-existing user
+   themes get them from the same regeneration step as step 2.
 5. **Document.**  Add a section to this directory referencing the
    pattern.
 

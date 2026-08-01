@@ -183,6 +183,7 @@ AudioEngine (aethercore, 24 kHz post-NR RX)
 | `ENABLE_ASR_METAL` | ON (Apple) | Metal GPU backend (macOS). |
 | `REQUIRE_ASR_ONNX` | OFF | **Release guard** — fail configure if ONNX Runtime is missing (else VAD/speaker/classifier silently compile out). |
 | `REQUIRE_ASR_GPU` | OFF | **Release guard** — fail configure if no GPU backend (Vulkan/Metal) is enabled. |
+| `USE_SYSTEM_LIBWHISPER` | OFF | Link a distro libwhisper (**≥ 1.8.0**) via pkg-config instead of the vendored snapshot. |
 
 The ONNX features (Silero VAD, speaker labeling) and the signal classifier need
 **ONNX Runtime**. Stage a prebuilt with `scripts/setup/setup-onnxruntime.sh`
@@ -194,6 +195,14 @@ installed (Linux x86_64 Vulkan, macOS Metal).
 
 Vendored whisper.cpp is pinned; see
 [`third_party/whisper.cpp/AETHER_VENDORING.md`](../third_party/whisper.cpp/AETHER_VENDORING.md).
+
+`USE_SYSTEM_LIBWHISPER=ON` is the packager escape hatch from that pin — it drops
+the vendored subdirectory and takes `whisper` (plus `ggml`, which
+`WhisperAsrBackend` calls directly) from pkg-config. The 1.8.0 floor is the first
+release carrying `GGML_BACKEND_DEVICE_TYPE_IGPU`. Since the ggml backends built
+into a distro package are the packager's choice and can't be read back at
+configure time, this path never reports a GPU backend and is rejected outright
+under `REQUIRE_ASR_GPU`: release images build the vendored engine.
 
 ### Tests
 

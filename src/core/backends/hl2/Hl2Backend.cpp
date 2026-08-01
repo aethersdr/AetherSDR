@@ -1,4 +1,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2Bands.h"
+
+#include <QJsonObject>
 
 #include <cmath>
 #include <limits>
@@ -150,6 +153,22 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     if (u == QLatin1String("DRM"))  return WdspChannel::Mode::Drm;
     if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return WdspChannel::Mode::Wbfm;
     return WdspChannel::Mode::Usb;
+}
+
+// Is `mode` a name modeFromString() genuinely maps (rather than falling back
+// to USB)? The restore boundary uses this so a corrupt document's mode string
+// is dropped instead of reaching Receiver::mode, the UI, and — via capture —
+// re-persisting itself (PR #4619 review, Ozy311).
+bool isKnownModeString(const QString& mode) noexcept
+{
+    static const QStringList kKnown = {
+        QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("DSB"),
+        QStringLiteral("CWL"), QStringLiteral("CWU"), QStringLiteral("CW"),
+        QStringLiteral("FM"),  QStringLiteral("NFM"), QStringLiteral("AM"),
+        QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("SAM"),
+        QStringLiteral("DRM"), QStringLiteral("WBFM"), QStringLiteral("WFM"),
+    };
+    return kKnown.contains(mode.toUpper());
 }
 
 // Default RX passband per mode, in Hz relative to the carrier. Sign carries the
@@ -1179,6 +1198,24 @@ RadioCapabilities Hl2Backend::capabilities() const
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    // The HL2 persists NOTHING across power cycles — "the radio reports no
+    // VFO, so the app is authoritative and must push" (pushInitialState).
+    // These are the domains the client owns as the radio's memory
+    // (RFC #4603): consumed by RadioStateMemory, wired per-domain in the
+    // RFC's PR 3 (per-band drive/LNA maps per nigelfenton's review).
+    c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::Tuning
+                            | RadioCapabilities::ClientSettingsDomain::Passband
+                            | RadioCapabilities::ClientSettingsDomain::SpanRate
+                            | RadioCapabilities::ClientSettingsDomain::RfGain
+                            | RadioCapabilities::ClientSettingsDomain::TxSetpoints
+                            // Memories: the client owns them (persistsMemories
+                            // is false above). NOTE the bank itself engages on
+                            // persistsMemories and keeps its own SHARED
+                            // document — this declaration is descriptive
+                            // completeness, and Memories stays out of
+                            // RadioStateMemory's ext gate (one domain, one
+                            // document — RFC #4603 PR 6).
+                            | RadioCapabilities::ClientSettingsDomain::Memories;
     // No extension namespaces (no invokeExtension verbs yet), matching FlexBackend.
     return c;
 }
@@ -1205,6 +1242,13 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     if (const double remembered = Hl2Settings::spanMhz(); remembered > 0.0)
         m_sampleRateHz = nearestIqSampleRateHz(remembered * 1.0e6);
 
+    // RFC #4603 PR 3: this radio's remembered state (validated in
+    // applyRestoredState) seeds the session. Ordering is deliberate — the
+    // legacy family-wide span above is the fallback, the per-radio restored
+    // rate beats it, and the explicit automation/test params below beat both.
+    if (m_haveRestoredState && m_restoredState.sampleRateHz > 0)
+        m_sampleRateHz = m_restoredState.sampleRateHz;
+
     // Optional overrides from the namespaced params.
     if (request.params.contains(QStringLiteral("sampleRateHz")))
         m_sampleRateHz = request.params.value(QStringLiteral("sampleRateHz")).toInt();
@@ -1217,8 +1261,37 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // exist, because m_rx is not built yet — how many of them there are is
     // decided a few lines below and depends on the sample rate settled above.
     double startFreqHz = 10'000'000.0;
+    if (m_haveRestoredState && m_restoredState.rfFrequencyHz > 0.0)
+        startFreqHz = m_restoredState.rfFrequencyHz;
     if (request.params.contains(QStringLiteral("rxFrequencyHz")))
         startFreqHz = request.params.value(QStringLiteral("rxFrequencyHz")).toDouble();
+
+    // Per-band memory (RFC #4603 PR 3): the session comes up with the start
+    // band's remembered LNA. The explicit param still wins via the guard.
+    m_currentBandKey = hl2::bandKeyForHz(startFreqHz);
+    if (m_haveRestoredState
+        && !request.params.contains(QStringLiteral("lnaGainDb"))) {
+        m_lnaGainDb = qBound(kLnaGainMinDb,
+                             m_lnaDbByBand.value(m_currentBandKey, m_lnaDefaultDb),
+                             kLnaGainMaxDb);
+    }
+    // Seed the DRIVE from the start band's memory and echo it upward NOW —
+    // before linkUp — so TransmitModel carries the restored value when its
+    // connect-time push fires (PR #4619 bench, nigelfenton: the push arrived
+    // as apparent operator intent at the model default of 100 and overwrote
+    // the stored per-band drive on every reconnect; Ozy311 traced the same
+    // seam). With the model seeded, that push becomes a value-identical echo
+    // — which setTxPower() now recognizes and declines to record.
+    if (m_haveRestoredState) {
+        const int drive =
+            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
+        if (drive >= 0) {
+            m_rfPowerPercent = drive;
+            TransmitDelta delta;
+            delta.rfPower = drive;
+            emit transmitChanged(delta);
+        }
+    }
 
     // ---- how many receivers ----
     //
@@ -1564,8 +1637,15 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     //
     // Sent whether or not transmit is enabled: this is oscillator setup, it keys
     // nothing, and having it already correct is part of what makes the key safe.
-    if (ddc == m_txDdc)
+    if (ddc == m_txDdc) {
         setTxFrequency(r->sliceFreqHz);
+        // Per-band memory follows the TRANSMIT-owning receiver (RFC #4603
+        // PR 3): leaving a band records its LNA/drive, entering one applies
+        // what it remembered. Keyed to the TX slice because drive and LNA are
+        // radio-wide hardware — a second receiver browsing another band must
+        // not drag the transmitter's setpoints around.
+        applyPerBandStateFor(r->sliceFreqHz, "tune");
+    }
 
     // The companion filter board is band hardware in the ANTENNA path, shared by
     // every receiver, and on transmit it is what keeps the harmonics legal.
@@ -1577,6 +1657,7 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
 
     emitSliceState(ddc);
     emitPanState(ddc);
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::setSliceMode(int sliceId, const QString& mode)
@@ -1647,6 +1728,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& mode)
             Q_ARG(double, static_cast<double>(txHi)));
     }
     emitSliceState(ddc);
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::setSliceFilter(int sliceId, int lowHz, int highHz)
@@ -1661,6 +1743,7 @@ void Hl2Backend::setSliceFilter(int sliceId, int lowHz, int highHz)
         QMetaObject::invokeMethod(r->dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, lowHz), Q_ARG(double, highHz));
     emitSliceState(ddc);
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
@@ -1782,6 +1865,11 @@ void Hl2Backend::setTxSlice(int sliceId)
     // old receiver's frequency would key on the wrong band with nothing to say
     // so — the exact failure §14 records from the first bring-up.
     setTxFrequency(r->sliceFreqHz);
+    // Band memory follows TRANSMIT (PR #4619 review, Ozy311 finding 2):
+    // moving TX from a 40 m receiver to a 20 m receiver must apply 20 m's
+    // remembered drive/LNA and re-key later edits — the band key belongs to
+    // the transmit-owning slice, not to whichever slice tuned last.
+    applyPerBandStateFor(r->sliceFreqHz, "tx slice move");
     if (m_txDsp) {
         QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(r->mode)));
@@ -1884,27 +1972,13 @@ void Hl2Backend::setPanRfGain(const QString& panId, int gainDb)
     const int clamped = qBound(kLnaGainMinDb, gainDb, kLnaGainMaxDb);
     if (clamped == m_lnaGainDb)
         return;
-    m_lnaGainDb = clamped;
-
-    // Move the dB reference IN LOCKSTEP with the gain, and do it here rather
-    // than letting the two drift. The spectrum and the S-meter are both
-    // rendered through m_dbRef, so without this every gain change would slide
-    // the whole trace up or down the display — an operator backing off 10 dB on
-    // a strong band would watch the noise floor drop 10 dB and read it as the
-    // band going quiet, which is the opposite of what they just did.
-    m_dbRef.setLnaGainDb(m_lnaGainDb);
-
-    if (m_metis)
-        QMetaObject::invokeMethod(m_metis, "setLnaGainDb", Qt::QueuedConnection,
-            Q_ARG(int, m_lnaGainDb));
-
+    applyLnaGainDb(clamped);
     qCInfo(lcHl2) << "HL2 LNA gain:" << m_lnaGainDb << "dB (requested" << gainDb << ")";
 
-    // Echo what the hardware actually took, to every pan. The slider is free to
-    // have asked for something outside the register's range, and this is where
-    // it finds out it did not get it.
-    for (const auto& ids : m_ids.all())
-        emit panRfGainChanged(ids.panId, m_lnaGainDb);
+    // The operator's gain belongs to the band they set it on (RFC #4603 PR 3).
+    if (!m_currentBandKey.isEmpty())
+        m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::applyPanBandwidth(double hz)
@@ -2055,6 +2129,7 @@ void Hl2Backend::applyPanBandwidth(double hz)
         if (const Receiver* r = rx(ids.ddcIndex))
             setSliceFrequency(ids.uiNumber, r->sliceFreqHz);
     }
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::setPanFrameRate(const QString& panId, int fps)
@@ -2310,7 +2385,30 @@ void Hl2Backend::setTxPower(int percent)
     // unkey can put this back. Recorded BEFORE the transmit gate and even while
     // tuning: a power change made mid-tune, or while TX is blocked, is still
     // what the operator wants once the carrier drops or the gate opens.
-    m_rfPowerPercent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+    const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+    // OPERATOR intent only — and only on CHANGE: internal band-memory applies
+    // (m_applyingBandMemory) and value-identical echoes (RadioModel's
+    // connect-time power push re-asserting what we just seeded) must neither
+    // claim the band nor set the baseline. Without the change-gate, the
+    // connect push at the model default bootstrapped defaultPercent=100 and
+    // rewrote the start band's stored drive on every reconnect
+    // (PR #4619 bench + review).
+    const bool operatorChange = !m_applyingBandMemory
+                                && clamped != m_rfPowerPercent;
+    m_rfPowerPercent = clamped;
+    if (operatorChange) {
+        // The operator's drive belongs to the band they set it on.
+        if (!m_currentBandKey.isEmpty())
+            m_driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
+        // The FIRST drive an operator sets becomes the radio's baseline for
+        // bands never visited (PR #4619 review: nothing else can ever raise
+        // the sentinel, so the unvisited-band fallback was dead and a new
+        // band inherited the previous band's drive). First-set-wins so later
+        // per-band tweaks don't move the baseline.
+        if (m_driveDefaultPercent < 0)
+            m_driveDefaultPercent = m_rfPowerPercent;
+    }
+    notifyOperatingStateChanged();
     if (m_tuning)
         return;   // tune power owns the drive register until the carrier drops
     applyDrive(m_rfPowerPercent);
@@ -2464,6 +2562,205 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     return h;
 }
 
+
+// ─── RFC #4603 PR 3: the client is this radio's memory ───────────────────────
+
+void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
+{
+    // THE VALIDATION BOUNDARY (Principle VII): everything in the document is
+    // operator data from disk. Each field is range-checked here, once, and a
+    // field that fails validation is dropped — never "fixed up" into a value
+    // the operator didn't choose. Restoring NEVER keys transmit: everything
+    // below is a setpoint; the TX gate (m_txAllowed / keying paths) is
+    // untouched.
+    // FULL RESET FIRST — and applyRestoredState({}) is a legitimate call
+    // meaning "this radio has no memory": RadioModel invokes this
+    // unconditionally on every engaged connect, so a same-family radio swap
+    // can never leak radio A's maps OR its live members into radio B
+    // (PR #4619 review, Ozy311 finding 1). Live members reset to the same
+    // virgin defaults a fresh backend construction would have.
+    m_restoredState = RestoredRadioState{};
+    m_haveRestoredState = false;
+    m_lnaDbByBand.clear();
+    m_driveByBand.clear();
+    m_lnaDefaultDb = 20;          // Hl2Backend.h: m_lnaGainDb's constructed default
+    m_lnaGainDb = 20;
+    m_driveDefaultPercent = -1;
+    m_rfPowerPercent = 100;       // TransmitModel's session default
+    m_sampleRateHz = 48000;       // construction default — radio B must not
+                                  // inherit radio A's span (PR #4619 review)
+    m_currentBandKey.clear();
+
+    RestoredRadioState valid;
+    if (state.rfFrequencyHz >= 100'000.0 && state.rfFrequencyHz <= 38'400'000.0)
+        valid.rfFrequencyHz = state.rfFrequencyHz;
+    if (isKnownModeString(state.mode))
+        valid.mode = state.mode.toUpper();   // canonical casing — a "cw" from a
+                                             // hand-edited document must not
+                                             // round-trip into the UI
+    // A passband is kept only as a sane pair; mode+passband are applied
+    // together in pushInitialState() (the #4484 reconciliation).
+    if (state.filterLowHz < state.filterHighHz
+        && state.filterLowHz >= -12'000.0 && state.filterHighHz <= 12'000.0)
+    {
+        valid.filterLowHz = state.filterLowHz;
+        valid.filterHighHz = state.filterHighHz;
+    }
+    if (state.sampleRateHz > 0)
+        valid.sampleRateHz = nearestIqSampleRateHz(state.sampleRateHz);
+
+    // Per-band maps ride the typed extension's domain sub-objects
+    // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
+    const QJsonObject rfGain =
+        state.extension.value(QStringLiteral("rfGain")).toObject();
+    if (rfGain.contains(QStringLiteral("defaultDb")))
+        m_lnaDefaultDb = qBound(kLnaGainMinDb,
+                                rfGain.value(QStringLiteral("defaultDb")).toInt(),
+                                kLnaGainMaxDb);
+    const QJsonObject lnaByBand =
+        rfGain.value(QStringLiteral("lnaDbByBand")).toObject();
+    for (auto it = lnaByBand.constBegin(); it != lnaByBand.constEnd(); ++it)
+        m_lnaDbByBand.insert(it.key(),
+                             qBound(kLnaGainMinDb, it.value().toInt(),
+                                    kLnaGainMaxDb));
+
+    const QJsonObject txSetpoints =
+        state.extension.value(QStringLiteral("txSetpoints")).toObject();
+    if (txSetpoints.contains(QStringLiteral("defaultPercent")))
+        m_driveDefaultPercent = qBound(
+            0, txSetpoints.value(QStringLiteral("defaultPercent")).toInt(), 100);
+    const QJsonObject driveByBand =
+        txSetpoints.value(QStringLiteral("driveByBand")).toObject();
+    for (auto it = driveByBand.constBegin(); it != driveByBand.constEnd(); ++it)
+        m_driveByBand.insert(it.key(), qBound(0, it.value().toInt(), 100));
+
+    m_restoredState = valid;
+    m_haveRestoredState = true;
+    qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
+                  << valid.mode << "filter" << valid.filterLowHz << ".."
+                  << valid.filterHighHz << "rate" << valid.sampleRateHz
+                  << "lna bands" << m_lnaDbByBand.size() << "drive bands"
+                  << m_driveByBand.size();
+}
+
+RestoredRadioState Hl2Backend::currentOperatingState() const
+{
+    RestoredRadioState state;
+    if (const Receiver* txRx = rx(m_txDdc)) {
+        state.rfFrequencyHz = txRx->sliceFreqHz;
+        state.mode = txRx->mode;
+        state.filterLowHz = txRx->filterLowHz;
+        state.filterHighHz = txRx->filterHighHz;
+    }
+    state.sampleRateHz = m_sampleRateHz;
+
+    // The maps plus the live values under the current band key — so a capture
+    // between band changes still records the operator's latest tweaks.
+    QJsonObject lnaByBand;
+    for (auto it = m_lnaDbByBand.constBegin(); it != m_lnaDbByBand.constEnd(); ++it)
+        lnaByBand.insert(it.key(), it.value());
+    QJsonObject driveByBand;
+    for (auto it = m_driveByBand.constBegin(); it != m_driveByBand.constEnd(); ++it)
+        driveByBand.insert(it.key(), it.value());
+    if (!m_currentBandKey.isEmpty()) {
+        lnaByBand.insert(m_currentBandKey, m_lnaGainDb);
+        driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
+    }
+
+    QJsonObject rfGain{{QStringLiteral("defaultDb"), m_lnaDefaultDb},
+                       {QStringLiteral("lnaDbByBand"), lnaByBand}};
+    QJsonObject txSetpoints{{QStringLiteral("driveByBand"), driveByBand}};
+    if (m_driveDefaultPercent >= 0)
+        txSetpoints.insert(QStringLiteral("defaultPercent"), m_driveDefaultPercent);
+    state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain},
+                                  {QStringLiteral("txSetpoints"), txSetpoints}};
+    state.extensionSchemaVersion = 1;
+    return state;
+}
+
+// The one true LNA application: register write, dB-reference lockstep, and
+// the every-pan echo. Shared by the operator path (setPanRfGain) and the
+// band-memory path so the two can't drift (PR #4619 review).
+//
+// The dB reference moves IN LOCKSTEP with the gain: spectrum and S-meter are
+// both rendered through m_dbRef, so without this every gain change would
+// slide the whole trace — an operator backing off 10 dB would watch the
+// noise floor drop and read it as the band going quiet.
+void Hl2Backend::applyLnaGainDb(int gainDb)
+{
+    m_lnaGainDb = gainDb;
+    m_dbRef.setLnaGainDb(m_lnaGainDb);
+    if (m_metis)
+        QMetaObject::invokeMethod(m_metis, "setLnaGainDb", Qt::QueuedConnection,
+            Q_ARG(int, m_lnaGainDb));
+    // Echo what the hardware actually took, to every pan — a slider that
+    // asked for something outside the register's range finds out here.
+    for (const auto& ids : m_ids.all())
+        emit panRfGainChanged(ids.panId, m_lnaGainDb);
+}
+
+void Hl2Backend::rememberCurrentBandState()
+{
+    if (m_currentBandKey.isEmpty())
+        return;
+    m_lnaDbByBand.insert(m_currentBandKey, m_lnaGainDb);
+    m_driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
+}
+
+void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
+{
+    const QString newBand = hl2::bandKeyForHz(freqHz);
+    if (newBand == m_currentBandKey) {
+        return;
+    }
+    // Leaving a band records the operator's values under the OLD key; the new
+    // band gets what it remembered (or the defaults). nigelfenton's RFC
+    // review: the drive that makes 5 W on 80 m is not polite on 10 m, so a
+    // band change must never carry the old band's drive along.
+    rememberCurrentBandState();
+    const QString oldBand = m_currentBandKey;
+    m_currentBandKey = newBand;
+
+    const int lna = qBound(kLnaGainMinDb,
+                           m_lnaDbByBand.value(newBand, m_lnaDefaultDb),
+                           kLnaGainMaxDb);
+    if (lna != m_lnaGainDb)
+        applyLnaGainDb(lna);
+
+    // NEVER inherit the previous band's drive (nigelfenton's RFC rationale:
+    // the drive that makes 5 W on 80 m is amplifier-input-unsafe on 10 m).
+    // Remembered value first, then the operator's baseline default, and — for
+    // a band never visited before any baseline exists — a deliberate 0:
+    // conservative once per band per radio, instead of hot once per mistake.
+    int drive = m_driveByBand.value(newBand, m_driveDefaultPercent);
+    if (drive < 0) {
+        drive = 0;
+        qCInfo(lcHl2) << "HL2 band memory: first visit to" << newBand
+                      << "with no drive baseline — drive set to 0 until the"
+                         " operator chooses one";
+    }
+    if (drive != m_rfPowerPercent) {
+        // A drive SETPOINT — applyDrive() itself stays behind the TX gate, so
+        // a transmit-blocked session records the value without touching the PA.
+        m_applyingBandMemory = true;
+        setTxPower(drive);
+        m_applyingBandMemory = false;
+        TransmitDelta delta;
+        delta.rfPower = drive;
+        emit transmitChanged(delta);
+    }
+
+    qCInfo(lcHl2) << "HL2 band memory (" << reason << "):" << oldBand << "->"
+                  << newBand << "lna" << m_lnaGainDb << "dB drive"
+                  << m_rfPowerPercent << '%';
+    notifyOperatingStateChanged();
+}
+
+void Hl2Backend::notifyOperatingStateChanged()
+{
+    emit operatingStateChanged();
+}
+
 void Hl2Backend::pushInitialState()
 {
     // THE RADIO REPORTS NO VFO, SO THE APP IS AUTHORITATIVE AND MUST PUSH.
@@ -2524,6 +2821,46 @@ void Hl2Backend::pushInitialState()
             const auto [pbLowHz, pbHighHz] = defaultPassbandForMode(r.mode);
             r.filterLowHz = pbLowHz;
             r.filterHighHz = pbHighHz;
+        }
+        // RFC #4603 PR 3, reconciled with #4484 (Ozy311's review catch): a
+        // RESTORED mode+passband overrides the derivation — but only as a
+        // pair. Restoring the mode alone re-derives its passband, and a
+        // restored passband applies on top of its restored mode, so mode and
+        // passband can never disagree — the invariant #4484 exists for. Runs
+        // under the same once-per-connect guard, so an EP6 glitch's re-linkUp
+        // cannot re-assert day-old state over the operator's live edits.
+        if (m_haveRestoredState) {
+            if (Receiver* txRx = rx(m_txDdc)) {
+                if (!m_restoredState.mode.isEmpty()) {
+                    txRx->mode = m_restoredState.mode;
+                    const auto [pbLowHz, pbHighHz] =
+                        defaultPassbandForMode(txRx->mode);
+                    txRx->filterLowHz = pbLowHz;
+                    txRx->filterHighHz = pbHighHz;
+                }
+                if (m_restoredState.filterLowHz != 0.0
+                    || m_restoredState.filterHighHz != 0.0) {
+                    txRx->filterLowHz =
+                        static_cast<int>(m_restoredState.filterLowHz);
+                    txRx->filterHighHz =
+                        static_cast<int>(m_restoredState.filterHighHz);
+                }
+            }
+            // The start band's remembered drive, as a SETPOINT (never keys —
+            // applyDrive() stays behind the TX gate). Echoed upward as a
+            // normalized delta so TransmitModel and the UI agree with the
+            // register. After RadioModel's own connect-time power push, so
+            // the remembered per-band value wins over the session default.
+            const int drive =
+                m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
+            if (drive >= 0) {
+                m_applyingBandMemory = true;
+                setTxPower(drive);
+                m_applyingBandMemory = false;
+                TransmitDelta delta;
+                delta.rfPower = drive;
+                emit transmitChanged(delta);
+            }
         }
         m_passbandDerivedThisConnect = true;
     }
