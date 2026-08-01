@@ -537,7 +537,7 @@ void KiwiSdrManager::primeProfileTracking(const QString& id, int sliceId,
                              KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
                                     filterHighHz, panId, bandName, cwPitchHz);
-            client->setWaterfallRate(lineDurationMs);
+            client->setDisplayWaterfallRate(lineDurationMs);
             if (!panId.isEmpty() && centerMhz > 0.0 && bandwidthMhz > 0.0) {
                 client->setWaterfallView(panId, centerMhz, bandwidthMhz);
             }
@@ -674,7 +674,7 @@ void KiwiSdrManager::updateWaterfallView(int sliceId, const QString& panId,
         Q_UNUSED(c);
         invokeClient(profileId, [panId, centerMhz, bandwidthMhz,
                                  lineDurationMs](KiwiSdrClient* client) {
-            client->setWaterfallRate(lineDurationMs);
+            client->setDisplayWaterfallRate(lineDurationMs);
             client->setWaterfallView(panId, centerMhz, bandwidthMhz);
         });
     }

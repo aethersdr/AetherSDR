@@ -1049,7 +1049,7 @@ void KiwiSdrClient::setWaterfallView(const QString& panId, double centerMhz,
     sendWaterfallViewToServer();
 }
 
-void KiwiSdrClient::setWaterfallRate(int rate)
+void KiwiSdrClient::setDisplayWaterfallRate(int rate)
 {
     // Renamed off `…LineDurationMs` because the name was the trap: what arrives
     // here is the 1..100 waterfall RATE, low slow / high fast, not milliseconds.
@@ -1061,11 +1061,11 @@ void KiwiSdrClient::setWaterfallRate(int rate)
     const int clamped = std::clamp(rate,
                                    AetherSDR::WaterfallRate::kMin,
                                    AetherSDR::WaterfallRate::kMax);
-    if (m_waterfallRate == clamped) {
+    if (m_displayWaterfallRate == clamped) {
         return;
     }
 
-    m_waterfallRate = clamped;
+    m_displayWaterfallRate = clamped;
     sendWaterfallRateToServer();
 }
 
