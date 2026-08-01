@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AutoBlackMode.h"
+
 #include <limits>
 #include <algorithm>
 #include <array>
@@ -487,6 +489,13 @@ public:
     // while m_wfAutoBlack is on.
     void setWfAutoBlackRadioSide(bool radioSide);
     void setWfLineDuration(int ms);
+    // Whether THIS host paces the waterfall rows (a backend with no radio-side
+    // display engine) rather than the radio. Selects which rate-to-cadence law
+    // seeds the time axis — see lineDurationToVisualMsPerRow. Mirrors
+    // RadioModel::shapesDisplayRatesLocally(); defaults false, the radio-paced
+    // case, which is what a widget built before any backend connects should
+    // assume.
+    void setWfRateShapedLocally(bool shapedLocally);
     void setWfColorScheme(int scheme);
     // Spectrum render mode: 2D (FFT trace + waterfall) or 3D (3DSS stacked
     // perspective trace surface). Persisted per-panadapter.
@@ -507,7 +516,21 @@ public:
     int   wfBlackLevel() const         { return m_wfBlackLevel; }
     bool  wfAutoBlack() const          { return m_wfAutoBlack; }
     int   wfAutoBlackOffset() const    { return m_wfAutoBlackOffset; }
+    // The operator's stored INTENT — what they chose, on whatever radio they
+    // chose it. Persisted, and deliberately NOT cleared by connecting a radio
+    // that cannot serve it: a Flex user who selected HW keeps HW across a
+    // session on an HL2. Read this when persisting or seeding the menu.
     bool  wfAutoBlackRadioSide() const { return m_wfAutoBlackRadioSide; }
+    // What is actually IN EFFECT — intent masked by whether this radio computes
+    // a black level at all (RadioCapabilities::hasRadioSideWaterfallAutoBlack).
+    // Read this when rendering, or when telling the radio anything. (#4606)
+    bool  effectiveWfAutoBlackRadioSide() const {
+        return AutoBlackMode::effectiveRadioSide(m_wfAutoBlackRadioSide,
+                                                 m_radioSideAutoBlackAvailable);
+    }
+    // The capability mask. Never persists — that is the whole point, see
+    // wfAutoBlackRadioSide() above.
+    void  setRadioSideAutoBlackAvailable(bool available);
     int   wfLineDuration() const       { return m_wfLineDuration; }
     int   wfColorScheme() const        { return static_cast<int>(m_wfColorScheme); }
     int   noiseFloorPosition() const   { return m_noiseFloorPosition; }
@@ -1380,9 +1403,15 @@ private:
     // pulls it below (lighter).  Stored separately from m_wfBlackLevel so
     // toggling AUTO swaps between the two without losing either value.
     int   m_wfAutoBlackOffset{50};
-    // Auto-black source: false = client-side noise-floor estimate (default,
-    // legacy look); true = the radio's per-tile auto-black level.
+    // Auto-black source INTENT: false = client-side noise-floor estimate
+    // (default, legacy look); true = the radio's per-tile auto-black level.
+    // Persisted; masked at use by m_radioSideAutoBlackAvailable below.
     bool  m_wfAutoBlackRadioSide{false};
+    // Whether the attached radio computes a black level at all. Permissive
+    // default, like every other capability gate: nothing is attached yet, so
+    // there is nothing to be honest about. NEVER persisted — see
+    // effectiveWfAutoBlackRadioSide(). (#4606)
+    bool  m_radioSideAutoBlackAvailable{true};
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
 
     // 3DSS — perspective stacked-trace render mode. m_dss owns the rolling
@@ -1422,7 +1451,8 @@ private:
     // Radio's per-tile auto-black level (raw uint16). Preferred over the client
     // estimate when non-zero; matches FlexLib's auto-level pipeline.
     float m_radioAutoBlackRaw{0.0f};
-    int   m_wfLineDuration{100};     // ms per waterfall row
+    int   m_wfLineDuration{100};     // 1..100 waterfall RATE (core/WaterfallRate.h)
+    bool  m_wfRateShapedLocally{false};
 
     // Waterfall colour range for FFT-derived fallback (dBm).
     float m_wfMinDbm{-130.0f};

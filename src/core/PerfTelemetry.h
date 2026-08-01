@@ -38,7 +38,11 @@ public:
     void recordWaterfallFallbackRows(int rows);
     void recordWaterfallVisibleRows(int rows = 1);
     void recordWaterfallRebuild();
-    void setWaterfallLineDurationMs(int ms);
+    // The 1..100 waterfall RATE control value, NOT milliseconds — its Flex
+    // wire name (`line_duration`) says ms and is wrong. Reported as `wfRate`
+    // so a perf summary read while debugging waterfall pacing cannot be
+    // mistaken for a cadence. See core/WaterfallRate.h. (#4606)
+    void setWaterfallRate(int rate);
 
     void recordPanCenterCommand();
     void recordPanUpdate(double updateMs);
@@ -127,7 +131,7 @@ private:
     qint64 m_lastHeartbeatNs{0};
     std::atomic_bool m_wasEnabled{false};
     std::atomic_bool m_dragActive{false};
-    std::atomic<int> m_waterfallLineDurationMs{0};
+    std::atomic<int> m_waterfallRate{0};
 };
 
 } // namespace AetherSDR

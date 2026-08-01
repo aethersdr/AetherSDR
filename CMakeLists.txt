@@ -561,6 +561,7 @@ set(CORE_SOURCES
     src/core/OccupiedRegion.cpp
     src/core/SettingsHelpers.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
@@ -1255,6 +1256,10 @@ if (ENABLE_ASR)
     # into a bare "unused variable" warning on the other.
     set(_asr_vulkan OFF)
     set(_asr_metal  OFF)
+    # Only the vendored-whisper branch can precompile the Metal kernels, so this
+    # stays OFF when USE_SYSTEM_LIBWHISPER=ON — where the distro's libwhisper
+    # decides how its own shaders are built.
+    set(_asr_metal_precompile OFF)
     if (APPLE)
         # Metal uses the Metal framework + the `metal` shader compiler from full
         # Xcode (present on macOS CI); no external SDK to install.
@@ -1359,6 +1364,86 @@ if (ENABLE_ASR)
         # error. Fix diagnosed + verified by K5PTB on large-v3-turbo + Metal. Only
         # needs the assembler + sed/echo (already in play). (RFC #4333)
         set(GGML_METAL_EMBED_LIBRARY ${_asr_metal} CACHE BOOL "" FORCE)
+        # Embed the library as a COMPILED .metallib (built by the offline `xcrun
+        # metal` toolchain), not as .metal source. Embedded source forces a runtime
+        # shader compile (newLibraryWithSource) at the first ggml touch of every
+        # cold-cache launch — seconds on Apple Silicon, and on Intel-GPU Macs
+        # Apple's runtime compiler can live-lock indefinitely, freezing the GUI
+        # (#4535). The compiled embed keeps #4333's no-file-lookup property while
+        # never invoking the runtime compiler. Needs the offline Metal toolchain,
+        # which newer Xcode ships as a separate downloadable component — so keep it
+        # opt-out: a host without the component can still build with
+        # -DENABLE_ASR_METAL_PRECOMPILE=OFF (source embed + runtime compile).
+        #
+        # The whole decision lives here rather than in the vendored ggml CMakeLists:
+        # which toolchain is required, what happens when it is missing, and which OS
+        # the kernels are built for are all AetherSDR release policy. The vendored
+        # file only consumes the result.
+        option(ENABLE_ASR_METAL_PRECOMPILE
+            "Compile the ASR Metal kernels at build time (needs the offline Metal toolchain)" ON)
+        if (_asr_metal AND ENABLE_ASR_METAL_PRECOMPILE)
+            # Probe the offline compiler at configure time so a missing toolchain is
+            # caught here rather than as a mid-build pipe error. Fatal only under
+            # REQUIRE_ASR_GPU (the fail-rather-than-ship-degraded flag); otherwise
+            # warn — never silently — and fall back to the source embed.
+            execute_process(COMMAND xcrun -sdk macosx metal --version
+                            RESULT_VARIABLE _asr_metal_cc_rc
+                            OUTPUT_QUIET ERROR_QUIET)
+            if (_asr_metal_cc_rc EQUAL 0)
+                set(_asr_metal_precompile ON)
+            elseif (REQUIRE_ASR_GPU)
+                message(FATAL_ERROR "ENABLE_ASR_METAL_PRECOMPILE is ON but the offline Metal "
+                    "compiler is not runnable ('xcrun -sdk macosx metal --version' failed). "
+                    "Install it with: xcodebuild -downloadComponent MetalToolchain, or "
+                    "configure with -DENABLE_ASR_METAL_PRECOMPILE=OFF to embed shader source "
+                    "and compile at runtime instead.")
+            else()
+                message(WARNING "The offline Metal compiler is not runnable "
+                    "('xcrun -sdk macosx metal --version' failed) — embedding shader source "
+                    "and compiling it at runtime instead of embedding a compiled .metallib. "
+                    "This build carries the #4535 runtime-compile hazard, so ASR stays "
+                    "CPU-only on Intel-GPU Macs (see asrMetalUsableHost() in "
+                    "src/asr/WhisperAsrBackend.cpp). Install the toolchain with: "
+                    "xcodebuild -downloadComponent MetalToolchain")
+            endif()
+        endif()
+        set(GGML_METAL_EMBED_LIBRARY_COMPILED ${_asr_metal_precompile} CACHE BOOL "" FORCE)
+        if (_asr_metal_precompile)
+            # The kernels are frozen at build time now, so both halves of "which OS
+            # can load this library" have to be pinned here. The runtime compile used
+            # to answer both by construction, because it ran on the target machine.
+            #
+            # 1. Deployment target. Without -mmacosx-version-min the offline compiler
+            #    targets the build host's SDK default, which would make the shipped
+            #    binary's Metal floor a property of the CI runner image rather than of
+            #    the release (macos-dmg.yml builds at 14.0 / 13.0). The vendored
+            #    CMakeLists appends the flag when this is set. FORCEd both ways, so a
+            #    reconfigure with a different deployment target cannot inherit the
+            #    previous one out of the cache.
+            if (CMAKE_OSX_DEPLOYMENT_TARGET)
+                set(GGML_METAL_MACOSX_VERSION_MIN "${CMAKE_OSX_DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
+            else()
+                set(GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING "" FORCE)
+            endif()
+            # 2. Shader language. bf16 kernels need >= metal3.1 (== macOS 14) — below
+            #    that ggml-metal.metal drops them itself — while props.has_bfloat stays
+            #    a runtime device query, so a library built below 3.1 would be missing
+            #    kernels the device then asks for. Pin 3.1 wherever the deployment
+            #    target allows it; where it does not (the Intel DMG's 13.0) build 3.0
+            #    and have the runtime clamp has_bfloat to match, the same way it
+            #    already clamps has_tensor. This is not a preference: asking for 3.1
+            #    against a 13.0 deployment target is a hard compile error.
+            if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
+                set(GGML_METAL_STD "metal3.0" CACHE STRING "" FORCE)
+                set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
+                message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
+                    "(metal3.0, no bf16 — props.has_bfloat clamped to match)")
+            else()
+                set(GGML_METAL_STD "metal3.1" CACHE STRING "" FORCE)
+                set(GGML_METAL_EMBED_LIBRARY_NO_BF16 OFF CACHE BOOL "" FORCE)
+                message(STATUS "ASR: Metal kernels precompiled at build time (metal3.1, bf16)")
+            endif()
+        endif()
 
         # Every other non-CPU backend OFF (their source dirs are not vendored):
         foreach(_ggml_backend
@@ -1431,7 +1516,8 @@ if (ENABLE_ASR)
     endif()
 
     # One name for "the whisper we link", resolved once above, so aetherasr and the
-    # two whisper-linked tests below can't drift apart on the system/vendored split.
+    # three whisper-linked tests below can't drift apart on the system/vendored
+    # split. (asr_whisper_smoke_test, asr_whisper_backend_test, asr_gpu_probe_test.)
     if (USE_SYSTEM_LIBWHISPER)
         set(_asr_whisper_link PkgConfig::whisper ${_asr_ggml_target})
     else()
@@ -1465,6 +1551,9 @@ if (ENABLE_ASR)
     target_compile_definitions(aetherasr PUBLIC AETHER_ASR_ENABLED=1)
     if (_asr_vulkan OR _asr_metal)
         target_compile_definitions(aetherasr PRIVATE AETHER_ASR_GPU=1)
+    endif()
+    if (_asr_metal_precompile)
+        target_compile_definitions(aetherasr PRIVATE AETHER_ASR_METAL_PRECOMPILED=1)
     endif()
     set_target_properties(aetherasr PROPERTIES AUTOMOC ON)
 
@@ -2889,6 +2978,18 @@ target_include_directories(slice_model_letter_test PRIVATE src)
 target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
 
+# Per-slice manual squelch memory (#3326 follow-up, #4592) — guards against
+# the cross-slice leak reopening via a caller that forgets to keep the live
+# level and the manual memory in sync, or an Auto-mode echo overwriting it.
+add_executable(slice_model_squelch_memory_test
+    tests/slice_model_squelch_memory_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(slice_model_squelch_memory_test PRIVATE src)
+target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
+
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
@@ -2896,6 +2997,7 @@ qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
 add_executable(theme_manager_test
     tests/theme_manager_test.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -2907,6 +3009,28 @@ add_test(NAME theme_manager_test COMMAND theme_manager_test)
 set_tests_properties(theme_manager_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Compiled-in theme seed (#3184).  DELIBERATELY has no ${THEME_TEST_RESOURCES}:
+# with the theme resource linked, the ThemeManager constructor loads Default
+# Dark straight after seeding and the JSON hides whatever the seed actually
+# contains — which is how nine seed tokens drifted unnoticed for months.
+# Without it, the seed IS the rendered palette and every token is assertable
+# through the public API.  Adding the resource here would silently turn this
+# into a second, weaker copy of theme_manager_test; the test asserts
+# availableThemes() is empty so that mistake fails loudly instead.
+add_executable(theme_seed_test
+    tests/theme_seed_test.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(theme_seed_test PRIVATE src)
+target_link_libraries(theme_seed_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME theme_seed_test COMMAND theme_seed_test)
+set_tests_properties(theme_seed_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Panadapter overlay collapse semantics for owner-managed status cards (#4387):
 # a collapse must shrink the card, survive owner re-assertion, and never make
 # the indicator disappear while its condition still holds.
@@ -2915,6 +3039,7 @@ add_executable(panadapter_message_overlay_test
     tests/panadapter_message_overlay_test.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -3019,6 +3144,16 @@ target_include_directories(model_capabilities_test PRIVATE src)
 target_link_libraries(model_capabilities_test PRIVATE Qt6::Core)
 add_test(NAME model_capabilities_test COMMAND model_capabilities_test)
 
+# Waterfall Black Level mode arithmetic (#4606) — header-only pure logic.
+add_executable(auto_black_mode_test tests/auto_black_mode_test.cpp)
+target_include_directories(auto_black_mode_test PRIVATE src)
+add_test(NAME auto_black_mode_test COMMAND auto_black_mode_test)
+
+# Waterfall rate <-> row cadence mapping (#4606) — header-only pure logic.
+add_executable(waterfall_rate_test tests/waterfall_rate_test.cpp)
+target_include_directories(waterfall_rate_test PRIVATE src)
+add_test(NAME waterfall_rate_test COMMAND waterfall_rate_test)
+
 # Adaptive-throttle display-status echo gate (#4261) — header-only pure logic.
 add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
@@ -3050,6 +3185,12 @@ add_executable(center_lock_rebind_tracker_test tests/center_lock_rebind_tracker_
 target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
 target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
+
+# Last-session DAX restore window + quit-time key prune (#4558) — header-only.
+add_executable(dax_restore_policy_test tests/dax_restore_policy_test.cpp)
+target_include_directories(dax_restore_policy_test PRIVATE src)
+target_link_libraries(dax_restore_policy_test PRIVATE Qt6::Core)
+add_test(NAME dax_restore_policy_test COMMAND dax_restore_policy_test)
 
 # Active-slice policy during FLEX band-stack teardown/rebuild — header-only.
 add_executable(band_recall_slice_selection_policy_test
@@ -3742,6 +3883,25 @@ if (ENABLE_ASR)
     target_include_directories(asr_whisper_backend_test PRIVATE src)
     target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core ${_asr_whisper_link})
     add_test(NAME asr_whisper_backend_test COMMAND asr_whisper_backend_test)
+    if (_asr_metal_precompile)
+        target_compile_definitions(asr_whisper_backend_test PRIVATE AETHER_ASR_METAL_PRECOMPILED=1)
+    endif()
+
+    # GPU probe must return promptly, and must keep Metal off Intel Macs on the
+    # source-embed fallback build (#4535: the probe used to run Apple's runtime
+    # shader compiler on the calling thread, which can live-lock there). The
+    # define has to match aetherasr's or the test asserts the wrong branch.
+    add_executable(asr_gpu_probe_test
+        tests/asr_gpu_probe_test.cpp
+        src/asr/WhisperAsrBackend.cpp
+    )
+    target_include_directories(asr_gpu_probe_test PRIVATE src)
+    target_link_libraries(asr_gpu_probe_test PRIVATE Qt6::Core ${_asr_whisper_link})
+    add_test(NAME asr_gpu_probe_test COMMAND asr_gpu_probe_test)
+    set_tests_properties(asr_gpu_probe_test PROPERTIES TIMEOUT 180)
+    if (_asr_metal_precompile)
+        target_compile_definitions(asr_gpu_probe_test PRIVATE AETHER_ASR_METAL_PRECOMPILED=1)
+    endif()
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
     add_executable(asr_remote_backend_test
@@ -3781,6 +3941,7 @@ if (ENABLE_ASR)
         src/gui/FramelessResizer.cpp
         src/gui/FramelessWindowTitleBar.cpp
         src/core/ThemeManager.cpp
+        src/core/ThemeSeedGenerated.cpp
         ${AETHER_SETTINGS_SOURCES}
         src/core/LogManager.cpp
         src/core/AsyncLogWriter.cpp
@@ -3821,6 +3982,7 @@ add_executable(s_meter_geometry_test
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4166,6 +4328,7 @@ add_executable(cwx_panel_test
     # CwxPanel.cpp calls ThemeManager::resolve() post-Phase-2 migration;
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4195,6 +4358,7 @@ add_executable(health_applet_test
     src/gui/HealthApplet.cpp
     src/models/MeterModel.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4685,6 +4849,7 @@ add_executable(help_dialog_test
     # HelpDialog.cpp calls ThemeManager::resolve() post-Phase-2 migration;
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4709,6 +4874,7 @@ add_executable(flex_control_dialog_size_test
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4722,6 +4888,39 @@ add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_tes
 set_tests_properties(flex_control_dialog_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(connection_panel_size_test
+    tests/connection_panel_size_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(connection_panel_size_test PRIVATE src tests)
+target_link_libraries(connection_panel_size_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(connection_panel_size_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
+set_tests_properties(connection_panel_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# FlexControl port-loss recovery (#4574). Guarded on SERIALPORT for the same
+# reason FlexControlManager itself is: the whole class is inside
+# #ifdef HAVE_SERIALPORT, so without Qt SerialPort there is nothing to test.
+if(TARGET Qt6::SerialPort)
+    add_executable(flex_control_recovery_test
+        tests/flex_control_recovery_test.cpp
+    )
+    target_include_directories(flex_control_recovery_test PRIVATE src)
+    # aethercore already carries FlexControlManager and the logging category it
+    # uses; compiling the .cpp standalone would drag in LogManager -> AppSettings
+    # -> AsyncLogWriter and need most of the core library linked by hand anyway.
+    target_link_libraries(flex_control_recovery_test PRIVATE
+        aethercore Qt6::Core Qt6::SerialPort Qt6::Test
+    )
+    set_target_properties(flex_control_recovery_test PROPERTIES AUTOMOC ON)
+    add_test(NAME flex_control_recovery_test COMMAND flex_control_recovery_test)
+endif()
+
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp
@@ -4729,6 +4928,7 @@ add_executable(pan_layout_dialog_size_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4809,8 +5009,12 @@ add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
 
 add_executable(kiwi_sdr_tx_mute_policy_test
     tests/kiwi_sdr_tx_mute_policy_test.cpp
+    # The resume hold's presentation-holdback input is routed by
+    # receivePresentationExternalKiwiDelayMs(); pinned against the real one.
+    src/core/ReceivePresentationSync.cpp
 )
 target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
+target_link_libraries(kiwi_sdr_tx_mute_policy_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
 add_executable(host_voice_chain_policy_test
     tests/host_voice_chain_policy_test.cpp
@@ -4836,6 +5040,7 @@ add_executable(container_widget_test
     # logging deps so the test links.  ThemeManager's compiled-in
     # seedBuiltinDefaults() means we don't need the theme resource here.
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4863,6 +5068,7 @@ add_executable(hl2_pc_audio_lock_test
     src/gui/DragValuePopup.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4881,6 +5087,7 @@ add_executable(amp_applet_test
     src/gui/DragValuePopup.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4918,6 +5125,7 @@ add_executable(container_manager_test
     src/gui/containers/FloatingContainerWindow.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4936,6 +5144,7 @@ add_executable(container_nesting_test
     src/gui/containers/FloatingContainerWindow.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -5038,6 +5247,7 @@ endif()
 set(AETHER_SETTINGS_CONSUMERS
     slice_label_test
     theme_manager_test
+    theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test
     nr2_settings_model_test

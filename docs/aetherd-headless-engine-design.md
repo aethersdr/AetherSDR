@@ -96,7 +96,7 @@ already in the tree:
    arrow points gui→core with exactly one tracked exception
    (`AutomationServer.cpp` includes `gui/ConnectionPanel.h`) plus five engine
    files that use QtWidgets — all six are step-1 relocation/seam work, and
-   `tools/check_engine_boundary.py` (CI: `engine-boundary.yml`) now blocks any
+   `tools/check_engine_boundary.py` (CI: `static-checks.yml`) now blocks any
    *new* leakage while that legacy set shrinks to zero. The engine can
    otherwise already run with no UI attached. This is the expensive invariant
    most codebases never hold.

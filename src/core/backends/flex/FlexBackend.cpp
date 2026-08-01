@@ -157,6 +157,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // NR/NB/ANF/NRL/ANFL/ANFT, the APD predistorter and the wideband noise
     // blanker all run in the radio's firmware, driven by command-plane verbs.
     caps.hasRadioSideDsp = true;
+    // The radio embeds a per-tile black level in the waterfall stream when
+    // asked (`display panafall set <id> auto_black=1`), so HW is a real
+    // choice on the Display panel's Black Level button.
+    caps.hasRadioSideWaterfallAutoBlack = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
     // GPSDO / on-board GNSS, reported through the `gps` status.

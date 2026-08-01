@@ -19,6 +19,7 @@
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
+#include "core/WaterfallRate.h"
 #include "ProfileLoadCommand.h"
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
@@ -74,8 +75,6 @@ constexpr int kNeutralPanIndexNone = -1;
 
 constexpr int kDefaultPanDimensionThreshold = 100;
 constexpr int kSessionRestorePruneDelayMs = 5000;
-constexpr int kWaterfallLineDurationMinMs = 1;
-constexpr int kWaterfallLineDurationMaxMs = 100;
 
 // parseDeclaredBands() moved to DeclaredBands.{h,cpp} so the Principle-VII
 // validation (allow-list against BandDefs, dedup, case-fold) has a light,
@@ -2930,6 +2929,14 @@ bool RadioModel::hasRadioSideDsp() const
     return backendCapabilities().hasRadioSideDsp;
 }
 
+bool RadioModel::hasRadioSideWaterfallAutoBlack() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasRadioSideWaterfallAutoBlack;
+}
+
 bool RadioModel::hasDaxStreams() const
 {
     if (!m_backend || !isConnected()) {
@@ -3934,7 +3941,7 @@ bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
 }
 
 bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
-                                        int wfLineDurationMs)
+                                        int wfRate)
 {
     if (panId.isEmpty())
         return false;
@@ -3949,7 +3956,7 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
     if (shapesDisplayRatesLocally()) {
         if (!pan)
             return false;
-        pan->setDisplayRates(fps, wfLineDurationMs);
+        pan->setDisplayRates(fps, wfRate);
         // The FPS half goes DOWN to the backend, which caps its own frame
         // production. Only the waterfall's line_duration is paced up here —
         // see onBackendSpectrumFrame for why the two live in different places.
@@ -3963,10 +3970,11 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
         sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps))
                || sent;
     }
-    if (wfLineDurationMs > 0 && pan && !pan->waterfallId().isEmpty()) {
+    if (wfRate > 0 && pan && !pan->waterfallId().isEmpty()) {
+        // The wire parameter keeps Flex's name; the value is the rate.
         sent = sendCommand(QString("display panafall set %1 line_duration=%2")
                                .arg(pan->waterfallId())
-                               .arg(wfLineDurationMs))
+                               .arg(wfRate))
                || sent;
     }
     return sent;
@@ -4371,7 +4379,15 @@ void RadioModel::applyWaterfallAutoBlack()
     // Otherwise the client renders the floor from its own estimate, so keep
     // auto_black=0 (radio-authoritative when, and only when, the user asks).
     if (activeWfId().isEmpty()) return;
-    const int v = (m_wfAutoBlackOn && m_wfAutoBlackRadioSide) ? 1 : 0;
+    // …and only when the RADIO can actually do it. m_wfAutoBlackRadioSide is the
+    // operator's stored intent, which deliberately survives a session on a radio
+    // that computes no black level (#4606), so the capability has to be ANDed in
+    // here too. Belt-and-braces with the GUI's own mask: this is the one place
+    // that emits the command, so a caller that reaches it with a stale intent —
+    // say a connect-time push that lands before the widget has been told the
+    // capability — still cannot ask a radio for a level it will never send.
+    const int v = (m_wfAutoBlackOn && m_wfAutoBlackRadioSide
+                   && hasRadioSideWaterfallAutoBlack()) ? 1 : 0;
     sendCmd(
         QString("display panafall set %1 auto_black=%2")
             .arg(activeWfId()).arg(v));
@@ -4449,10 +4465,10 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // waterfall plane (Flex gets one from the radio), so the panadapter row IS
     // the waterfall row; it needs real band edges to scale against.
     //
-    // Gated once more, because line_duration is a SEPARATE control and slower
-    // than the frame rate (100 ms against 25-40 fps). That gate is what makes a
-    // row actually represent line_duration of time — the calibration the
-    // widget's time axis already assumes.
+    // Gated once more, because the waterfall rate is a SEPARATE control from
+    // the frame rate and normally asks for something slower. That gate is what
+    // makes a row actually represent the requested span of time — the
+    // calibration the widget's time axis already assumes.
     // Geometry for THIS pan. `panId` here is already the neutral index, which is
     // the same key the geometry handler stores under.
     const double panBandwidthMhz = m_backendPanBandwidthMhz.value(panId, 0.0);
@@ -4469,13 +4485,19 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
         // back to the active pan, which is what the spectrum path above uses and
         // why that side reports zero drops.
         const PanadapterModel* pan = resolvePan(neutralPanIdString(panId));
-        const int wfMs = (pan && pan->waterfallLineDuration() > 0)
-                             ? pan->waterfallLineDuration()
-                             : kBackendDefaultWfLineDurationMs;
+        // waterfallLineDuration() carries the 1..100 RATE, not milliseconds —
+        // low is slow, high is fast (see WaterfallRate.h). Pacing on the raw
+        // number ran the control backwards here: rate 1 gated at 1 ms and gave
+        // the full 25 fps, rate 100 gated at 100 ms and gave 10 (#4606).
+        const int wfRate = (pan && pan->waterfallLineDuration() > 0)
+                               ? pan->waterfallLineDuration()
+                               : kBackendDefaultWfRate;
+        const int wfMs = AetherSDR::WaterfallRate::localRowIntervalMs(wfRate);
         qint64& lastNs = m_backendWfLastRowNs[panId];
         const qint64 dueNs = static_cast<qint64>(wfMs) * 1000000;
         // First row goes out immediately: the interval is the gap BETWEEN rows,
-        // not a delay before the first one.
+        // not a delay before the first one. A zero interval is the top of the
+        // control asking for one row per frame, which this same test gives.
         if (lastNs == 0 || (nowNs - lastNs) >= dueNs) {
             // Advance BY the interval rather than resetting to now, so the row
             // rate does not quantise down onto the frame grid. Clamped to one
@@ -5969,12 +5991,23 @@ int RadioModel::currentAdaptiveFpsCap() const
 }
 
 
-int RadioModel::adaptiveWfMsForCap(int fpsCap) const
+int RadioModel::adaptiveWfRateForCap(int fpsCap) const
 {
     if (fpsCap <= 0) return 0;
-    return std::clamp((1000 + fpsCap / 2) / fpsCap,
-                      kWaterfallLineDurationMinMs,
-                      kWaterfallLineDurationMaxMs);
+    // The caller knows a frame cap; the control speaks the 1..100 rate. Going
+    // straight from 1000/fps to the wire treated the rate as milliseconds and
+    // inverted the throttle: a Poor-network 4 fps cap produced 250, clamped to
+    // 100 — the FASTEST setting — while a mild Good-network 15 fps cap produced
+    // 67, about 4.5 rows/s. Worse network, faster waterfall. (#4606)
+    //
+    // Which law converts depends on who turns the rate into rows: ask a Flex in
+    // the units its display engine answers in, and this host in ours.
+    if (shapesDisplayRatesLocally()) {
+        return AetherSDR::WaterfallRate::localRateForRowsPerSec(
+            static_cast<float>(fpsCap));
+    }
+    return AetherSDR::WaterfallRate::flexRateForMsPerRow(
+        1000.0f / static_cast<float>(fpsCap));
 }
 
 void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
@@ -5988,13 +6021,13 @@ void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
     // to it — on the one backend where the frame cost is paid by THIS host.
     // Route it the same way an operator's slider goes. (#4470)
     if (shapesDisplayRatesLocally()) {
-        requestPanDisplayRates(panId, fpsCap, adaptiveWfMsForCap(fpsCap));
+        requestPanDisplayRates(panId, fpsCap, adaptiveWfRateForCap(fpsCap));
         return;
     }
     sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fpsCap));
     if (!pan->waterfallId().isEmpty())
         sendCommand(QString("display panafall set %1 line_duration=%2")
-                        .arg(pan->waterfallId()).arg(adaptiveWfMsForCap(fpsCap)));
+                        .arg(pan->waterfallId()).arg(adaptiveWfRateForCap(fpsCap)));
 }
 
 void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
@@ -6012,7 +6045,7 @@ void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
         m_lastThrottleEngageMs = QDateTime::currentMSecsSinceEpoch();
         m_pendingThrottleLift = false;
         qCDebug(lcProtocol) << "RadioModel: adaptive throttle engaged — fps cap"
-                            << newCap << "/ wf line" << adaptiveWfMsForCap(newCap) << "ms";
+                            << newCap << "/ wf rate" << adaptiveWfRateForCap(newCap);
         for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it)
             sendAdaptiveCapToPan(it.key(), newCap);
         emit adaptiveThrottleChanged(throttling, newCap);
@@ -8861,25 +8894,26 @@ void RadioModel::handleSliceStatus(int id,
                                 << "from previous session";
         } else {
             s = new SliceModel(id, this);
-            // Seed this slice's manual-squelch memory (#3326).  The radio
-            // wins whenever its status frame carries a level: a slice that
-            // already existed when we connected — ours from a prior run, or
-            // one another Multi-Flex client created — arrives with its own
-            // squelch_level, and adopting this client's last-used value
-            // instead would clobber it on the first flip to Manual
-            // (Principle II).  Only when the status is silent do we fall
-            // back to the operator's last-used value so a genuinely new
-            // slice starts where they left off.  Either way this is only a
-            // starting point, not a live shared value; each slice's own
-            // threshold is independent from here on.
+            // Seed this slice's manual-squelch memory (#3326) from the
+            // radio's own status when the frame carries a level: a slice
+            // that already existed when we connected — ours from a prior
+            // run, or one another Multi-Flex client created — arrives with
+            // its own squelch_level, and that's the value to start from
+            // (Principle II: the radio is authoritative). When the status
+            // is silent, SliceModel's own class default applies — squelch
+            // is radio-authoritative (AGENTS.md "do NOT persist"), so there
+            // is no client-side last-used value to fall back to (#4592).
+            // Either way this is only a starting point, not a live shared
+            // value; each slice's own threshold is independent from here on.
+            // applyChanges() below maintains the same memory from every
+            // subsequent echo (the gate defaults open for a slice with no
+            // surface attached), so this seed is the explicit belt to that
+            // braces — it pins the value before any UI can observe the slice.
             bool haveRadioLevel = false;
             const int radioLevel =
                 kvs.value(QStringLiteral("squelch_level")).toInt(&haveRadioLevel);
-            s->setManualSquelchLevel(
-                haveRadioLevel
-                    ? radioLevel
-                    : AppSettings::instance()
-                          .value("LastManualSquelchLevel", "20").toInt());
+            if (haveRadioLevel)
+                s->setManualSquelchLevel(radioLevel);
             // Forward slice commands to the radio
             connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
                 sendSliceCommand(s, cmd);

@@ -433,7 +433,32 @@ inside third_party/crdv/.
   Manifest:   third_party/crdv/CONTENT_SHA256.txt
 
 
-20. sherpa-onnx — Non-Whisper ASR Engine (optional)
+20. whisper.cpp (bundling ggml) — Copy Assist ASR Engine
+--------------------------------------------------------
+Vendored under third_party/whisper.cpp/ (library only; see that directory's
+AETHER_VENDORING.md for what was trimmed). Version 1.9.1, upstream commit pinned
+in third_party/whisper.cpp/COMMIT. This is the default on-device speech-to-text
+engine adopted in RFC #4333, and it bundles ggml (third_party/whisper.cpp/ggml/)
+as its tensor library — upstream ships a single MIT LICENSE covering both, which
+is vendored verbatim at third_party/whisper.cpp/LICENSE.
+
+Two files in the vendored ggml Metal backend carry AetherSDR-local changes
+(build-time Metal kernel compilation, #4535 / PR #4553). Every modification is
+recorded in third_party/whisper.cpp/AETHERSDR-PATCHES.md.
+
+  Copyright (c) 2023-2026 The ggml authors
+  License: MIT (see third_party/whisper.cpp/LICENSE)
+  Source:  https://github.com/ggml-org/whisper.cpp
+           https://github.com/ggml-org/ggml
+
+  Model weights are NOT vendored: the ggml-format Whisper models are downloaded
+  on first enable (primary: Hugging Face; fallback: the AetherSDR release
+  mirror), SHA-256-verified, and cached under the user's data dir. The
+  underlying Whisper models are Copyright (c) 2022 OpenAI, MIT-licensed
+  (https://github.com/openai/whisper).
+
+
+21. sherpa-onnx — Non-Whisper ASR Engine (optional)
 ---------------------------------------------------
 Pre-built C-API shared library staged at third_party/sherpa-onnx/ by
 scripts/setup/setup-sherpa-onnx.sh (from k2-fsa's releases on x64/macOS, or from
@@ -452,7 +477,7 @@ Paraformer/CTC models). Absent unless the setup script has been run.
     - ONNX Runtime        MIT         (see entry 11; sherpa ships its own copy)
 
 
-21. Silero VAD — Voice-Activity-Detection Model (download-on-demand)
+22. Silero VAD — Voice-Activity-Detection Model (download-on-demand)
 -------------------------------------------------------------------
 Model weights only; NOT bundled in the binary. Downloaded on first enable of the
 optional Silero VAD option (primary: Hugging Face; fallback: the AetherSDR
@@ -465,7 +490,7 @@ dir. Run by ONNX Runtime (entry 11).
            https://huggingface.co/onnx-community/silero-vad
 
 
-22. WeSpeaker ECAPA-TDNN — Speaker-Embedding Model (download-on-demand)
+23. WeSpeaker ECAPA-TDNN — Speaker-Embedding Model (download-on-demand)
 ----------------------------------------------------------------------
 Model weights only; NOT bundled in the binary. Downloaded on first enable of the
 optional speaker-labeling option (primary: Hugging Face; fallback: the AetherSDR
@@ -478,7 +503,7 @@ dir. Trained on VoxCeleb2. Run by ONNX Runtime (entry 11).
            https://huggingface.co/Wespeaker/wespeaker-ecapa-tdnn512-LM
 
 
-23. Moonshine — Speech-Recognition Model (download-on-demand, via sherpa-onnx)
+24. Moonshine — Speech-Recognition Model (download-on-demand, via sherpa-onnx)
 -----------------------------------------------------------------------------
 Model weights only; NOT bundled or redistributed by AetherSDR. A user may point
 the "sherpa-onnx model…" folder picker at a Moonshine bundle obtained from the

@@ -1209,6 +1209,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     // off is what stops them from looking operable; the client-side modules
     // (NR2/NR4/MNR/BNR/DFNR/RN2) are unaffected and remain available.
     c.hasRadioSideDsp = false;
+    // Same reason, on the display plane: nothing in the HL2 computes a
+    // waterfall black level, so the Black Level button's HW position would be
+    // a mode that never produces one. Off <-> SW only. (#4606)
+    c.hasRadioSideWaterfallAutoBlack = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
     c.hasGpsLocation = false;           // no GNSS receiver on the board

@@ -4,6 +4,7 @@
 #include "KiwiSdrProtocol.h"
 #include "LogManager.h"
 #include "Resampler.h"
+#include "WaterfallRate.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -1048,14 +1049,23 @@ void KiwiSdrClient::setWaterfallView(const QString& panId, double centerMhz,
     sendWaterfallViewToServer();
 }
 
-void KiwiSdrClient::setWaterfallLineDurationMs(int lineDurationMs)
+void KiwiSdrClient::setDisplayWaterfallRate(int rate)
 {
-    const int clamped = std::clamp(lineDurationMs, 1, 100);
-    if (m_waterfallLineDurationMs == clamped) {
+    // Renamed off `…LineDurationMs` because the name was the trap: what arrives
+    // here is the 1..100 waterfall RATE, low slow / high fast, not milliseconds.
+    // Reading it as ms is what inverted the control on the HL2 (#4606), and this
+    // was the one remaining setter still asserting the wrong unit. Auto mode
+    // ignores the value entirely today and requests the fastest validated Kiwi
+    // speed; a future auto that actually follows the rate must convert through
+    // core/WaterfallRate.h, not divide.
+    const int clamped = std::clamp(rate,
+                                   AetherSDR::WaterfallRate::kMin,
+                                   AetherSDR::WaterfallRate::kMax);
+    if (m_displayWaterfallRate == clamped) {
         return;
     }
 
-    m_waterfallLineDurationMs = clamped;
+    m_displayWaterfallRate = clamped;
     sendWaterfallRateToServer();
 }
 
