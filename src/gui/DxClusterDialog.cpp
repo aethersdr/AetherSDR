@@ -1697,7 +1697,7 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
         s.value("N1MMSpotAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
     m_n1mmAutoStartBtn->setCheckable(true);
     m_n1mmAutoStartBtn->setChecked(s.value("N1MMSpotAutoStart", "False").toString() == "True");
-    m_n1mmAutoStartBtn->setStyleSheet(kSpotHubToggle);
+    ThemeManager::instance().applyStyleSheet(m_n1mmAutoStartBtn, kSpotHubToggle);
     connect(m_n1mmAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_n1mmAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1717,7 +1717,7 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+        "QPushButton:disabled { background: {{color.background.2}}; color: {{color.text.label}}; }");
     connect(m_n1mmStartBtn, &QPushButton::clicked, this, [this] {
         if (m_n1mmSpotClient->isListening()) {
             emit n1mmStopRequested();
@@ -1741,40 +1741,42 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
     auto* colorGrid = new QGridLayout(colorGroup);
     colorGrid->setSpacing(6);
 
-    struct StatusColorRow { const char* label; const char* key; const char* def; };
-    static const StatusColorRow kRows[] = {
-        {"Busted call",        "N1MMStatusColorBust",    "#FF0000"},
-        {"Dupe",                "N1MMStatusColorDupe",    "#808080"},
-        {"Needed multiplier",   "N1MMStatusColorMult",    "#00FFFF"},
-        {"CQ frequency",        "N1MMStatusColorCq",      "#00FF00"},
-        {"Busy (marked)",       "N1MMStatusColorBusy",    "#FFA500"},
-        {"QTC",                 "N1MMStatusColorQtc",     "#FFFF00"},
-        {"New QSO (not mult)",  "N1MMStatusColorNew",     "#FF00FF"},
-        {"No status",           "N1MMStatusColorDefault", "#FFFFFF"},
+    // Swatch chrome comes from tokens so the picker matches the active theme;
+    // only the swatch fill (%1) is the operator's chosen spot colour.
+    const QString swatchTemplate =
+        "QPushButton { background: %1; border: 2px solid {{color.background.2}};"
+        " border-radius: 3px; }"
+        "QPushButton:hover { border-color: {{color.text.primary}}; }";
+
+    // Each flag falls back to its theme token until the operator overrides it.
+    auto statusColor = [](const N1MMSpotParser::StatusColorSpec& spec) {
+        const QString stored =
+            AppSettings::instance().value(spec.settingsKey, "").toString();
+        return stored.isEmpty()
+             ? ThemeManager::instance().color(QString::fromLatin1(spec.themeToken))
+             : QColor(stored);
     };
+
     int row = 0;
-    for (const auto& r : kRows) {
-        auto* label = new QLabel(r.label);
+    for (const auto& spec : N1MMSpotParser::kStatusColorSpecs) {
+        auto* label = new QLabel(spec.label);
         AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
         colorGrid->addWidget(label, row / 2, (row % 2) * 2);
 
-        const QString key = r.key;
-        const QString def = r.def;
-        QColor color(s.value(key, def).toString());
+        // kStatusColorSpecs has static storage, so the pointer stays valid for
+        // the lifetime of the button.
+        const auto* specPtr = &spec;
         auto* colorBtn = new QPushButton;
         colorBtn->setFixedSize(18, 18);
-        colorBtn->setStyleSheet(QString(
-            "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-            "QPushButton:hover { border-color: #c8d8e8; }").arg(color.name()));
-        connect(colorBtn, &QPushButton::clicked, this, [this, colorBtn, key, def] {
-            QColor c = QColorDialog::getColor(
-                QColor(AppSettings::instance().value(key, def).toString()),
-                this, "N1MM Status Color");
+        ThemeManager::instance().applyStyleSheet(
+            colorBtn, swatchTemplate.arg(statusColor(spec).name()));
+        connect(colorBtn, &QPushButton::clicked, this,
+                [this, colorBtn, swatchTemplate, statusColor, specPtr] {
+            QColor c = QColorDialog::getColor(statusColor(*specPtr), this, "N1MM Status Color");
             if (c.isValid()) {
-                colorBtn->setStyleSheet(QString(
-                    "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
-                    "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name()));
-                AppSettings::instance().setValue(key, c.name());
+                ThemeManager::instance().applyStyleSheet(
+                    colorBtn, swatchTemplate.arg(c.name()));
+                AppSettings::instance().setValue(specPtr->settingsKey, c.name());
                 AppSettings::instance().save();
             }
         });

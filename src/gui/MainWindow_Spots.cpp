@@ -26,6 +26,7 @@
 #endif
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/SpotModel.h"
@@ -433,16 +434,20 @@ void MainWindow::wireSpotSubsystem()
     // N1MMSpotParser::spotKey() (callsign+band) instead. A generous lifetime
     // still backstops the model in case the logger exits without sending
     // deletes for its open spots.
+    // Per-flag colour: the operator's stored override if they picked one,
+    // otherwise the flag's theme token so contest spots follow the theme.
     auto n1mmColorForStatus = [](const QString& statusFlag) {
-        auto& as = AppSettings::instance();
-        if (statusFlag == "bust") return as.value("N1MMStatusColorBust", "#FF0000").toString();
-        if (statusFlag == "dupe") return as.value("N1MMStatusColorDupe", "#808080").toString();
-        if (statusFlag == "mult") return as.value("N1MMStatusColorMult", "#00FFFF").toString();
-        if (statusFlag == "cq")   return as.value("N1MMStatusColorCq",   "#00FF00").toString();
-        if (statusFlag == "busy") return as.value("N1MMStatusColorBusy", "#FFA500").toString();
-        if (statusFlag == "qtc")  return as.value("N1MMStatusColorQtc",  "#FFFF00").toString();
-        if (statusFlag == "new")  return as.value("N1MMStatusColorNew",  "#FF00FF").toString();
-        return as.value("N1MMStatusColorDefault", "#FFFFFF").toString();
+        for (const auto& spec : N1MMSpotParser::kStatusColorSpecs) {
+            if (statusFlag != QLatin1String(spec.flag))
+                continue;
+            const QString stored =
+                AppSettings::instance().value(spec.settingsKey, "").toString();
+            if (!stored.isEmpty())
+                return stored;
+            return ThemeManager::instance()
+                       .color(QString::fromLatin1(spec.themeToken)).name();
+        }
+        return QString();
     };
 
     connect(m_n1mmSpotClient, &N1MMSpotClient::spotAdded,
