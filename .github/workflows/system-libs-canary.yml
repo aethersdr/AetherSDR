@@ -53,6 +53,18 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:sid
 
+    env:
+      CCACHE_DIR: /ccache
+      # Smaller than ci.yml's build (1000M): this tree is configured with
+      # ENABLE_RADE=OFF and system libraries in place of several vendored
+      # third_party builds, so it compiles less.
+      CCACHE_MAXSIZE: 500M
+      # NOT the default (mtime). sid reinstalls the toolchain from apt on every
+      # run, so the compiler binary's identity is the one input that genuinely
+      # could go stale here — hash its contents rather than trusting size+mtime.
+      # This is the narrow risk that actually exists; see the cache step below.
+      CCACHE_COMPILERCHECK: content
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -87,14 +99,50 @@ jobs:
             libliquid-dev \
             libwhisper-dev
 
+      # ccache IS safe here, despite the intuition that a canary wants a
+      # from-scratch build. ccache is content-addressed: direct mode hashes the
+      # source plus a manifest of every included header's contents, so the
+      # moment sid ships a new Qt or glibc header the affected entries stop
+      # matching and those TUs recompile. It cannot serve a stale object for
+      # changed input — that is the whole basis of the tool.
+      #
+      # Nor does it weaken the ABI half of the job: ccache never caches LINKING,
+      # and a symbol that changed or vanished in a rebuilt system library fails
+      # at link on every run regardless of hit rate.
+      #
+      # The one input that could genuinely go stale is the compiler itself,
+      # since apt reinstalls it from sid each run — hence
+      # CCACHE_COMPILERCHECK=content above rather than the default mtime check.
+      #
+      # Expect lumpy hit rates: a toolchain or Qt6 bump in sid invalidates
+      # broadly, which is correct behaviour rather than a cache failure.
+      - name: Install ccache
+        run: apt -U install -y --no-install-recommends ccache
+
+      - name: Cache ccache objects
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          key: ccache-sid-canary-${{ github.run_id }}
+          restore-keys: |
+            ccache-sid-canary-
+
       - name: Configure
         run: |
-          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF
+          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
-      # No ccache here, deliberately. This job's value is proving a FROM-SCRATCH
-      # build works against whatever sid shipped today; a warm object cache
-      # would let stale objects mask exactly the header/ABI drift it exists to
-      # find. It runs nightly, so the wall clock is nobody's critical path.
+      - name: Zero ccache stats
+        run: ccache --zero-stats
+
       - name: Build
         run: |
           cmake --build build -j$(nproc)
+
+      # Same reason as the equivalent steps in ci.yml: #1963 disabled the
+      # Windows compiler cache for three months because nothing surfaced the
+      # hit rate. A "Hits 0" line here means the launcher was dropped.
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats
