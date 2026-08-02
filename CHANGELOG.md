@@ -43,6 +43,27 @@ rather than by mixing a dry copy of the waveform back in afterwards — mixing
 two waveforms that have been through different delays comb filters, and the
 whole point is a floor you stop noticing.
 
+### Fixed: transmit audio breaking up with RN2 enabled (#4584)
+
+**Your transmitted audio no longer breaks up when RN2 is on.** Remote transmit
+audio reaches the radio as one small Opus packet every 10 ms. RN2 runs on the
+same thread as the timer that paces those packets, so when RN2 delayed a tick
+the pacer had no way to make the time back up — it sent one packet per tick no
+matter how far behind it had fallen. Packets piled up until a 200 ms cap began
+deleting them outright, and the other station heard the gaps. It was worst on
+slower machines and over SmartLink/WAN, and every deleted packet also left a
+hole in the transmit sequence numbering the radio checks.
+
+The pacer now follows real elapsed time and may send a small burst (up to three
+packets) to recover from a late tick, and the sequence number is assigned when a
+packet actually goes out rather than when it is queued, so the numbering stays
+unbroken even if the queue does overflow. An overflow is now written to the log
+instead of failing silently — the old behaviour left no trace in a support
+bundle, which is why this kept arriving as unexplained "audio break up". Live
+pacing counters are exposed to the automation bridge (`get audio` →
+`opusTxPacing`) for diagnosing future reports.
+
+Reported by @Bill6000 on a FLEX-6500 under Linux Mint.
 
 ### Minimum Qt raised to 6.8 — source builds on Ubuntu 24.04 need a newer Qt
 
@@ -73,6 +94,54 @@ Qt online installer and pass
 section.
 
 ### Fixed
+
+- **TX meter hover badges no longer stack up two at a time, and they let go
+  (#3936 follow-up).** Traversing the stacked TX meters left **two** value
+  badges on screen at once. Every `HGauge` allocated its own `DragValuePopup`
+  with nothing coordinating them, so entering the SWR bar raised a second badge
+  rather than replacing the RF Pwr one. Those two are consecutive rows two
+  pixels apart and both badges anchor above the pointer, so the pair landed
+  nearly on top of each other, covering the TX Controls header and the RIT/XIT
+  row. The badge is now claimed app-wide — entering a gauge closes whichever
+  one is already showing — so at most one is ever up.
+
+  The survivor could also stay up indefinitely. `leaveEvent` starts a hide
+  timer rather than hiding, every meter frame cancelled that timer, and Qt does
+  not guarantee a `leaveEvent` — so one dropped leave pinned the badge on
+  screen, frozen at the anchor the pointer had left it at, for as long as the
+  radio kept reporting. Recovery is now a 250 ms watchdog armed only while the
+  pointer is physically over the bar, which bounds a dropped leave by wall
+  clock whether or not values keep arriving — so a settled meter, or one that
+  stopped reporting on unkey, recovers too.
+
+  The linger itself drops from a bespoke 1000 ms to the 450 ms every other
+  `DragValuePopup` in the app already uses (settled in #2944), so the readout
+  no longer sits over the next control long after the pointer has gone.
+
+- **Demo mode no longer opens with a ghost "Slice A" panadapter (#4671).** The
+  demo's simulator claims its panadapter from its own synthetic wire, but the
+  model treated every non-Flex backend as wire-less and minted a *second*,
+  ownerless pan in the neutral id space on the seam's geometry edge — a pane the
+  user could neither use nor delete. The same assumption re-addressed the demo's
+  slice into that neutral space, so the slice pointed at the ghost rather than
+  at its real pan; with the ghost gone it would have pointed at nothing. Both
+  now key off whether the backend vends its own connection, so the demo opens
+  with one panadapter and a slice that belongs to it — restoring the pan title
+  bar, adaptive RX filter, auto-squelch, centre-lock and band recall on demo
+  mode. Hermes-Lite 2 and other wire-less backends keep the neutral mapping.
+
+- **Demo mode's power-line hum clicked instead of bending when you moved its
+  50/60 Hz slider (#4668).** The hum's six harmonics were synthesized from
+  absolute time × the current mains frequency, so every move of **Power-line**
+  in the Demo applet jumped all six phases at once rather than changing their
+  frequency — and because that jump scales with the harmonic number, the high
+  harmonics stepped hardest and the click grew with how long the session had
+  been running. The hum now accumulates phase per sample the way the CW tone
+  (#4618) and the birdie carrier already did, deriving every harmonic from one
+  shared fundamental so they stay locked to each other, and bends smoothly to
+  the new frequency. This was the last generator in the demo mixer still keyed
+  off absolute time. Demo mode only — no radio, protocol, or transmit path is
+  involved.
 
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —

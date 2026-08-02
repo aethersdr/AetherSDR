@@ -351,13 +351,25 @@ void NoiseMixer::genQrn(const ChannelState& c, float* out)
 void NoiseMixer::genPowerline(const ChannelState& c, float* out)
 {
     const double f0 = c.freq > 0 ? c.freq : 60.0;
+    // Continuous phase accumulation, same cure as the birdie and the CW tone
+    // (#4637): advance the FUNDAMENTAL's phase by 2π·f0/rate per sample and
+    // derive harmonic h as sin(h·φ). A live 50↔60 Hz change (the Demo applet's
+    // Power-line slider) then bends all six harmonics smoothly from their
+    // current phase; the old sin(2π·f0·h·t_absolute) teleported each by
+    // 2π·Δf·h·t at once — a hard click, worst on the high harmonics (#4668).
+    // Wrapping φ keeps sin(h·φ) exact for integer h: sin(h·(φ−2π)) == sin(h·φ).
+    const double dphi = kTwoPi * f0 / kSampleRate;
     for (int i = 0; i < kFrameLen; ++i) {
-        const double tt = static_cast<double>(m_plPhase + i) / kSampleRate;
         double v = 0.0;
-        for (int h : {1, 3, 5, 7, 9, 11}) v += (1.0 / h) * std::sin(kTwoPi * f0 * h * tt);
+        for (int h : {1, 3, 5, 7, 9, 11}) v += (1.0 / h) * std::sin(h * m_plPhaseRad);
         out[i] = static_cast<float>(v * kNoiseRef * 0.5);
+        m_plPhaseRad += dphi;
+        // fmod, not a single subtraction, to match genCw and genBirdie: freq is
+        // an unclamped knob, so a caller sending f0 >= kSampleRate would leave a
+        // one-shot subtraction permanently behind and φ would grow without bound.
+        if (m_plPhaseRad >= kTwoPi)
+            m_plPhaseRad = std::fmod(m_plPhaseRad, kTwoPi);
     }
-    m_plPhase += kFrameLen;
 }
 
 void NoiseMixer::genCrashes(const ChannelState& c, float* out)

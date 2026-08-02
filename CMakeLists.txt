@@ -700,6 +700,7 @@ set(CORE_SOURCES
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
     src/core/RNNoiseFilter.cpp
+    src/core/OpusTxPacer.cpp
     src/core/SpecbleachFilter.cpp
     src/core/CwDecoder.cpp
     src/core/CwCallsignSpotter.cpp
@@ -3566,6 +3567,14 @@ add_executable(rnnoise_filter_test
 target_link_libraries(rnnoise_filter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)
 
+add_executable(opus_tx_pacer_test
+    tests/opus_tx_pacer_test.cpp
+    src/core/OpusTxPacer.cpp
+)
+target_include_directories(opus_tx_pacer_test PRIVATE src)
+target_link_libraries(opus_tx_pacer_test PRIVATE Qt6::Core)
+add_test(NAME opus_tx_pacer_test COMMAND opus_tx_pacer_test)
+
 add_executable(adaptive_filter_test
     tests/adaptive_filter_test.cpp
     src/core/OccupiedRegion.cpp
@@ -4128,6 +4137,21 @@ add_test(NAME hgauge_range_test COMMAND hgauge_range_test)
 # before the first HGauge caches the gate, so running the binary directly
 # exercises the same assertions ctest does.
 set_tests_properties(hgauge_range_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# HGauge hover readout (#3936 follow-up): exactly one badge on screen across a
+# meter-to-meter traverse, and it releases itself even if the leaveEvent is
+# dropped and the meter keeps updating.
+add_executable(hgauge_hover_popup_test
+    tests/hgauge_hover_popup_test.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(hgauge_hover_popup_test PRIVATE src src/gui)
+target_link_libraries(hgauge_hover_popup_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets)
+set_target_properties(hgauge_hover_popup_test PROPERTIES AUTOMOC ON)
+add_test(NAME hgauge_hover_popup_test COMMAND hgauge_hover_popup_test)
+set_tests_properties(hgauge_hover_popup_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # RangeSlider accessibility announcements (#4565): arrow-key bursts debounce to

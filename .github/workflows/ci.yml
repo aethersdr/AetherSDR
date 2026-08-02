@@ -114,10 +114,21 @@ jobs:
       # tree, which is how it shipped in AcomApplet and stayed there. It is
       # plain float arithmetic, verified identical on Windows/MSVC, macOS
       # arm64 and Linux/GCC, so gating it on Linux alone is enough.
+      # hgauge_hover_popup_test is a different flakiness class from the two
+      # above: it is wall-clock timed against the badge's linger rather than
+      # pure arithmetic, so it is written so a loaded runner makes it SLOWER
+      # rather than red. Every "gone by now" assertion polls to a generous
+      # deadline instead of sleeping a fixed span, so overshooting costs time
+      # and nothing else. The one assertion that cannot do that is the one
+      # pinning the linger at 450 ms rather than #3936's superseded 1000 ms:
+      # it has to land in the GAP between the two, so waiting several
+      # multiples would sail past 1000 ms and the old value would pass it just
+      # as happily. That one measures elapsed time and reports a skip rather
+      # than asserting, if the runner stalled out of the window.
       - name: Test meter geometry and gauge scaling
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test" --output-on-failure
+        run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test|hgauge_hover_popup_test" --output-on-failure
 
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the

@@ -408,6 +408,11 @@ your "DOM snapshot" for controls.
 ← {"ok":true,"roots":[ <node>, <node>, … ]}
 ```
 
+A widget that is itself a window — a floated pan, a dialog, a popup menu —
+appears exactly once, as a **root**, never nested under its `QObject` parent
+even when it has one. Walk `roots` to find them; do not expect to reach a
+floated pan (or a parented context menu) by descending from `MainWindow`.
+
 Each `<node>`:
 
 ```jsonc
@@ -672,7 +677,7 @@ connects).
 
 | `model` | `selector` | returns |
 |---|---|---|
-| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
+| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
 | `gps` | — | GPS status, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time, frequency error, and oscillator-reference state |
@@ -701,6 +706,12 @@ chunks dispatched to Receive Presentation Sync analysis, while
 `receivePresentationOutputSignalSuppressedCount` counts non-empty output chunks
 that were captured for automation but skipped because no KiwiSDR audio source
 was active.
+
+`opusTxPacing` reports the live remote-audio TX pacing queue:
+`queueDepth`, lifetime `maxQueueDepth`, `packetsSent`, `catchUpPackets`, and
+`droppedPackets`. A late audio-thread timer increments `catchUpPackets` when the
+pacer repays missed 10 ms deadlines; `droppedPackets` must remain zero during a
+healthy TX-mic run.
 
 The TX input endpoint also exposes in-memory capture-health evidence for TCI
 handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
@@ -1359,10 +1370,33 @@ plus a no-button `QMouseMove` at the widget centre; the `leave` form fires a
 Used to prove the TX meter mouse-over value readout: the SWR / forward-power /
 ALC / mic-level / compression `HGauge`s pop a `DragValuePopup` badge (the same
 one the sliders flash) showing the live numeric value while hovered, which fades
-one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
-— note each `HGauge` owns its own popup, so with several meters hovered the name
-resolves to the first-created one; hover a single meter per instance for an
-unambiguous grab.
+`DragValuePopup::kDefaultLingerMs` (450 ms) after the pointer leaves.
+
+**At most one badge is visible app-wide.** Entering a second gauge closes the
+first one's badge, so a traverse across the stacked TX meters can never leave
+two overlapping. A driver asserting the hand-off should `hover` the second
+gauge and check the first's badge within that 450 ms window — a `leave` on the
+first is *not* required, and waiting out the linger between hovers proves
+nothing.
+
+Grab the badge with `grab DragValuePopup`. Widget resolution ranks visible and
+enabled matches ahead of hidden ones, and the hand-off above guarantees at most
+one badge is visible, so the name resolves to whichever gauge's badge is
+actually on screen — no per-instance disambiguation needed.
+
+`grab` on the *gauge* does not help: `grab` ends in `QWidget::grab()`, which
+renders only that widget's own subtree, and the badge is a separate top-level
+`Qt::ToolTip` window anchored 16 px *above* the gauge rect — so the capture
+comes back as a bare bar. To assert *which* badge is up and where, read the
+`DragValuePopup` nodes out of `dumpTree` (each carries `visible` plus
+geometry). The badge is itself a window, so per the `dumpTree` section above it
+appears exactly **once, as a root**, never nested under the gauge that owns it.
+Walk `roots` to find it; do not look for it under `TxApplet`.
+
+An injected hover holds the badge until an explicit `hover <target> leave`:
+the recovery watchdog that bounds a dropped physical leave is gated on the real
+cursor position, and `hover` does not move the cursor, so a driver's badge is
+never torn down underneath it by a live meter frame.
 
 ### `tooltip`
 Force-show a widget's native Qt tooltip, using the widget's current
