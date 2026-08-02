@@ -157,6 +157,21 @@ jobs:
       - name: Install Qt 6.8.3 LTS via aqtinstall
         run: |
           pip3 install aqtinstall
+          # No qtwayland entry, deliberately: it rides in the BASE package.
+          # qt.qt6.683.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
+          # next to qtbase, so this install already lays down
+          # plugins/platforms/libqwayland-generic.so, libqwayland-egl.so and the
+          # three wayland-* integration dirs. There is no "qtwayland" module in
+          # the 6.8.3 repository at all — only qtwaylandcompositor — and aqt
+          # hard-errors on an unknown module ("The packages ['qtwayland'] were
+          # not found"), so naming one here fails the whole release build.
+          #
+          # #1389 — QT_QPA_PLATFORM=wayland aborting with "no Qt platform plugin
+          # could be initialized" — was therefore never a missing module. The
+          # plugin was in this tree and simply never DEPLOYED:
+          # linuxdeploy-plugin-qt copies platforms/libqxcb.so and nothing else
+          # unless EXTRA_PLATFORM_PLUGINS says otherwise. That is fixed in the
+          # AppImage steps below.
           aqt install-qt ${{ matrix.qt_host }} desktop 6.8.3 ${{ matrix.qt_arch }} \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir ${{ github.workspace }}/Qt
@@ -283,6 +298,25 @@ jobs:
           # are missing, that is a broken release and the job should say so.
           cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/
 
+          # Bundle the Wayland client buffer integration. QT_QPA_PLATFORM=wayland
+          # resolves to platforms/libqwayland-generic.so (qwayland-generic.json
+          # declares Keys: ["wayland"]; the EGL *platform* plugin's key is
+          # "wayland-egl", so that name never selects it), and the generic plugin
+          # obtains OpenGL only through a client buffer integration plugin loaded
+          # from this directory — libqt-plugin-wayland-egl.so. Without it native
+          # Wayland comes up with no GL at all, which matters because both legs
+          # ship AETHER_GPU_SPECTRUM=ON.
+          #
+          # It is staged by hand because no linuxdeploy variable reaches this
+          # directory: EXTRA_PLATFORM_PLUGINS covers platforms/ and makes
+          # linuxdeploy auto-deploy wayland-decoration-client and
+          # wayland-shell-integration, but not this one. Copying it here, before
+          # linuxdeploy runs, also gets its NEEDED libs resolved by the same
+          # dependency walk that handles everything else in the AppDir.
+          mkdir -p AppDir/usr/plugins/wayland-graphics-integration-client
+          cp -v "$QT_PLUGIN_PATH"/wayland-graphics-integration-client/* \
+            AppDir/usr/plugins/wayland-graphics-integration-client/
+
           # Bundle essential GStreamer plugins for audio
           GST_PATH=$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || echo "/usr/lib/$(uname -m)-linux-gnu/gstreamer-1.0")
           mkdir -p AppDir/usr/lib/gstreamer-1.0
@@ -300,7 +334,19 @@ jobs:
       - name: Build AppImage
         env:
           QT_SELECT: qt6
+          # EXTRA_QT_PLUGINS is the deprecated alias of EXTRA_QT_MODULES and
+          # takes Qt *module* names, matched against linuxdeploy-plugin-qt's
+          # fixed table in src/qt-modules.h. Plugin *directory* names put here
+          # match nothing and are dropped without a warning, so it cannot reach
+          # platforms/ — the platform plugin has its own variable.
           EXTRA_QT_PLUGINS: multimedia
+          # This is what deploys the Wayland platform plugin (#1389): without it
+          # PlatformPluginsDeployer copies platforms/libqxcb.so and stops. Naming
+          # a libqwayland* plugin here additionally makes linuxdeploy deploy
+          # wayland-decoration-client and wayland-shell-integration on its own —
+          # only wayland-graphics-integration-client has to be staged by hand,
+          # which the "Install to AppDir" step above does.
+          EXTRA_PLATFORM_PLUGINS: libqwayland-generic.so;libqwayland-egl.so
         run: |
           # Sanitize the ref for the output filename: a workflow_dispatch on a
           # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
@@ -326,6 +372,62 @@ jobs:
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             --output appimage
+
+      # Nothing else in the build would notice these plugins going missing: Qt
+      # dlopen()s them at runtime rather than linking them, so no dependency walk
+      # covers them and the AppImage packages happily without them. That is
+      # exactly how #1389 shipped — the platform plugin sat unused in the Qt tree
+      # while linuxdeploy deployed libqxcb.so and nothing else.
+      #
+      # This is a quality gate, not a safety gate. src/main.cpp now asks for
+      # "wayland;xcb", so a missing plugin costs the Wayland improvement and
+      # falls back to XWayland rather than failing to start. Failing the build
+      # is still right — silently reverting to the old behaviour while the
+      # release notes claim native Wayland is worse than a red run.
+      - name: Assert the Wayland plugins were bundled
+        run: |
+          plugins="AppDir/usr/plugins"
+          fail=0
+          # Anchored to platforms/ deliberately: a libqwayland*.so sitting
+          # anywhere else in the AppDir is not something Qt can load. The `||
+          # true` keeps a missing directory from killing the step under `bash -e`
+          # before it can print why.
+          platform=$(find "$plugins/platforms" -maxdepth 1 -name 'libqwayland*.so' 2>/dev/null | sort || true)
+          if [ -z "$platform" ]; then
+            echo "ERROR: no Wayland platform plugin in $plugins/platforms — the"
+            echo "AppImage would silently fall back to XWayland (the #1389 shape)."
+            echo "EXTRA_PLATFORM_PLUGINS is what deploys it."
+            fail=1
+          else
+            echo "Wayland platform plugin(s):"
+            echo "$platform"
+          fi
+          # The generic platform plugin gets OpenGL only through this one, and no
+          # linuxdeploy variable deploys it — the "Install to AppDir" step stages
+          # it by hand, so a typo there is silent without this check.
+          if [ ! -f "$plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so" ]; then
+            echo "ERROR: libqt-plugin-wayland-egl.so missing from"
+            echo "$plugins/wayland-graphics-integration-client — native Wayland"
+            echo "would come up with no OpenGL."
+            fail=1
+          fi
+          # linuxdeploy deploys these two itself, off the libqwayland* name in
+          # EXTRA_PLATFORM_PLUGINS. If a future linuxdeploy drops that special
+          # case, catch it here rather than in a bug report about undecorated
+          # windows.
+          for d in wayland-decoration-client wayland-shell-integration; do
+            if [ ! -d "$plugins/$d" ]; then
+              echo "ERROR: $plugins/$d missing"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "Qt plugin dirs actually deployed:"
+            find AppDir -type d \( -name platforms -o -name 'wayland-*' \) 2>/dev/null | sort || true
+            exit 1
+          fi
+          echo "Wayland integration plugin dirs:"
+          find "$plugins" -maxdepth 1 -type d -name 'wayland-*' | sort
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

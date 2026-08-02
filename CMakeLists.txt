@@ -5277,6 +5277,11 @@ add_executable(host_voice_chain_policy_test
 )
 target_include_directories(host_voice_chain_policy_test PRIVATE src)
 add_test(NAME host_voice_chain_policy_test COMMAND host_voice_chain_policy_test)
+add_executable(hl2_tx_level_policy_test
+    tests/hl2_tx_level_policy_test.cpp
+)
+target_include_directories(hl2_tx_level_policy_test PRIVATE src)
+add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )

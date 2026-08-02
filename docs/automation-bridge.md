@@ -306,6 +306,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`grab pan-visible <index> [path]`](#grab) | Pan applet incl. VFO/flag overlays (alias `pan-composite`). |
 | | [`floors`](#floors) | Per-pan measured noise + display floor (dBm). |
 | | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`, `readOnly`. |
+| | [`health`](#health) | Backend health snapshot — what the **radio** reports, not what was asked for. |
 | **Drive** | [`invoke <target> <action> [v]`](#invoke) | Click/toggle/set/selectRow/submit/trigger a control (TX-guarded). |
 | | [`close <target>`](#close) | Close the target's top-level window. |
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
@@ -2442,6 +2443,38 @@ its own per-pid socket + discovery entry).
 check it before assuming a keying verb will work. `label` is
 `AETHER_AUTOMATION_LABEL` (a human tag for the instance).
 
+### `health`
+The **backend's** view of the radio — the same rows the Radio Health dialog
+shows, which until now reached nothing else and so were unavailable to a script
+or a regression test. Read-only: it keys nothing and sets nothing.
+
+```json
+→ {"cmd":"health"}
+← {"ok":true,"connected":true,"rows":[
+     {"key":"micLevel","section":"Transmit voice chain",
+      "label":"Mic slider (0-100, 50 = unity)","value":80},
+     {"key":"micGainAppliedLinear",
+      "label":"Mic gain at the modulator (linear)","value":3.98},
+     {"key":"forwardPowerPeakW",
+      "label":"Forward (W, approx — peak estimate)","value":4.56}]}
+```
+
+**This is deliberately not assembled from the models, and that is the whole
+point.** `get` already reports those, and a model reports what the operator
+**asked for** — so a control whose command was dropped on the way to the radio
+reads back as though it worked. Every row here comes from the backend instead,
+so the two can be compared and the comparison is the diagnosis. The HL2's mic
+gain was exactly that failure: the slider moved, every readback agreed, and the
+modulator never heard about it.
+
+`rows` is ordered as the dialog renders it; `section` appears on the first row
+of each group and is absent on the rest. A `value` of `null` means **the radio
+never reported this**, which is distinct from a zero — "the FIFO is empty" and
+"we were never told" are different answers, and collapsing them is what makes a
+readout unable to detect its own failure. An empty `rows` array with
+`"ok":true` is a real state too: no radio connected, or a family that publishes
+no health rows. Check `connected` to tell those apart.
+
 ### `mark`
 Drop a **sequenced timeline marker** into the log ring, then bracket a sequence
 with `log tail since=<seq>` to capture exactly the events between two marks.
@@ -2928,7 +2961,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 57 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 58 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2986,6 +3019,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
+| `health` | — | backend health snapshot — what the RADIO reports, not what was asked for |
 | `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |
 | `mark` | — | mark <text> — timestamped annotation in the log ring |
 | `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |

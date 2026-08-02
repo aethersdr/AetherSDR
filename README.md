@@ -234,6 +234,23 @@ AETHER_NO_GPU=1 ./AetherSDR-*.AppImage
 
 That is the escape hatch if a GPU or driver renders the spectrum incorrectly — worth trying first on Raspberry Pi and other systems whose Mesa driver is newer than its hardware.
 
+### Wayland and XWayland
+
+On a Wayland session AetherSDR asks Qt for `wayland;xcb` — native Wayland when
+the platform plugin is available, XWayland otherwise. Native Wayland avoids the
+GLX `BadAccess` crash that XWayland can produce when opening child dialogs on
+some compositors, and renders correctly under fractional scaling instead of
+being bitmap-scaled by the compositor.
+
+If a compositor misbehaves under native Wayland, force XWayland:
+
+```bash
+QT_QPA_PLATFORM=xcb ./AetherSDR-*.AppImage
+```
+
+Setting `QT_QPA_PLATFORM` yourself always wins — AetherSDR only supplies a
+default when the variable is unset.
+
 On a distribution whose Qt is older than the required 6.8 (notably Ubuntu 24.04 LTS at 6.4.2), install a newer Qt manually:
 
 1. **Option 1: Using a PPA (Ubuntu/Mint)**

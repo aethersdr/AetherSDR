@@ -1906,9 +1906,17 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // main.cpp normally forces native Wayland, but log it if we ended up here.
     if (QGuiApplication::platformName() == QLatin1String("xcb")
         && qEnvironmentVariable("XDG_SESSION_TYPE") == QLatin1String("wayland")) {
+        // Don't advise "set QT_QPA_PLATFORM=wayland" here. Reaching this line on
+        // a Wayland session means either main.cpp already asked for
+        // "wayland;xcb" and the Wayland plugin would not load, or the user
+        // forced xcb — so the old advice was a no-op in the first case and a
+        // startup abort in the second, which is how #1389 happened. Name the
+        // workaround that always applies, and the override only where it helps.
         qWarning() << "SpectrumWidget: running under XWayland with OpenGL — "
-                      "GLX context issues may occur. Set QT_QPA_PLATFORM=wayland "
-                      "or AETHER_NO_GPU=1 to work around (#1233)";
+                      "GLX context issues may occur. The Wayland platform plugin "
+                      "is unavailable or overridden; set AETHER_NO_GPU=1 to work "
+                      "around, or QT_QPA_PLATFORM='wayland;xcb' if you forced "
+                      "xcb yourself (#1233)";
     }
 #  endif
 #endif

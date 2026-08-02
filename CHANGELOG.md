@@ -8,40 +8,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### RN2 no longer pumps on stereo and binaural receive audio
+### Fixed: the Linux AppImage runs natively on Wayland instead of XWayland (#1389, #1233)
 
-**If you listen to RN2 with binaural or diversity receive audio, the noise
-floor no longer rises every time someone talks.** Nothing changes for
-duplicated-mono slices, and nothing changes in how much noise RN2 removes.
+**On a Wayland desktop the AppImage now uses Wayland directly.** Text and the
+spectrum are sharp under fractional scaling — previously the desktop was
+bitmap-scaling an X11 window — and the AppImage finally receives the fix for the
+GLX crash that could happen when opening a dialog such as Radio Setup on some
+desktops. Every other Linux build has had that fix since v0.8.12; the AppImage
+was the one left out.
 
-RN2 used to denoise an L/R downmix, derive a gain envelope from the result and
-re-apply that one envelope to the original stereo. That is exact when the two
-channels are proportional to their sum — plain mono, and simple panning — but
-binaural and diversity audio are not: the downmix has comb-filter nulls the
-individual channels do not, so the envelope fits neither channel. The audible
-result was the noise floor breathing with speech, loud under voice and gated
-between phrases. RN2 now runs one RNNoise instance and one matched resampler
-pair per receive channel, driven from the same block so the two stay in
-lockstep. Pan, stereo balance, diversity and binaural phase all survive it. A
-regression test mixes a steady tone into binaural speech and measures its level
-during speech against the gaps: the old path modulated it ~15x, the new one
-~1.0x.
+It was left out to stop a worse problem. The AppImage asked for Wayland without
+carrying the piece of Qt that talks Wayland, so it refused to start at all on
+Ubuntu 24.04 and anything else defaulting to a Wayland session. The quick fix
+was to stop asking for Wayland in the AppImage, which cured the crash and
+stranded those users on XWayland permanently. The Wayland support was in fact
+present in the Qt we build against the whole time — it simply never made it into
+the packaged app, and nothing in the build noticed, because it is loaded on
+demand rather than linked. It is now packaged, and the release build fails if it
+ever goes missing again.
 
-The transmit denoiser is unchanged — it still downmixes to mono, which is what
-a microphone path wants.
+AetherSDR also now asks for Wayland *with a fallback* rather than demanding it,
+so a machine without Wayland support quietly uses XWayland instead of failing to
+start. If a desktop misbehaves under native Wayland, `QT_QPA_PLATFORM=xcb`
+forces the old path — documented in the README next to `AETHER_NO_GPU`. Setting
+`QT_QPA_PLATFORM` yourself always wins.
 
-### RN2 can leave a noise floor instead of going silent between phrases
-
-**New, off by default:** *AetherDSP → RN2 → Noise Floor*. RNNoise gates hard,
-which some operators hear as the receiver going dead rather than quiet. Raising
-this leaves that percentage of the original signal under the denoised audio, so
-the band still sounds live between phrases. 0% is what RN2 has always done and
-remains the default; 10–20% is a usable floor. Receive only.
-
-The blend happens inside RNNoise, before its synthesis and overlap-add stage,
-rather than by mixing a dry copy of the waveform back in afterwards — mixing
-two waveforms that have been through different delays comb filters, and the
-whole point is a floor you stop noticing.
+Reported by @cjdellis on Ubuntu 24.04.
 
 ### Changed: the waterfall recolours its history when you change the palette (#4694)
 
@@ -111,6 +103,53 @@ Qt online installer and pass
 section.
 
 ### Fixed
+
+- **Hermes-Lite 2: the MIC slider reached nothing, and the wattmeter read voice
+  ~3.5 dB low (#4696).** Reported from the bench as 6 W out on FT8 and WSPR but
+  never more than 1 W on SSB voice, at every mic and RF level, with and without
+  the compressor. Three faults, and the first is why the other two were
+  invisible.
+
+  *The wattmeter was measuring the wrong thing on voice.* Forward power was
+  published as the raw instantaneous sample from the HL2's directional coupler
+  — one 12-bit conversion from the `slow_adc` I2C converter, round-robined with
+  reverse power, temperature and bias current, with no peak detector and no
+  averaging anywhere in the gateware, reaching us at 10 Hz. Speech peaks last
+  tens of milliseconds, so sampling that envelope at 10 Hz lands on a peak
+  essentially never, while a constant-envelope FT8 or WSPR transmission — where
+  every instant *is* the peak — read full scale. The same transmitter making the
+  same power read very differently depending on what was modulating it. It is
+  now published through a peak hold (instant attack, ~2 s release, in watts
+  because the calibration curve is markedly non-linear). This does not recover
+  an instantaneous PEP reading — no filter can recover a peak that was never
+  sampled — it accumulates the maximum across a transmission, so the reading
+  climbs toward PEP as the over goes on; the meter is labelled "peak estimate"
+  rather than claiming to be a measurement. Measured on a live HL2 into a dummy
+  load, voice peaks now read **4.6 W where they read 1.7 W before**, and a
+  constant carrier is unchanged (2.642 W held against 2.637 W instantaneous),
+  which is the control case a hold must not inflate. `MeterModel`'s own
+  ballistics are untouched, so no Flex behaviour changes.
+
+  *Mic gain was wired to nothing.* The Phone applet's MIC slider emits a Flex
+  `transmit set miclevel=` verb, which a backend with no command plane drops,
+  and nothing bridged it to the host modulator — so sweeping the slider end to
+  end changed nothing on the air. The client-side fallback could not fire
+  either, being gated on a `mic_selection` an HL2 never reports. The slider now
+  reaches the modulator's pre-ALC gain through the same seam the TX passband
+  uses, with 50 as unity so an untouched slider leaves every existing install
+  exactly where it was. This is what carries a quiet microphone over the ALC's
+  hold threshold, which is what the "raise mic gain" diagnostic has been
+  advising since it shipped — at a control that did nothing on this backend.
+
+  *And the readback agreed with the failure.* Every readback available while mic
+  gain was dead reported the requesting side, so all of them agreed the control
+  worked. A confirmation sourced from the requester cannot detect a request that
+  never arrived. The modulator now echoes its own gain, and the Radio Health
+  dialog gained a **Transmit voice chain** section reporting both the operator's
+  request and what the modulator is actually running — mic level and applied
+  gain, mic peak for the current over, the ALC hold threshold, ALC gain and
+  post-ALC peak, the passband in use, and both instantaneous and held forward
+  power.
 
 - **TX meter hover badges no longer stack up two at a time, and they let go
   (#3936 follow-up).** Traversing the stacked TX meters left **two** value
@@ -201,6 +240,18 @@ section.
   with no cause at all.
 
 ### Added
+
+- **`health` automation-bridge verb (#4696).** Returns the backend's own health
+  snapshot — the rows the Radio Health dialog shows, which until now reached
+  nothing else and so were unavailable to any script or regression test.
+  Deliberately *not* assembled from the models: `get` already reports those, and
+  a model reports what the operator **asked for**, which is why a control whose
+  command was dropped on the way to the radio could read back as working. Every
+  row here comes from the backend instead, so the two can be compared and the
+  comparison is the diagnosis. Read-only and TX-safe — it keys nothing and sets
+  nothing. A `null` value means the radio never reported that row, kept distinct
+  from a zero because "the FIFO is empty" and "we were never told" are different
+  answers.
 
 - **The aarch64 (Raspberry Pi / ARM) AppImage now ships Qt 6.8.3 LTS and
   GPU spectrum rendering (#4670).** It was the only release artifact still
@@ -446,6 +497,41 @@ section.
   announces immediately, so the handle change is never lost behind a value
   update, and neither control does any accessibility work when no screen
   reader is running.
+
+### RN2 no longer pumps on stereo and binaural receive audio
+
+**If you listen to RN2 with binaural or diversity receive audio, the noise
+floor no longer rises every time someone talks.** Nothing changes for
+duplicated-mono slices, and nothing changes in how much noise RN2 removes.
+
+RN2 used to denoise an L/R downmix, derive a gain envelope from the result and
+re-apply that one envelope to the original stereo. That is exact when the two
+channels are proportional to their sum — plain mono, and simple panning — but
+binaural and diversity audio are not: the downmix has comb-filter nulls the
+individual channels do not, so the envelope fits neither channel. The audible
+result was the noise floor breathing with speech, loud under voice and gated
+between phrases. RN2 now runs one RNNoise instance and one matched resampler
+pair per receive channel, driven from the same block so the two stay in
+lockstep. Pan, stereo balance, diversity and binaural phase all survive it. A
+regression test mixes a steady tone into binaural speech and measures its level
+during speech against the gaps: the old path modulated it ~15x, the new one
+~1.0x.
+
+The transmit denoiser is unchanged — it still downmixes to mono, which is what
+a microphone path wants.
+
+### RN2 can leave a noise floor instead of going silent between phrases
+
+**New, off by default:** *AetherDSP → RN2 → Noise Floor*. RNNoise gates hard,
+which some operators hear as the receiver going dead rather than quiet. Raising
+this leaves that percentage of the original signal under the denoised audio, so
+the band still sounds live between phrases. 0% is what RN2 has always done and
+remains the default; 10–20% is a usable floor. Receive only.
+
+The blend happens inside RNNoise, before its synthesis and overlap-add stage,
+rather than by mixing a dry copy of the waveform back in afterwards — mixing
+two waveforms that have been through different delays comb filters, and the
+whole point is a floor you stop noticing.
 
 ## [v26.7.4.1] — 2026-07-27
 

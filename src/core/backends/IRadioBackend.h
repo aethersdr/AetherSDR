@@ -310,6 +310,22 @@ public:
         Q_UNUSED(highHz);
     }
 
+    // Microphone gain, 0..100, as the Phone applet's MIC slider means it.
+    //
+    // Same seam and same reason as setTxFilter() above: on a Flex the slider's
+    // `transmit set miclevel=` reaches the radio's own preamp, but a backend
+    // that modulates on this host has no command plane to receive it and the
+    // verb is dropped. Without this the slider was inert on the HL2 — moving it
+    // end to end changed nothing on the air, which reads as a dead control
+    // rather than as a control aimed at hardware that is not there.
+    //
+    // A backend that takes this owns the gain: nothing else scales the mic on
+    // its behalf, so ignoring the call means the operator has no mic gain at all.
+    virtual void setMicGain(int level)
+    {
+        Q_UNUSED(level);
+    }
+
     // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
     //
     // For backends that modulate on the host (HL2). A Flex radio does its own

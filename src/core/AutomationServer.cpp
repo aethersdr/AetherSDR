@@ -2504,6 +2504,8 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
         QStringLiteral("whoami"),   QStringLiteral("dumpTree"),
         QStringLiteral("grab"),     QStringLiteral("get"),
         QStringLiteral("floors"),   QStringLiteral("hitTest"),
+        // Reads backend telemetry; keys nothing and sets nothing.
+        QStringLiteral("health"),
     };
     if (kSafe.contains(name)) {
         return true;
@@ -3226,6 +3228,10 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("whoami", {}, "bridge instance info: pid, socket, label, station, txAllowed",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doWhoami(); });
+
+        add("health", {}, "backend health snapshot — what the RADIO reports, not what was asked for",
+            parseTargetPath,
+            [](AutomationServer& s, A&, QLocalSocket*) { return s.doHealth(); });
 
         add("log", {}, "log <categories|get|set|reset|tail|subscribe|unsubscribe> [args]",
             parseActionRest,
@@ -5716,6 +5722,57 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
     }
 
     writeJsonResponse(socket, response);
+}
+
+// ── Backend health snapshot ─────────────────────────────────────────────────
+// The backend's own view of the radio, surfaced over the bridge. Until now this
+// reached only the Radio Health dialog, so anything it knew was unavailable to a
+// script and therefore unavailable to a regression test.
+//
+// This is deliberately NOT assembled from the models. `get` already reports
+// those, and a model reports what the operator ASKED for — which is why a
+// control whose command was dropped could read back as working. Everything here
+// comes from the backend, so the two can be compared and the comparison is the
+// diagnosis.
+//
+// Read-only and TX-safe: it keys nothing and changes nothing.
+QJsonObject AutomationServer::doHealth()
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+
+    const IRadioBackend::HealthSnapshot snap = m_radioModel->backendHealthSnapshot();
+    if (snap.isEmpty()) {
+        // Not an error: a backend with nothing to report is a real state (no
+        // radio connected, or a family that publishes no health rows). Say which
+        // rather than returning an empty object the caller has to guess about.
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("connected"), m_radioModel->isConnected()},
+                           {QStringLiteral("rows"), QJsonArray{}}};
+    }
+
+    QJsonArray rows;
+    for (const QString& key : snap.order) {
+        QJsonObject row;
+        row[QStringLiteral("key")] = key;
+        if (const auto label = snap.labels.constFind(key); label != snap.labels.constEnd())
+            row[QStringLiteral("label")] = *label;
+        if (const auto sect = snap.sections.constFind(key); sect != snap.sections.constEnd())
+            row[QStringLiteral("section")] = *sect;
+        // A key absent from `values` means "the radio never reported this",
+        // which the dialog renders as "not reported". Preserve that as JSON
+        // null rather than coercing to 0 or "" — the difference between "the
+        // FIFO is empty" and "we were never told" is the whole value of the row.
+        const auto v = snap.values.constFind(key);
+        row[QStringLiteral("value")] = v != snap.values.constEnd()
+            ? QJsonValue::fromVariant(*v)
+            : QJsonValue(QJsonValue::Null);
+        rows.append(row);
+    }
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("connected"), m_radioModel->isConnected()},
+                       {QStringLiteral("rows"), rows}};
 }
 
 // ── TX test-signal control (#3646) ──────────────────────────────────────────
