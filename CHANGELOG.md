@@ -8,6 +8,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed: the Linux AppImage runs natively on Wayland instead of XWayland (#1389, #1233)
+
+**On a Wayland desktop the AppImage now uses Wayland directly.** Text and the
+spectrum are sharp under fractional scaling — previously the desktop was
+bitmap-scaling an X11 window — and the AppImage finally receives the fix for the
+GLX crash that could happen when opening a dialog such as Radio Setup on some
+desktops. Every other Linux build has had that fix since v0.8.12; the AppImage
+was the one left out.
+
+It was left out to stop a worse problem. The AppImage asked for Wayland without
+carrying the piece of Qt that talks Wayland, so it refused to start at all on
+Ubuntu 24.04 and anything else defaulting to a Wayland session. The quick fix
+was to stop asking for Wayland in the AppImage, which cured the crash and
+stranded those users on XWayland permanently. The Wayland support was in fact
+present in the Qt we build against the whole time — it simply never made it into
+the packaged app, and nothing in the build noticed, because it is loaded on
+demand rather than linked. It is now packaged, and the release build fails if it
+ever goes missing again.
+
+AetherSDR also now asks for Wayland *with a fallback* rather than demanding it,
+so a machine without Wayland support quietly uses XWayland instead of failing to
+start. If a desktop misbehaves under native Wayland, `QT_QPA_PLATFORM=xcb`
+forces the old path — documented in the README next to `AETHER_NO_GPU`. Setting
+`QT_QPA_PLATFORM` yourself always wins.
+
+Reported by @cjdellis on Ubuntu 24.04.
+
 ### Changed: the waterfall recolours its history when you change the palette (#4694)
 
 **Picking a new waterfall Scheme now recolours the waterfall you are already
