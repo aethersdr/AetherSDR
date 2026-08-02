@@ -483,12 +483,38 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install dependencies via Homebrew
-        # Mirrors macos-dmg.yml's apple-silicon path.  Homebrew Qt targets
-        # the current OS, which is fine for the arm64 CI check; deployment-
-        # target pinning is a release-time concern handled in macos-dmg.yml.
+        # Mirrors macos-dmg.yml's apple-silicon path — which no longer takes Qt
+        # from Homebrew, so neither does this. Leaving qt@6 here would put the
+        # per-PR macOS check on a rolling Qt (6.11.1 today) while the DMG ships
+        # 6.8.3, i.e. CI green would say nothing about the artifact.
         run: |
-          brew install ninja qt@6 qtkeychain fftw portaudio hidapi \
+          brew install ninja fftw portaudio hidapi \
             autoconf automake libtool
+
+      - name: Install Qt 6.8.3 LTS via aqtinstall
+        run: |
+          set -o pipefail
+          python3 -m venv "$RUNNER_TEMP/aqtvenv"
+          "$RUNNER_TEMP/aqtvenv/bin/pip" install -q aqtinstall
+          "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop 6.8.3 clang_64 \
+            -m qtmultimedia qtwebsockets qtserialport qtshadertools \
+            --outputdir ${{ github.workspace }}/Qt
+          QT_ROOT="${{ github.workspace }}/Qt/6.8.3/macos"
+          if [ ! -x "$QT_ROOT/bin/qmake" ]; then
+            echo "ERROR: no qmake at $QT_ROOT — aqt layout changed"
+            ls -la "${{ github.workspace }}/Qt/6.8.3/" || true
+            exit 1
+          fi
+          # CMAKE_PREFIX_PATH and PATH matter beyond the Configure step:
+          # setup-qtkeychain.sh locates Qt via CMAKE_PREFIX_PATH, then Qt6_DIR,
+          # then qmake on PATH. Exporting only QT_ROOT would leave it with none
+          # of the three, and it would exit "Qt6 not found" before building.
+          {
+            echo "QT_ROOT=$QT_ROOT"
+            echo "CMAKE_PREFIX_PATH=$QT_ROOT"
+            echo "PATH=$QT_ROOT/bin:$PATH"
+          } >> "$GITHUB_ENV"
+          "$QT_ROOT/bin/qmake" -query QT_VERSION
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -500,6 +526,22 @@ jobs:
       - name: Setup DeepFilterNet3 (DFNR)
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
+
+      - name: Cache qtkeychain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-qtkeychain-mac
+        with:
+          path: third_party/qtkeychain
+          key: qtkeychain-macos-arm64-qt6.8.3-${{ hashFiles('scripts/setup/setup-qtkeychain.sh') }}
+
+      # Dropping Homebrew's qtkeychain along with its Qt would have quietly
+      # removed credential-persistence compile coverage from every PR, since
+      # find_package(Qt6Keychain QUIET) just compiles it out — the #3639 shape.
+      # Build it from source against the same aqt Qt the DMG uses, and pair it
+      # with REQUIRE_KEYCHAIN=ON at configure so a regression is a red run.
+      - name: Setup qtkeychain (SmartLink credential persistence)
+        if: steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
+        run: bash scripts/setup/setup-qtkeychain.sh
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03
@@ -529,13 +571,19 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix)" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT;$(brew --prefix)" \
             -DAETHER_GPU_SPECTRUM=ON \
+            -DREQUIRE_KEYCHAIN=ON \
             -DMQTT_TLS=OFF 2>&1 | tee configure.log
 
       # Same guard as the Linux build job above. -iE rather than the -i "a\|b"
       # form: this runs on the macOS runner's BSD grep, which has no BRE
       # alternation and would search for the literal "a|b".
+      #
+      # This assertion is the one that caught the aqt Qt having no Qt6GuiPrivate
+      # CMake package where Homebrew's had one — see the CMakeLists.txt macOS
+      # framework-layout probe. Homebrew Qt was carrying this leg; the pin
+      # exposed that, which is exactly what a guard is for.
       - name: Assert GPU spectrum rendering actually enabled
         run: |
           grep -q "GPU spectrum rendering enabled" configure.log || {

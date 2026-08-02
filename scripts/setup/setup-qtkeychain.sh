@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-qtkeychain.sh — Build qtkeychain for Linux release packaging.
+# setup-qtkeychain.sh — Build qtkeychain for Linux and macOS release packaging.
 #
 # Downloads the qtkeychain source, builds it from source against the Qt6
 # installation in use (aqt-provided or system), and installs it into
@@ -17,7 +17,8 @@
 # LIBSECRET_SUPPORT is OFF on purpose: that selects qtkeychain's pure
 # Qt-D-Bus Secret Service backend, which talks to KDE Wallet (kwalletd) and
 # GNOME Keyring over the session bus with no extra native runtime deps to
-# bundle — only Qt6 D-Bus, which linuxdeploy already carries.
+# bundle — only Qt6 D-Bus, which linuxdeploy already carries. It has no effect
+# on macOS, where qtkeychain always uses the native Keychain backend.
 #
 # Requires: cmake, ninja, a C++ compiler, git, and a discoverable Qt6.
 #
@@ -86,7 +87,13 @@ cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
     -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
     -DCMAKE_INSTALL_PREFIX="$OUT_DIR_ABS" \
     -DCMAKE_INSTALL_LIBDIR=lib
-cmake --build "$BUILD_DIR" -j"$(nproc)"
+# nproc is GNU coreutils and absent on macOS, where this script now also runs
+# (the Apple Silicon DMG builds qtkeychain against its aqt Qt for the same ABI
+# reason as Linux). sysctl is the BSD equivalent. Fall back to 1 rather than
+# letting the substitution come out empty — a bare `-j` means "unlimited" and
+# would fork-bomb the runner.
+JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
+cmake --build "$BUILD_DIR" -j"$JOBS"
 cmake --install "$BUILD_DIR"
 
 # ── Cleanup ──────────────────────────────────────────────────────────────
