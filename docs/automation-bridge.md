@@ -2894,7 +2894,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 57 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 58 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2952,6 +2952,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
+| `health` | — | backend health snapshot — what the RADIO reports, not what was asked for |
 | `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |
 | `mark` | — | mark <text> — timestamped annotation in the log ring |
 | `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |

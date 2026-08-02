@@ -1569,6 +1569,14 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->setTxFilter(lowHz, highHz);
     });
 
+    // Mic gain reaches a host-modulating backend the same way and under the same
+    // rule: operator intent only, and only where the Flex verb cannot land.
+    connect(&m_transmitModel, &TransmitModel::micLevelCommandIssued, this,
+            [this](int level) {
+        if (m_backend && !usesFlexCommandPlane())
+            m_backend->setMicGain(level);
+    });
+
     // Forward transmit model commands to the radio
     connect(&m_transmitModel, &TransmitModel::commandReady, this, [this](const QString& cmd){
         const QString trimmed = cmd.trimmed();

@@ -320,6 +320,11 @@ signals:
     // (Principle II). Distinct from txFilterCutoffChanged, which also fires when
     // a Flex's own status moves the value.
     void txFilterCommandIssued(int lowHz, int highHz);
+    // The operator moved the MIC slider. OPERATOR INTENT ONLY, for exactly the
+    // reason txFilterCommandIssued carries above: applyStatus() must never emit
+    // this, or a Flex's own `transmit set miclevel=` echo would be handed
+    // straight back to the seam as a fresh command.
+    void micLevelCommandIssued(int level);
     // The operator moved PROC or its NOR/DX/DX+ level. OPERATOR INTENT ONLY,
     // for the same reason as txFilterCommandIssued — and here the distinction is
     // what protects the operator's own work: the client compressor these drive is

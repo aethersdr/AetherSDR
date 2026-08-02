@@ -8,6 +8,7 @@
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
@@ -419,8 +420,23 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // alcGain answers "how hard is the ALC working"; the gauge asks "how close
     // to full modulation am I", and on a chain whose ALC targets 0.85 those two
     // move in opposite directions.
-    connect(m_txDsp, &Hl2TxDsp::alcPeak, this,
-            [this](float dbfs) { emit meterUpdate(QStringLiteral("TX:ALC"), dbfs); });
+    connect(m_txDsp, &Hl2TxDsp::alcPeak, this, [this](float dbfs) {
+        m_alcPeakDbfs = dbfs;
+        emit meterUpdate(QStringLiteral("TX:ALC"), dbfs);
+    });
+    // alcGain drives no meter — TX:ALC is fed from alcPeak above, for the reason
+    // given there — but it is the number that answers "is the ALC holding?", so
+    // it is mirrored for healthSnapshot() and the bridge. Before this it was
+    // emitted into nothing, which is why a chain that was quietly refusing to
+    // lift a quiet mic could only be diagnosed by reading the source.
+    connect(m_txDsp, &Hl2TxDsp::alcGain, this,
+            [this](float db) { m_alcGainDb = db; });
+    // The modulator's own copy of the mic gain, for healthSnapshot(). Reported
+    // ALONGSIDE m_micLevel rather than instead of it: the operator's request and
+    // the modulator's state are different facts, and a diagnosis needs to see
+    // them disagree. See Hl2TxDsp::micGainChanged.
+    connect(m_txDsp, &Hl2TxDsp::micGainChanged, this,
+            [this](double linear) { m_appliedMicGainLinear = linear; });
 
     connect(m_metis, &MetisClient::telemetryUpdated, this,
             [this](const Hl2Telemetry& t) { publishTelemetry(t); });
@@ -2282,8 +2298,15 @@ void Hl2Backend::setKeying(bool key)
                              " audio went out quiet. Raise mic gain.";
         }
     }
-    if (key)
+    if (key) {
         m_txMicPeakMaxDbfs = -140.0f;
+        // Start each transmission's peak hold from nothing, rather than trusting
+        // the unkeyed branch in publishTelemetry() to have already walked it
+        // down. Telemetry is 10 Hz, so a key inside 100 ms of the previous unkey
+        // can arrive before any no-carrier sample does, and the new over would
+        // open displaying the old one's peak.
+        m_fwdPeakWatts = 0.0;
+    }
 
     m_keyed = key;
     // MUTE RECEIVE AUDIO WHILE TRANSMITTING.
@@ -2597,6 +2620,45 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
     notifyOperatingStateChanged();
 }
 
+// The Phone applet's MIC slider, 0..100, onto the modulator's linear pre-ALC gain.
+//
+// 50 IS UNITY, and that is load-bearing rather than cosmetic. TransmitModel
+// constructs m_micLevel at 50 and nothing restores it at startup, so a session
+// where the operator never touches the slider must leave the modulator exactly
+// where its own default (m_micGain = 1.0) puts it. A mapping with unity anywhere
+// else would silently change the transmit level of every existing HL2 install
+// the first time this code shipped.
+//
+// Above and below that, +/-20 dB linear in dB — 0.4 dB per slider step, which is
+// fine enough to set by ear and wide enough to cover the range between a headset
+// boom mic and a built-in laptop microphone.
+//
+// WHAT THIS DOES AND DOES NOT BUY, because the ALC sits right behind it:
+// Hl2TxDsp's ALC normalizes each block's peak to alcTargetPeak, so raising mic
+// gain on already-loud speech is largely given back and PEP barely moves. Where
+// it MATTERS is the ALC's hold threshold (alcHoldBelowDbfs, -45 dBFS): below
+// that the ALC deliberately stops lifting, so a microphone quiet enough to sit
+// under it gets no makeup at all and goes out weak. This slider is what carries
+// such a mic over the threshold — which is exactly what setKeying()'s "raise mic
+// gain" diagnostic tells the operator to do, and until now that advice pointed
+// at a control that did nothing on this backend.
+//
+// Level 0 mutes outright rather than resolving to -20 dB. A slider at the bottom
+// of its travel means off, and a mic that is merely 20 dB down would still be
+// hauled back up by the ALC's 40 dB of makeup — so without the special case,
+// "0" would sound barely different from "50".
+void Hl2Backend::setMicGain(int level)
+{
+    level = std::clamp(level, 0, 100);
+    m_micLevel = level;
+
+    const double linear = micSliderToLinear(level);
+
+    if (m_txDsp)
+        QMetaObject::invokeMethod(m_txDsp, "setMicGain", Qt::QueuedConnection,
+            Q_ARG(double, linear));
+}
+
 void Hl2Backend::setTxPower(int percent)
 {
     // The operator's 0..100 maps onto the HL2's 0..255 drive field. The gateware
@@ -2704,6 +2766,56 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         opt(m_telemetry.txFifoUnderflow));
     put("txFifoOverflow", QStringLiteral("TX FIFO overflow"),
         opt(m_telemetry.txFifoOverflow));
+
+    // THE VOICE CHAIN, END TO END, AS THE MODULATOR ACTUALLY RAN IT.
+    //
+    // Every row here is read from this backend rather than from TransmitModel.
+    // That distinction is the entire reason the section exists: the bridge's
+    // transmit snapshot reports the operator's REQUEST, so a control whose verb
+    // was dropped on the floor read back as though it had worked. Mic gain was
+    // exactly that — the slider moved, the snapshot agreed, and the modulator
+    // never heard about it. A readback that shares the failure it is meant to
+    // catch is worse than none, because it manufactures confidence.
+    //
+    // So: what the operator asked for AND what the modulator is running, side by
+    // side, and a diagnosis is one comparison rather than a source dive.
+    section("micLevel", QStringLiteral("Transmit voice chain"));
+    put("micLevel", QStringLiteral("Mic slider (0-100, 50 = unity)"), m_micLevel);
+    put("micGainDb", QStringLiteral("Mic gain requested (dB)"),
+        m_micLevel == 0 ? QVariant(QStringLiteral("muted"))
+                        : QVariant(micSliderToGainDb(m_micLevel)));
+    // THE ROW THAT WOULD HAVE CAUGHT THE ORIGINAL BUG. Echoed by the modulator,
+    // so it stays absent — "not reported" — if the push never arrived, however
+    // confidently the row above claims a value.
+    put("micGainAppliedLinear", QStringLiteral("Mic gain at the modulator (linear)"),
+        std::isnan(m_appliedMicGainLinear) ? QVariant()
+                                           : QVariant(m_appliedMicGainLinear));
+    // Peak mic level for the CURRENT transmission, reset at each key. Compared
+    // against the hold threshold below, these two rows are the whole "why did I
+    // go out quiet" diagnosis: a peak under the threshold means the ALC declined
+    // to lift it and the answer is mic gain.
+    put("txMicPeakDbfs", QStringLiteral("Mic peak this over (dBFS)"),
+        m_txMicPeakMaxDbfs > -139.0f ? QVariant(m_txMicPeakMaxDbfs) : QVariant());
+    put("alcHoldBelowDbfs", QStringLiteral("ALC hold threshold (dBFS)"),
+        Hl2TxDsp::Config{}.alcHoldBelowDbfs);
+    put("alcGainDb", QStringLiteral("ALC gain applied (dB)"),
+        std::isnan(m_alcGainDb) ? QVariant() : QVariant(m_alcGainDb));
+    put("alcPeakDbfs", QStringLiteral("Post-ALC peak (dBFS)"),
+        std::isnan(m_alcPeakDbfs) ? QVariant() : QVariant(m_alcPeakDbfs));
+    // The passband the modulator is running RIGHT NOW, which on any mode other
+    // than SSB voice is NOT the operator's stored pair — effectiveTxPassband()
+    // deliberately declines to apply a voice setting to CW or the digital modes.
+    // Reporting the stored pair here would explain nothing on exactly the modes
+    // where the two disagree.
+    {
+        const Receiver* txRx = rx(m_txDdc);
+        const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
+        const auto [lo, hi] = effectiveTxPassband(txMode);
+        put("txPassbandHz", QStringLiteral("TX passband in use (Hz)"),
+            QStringLiteral("%1 .. %2").arg(lo).arg(hi));
+        put("txPassbandFromOperator", QStringLiteral("TX passband is an operator override"),
+            m_txFilterFromOperator);
+    }
 
     section("temperatureC", QStringLiteral("Analog / thermal"));
     put("temperatureC", QStringLiteral("PA temperature (°C)"),
@@ -3243,7 +3355,7 @@ void Hl2Backend::defineMeters()
     // little above the top of the reference curve. A 50 dBm (100 W) scale would
     // leave every real HL2 reading in the bottom tenth of the meter.
     def(2, QStringLiteral("TX"),  QStringLiteral("FWDPWR"),  QStringLiteral("dBm"),
-        0.0, 41.0,     QStringLiteral("Forward power (uncalibrated)"));
+        0.0, 41.0,     QStringLiteral("Forward power, peak estimate (uncalibrated)"));
     def(3, QStringLiteral("TX"),  QStringLiteral("REFPWR"),  QStringLiteral("dBm"),
         0.0, 41.0,     QStringLiteral("Reflected power (uncalibrated)"));
     def(4, QStringLiteral("TX"),  QStringLiteral("SWR"),     QStringLiteral("SWR"),
@@ -3308,9 +3420,21 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // Arrives at the 10 Hz MetisClient already paces telemetry at
     // (kTelemetryMinIntervalMs), so no further rate gate is needed here;
     // MeterModel applies its own forward-power ballistics on top.
-    if (t.forwardPowerRaw)
-        emit meterUpdate(QStringLiteral("TX:FWDPWR"),
-                         wattsToDbm(directionalWatts(*t.forwardPowerRaw)));
+    //
+    // Published through the peak hold, not raw. See kFwdPeakReleaseAlpha for
+    // why a 10 Hz instantaneous sample of a speech envelope reads ~10 dB low
+    // and what the hold does and does not recover.
+    if (t.forwardPowerRaw) {
+        const double instantW = directionalWatts(*t.forwardPowerRaw);
+        // The hold applies only while keyed. Unkeyed, the reading must fall to
+        // zero on the same schedule REFPWR does — MeterModel snaps its own
+        // forward-power filter to zero the moment a no-carrier sample arrives,
+        // and a hold that outlived the transmission would keep re-arming it,
+        // leaving the gauge claiming power out of a radio that has stopped.
+        m_fwdPeakWatts = fwdPeakHoldStep(m_fwdPeakWatts, instantW, m_keyed,
+                                         kFwdPeakReleaseAlpha);
+        emit meterUpdate(QStringLiteral("TX:FWDPWR"), wattsToDbm(m_fwdPeakWatts));
+    }
     if (t.reversePowerRaw)
         emit meterUpdate(QStringLiteral("TX:REFPWR"),
                          wattsToDbm(directionalWatts(*t.reversePowerRaw)));
