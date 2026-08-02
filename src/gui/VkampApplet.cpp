@@ -1,0 +1,462 @@
+#include "VkampApplet.h"
+#include "HGauge.h"
+#include "core/ThemeManager.h"
+#include "MeterSmoother.h"
+
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QMessageBox>
+#include <QVBoxLayout>
+
+namespace AetherSDR {
+
+namespace {
+
+// 5 evenly spaced ticks across [0, max] -- same convention as
+// AcomApplet/AmpApplet's own gauge tick helper.
+QVector<HGauge::Tick> evenTicks(float max)
+{
+    QVector<HGauge::Tick> ticks;
+    for (float frac : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+        const int v = static_cast<int>(max * frac);
+        ticks.append({static_cast<float>(v), QString::number(v)});
+    }
+    return ticks;
+}
+
+QLabel* makeValueLabel(QWidget* parent)
+{
+    auto* lbl = new QLabel(parent);
+    lbl->setFixedWidth(46);
+    lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
+    return lbl;
+}
+
+QString activeBtnStyle(const QString& bg, const QString& border, const QString& fg)
+{
+    return QStringLiteral(
+        "QPushButton { background: %1; border: 1px solid %2; border-radius: 3px; "
+        "color: %3; font-size: 10px; font-weight: bold; } "
+        "QPushButton:hover { background: %1; }").arg(bg, border, fg);
+}
+
+QString neutralBtnStyle()
+{
+    return QStringLiteral(
+        "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+        "QPushButton:hover { background: {{color.background.1}}; }"
+        "QPushButton:disabled { background: #181c22; border: 1px solid #232a33; color: #3a4552; }");
+}
+
+QPushButton* makeSmallButton(const QString& text, QWidget* parent)
+{
+    auto* btn = new QPushButton(text, parent);
+    btn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    return btn;
+}
+
+}  // namespace
+
+VkampApplet::VkampApplet(QWidget* parent)
+    : QWidget(parent)
+{
+    theme::setContainer(this, QStringLiteral("applet/vkamp"));
+    auto* vbox = new QVBoxLayout(this);
+    vbox->setContentsMargins(4, 2, 4, 2);
+    vbox->setSpacing(2);
+
+    // ── Header: status pill ─────────────────────────────────────────────────
+    m_statusPill = new QLabel("—", this);
+    m_statusPill->setStyleSheet(
+        "QLabel { background: #1c222a; color: #6b7684; border: 1px solid #303a44; "
+        "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }");
+    m_statusPill->setAlignment(Qt::AlignCenter);
+    auto* headerRow = new QHBoxLayout;
+    headerRow->addStretch();
+    headerRow->addWidget(m_statusPill);
+    vbox->addLayout(headerRow);
+
+    // ── PWR row ───────────────────────────────────────────────────────────
+    m_pwrLabel = makeValueLabel(this);
+    m_pwrLabel->setText("PWR");
+    m_pwrGauge = new HGauge(0.0f, 2000.0f, 1500.0f, "", "", evenTicks(2000.0f), this);
+    m_pwrGauge->setBallistics({0.030f, 0.800f});
+    m_pwrGauge->setAccessibleName(tr("Forward power"));
+    auto* pwrRow = new QHBoxLayout;
+    pwrRow->setSpacing(4);
+    pwrRow->addWidget(m_pwrLabel);
+    pwrRow->addWidget(m_pwrGauge, 1);
+    vbox->addLayout(pwrRow);
+
+    // ── REF row ───────────────────────────────────────────────────────────
+    m_refLabel = makeValueLabel(this);
+    m_refLabel->setText("REF");
+    m_refGauge = new HGauge(0.0f, 300.0f, 150.0f, "", "", evenTicks(300.0f), this);
+    m_refGauge->setAccessibleName(tr("Reflected power"));
+    auto* refRow = new QHBoxLayout;
+    refRow->setSpacing(4);
+    refRow->addWidget(m_refLabel);
+    refRow->addWidget(m_refGauge, 1);
+    vbox->addLayout(refRow);
+
+    // ── SWR row ───────────────────────────────────────────────────────────
+    m_swrLabel = makeValueLabel(this);
+    m_swrLabel->setText("SWR");
+    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
+        {{1.0f, "1"}, {1.5f, "1.5"}, {2.0f, "2"}, {2.5f, "2.5"}, {3.0f, "3"}},
+        this, 2.0f);
+    m_swrGauge->setAccessibleName(tr("SWR"));
+    auto* swrRow = new QHBoxLayout;
+    swrRow->setSpacing(4);
+    swrRow->addWidget(m_swrLabel);
+    swrRow->addWidget(m_swrGauge, 1);
+    vbox->addLayout(swrRow);
+
+    vbox->addSpacing(4);
+
+    // ── Info grid: temp / volts / current, band / antenna / fault ──────────
+    static const char* kTelStyle = "QLabel { color: #c8d8e8; font-size: 10px; }";
+
+    m_tempLabel = new QLabel("TEMP  — C", this);
+    m_tempLabel->setStyleSheet(kTelStyle);
+    m_voltsLabel = new QLabel("SUPPLY  — V", this);
+    m_voltsLabel->setStyleSheet(kTelStyle);
+    m_currentLabel = new QLabel("CURR  — A", this);
+    m_currentLabel->setStyleSheet(kTelStyle);
+    m_bandLabel = new QLabel("BAND  —", this);
+    m_bandLabel->setStyleSheet(kTelStyle);
+    m_antennaLabel = new QLabel("ANT  —", this);
+    m_antennaLabel->setStyleSheet(kTelStyle);
+
+    auto* infoGrid = new QGridLayout;
+    infoGrid->setHorizontalSpacing(12);
+    infoGrid->setVerticalSpacing(2);
+    infoGrid->addWidget(m_tempLabel,    0, 0);
+    infoGrid->addWidget(m_voltsLabel,   0, 1);
+    infoGrid->addWidget(m_currentLabel, 0, 2);
+    infoGrid->addWidget(m_bandLabel,    1, 0);
+    infoGrid->addWidget(m_antennaLabel, 1, 1);
+    vbox->addLayout(infoGrid);
+
+    vbox->addSpacing(4);
+
+    // ── Fault banner (own row, full width, only shown when active) ─────────
+    // Raw numeric code only, no fault-name lookup -- see design doc Section 1
+    // (Constitution Principle IV: the only known code->name mapping for this
+    // amp is decompile-derived, and is deliberately not carried into this
+    // codebase).
+    m_faultLabel = new QLabel(this);
+    m_faultLabel->setWordWrap(true);
+    m_faultLabel->setStyleSheet("QLabel { color: #ff8080; font-size: 10px; font-weight: bold; }");
+    m_faultLabel->hide();
+    vbox->addWidget(m_faultLabel);
+
+    // ── Bypass / Cooling row ─────────────────────────────────────────────────
+    m_bypassBtn = makeSmallButton("BYPASS", this);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bypassBtn, neutralBtnStyle());
+    connect(m_bypassBtn, &QPushButton::clicked, this, [this]() { emit bypassToggled(!m_bypassed); });
+
+    m_coolingBtn = makeSmallButton("COOLING", this);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_coolingBtn, neutralBtnStyle());
+    connect(m_coolingBtn, &QPushButton::clicked, this, [this]() {
+        emit coolingToggled(m_coolingBtn->property("active").toBool() ? false : true);
+    });
+
+    auto* toggleRow = new QHBoxLayout;
+    toggleRow->setSpacing(6);
+    toggleRow->addWidget(m_bypassBtn);
+    toggleRow->addWidget(m_coolingBtn);
+    vbox->addLayout(toggleRow);
+
+    // ── Antenna row ───────────────────────────────────────────────────────
+    auto* antLabel = new QLabel("ANT", this);
+    antLabel->setStyleSheet(kTelStyle);
+    m_ant1Btn = makeSmallButton("1", this);
+    m_ant2Btn = makeSmallButton("2", this);
+    m_ant3Btn = makeSmallButton("3", this);
+    for (auto* btn : {m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, neutralBtnStyle());
+    }
+    // Read-only display, not an optimistic latch -- see setAntenna()'s own
+    // doc comment. Clicking just asks; the label/highlight only moves once
+    // the live status confirms it.
+    connect(m_ant1Btn, &QPushButton::clicked, this, [this]() { emit antennaSelected(1); });
+    connect(m_ant2Btn, &QPushButton::clicked, this, [this]() { emit antennaSelected(2); });
+    connect(m_ant3Btn, &QPushButton::clicked, this, [this]() { emit antennaSelected(3); });
+
+    auto* antRow = new QHBoxLayout;
+    antRow->setSpacing(6);
+    antRow->addWidget(antLabel);
+    antRow->addWidget(m_ant1Btn);
+    antRow->addWidget(m_ant2Btn);
+    antRow->addWidget(m_ant3Btn);
+    antRow->addStretch();
+    vbox->addLayout(antRow);
+
+    // ── Voltage rail row ──────────────────────────────────────────────────
+    // Two fixed setpoints, never a dial -- see design doc Section 5. Both
+    // buttons are disabled while bypassed (refreshVoltageButtons()) -- a
+    // real-hardware safety finding, not a cosmetic choice.
+    auto* railLabel = new QLabel("RAIL", this);
+    railLabel->setStyleSheet(kTelStyle);
+    m_voltLowBtn = makeSmallButton("LOW", this);
+    m_voltHighBtn = makeSmallButton("HIGH", this);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltLowBtn, neutralBtnStyle());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltHighBtn, neutralBtnStyle());
+    connect(m_voltLowBtn, &QPushButton::clicked, this, [this]() { emit voltageSelected(true); });
+    connect(m_voltHighBtn, &QPushButton::clicked, this, [this]() { emit voltageSelected(false); });
+
+    auto* railRow = new QHBoxLayout;
+    railRow->setSpacing(6);
+    railRow->addWidget(railLabel);
+    railRow->addWidget(m_voltLowBtn);
+    railRow->addWidget(m_voltHighBtn);
+    railRow->addStretch();
+    vbox->addLayout(railRow);
+
+    // ── Reset row ─────────────────────────────────────────────────────────
+    // Hold-to-confirm on the amp's own end (the wire command needs ~9-12s of
+    // repeated sends to register -- design doc Section 4); the confirm
+    // dialog here is this app's own gate against an accidental click, same
+    // pattern as every other destructive-action confirm in this codebase
+    // (see e.g. ProfileManagerDialog's delete-profile confirm).
+    m_resetBtn = new QPushButton("RESET", this);
+    m_resetBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_resetBtn,
+        "QPushButton { background: #2a2210; border: 1px solid #5a4a1a; "
+        "border-radius: 3px; color: #ffb84d; font-size: 10px; font-weight: bold; padding: 2px 8px; }"
+        "QPushButton:hover { background: #3a2e14; }"
+        "QPushButton:disabled { background: #181c22; border: 1px solid #232a33; color: #3a4552; }");
+    connect(m_resetBtn, &QPushButton::clicked, this, [this]() {
+        const auto reply = QMessageBox::question(this, "Reset Amplifier",
+            "Reset the VK3AMP? The amp needs the reset command held for about "
+            "10 seconds to register.",
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::Yes) {
+            emit resetRequested();
+        }
+    });
+    auto* resetRow = new QHBoxLayout;
+    resetRow->addStretch();
+    resetRow->addWidget(m_resetBtn);
+    vbox->addLayout(resetRow);
+
+    m_labelTimer.setInterval(kMeterReadoutUpdateMs);
+    connect(&m_labelTimer, &QTimer::timeout, this, &VkampApplet::updateValueLabels);
+    m_labelTimer.start();
+
+    m_peakTimer = new QTimer(this);
+    m_peakTimer->setSingleShot(true);
+    m_peakTimer->setInterval(2500);
+    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
+        m_peakFwd = 0.0f;
+        m_pwrGauge->clearPeak();
+    });
+
+    setConnected(false);
+}
+
+void VkampApplet::setForwardPower(float watts)
+{
+    m_fwdWatts = watts;
+    m_pwrGauge->setValue(watts);
+    if (watts > m_peakFwd) {
+        m_peakFwd = watts;
+        m_pwrGauge->setPeakValue(watts);
+        m_peakTimer->start();
+    }
+    m_valuesDirty = true;
+}
+
+void VkampApplet::setReflectedPower(float watts)
+{
+    m_reflectedWatts = watts;
+    // Reflected power only means anything alongside forward drive -- hold
+    // the needle at baseline below 1W, same gate AcomApplet uses.
+    m_refGauge->setValue(m_fwdWatts >= 1.0f ? watts : 0.0f);
+    m_valuesDirty = true;
+}
+
+void VkampApplet::setSwr(float swr)
+{
+    m_swrVal = swr;
+    m_swrGauge->setValue(m_fwdWatts >= 1.0f ? swr : 1.0f);
+    m_valuesDirty = true;
+}
+
+void VkampApplet::setCurrent(float amps)
+{
+    m_currentAmps = amps;
+    m_valuesDirty = true;
+}
+
+void VkampApplet::setTemp(float degC)
+{
+    m_tempC = degC;
+    m_valuesDirty = true;
+}
+
+void VkampApplet::setSupplyVoltage(float volts)
+{
+    m_volts = volts;
+    m_valuesDirty = true;
+}
+
+void VkampApplet::setBand(const QString& band)
+{
+    m_pendingBand = band;
+    m_bandDirty = true;
+}
+
+void VkampApplet::setAntenna(int port)
+{
+    m_antennaPort = port;
+    m_bandDirty = true;  // reuses the same throttle flag as band -- both are low-rate status fields
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    theme.applyStyleSheet(m_ant1Btn, port == 1 ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+    theme.applyStyleSheet(m_ant2Btn, port == 2 ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+    theme.applyStyleSheet(m_ant3Btn, port == 3 ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+}
+
+void VkampApplet::setBypass(bool on)
+{
+    m_bypassed = on;
+    auto& theme = AetherSDR::ThemeManager::instance();
+    theme.applyStyleSheet(m_bypassBtn,
+        on ? activeBtnStyle("#3a2a12", "#6a4a1a", "#ffb84d") : neutralBtnStyle());
+    refreshVoltageButtons();
+}
+
+void VkampApplet::setCoolingOverride(bool on)
+{
+    m_coolingBtn->setProperty("active", on);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_coolingBtn,
+        on ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+}
+
+void VkampApplet::setVoltageLow(bool low)
+{
+    m_voltageLow = low;
+    refreshVoltageButtons();
+}
+
+void VkampApplet::refreshVoltageButtons()
+{
+    // Mirrors the sibling VK-AMPS-Control web app's own renderVoltage() /
+    // updateVoltageButtonsEnabled() logic exactly -- neither button shows
+    // active while bypassed, and both are disabled (not just visually
+    // muted) for the entire time bypass is on. See design doc Section 5.
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const bool lowActive = m_voltageLow && !m_bypassed;
+    const bool highActive = !m_voltageLow && !m_bypassed;
+    theme.applyStyleSheet(m_voltLowBtn,
+        lowActive ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+    theme.applyStyleSheet(m_voltHighBtn,
+        highActive ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+    const bool enabled = m_connected && !m_bypassed;
+    m_voltLowBtn->setEnabled(enabled);
+    m_voltHighBtn->setEnabled(enabled);
+}
+
+void VkampApplet::setFaultCode(int code)
+{
+    m_faultCode = code;
+    if (code == 0) {
+        m_faultLabel->hide();
+        m_faultLabel->clear();
+        return;
+    }
+    m_faultLabel->setText(QStringLiteral("Error %1").arg(code));
+    m_faultLabel->show();
+}
+
+void VkampApplet::setResetProgress(double remainingSeconds, bool active)
+{
+    if (active) {
+        m_resetBtn->setEnabled(false);
+        m_resetBtn->setText(QStringLiteral("RESETTING… %1s").arg(static_cast<int>(remainingSeconds + 0.5)));
+    } else {
+        m_resetBtn->setEnabled(m_connected);
+        m_resetBtn->setText("RESET");
+    }
+}
+
+void VkampApplet::setConnected(bool connected)
+{
+    m_connected = connected;
+    m_bypassBtn->setEnabled(connected);
+    m_coolingBtn->setEnabled(connected);
+    m_ant1Btn->setEnabled(connected);
+    m_ant2Btn->setEnabled(connected);
+    m_ant3Btn->setEnabled(connected);
+    m_resetBtn->setEnabled(connected);
+    refreshVoltageButtons();
+
+    m_statusPill->setText(connected ? QStringLiteral("CONNECTED") : QStringLiteral("—"));
+    m_statusPill->setStyleSheet(connected
+        ? "QLabel { background: #0f2a1c; color: #6be899; border: 1px solid #4dd87a; "
+          "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }"
+        : "QLabel { background: #1c222a; color: #6b7684; border: 1px solid #303a44; "
+          "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }");
+
+    if (!connected) {
+        setFaultCode(0);
+        setBypass(false);
+        setCoolingOverride(false);
+        m_antennaPort = 0;
+        m_pendingBand.clear();
+        m_bandLabel->setText("BAND  —");
+        m_antennaLabel->setText("ANT  —");
+        for (auto* btn : {m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(btn, neutralBtnStyle());
+        }
+        m_tempC = 0.0f;
+        m_volts = 0.0f;
+        m_currentAmps = 0.0f;
+        m_tempLabel->setText("TEMP  — C");
+        m_voltsLabel->setText("SUPPLY  — V");
+        m_currentLabel->setText("CURR  — A");
+        m_fwdWatts = 0.0f;
+        m_reflectedWatts = 0.0f;
+        m_swrVal = 1.0f;
+        m_peakFwd = 0.0f;
+        if (m_peakTimer) { m_peakTimer->stop(); }
+        m_pwrGauge->setValueImmediate(0.0f);
+        m_pwrGauge->clearPeak();
+        m_refGauge->setValueImmediate(0.0f);
+        m_swrGauge->setValueImmediate(1.0f);
+        setResetProgress(0.0, false);
+        updateValueLabels();
+    }
+}
+
+void VkampApplet::updateValueLabels()
+{
+    m_pwrLabel->setText(m_fwdWatts >= 1.0f
+        ? QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdWatts))
+        : QStringLiteral("PWR"));
+    m_refLabel->setText(m_fwdWatts >= 1.0f
+        ? QStringLiteral("REF  %1").arg(static_cast<int>(m_reflectedWatts))
+        : QStringLiteral("REF"));
+    m_swrLabel->setText(m_fwdWatts >= 1.0f
+        ? QStringLiteral("SWR  %1:1").arg(m_swrVal, 0, 'f', 1)
+        : QStringLiteral("SWR"));
+
+    if (m_valuesDirty) {
+        m_valuesDirty = false;
+        m_tempLabel->setText(QStringLiteral("TEMP  %1C").arg(static_cast<int>(m_tempC)));
+        m_voltsLabel->setText(QStringLiteral("SUPPLY  %1V").arg(m_volts, 0, 'f', 1));
+        m_currentLabel->setText(QStringLiteral("CURR  %1A").arg(m_currentAmps, 0, 'f', 1));
+    }
+    if (m_bandDirty) {
+        m_bandDirty = false;
+        m_bandLabel->setText(QStringLiteral("BAND  %1").arg(m_pendingBand.isEmpty() ? QStringLiteral("—") : m_pendingBand));
+        m_antennaLabel->setText(QStringLiteral("ANT  %1").arg(m_antennaPort > 0 ? QString::number(m_antennaPort) : QStringLiteral("—")));
+    }
+}
+
+}  // namespace AetherSDR

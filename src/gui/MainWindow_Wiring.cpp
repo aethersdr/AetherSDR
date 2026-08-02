@@ -37,6 +37,7 @@
 #include "AmpApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
+#include "VkampApplet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
 #include "MeterApplet.h"
@@ -4894,7 +4895,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn, &m_speConn);
+                              m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)
@@ -5665,6 +5666,7 @@ void MainWindow::wireMeters()
         m_antennaGenius.setAutoReconnect(ar);
         m_acomConn.setAutoReconnect(ar);
         m_speConn.setAutoReconnect(ar);
+        m_vkampConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
@@ -6040,6 +6042,79 @@ void MainWindow::wireMeters()
                 m_speConn.connectSerial(port);
         }
 #endif
+    }
+
+    // ── VK3AMP amplifier — TCP control/status + UDP telemetry, no FlexRadio
+    // relay ─────────────────────────────────────────────────────────────────
+    // See docs/architecture/vkamp-amplifier-design.md. Deliberately does NOT
+    // route through AmpModel, same reasoning as ACOM above (§2 of the ACOM
+    // design doc, applied here from the start): a shared AmpModel/AmpApplet
+    // would make the PGXL panel appear whenever an unrelated peripheral
+    // connects.
+    connect(&m_vkampConn, &VkampConnection::connected, this, [this]() {
+        m_appletPanel->vkampApplet()->setConnected(true);
+        m_appletPanel->setVkampVisible(true);
+    });
+    connect(&m_vkampConn, &VkampConnection::disconnected, this, [this]() {
+        m_appletPanel->vkampApplet()->setConnected(false);
+        m_appletPanel->setVkampVisible(false);
+    });
+    connect(m_appletPanel->vkampApplet(), &VkampApplet::bypassToggled, this, [this](bool on) {
+        m_vkampConn.setBypass(on);
+    });
+    connect(m_appletPanel->vkampApplet(), &VkampApplet::coolingToggled, this, [this](bool on) {
+        m_vkampConn.setCoolingOverride(on);
+    });
+    connect(m_appletPanel->vkampApplet(), &VkampApplet::antennaSelected, this, [this](int port) {
+        m_vkampConn.selectAntenna(port);
+    });
+    connect(m_appletPanel->vkampApplet(), &VkampApplet::voltageSelected, this, [this](bool low) {
+        m_vkampConn.setVoltage(low);
+    });
+    connect(m_appletPanel->vkampApplet(), &VkampApplet::resetRequested, this, [this]() {
+        m_vkampConn.startReset();
+    });
+    connect(&m_vkampConn, &VkampConnection::resetProgress, this, [this](double remaining) {
+        m_appletPanel->vkampApplet()->setResetProgress(remaining, remaining > 0.0);
+    });
+    connect(&m_vkampConn, &VkampConnection::resetFinished, this, [this]() {
+        m_appletPanel->vkampApplet()->setResetProgress(0.0, false);
+    });
+
+    connect(&m_vkampConn, &VkampConnection::statusUpdated, this,
+            [this](const AetherSDR::Vkamp::Status& s) {
+        auto* vkamp = m_appletPanel->vkampApplet();
+        vkamp->setTemp(static_cast<float>(s.temp_c));
+        vkamp->setSupplyVoltage(s.volts);
+        vkamp->setBand(AetherSDR::Vkamp::bandName(s.band));
+        vkamp->setAntenna(s.antenna);
+        vkamp->setBypass(s.bypass);
+        vkamp->setCoolingOverride(s.cooling_override);
+        // Inferred from the live volts reading, gated on !bypass at the
+        // source (Status::voltageLow()) — see design doc Section 5's
+        // real-hardware safety finding on why bypass must never be read as
+        // a rail selection.
+        vkamp->setVoltageLow(s.bypass ? false : s.voltageLow());
+        vkamp->setFaultCode(s.error_code);
+    });
+    connect(&m_vkampConn, &VkampConnection::telemetryUpdated, this,
+            [this](const AetherSDR::Vkamp::Telemetry& t) {
+        auto* vkamp = m_appletPanel->vkampApplet();
+        vkamp->setForwardPower(t.outputWatts());
+        vkamp->setReflectedPower(t.reflectedWatts());
+        vkamp->setSwr(t.swr());
+        vkamp->setCurrent(t.currentAmps());
+    });
+
+    // Startup auto-connect from saved Peripherals settings — same reasoning
+    // as ACOM above: no radio-side presence signal exists for this
+    // peripheral, so the saved setting is the only trigger there will ever
+    // be.
+    {
+        const QString ip = PeripheralSettings::deviceString("Vkamp", "ManualIp");
+        const int port = PeripheralSettings::deviceInt("Vkamp", "ManualPort", 5005);
+        if (!ip.isEmpty())
+            m_vkampConn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
     // Switch Fwd Power gauge scale based on radio max power and amplifier presence.

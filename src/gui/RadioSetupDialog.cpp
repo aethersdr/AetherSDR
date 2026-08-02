@@ -31,6 +31,7 @@
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
 #include "core/SpeConnection.h"
+#include "core/VkampConnection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
@@ -636,12 +637,13 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    KiwiSdrManager* kiwiSdrManager,
                                    AcomConnection* acom,
                                    SpeConnection* spe,
+                                   VkampConnection* vkamp,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -7761,6 +7763,88 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             PeripheralSettings::clearDeviceField("SpeExpert", "ManualPort");
             if (m_spe->isConnected() && m_spe->description().startsWith(savedIp + ":")) {
                 m_spe->disconnect();
+            }
+        });
+    }
+
+    // Row 7: VK3AMP amplifier — TCP control/status only for v1 (see
+    // docs/architecture/vkamp-amplifier-design.md Section 3.3/Section 9:
+    // serial is a genuinely different wire format, deferred to a later
+    // phase), so this row is a plain host/port pair, no Serial/Network
+    // toggle.
+    if (m_vkamp) {
+        const int row = 7;
+
+        auto* devLbl = new QLabel("VK3AMP Amplifier");
+        devLbl->setStyleSheet(kLabelStyle);
+        grid->addWidget(devLbl, row, 0);
+
+        auto* ipEdit = new QLineEdit;
+        ipEdit->setPlaceholderText("e.g. 192.168.1.50");
+        ipEdit->setStyleSheet(kEditStyle);
+        ipEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
+        grid->addWidget(ipEdit, row, 1);
+
+        auto* portSpin = new QSpinBox;
+        portSpin->setRange(1, 65535);
+        portSpin->setValue(PeripheralSettings::deviceInt("Vkamp", "ManualPort", 5005));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        grid->addWidget(portSpin, row, 2);
+
+        auto* statusLbl = new QLabel(m_vkamp->isConnected() ? "Connected" : "Not connected");
+        statusLbl->setStyleSheet(m_vkamp->isConnected()
+            ? "QLabel { color: #00e060; font-size: 11px; }"
+            : "QLabel { color: #8aa8c0; font-size: 11px; }");
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* vkampBtn = new QPushButton(m_vkamp->isConnected() ? "Disconnect" : "Connect");
+        vkampBtn->setStyleSheet(kBtnStyle);
+        grid->addWidget(vkampBtn, row, 3);
+
+        auto updateVkampState = [this, vkampBtn, statusLbl]() {
+            const bool conn = m_vkamp->isConnected();
+            vkampBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            statusLbl->setStyleSheet(conn
+                ? "QLabel { color: #00e060; font-size: 11px; }"
+                : "QLabel { color: #8aa8c0; font-size: 11px; }");
+        };
+        connect(m_vkamp, &VkampConnection::connected, this, updateVkampState);
+        connect(m_vkamp, &VkampConnection::disconnected, this, updateVkampState);
+        connect(m_vkamp, &VkampConnection::connectionFailed, this,
+                [statusLbl](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            statusLbl->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
+        });
+
+        connect(vkampBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_vkamp->isConnected()) {
+                m_vkamp->disconnect();
+                return;
+            }
+            const QString ip = ipEdit->text().trimmed();
+            if (ip.isEmpty()) return;
+            const int port = portSpin->value();
+            PeripheralSettings::setDeviceString("Vkamp", "ManualIp", ip);
+            PeripheralSettings::setDeviceInt("Vkamp", "ManualPort", port);
+            m_vkamp->connectNetwork(ip, static_cast<quint16>(port));
+        });
+
+        // Save-on-close: same "user cleared the field and closed the dialog
+        // without clicking Connect/Disconnect" handling as ACOM's own row
+        // above.
+        m_peripheralRowSavers.append([ipEdit, this]() {
+            if (!ipEdit) return;
+            const QString ip = ipEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("Vkamp", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("Vkamp", "ManualIp");
+            PeripheralSettings::clearDeviceField("Vkamp", "ManualPort");
+            if (m_vkamp->isConnected() && m_vkamp->description().startsWith(savedIp + ":")) {
+                m_vkamp->disconnect();
             }
         });
     }

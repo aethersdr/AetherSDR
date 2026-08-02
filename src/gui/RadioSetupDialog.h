@@ -33,6 +33,7 @@ class AntennaGeniusModel;
 class KiwiSdrManager;
 class AcomConnection;
 class SpeConnection;
+class VkampConnection;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -46,6 +47,7 @@ public:
                               KiwiSdrManager* kiwiSdrManager = nullptr,
                               AcomConnection* acom = nullptr,
                               SpeConnection* spe = nullptr,
+                              VkampConnection* vkamp = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void refreshFlexControlButtonActions();
@@ -137,6 +139,7 @@ private:
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     AcomConnection* m_acom{nullptr};
     SpeConnection* m_spe{nullptr};
+    VkampConnection* m_vkamp{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};
