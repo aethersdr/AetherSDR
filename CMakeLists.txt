@@ -2518,6 +2518,17 @@ if(HIDAPI_FOUND)
     endforeach()
     list(REMOVE_DUPLICATES HIDAPI_NORMALIZED_INCLUDE_DIRS)
     target_include_directories(aethercore PUBLIC ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
+    # pkg_check_modules sets HIDAPI_LIBRARIES to a bare name ("hidapi"), so the
+    # link needs the -L that HIDAPI_LIBRARY_DIRS carries — exactly as portaudio
+    # and fftw3 do below. hidapi was the one dependency missing it, and it went
+    # unnoticed because the only prefix it ever came from on macOS was
+    # Homebrew's, already covered by the global link_directories() near the top
+    # of this file. #4706 moved hidapi to a from-source prefix so it could be
+    # built at the deployment target, which is off every default search path:
+    # CMake still reported "Found hidapi, version 0.15.0" from the .pc file and
+    # the DMG build then died at 100% with "ld: library 'hidapi' not found".
+    # Empty on Windows, where HIDAPI_LIBRARIES is a full path — a no-op there.
+    target_link_directories(aethercore PRIVATE ${HIDAPI_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${HIDAPI_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND HIDAPI_DLL)
