@@ -268,7 +268,7 @@ GitHub on every tier — your own PR always needs review from someone else.
 |---|---|---|
 | **Source (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking) |
 | **Infrastructure (Tier 2)** | `tests/`, `docs/`, `*.md`, `CMakeLists.txt`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat) |
-| **Maintainer-only (Tier 1)** | governance/security docs (`CONSTITUTION.md`, `GOVERNANCE.md`, `CONTRIBUTING.md`, `SECURITY*`, `LICENSE`, `ROADMAP.md`, `CODE_OF_CONDUCT.md`), `.github/CODEOWNERS`, `.github/codeql/`, the release signing/publish + CodeQL-scan workflows (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `build-macos-qt.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`), and the AI-instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/commands/`) | `@aethersdr/maintainers` (@ten9876) |
+| **Maintainer-only (Tier 1)** | governance/security docs (`CONSTITUTION.md`, `GOVERNANCE.md`, `CONTRIBUTING.md`, `SECURITY*`, `LICENSE`, `ROADMAP.md`, `CODE_OF_CONDUCT.md`), `.github/CODEOWNERS`, `.github/codeql/`, the release signing/publish + CodeQL-scan workflows (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`), and the AI-instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/commands/`) | `@aethersdr/maintainers` (@ten9876) |
 
 The maintainer-only tier covers *governance and security-critical* paths:
 project policy and governance docs, the CODEOWNERS file and CodeQL config, the

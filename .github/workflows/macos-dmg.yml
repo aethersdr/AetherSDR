@@ -13,28 +13,43 @@ jobs:
     strategy:
       matrix:
         include:
+          # deploy_target moves out of job-level env and into the matrix. It was
+          # two env vars read by steps that each re-branched on matrix.label; it
+          # is now one per-leg value, which is what lets the cache keys below
+          # carry it — a cache step cannot see a value that a `run:` block picks
+          # with an if/else.
+          #
+          # The legs differ on purpose. Apple Silicon stays at 14.0 because
+          # CMakeLists.txt gates the ASR Metal kernels on it (>= 14.0 builds
+          # metal3.1 with bf16, below that metal3.0 with props.has_bfloat
+          # clamped) and upstream ONNX Runtime 1.27.0 is built at exactly 14.0 —
+          # no Apple Silicon Mac is stuck below it. Intel goes to 12.0: nothing
+          # in that artifact needs a higher floor, and it exists to serve the
+          # aging hardware that cannot go higher (#4532).
+          #
+          # arch is the qtkeychain cache-key tag, kept separate from label so the
+          # Apple Silicon key stays byte-identical to ci.yml's — that sharing is
+          # deliberate (same source, same Qt, same runner class).
           - runner: macos-15
             label: apple-silicon
+            arch: arm64
+            deploy_target: '14.0'
           - runner: macos-15-intel
             label: intel
+            arch: x86_64
+            deploy_target: '12.0'
     runs-on: ${{ matrix.runner }}
 
-    # One place each for the versions and the deployment targets this workflow
-    # pins. MACOS_DEPLOYMENT_TARGET is the Apple Silicon value: it feeds both
-    # the app's CMAKE_OSX_DEPLOYMENT_TARGET below and setup-qtkeychain.sh, so
-    # the bundled dylib can never end up newer than the bundle carrying it.
-    # ci.yml's check-macos pins the same three values, and shares the qtkeychain
-    # cache key built from them.
+    # One place each for the versions this workflow pins. ci.yml's check-macos
+    # pins the same values and shares the qtkeychain cache key built from them.
     env:
       QT_VERSION: '6.8.3'
       AQTINSTALL_VERSION: '3.3.0'
-      MACOS_DEPLOYMENT_TARGET: '14.0'
-      MACOS_INTEL_DEPLOYMENT_TARGET: '13.0'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          clean: false  # skip post-run cleanup — Intel Qt source build creates huge tree
+          clean: false  # skip post-run cleanup — the aqt Qt tree is large
 
       - name: Install dependencies via Homebrew
         run: |
@@ -42,19 +57,34 @@ jobs:
           # which is a rolling formula — it shipped 6.11.1 while every other
           # artifact pinned 6.8.3, so the most-downloaded macOS artifact linked
           # a Qt no other build tested and could change between tags with no PR
-          # (#4688 §1). Both legs now use a pinned Qt: aqt 6.8.3 below on Apple
-          # Silicon, the from-source/prebuilt 6.8.3 tree on Intel.
+          # (#4688 §1). Both legs now take the same pinned aqt Qt below.
           #
           # qtkeychain likewise: the Homebrew formula is compiled against
           # Homebrew Qt, so taking it here would reintroduce the exact ABI
           # mismatch #4685 removed on Linux — and one that fails silently,
           # because find_package(Qt6Keychain QUIET) just compiles credential
           # persistence out (#3639). It is built from source against the aqt Qt.
-          brew install ninja create-dmg autoconf automake libtool \
-            fftw portaudio hidapi
+          #
+          # fftw, portaudio and hidapi are gone for a third reason, and it is the
+          # one that was actually breaking users. A Homebrew bottle is compiled
+          # for the OS it was built on: this job resolves arm64_sequoia (minos
+          # 15.0) on macos-15 and sonoma (minos 14.0) on macos-15-intel, because
+          # Homebrew publishes no newer Intel bottle. macdeployqt stages those
+          # dylibs into the bundle and dyld enforces their minos, so the DMG's
+          # real floor was the runner image's OS — the Apple Silicon DMG declared
+          # 14.0 and needed 15, the Intel DMG declared 13.0 and needed 14. That
+          # is #4532, and it is the same mechanism #802 diagnosed for Qt and
+          # fixed for Qt alone. scripts/setup/setup-macos-deps.sh builds all
+          # three at our floor instead.
+          #
+          # What is left is build tooling that never gets linked into the app, so
+          # its own deployment target is irrelevant. pkg-config is explicit
+          # rather than incidental: CMakeLists.txt finds portaudio and hidapi
+          # through pkg_check_modules, which quietly finds nothing at all when
+          # pkg-config is missing, compiling both features out without an error.
+          brew install ninja create-dmg autoconf automake libtool pkg-config
 
-      - name: Install Qt LTS via aqtinstall (Apple Silicon)
-        if: matrix.label == 'apple-silicon'
+      - name: Install Qt LTS via aqtinstall
         run: |
           set -o pipefail
           # aqt goes in a venv rather than `pip3 install --user` or
@@ -71,11 +101,24 @@ jobs:
           # does not, and should — separate change, separate artifact.
           python3 -m venv "$RUNNER_TEMP/aqtvenv"
           "$RUNNER_TEMP/aqtvenv/bin/pip" install -q "aqtinstall==${AQTINSTALL_VERSION}"
-          # Qt publishes ONE macOS desktop build, clang_64, and it is universal2
-          # (x86_64 + arm64) — there is no separate arm64 arch to choose.
-          # Verified against `aqt list-qt mac desktop --arch 6.8.3`, which
-          # returns clang_64 alone, and all four modules below are published
-          # for it.
+          # Qt publishes ONE macOS desktop build, clang_64, and it serves BOTH
+          # legs — verified by inspecting the shipped binary, not the docs:
+          #
+          #   $ file .../QtCore.framework/Versions/A/QtCore
+          #   Mach-O universal binary with 2 architectures: x86_64, arm64
+          #   $ llvm-otool -l ... | grep -A4 LC_BUILD_VERSION
+          #   platform 1   sdk 14.4   minos 12.0
+          #
+          # minos 12.0 is what retires the Intel from-source build. #802 built Qt
+          # by hand because "Homebrew Qt bottles on macos-15-intel target macOS
+          # 14.0, breaking on 2017 iMacs stuck on Ventura" — a property of
+          # HOMEBREW's bottles, not of Qt. Qt's own binary reaches further back
+          # than the 13.0 we were hand-building for. The option was invisible at
+          # the time only because #711 had removed aqt from macOS the previous
+          # day, for the unrelated dual-Qt conflict.
+          #
+          # `aqt list-qt mac desktop --arch 6.8.3` returns clang_64 alone, and
+          # all four modules below are published for it.
           "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir "${{ github.workspace }}/Qt"
@@ -113,8 +156,7 @@ jobs:
       # CMAKE_PREFIX_PATH still carries $(brew --prefix) for fftw/portaudio/
       # hidapi, so a future formula that pulls qtbase in, or a runner image that
       # ships Qt preinstalled, would silently recreate #711. Assert it.
-      - name: Assert no Homebrew Qt is discoverable (Apple Silicon)
-        if: matrix.label == 'apple-silicon'
+      - name: Assert no Homebrew Qt is discoverable
         run: |
           set -o pipefail
           if brew list --formula 2>/dev/null | grep -qE '^(qt|qt@[0-9]+|qtbase)$'; then
@@ -133,86 +175,72 @@ jobs:
           fi
           echo "No Homebrew Qt present; the aqt tree at $QT_ROOT is the only one."
 
-      - name: Cache qtkeychain (Apple Silicon)
-        if: matrix.label == 'apple-silicon'
+      - name: Cache macOS deps (fftw, portaudio, hidapi)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-macos-deps
+        with:
+          path: third_party/macos-deps
+          # The deployment target is IN the key. It is the one thing the build
+          # bakes in that nothing downstream can correct, so a 14.0 tree must
+          # never restore into a 12.0 build — that would silently recreate the
+          # bug this change exists to remove.
+          key: macos-deps-${{ matrix.label }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-macos-deps.sh') }}
+
+      # ~8 min cold, then cached until the script or the target changes — the
+      # same deal third_party/qtkeychain already has. That cost buys the DMG a
+      # deployment target that describes the DMG instead of the runner image.
+      - name: Build macOS deps at the deployment target
+        if: steps.cache-macos-deps.outputs.cache-hit != 'true'
+        env:
+          MACOS_DEPLOYMENT_TARGET: ${{ matrix.deploy_target }}
+        run: bash scripts/setup/setup-macos-deps.sh
+
+      - name: Cache qtkeychain
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qtkeychain-mac
         with:
           path: third_party/qtkeychain
           # Keyed on every input that changes the dylib, not just the script:
           # it is an ABI match for one specific Qt, and it carries one specific
-          # LC_BUILD_VERSION. Identical to ci.yml's key on purpose — that job
-          # runs on push:main, default-branch caches are visible to every ref,
-          # so the entry restored here is normally the one check-macos wrote.
-          # Anything that would make those two builds differ has to appear here.
-          key: qtkeychain-macos-arm64-qt${{ env.QT_VERSION }}-deploy${{ env.MACOS_DEPLOYMENT_TARGET }}-${{ hashFiles('scripts/setup/setup-qtkeychain.sh') }}
+          # LC_BUILD_VERSION. matrix.arch rather than matrix.label so the Apple
+          # Silicon key stays byte-identical to ci.yml's — that sharing is
+          # deliberate (that job runs on push:main, and default-branch caches
+          # are visible to every ref, so the entry restored here is normally the
+          # one check-macos wrote). Intel gets its own key; nothing else builds
+          # that leg's qtkeychain.
+          key: qtkeychain-macos-${{ matrix.arch }}-qt${{ env.QT_VERSION }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-qtkeychain.sh') }}
 
+      # Both legs now. #812 gave up SmartLink credential persistence on Intel
+      # ("qtkeychain pulls in qt@6 as a dependency, so skip it too") purely to
+      # dodge the Homebrew-Qt clash. With Qt coming from aqt and qtkeychain built
+      # against it from source, that trade is no longer required.
+      #
       # MACOS_DEPLOYMENT_TARGET is not optional here: CMake otherwise leaves the
       # deployment target empty and clang stamps the runner's own OS (15.x) into
-      # the dylib, which CMakeLists.txt then copies into Contents/Frameworks of
-      # a bundle built for 14.0 — dyld refuses to load it on macOS 14.
-      - name: Setup qtkeychain (SmartLink credential persistence, Apple Silicon)
-        if: matrix.label == 'apple-silicon' && steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
+      # the dylib, which CMakeLists.txt then copies into Contents/Frameworks —
+      # dyld refuses to load it on anything older.
+      - name: Setup qtkeychain (SmartLink credential persistence)
+        if: steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
+        env:
+          MACOS_DEPLOYMENT_TARGET: ${{ matrix.deploy_target }}
         run: bash scripts/setup/setup-qtkeychain.sh
-
-      - name: Download pre-built Qt (Intel only)
-        if: matrix.label == 'intel'
-        id: qt-download
-        run: |
-          # Pull the pinned Qt tarball produced by build-macos-qt.yml.
-          # GitHub's release CDN doesn't evict, so this hits reliably
-          # regardless of how long since the last release build.  If the
-          # tarball is missing (Qt version bumped without re-running the
-          # builder workflow), fall back to from-source.
-          URL="https://github.com/${{ github.repository }}/releases/download/deps-qt-6.8.3-macos-intel/qt-6.8.3-macos-intel-deploy13.0.tar.gz"
-          if curl -sL --fail -o qt-install.tar.gz "$URL"; then
-            tar -xzf qt-install.tar.gz
-            rm qt-install.tar.gz
-            echo "downloaded=true" >> "$GITHUB_OUTPUT"
-            echo "Pre-built Qt downloaded ($(du -sh qt-install | cut -f1))"
-          else
-            echo "downloaded=false" >> "$GITHUB_OUTPUT"
-            echo "Pre-built Qt not available at $URL — falling back to from-source build (~27 min).  Run the Build macOS Qt (Intel deps) workflow to populate this asset."
-          fi
-
-      - name: Cache Qt (Intel from-source build)
-        # The pre-built Qt tarball above is the fast path; when that asset is
-        # missing we compile Qt from source (~2 h on the Intel runner). Cache the
-        # resulting qt-install prefix so it's built once per Qt version and
-        # restored on every later run. Bump the version in the key whenever the
-        # Qt version / module set below changes (same as the download URL above).
-        if: matrix.label == 'intel' && steps.qt-download.outputs.downloaded != 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        id: qt-cache
-        with:
-          path: qt-install
-          key: qt-intel-src-6.8.3-deploy13.0-qtbase.mm.ws.sp.st
-
-      - name: Build Qt from source (Intel only, fallback)
-        if: matrix.label == 'intel' && steps.qt-download.outputs.downloaded != 'true' && steps.qt-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch v6.8.3 https://code.qt.io/qt/qt5.git qt-src
-          cd qt-src
-          perl init-repository --module-subset=qtbase,qtmultimedia,qtwebsockets,qtserialport,qtshadertools
-          cd ..
-          mkdir qt-build && cd qt-build
-          ../qt-src/configure -prefix $PWD/../qt-install \
-            -release -opensource -confirm-license \
-            -nomake examples -nomake tests \
-            QMAKE_MACOSX_DEPLOYMENT_TARGET=13.0 \
-            -- -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
-          cmake --build . --parallel $(sysctl -n hw.ncpu)
-          cmake --install .
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
-          key: deepfilter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup/setup-deepfilter.sh') }}
+          # deploy_target for the same reason as the two caches above: the DFNR
+          # library is a Rust cdylib staged into Contents/Frameworks, so it
+          # carries an LC_BUILD_VERSION into the bundle like any other dependency.
+          key: deepfilter-${{ runner.os }}-${{ runner.arch }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-deepfilter.sh') }}
 
       - name: Setup DeepFilterNet3 (DFNR)
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
+        env:
+          # cargo/rustc read MACOSX_DEPLOYMENT_TARGET straight from the
+          # environment; there is no flag to pass through the script.
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deploy_target }}
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)
@@ -223,8 +251,22 @@ jobs:
         run: bash scripts/setup/setup-onnxruntime.sh
 
       - name: Setup sherpa-onnx (non-whisper ASR backend)
-        # sherpa's macOS prebuilt is universal2, so it ships on both Apple Silicon
-        # and Intel (and bundles ONNX Runtime, which the app shares).
+        # Apple Silicon only, and the reason is the deployment floor rather than
+        # the architecture: sherpa's universal2 prebuilt would run on Intel, but
+        # the ONNX Runtime it carries is built at minos 15.5 on BOTH slices, and
+        # the app links it at load time. No prebuilt ORT is low enough to fix
+        # that on Intel — upstream 1.27.0 is arm64-only at 14.0, and the last
+        # universal2 build (1.22.0) is 13.3 — so the Intel DMG would have to
+        # advertise macOS 15.5 to be honest about what it ships, which is
+        # useless on hardware that mostly stops at 13.
+        #
+        # Intel therefore ships whisper.cpp ASR (built from source here, so it
+        # takes the deployment target) without the sherpa backend or the
+        # ONNX-based extras. setup-sherpa-onnx.sh drops sherpa's bundled ORT on
+        # macOS so the Apple Silicon leg carries exactly one runtime — the
+        # upstream 14.0 build staged above — instead of silently preferring the
+        # 15.5 copy.
+        if: matrix.label == 'apple-silicon'
         run: bash scripts/setup/setup-sherpa-onnx.sh
 
       - name: Set up ccache
@@ -251,18 +293,18 @@ jobs:
           # (which also implies -eo pipefail) so the guard is self-contained and
           # survives anyone editing the step's shell. Same as appimage.yml.
           set -o pipefail
-          if [ "${{ matrix.label }}" = "intel" ]; then
-            QT_PREFIX="$PWD/qt-install"
-            DEPLOY_TARGET="$MACOS_INTEL_DEPLOYMENT_TARGET"
-          else
-            # $QT_ROOT is the aqt Qt tree exported by the install step — not
-            # $(brew --prefix), which used to resolve to Homebrew's rolling
-            # qt@6 (#4688 §1). DEPLOY_TARGET comes from the same job-level env
-            # setup-qtkeychain.sh was given, so the bundled dylib and the bundle
-            # cannot drift apart.
-            QT_PREFIX="$QT_ROOT"
-            DEPLOY_TARGET="$MACOS_DEPLOYMENT_TARGET"
-          fi
+          # One Qt for both legs: $QT_ROOT, the aqt tree exported by the install
+          # step. Not $(brew --prefix) (Homebrew's rolling qt@6, #4688 §1) and no
+          # longer $PWD/qt-install (the retired Intel from-source build).
+          QT_PREFIX="$QT_ROOT"
+          # fftw/portaudio/hidapi come from third_party/macos-deps, built at this
+          # leg's deployment target. It goes BEFORE $(brew --prefix) so that if a
+          # formula ever reintroduces one of them transitively the correctly
+          # targeted copy still wins — and PKG_CONFIG_PATH matters as much as
+          # CMAKE_PREFIX_PATH, because portaudio and hidapi are found through
+          # pkg_check_modules rather than find_library.
+          DEPS_PREFIX="$PWD/third_party/macos-deps"
+          export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           # Intel Mac: disable GPU rendering — QRhiWidget has issues on
           # older Metal/OpenGL hardware. Apple Silicon renders via QRhi.
           # Both legs state the value rather than leaning on the CMake default,
@@ -277,27 +319,33 @@ jobs:
           # backend must build (the macOS runners have full Xcode with the metal
           # compiler + the GGML_METAL_EMBED_LIBRARY fix), so a broken Metal
           # toolchain fails the build instead of silently shipping CPU-only.
+          # ONNX and sherpa are Apple-Silicon-only, both for the ORT deployment
+          # floor explained on the sherpa setup step above. Requiring them where
+          # they are staged keeps a silent compile-out from shipping; not
+          # requiring them on Intel is the deliberate feature split, not an
+          # oversight.
           ONNX_FLAG=""
-          KEYCHAIN_FLAG=""
+          SHERPA_FLAG=""
           if [ "${{ matrix.label }}" = "apple-silicon" ]; then
             ONNX_FLAG="-DREQUIRE_ASR_ONNX=ON"
-            # qtkeychain is now built from source against the aqt Qt rather than
-            # taken from Homebrew, so make its absence fatal. find_package(
-            # Qt6Keychain QUIET) otherwise compiles SmartLink credential
-            # persistence out without a word, which is how the AppImage shipped
-            # broken persistence for several releases (#3639). Intel stays
-            # unguarded — it deliberately ships without persistence.
-            KEYCHAIN_FLAG="-DREQUIRE_KEYCHAIN=ON"
+            SHERPA_FLAG="-DREQUIRE_ASR_SHERPA=ON"
           fi
+          # Both legs: qtkeychain is built from source against the aqt Qt, so
+          # make its absence fatal. find_package(Qt6Keychain QUIET) otherwise
+          # compiles SmartLink credential persistence out without a word, which
+          # is how the AppImage shipped broken persistence for several releases
+          # (#3639). Intel is no longer exempt — it only ever was because #812
+          # had to drop Homebrew qtkeychain to dodge the Qt clash.
+          KEYCHAIN_FLAG="-DREQUIRE_KEYCHAIN=ON"
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET" \
-            -DCMAKE_PREFIX_PATH="$QT_PREFIX;$(brew --prefix)" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}" \
+            -DCMAKE_PREFIX_PATH="$QT_PREFIX;$DEPS_PREFIX;$(brew --prefix)" \
             -DMQTT_TLS=OFF \
             -DREQUIRE_ASR_GPU=ON \
-            -DREQUIRE_ASR_SHERPA=ON \
+            $SHERPA_FLAG \
             $ONNX_FLAG \
             $KEYCHAIN_FLAG \
             $GPU_FLAG 2>&1 | tee configure.log
@@ -366,14 +414,13 @@ jobs:
 
       - name: Build DAX audio driver
         run: |
-          if [ "${{ matrix.label }}" = "intel" ]; then
-            DEPLOY_TARGET="$MACOS_INTEL_DEPLOYMENT_TARGET"
-          else
-            DEPLOY_TARGET="$MACOS_DEPLOYMENT_TARGET"
-          fi
+          # Same matrix.deploy_target as the app. The driver installs outside the
+          # bundle, so the floor assertion below never sees it — if it were built
+          # to a higher floor the app would launch on the older OS and then fail
+          # to load its own audio driver, with nothing catching it.
           cmake -B driver-build hal-plugin \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET"
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}"
           cmake --build driver-build -j$(sysctl -n hw.ncpu)
           DESTDIR="$PWD/driver-root" cmake --install driver-build
 
@@ -390,13 +437,11 @@ jobs:
         run: |
           # macdeployqt must come from the SAME Qt the app linked, or it stages
           # frameworks from a different build than the binary resolves against.
-          # On Apple Silicon that is now the aqt Qt tree; taking it from
-          # $(brew --prefix qt@6) is what mixed Homebrew's 6.11.1 into the DMG.
-          if [ "${{ matrix.label }}" = "intel" ]; then
-            DEPLOYQT="$PWD/qt-install/bin/macdeployqt"
-          else
-            DEPLOYQT="$QT_ROOT/bin/macdeployqt"
-          fi
+          # Both legs link the aqt tree now, so there is one answer — no matrix
+          # branch, and no way for the two to drift apart again. ($(brew --prefix
+          # qt@6) is what mixed Homebrew's 6.11.1 into the Apple Silicon DMG;
+          # $PWD/qt-install was the retired Intel from-source tree.)
+          DEPLOYQT="$QT_ROOT/bin/macdeployqt"
           "$DEPLOYQT" build/AetherSDR.app \
             -verbose=1 \
             -always-overwrite
@@ -428,8 +473,7 @@ jobs:
           BUILD_STR="$(strings -a "$FW" | grep -m1 -oE 'Qt [0-9]+\.[0-9]+\.[0-9]+' || true)"
           echo "  install name: ${ID_LINE:-<none>}"
           echo "  build string: ${BUILD_STR:-<none>}"
-          # Both legs pin the same version — aqt on Apple Silicon, the
-          # prebuilt/from-source tree on Intel — so one expectation covers both.
+          # Both legs stage the same aqt Qt now, so one expectation covers both.
           if ! printf '%s\n%s\n' "$ID_LINE" "$BUILD_STR" | grep -qF "$QT_VERSION"; then
             echo "ERROR: the staged QtCore is not the pinned Qt $QT_VERSION."
             echo "macdeployqt staged a different Qt than this workflow installed."
@@ -437,6 +481,22 @@ jobs:
             exit 1
           fi
           echo "Bundled Qt matches the pin ($QT_VERSION)."
+
+      # The other half of the same idea, for the other claim this job makes. dyld
+      # enforces LC_BUILD_VERSION minos on every Mach-O it loads, so the DMG's
+      # real minimum macOS is the MAXIMUM across everything staged — not
+      # CMAKE_OSX_DEPLOYMENT_TARGET, which describes the app's own binary alone.
+      # That gap is why Homebrew's fftw/portaudio/hidapi and an untargeted
+      # qtkeychain could raise the floor to the runner's OS on a bundle
+      # advertising 14.0 / 13.0, with every step green (#4532).
+      #
+      # After macdeployqt, because that is the first moment the bundle contains
+      # everything it ships; before code signing, so a bundle that fails is never
+      # signed or notarized.
+      - name: Assert nothing in the bundle outranks the deployment target
+        run: |
+          bash scripts/build/assert-macos-deployment-floor.sh \
+            build/AetherSDR.app "${{ matrix.deploy_target }}"
 
       - name: Import code signing certificate
         env:

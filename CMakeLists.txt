@@ -1502,7 +1502,29 @@ if (ENABLE_ASR)
             #    and have the runtime clamp has_bfloat to match, the same way it
             #    already clamps has_tensor. This is not a preference: asking for 3.1
             #    against a 13.0 deployment target is a hard compile error.
-            if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
+            #
+            #    The mapping is one shader-language version per macOS release —
+            #    metal2.4 = macOS 12, metal3.0 = 13, metal3.1 = 14 — so the tier has
+            #    to follow the deployment target exactly, and the same hard error
+            #    applies at every step. The Intel DMG dropped to 12.0 once its Qt
+            #    stopped being hand-built at 13.0 (its floor was the deployment
+            #    target of that hand-built Qt, not a product decision), which is why
+            #    a third tier exists here at all.
+            #
+            #    ggml's own shader carries exactly one version guard,
+            #    `__METAL_VERSION__ < 310`, i.e. the bf16 kernels already handled by
+            #    NO_BF16 — nothing in it distinguishes 3.0 from 2.4. That makes the
+            #    2.4 build plausible but NOT proven: ggml may still use unguarded
+            #    Metal-3 intrinsics. REQUIRE_ASR_GPU=ON on the DMG job means a wrong
+            #    answer is a loud build failure rather than a silently CPU-only
+            #    artifact, so this is safe to discover in CI — but it does need a
+            #    macOS run to confirm, and it has not had one.
+            if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 13.0)
+                set(GGML_METAL_STD "metal2.4" CACHE STRING "" FORCE)
+                set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
+                message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
+                    "(metal2.4, no bf16 — props.has_bfloat clamped to match)")
+            elseif (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
                 set(GGML_METAL_STD "metal3.0" CACHE STRING "" FORCE)
                 set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
                 message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
@@ -2561,9 +2583,19 @@ endif()
 # sherpa-onnx (detected further below) bundles the SAME ONNX Runtime version we
 # stage (1.27 — the setup scripts are pinned to match). If it's staged, link its
 # libonnxruntime for our ORT code too, so the app ships/loads a single runtime
-# instead of two identical copies, and there's no rpath ambiguity. On macOS
-# sherpa's runtime is universal2, so this also covers Intel Macs, where the
-# standalone ONNX Runtime prebuilt is Apple-Silicon-only at 1.27.
+# instead of two identical copies, and there's no rpath ambiguity.
+#
+# macOS is the exception, and it goes the other way: same version, but NOT the
+# same binary. k2-fsa build their copy on whatever macOS their runner happens to
+# be, which stamps LC_BUILD_VERSION minos 15.5 into both slices of the
+# universal2 archive; Microsoft's own 1.27.0 build is 14.0. dyld enforces that
+# stamp on every dylib macdeployqt stages, so preferring sherpa's would set the
+# DMG's real minimum macOS to 15.5 no matter what CMAKE_OSX_DEPLOYMENT_TARGET
+# says — the app would not launch at all below it, which is #4532.
+# setup-sherpa-onnx.sh deletes sherpa's copy on macOS for the same reason; the
+# install name and C API are identical, so sherpa's own dylib resolves against
+# the upstream runtime unchanged. Upstream publishes no x86_64 macOS build, so
+# Intel Macs get no ORT and no sherpa backend at all — see macos-dmg.yml.
 if(ORT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
     if(WIN32)
         # sherpa's Windows bundle carries onnxruntime.lib + onnxruntime.dll; link
@@ -2574,10 +2606,12 @@ if(ORT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
             set(ORT_DLLS "")
             message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
         endif()
+    elseif(APPLE)
+        message(STATUS "ONNX Runtime: keeping the upstream 1.27 runtime, not sherpa's "
+            "(sherpa's macOS build is stamped minos 15.5 and would become the bundle's floor)")
     else()
         file(GLOB _sherpa_ort
-            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so"
-            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.dylib")
+            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so")
         if(_sherpa_ort)
             list(GET _sherpa_ort 0 ORT_LIBRARIES)
             message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
