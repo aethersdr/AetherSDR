@@ -269,6 +269,29 @@ enum class WaterfallPipelineMode {
     RowFrequencyFrames,
 };
 
+struct WaterfallPaletteRecolorPlan {
+    bool retainNativeFrames{false};
+    FrequencyFrame primaryFrame;
+    FrequencyFrame supplementalFrame;
+};
+
+inline WaterfallPaletteRecolorPlan waterfallPaletteRecolorPlan(
+    WaterfallPipelineMode pipelineMode,
+    const FrequencyFrame& historyFrame,
+    const FrequencyFrame& supplementalHistoryFrame,
+    const FrequencyFrame& viewportFrame)
+{
+    if (pipelineMode == WaterfallPipelineMode::RowFrequencyFrames) {
+        return WaterfallPaletteRecolorPlan{
+            true,
+            historyFrame.isValid() ? historyFrame : viewportFrame,
+            supplementalHistoryFrame.isValid()
+                ? supplementalHistoryFrame : FrequencyFrame{},
+        };
+    }
+    return WaterfallPaletteRecolorPlan{false, viewportFrame, {}};
+}
+
 struct WaterfallRowFrameReadiness {
     bool requested{false};
     bool formatSupported{false};

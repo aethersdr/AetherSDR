@@ -5468,6 +5468,17 @@ static void remapHistoryRowInto(
     }
 }
 
+static void colorizeHistoryRowInto(
+    QRgb* dst,
+    const quint8* src,
+    int width,
+    const std::array<QRgb, 256>& colorLut)
+{
+    for (int x = 0; x < width; ++x) {
+        dst[x] = colorLut[src[x]];
+    }
+}
+
 void SpectrumWidget::resetVisibleWaterfallFrequencyFrames(
     double centerMhz,
     double bandwidthMhz)
@@ -5606,6 +5617,13 @@ void SpectrumWidget::recolorWaterfallViewport()
             == m_waterfallHistory.capacityRows()
         && m_wfHistorySupplementalBwMhz.size()
             == m_waterfallHistory.capacityRows();
+#ifdef AETHER_GPU_SPECTRUM
+    const WaterfallPipelineMode pipelineMode = m_wfPipelineMode;
+#else
+    constexpr WaterfallPipelineMode pipelineMode =
+        WaterfallPipelineMode::Legacy;
+#endif
+    const FrequencyFrame viewportFrame{m_centerMhz, m_bandwidthMhz};
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
     for (int age = 0; age < height; ++age) {
         const int rowIndex = historyRowIndexForAge(
@@ -5632,17 +5650,42 @@ void SpectrumWidget::recolorWaterfallViewport()
             ? m_wfHistorySupplementalCenterMhz[rowIndex] : 0.0;
         const double supplementalBw = haveSupplementalFrames
             ? m_wfHistorySupplementalBwMhz[rowIndex] : 0.0;
-        remapHistoryRowInto(dst, src, w, colorLut,
-                            rowCenter, rowBw,
-                            m_centerMhz, m_bandwidthMhz,
-                            m_kiwiSdrWaterfallActive,
-                            supplementalSrc,
-                            supplementalCenter, supplementalBw);
+        const WaterfallPaletteRecolorPlan recolorPlan =
+            waterfallPaletteRecolorPlan(
+                pipelineMode,
+                FrequencyFrame{rowCenter, rowBw},
+                FrequencyFrame{supplementalCenter, supplementalBw},
+                viewportFrame);
+        // Row-frame rendering needs native primary and supplemental pixels so
+        // the shader can reproject each texture exactly once. The legacy path
+        // instead stores one flattened viewport row and labels it accordingly.
+        if (recolorPlan.retainNativeFrames) {
+            colorizeHistoryRowInto(dst, src, w, colorLut);
+            if (supplementalSrc
+                && recolorPlan.supplementalFrame.isValid()
+                && !m_waterfallSupplemental.isNull()) {
+                auto* supplementalDst = reinterpret_cast<QRgb*>(
+                    m_waterfallSupplemental.scanLine(destinationRow));
+                colorizeHistoryRowInto(
+                    supplementalDst, supplementalSrc, w, colorLut);
+            }
+        } else {
+            remapHistoryRowInto(dst, src, w, colorLut,
+                                rowCenter, rowBw,
+                                m_centerMhz, m_bandwidthMhz,
+                                m_kiwiSdrWaterfallActive,
+                                supplementalSrc,
+                                supplementalCenter, supplementalBw);
+        }
 
-        m_wfVisibleRowCenterMhz[destinationRow] = rowCenter;
-        m_wfVisibleRowBwMhz[destinationRow] = rowBw;
-        m_wfVisibleSupplementalCenterMhz[destinationRow] = supplementalCenter;
-        m_wfVisibleSupplementalBwMhz[destinationRow] = supplementalBw;
+        m_wfVisibleRowCenterMhz[destinationRow] =
+            recolorPlan.primaryFrame.centerMhz;
+        m_wfVisibleRowBwMhz[destinationRow] =
+            recolorPlan.primaryFrame.bandwidthMhz;
+        m_wfVisibleSupplementalCenterMhz[destinationRow] =
+            recolorPlan.supplementalFrame.centerMhz;
+        m_wfVisibleSupplementalBwMhz[destinationRow] =
+            recolorPlan.supplementalFrame.bandwidthMhz;
     }
 
 #ifdef AETHER_GPU_SPECTRUM

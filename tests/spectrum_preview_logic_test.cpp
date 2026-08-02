@@ -356,6 +356,66 @@ int testWaterfallPipelineSelection()
     return 0;
 }
 
+int testWaterfallPaletteRecolorPlan()
+{
+    using namespace AetherSDR;
+    const FrequencyFrame historyFrame{14.0, 0.2};
+    const FrequencyFrame supplementalFrame{14.0, 0.8};
+    const FrequencyFrame viewportFrame{14.05, 0.1};
+
+    const WaterfallPaletteRecolorPlan nativePlan =
+        waterfallPaletteRecolorPlan(
+            WaterfallPipelineMode::RowFrequencyFrames,
+            historyFrame, supplementalFrame, viewportFrame);
+    if (!nativePlan.retainNativeFrames
+        || !nearlyEqual(nativePlan.primaryFrame.centerMhz,
+                        historyFrame.centerMhz)
+        || !nearlyEqual(nativePlan.primaryFrame.bandwidthMhz,
+                        historyFrame.bandwidthMhz)
+        || !nearlyEqual(nativePlan.supplementalFrame.centerMhz,
+                        supplementalFrame.centerMhz)
+        || !nearlyEqual(nativePlan.supplementalFrame.bandwidthMhz,
+                        supplementalFrame.bandwidthMhz)
+        || !nearlyEqual(
+            sourceUnitPosition(
+                0.5, nativePlan.primaryFrame, viewportFrame),
+            0.75)) {
+        return fail(
+            "row-frame recolor must retain matching native frame metadata");
+    }
+
+    const WaterfallPaletteRecolorPlan flattenedPlan =
+        waterfallPaletteRecolorPlan(
+            WaterfallPipelineMode::Legacy,
+            historyFrame, supplementalFrame, viewportFrame);
+    if (flattenedPlan.retainNativeFrames
+        || !nearlyEqual(flattenedPlan.primaryFrame.centerMhz,
+                        viewportFrame.centerMhz)
+        || !nearlyEqual(flattenedPlan.primaryFrame.bandwidthMhz,
+                        viewportFrame.bandwidthMhz)
+        || flattenedPlan.supplementalFrame.isValid()
+        || !nearlyEqual(
+            sourceUnitPosition(
+                0.5, flattenedPlan.primaryFrame, viewportFrame),
+            0.5)) {
+        return fail(
+            "legacy recolor must label flattened pixels as the viewport frame");
+    }
+
+    const WaterfallPaletteRecolorPlan missingSupplementalPlan =
+        waterfallPaletteRecolorPlan(
+            WaterfallPipelineMode::RowFrequencyFrames,
+            FrequencyFrame{}, FrequencyFrame{}, viewportFrame);
+    if (!missingSupplementalPlan.retainNativeFrames
+        || !nearlyEqual(missingSupplementalPlan.primaryFrame.centerMhz,
+                        viewportFrame.centerMhz)
+        || missingSupplementalPlan.supplementalFrame.isValid()) {
+        return fail(
+            "missing native frames must fall back without inventing coverage");
+    }
+    return 0;
+}
+
 int testWaterfallScrollProgress()
 {
     using namespace AetherSDR;
@@ -823,6 +883,9 @@ int main()
         return result;
     }
     if (const int result = testWaterfallPipelineSelection(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallPaletteRecolorPlan(); result != 0) {
         return result;
     }
     if (const int result = testWaterfallScrollProgress(); result != 0) {
