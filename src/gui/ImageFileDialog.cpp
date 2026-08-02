@@ -178,6 +178,12 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
     dlg.setFileMode(QFileDialog::ExistingFile);
     dlg.setOption(QFileDialog::DontUseNativeDialog, true);
     dlg.setAcceptMode(QFileDialog::AcceptOpen);
+    // Detail (name/date modified/type/size columns, small icons) instead of
+    // the default, which shows the "Computer" root's drives as large icons —
+    // distracting, and inconsistent with how the rest of the list renders.
+    // Qt's own view, not the native shell's (DontUseNativeDialog above), so
+    // this is identical across Windows/Linux/macOS.
+    dlg.setViewMode(QFileDialog::Detail);
 
     // Best-effort augmentation: if QFileDialog's internal layout/widget
     // names ever change under us, fall back to the plain (wider-filter)
