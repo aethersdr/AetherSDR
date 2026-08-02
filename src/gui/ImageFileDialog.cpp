@@ -114,13 +114,28 @@ public:
     {
     }
 
+    // Gates real-thumbnail decoration on/off. False returns the untouched
+    // generic file icon (QIdentityProxyModel::data() passthrough) — the
+    // normal small-icon list. True supplies the real decoded photo instead.
+    // Kept as an explicit switch rather than relying on icon-size alone:
+    // whether the delegate visibly scales a raw QPixmap decoration to a
+    // changed view iconSize() is not reliable, so "off" must mean a
+    // genuinely different (generic-icon) decoration value, not just a
+    // smaller copy of the same thumbnail.
+    void setShowThumbnails(bool on)
+    {
+        if (m_showThumbnails == on)
+            return;
+        m_showThumbnails = on;
+    }
+
     QVariant data(const QModelIndex& index, int role) const override
     {
         // Name is column 0; Size/Type/Date Modified are separate indexes on
         // the same row. Without this check every column got the same
         // thumbnail for Qt::DecorationRole (the path lookup is column-
         // agnostic), crowding the attribute columns' text out entirely.
-        if (role != Qt::DecorationRole || index.column() != 0)
+        if (role != Qt::DecorationRole || index.column() != 0 || !m_showThumbnails)
             return QIdentityProxyModel::data(index, role);
 
         const QString path = pathForIndex(index);
@@ -172,6 +187,7 @@ private:
     }
 
     QSet<QString> m_pending;
+    bool m_showThumbnails = false;
 };
 
 } // namespace
@@ -234,15 +250,19 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         const int previewRowSpan = std::max(1, grid->rowCount() - 1);
         grid->addWidget(previewLabel, 1, grid->columnCount(), previewRowSpan, 1, Qt::AlignTop);
 
-        auto applyThumbnailSize = [listView, treeView, defaultIconSize](bool large) {
+        auto applyThumbnailMode = [listView, treeView, proxy, defaultIconSize](bool large) {
+            proxy->setShowThumbnails(large);
             const QSize size = large ? kThumbnailDecodeSize : defaultIconSize;
             listView->setIconSize(size);
-            if (treeView)
+            listView->viewport()->update();
+            if (treeView) {
                 treeView->setIconSize(size);
+                treeView->viewport()->update();
+            }
         };
 
-        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [applyThumbnailSize](bool on) {
-            applyThumbnailSize(on);
+        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [applyThumbnailMode](bool on) {
+            applyThumbnailMode(on);
             auto& s = AppSettings::instance();
             s.setValue(QStringLiteral("ImageFileDialog/ThumbnailView"),
                        on ? QStringLiteral("True") : QStringLiteral("False"));
