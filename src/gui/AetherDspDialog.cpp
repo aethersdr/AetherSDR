@@ -43,6 +43,8 @@ AetherDspDialog::AetherDspDialog(AudioEngine* audio, QWidget* parent)
             this,    &AetherDspDialog::mnrEnabledChanged);
     connect(m_widget, &AetherDspWidget::mnrStrengthChanged,
             this,    &AetherDspDialog::mnrStrengthChanged);
+    connect(m_widget, &AetherDspWidget::rn2DryMixChanged,
+            this,    &AetherDspDialog::rn2DryMixChanged);
     connect(m_widget, &AetherDspWidget::dfnrAttenLimitChanged,
             this,    &AetherDspDialog::dfnrAttenLimitChanged);
     connect(m_widget, &AetherDspWidget::dfnrPostFilterBetaChanged,

@@ -8,6 +8,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### RN2 no longer pumps on stereo and binaural receive audio
+
+**If you listen to RN2 with binaural or diversity receive audio, the noise
+floor no longer rises every time someone talks.** Nothing changes for
+duplicated-mono slices, and nothing changes in how much noise RN2 removes.
+
+RN2 used to denoise an L/R downmix, derive a gain envelope from the result and
+re-apply that one envelope to the original stereo. That is exact when the two
+channels are proportional to their sum — plain mono, and simple panning — but
+binaural and diversity audio are not: the downmix has comb-filter nulls the
+individual channels do not, so the envelope fits neither channel. The audible
+result was the noise floor breathing with speech, loud under voice and gated
+between phrases. RN2 now runs one RNNoise instance and one matched resampler
+pair per receive channel, driven from the same block so the two stay in
+lockstep. Pan, stereo balance, diversity and binaural phase all survive it. A
+regression test mixes a steady tone into binaural speech and measures its level
+during speech against the gaps: the old path modulated it ~15x, the new one
+~1.0x.
+
+The transmit denoiser is unchanged — it still downmixes to mono, which is what
+a microphone path wants.
+
+### RN2 can leave a noise floor instead of going silent between phrases
+
+**New, off by default:** *AetherDSP → RN2 → Noise Floor*. RNNoise gates hard,
+which some operators hear as the receiver going dead rather than quiet. Raising
+this leaves that percentage of the original signal under the denoised audio, so
+the band still sounds live between phrases. 0% is what RN2 has always done and
+remains the default; 10–20% is a usable floor. Receive only.
+
+The blend happens inside RNNoise, before its synthesis and overlap-add stage,
+rather than by mixing a dry copy of the waveform back in afterwards — mixing
+two waveforms that have been through different delays comb filters, and the
+whole point is a floor you stop noticing.
+
+
 ### Minimum Qt raised to 6.8 — source builds on Ubuntu 24.04 need a newer Qt
 
 **Building from source now requires Qt 6.8 or newer.** Nothing changes for

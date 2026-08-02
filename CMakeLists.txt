@@ -778,6 +778,7 @@ endif()
 
 set(MODEL_SOURCES
     src/models/Nr2SettingsModel.cpp
+    src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
@@ -3181,6 +3182,16 @@ target_link_libraries(nr2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(nr2_settings_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME nr2_settings_model_test COMMAND nr2_settings_model_test)
 
+add_executable(rn2_settings_model_test
+    tests/rn2_settings_model_test.cpp
+    src/models/Rn2SettingsModel.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(rn2_settings_model_test PRIVATE src tests)
+target_link_libraries(rn2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(rn2_settings_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME rn2_settings_model_test COMMAND rn2_settings_model_test)
+
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
     src/models/PanadapterModel.cpp
@@ -3545,7 +3556,9 @@ target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
 target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
 add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
 
-qt_add_resources(RNNOISE_FILTER_TEST_RESOURCES resources/resources.qrc)
+# Just the voice fixture — linking the full resources.qrc pulled 5.8 MB of
+# application assets into a unit test to reach one 458 KB WAV (PR #4689 review).
+qt_add_resources(RNNOISE_FILTER_TEST_RESOURCES tests/rnnoise_filter_test.qrc)
 add_executable(rnnoise_filter_test
     tests/rnnoise_filter_test.cpp
     ${RNNOISE_FILTER_TEST_RESOURCES}
@@ -5471,6 +5484,7 @@ set(AETHER_SETTINGS_CONSUMERS
     panadapter_message_overlay_test
     app_settings_safety_test
     nr2_settings_model_test
+    rn2_settings_model_test
     panadapter_model_rx_antenna_test
     qso_recorder_slice_lifetime_test
     qso_recorder_pc_audio_guard_test
