@@ -19,6 +19,18 @@ jobs:
             label: intel
     runs-on: ${{ matrix.runner }}
 
+    # One place each for the versions and the deployment targets this workflow
+    # pins. MACOS_DEPLOYMENT_TARGET is the Apple Silicon value: it feeds both
+    # the app's CMAKE_OSX_DEPLOYMENT_TARGET below and setup-qtkeychain.sh, so
+    # the bundled dylib can never end up newer than the bundle carrying it.
+    # ci.yml's check-macos pins the same three values, and shares the qtkeychain
+    # cache key built from them.
+    env:
+      QT_VERSION: '6.8.3'
+      AQTINSTALL_VERSION: '3.3.0'
+      MACOS_DEPLOYMENT_TARGET: '14.0'
+      MACOS_INTEL_DEPLOYMENT_TARGET: '13.0'
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -26,17 +38,122 @@ jobs:
 
       - name: Install dependencies via Homebrew
         run: |
+          # No Homebrew Qt on either leg. Apple Silicon used to take qt@6 here,
+          # which is a rolling formula — it shipped 6.11.1 while every other
+          # artifact pinned 6.8.3, so the most-downloaded macOS artifact linked
+          # a Qt no other build tested and could change between tags with no PR
+          # (#4688 §1). Both legs now use a pinned Qt: aqt 6.8.3 below on Apple
+          # Silicon, the from-source/prebuilt 6.8.3 tree on Intel.
+          #
+          # qtkeychain likewise: the Homebrew formula is compiled against
+          # Homebrew Qt, so taking it here would reintroduce the exact ABI
+          # mismatch #4685 removed on Linux — and one that fails silently,
+          # because find_package(Qt6Keychain QUIET) just compiles credential
+          # persistence out (#3639). It is built from source against the aqt Qt.
           brew install ninja create-dmg autoconf automake libtool \
             fftw portaudio hidapi
-          if [ "${{ matrix.label }}" = "apple-silicon" ]; then
-            # Apple Silicon: Homebrew Qt targets current OS, fine for arm64
-            brew install qt@6 qtkeychain
-          else
-            # Intel: don't install Homebrew Qt — we build from source below.
-            # qtkeychain pulls in qt@6 as a dependency, so skip it too and
-            # build without SmartLink credential persistence on Intel.
-            brew install fftw portaudio hidapi
+
+      - name: Install Qt LTS via aqtinstall (Apple Silicon)
+        if: matrix.label == 'apple-silicon'
+        run: |
+          set -o pipefail
+          # aqt goes in a venv rather than `pip3 install --user` or
+          # --break-system-packages: whether the runner's python3 is PEP 668
+          # externally-managed depends on the image and on whether a Homebrew
+          # formula pulled in its own python, and --break-system-packages is
+          # itself a pip>=23 option. A venv is correct regardless of both.
+          # Same reasoning as .github/docker/Dockerfile.
+          #
+          # aqt is pinned for the same reason Qt is: it is the tool that decides
+          # which Qt lands in the DMG, so leaving it floating would put an
+          # unreviewed dependency back on the release path this PR exists to
+          # close. .github/docker/Dockerfile pins it and says so; appimage.yml
+          # does not, and should — separate change, separate artifact.
+          python3 -m venv "$RUNNER_TEMP/aqtvenv"
+          "$RUNNER_TEMP/aqtvenv/bin/pip" install -q "aqtinstall==${AQTINSTALL_VERSION}"
+          # Qt publishes ONE macOS desktop build, clang_64, and it is universal2
+          # (x86_64 + arm64) — there is no separate arm64 arch to choose.
+          # Verified against `aqt list-qt mac desktop --arch 6.8.3`, which
+          # returns clang_64 alone, and all four modules below are published
+          # for it.
+          "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
+            -m qtmultimedia qtwebsockets qtserialport qtshadertools \
+            --outputdir "${{ github.workspace }}/Qt"
+          QT_ROOT="${{ github.workspace }}/Qt/$QT_VERSION/macos"
+          # Assert the layout rather than trusting it: a wrong QT_ROOT would
+          # sail through configure (Homebrew's Qt could satisfy find_package if
+          # it were ever reinstalled by another formula) and only surface as a
+          # subtly mis-deployed DMG. Same guard appimage.yml uses.
+          if [ ! -x "$QT_ROOT/bin/qmake" ]; then
+            echo "ERROR: no qmake at $QT_ROOT — aqt layout changed"
+            ls -la "${{ github.workspace }}/Qt/$QT_VERSION/" || true
+            exit 1
           fi
+          # PATH goes through GITHUB_PATH, not GITHUB_ENV: the latter would
+          # freeze this step's PATH verbatim for every later step, silently
+          # discarding anything a subsequent action prepends.
+          {
+            echo "QT_ROOT=$QT_ROOT"
+            echo "CMAKE_PREFIX_PATH=$QT_ROOT"
+          } >> "$GITHUB_ENV"
+          echo "$QT_ROOT/bin" >> "$GITHUB_PATH"
+          "$QT_ROOT/bin/qmake" -query QT_VERSION
+
+      # Why this guard exists — the history is easy to lose and expensive to
+      # relearn. #711 ("drop aqtinstall, use Homebrew for everything") removed
+      # aqt from macOS precisely because an aqt Qt and a Homebrew Qt visible at
+      # the same time produced "Qt6GuiPrivate and linker failures", and #812 hit
+      # the same clash on Intel against the source-built Qt ("their CMake
+      # configs clash"). The real constraint is not "aqt is wrong on macOS" —
+      # it is that TWO discoverable Qt trees break the build.
+      #
+      # In both incidents the second Qt arrived transitively rather than by
+      # request: brew's qtkeychain depends on qtbase. This job installs neither
+      # qtkeychain nor any Qt formula, so there is exactly one Qt — but
+      # CMAKE_PREFIX_PATH still carries $(brew --prefix) for fftw/portaudio/
+      # hidapi, so a future formula that pulls qtbase in, or a runner image that
+      # ships Qt preinstalled, would silently recreate #711. Assert it.
+      - name: Assert no Homebrew Qt is discoverable (Apple Silicon)
+        if: matrix.label == 'apple-silicon'
+        run: |
+          set -o pipefail
+          if brew list --formula 2>/dev/null | grep -qE '^(qt|qt@[0-9]+|qtbase)$'; then
+            echo "ERROR: a Homebrew Qt is installed alongside the aqt Qt:"
+            brew list --formula | grep -E '^(qt|qt@[0-9]+|qtbase)$'
+            echo "Two discoverable Qt trees is the #711 / #812 failure mode."
+            echo "Find the formula that pulled it in (qtkeychain depends on"
+            echo "qtbase) and drop it, or this build links a mixed Qt."
+            exit 1
+          fi
+          if [ -f "$(brew --prefix)/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "ERROR: a Qt6 CMake config exists under $(brew --prefix)"
+            echo "even though no Qt formula is listed — CMAKE_PREFIX_PATH"
+            echo "includes that prefix and could resolve Qt from it."
+            exit 1
+          fi
+          echo "No Homebrew Qt present; the aqt tree at $QT_ROOT is the only one."
+
+      - name: Cache qtkeychain (Apple Silicon)
+        if: matrix.label == 'apple-silicon'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-qtkeychain-mac
+        with:
+          path: third_party/qtkeychain
+          # Keyed on every input that changes the dylib, not just the script:
+          # it is an ABI match for one specific Qt, and it carries one specific
+          # LC_BUILD_VERSION. Identical to ci.yml's key on purpose — that job
+          # runs on push:main, default-branch caches are visible to every ref,
+          # so the entry restored here is normally the one check-macos wrote.
+          # Anything that would make those two builds differ has to appear here.
+          key: qtkeychain-macos-arm64-qt${{ env.QT_VERSION }}-deploy${{ env.MACOS_DEPLOYMENT_TARGET }}-${{ hashFiles('scripts/setup/setup-qtkeychain.sh') }}
+
+      # MACOS_DEPLOYMENT_TARGET is not optional here: CMake otherwise leaves the
+      # deployment target empty and clang stamps the runner's own OS (15.x) into
+      # the dylib, which CMakeLists.txt then copies into Contents/Frameworks of
+      # a bundle built for 14.0 — dyld refuses to load it on macOS 14.
+      - name: Setup qtkeychain (SmartLink credential persistence, Apple Silicon)
+        if: matrix.label == 'apple-silicon' && steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
+        run: bash scripts/setup/setup-qtkeychain.sh
 
       - name: Download pre-built Qt (Intel only)
         if: matrix.label == 'intel'
@@ -129,16 +246,29 @@ jobs:
 
       - name: Configure
         run: |
+          # Without pipefail the step's exit status is tee's, so a cmake failure
+          # would look green. Set it in the script rather than via `shell: bash`
+          # (which also implies -eo pipefail) so the guard is self-contained and
+          # survives anyone editing the step's shell. Same as appimage.yml.
+          set -o pipefail
           if [ "${{ matrix.label }}" = "intel" ]; then
             QT_PREFIX="$PWD/qt-install"
-            DEPLOY_TARGET="13.0"
+            DEPLOY_TARGET="$MACOS_INTEL_DEPLOYMENT_TARGET"
           else
-            QT_PREFIX="$(brew --prefix)"
-            DEPLOY_TARGET="14.0"
+            # $QT_ROOT is the aqt Qt tree exported by the install step — not
+            # $(brew --prefix), which used to resolve to Homebrew's rolling
+            # qt@6 (#4688 §1). DEPLOY_TARGET comes from the same job-level env
+            # setup-qtkeychain.sh was given, so the bundled dylib and the bundle
+            # cannot drift apart.
+            QT_PREFIX="$QT_ROOT"
+            DEPLOY_TARGET="$MACOS_DEPLOYMENT_TARGET"
           fi
           # Intel Mac: disable GPU rendering — QRhiWidget has issues on
-          # older Metal/OpenGL hardware. Apple Silicon uses GPU by default.
-          GPU_FLAG=""
+          # older Metal/OpenGL hardware. Apple Silicon renders via QRhi.
+          # Both legs state the value rather than leaning on the CMake default,
+          # so the intent is readable here and the assertion below has a
+          # request to check against.
+          GPU_FLAG="-DAETHER_GPU_SPECTRUM=ON"
           if [ "${{ matrix.label }}" = "intel" ]; then
             GPU_FLAG="-DAETHER_GPU_SPECTRUM=OFF"
           fi
@@ -148,8 +278,16 @@ jobs:
           # compiler + the GGML_METAL_EMBED_LIBRARY fix), so a broken Metal
           # toolchain fails the build instead of silently shipping CPU-only.
           ONNX_FLAG=""
+          KEYCHAIN_FLAG=""
           if [ "${{ matrix.label }}" = "apple-silicon" ]; then
             ONNX_FLAG="-DREQUIRE_ASR_ONNX=ON"
+            # qtkeychain is now built from source against the aqt Qt rather than
+            # taken from Homebrew, so make its absence fatal. find_package(
+            # Qt6Keychain QUIET) otherwise compiles SmartLink credential
+            # persistence out without a word, which is how the AppImage shipped
+            # broken persistence for several releases (#3639). Intel stays
+            # unguarded — it deliberately ships without persistence.
+            KEYCHAIN_FLAG="-DREQUIRE_KEYCHAIN=ON"
           fi
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -161,7 +299,55 @@ jobs:
             -DREQUIRE_ASR_GPU=ON \
             -DREQUIRE_ASR_SHERPA=ON \
             $ONNX_FLAG \
-            $GPU_FLAG
+            $KEYCHAIN_FLAG \
+            $GPU_FLAG 2>&1 | tee configure.log
+
+      # Apple Silicon only — the Intel leg asks for OFF on purpose (see above).
+      # Same reasoning as appimage.yml and windows-installer.yml: CMake turns
+      # AETHER_GPU_SPECTRUM back OFF without failing when Qt6GuiPrivate can't be
+      # located, so the DMG could ship the CPU QPainter fallback with this
+      # workflow green.
+      #
+      # This is not hypothetical here. Homebrew Qt shipped the Qt6GuiPrivate
+      # CMake package, which is the only reason this leg went unguarded for so
+      # long; the aqt Qt above does not, and the private headers sit in a
+      # framework layout CMakeLists.txt did not probe for. Pinning the Qt
+      # without also teaching CMake that layout turned this feature off
+      # silently — this assertion is what makes that impossible to ship.
+      #
+      # Assert on the configure output, not CMakeCache.txt: CMakeLists.txt
+      # disables the feature with a plain set(), which shadows the cache entry
+      # without rewriting it, so the cache still reads ON when it is off.
+      # -iE, not the -i "a\|b" form appimage.yml uses: that file runs on GNU
+      # grep, where \| is BRE alternation. This one runs on the macOS runner's
+      # BSD grep, which has no BRE alternation and would search for the literal
+      # string "GPU spectrum|Qt6GuiPrivate|private headers" — printing nothing
+      # under the ERROR header, on the one path where this step has to explain
+      # itself. Every other multi-pattern grep in this file already uses -E.
+      - name: Assert GPU spectrum rendering actually enabled
+        if: matrix.label == 'apple-silicon'
+        run: |
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering enabled" configure.log
+
+      # The mirror of the above, and cheap: the Intel leg asks for OFF because
+      # QRhiWidget misbehaves on older Metal/OpenGL hardware, so a change that
+      # quietly turned it back ON here would ship exactly the artifact that
+      # decision exists to prevent. Asserting both directions is what makes
+      # GPU_FLAG's two values a tested contract rather than a comment.
+      - name: Assert GPU spectrum rendering actually disabled
+        if: matrix.label == 'intel'
+        run: |
+          grep -q "GPU spectrum rendering disabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=OFF but CMake enabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering disabled" configure.log
 
       - name: Build
         # Only the .app bundle ships (+ its aether-dv-waveform helper dependency,
@@ -181,9 +367,9 @@ jobs:
       - name: Build DAX audio driver
         run: |
           if [ "${{ matrix.label }}" = "intel" ]; then
-            DEPLOY_TARGET="13.0"
+            DEPLOY_TARGET="$MACOS_INTEL_DEPLOYMENT_TARGET"
           else
-            DEPLOY_TARGET="14.0"
+            DEPLOY_TARGET="$MACOS_DEPLOYMENT_TARGET"
           fi
           cmake -B driver-build hal-plugin \
             -DCMAKE_BUILD_TYPE=Release \
@@ -202,14 +388,55 @@ jobs:
 
       - name: Bundle Qt frameworks
         run: |
+          # macdeployqt must come from the SAME Qt the app linked, or it stages
+          # frameworks from a different build than the binary resolves against.
+          # On Apple Silicon that is now the aqt Qt tree; taking it from
+          # $(brew --prefix qt@6) is what mixed Homebrew's 6.11.1 into the DMG.
           if [ "${{ matrix.label }}" = "intel" ]; then
             DEPLOYQT="$PWD/qt-install/bin/macdeployqt"
           else
-            DEPLOYQT="$(brew --prefix qt@6)/bin/macdeployqt"
+            DEPLOYQT="$QT_ROOT/bin/macdeployqt"
           fi
           "$DEPLOYQT" build/AetherSDR.app \
             -verbose=1 \
             -always-overwrite
+
+      # The artifact-side half of the pin. Everything upstream of here asserts
+      # what we *asked* for; this asserts what the DMG actually carries, which
+      # is the claim #4688 §1 makes and #2191 asked for directly ("verify they
+      # resolve to the same installation"). Reading it off the staged framework
+      # is the only check that survives someone changing QT_ROOT, macdeployqt,
+      # or the Homebrew guard without noticing.
+      - name: Assert the bundled Qt is the pinned Qt
+        run: |
+          set -o pipefail
+          FW="build/AetherSDR.app/Contents/Frameworks/QtCore.framework/Versions/A/QtCore"
+          if [ ! -f "$FW" ]; then
+            echo "ERROR: macdeployqt staged no QtCore framework at $FW"
+            ls -la build/AetherSDR.app/Contents/Frameworks/ || true
+            exit 1
+          fi
+          # Two independent readings, and the pin has to show up in one of them.
+          # Line 2 of `otool -L` on a dylib is its own LC_ID_DYLIB; `strings -a`
+          # finds the "Qt <ver> (...)" build string QLibraryInfo::build() returns
+          # (-a so it does not skip Mach-O sections it cannot classify). Either
+          # alone is a plausible false negative on some future Qt packaging;
+          # requiring only one to match keeps this from turning into a red
+          # release on a cosmetic change, while a genuinely wrong Qt — the 6.11.1
+          # this PR exists to keep out — fails both.
+          ID_LINE="$(otool -L "$FW" | sed -n '2p')"
+          BUILD_STR="$(strings -a "$FW" | grep -m1 -oE 'Qt [0-9]+\.[0-9]+\.[0-9]+' || true)"
+          echo "  install name: ${ID_LINE:-<none>}"
+          echo "  build string: ${BUILD_STR:-<none>}"
+          # Both legs pin the same version — aqt on Apple Silicon, the
+          # prebuilt/from-source tree on Intel — so one expectation covers both.
+          if ! printf '%s\n%s\n' "$ID_LINE" "$BUILD_STR" | grep -qF "$QT_VERSION"; then
+            echo "ERROR: the staged QtCore is not the pinned Qt $QT_VERSION."
+            echo "macdeployqt staged a different Qt than this workflow installed."
+            otool -L build/AetherSDR.app/Contents/MacOS/AetherSDR | head -20
+            exit 1
+          fi
+          echo "Bundled Qt matches the pin ($QT_VERSION)."
 
       - name: Import code signing certificate
         env:

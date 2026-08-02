@@ -596,6 +596,9 @@ private:
     // TX test-signal control (two-tone) and ATU control. Both gated by
     // AETHER_AUTOMATION_ALLOW_TX where they key the transmitter.
     QJsonObject doTxTest(const QString& action);
+    // Backend-sourced radio health. Read-only; see the definition for why it is
+    // deliberately not assembled from the models.
+    QJsonObject doHealth();
     QJsonObject doAtu(const QString& action);
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)

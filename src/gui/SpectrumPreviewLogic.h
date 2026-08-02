@@ -269,6 +269,50 @@ enum class WaterfallPipelineMode {
     RowFrequencyFrames,
 };
 
+struct WaterfallPaletteRecolorPlan {
+    bool retainNativeFrames{false};
+    FrequencyFrame primaryFrame;
+    FrequencyFrame supplementalFrame;
+};
+
+inline WaterfallPaletteRecolorPlan waterfallPaletteRecolorPlan(
+    WaterfallPipelineMode pipelineMode,
+    const FrequencyFrame& historyFrame,
+    const FrequencyFrame& supplementalHistoryFrame,
+    const FrequencyFrame& viewportFrame)
+{
+    if (pipelineMode == WaterfallPipelineMode::RowFrequencyFrames) {
+        return WaterfallPaletteRecolorPlan{
+            true,
+            historyFrame.isValid() ? historyFrame : viewportFrame,
+            supplementalHistoryFrame.isValid()
+                ? supplementalHistoryFrame : FrequencyFrame{},
+        };
+    }
+    return WaterfallPaletteRecolorPlan{false, viewportFrame, {}};
+}
+
+// Scanline that a retained row of age `ageRows` occupies in a visible ring
+// whose newest row sits at `writeRowOrigin`. appendVisibleRow() decrements the
+// write row *before* writing, so age 0 is the origin itself and age grows
+// downward, wrapping — which is exactly the order drawWaterfall() blits from.
+//
+// The origin is the whole reason a palette recolour is not just a viewport
+// rebuild: a rebuild re-lays the ring out from scanline 0 (origin 0), which is
+// invisible only because it repaints everything at once. Recolouring in place
+// must keep the live origin, or the waterfall jumps by m_wfWriteRow rows the
+// moment the operator touches the Scheme dropdown.
+inline int waterfallVisibleRowForAge(int writeRowOrigin, int ageRows,
+                                     int height)
+{
+    if (height <= 0) {
+        return -1;
+    }
+    const int origin = ((writeRowOrigin % height) + height) % height;
+    const int age = ((ageRows % height) + height) % height;
+    return (origin + age) % height;
+}
+
 struct WaterfallRowFrameReadiness {
     bool requested{false};
     bool formatSupported{false};

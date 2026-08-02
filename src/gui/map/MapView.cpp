@@ -39,6 +39,12 @@ const QGV::GeoRect kWorldRect{ 70.0, -170.0, -60.0, 170.0 };
 constexpr double kPanFraction = 0.25;   // arrow-key pan, fraction of viewport
 constexpr double kZoomStep = 2.0;       // +/- key zoom factor
 constexpr qint64 kTileCacheBytes = 256LL * 1024 * 1024;
+// Stall timeout for OSM tile fetches (#4688 §6). A stalled tile is milder than
+// a stalled panel — QGVLayerTiles marks a pending tile as present, so it is not
+// re-requested until the camera moves off it, and QGVLayerTilesOnline::cancel()
+// aborts the reply at that point — but until then the tile stays blank with the
+// socket held open and nothing logged.
+constexpr int kTransferTimeoutMs = 15000;
 } // namespace
 
 void MapView::ensureTileNetworkManager()
@@ -51,6 +57,7 @@ void MapView::ensureTileNetworkManager()
     // policy — and the User-Agent uniquely identifies AetherSDR (library
     // defaults and browser impersonation are documented blocking causes).
     auto* nam = new QNetworkAccessManager(QCoreApplication::instance());
+    nam->setTransferTimeout(kTransferTimeoutMs);
     auto* cache = new QNetworkDiskCache(nam);
     cache->setCacheDirectory(
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation)

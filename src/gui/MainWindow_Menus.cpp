@@ -76,6 +76,11 @@
 
 namespace AetherSDR {
 
+namespace {
+// Stall timeout for the About dialog's GitHub contributor fetch (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+} // namespace
+
 void MainWindow::buildMenuBar()
 {
     auto* fileMenu = menuBar()->addMenu("&File");
@@ -1381,6 +1386,9 @@ void MainWindow::buildMenuBar()
 
         // Fetch live contributor list from GitHub API
         auto* nam = new QNetworkAccessManager(dlg);
+        // Bound the contributor fetch (#4688 §6) — without it a half-open
+        // connection leaves the About dialog's list pending with no error.
+        nam->setTransferTimeout(kTransferTimeoutMs);
         auto* reply = nam->get(QNetworkRequest(
             QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
         connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {

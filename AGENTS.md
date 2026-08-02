@@ -205,6 +205,32 @@ Leave every *historical* mention alone. "shipped v26.7.4" and "(v26.7.4)" are
 statements about when something landed and stay true forever, so a blanket
 find-and-replace across a version bump silently corrupts them.
 
+### `CHANGELOG.md` is a release-prep file. Do not touch it in a feature PR.
+
+The table above is the **only** reason to edit `CHANGELOG.md`: a new version
+section, at release prep. An ordinary PR — a fix, a feature, a refactor —
+**must not add an entry**, however user-visible the change is. Describe it in
+the PR body and the commit message instead; those are where the reasoning
+belongs and neither one conflicts with anything. At release prep, the section
+is written *from* those PR bodies — `gh pr list --state merged --search
+'merged:>=<last-tag-date>'` is the source of truth for what shipped.
+
+This is a mechanical rule, not a stylistic preference. Every entry is prepended
+to the top of the same `## [Unreleased]` list, so **any two PRs that both add
+one conflict with each other**, and every PR still open when one of them merges
+goes stale and needs a manual resolution. With a queue of concurrent agent PRs
+that is not an occasional annoyance — it is a conflict on essentially every
+pair. The file is append-mostly by nature and merges terribly by construction,
+so the fix is to stop writing to it outside the one moment that needs it.
+
+Reviewers: do not ask for a `CHANGELOG.md` entry, and flag one as a change to
+remove if a PR adds it. There has never been a written rule requiring per-PR
+entries — `CONTRIBUTING.md` has never mentioned the file at all — but the habit
+propagated anyway, by agents reading `git log` and copying what they saw. When
+this rule landed it sat at 45% of recent merges (18 of the last 40, measured
+2026-08-02), which is the worst of both worlds: not a convention anyone can
+rely on, and enough churn to conflict constantly.
+
 ---
 
 ## CI/CD Workflow

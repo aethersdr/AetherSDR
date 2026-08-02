@@ -250,13 +250,36 @@ int main(int argc, char* argv[])
     // context switching between the main window and child dialogs triggers
     // a BadAccess crash (X_GLXMakeCurrent) on some compositors.
     // Only set when QT_QPA_PLATFORM isn't already configured by the user.
-    // Skip for AppImage: the bundled Qt Wayland plugin may not match the
-    // host compositor's protocol version, causing an abort on init (#1389).
-    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")
-            && !qEnvironmentVariableIsSet("APPIMAGE")) {
+    //
+    // "wayland;xcb", not "wayland": Qt reads the value as an ordered list and
+    // moves to the next entry when a plugin cannot be loaded, so a build or
+    // host without the Wayland plugin lands on xcb instead of aborting with
+    // "no Qt platform plugin could be initialized".
+    //
+    // That abort is precisely what #1389 was. The AppImage forced plain
+    // "wayland" while shipping no Wayland platform plugin inside the AppDir.
+    // The plugin was never missing from the Qt build — qtwayland rides in the
+    // base aqt package — but linuxdeploy-plugin-qt deploys platforms/libqxcb.so
+    // and nothing else unless EXTRA_PLATFORM_PLUGINS names more, so every
+    // Wayland-session user got a binary that would not start. The carve-out
+    // added then — skip this block under APPIMAGE — treated the symptom, and
+    // its stated reason (a bundled plugin mismatching the compositor's protocol
+    // version) described something that never happened: there was no bundled
+    // plugin to mismatch.
+    //
+    // The carve-out is gone because both of its causes are: appimage.yml now
+    // deploys the Wayland platform plugin and asserts it reached the AppDir,
+    // and this fallback turns a missing plugin into a downgrade to XWayland
+    // rather than a failure to start. Removing it also closes a real gap —
+    // AppImage users were the only Linux users not receiving the #1233
+    // XWayland GLX fix that this block exists to deliver.
+    //
+    // QT_QPA_PLATFORM=xcb remains the escape hatch if a compositor renders
+    // badly under native Wayland (documented in README next to AETHER_NO_GPU).
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
-            qputenv("QT_QPA_PLATFORM", "wayland");
+            qputenv("QT_QPA_PLATFORM", "wayland;xcb");
         }
     }
 

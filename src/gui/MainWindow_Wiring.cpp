@@ -1443,6 +1443,10 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SuppressionStrength(v); });
     });
     // DFNR
+    // RN2
+    connect(w, &AetherDspWidget::rn2DryMixChanged, this, [this](float v) {
+        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setRn2DryMix(v); });
+    });
     connect(w, &AetherDspWidget::dfnrAttenLimitChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrAttenLimit(v); });
     });

@@ -117,6 +117,8 @@ it on Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch. It does **not** clear
 on **Ubuntu 24.04 LTS**, which ships Qt 6.4.2 — build there against a Qt from
 [aqtinstall](https://github.com/miurahr/aqtinstall) or the Qt online installer
 and point CMake at it with `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64`.
+On **macOS** the Qt does not come from Homebrew at all — see the macOS note
+below the install commands.
 
 ```bash
 # Arch / CachyOS / Manjaro
@@ -139,10 +141,45 @@ sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-deve
   cmake ninja-build autoconf automake libtool \
   fftw3-devel portaudio-devel hidapi-devel qtkeychain-qt6-devel
 
-# macOS (Homebrew)
-brew install qt@6 ninja cmake pkgconf autoconf automake libtool \
-  fftw portaudio hidapi qtkeychain
+# macOS (Homebrew) — everything EXCEPT Qt and qtkeychain; see the note below
+brew install ninja cmake pkgconf autoconf automake libtool \
+  fftw portaudio hidapi
 ```
+
+> **macOS note — Qt and qtkeychain do not come from Homebrew.** Homebrew's `qt`
+> formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.1 at the time
+> of writing — while the DMG ships 6.8.3 LTS like every other artifact. Building
+> against Homebrew's Qt means testing a Qt no release ships. Install the matching
+> one and point CMake at it:
+>
+> ```bash
+> # A venv rather than a bare `pip install`: a PEP 668 python3 refuses the latter.
+> python3 -m venv ~/.venv/aqt && ~/.venv/aqt/bin/pip install aqtinstall
+> ~/.venv/aqt/bin/aqt install-qt mac desktop 6.8.3 clang_64 \
+>   -m qtmultimedia qtwebsockets qtserialport qtshadertools \
+>   --outputdir ~/Qt
+> cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos;$(brew --prefix)"
+> ```
+>
+> `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
+> there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
+> path for fftw, portaudio and hidapi.
+>
+> Homebrew's `qtkeychain` is left out for a related reason: the formula depends
+> on `qtbase`, so installing it pulls a second Qt in behind your back. Build it
+> against the Qt you just installed instead — or skip it and build without
+> SmartLink credential persistence:
+>
+> ```bash
+> CMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos" bash scripts/setup/setup-qtkeychain.sh
+> ```
+>
+> **Two Qt installations visible to CMake at once is a real failure, not a
+> theoretical one** — it is what #711 and #812 were, and `CMakeLists.txt` puts
+> `$(brew --prefix)/include` on the global include path on macOS, so a Homebrew
+> Qt is discoverable whether or not you asked for it. If you have one,
+> `brew uninstall qt` (plus whatever pulled it in) before building. The release
+> workflow asserts this; your machine will not.
 
 <details>
 <summary>What each dependency enables</summary>
@@ -224,15 +261,38 @@ cmake --build build --target AetherSDR
 
 ### GPU Spectrum Rendering
 
-GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). Since the build now requires Qt 6.8 as a minimum, every build — source or release binary, the aarch64 AppImage included — clears that floor and renders via QRhi. The CPU-based `QPainter` path remains as a runtime fallback for machines where GPU initialisation fails, not as a Qt-version fallback.
+GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). Since the build now requires Qt 6.8 as a minimum, no build is held back by the Qt version any more — the aarch64 AppImage included. What decides whether a given binary renders via QRhi is the `AETHER_GPU_SPECTRUM` build option, and for a source build whether Qt's private GUI headers are installed: CMake turns the option off with `GPU spectrum rendering disabled — Qt6GuiPrivate not found` when they are missing (install `qt6-base-private-dev` / `qt6-qtbase-private-devel`).
 
-Going the other way, `AETHER_NO_GPU=1` forces software OpenGL on an already-built binary, without a rebuild:
+The CPU `QPainter` path is a **build-time alternative, not a runtime fallback**. `AETHER_GPU_SPECTRUM` selects `SpectrumWidget`'s base class — `QRhiWidget` or `QWidget` — and `SpectrumWidget::paintEvent()`, which is what draws the spectrum on the CPU, is compiled only into the `QWidget` build. (A GPU build still uses `QPainter`, but only to rasterise overlays into textures QRhi then composites.) Of the shipped artifacts only the Intel macOS DMG is built the other way, and deliberately: `QRhiWidget` misbehaves on older Metal/OpenGL hardware.
+
+Having no GPU is usually a non-event, because in practice "no GPU" means a software rasterizer rather than nothing. QRhi comes up on whatever the platform provides — llvmpipe or softpipe (Mesa), WARP or Microsoft Basic Render (D3D11), SwiftShader — and the app detects it and says so: **Help ▸ About** shows a `Renderer:` line reading `CPU QRhi (…)` rather than `GPU QRhi (…)`, naming the backend and device. Rendering is correct, just slow.
+
+If QRhi cannot initialise at all — no usable GL/D3D/Metal, as on a headless host, in some VMs, or behind a broken driver — there is nothing to fall back to. The spectrum does not draw, and the failure is reported by Qt rather than by AetherSDR: the log records `QRhiWidget: QRhi is not supported on this platform.` or `QRhiWidget: No QRhi`, and `QRhiWidget::renderFailed()` fires with nothing listening, so there is no notice in the UI. The rest of the app (controls, audio, radio I/O) is unaffected.
+
+`AETHER_NO_GPU=1` forces software OpenGL on an already-built binary, without a rebuild:
 
 ```bash
 AETHER_NO_GPU=1 ./AetherSDR-*.AppImage
 ```
 
 That is the escape hatch if a GPU or driver renders the spectrum incorrectly — worth trying first on Raspberry Pi and other systems whose Mesa driver is newer than its hardware.
+
+### Wayland and XWayland
+
+On a Wayland session AetherSDR asks Qt for `wayland;xcb` — native Wayland when
+the platform plugin is available, XWayland otherwise. Native Wayland avoids the
+GLX `BadAccess` crash that XWayland can produce when opening child dialogs on
+some compositors, and renders correctly under fractional scaling instead of
+being bitmap-scaled by the compositor.
+
+If a compositor misbehaves under native Wayland, force XWayland:
+
+```bash
+QT_QPA_PLATFORM=xcb ./AetherSDR-*.AppImage
+```
+
+Setting `QT_QPA_PLATFORM` yourself always wins — AetherSDR only supplies a
+default when the variable is unset.
 
 On a distribution whose Qt is older than the required 6.8 (notably Ubuntu 24.04 LTS at 6.4.2), install a newer Qt manually:
 

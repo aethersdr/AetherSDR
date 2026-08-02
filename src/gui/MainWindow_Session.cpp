@@ -864,8 +864,32 @@ void MainWindow::wireRadioModel()
 #endif
     // Sync PC mic gain directly from slider. In RADE mode, the radio's mic input
     // is unused — the slider controls client-side gain regardless of mic_selection.
+    //
+    // EXCEPT on a backend that modulates on this host, where the SAME slider
+    // already reaches Hl2TxDsp's pre-ALC gain through TransmitModel::setMicLevel
+    // and the seam bridge in RadioModel. Letting both run would apply the
+    // operator's gain TWICE, in series, which is not what a slider labelled once
+    // can mean. The modulator's is the one to keep: setPcMicGain only ever
+    // attenuates (0..100 maps to 0.0..1.0, and AudioEngine skips it entirely at
+    // unity), while the ALC behind the modulator needs the mic pushed UP past
+    // its hold threshold — see Hl2Backend::setMicGain.
+    //
+    // This gate is also why the control was dead rather than doubled before now:
+    // micSelection() is "MIC" until a radio reports otherwise, and an HL2 has no
+    // command plane to report it, so neither branch of the old condition ever
+    // ran and neither did the modulator's — the slider reached nothing at all.
+    //
+    // Through hostModulatesTxAudio() rather than reading caps.hostModulates
+    // bare: that helper is `hostModulates && canTransmit`, which is the form
+    // every other site in this file uses (see the connection-edge handler
+    // above) and the one QsoRecordStartPolicy.h names as canonical. A backend
+    // declaring hostModulates without canTransmit would otherwise lose the PC
+    // path here and get nothing back, since RadioModel's seam would be pushing
+    // gain into a modulator that can never key.
     connect(m_appletPanel->phoneCwApplet(), &PhoneCwApplet::micLevelChanged,
             this, [this](int level) {
+        if (hostModulatesTxAudio())
+            return;
         if (m_radioModel.transmitModel().micSelection() == "PC" || m_audio->isRadeMode()) {
             m_audio->setPcMicGain(level);
             auto& s = AppSettings::instance();

@@ -8,6 +8,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed: the macOS build keeps GPU spectrum rendering when Qt comes from Qt (#4688, #2191)
+
+**The Apple Silicon DMG now ships the Qt it says it ships — 6.8.3, the same one
+behind every other download — and keeps drawing the spectrum on the GPU while
+doing it.**
+
+Until now that DMG took Qt from Homebrew: whatever version Homebrew happened to
+be publishing on the day a release was tagged. That was 6.11.1 while every other
+artifact was pinned to 6.8.3, so the most-downloaded macOS build was the only one
+running a Qt nobody had tested it against — and it could change between two
+releases with no code change anywhere. It is the most likely explanation for
+#2191, where the DMG's Qt behaved differently from a standard install of the
+same version.
+
+Pinning it exposed a second problem that had been hiding behind Homebrew. Qt's
+own macOS packages arrange their headers differently from every other platform,
+and AetherSDR's build did not recognise that arrangement — so the GPU spectrum
+renderer quietly switched itself off and the app fell back to CPU drawing, with
+nothing in the build saying so. Both halves are fixed here, and the release now
+refuses to produce a macOS app that has silently lost GPU rendering or that
+bundles a Qt other than the pinned one.
+
+Also on macOS: SmartLink credential persistence — staying logged in between
+launches — is now built as part of the release rather than picked up from
+Homebrew, and its absence is a build failure instead of a feature that
+disappears without a word.
+
+### Fixed: the Linux AppImage runs natively on Wayland instead of XWayland (#1389, #1233)
+
+**On a Wayland desktop the AppImage now uses Wayland directly.** Text and the
+spectrum are sharp under fractional scaling — previously the desktop was
+bitmap-scaling an X11 window — and the AppImage finally receives the fix for the
+GLX crash that could happen when opening a dialog such as Radio Setup on some
+desktops. Every other Linux build has had that fix since v0.8.12; the AppImage
+was the one left out.
+
+It was left out to stop a worse problem. The AppImage asked for Wayland without
+carrying the piece of Qt that talks Wayland, so it refused to start at all on
+Ubuntu 24.04 and anything else defaulting to a Wayland session. The quick fix
+was to stop asking for Wayland in the AppImage, which cured the crash and
+stranded those users on XWayland permanently. The Wayland support was in fact
+present in the Qt we build against the whole time — it simply never made it into
+the packaged app, and nothing in the build noticed, because it is loaded on
+demand rather than linked. It is now packaged, and the release build fails if it
+ever goes missing again.
+
+AetherSDR also now asks for Wayland *with a fallback* rather than demanding it,
+so a machine without Wayland support quietly uses XWayland instead of failing to
+start. If a desktop misbehaves under native Wayland, `QT_QPA_PLATFORM=xcb`
+forces the old path — documented in the README next to `AETHER_NO_GPU`. Setting
+`QT_QPA_PLATFORM` yourself always wins.
+
+Reported by @cjdellis on Ubuntu 24.04.
+
+### Changed: the waterfall recolours its history when you change the palette (#4694)
+
+**Picking a new waterfall Scheme now recolours the waterfall you are already
+looking at, instead of only the rows that arrive next.** Previously the palette
+change took effect at the waterline: everything above it kept the old colours,
+so comparing two schemes meant waiting for the display to scroll clear. The 3D
+spectrum has always recoloured immediately — the 2D waterfall now matches it.
+
+Switching *themes* does the same thing, for the same reason: the theme owns the
+gradient behind every preset, so a theme change is a palette change.
+
+Nothing moves while it happens. The waterfall keeps its scroll position, its
+paused scrollback, and its place in the scroll animation — the retained rows
+were always stored as palette-independent intensity, so recolouring is a
+repaint of what is on screen, the same work a pan already does, and the
+scrollback above the viewport recolours as you scroll it back in.
+
 ### Fixed: transmit audio breaking up with RN2 enabled (#4584)
 
 **Your transmitted audio no longer breaks up when RN2 is on.** Remote transmit
@@ -60,6 +131,101 @@ section.
 
 ### Fixed
 
+- **Hermes-Lite 2: the MIC slider reached nothing, and the wattmeter read voice
+  ~3.5 dB low (#4696).** Reported from the bench as 6 W out on FT8 and WSPR but
+  never more than 1 W on SSB voice, at every mic and RF level, with and without
+  the compressor. Three faults, and the first is why the other two were
+  invisible.
+
+  *The wattmeter was measuring the wrong thing on voice.* Forward power was
+  published as the raw instantaneous sample from the HL2's directional coupler
+  — one 12-bit conversion from the `slow_adc` I2C converter, round-robined with
+  reverse power, temperature and bias current, with no peak detector and no
+  averaging anywhere in the gateware, reaching us at 10 Hz. Speech peaks last
+  tens of milliseconds, so sampling that envelope at 10 Hz lands on a peak
+  essentially never, while a constant-envelope FT8 or WSPR transmission — where
+  every instant *is* the peak — read full scale. The same transmitter making the
+  same power read very differently depending on what was modulating it. It is
+  now published through a peak hold (instant attack, ~2 s release, in watts
+  because the calibration curve is markedly non-linear). This does not recover
+  an instantaneous PEP reading — no filter can recover a peak that was never
+  sampled — it accumulates the maximum across a transmission, so the reading
+  climbs toward PEP as the over goes on; the meter is labelled "peak estimate"
+  rather than claiming to be a measurement. Measured on a live HL2 into a dummy
+  load, voice peaks now read **4.6 W where they read 1.7 W before**, and a
+  constant carrier is unchanged (2.642 W held against 2.637 W instantaneous),
+  which is the control case a hold must not inflate. `MeterModel`'s own
+  ballistics are untouched, so no Flex behaviour changes.
+
+  *Mic gain was wired to nothing.* The Phone applet's MIC slider emits a Flex
+  `transmit set miclevel=` verb, which a backend with no command plane drops,
+  and nothing bridged it to the host modulator — so sweeping the slider end to
+  end changed nothing on the air. The client-side fallback could not fire
+  either, being gated on a `mic_selection` an HL2 never reports. The slider now
+  reaches the modulator's pre-ALC gain through the same seam the TX passband
+  uses, with 50 as unity so an untouched slider leaves every existing install
+  exactly where it was. This is what carries a quiet microphone over the ALC's
+  hold threshold, which is what the "raise mic gain" diagnostic has been
+  advising since it shipped — at a control that did nothing on this backend.
+
+  *And the readback agreed with the failure.* Every readback available while mic
+  gain was dead reported the requesting side, so all of them agreed the control
+  worked. A confirmation sourced from the requester cannot detect a request that
+  never arrived. The modulator now echoes its own gain, and the Radio Health
+  dialog gained a **Transmit voice chain** section reporting both the operator's
+  request and what the modulator is actually running — mic level and applied
+  gain, mic peak for the current over, the ALC hold threshold, ALC gain and
+  post-ALC peak, the passband in use, and both instantaneous and held forward
+  power.
+
+- **TX meter hover badges no longer stack up two at a time, and they let go
+  (#3936 follow-up).** Traversing the stacked TX meters left **two** value
+  badges on screen at once. Every `HGauge` allocated its own `DragValuePopup`
+  with nothing coordinating them, so entering the SWR bar raised a second badge
+  rather than replacing the RF Pwr one. Those two are consecutive rows two
+  pixels apart and both badges anchor above the pointer, so the pair landed
+  nearly on top of each other, covering the TX Controls header and the RIT/XIT
+  row. The badge is now claimed app-wide — entering a gauge closes whichever
+  one is already showing — so at most one is ever up.
+
+  The survivor could also stay up indefinitely. `leaveEvent` starts a hide
+  timer rather than hiding, every meter frame cancelled that timer, and Qt does
+  not guarantee a `leaveEvent` — so one dropped leave pinned the badge on
+  screen, frozen at the anchor the pointer had left it at, for as long as the
+  radio kept reporting. Recovery is now a 250 ms watchdog armed only while the
+  pointer is physically over the bar, which bounds a dropped leave by wall
+  clock whether or not values keep arriving — so a settled meter, or one that
+  stopped reporting on unkey, recovers too.
+
+  The linger itself drops from a bespoke 1000 ms to the 450 ms every other
+  `DragValuePopup` in the app already uses (settled in #2944), so the readout
+  no longer sits over the next control long after the pointer has gone.
+
+- **Demo mode no longer opens with a ghost "Slice A" panadapter (#4671).** The
+  demo's simulator claims its panadapter from its own synthetic wire, but the
+  model treated every non-Flex backend as wire-less and minted a *second*,
+  ownerless pan in the neutral id space on the seam's geometry edge — a pane the
+  user could neither use nor delete. The same assumption re-addressed the demo's
+  slice into that neutral space, so the slice pointed at the ghost rather than
+  at its real pan; with the ghost gone it would have pointed at nothing. Both
+  now key off whether the backend vends its own connection, so the demo opens
+  with one panadapter and a slice that belongs to it — restoring the pan title
+  bar, adaptive RX filter, auto-squelch, centre-lock and band recall on demo
+  mode. Hermes-Lite 2 and other wire-less backends keep the neutral mapping.
+
+- **Demo mode's power-line hum clicked instead of bending when you moved its
+  50/60 Hz slider (#4668).** The hum's six harmonics were synthesized from
+  absolute time × the current mains frequency, so every move of **Power-line**
+  in the Demo applet jumped all six phases at once rather than changing their
+  frequency — and because that jump scales with the harmonic number, the high
+  harmonics stepped hardest and the click grew with how long the session had
+  been running. The hum now accumulates phase per sample the way the CW tone
+  (#4618) and the birdie carrier already did, deriving every harmonic from one
+  shared fundamental so they stay locked to each other, and bends smoothly to
+  the new frequency. This was the last generator in the demo mixer still keyed
+  off absolute time. Demo mode only — no radio, protocol, or transmit path is
+  involved.
+
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —
   the ACOM auto-range as forward power outgrows its tier, an SPE LOW/MID/HIGH
@@ -101,6 +267,18 @@ section.
   with no cause at all.
 
 ### Added
+
+- **`health` automation-bridge verb (#4696).** Returns the backend's own health
+  snapshot — the rows the Radio Health dialog shows, which until now reached
+  nothing else and so were unavailable to any script or regression test.
+  Deliberately *not* assembled from the models: `get` already reports those, and
+  a model reports what the operator **asked for**, which is why a control whose
+  command was dropped on the way to the radio could read back as working. Every
+  row here comes from the backend instead, so the two can be compared and the
+  comparison is the diagnosis. Read-only and TX-safe — it keys nothing and sets
+  nothing. A `null` value means the radio never reported that row, kept distinct
+  from a zero because "the FIFO is empty" and "we were never told" are different
+  answers.
 
 - **The aarch64 (Raspberry Pi / ARM) AppImage now ships Qt 6.8.3 LTS and
   GPU spectrum rendering (#4670).** It was the only release artifact still
@@ -346,6 +524,41 @@ section.
   announces immediately, so the handle change is never lost behind a value
   update, and neither control does any accessibility work when no screen
   reader is running.
+
+### RN2 no longer pumps on stereo and binaural receive audio
+
+**If you listen to RN2 with binaural or diversity receive audio, the noise
+floor no longer rises every time someone talks.** Nothing changes for
+duplicated-mono slices, and nothing changes in how much noise RN2 removes.
+
+RN2 used to denoise an L/R downmix, derive a gain envelope from the result and
+re-apply that one envelope to the original stereo. That is exact when the two
+channels are proportional to their sum — plain mono, and simple panning — but
+binaural and diversity audio are not: the downmix has comb-filter nulls the
+individual channels do not, so the envelope fits neither channel. The audible
+result was the noise floor breathing with speech, loud under voice and gated
+between phrases. RN2 now runs one RNNoise instance and one matched resampler
+pair per receive channel, driven from the same block so the two stay in
+lockstep. Pan, stereo balance, diversity and binaural phase all survive it. A
+regression test mixes a steady tone into binaural speech and measures its level
+during speech against the gaps: the old path modulated it ~15x, the new one
+~1.0x.
+
+The transmit denoiser is unchanged — it still downmixes to mono, which is what
+a microphone path wants.
+
+### RN2 can leave a noise floor instead of going silent between phrases
+
+**New, off by default:** *AetherDSP → RN2 → Noise Floor*. RNNoise gates hard,
+which some operators hear as the receiver going dead rather than quiet. Raising
+this leaves that percentage of the original signal under the denoised audio, so
+the band still sounds live between phrases. 0% is what RN2 has always done and
+remains the default; 10–20% is a usable floor. Receive only.
+
+The blend happens inside RNNoise, before its synthesis and overlap-add stage,
+rather than by mixing a dry copy of the waveform back in afterwards — mixing
+two waveforms that have been through different delays comb filters, and the
+whole point is a floor you stop noticing.
 
 ## [v26.7.4.1] — 2026-07-27
 

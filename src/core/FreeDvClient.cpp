@@ -37,12 +37,7 @@ void FreeDvClient::initialize()
     connect(m_ws, &QWebSocket::connected, this, &FreeDvClient::onWsConnected);
     connect(m_ws, &QWebSocket::disconnected, this, &FreeDvClient::onWsDisconnected);
     connect(m_ws, &QWebSocket::textMessageReceived, this, &FreeDvClient::onWsTextMessage);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(m_ws, &QWebSocket::errorOccurred, this, &FreeDvClient::onWsError);
-#else
-    connect(m_ws, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error),
-            this, &FreeDvClient::onWsError);
-#endif
     connect(m_reconnectTimer, &QTimer::timeout, this, &FreeDvClient::onReconnectTimer);
     connect(m_snrTimer,       &QTimer::timeout, this, &FreeDvClient::onSnrTimer);
 

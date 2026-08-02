@@ -71,6 +71,8 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/sim/SimBackend.h"
 
+#include "TestEventLoop.h"
+
 #include <QCoreApplication>
 #include <QSignalSpy>
 
@@ -83,6 +85,16 @@ static void check(bool ok, const char* what)
 {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
 }
+
+// This file is where the shared wait came from: it spun on an iteration count
+// (`for (200x) processEvents(AllEvents, 10)`), which waits approximately zero
+// because processEvents() strips WaitForMoreEvents and returns immediately on an
+// empty queue. Both edge assertions below therefore passed on luck — on whether
+// the emission happened to be queued already — and lost that luck on a loaded
+// box (#4693). AetherTest::waitForSignal() is that fix, generalised; the trap
+// itself is pinned as a negative case in tests/test_event_loop_test.cpp so it
+// cannot quietly stop being a trap. See tests/TestEventLoop.h for the full
+// account and for which helper to reach for.
 
 // The exact expression MainWindow::applyCapabilitiesToUi() applies to every
 // capability-gated surface. Stated once here so the assertions below read as
@@ -287,16 +299,21 @@ int main(int argc, char** argv)
         // object lives on a worker thread and reaches Connected before its
         // queued signal has crossed to this one, so waiting on isConnected()
         // races the very emission under test.
-        for (int i = 0; i < 200 && spy.count() == 0; ++i) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
+        //
+        // The relay is the anchor for BOTH checks below, so it is waited on and
+        // asserted first. isConnected() reads the connection's atomic state, which
+        // flips the instant the worker sets Connected — before the queued signal
+        // chain has been delivered here. Asserting it before the relay has landed
+        // means a worker that has not been scheduled at all inverts every
+        // connected-branch assertion in this block, not just this one. (#4693)
+        const bool relayFired = AetherTest::waitForSignal(spy);
+
+        // Without it applyCapabilitiesToUi() never runs and every gated surface
+        // keeps the previous radio's answer.
+        check(relayFired,
+              "relay: capabilitiesChanged fired on the connect edge");
         check(model.isConnected(),
               "synthetic demo connect reached the connected state");
-
-        // The relay fired for that edge. Without it applyCapabilitiesToUi()
-        // never runs and every gated surface keeps the previous radio's answer.
-        check(spy.count() > 0,
-              "relay: capabilitiesChanged fired on the connect edge");
         if (spy.count() > 0) {
             const QList<QVariant> args = spy.last();
             check(args.value(0).toBool(),
@@ -370,12 +387,11 @@ int main(int argc, char** argv)
     {
         QSignalSpy spy(&model, &RadioModel::capabilitiesChanged);
         model.disconnectFromRadio();
-        for (int i = 0; i < 200 && spy.count() == 0; ++i) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
-        check(!model.isConnected(), "disconnected from the synthetic demo radio");
-        check(spy.count() > 0,
+        // Same ordering as the connect edge above, for the same reason. (#4693)
+        const bool relayFired = AetherTest::waitForSignal(spy);
+        check(relayFired,
               "relay: capabilitiesChanged fired on the disconnect edge");
+        check(!model.isConnected(), "disconnected from the synthetic demo radio");
 
         const RadioCapabilities caps = model.backendCapabilities();
         check(uiWouldShow(model.isConnected(), caps.hasProfiles),

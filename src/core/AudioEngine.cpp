@@ -27,6 +27,7 @@
 #include "ReceivePresentationSync.h"
 #include "SpectralNR.h"
 #include "models/Nr2SettingsModel.h"
+#include "models/Rn2SettingsModel.h"
 #ifdef HAVE_SPECBLEACH
 #include "SpecbleachFilter.h"
 #endif
@@ -80,6 +81,7 @@ static void logNr2WisdomSummary(const QString& context);
 static void logNr2WisdomGenerationSummary(SpectralNR::WisdomResult result);
 static void applyNr2Settings(SpectralNR& nr2);
 static void copyNr2Settings(const SpectralNR& source, SpectralNR& target);
+static void applyRn2Settings(RNNoiseFilter& rn2);
 #ifdef HAVE_SPECBLEACH
 static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4);
 static void copyNr4Settings(const SpecbleachFilter& source,
@@ -1031,6 +1033,8 @@ AudioEngine::createRn2Filter(const QString& label) const
             << "AudioEngine: RN2 rnnoise_create() failed for" << label;
         return {};
     }
+    // Restore the feature-owned RN2 configuration.
+    applyRn2Settings(*filter);
     return filter;
 }
 
@@ -3051,6 +3055,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 
         if (requestedMode == QLatin1String("RN2")) {
             RNNoiseFilter rn2;
+            applyRn2Settings(rn2);
             if (!rn2.isValid()) {
                 return QJsonObject{
                     {QStringLiteral("ok"), false},
@@ -6481,6 +6486,14 @@ static void applyNr2Settings(SpectralNR& nr2)
     nr2.setAeFilter(config.aeFilter);
 }
 
+// RN2's only user-adjustable parameter. The TX (ProcessedMono) instance is
+// deliberately NOT fed this: the dry mix exists so RX gaps between phrases do
+// not go dead, which is meaningless for a mic pre-amp.
+static void applyRn2Settings(RNNoiseFilter& rn2)
+{
+    rn2.setDryMix(Rn2SettingsModel::instance().config().rxDryMix);
+}
+
 static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
 {
     target.setGainMax(source.gainMax());
@@ -6642,6 +6655,18 @@ void AudioEngine::setNr2Enabled(bool on)
     }
     qCDebug(lcAudio) << "AudioEngine: NR2" << (on ? "enabled" : "disabled");
     emit nr2EnabledChanged(on);
+}
+
+void AudioEngine::setRn2DryMix(float value)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_rn2) m_rn2->setDryMix(value);
+    if (m_kiwiSdrRn2) m_kiwiSdrRn2->setDryMix(value);
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->rn2) {
+            source->rn2->setDryMix(value);
+        }
+    }
 }
 
 void AudioEngine::setNr2GainMax(float v)

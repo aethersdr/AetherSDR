@@ -914,6 +914,11 @@ private:
     QRect waterfallLiveButtonRect(const QRect& wfRect) const;
     QRect waterfallTimeScaleRect(const QRect& wfRect) const;
     void ensureWaterfallHistory();
+    quint64 waterfallPaletteToken() const;
+    void paintWaterfallRowsFromHistory(double centerMhz, double bandwidthMhz,
+                                       int writeRowOrigin,
+                                       WaterfallPipelineMode pipelineMode);
+    void recolorWaterfallViewport();
     void rebuildWaterfallViewport();
     void rebuildWaterfallViewportForFrame(double centerMhz, double bandwidthMhz);
     void rebuildDssViewportFromHistory();
@@ -1020,6 +1025,11 @@ private:
         bool kiwiDisplayRangeAutoRange{false};
         float kiwiFftTraceFloorDbm{-1000.0f};
         bool kiwiFftTraceFloorValid{false};
+        // Palette the saved RGB rows were rendered with. A parked stream
+        // cannot see a Scheme or theme change, so restore compares this
+        // against the live token and recolours once instead of on every
+        // hidden-source row write.
+        quint64 visiblePaletteToken{0};
         bool valid{false};
 #ifdef AETHER_GPU_SPECTRUM
         bool wfTexFullUpload{true};
@@ -1419,6 +1429,10 @@ private:
     // effectiveWfAutoBlackRadioSide(). (#4606)
     bool  m_radioSideAutoBlackAvailable{true};
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
+    // Palette the visible RGB rows currently hold. Diverges from the live
+    // token only while a stream is parked (see WaterfallStreamState) or a
+    // palette refresh is deferred behind a frequency preview.
+    quint64 m_wfVisiblePaletteToken{0};
 
     // 3DSS — perspective stacked-trace render mode. m_dss owns the rolling
     // history + cached surface image; consumed by both the CPU and GPU paths.
@@ -1556,6 +1570,7 @@ private:
     FrequencyRangeCommandThrottle m_frequencyRangeCommandThrottle;
     quint64 m_frequencyRangeCommandCount{0};
     bool m_frequencyPreviewActive{false};
+    bool m_waterfallPaletteRefreshPending{false};
     double m_frequencyPreviewBaseCenterMhz{0.0};
     double m_frequencyPreviewBaseBandwidthMhz{0.0};
     double m_frequencyPreviewTargetCenterMhz{0.0};

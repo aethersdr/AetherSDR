@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/NvidiaBnrSettings.h"
 #include "models/Nr2SettingsModel.h"
+#include "models/Rn2SettingsModel.h"
 #include "GuardedSlider.h"
 #include "Theme.h"
 
@@ -457,8 +458,10 @@ void AetherDspWidget::resetCurrentTab()
     } else if (name == "DFNR") {
         if (m_dfnrAttenSlider) m_dfnrAttenSlider->setValue(100);
         if (m_dfnrBetaSlider)  m_dfnrBetaSlider->setValue(0);
+    } else if (name == "RN2") {
+        if (m_rn2DryMixSlider) m_rn2DryMixSlider->setValue(0);
     }
-    // RN2 / BNR have no adjustable parameters — Reset Defaults is a no-op.
+    // BNR has no adjustable parameters — Reset Defaults is a no-op there.
 }
 
 void AetherDspWidget::setCompactMode(bool on)
@@ -1170,15 +1173,71 @@ QWidget* AetherDspWidget::buildRn2Page()
 {
     auto* page = new QWidget;
     auto* vbox = new QVBoxLayout(page);
+    vbox->setContentsMargins(10, 20, 0, 0);
     auto* lbl = new QLabel(
         "RNNoise — open-source recurrent neural-network voice denoiser. "
         "Removes stationary background noise (fans, hum, white-noise floor) "
-        "while preserving speech.  Lightweight and CPU-only.  No adjustable "
-        "parameters.");
+        "while preserving speech.  Lightweight and CPU-only.");
     lbl->setWordWrap(true);
     lbl->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
-    vbox->addWidget(lbl);
+    {
+        auto* infoRow = new QHBoxLayout;
+        infoRow->setContentsMargins(0, 0, 10, 0);
+        infoRow->addWidget(lbl);
+        vbox->addLayout(infoRow);
+    }
+
+    {
+        auto* resetRow = new QHBoxLayout;
+        resetRow->setContentsMargins(0, 10, 10, 0);
+        resetRow->addStretch(1);
+        auto* rn2ResetBtn = makeResetIconButton();
+        connect(rn2ResetBtn, &QPushButton::clicked,
+                this, &AetherDspWidget::resetCurrentTab);
+        resetRow->addWidget(rn2ResetBtn);
+        vbox->addLayout(resetRow);
+    }
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+
+    // Dry mix. RNNoise gates hard between phrases, which some operators hear
+    // as the receiver going dead rather than quiet. Retaining a slice of the
+    // original spectrum leaves a constant floor under the speech. Default 0 is
+    // RN2's behavior since it shipped, so nothing changes until it is asked for.
+    auto* dryTitle = new QLabel("Noise Floor");
+    grid->addWidget(dryTitle, 0, 0);
+    m_rn2DryMixSlider = new QSlider(Qt::Horizontal);
+    m_rn2DryMixSlider->setObjectName(QStringLiteral("rn2DryMixSlider"));
+    m_rn2DryMixSlider->setAccessibleName(tr("RN2 noise floor"));
+    m_rn2DryMixSlider->setAccessibleDescription(
+        tr("Percentage of the original signal RN2 leaves under the denoised "
+           "audio. Zero is full noise suppression."));
+    m_rn2DryMixSlider->setRange(
+        0, static_cast<int>(Rn2SettingsModel::kMaxRxDryMix * 100.0f));
+    m_rn2DryMixSlider->setValue(static_cast<int>(
+        Rn2SettingsModel::instance().config().rxDryMix * 100.0f + 0.5f));
+    applyPrimarySliderStyle(m_rn2DryMixSlider);
+    m_rn2DryMixSlider->setToolTip(
+        "How much of the original signal RN2 leaves under the denoised audio.\n"
+        "0% = full suppression (default) — silent between phrases\n"
+        "10–20% = a steady, quiet noise floor so the receiver still sounds live\n\n"
+        "Affects received audio only; the transmit denoiser is unchanged.");
+    grid->addWidget(m_rn2DryMixSlider, 0, 1);
+    m_rn2DryMixLabel = new QLabel(
+        QString::number(m_rn2DryMixSlider->value()) + QStringLiteral("%"));
+    m_rn2DryMixLabel->setFixedWidth(40);
+    grid->addWidget(m_rn2DryMixLabel, 0, 2);
+
+    connect(m_rn2DryMixSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_rn2DryMixLabel->setText(QString::number(v) + QStringLiteral("%"));
+        const float mix = static_cast<float>(v) / 100.0f;
+        Rn2SettingsModel::instance().setRxDryMix(mix);
+        emit rn2DryMixChanged(mix);
+    });
+
+    vbox->addLayout(grid);
     vbox->addStretch();
     return page;
 }

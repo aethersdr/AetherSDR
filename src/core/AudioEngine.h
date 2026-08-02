@@ -243,6 +243,10 @@ public:
     // Client-side RN2 (RNNoise neural noise suppression)
     Q_INVOKABLE void setRn2Enabled(bool on);
     bool rn2Enabled() const { return m_rn2Enabled.load(); }
+    // RN2 dry mix — fraction of the original spectrum RN2 leaves in the RX
+    // output (Rn2SettingsModel owns the value). Applies to every live RX RN2
+    // instance; the TX path keeps full suppression.
+    void setRn2DryMix(float value);
 
     // Client-side RN2 — TX path (mic pre-amp).  Runs on the voice path
     // in onTxAudioReady() AFTER the RADE/DAX early-returns, so digital
