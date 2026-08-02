@@ -5800,6 +5800,12 @@ void SpectrumWidget::recolorWaterfallViewport()
     if (!m_wfLive) {
         rebuildDssViewportFromHistory();
     }
+    // Self-sufficient, like rebuildWaterfallViewportForFrame(). Two of the
+    // four callers (the stream restore, clearFrequencyPreview()) do not
+    // repaint afterwards, and relying on the caller is how a recolour that
+    // ran silently ends up on screen a frame late — or not until the next
+    // unrelated update().
+    update();
 }
 
 void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
@@ -6127,6 +6133,7 @@ void SpectrumWidget::commitFrequencyPreview()
 
 void SpectrumWidget::clearFrequencyPreview()
 {
+    const bool paletteRefreshPending = m_waterfallPaletteRefreshPending;
     m_frequencyPreviewActive = false;
     m_frequencyPreviewBaseCenterMhz = m_centerMhz;
     m_frequencyPreviewBaseBandwidthMhz = m_bandwidthMhz;
@@ -6137,6 +6144,14 @@ void SpectrumWidget::clearFrequencyPreview()
 #ifdef AETHER_GPU_SPECTRUM
     m_frequencyScalePreviewNeedsUpload = false;
 #endif
+    // m_frequencyPreviewActive has two exits — commitFrequencyPreview() lands
+    // the preview, this abandons it — and a deferred palette refresh has to
+    // drain through both. Leaving it armed here loses a Scheme change made
+    // during a drag that ends in an automation reset or a clearDisplay(),
+    // and leaves the flag set for the next preview to inherit.
+    if (paletteRefreshPending) {
+        recolorWaterfallViewport();
+    }
 }
 
 void SpectrumWidget::requestFrequencyRangeChange(double centerMhz,
