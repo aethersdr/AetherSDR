@@ -1517,13 +1517,21 @@ if (ENABLE_ASR)
             #    2.4 build plausible but NOT proven: ggml may still use unguarded
             #    Metal-3 intrinsics. REQUIRE_ASR_GPU=ON on the DMG job means a wrong
             #    answer is a loud build failure rather than a silently CPU-only
-            #    artifact, so this is safe to discover in CI — but it does need a
-            #    macOS run to confirm, and it has not had one.
+            #    artifact, so this is safe to discover in CI.
+            #
+            #    Note the 2.x tier is spelled `macos-metal2.4`, NOT `metal2.4`.
+            #    Metal 3 unified the platforms and dropped the prefix, so 3.0/3.1
+            #    below are correct unqualified while everything at 2.x needs it.
+            #    The unqualified 2.4 spelling is not a legacy alias — the compiler
+            #    rejects it outright ("invalid value 'metal2.4' in '-std=metal2.4'")
+            #    and lists ios-metal2.4 / macos-metal2.4 / metal3.0 / metal3.1 /
+            #    metal3.2 as the accepted set. That killed the first Intel DMG
+            #    build to reach this tier, at 32%, in run 30764239938.
             if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 13.0)
-                set(GGML_METAL_STD "metal2.4" CACHE STRING "" FORCE)
+                set(GGML_METAL_STD "macos-metal2.4" CACHE STRING "" FORCE)
                 set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
                 message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
-                    "(metal2.4, no bf16 — props.has_bfloat clamped to match)")
+                    "(macos-metal2.4, no bf16 — props.has_bfloat clamped to match)")
             elseif (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
                 set(GGML_METAL_STD "metal3.0" CACHE STRING "" FORCE)
                 set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
