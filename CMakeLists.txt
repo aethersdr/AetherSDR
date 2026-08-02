@@ -700,6 +700,7 @@ set(CORE_SOURCES
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
     src/core/RNNoiseFilter.cpp
+    src/core/OpusTxPacer.cpp
     src/core/SpecbleachFilter.cpp
     src/core/CwDecoder.cpp
     src/core/CwCallsignSpotter.cpp
@@ -3550,6 +3551,14 @@ add_executable(rnnoise_filter_test
 )
 target_link_libraries(rnnoise_filter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)
+
+add_executable(opus_tx_pacer_test
+    tests/opus_tx_pacer_test.cpp
+    src/core/OpusTxPacer.cpp
+)
+target_include_directories(opus_tx_pacer_test PRIVATE src)
+target_link_libraries(opus_tx_pacer_test PRIVATE Qt6::Core)
+add_test(NAME opus_tx_pacer_test COMMAND opus_tx_pacer_test)
 
 add_executable(adaptive_filter_test
     tests/adaptive_filter_test.cpp

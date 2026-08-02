@@ -26,6 +26,7 @@
 #include "TxMicChannelNormalizer.h"
 #include "TxCaptureHealthTracker.h"
 #include "SpectralNR.h"
+#include "OpusTxPacer.h"
 
 class QMediaDevices;
 
@@ -229,6 +230,7 @@ public:
     void setNr2NpeMethod(int method);
     void setNr2AeFilter(bool on);
     QJsonObject nr2RuntimeDiagnostics() const;
+    QJsonObject opusTxPacingDiagnostics() const;
     Q_INVOKABLE void setNr2UseOriginalGeometry(bool useOriginal);
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
     // filter uses the original 256/2 geometry the demo's tiny frames need. Rebuilds
@@ -940,8 +942,11 @@ private:
     std::atomic<bool>  m_opusTxEnabled{false}; // Opus TX encoding for SmartLink
     std::unique_ptr<class OpusCodec> m_opusTxCodec; // lazy-init on first TX with Opus
     QByteArray    m_opusTxAccumulator;  // accumulate stereo samples for Opus frame
-    QVector<QByteArray> m_opusTxQueue;  // pacing queue for even 10ms packet delivery
+    OpusTxPacer   m_opusTxPacer;
     QTimer*       m_opusTxPaceTimer{nullptr};
+    QElapsedTimer m_opusTxPaceClock;
+    QElapsedTimer m_opusTxDropLogTimer;
+    quint64       m_opusTxDropsSinceLog{0};
 
     // Client-side PC mic metering (accumulated over ~50ms window)
     float         m_pcMicPeak{0.0f};
