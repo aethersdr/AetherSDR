@@ -1090,6 +1090,8 @@ private:
     // radio-authoritative model state — togglePanZoomModeForPan, #4057.)
     void togglePanZoomMode(bool segmentZoom);
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
+    void setPanZoomMode(bool segmentZoom, bool enable);
+    void zoomActivePanadapter(double factor);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -1157,8 +1159,6 @@ private:
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
-    QTimer                     m_dialCoalesceTimer;
-    int                        m_dialPendingSteps{0};
     QSet<QString>              m_dialActiveMidiGates;
     // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
     // dial release cannot un-key a PTT the keyboard is still holding.

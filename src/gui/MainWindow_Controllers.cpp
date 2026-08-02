@@ -20,6 +20,7 @@
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
+#include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceFeature.h"
@@ -27,6 +28,7 @@
 #include "core/LogManager.h"
 #include "core/MidiSettings.h"
 #include "core/UlanziDialBackend.h"
+#include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
 #include "core/IambicKeyer.h"
 #include "PanadapterStack.h"
@@ -1455,6 +1457,39 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #ifdef HAVE_HIDAPI
         triggerTMate2Overlay(TMate2Overlay::Wpm, next);
 #endif
+    } else if (actionId == "BandZoom") {
+        setPanZoomMode(/*segmentZoom=*/false, steps > 0);
+    } else if (actionId == "SegmentZoom") {
+        setPanZoomMode(/*segmentZoom=*/true, steps > 0);
+    } else if (actionId == "FilterWidth") {
+        if (auto* rx = m_appletPanel->rxApplet()) {
+            rx->stepFilterWidth(steps);
+        }
+    } else if (actionId == "PanadapterZoom") {
+        const double baseFactor = steps > 0 ? 0.8 : 1.25;
+        const double factor = std::pow(baseFactor, std::abs(steps));
+        zoomActivePanadapter(factor);
+    } else if (actionId == "WheelRfGain") {
+        if (auto* s = activeSlice()) {
+            if (!s->panId().isEmpty()) {
+                auto* pan = m_radioModel.panadapter(s->panId());
+                const int low = pan ? pan->rfGainLow() : -8;
+                const int high = pan ? pan->rfGainHigh() : 32;
+                const int step = (pan && pan->rfGainStep() > 0) ? pan->rfGainStep() : 8;
+                const int current = pan ? pan->rfGain() : static_cast<int>(s->rfGain());
+                const int next = std::clamp(current + steps * step, low, high);
+                m_radioModel.setPanRfGainFor(s->panId(), next);
+                if (auto* sw = spectrumForSlice(s)) {
+                    sw->setRfGain(next);
+                    if (auto* menu = sw->overlayMenu()) {
+                        menu->setRfGain(next);
+                    }
+                    auto& settings = AppSettings::instance();
+                    settings.setValue(rfGainSettingsKey(sw), QString::number(next));
+                    settings.save();
+                }
+            }
+        }
     }
 }
 
@@ -2698,28 +2733,10 @@ void MainWindow::wireExternalControllers()
 #endif
 
 
-    m_dialCoalesceTimer.setSingleShot(true);
-    m_dialCoalesceTimer.setInterval(20);
-    connect(&m_dialCoalesceTimer, &QTimer::timeout, this, [this]() {
-        if (m_dialPendingSteps == 0) return;
-        auto* s = activeSlice();
-        if (!s) { m_dialPendingSteps = 0; return; }
-        if (s->isLocked()) {
-            s->notifyTuneBlockedByLock();
-            m_dialPendingSteps = 0;
-            return;
-        }
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + m_dialPendingSteps * stepHz / 1e6;
-        m_dialPendingSteps = 0;
-        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "ulanzi-dial");
-    });
-
     connect(m_dialBackend, &UlanziDialBackend::tuneSteps,
             this, [this](int steps) {
-        m_dialPendingSteps += steps;
-        if (!m_dialCoalesceTimer.isActive())
-            m_dialCoalesceTimer.start();
+        const QString actionId = UlanziDialMappings::rotaryAction();
+        applyFlexControlWheelAction(actionId, steps);
     });
 
     // One-shot claim of the pre-#4611 flat mapping keys, before the first
