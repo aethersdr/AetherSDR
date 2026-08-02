@@ -107,6 +107,29 @@ section.
   post-ALC peak, the passband in use, and both instantaneous and held forward
   power.
 
+- **TX meter hover badges no longer stack up two at a time, and they let go
+  (#3936 follow-up).** Traversing the stacked TX meters left **two** value
+  badges on screen at once. Every `HGauge` allocated its own `DragValuePopup`
+  with nothing coordinating them, so entering the SWR bar raised a second badge
+  rather than replacing the RF Pwr one. Those two are consecutive rows two
+  pixels apart and both badges anchor above the pointer, so the pair landed
+  nearly on top of each other, covering the TX Controls header and the RIT/XIT
+  row. The badge is now claimed app-wide — entering a gauge closes whichever
+  one is already showing — so at most one is ever up.
+
+  The survivor could also stay up indefinitely. `leaveEvent` starts a hide
+  timer rather than hiding, every meter frame cancelled that timer, and Qt does
+  not guarantee a `leaveEvent` — so one dropped leave pinned the badge on
+  screen, frozen at the anchor the pointer had left it at, for as long as the
+  radio kept reporting. Recovery is now a 250 ms watchdog armed only while the
+  pointer is physically over the bar, which bounds a dropped leave by wall
+  clock whether or not values keep arriving — so a settled meter, or one that
+  stopped reporting on unkey, recovers too.
+
+  The linger itself drops from a bespoke 1000 ms to the 450 ms every other
+  `DragValuePopup` in the app already uses (settled in #2944), so the readout
+  no longer sits over the next control long after the pointer has gone.
+
 - **Demo mode no longer opens with a ghost "Slice A" panadapter (#4671).** The
   demo's simulator claims its panadapter from its own synthetic wire, but the
   model treated every non-Flex backend as wire-less and minted a *second*,

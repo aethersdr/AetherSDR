@@ -4124,6 +4124,21 @@ add_test(NAME hgauge_range_test COMMAND hgauge_range_test)
 set_tests_properties(hgauge_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# HGauge hover readout (#3936 follow-up): exactly one badge on screen across a
+# meter-to-meter traverse, and it releases itself even if the leaveEvent is
+# dropped and the meter keeps updating.
+add_executable(hgauge_hover_popup_test
+    tests/hgauge_hover_popup_test.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(hgauge_hover_popup_test PRIVATE src src/gui)
+target_link_libraries(hgauge_hover_popup_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets)
+set_target_properties(hgauge_hover_popup_test PROPERTIES AUTOMOC ON)
+add_test(NAME hgauge_hover_popup_test COMMAND hgauge_hover_popup_test)
+set_tests_properties(hgauge_hover_popup_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # RangeSlider accessibility announcements (#4565): arrow-key bursts debounce to
 # one settled announcement, while discrete handle-focus moves announce
 # immediately instead of being swallowed by that debounce.
