@@ -601,12 +601,18 @@ void RadioModel::setupBackend(const QString& family)
             m_backendPanBandwidthMhz[panIdx] = bandwidthMhz;
         }
         auto* pan = resolveBackendPan(panId);
-        if (!pan && !m_flexBackend) {
-            // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend.
-            // No Flex "display pan" status exists to create one, so without this
-            // there is no PanadapterModel to route frames to and the UI never
-            // builds a pane — the render path was falling back to the active
-            // spectrum widget, which is null when no pan applet exists.
+        if (!pan && !m_flexBackend && !m_connection) {
+            // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend
+            // WITHOUT a wire. No Flex "display pan" status exists to create one,
+            // so without this there is no PanadapterModel to route frames to and
+            // the UI never builds a pane — the render path was falling back to the
+            // active spectrum widget, which is null when no pan applet exists.
+            //
+            // The !m_connection gate: a backend that vends its own RadioConnection
+            // (the demo's Route A SimBackend) claims its pans from its own wire
+            // status, so minting a neutral twin here created a second, ownerless
+            // pan applet — the ghost "Slice A" of #4671. Its pans arrive through
+            // the claim path; only truly wire-less backends (HL2) materialise.
             //
             // One pane per backend pan id, so a multi-receiver backend gets a
             // pane each instead of four receivers sharing one.
@@ -935,8 +941,16 @@ void RadioModel::setupBackend(const QString& family)
         // unmapped the slice belongs to no pan, so no slice flag is drawn on the
         // panadapter even though the VFO shows the right frequency. Re-address the
         // delta at the pan we materialised.
+        //
+        // ...but ONLY when we materialised one. A backend that vends its own
+        // RadioConnection claims its pans from its own wire, so its pan ids ARE
+        // the model keys — the same discriminator resolveBackendPan() uses. The
+        // demo announces slice.panId = "0x40000000", already a key; rewriting it
+        // into the neutral space pointed the slice at a pan nothing holds, and
+        // every slice-to-pane association keys off that exact equality (pan title
+        // bar, adaptive RX filter, auto-squelch, centre-lock, band recall). (#4671)
         SliceDelta mapped = delta;
-        if (!m_flexBackend && mapped.panId) {
+        if (!m_flexBackend && !m_connection && mapped.panId) {
             // Through the SAME allocator the geometry handler uses, so a slice
             // lands on the pane its own receiver feeds. Pinned to index 0 while
             // one pan existed; at four receivers that put every slice flag on
@@ -7312,6 +7326,19 @@ PanadapterModel* RadioModel::resolveBackendPan(const QString& backendPanId)
     // Flex keeps its existing behaviour: its pan ids ARE the model keys.
     if (m_flexBackend)
         return resolvePan(backendPanId);
+    // A non-Flex backend that vends its own RadioConnection (the demo's Route A
+    // SimBackend) claims pans from its own synthetic wire status, so — exactly
+    // like Flex — its pan ids ARE the model keys. Exact lookup, deliberately NOT
+    // resolvePan(): a geometry edge can outrun the wire claim during connect,
+    // and the active-pan fallback would re-introduce the wrong-pan hazard this
+    // helper exists to prevent. A miss returns null and the caller skips — and on
+    // the demo that DROPS the geometry rather than deferring it: the synthetic
+    // wire's `display pan center=…` is decoded only through m_flexBackend (see
+    // handlePanadapterStatus), which is why RFC #4288 added this seam emit at all.
+    // What keeps the ordering safe is SimBackend's 150 ms delay before
+    // emitInitialState() (SimBackend.cpp) — do not shorten it. (#4671)
+    if (m_connection)
+        return panadapter(normalizePanadapterId(backendPanId));
     return panadapter(neutralPanIdString(neutralPanIndexFor(backendPanId)));
 }
 

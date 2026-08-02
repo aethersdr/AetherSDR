@@ -71,6 +71,7 @@
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -1839,16 +1840,20 @@ AudioEngine::AudioEngine(QObject* parent)
         DeviceDiagnostics::buildAudioStartupSnapshot(this, QJsonObject{}));
     logNr2WisdomSummary(QStringLiteral("startup"));
 
-    // Opus TX pacing timer — sends one queued packet every 10ms for even
-    // delivery timing. Without this, QAudioSource delivers bursts of samples
-    // that get Opus-encoded and sent back-to-back, causing jitter-induced
-    // crackling on SmartLink/WAN connections.
+    // Opus TX pacing timer — follows a 10 ms wall-clock schedule. The mic
+    // callback and RN2 share this event loop, so late timer events drain a
+    // small bounded catch-up batch rather than permanently losing ground.
     m_opusTxPaceTimer = new QTimer(this);
     m_opusTxPaceTimer->setTimerType(Qt::PreciseTimer);
     m_opusTxPaceTimer->setInterval(10);
+    m_opusTxPaceClock.start();
     connect(m_opusTxPaceTimer, &QTimer::timeout, this, [this]() {
-        if (m_opusTxQueue.isEmpty()) return;
-        emit txPacketReady(m_opusTxQueue.takeFirst());
+        OpusTxPacer::DrainResult drain =
+            m_opusTxPacer.takeDue(m_opusTxPaceClock.elapsed(),
+                                  m_txPacketCount);
+        for (const QByteArray& packet : drain.packets) {
+            emit txPacketReady(packet);
+        }
     });
     m_opusTxPaceTimer->start();
 
@@ -7091,6 +7096,20 @@ void AudioEngine::setRn2TxEnabled(bool on)
     emit rn2TxEnabledChanged(on);
 }
 
+QJsonObject AudioEngine::opusTxPacingDiagnostics() const
+{
+    return QJsonObject{
+        {QStringLiteral("queueDepth"), m_opusTxPacer.queueDepth()},
+        {QStringLiteral("maxQueueDepth"), m_opusTxPacer.maxQueueDepth()},
+        {QStringLiteral("packetsSent"),
+         static_cast<double>(m_opusTxPacer.packetsSent())},
+        {QStringLiteral("catchUpPackets"),
+         static_cast<double>(m_opusTxPacer.catchUpPackets())},
+        {QStringLiteral("droppedPackets"),
+         static_cast<double>(m_opusTxPacer.droppedPackets())},
+    };
+}
+
 // ─── DFNR (DeepFilterNet3 neural noise reduction) ────────────────────────────
 
 #ifdef HAVE_DFNR
@@ -8257,8 +8276,7 @@ void AudioEngine::onTxAudioReady()
             // Word 0: type=3 (ExtDataWithStream), C=1, T=0, TSI=3, TSF=1
             p[0] = qToBigEndian<quint32>(
                 (3u << 28) | (1u << 27) | (3u << 22) | (1u << 20)
-                | ((m_txPacketCount & 0x0F) << 16) | sizeWords);
-            m_txPacketCount = (m_txPacketCount + 1) & 0x0F;
+                | sizeWords);
             p[1] = qToBigEndian(m_remoteTxStreamId);    // remote_audio_tx stream
             p[2] = qToBigEndian<quint32>(0x00001C2D);   // OUI (FlexRadio)
             p[3] = qToBigEndian<quint32>(0x534C0000 | 0x8005);  // ICC=0x534C, PCC=0x8005
@@ -8267,12 +8285,22 @@ void AudioEngine::onTxAudioReady()
             memcpy(pkt.data() + 28, opus.constData(), opus.size());
 
             // Queue for paced delivery instead of sending immediately.
-            // The 10ms pacing timer drains one packet per tick for even
-            // timing over SmartLink/WAN. Cap queue to ~200ms to prevent
-            // runaway growth if the mic delivers faster than real-time.
-            m_opusTxQueue.append(pkt);
-            if (m_opusTxQueue.size() > 20)
-                m_opusTxQueue.removeFirst();
+            // The 10 ms pacer follows elapsed deadlines and drains a bounded
+            // catch-up batch after a late timer event. Cap the queue to
+            // ~200 ms if the producer still outruns that recovery.
+            if (m_opusTxPacer.enqueue(std::move(pkt))) {
+                ++m_opusTxDropsSinceLog;
+                if (!m_opusTxDropLogTimer.isValid()
+                    || m_opusTxDropLogTimer.hasExpired(1000)) {
+                    qCWarning(lcAudio)
+                        << "AudioEngine: Opus TX pacing queue overflow — dropped"
+                        << m_opusTxDropsSinceLog
+                        << "oldest 10 ms packet(s); queue depth"
+                        << m_opusTxPacer.queueDepth();
+                    m_opusTxDropsSinceLog = 0;
+                    m_opusTxDropLogTimer.restart();
+                }
+            }
         }
         return;
     }
@@ -8520,7 +8548,7 @@ void AudioEngine::setTransmitting(bool tx)
         m_txAccumulator.clear();
         m_txFloatAccumulator.clear();
         m_daxPreTxBuffer.clear();
-        m_opusTxQueue.clear();
+        m_opusTxPacer.clear();
     }
 }
 

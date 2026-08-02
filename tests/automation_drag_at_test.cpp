@@ -9,8 +9,10 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QLocalSocket>
 #include <QMouseEvent>
 #include <QTemporaryDir>
@@ -154,6 +156,28 @@ bool hasExpectedMouseEvents(const QVector<RecordedMouseEvent>& events)
     return true;
 }
 
+// Count nodes with a given objectName anywhere in a dumpTree subtree. A window
+// parented to another widget is enumerated as a root by topLevelWidgets() AND
+// was recursed into by its parent's node, so the duplicate shows up as a count
+// of 2 rather than as a malformed tree. (#4674)
+int countNodes(const QJsonObject& node, const QString& name)
+{
+    int n = node.value(QStringLiteral("objectName")).toString() == name ? 1 : 0;
+    for (const QJsonValue& kid : node.value(QStringLiteral("children")).toArray()) {
+        n += countNodes(kid.toObject(), name);
+    }
+    return n;
+}
+
+int countNodesInTree(const QJsonObject& tree, const QString& name)
+{
+    int n = 0;
+    for (const QJsonValue& root : tree.value(QStringLiteral("roots")).toArray()) {
+        n += countNodes(root.toObject(), name);
+    }
+    return n;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -264,6 +288,48 @@ int main(int argc, char** argv)
                && activatedMemoryPan == QStringLiteral("0x40000000"),
            QString::fromUtf8(
                QJsonDocument(memory).toJson(QJsonDocument::Compact)));
+
+    // ---- a parented window is serialized once, not twice (#4674) ----
+    // PanFloatingWindow is a Qt::Window parented to MainWindow for z-order and
+    // lifetime. In Qt 6 topLevelWidgets() is exactly the isWindow() set, so such
+    // a widget is enumerated as a root AND was recursed into by its parent's
+    // node — every widget inside a floated pan appeared twice (two VfoWidgets
+    // for one slice). A bare QWidget reproduces it without a radio.
+    QWidget floated(&target, Qt::Window);
+    floated.setObjectName(QStringLiteral("automationFloatedProbe"));
+    floated.resize(80, 60);
+    QWidget inner(&floated);
+    inner.setObjectName(QStringLiteral("automationFloatedChildProbe"));
+    // floors keys off the property, not the concrete type, so a plain widget
+    // stands in for a floated pan's SpectrumWidget here.
+    inner.setProperty("noiseFloorDbm", -122.5);
+    inner.setProperty("panIndex", 1);
+    floated.show();
+    QCoreApplication::processEvents();
+
+    const QJsonObject tree = request(socket, QByteArrayLiteral("dumpTree"));
+    const int windowNodes =
+        countNodesInTree(tree, QStringLiteral("automationFloatedProbe"));
+    const int childNodes =
+        countNodesInTree(tree, QStringLiteral("automationFloatedChildProbe"));
+    report("parented window serialized once",
+           windowNodes == 1, QStringLiteral("count=%1").arg(windowNodes));
+    report("its child serialized once",
+           childNodes == 1, QStringLiteral("count=%1").arg(childNodes));
+
+    // Same double-count, different verb: findChildren() also recurses through a
+    // parented window, so one spectrum yielded two floors entries with the same
+    // panIndex — and floors is documented for 20 Hz polling, so a driver that
+    // averages the array silently double-weighted every floated pan. (#4674)
+    const QJsonObject floors = request(socket, QByteArrayLiteral("floors"));
+    int floorEntries = 0;
+    for (const QJsonValue& entry : floors.value(QStringLiteral("floors")).toArray()) {
+        if (entry.toObject().value(QStringLiteral("panIndex")).toInt() == 1) {
+            ++floorEntries;
+        }
+    }
+    report("floors reports one entry per spectrum",
+           floorEntries == 1, QStringLiteral("count=%1").arg(floorEntries));
 
     target.mouseEvents.clear();
     server.setAuthToken(QStringLiteral("test-token"));

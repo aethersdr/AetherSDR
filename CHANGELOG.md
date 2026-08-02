@@ -8,6 +8,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed: transmit audio breaking up with RN2 enabled (#4584)
+
+**Your transmitted audio no longer breaks up when RN2 is on.** Remote transmit
+audio reaches the radio as one small Opus packet every 10 ms. RN2 runs on the
+same thread as the timer that paces those packets, so when RN2 delayed a tick
+the pacer had no way to make the time back up — it sent one packet per tick no
+matter how far behind it had fallen. Packets piled up until a 200 ms cap began
+deleting them outright, and the other station heard the gaps. It was worst on
+slower machines and over SmartLink/WAN, and every deleted packet also left a
+hole in the transmit sequence numbering the radio checks.
+
+The pacer now follows real elapsed time and may send a small burst (up to three
+packets) to recover from a late tick, and the sequence number is assigned when a
+packet actually goes out rather than when it is queued, so the numbering stays
+unbroken even if the queue does overflow. An overflow is now written to the log
+instead of failing silently — the old behaviour left no trace in a support
+bundle, which is why this kept arriving as unexplained "audio break up". Live
+pacing counters are exposed to the automation bridge (`get audio` →
+`opusTxPacing`) for diagnosing future reports.
+
+Reported by @Bill6000 on a FLEX-6500 under Linux Mint.
+
+### Minimum Qt raised to 6.8 — source builds on Ubuntu 24.04 need a newer Qt
+
+**Building from source now requires Qt 6.8 or newer.** Nothing changes for
+users of the release binaries: the AppImage, the Windows installer and the
+macOS build were already compiled against Qt 6.8.3 LTS, and still are.
+
+The old floor said 6.2 and nothing enforced it. The only CI leg near it was the
+Linux container on Ubuntu 24.04's **Qt 6.4.2** — seven minor versions behind
+current, and EOL upstream since the 6.4 series ended at 6.4.3. So the project
+was testing a Qt no artifact shipped, and *rejecting* code that is valid on
+every configuration it actually ships: PR #4646 was failed by CI for using
+`QList::assign()`, a Qt 6.6 addition that works fine on all three release
+builds. The reverse risk was live too, since no per-PR Linux job compiled
+against 6.8.3 — the AppImage first sees that Qt at release-tag time.
+
+The CI image now installs Qt 6.8.3 via aqtinstall instead of using the distro's,
+matching `appimage.yml` and the Windows leg, so one Qt version covers every
+check and every artifact. It also builds qtkeychain from source against that Qt,
+since the distro package is compiled against 6.4.2. A side effect: the CI image
+clears the QRhi floor (6.7+), so GPU spectrum rendering is no longer silently
+compiled out of Linux CI builds.
+
+Distro Qt satisfies 6.8 on Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch.
+On **Ubuntu 24.04 LTS** it does not — build against a Qt from aqtinstall or the
+Qt online installer and pass
+`-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64`. See the README's dependency
+section.
+
 ### Fixed
 
 - **TX meter hover badges no longer stack up two at a time, and they let go
@@ -32,6 +82,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   The linger itself drops from a bespoke 1000 ms to the 450 ms every other
   `DragValuePopup` in the app already uses (settled in #2944), so the readout
   no longer sits over the next control long after the pointer has gone.
+
+- **Demo mode no longer opens with a ghost "Slice A" panadapter (#4671).** The
+  demo's simulator claims its panadapter from its own synthetic wire, but the
+  model treated every non-Flex backend as wire-less and minted a *second*,
+  ownerless pan in the neutral id space on the seam's geometry edge — a pane the
+  user could neither use nor delete. The same assumption re-addressed the demo's
+  slice into that neutral space, so the slice pointed at the ghost rather than
+  at its real pan; with the ghost gone it would have pointed at nothing. Both
+  now key off whether the backend vends its own connection, so the demo opens
+  with one panadapter and a slice that belongs to it — restoring the pan title
+  bar, adaptive RX filter, auto-squelch, centre-lock and band recall on demo
+  mode. Hermes-Lite 2 and other wire-less backends keep the neutral mapping.
+
+- **Demo mode's power-line hum clicked instead of bending when you moved its
+  50/60 Hz slider (#4668).** The hum's six harmonics were synthesized from
+  absolute time × the current mains frequency, so every move of **Power-line**
+  in the Demo applet jumped all six phases at once rather than changing their
+  frequency — and because that jump scales with the harmonic number, the high
+  harmonics stepped hardest and the click grew with how long the session had
+  been running. The hum now accumulates phase per sample the way the CW tone
+  (#4618) and the birdie carrier already did, deriving every harmonic from one
+  shared fundamental so they stay locked to each other, and bends smoothly to
+  the new frequency. This was the last generator in the demo mixer still keyed
+  off absolute time. Demo mode only — no radio, protocol, or transmit path is
+  involved.
 
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —
