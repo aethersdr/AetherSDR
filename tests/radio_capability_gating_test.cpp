@@ -72,6 +72,7 @@
 #include "core/backends/sim/SimBackend.h"
 
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QSignalSpy>
 
 #include <cstdio>
@@ -82,6 +83,35 @@ static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
+}
+
+// Wait for a queued cross-thread signal, or give up at a real deadline.
+//
+// The obvious `for (200x) processEvents(AllEvents, 10)` does NOT do this. That
+// argument is a MAXIMUM, not a wait — processEvents() strips WaitForMoreEvents
+// and returns immediately on an empty queue — so all 200 iterations drain in
+// microseconds and the loop exits having waited approximately zero. It reads as
+// a 2-second budget and is a zero-second one.
+//
+// Measured with a standalone Qt 6.10.3 probe firing a worker-thread signal
+// after N ms. The old loop exited after 0 ms and MISSED it at every N tried
+// (5, 50, 200, 1000, 3000) — it never waited at all. This form catches it at
+// each of those and returns as the signal arrives (0 ms at N=0, 201 ms at
+// N=200), timing out only past the deadline.
+//
+// So both edge assertions here passed on luck — on whether the emission
+// happened to be queued already — which is why this test failed intermittently
+// on assertions unrelated to whatever was under review (#4693).
+//
+// count() is tested FIRST because wait() waits for the NEXT emission and would
+// miss one already delivered. 5 s is a timeout, not a duration: the normal path
+// returns in well under a millisecond.
+static bool waitForSpy(QSignalSpy& spy, int timeoutMs = 5000)
+{
+    QDeadlineTimer deadline(timeoutMs);
+    while (spy.count() == 0 && !deadline.hasExpired())
+        spy.wait(static_cast<int>(qMin<qint64>(100, deadline.remainingTime())));
+    return spy.count() > 0;
 }
 
 // The exact expression MainWindow::applyCapabilitiesToUi() applies to every
@@ -287,16 +317,21 @@ int main(int argc, char** argv)
         // object lives on a worker thread and reaches Connected before its
         // queued signal has crossed to this one, so waiting on isConnected()
         // races the very emission under test.
-        for (int i = 0; i < 200 && spy.count() == 0; ++i) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
+        //
+        // The relay is the anchor for BOTH checks below, so it is waited on and
+        // asserted first. isConnected() reads the connection's atomic state, which
+        // flips the instant the worker sets Connected — before the queued signal
+        // chain has been delivered here. Asserting it before the relay has landed
+        // means a worker that has not been scheduled at all inverts every
+        // connected-branch assertion in this block, not just this one. (#4693)
+        const bool relayFired = waitForSpy(spy);
+
+        // Without it applyCapabilitiesToUi() never runs and every gated surface
+        // keeps the previous radio's answer.
+        check(relayFired,
+              "relay: capabilitiesChanged fired on the connect edge");
         check(model.isConnected(),
               "synthetic demo connect reached the connected state");
-
-        // The relay fired for that edge. Without it applyCapabilitiesToUi()
-        // never runs and every gated surface keeps the previous radio's answer.
-        check(spy.count() > 0,
-              "relay: capabilitiesChanged fired on the connect edge");
         if (spy.count() > 0) {
             const QList<QVariant> args = spy.last();
             check(args.value(0).toBool(),
@@ -370,12 +405,11 @@ int main(int argc, char** argv)
     {
         QSignalSpy spy(&model, &RadioModel::capabilitiesChanged);
         model.disconnectFromRadio();
-        for (int i = 0; i < 200 && spy.count() == 0; ++i) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
-        check(!model.isConnected(), "disconnected from the synthetic demo radio");
-        check(spy.count() > 0,
+        // Same ordering as the connect edge above, for the same reason. (#4693)
+        const bool relayFired = waitForSpy(spy);
+        check(relayFired,
               "relay: capabilitiesChanged fired on the disconnect edge");
+        check(!model.isConnected(), "disconnected from the synthetic demo radio");
 
         const RadioCapabilities caps = model.backendCapabilities();
         check(uiWouldShow(model.isConnected(), caps.hasProfiles),
