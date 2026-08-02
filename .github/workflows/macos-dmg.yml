@@ -129,6 +129,11 @@ jobs:
 
       - name: Configure
         run: |
+          # Without pipefail the step's exit status is tee's, so a cmake failure
+          # would look green. Set it in the script rather than via `shell: bash`
+          # (which also implies -eo pipefail) so the guard is self-contained and
+          # survives anyone editing the step's shell. Same as appimage.yml.
+          set -o pipefail
           if [ "${{ matrix.label }}" = "intel" ]; then
             QT_PREFIX="$PWD/qt-install"
             DEPLOY_TARGET="13.0"
@@ -137,8 +142,11 @@ jobs:
             DEPLOY_TARGET="14.0"
           fi
           # Intel Mac: disable GPU rendering — QRhiWidget has issues on
-          # older Metal/OpenGL hardware. Apple Silicon uses GPU by default.
-          GPU_FLAG=""
+          # older Metal/OpenGL hardware. Apple Silicon renders via QRhi.
+          # Both legs state the value rather than leaning on the CMake default,
+          # so the intent is readable here and the assertion below has a
+          # request to check against.
+          GPU_FLAG="-DAETHER_GPU_SPECTRUM=ON"
           if [ "${{ matrix.label }}" = "intel" ]; then
             GPU_FLAG="-DAETHER_GPU_SPECTRUM=OFF"
           fi
@@ -161,7 +169,50 @@ jobs:
             -DREQUIRE_ASR_GPU=ON \
             -DREQUIRE_ASR_SHERPA=ON \
             $ONNX_FLAG \
-            $GPU_FLAG
+            $GPU_FLAG 2>&1 | tee configure.log
+
+      # Apple Silicon only — the Intel leg asks for OFF on purpose (see above).
+      # Same reasoning as appimage.yml and windows-installer.yml: CMake turns
+      # AETHER_GPU_SPECTRUM back OFF without failing when Qt6GuiPrivate can't be
+      # located, so the DMG could ship the CPU QPainter fallback with this
+      # workflow green. Homebrew Qt is the one layout here that does provide the
+      # Qt6GuiPrivate CMake package, which is precisely why this leg has gone
+      # unguarded — but that is a property of the Qt we happen to install, not
+      # something this workflow pins, so assert it rather than assume it.
+      #
+      # Assert on the configure output, not CMakeCache.txt: CMakeLists.txt
+      # disables the feature with a plain set(), which shadows the cache entry
+      # without rewriting it, so the cache still reads ON when it is off.
+      # -iE, not the -i "a\|b" form appimage.yml uses: that file runs on GNU
+      # grep, where \| is BRE alternation. This one runs on the macOS runner's
+      # BSD grep, which has no BRE alternation and would search for the literal
+      # string "GPU spectrum|Qt6GuiPrivate|private headers" — printing nothing
+      # under the ERROR header, on the one path where this step has to explain
+      # itself. Every other multi-pattern grep in this file already uses -E.
+      - name: Assert GPU spectrum rendering actually enabled
+        if: matrix.label == 'apple-silicon'
+        run: |
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering enabled" configure.log
+
+      # The mirror of the above, and cheap: the Intel leg asks for OFF because
+      # QRhiWidget misbehaves on older Metal/OpenGL hardware, so a change that
+      # quietly turned it back ON here would ship exactly the artifact that
+      # decision exists to prevent. Asserting both directions is what makes
+      # GPU_FLAG's two values a tested contract rather than a comment.
+      - name: Assert GPU spectrum rendering actually disabled
+        if: matrix.label == 'intel'
+        run: |
+          grep -q "GPU spectrum rendering disabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=OFF but CMake enabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering disabled" configure.log
 
       - name: Build
         # Only the .app bundle ships (+ its aether-dv-waveform helper dependency,

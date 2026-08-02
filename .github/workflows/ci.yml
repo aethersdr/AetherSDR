@@ -88,9 +88,50 @@ jobs:
 
       - name: Configure
         run: |
+          # Redirect, not `| tee`: this job runs in the CI container, which
+          # ships no bash, so GitHub falls back to `sh -e {0}` — dash, where
+          # `set -o pipefail` is not a valid option and fails the step outright
+          # (exit 2). Without pipefail a pipeline's status is tee's, which would
+          # mask a cmake failure, so the safe form here is no pipeline at all:
+          # cmake's own exit status is the step's, and the log is echoed after
+          # so a failed configure stays readable in the step output. The other
+          # two jobs run on real runners and keep the `tee` form.
+          #
+          # AETHER_GPU_SPECTRUM=ON is stated rather than left to the CMake
+          # default so the assertion below has a request to check against.
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
+            -DAETHER_GPU_SPECTRUM=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache > configure.log 2>&1 || {
+            cat configure.log
+            exit 1
+          }
+          cat configure.log
+
+      # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
+      # back OFF without failing when Qt6GuiPrivate can't be located, so a build
+      # can ship the CPU QPainter fallback with its workflow green — the failure
+      # #4000 shipped on aarch64.
+      #
+      # appimage.yml, macos-dmg.yml and windows-installer.yml all assert this,
+      # but every one of them is tag-triggered. Until this step existed nothing
+      # checked it on a pull request, so a change that silently flipped the
+      # feature off could sit on main until someone cut a release. Here it costs
+      # seconds and fails the PR that caused it. The release assertions stay:
+      # they cover the Qt each artifact actually ships, which is not the Qt any
+      # of these jobs use.
+      #
+      # Assert on the configure output, not CMakeCache.txt: CMakeLists.txt
+      # disables the feature with a plain set(), which shadows the cache entry
+      # without rewriting it, so the cache still reads ON when it is off.
+      - name: Assert GPU spectrum rendering actually enabled
+        run: |
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering enabled" configure.log
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -337,6 +378,9 @@ jobs:
             # is fully built + linked + packaged by the windows-installer workflow,
             # so nothing is lost here.
             "-DENABLE_ASR=OFF",
+            # Stated rather than left to the CMake default so the assertion
+            # below has a request to check against.
+            "-DAETHER_GPU_SPECTRUM=ON",
             "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE",
             "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
           )
@@ -344,7 +388,30 @@ jobs:
             $cargs += "-DCMAKE_C_COMPILER_LAUNCHER=sccache"
             $cargs += "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
           }
-          & cmake @cargs
+          # Tee without `2>&1`: GitHub runs pwsh with $ErrorActionPreference=
+          # 'Stop', where merging a native command's stderr into the pipeline
+          # can promote an ordinary CMake warning to a terminating error and
+          # fail configure on a non-problem. Nothing is lost — every line the
+          # assertion reads is message(STATUS), which CMake writes to stdout.
+          # No pipefail equivalent is needed either: $LASTEXITCODE tracks the
+          # last *native* command (cmake), and Tee-Object is a cmdlet.
+          & cmake @cargs | Tee-Object -FilePath configure.log
+
+      # Same guard as the Linux build job above — see the long note there for
+      # why it reads configure output rather than CMakeCache.txt. This job is
+      # the only per-PR coverage the aqtinstall Qt layout gets: it is the layout
+      # CMakeLists.txt calls out as shipping the private QtGui headers while
+      # omitting the Qt6GuiPrivate CMake package, so it reaches the fallback
+      # path that windows-installer.yml depends on at release time.
+      - name: Assert GPU spectrum rendering actually enabled
+        shell: pwsh
+        run: |
+          if (-not (Select-String -Path configure.log -Pattern 'GPU spectrum rendering enabled' -Quiet)) {
+            Write-Host "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            Select-String -Path configure.log -Pattern 'GPU spectrum|Qt6GuiPrivate|private headers'
+            exit 1
+          }
+          Select-String -Path configure.log -Pattern 'GPU spectrum rendering enabled'
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,
@@ -451,12 +518,32 @@ jobs:
 
       - name: Configure
         run: |
+          # pipefail so the tee below can't mask a cmake failure — GitHub's
+          # default bash is -e without it. The Linux build job cannot do this
+          # and redirects instead: it runs in the CI container, which has no
+          # bash, so GitHub falls back to dash. macOS runners have bash.
+          # AETHER_GPU_SPECTRUM is stated rather than defaulted for the same
+          # reason as there — the assertion needs a request to check against.
+          set -o pipefail
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix)" \
-            -DMQTT_TLS=OFF
+            -DAETHER_GPU_SPECTRUM=ON \
+            -DMQTT_TLS=OFF 2>&1 | tee configure.log
+
+      # Same guard as the Linux build job above. -iE rather than the -i "a\|b"
+      # form: this runs on the macOS runner's BSD grep, which has no BRE
+      # alternation and would search for the literal "a|b".
+      - name: Assert GPU spectrum rendering actually enabled
+        run: |
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering enabled" configure.log
 
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)

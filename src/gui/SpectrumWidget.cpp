@@ -756,6 +756,10 @@ namespace {
 struct WfStopsCache {
     std::array<std::vector<WfGradientStop>, static_cast<int>(WfColorScheme::Count)> stops;
     bool initialized = false;
+    // Bumped whenever the theme reloads the stops. Combined with the selected
+    // scheme it identifies the exact 256-entry LUT a run of RGB rows was
+    // rendered with — see SpectrumWidget::waterfallPaletteToken().
+    quint64 generation = 0;
 };
 
 WfStopsCache& wfStopsCache()
@@ -776,10 +780,26 @@ const char* wfSchemeToken(WfColorScheme s)
     }
 }
 
+bool sameWfStops(const std::vector<WfGradientStop>& a,
+                 const std::vector<WfGradientStop>& b)
+{
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (a[i].pos != b[i].pos || a[i].r != b[i].r
+            || a[i].g != b[i].g || a[i].b != b[i].b) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void rebuildWfStopsCacheFromTheme()
 {
     auto& c = wfStopsCache();
     auto& tm = ThemeManager::instance();
+    bool changed = !c.initialized;
     for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i) {
         const QBrush br = tm.brush(QString::fromLatin1(
             wfSchemeToken(static_cast<WfColorScheme>(i))));
@@ -798,9 +818,23 @@ void rebuildWfStopsCacheFromTheme()
         // black→white ramp instead of a divide-by-zero on the first paint.
         if (v.size() < 2)
             v = { {0.0f, 0, 0, 0}, {1.0f, 255, 255, 255} };
+        if (!sameWfStops(v, c.stops[i])) {
+            changed = true;
+        }
         c.stops[i] = std::move(v);
     }
     c.initialized = true;
+    // Bump only on a real stop change. Every SpectrumWidget rebuilds this
+    // shared cache on themeChanged, so an unconditional bump would leave each
+    // widget's palette token stale the moment the next widget's handler ran.
+    if (changed) {
+        ++c.generation;
+    }
+}
+
+quint64 wfStopsCacheGeneration()
+{
+    return wfStopsCache().generation;
 }
 
 } // namespace
@@ -2122,14 +2156,18 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
             this, [this]() { markOverlayDirty(); });
 
-    // Refresh the waterfall colormap cache when the theme changes.  Existing
-    // already-rendered rows keep their pre-switch colours (same behaviour as
-    // changing the Scheme: dropdown — recolouring history would force a full
-    // O(rows × cols) repaint we don't currently amortise).  New rows pick up
-    // the new palette on the next push.
+    // Refresh the waterfall colormap cache when the theme changes, then
+    // recolour retained history through the new stops. The theme owns the
+    // gradient behind every Scheme preset (#3122), so a theme switch changes
+    // exactly the same 256-entry LUT the Scheme: dropdown does — leaving
+    // history on the old palette here would band the waterfall at the switch
+    // point. The cost is one viewport repaint, the same work a pan already
+    // does; the retained scrollback stays palette-independent intensity and
+    // recolours as it is scrolled back in.
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, [this]() {
         rebuildWfStopsCacheFromTheme();
+        recolorWaterfallViewport();
         markOverlayDirty();
         update();
     });
@@ -4411,6 +4449,7 @@ void SpectrumWidget::setWfColorScheme(int scheme) {
         auto& s = AppSettings::instance();
         s.setValue(settingsKey("DisplayWfColorScheme"), QString::number(static_cast<int>(m_wfColorScheme)));
         s.save();
+        recolorWaterfallViewport();
     }
     update();
 }
@@ -5468,6 +5507,17 @@ static void remapHistoryRowInto(
     }
 }
 
+static void colorizeHistoryRowInto(
+    QRgb* dst,
+    const quint8* src,
+    int width,
+    const std::array<QRgb, 256>& colorLut)
+{
+    for (int x = 0; x < width; ++x) {
+        dst[x] = colorLut[src[x]];
+    }
+}
+
 void SpectrumWidget::resetVisibleWaterfallFrequencyFrames(
     double centerMhz,
     double bandwidthMhz)
@@ -5567,6 +5617,197 @@ void SpectrumWidget::rebuildDssViewportFromHistoryForFrame(double centerMhz,
     resetDssUploadState();
 }
 
+quint64 SpectrumWidget::waterfallPaletteToken() const
+{
+    // Identifies the exact LUT waterfallHistoryColorLut() would build right
+    // now: the selected scheme plus the theme generation behind it, because a
+    // theme reload rewrites the gradient stops of every preset (#3122).
+    // Asking through wfSchemeStops() forces the lazy first fill, so a token
+    // taken before the first paint is not the pre-init generation.
+    int stopCount = 0;
+    (void)wfSchemeStops(m_wfColorScheme, stopCount);
+    return (wfStopsCacheGeneration() << 8)
+        | static_cast<quint64>(static_cast<int>(m_wfColorScheme));
+}
+
+void SpectrumWidget::paintWaterfallRowsFromHistory(
+    double centerMhz,
+    double bandwidthMhz,
+    int writeRowOrigin,
+    WaterfallPipelineMode pipelineMode)
+{
+    // The single loop behind every "repaint the visible rows from retained
+    // intensity" caller. The two axes callers vary on:
+    //   • writeRowOrigin — which scanline holds the newest row. A pan/resize
+    //     rebuild re-lays the ring out from 0; a palette recolour passes the
+    //     live m_wfWriteRow so the waterfall cannot jump under the operator.
+    //   • pipelineMode — Legacy flattens every row into the destination frame;
+    //     RowFrequencyFrames keeps native pixels and per-row frames so the
+    //     shader reprojects each texture exactly once.
+    // Keeping them one function means the frame bookkeeping (#3578, #3668,
+    // #4081) can only ever be fixed in one place.
+    const int height = m_waterfall.height();
+    if (height <= 0 || !m_waterfallHistory.isConfigured()) {
+        return;
+    }
+    if (m_wfVisibleRowCenterMhz.size() != height
+        || m_wfVisibleRowBwMhz.size() != height
+        || m_wfVisibleSupplementalCenterMhz.size() != height
+        || m_wfVisibleSupplementalBwMhz.size() != height) {
+        resetVisibleWaterfallFrequencyFrames(centerMhz, bandwidthMhz);
+    }
+
+    const int w = m_waterfall.width();
+    const bool haveFrames = m_wfHistoryRowCenterMhz.size()
+        == m_waterfallHistory.capacityRows();
+    const bool haveSupplementalFrames =
+        m_wfHistorySupplementalCenterMhz.size()
+            == m_waterfallHistory.capacityRows()
+        && m_wfHistorySupplementalBwMhz.size()
+            == m_waterfallHistory.capacityRows();
+    // Every other writer of the supplemental image requires an exact size
+    // match (appendVisibleRow, the upload path's supplementalTextureReady);
+    // scanLine() on a stale smaller image would be a heap overflow, not a
+    // wrong pixel.
+    const bool supplementalWritable =
+        m_waterfallSupplemental.size() == m_waterfall.size();
+    const FrequencyFrame viewportFrame{centerMhz, bandwidthMhz};
+    const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
+    for (int age = 0; age < height; ++age) {
+        const int rowIndex = historyRowIndexForAge(
+            m_wfHistoryOffsetRows + age);
+        if (rowIndex < 0) {
+            break;
+        }
+
+        const quint8* src = m_waterfallHistory.row(rowIndex);
+        if (!src) {
+            continue;
+        }
+
+        const int destinationRow =
+            waterfallVisibleRowForAge(writeRowOrigin, age, height);
+        auto* dst = reinterpret_cast<QRgb*>(
+            m_waterfall.scanLine(destinationRow));
+        // With no stamped frames the rows carry no capture information at all,
+        // so fall back to the widget's live frame — NOT the destination frame.
+        // The two differ mid-pan, and treating an unstamped row as already
+        // being in the destination frame would skip the remap it needs.
+        const double rowCenter = haveFrames
+            ? m_wfHistoryRowCenterMhz[rowIndex] : m_centerMhz;
+        const double rowBw = haveFrames
+            ? m_wfHistoryRowBwMhz[rowIndex] : m_bandwidthMhz;
+        const quint8* supplementalSrc =
+            m_waterfallSupplementalHistory.row(rowIndex);
+        const double supplementalCenter = haveSupplementalFrames
+            ? m_wfHistorySupplementalCenterMhz[rowIndex] : 0.0;
+        const double supplementalBw = haveSupplementalFrames
+            ? m_wfHistorySupplementalBwMhz[rowIndex] : 0.0;
+        const WaterfallPaletteRecolorPlan recolorPlan =
+            waterfallPaletteRecolorPlan(
+                pipelineMode,
+                FrequencyFrame{rowCenter, rowBw},
+                FrequencyFrame{supplementalCenter, supplementalBw},
+                viewportFrame);
+        bool wroteSupplemental = false;
+        if (recolorPlan.retainNativeFrames) {
+            colorizeHistoryRowInto(dst, src, w, colorLut);
+            if (supplementalSrc
+                && recolorPlan.supplementalFrame.isValid()
+                && supplementalWritable) {
+                auto* supplementalDst = reinterpret_cast<QRgb*>(
+                    m_waterfallSupplemental.scanLine(destinationRow));
+                colorizeHistoryRowInto(
+                    supplementalDst, supplementalSrc, w, colorLut);
+                wroteSupplemental = true;
+            }
+        } else {
+            remapHistoryRowInto(dst, src, w, colorLut,
+                                rowCenter, rowBw,
+                                centerMhz, bandwidthMhz,
+                                m_kiwiSdrWaterfallActive,
+                                supplementalSrc,
+                                supplementalCenter, supplementalBw);
+        }
+
+        // Label the pixels that were actually written. Claiming supplemental
+        // coverage the image does not hold sends the shader sampling rows the
+        // fill() above left black.
+        m_wfVisibleRowCenterMhz[destinationRow] =
+            recolorPlan.primaryFrame.centerMhz;
+        m_wfVisibleRowBwMhz[destinationRow] =
+            recolorPlan.primaryFrame.bandwidthMhz;
+        m_wfVisibleSupplementalCenterMhz[destinationRow] =
+            wroteSupplemental ? recolorPlan.supplementalFrame.centerMhz : 0.0;
+        m_wfVisibleSupplementalBwMhz[destinationRow] =
+            wroteSupplemental ? recolorPlan.supplementalFrame.bandwidthMhz
+                              : 0.0;
+    }
+}
+
+void SpectrumWidget::recolorWaterfallViewport()
+{
+    if (m_frequencyPreviewActive) {
+        m_waterfallPaletteRefreshPending = true;
+        return;
+    }
+
+    // Claim the palette before the early-outs: once the refresh is serviced
+    // the visible rows are at the current palette either way — recoloured
+    // below, or empty because there is nothing to recolour. Leaving the stamp
+    // stale here would re-arm the stream-restore check on every parked row.
+    m_waterfallPaletteRefreshPending = false;
+    m_wfVisiblePaletteToken = waterfallPaletteToken();
+    if (m_waterfall.isNull() || !m_waterfallHistory.isConfigured()) {
+        return;
+    }
+
+    const int height = m_waterfall.height();
+    if (height <= 0) {
+        return;
+    }
+
+    m_wfHistoryOffsetRows = std::clamp(
+        m_wfHistoryOffsetRows, 0, maxWaterfallHistoryOffsetRows());
+
+    // Rebuild only the already-visible RGB images from the retained,
+    // palette-independent intensity history. Keep the current visible ring
+    // position and scroll clock intact so a palette change cannot move the
+    // waterfall while it is live or paused.
+    m_waterfall.fill(Qt::black);
+    if (!m_waterfallSupplemental.isNull()) {
+        m_waterfallSupplemental.fill(Qt::black);
+    }
+    resetVisibleWaterfallFrequencyFrames(m_centerMhz, m_bandwidthMhz);
+
+#ifdef AETHER_GPU_SPECTRUM
+    const WaterfallPipelineMode pipelineMode = m_wfPipelineMode;
+#else
+    constexpr WaterfallPipelineMode pipelineMode =
+        WaterfallPipelineMode::Legacy;
+#endif
+    paintWaterfallRowsFromHistory(m_centerMhz, m_bandwidthMhz,
+                                  m_wfWriteRow, pipelineMode);
+
+#ifdef AETHER_GPU_SPECTRUM
+    // The image changed in every physical row, so an incremental upload would
+    // be both more complicated and slower than the existing full-upload path.
+    m_wfTexFullUpload = true;
+#endif
+    if (PerfTelemetry::instance().enabled()) {
+        PerfTelemetry::instance().recordWaterfallRebuild();
+    }
+    if (!m_wfLive) {
+        rebuildDssViewportFromHistory();
+    }
+    // Self-sufficient, like rebuildWaterfallViewportForFrame(). Two of the
+    // four callers (the stream restore, clearFrequencyPreview()) do not
+    // repaint afterwards, and relying on the caller is how a recolour that
+    // ran silently ends up on screen a frame late — or not until the next
+    // unrelated update().
+    update();
+}
+
 void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
                                                       double bandwidthMhz)
 {
@@ -5585,45 +5826,20 @@ void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
     }
     m_wfWriteRow = 0;
     resetVisibleWaterfallFrequencyFrames(centerMhz, bandwidthMhz);
+    m_wfVisiblePaletteToken = waterfallPaletteToken();
 
     if (!m_waterfallHistory.isConfigured()) {
         update();
         return;
     }
 
-    const int w = m_waterfall.width();
-    const bool haveFrames = m_wfHistoryRowCenterMhz.size()
-        == m_waterfallHistory.capacityRows();
-    const bool haveSupplementalFrames =
-        m_wfHistorySupplementalCenterMhz.size()
-            == m_waterfallHistory.capacityRows()
-        && m_wfHistorySupplementalBwMhz.size()
-            == m_waterfallHistory.capacityRows();
-    const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
-    for (int y = 0; y < m_waterfall.height(); ++y) {
-        const int rowIndex = historyRowIndexForAge(m_wfHistoryOffsetRows + y);
-        if (rowIndex < 0) {
-            break;
-        }
-        const quint8* src = m_waterfallHistory.row(rowIndex);
-        if (!src) {
-            continue;
-        }
-        auto* dst = reinterpret_cast<QRgb*>(m_waterfall.scanLine(y));
-        const double rowCenter = haveFrames ? m_wfHistoryRowCenterMhz[rowIndex] : m_centerMhz;
-        const double rowBw = haveFrames ? m_wfHistoryRowBwMhz[rowIndex] : m_bandwidthMhz;
-        const quint8* supplementalSrc =
-            m_waterfallSupplementalHistory.row(rowIndex);
-        const double supplementalCenter = haveSupplementalFrames
-            ? m_wfHistorySupplementalCenterMhz[rowIndex] : 0.0;
-        const double supplementalBw = haveSupplementalFrames
-            ? m_wfHistorySupplementalBwMhz[rowIndex] : 0.0;
-        remapHistoryRowInto(dst, src, w, colorLut,
-                            rowCenter, rowBw, centerMhz, bandwidthMhz,
-                            m_kiwiSdrWaterfallActive,
-                            supplementalSrc,
-                            supplementalCenter, supplementalBw);
-    }
+    // The ring was just re-laid out from scanline 0, so there is no native row
+    // ordering left to preserve: every row is flattened into the destination
+    // frame and labelled with it (what resetVisibleWaterfallFrequencyFrames
+    // above already wrote).
+    paintWaterfallRowsFromHistory(centerMhz, bandwidthMhz,
+                                  /*writeRowOrigin=*/0,
+                                  WaterfallPipelineMode::Legacy);
 
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
@@ -5906,6 +6122,9 @@ void SpectrumWidget::commitFrequencyPreview()
 #ifdef AETHER_GPU_SPECTRUM
     m_frequencyScalePreviewNeedsUpload = false;
 #endif
+    if (m_waterfallPaletteRefreshPending) {
+        recolorWaterfallViewport();
+    }
     ++m_frequencyPreviewOverlayCommitRefreshCount;
     ++m_panStats.previewOverlayCommitRefreshes;
     markOverlayDirty("frequencyPreviewCommit", false);
@@ -5914,6 +6133,7 @@ void SpectrumWidget::commitFrequencyPreview()
 
 void SpectrumWidget::clearFrequencyPreview()
 {
+    const bool paletteRefreshPending = m_waterfallPaletteRefreshPending;
     m_frequencyPreviewActive = false;
     m_frequencyPreviewBaseCenterMhz = m_centerMhz;
     m_frequencyPreviewBaseBandwidthMhz = m_bandwidthMhz;
@@ -5924,6 +6144,14 @@ void SpectrumWidget::clearFrequencyPreview()
 #ifdef AETHER_GPU_SPECTRUM
     m_frequencyScalePreviewNeedsUpload = false;
 #endif
+    // m_frequencyPreviewActive has two exits — commitFrequencyPreview() lands
+    // the preview, this abandons it — and a deferred palette refresh has to
+    // drain through both. Leaving it armed here loses a Scheme change made
+    // during a drag that ends in an automation reset or a clearDisplay(),
+    // and leaves the flag set for the next preview to inherit.
+    if (paletteRefreshPending) {
+        recolorWaterfallViewport();
+    }
 }
 
 void SpectrumWidget::requestFrequencyRangeChange(double centerMhz,
@@ -6025,6 +6253,9 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfHistoryWriteRow = 0;
     m_wfHistoryRowCount = 0;
     m_wfHistoryOffsetRows = 0;
+    m_waterfallPaletteRefreshPending = false;
+    // Cleared rows carry no palette, so they are trivially current.
+    m_wfVisiblePaletteToken = waterfallPaletteToken();
     m_wfLive = true;
     m_wfRowsSinceRateChange = 0;
     m_prevTileLevels.clear();
@@ -6193,6 +6424,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.kiwiDisplayRangeAutoRange = m_kiwiSdrDisplayRangeAutoRange;
     updated.kiwiFftTraceFloorDbm = m_kiwiSdrFftTraceFloorDbm;
     updated.kiwiFftTraceFloorValid = m_kiwiSdrFftTraceFloorValid;
+    updated.visiblePaletteToken = m_wfVisiblePaletteToken;
     updated.valid = !updated.waterfall.isNull();
 #ifdef AETHER_GPU_SPECTRUM
     updated.wfTexFullUpload = m_wfTexFullUpload;
@@ -6325,6 +6557,7 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_kiwiSdrDisplayRangeAutoRange = restored.kiwiDisplayRangeAutoRange;
     m_kiwiSdrFftTraceFloorDbm = restored.kiwiFftTraceFloorDbm;
     m_kiwiSdrFftTraceFloorValid = restored.kiwiFftTraceFloorValid;
+    m_wfVisiblePaletteToken = restored.visiblePaletteToken;
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = restored.wfTexFullUpload;
     m_wfLastUploadedRow = restored.wfLastUploadedRow;
@@ -6336,6 +6569,14 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
 #endif
     if (m_waterfallWriteVisible) {
         ensureWaterfallHistory();
+    }
+    // A parked stream keeps already-coloured RGB rows, so a Scheme or theme
+    // change made while the other source was on screen never reached them.
+    // This runs at most once per palette change per stream — begin/end
+    // WaterfallStreamWrite() swap on every hidden-source row, and the stamp
+    // matches on all of those.
+    if (m_wfVisiblePaletteToken != waterfallPaletteToken()) {
+        recolorWaterfallViewport();
     }
 }
 
