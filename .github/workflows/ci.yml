@@ -26,19 +26,11 @@ concurrency:
 # that needs more (e.g. publishing a comment) must opt in at the job level.
 permissions:
   contents: read
-  packages: read   # pull the CI image from GHCR (private package)
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/aethersdr/aethersdr-ci:latest
-      # The package is private; a bare `container:` pulls anonymously
-      # and 403s. GITHUB_TOKEN can read it because the image carries
-      # org.opencontainers.image.source pointing at this repo.
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
 
     # Explicit CCACHE_DIR: the job runs as root inside a container, so `~`
     # resolves to /root and an actions/cache `path:` of `~/.cache/ccache` would

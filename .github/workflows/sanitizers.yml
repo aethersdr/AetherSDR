@@ -14,20 +14,12 @@ on:
 permissions:
   contents: read
   issues: write
-  packages: read   # pull the CI image from GHCR (private package)
 
 jobs:
   sanitize:
     name: ${{ matrix.sanitizer.label }}
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/aethersdr/aethersdr-ci:latest
-      # The package is private; a bare `container:` pulls anonymously
-      # and 403s. GITHUB_TOKEN can read it because the image carries
-      # org.opencontainers.image.source pointing at this repo.
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
     strategy:
       fail-fast: false
       matrix:
