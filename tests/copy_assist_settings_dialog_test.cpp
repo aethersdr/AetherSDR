@@ -79,6 +79,27 @@ int main(int argc, char** argv)
                "setValue then value round-trips through the nested object");
     }
 
+    // ---- AsrTier persistence contract (#4676) --------------------------------
+    // A chosen catalog tier is written to the nested store and restorable; the
+    // special tiers clear it with an empty write. Pinned here so a controller
+    // refactor can't silently drop the restart-survival half of the fix.
+    {
+        auto& s = AppSettings::instance();
+        CopyAssistSettings::setValue(QStringLiteral("AsrTier"),
+                                     QStringLiteral("small"));
+        expect(CopyAssistSettings::value(QStringLiteral("AsrTier"), QString())
+                       .toString() == QStringLiteral("small"),
+               "AsrTier catalog choice round-trips through the nested store");
+        expect(!s.contains(QStringLiteral("AsrTier")),
+               "AsrTier lives only in the nested CopyAssist object, never flat");
+
+        CopyAssistSettings::setValue(QStringLiteral("AsrTier"), QString());
+        expect(CopyAssistSettings::value(QStringLiteral("AsrTier"), QString())
+                       .toString().isEmpty(),
+               "special tiers clear AsrTier so a stale catalog choice cannot "
+               "resurrect");
+    }
+
     // Frameless-window behavior (from #4414) shares this offscreen harness.
     AppSettings::instance().setValue(QStringLiteral("FramelessWindow"),
                                      QStringLiteral("True"));

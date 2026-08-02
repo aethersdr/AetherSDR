@@ -88,7 +88,7 @@ is accepted:
 | tiny | 74 MB | fastest, roughest |
 | **base** | 141 MB | default on CPU/ARM (incl. Raspberry Pi 5) |
 | small | 465 MB | desktop CPU |
-| **large-v3-turbo** | 1.6 GB | default when a GPU is available |
+| **large-v3-turbo** | 1.6 GB | default when a *usable* GPU is available (see GPU acceleration) |
 
 Offline/air-gapped: drop the `ggml-*.bin` file into the models dir manually.
 
@@ -102,8 +102,16 @@ and it runs on the selected compute device like any built-in tier.
 
 ## GPU acceleration
 
-The selected model runs on the **GPU when one is available**, else CPU
-(automatic fallback). GPU is auto-detected at build time and used at runtime via
+The selected model runs on the **GPU when a usable one is available**, else CPU
+(automatic fallback). At startup each enumerated GPU is probed for the ops
+whisper's decode actually schedules (soft-max, mat-mul, flash attention); only
+a device that passes all three is offered as the default. Devices that fail
+the probe stay selectable in the compute-device picker but are labeled
+**"(unsupported)"** — picking one is allowed (e.g. for diagnostics) but decode
+quality/stability is not guaranteed there (#4676). An explicitly chosen device
+and the chosen model tier both persist across restarts; the tier picker's
+default (Large-v3-Turbo) applies only when decode lands on a usable GPU. GPU
+support is auto-detected at build time and used at runtime via
 `ggml_backend_dev_by_type(GPU)`:
 
 - **Vulkan** — Linux/Windows (NVIDIA/AMD/Intel). Requires the Vulkan

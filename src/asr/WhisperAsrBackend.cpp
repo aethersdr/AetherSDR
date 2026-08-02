@@ -225,8 +225,9 @@ std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QSt
 namespace {
 // Whether `dev` can run the kernels whisper's heavy path schedules on the GPU.
 // Probed through the public ggml_backend_dev_supports_op with synthetic ops —
-// a contiguous F32 soft-max (gated on has_simdgroup_reduction in the Metal
-// backend) and an F16 mat-mul (gated on has_simdgroup_mm) — rather than by
+// a contiguous F32 soft-max and an F16 mat-mul (both gated on
+// has_simdgroup_reduction in the Metal backend) and a flash-attention op
+// (the only op gated on has_simdgroup_mm) — rather than by
 // reading backend-internal device props, so it works unchanged for Vulkan/CUDA
 // hosts. supports_op only consults device properties: nothing is compiled or
 // allocated (no_alloc context, freed before returning).
@@ -243,8 +244,19 @@ bool asrDeviceUsableForDecode(ggml_backend_dev_t dev)
     ggml_tensor* softMax = ggml_soft_max(ctx, act);
     ggml_tensor* weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 64, 64);
     ggml_tensor* mulMat = ggml_mul_mat(ctx, weights, act);
+    // FLASH_ATTN_EXT is the only op the Metal backend gates on
+    // has_simdgroup_mm, and whisper turns flash attention on unconditionally
+    // (whisper_context_default_params), so it has to be probed separately —
+    // a Metal3-but-not-Apple7 dGPU passes the two ops above and still gets a
+    // split graph without it. Head dim 64 + F16 K/V mirrors whisper's encoder.
+    ggml_tensor* q = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 64, 4, 8);
+    ggml_tensor* k = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 64, 4, 8);
+    ggml_tensor* v = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 64, 4, 8);
+    ggml_tensor* flashAttn =
+        ggml_flash_attn_ext(ctx, q, k, v, nullptr, 1.0f, 0.0f, 0.0f);
     const bool usable = ggml_backend_dev_supports_op(dev, softMax)
-        && ggml_backend_dev_supports_op(dev, mulMat);
+        && ggml_backend_dev_supports_op(dev, mulMat)
+        && ggml_backend_dev_supports_op(dev, flashAttn);
     ggml_free(ctx);
     return usable;
 }
