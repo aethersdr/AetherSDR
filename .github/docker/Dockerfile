@@ -84,13 +84,25 @@ RUN apt-get update && apt-get install -y \
 # rather than --break-system-packages; the venv is removed in the same layer.
 ENV QT_VERSION=6.8.3
 ENV QT_ROOT=/opt/Qt/6.8.3/gcc_64
+# aqtinstall is pinned. It is the tool that decides what Qt lands in this image,
+# so leaving it floating means a cache-miss rebuild months from now silently
+# fetches a different installer than the one this image was validated with.
+ENV AQTINSTALL_VERSION=3.3.0
 RUN python3 -m venv /tmp/aqt-venv \
-    && /tmp/aqt-venv/bin/pip install --no-cache-dir aqtinstall \
+    && /tmp/aqt-venv/bin/pip install --no-cache-dir "aqtinstall==${AQTINSTALL_VERSION}" \
     && /tmp/aqt-venv/bin/aqt install-qt linux desktop "${QT_VERSION}" linux_gcc_64 \
         -m qtmultimedia qtwebsockets qtserialport qtshadertools \
         --outputdir /opt/Qt \
     && test -x "${QT_ROOT}/bin/qmake" \
     && "${QT_ROOT}/bin/qmake" -query QT_VERSION \
+    # qmake alone only proves qtbase landed. Assert each addon module's CMake
+    # package too: a partial aqt install that still exits 0 would otherwise
+    # surface much later as a confusing find_package(Qt6 COMPONENTS Multimedia)
+    # miss during ci.yml's configure, with nothing pointing back here.
+    && for m in Multimedia WebSockets SerialPort ShaderTools; do \
+           test -f "${QT_ROOT}/lib/cmake/Qt6${m}/Qt6${m}Config.cmake" \
+           || { echo "aqt did not install Qt6${m}"; exit 1; }; \
+       done \
     && rm -rf /tmp/aqt-venv
 
 # ── qtkeychain, built against THAT Qt ────────────────────────────────────
@@ -100,9 +112,13 @@ RUN python3 -m venv /tmp/aqt-venv \
 # #3639 for what a missing keychain costs — SmartLink credential persistence
 # silently compiles out via find_package(Qt6Keychain QUIET)).
 #
-# Version and commit pin are kept in step with scripts/setup/setup-qtkeychain.sh;
 # LIBSECRET_SUPPORT=OFF selects the pure Qt-D-Bus Secret Service backend for the
 # same reason it does there.
+#
+# The version, commit pin and flags below are hand-duplicated from
+# scripts/setup/setup-qtkeychain.sh rather than sourced from it: this image is
+# built with `context: .github/docker` (see docker-ci-image.yml), so COPY cannot
+# reach a file outside that directory. BUMPING QTKEYCHAIN MEANS EDITING BOTH.
 ENV QTKEYCHAIN_VERSION=0.16.0
 ENV QTKEYCHAIN_COMMIT=aa6da344e1a20b9194e12bace3665caeea6b6304
 ENV QTKEYCHAIN_ROOT=/opt/qtkeychain
