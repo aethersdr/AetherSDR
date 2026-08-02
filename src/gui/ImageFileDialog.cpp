@@ -190,16 +190,21 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
     if (grid && listView) {
         // Deliberately not touching QFileDialog's own view/flow/layout
         // (setViewMode, setFlow, setWrapping, setResizeMode,
-        // setUniformItemSizes): reconfiguring the internal listView into a
-        // wrapped icon grid broke double-click activation on the "Computer"
-        // root (drive entries stopped responding to clicks). Real machine
-        // testing on Windows caught this. Sticking to icon-size-only keeps
-        // native navigation (List and Detail both) completely untouched.
+        // setUniformItemSizes) — that was ruled out on real hardware as the
+        // cause of broken drive/folder navigation.
+        //
+        // The actual cause: QFileDialogPrivate's own navigation slots
+        // (_q_enterDirectory and friends) map a clicked view index back to
+        // the real QFileSystemModel via a private `proxyModel` pointer that
+        // is only populated by QFileDialog::setProxyModel(). Setting
+        // listView/treeView's model directly (as this used to do) leaves
+        // that private pointer null, so the dialog resolves proxy-model
+        // indices against the raw model and silently fails to navigate —
+        // clicking anything did nothing. setProxyModel() is the sanctioned
+        // API for exactly this (augmenting the model backing the dialog's
+        // views) and wires both listView and treeView itself.
         auto* proxy = new ImageThumbnailProxyModel(&dlg);
-        proxy->setSourceModel(listView->model());
-        listView->setModel(proxy);
-        if (treeView && treeView->model() == proxy->sourceModel())
-            treeView->setModel(proxy);
+        dlg.setProxyModel(proxy);
 
         const QSize defaultIconSize = listView->iconSize();
 
