@@ -75,12 +75,27 @@ struct Rig {
     }
     ~Rig()
     {
+        // Stop and destroy the timers on the thread that owns them, BEFORE the
+        // thread stops. Letting ~Trigger() run on the main thread instead would
+        // delete worker-affinity QObjects with live timers from the wrong
+        // thread — Qt warns ("Timers cannot be stopped from another thread") and
+        // the teardown is genuinely unsafe. This file is the template the next
+        // threaded test will copy, so it should model the correct shape.
+        QMetaObject::invokeMethod(&trigger, [this] {
+            for (QObject* child : trigger.children())
+                if (auto* t = qobject_cast<QTimer*>(child))
+                    t->stop();
+            qDeleteAll(trigger.children());
+        }, Qt::BlockingQueuedConnection);
+
         thread.quit();
         thread.wait();
     }
 
-    // Creates the timer on THIS thread so a spy can be attached before it runs,
-    // then starts it over on the worker. Returns it for QSignalSpy.
+    // Creates the timer ON THE WORKER (blocking, so it exists before we return)
+    // and hands it back so a QSignalSpy can attach before anything starts it.
+    // Worker affinity is the point: the emission has to cross threads to be the
+    // delivery path these helpers exist to observe.
     QTimer* armAfter(int ms)
     {
         QTimer* timer = nullptr;

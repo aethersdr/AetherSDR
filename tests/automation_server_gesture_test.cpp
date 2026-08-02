@@ -8,7 +8,6 @@
 #include "core/TxKeyingMarker.h"
 
 #include <QApplication>
-#include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>

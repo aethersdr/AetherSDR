@@ -4,12 +4,10 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QHash>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
-#include <QThread>
 
 #include <cstdio>
 #include <functional>

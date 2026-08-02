@@ -6,7 +6,6 @@
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QHostAddress>
 #include <QJsonArray>
@@ -14,7 +13,6 @@
 #include <QJsonObject>
 #include <QLocalSocket>
 #include <QTemporaryDir>
-#include <QThread>
 #include <QWebSocket>
 #include <QWebSocketServer>
 

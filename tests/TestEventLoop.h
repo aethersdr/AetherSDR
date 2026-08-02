@@ -59,6 +59,7 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QEventLoop>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
@@ -79,9 +80,11 @@ namespace AetherTest {
 // Returns the predicate's final value, so `if (!waitFor(...)) fail()` reads
 // correctly and a timeout is never silently mistaken for success.
 //
-// The nested QEventLoop is what makes this a wait rather than a poll: it
-// blocks the calling thread and wakes on delivery, so a queued cross-thread
-// signal is observed as soon as it crosses, not on the next spin.
+// The nested QEventLoop is what makes this a wait rather than a poll: it blocks
+// the calling thread instead of burning CPU on an empty queue. Latency is one
+// tick (10 ms), not zero — the predicate is evaluated on the tick rather than
+// on delivery, because a predicate can be satisfied by something that posts no
+// event to this thread at all.
 template <typename Predicate>
 bool waitFor(Predicate predicate, int timeoutMs = 5000)
 {
@@ -91,12 +94,14 @@ bool waitFor(Predicate predicate, int timeoutMs = 5000)
     QDeadlineTimer deadline(timeoutMs);
     while (!deadline.hasExpired()) {
         QEventLoop loop;
-        // Re-check on a short tick as well as on delivery: a predicate can be
-        // satisfied by something that posts no event to THIS thread (a worker
-        // setting an atomic, a timer owned elsewhere), and that would otherwise
-        // not wake the loop at all.
+        // The tick is load-bearing, not a safety net: a worker thread setting an
+        // atomic (or a timer owned elsewhere) wakes nothing here, so a bare
+        // exec() would sleep until the deadline. Mutation-checked — remove the
+        // periodic re-check and the helper sits out the full timeout instead of
+        // returning when the predicate holds.
         QTimer tick;
-        tick.setInterval(std::min<qint64>(10, deadline.remainingTime() + 1));
+        tick.setInterval(
+            static_cast<int>(std::min<qint64>(10, deadline.remainingTime() + 1)));
         QObject::connect(&tick, &QTimer::timeout, &loop, [&] {
             if (predicate() || deadline.hasExpired())
                 loop.quit();
@@ -137,6 +142,13 @@ inline void pumpFor(int milliseconds)
         QCoreApplication::processEvents(
             QEventLoop::AllEvents,
             static_cast<int>(std::min<qint64>(10, deadline.remainingTime() + 1)));
+        // Yield rather than busy-spinning a whole core for the window. The
+        // contract here is "burn wall-clock time while events flow", and on an
+        // empty queue processEvents() returns instantly — without this the loop
+        // pegs a core, which on a loaded CI box steals the scheduling the code
+        // under test may itself be waiting for.
+        if (!deadline.hasExpired())
+            QThread::msleep(1);
     }
     // A final drain so events posted by the last timer to fire inside the
     // window are delivered before the caller asserts on their effect.
