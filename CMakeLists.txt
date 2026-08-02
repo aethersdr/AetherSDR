@@ -1034,6 +1034,7 @@ set(GUI_SOURCES
     src/gui/GradientEditorDialog.cpp
     src/gui/TokenEditorWidget.cpp
     src/gui/CompactColorPicker.cpp
+    src/gui/ImageFileDialog.cpp
 )
 
 # Bundled RNNoise (Mozilla/Xiph BSD-3) — client-side neural noise suppression

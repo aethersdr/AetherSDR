@@ -36,6 +36,7 @@
 #include "AmpApplet.h"
 #include "AcomApplet.h"
 #include "HealthApplet.h"
+#include "ImageFileDialog.h"
 #include "MeterApplet.h"
 #include "ProfileSwitcherApplet.h"
 #include "SMeterWidget.h"
@@ -66,7 +67,6 @@
 
 #include <QDateTime>
 #include <QElapsedTimer>
-#include <QFileDialog>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -4059,13 +4059,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setWfBlankerThreshold);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
             this, [sw] {
-        QString path = QFileDialog::getOpenFileName(
-            sw->window(),
-            "Choose Background Image",
-            QString(),
-            "Images (*.png *.jpg *.jpeg *.bmp)",
-            nullptr,
-            QFileDialog::DontUseNativeDialog);
+        const QString path = getBackgroundImagePath(sw->window(), "Choose Background Image");
         if (path.isEmpty()) return;
         sw->setBackgroundImage(path);
         auto& s = AppSettings::instance();
