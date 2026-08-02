@@ -2583,9 +2583,19 @@ endif()
 # sherpa-onnx (detected further below) bundles the SAME ONNX Runtime version we
 # stage (1.27 — the setup scripts are pinned to match). If it's staged, link its
 # libonnxruntime for our ORT code too, so the app ships/loads a single runtime
-# instead of two identical copies, and there's no rpath ambiguity. On macOS
-# sherpa's runtime is universal2, so this also covers Intel Macs, where the
-# standalone ONNX Runtime prebuilt is Apple-Silicon-only at 1.27.
+# instead of two identical copies, and there's no rpath ambiguity.
+#
+# macOS is the exception, and it goes the other way: same version, but NOT the
+# same binary. k2-fsa build their copy on whatever macOS their runner happens to
+# be, which stamps LC_BUILD_VERSION minos 15.5 into both slices of the
+# universal2 archive; Microsoft's own 1.27.0 build is 14.0. dyld enforces that
+# stamp on every dylib macdeployqt stages, so preferring sherpa's would set the
+# DMG's real minimum macOS to 15.5 no matter what CMAKE_OSX_DEPLOYMENT_TARGET
+# says — the app would not launch at all below it, which is #4532.
+# setup-sherpa-onnx.sh deletes sherpa's copy on macOS for the same reason; the
+# install name and C API are identical, so sherpa's own dylib resolves against
+# the upstream runtime unchanged. Upstream publishes no x86_64 macOS build, so
+# Intel Macs get no ORT and no sherpa backend at all — see macos-dmg.yml.
 if(ORT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
     if(WIN32)
         # sherpa's Windows bundle carries onnxruntime.lib + onnxruntime.dll; link
@@ -2596,10 +2606,12 @@ if(ORT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
             set(ORT_DLLS "")
             message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
         endif()
+    elseif(APPLE)
+        message(STATUS "ONNX Runtime: keeping the upstream 1.27 runtime, not sherpa's "
+            "(sherpa's macOS build is stamped minos 15.5 and would become the bundle's floor)")
     else()
         file(GLOB _sherpa_ort
-            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so"
-            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.dylib")
+            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so")
         if(_sherpa_ort)
             list(GET _sherpa_ort 0 ORT_LIBRARIES)
             message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")

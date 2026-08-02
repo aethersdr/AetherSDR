@@ -107,7 +107,7 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 # the Tier-2 .github/workflows/ default above. The release signing/publish
 # pipeline runs with the signing secret, and codeql.yml invokes the security
 # scan (which is NOT a required status check, so a Tier-2 edit could disable it
-# undetected). Routine CI workflows stay Tier 2. Keep these two lists in sync
+# undetected). Routine CI workflows stay Tier 2. Keep the list below in sync
 # with .github/workflows/ as workflows are added/renamed.
 #
 # The criterion is "produces or feeds a signed/official release artifact." That

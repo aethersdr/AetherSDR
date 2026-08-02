@@ -43,8 +43,14 @@ QTKEYCHAIN_COMMIT="aa6da344e1a20b9194e12bace3665caeea6b6304"
 OUT_DIR="third_party/qtkeychain"
 
 # ── Already set up? (lets CI cache third_party/qtkeychain) ───────────────
-if [ -f "$OUT_DIR/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" ]; then
-    echo "qtkeychain already set up in $OUT_DIR"
+# The stamp carries the deployment target as well, so switching targets rebuilds
+# instead of reusing a dylib built for a different floor — the reuse would be
+# invisible until the DMG failed to launch on the older OS.
+STAMP="$OUT_DIR/.build-stamp"
+STAMP_CONTENT="version=$QTKEYCHAIN_VERSION target=${MACOS_DEPLOYMENT_TARGET:-host}"
+if [ -f "$OUT_DIR/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" ] &&
+   [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$STAMP_CONTENT" ]; then
+    echo "qtkeychain already set up in $OUT_DIR ($STAMP_CONTENT)"
     exit 0
 fi
 
@@ -86,9 +92,34 @@ fi
 echo "Verified qtkeychain commit $QTKEYCHAIN_COMMIT"
 
 # ── Build + install ──────────────────────────────────────────────────────
+# On macOS the deployment target has to be passed through, not left to default.
+# Without it clang targets the BUILD HOST, so a macos-15 runner produces a dylib
+# with LC_BUILD_VERSION minos 15.0 — and since CMakeLists.txt copies
+# libqt6keychain.1.dylib into Contents/Frameworks, dyld then refuses to load it
+# on anything older and the app dies at launch rather than degrading. The bundle
+# floor is the MAX minos across everything staged, so one unpinned dependency
+# silently overrides the deployment target of the whole DMG. Same reasoning as
+# scripts/setup/setup-macos-deps.sh; asserted after macdeployqt by
+# scripts/build/assert-macos-bundle.sh.
+# Warn rather than fail when it is unset: a developer building locally wants the
+# host default and has no bundle to break. The release path always sets it, and
+# assert-macos-bundle.sh fails the DMG if it ever stops doing so — so the check
+# that matters is downstream, and this stays usable off CI.
+QTKEYCHAIN_OSX_TARGET=()
+if [ "$(uname -s)" = "Darwin" ]; then
+    if [ -n "${MACOS_DEPLOYMENT_TARGET:-}" ]; then
+        QTKEYCHAIN_OSX_TARGET=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET")
+        echo "Targeting macOS $MACOS_DEPLOYMENT_TARGET"
+    else
+        echo "WARNING: MACOS_DEPLOYMENT_TARGET is unset — qtkeychain will inherit this" >&2
+        echo "         host's macOS version. Fine locally; NOT fine for a release DMG." >&2
+    fi
+fi
+
 echo "Building qtkeychain $QTKEYCHAIN_VERSION from source..."
 cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    "${QTKEYCHAIN_OSX_TARGET[@]}" \
     -DBUILD_WITH_QT6=ON \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_TRANSLATIONS=OFF \
@@ -108,6 +139,7 @@ cmake --install "$BUILD_DIR"
 
 # ── Cleanup ──────────────────────────────────────────────────────────────
 rm -rf "$SRC_DIR" "$BUILD_DIR"
+echo "$STAMP_CONTENT" > "$STAMP"
 
 echo "qtkeychain ready in $OUT_DIR_ABS"
 echo "  cmake config: $OUT_DIR_ABS/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake"
