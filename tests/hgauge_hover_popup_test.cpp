@@ -113,6 +113,21 @@ void spin(int msec)
         QApplication::processEvents(QEventLoop::AllEvents, 10);
 }
 
+// Poll for the badge to go away rather than sleeping a fixed span and asserting
+// once. Every "gone by now" case here is bounded by a timer the code itself
+// owns, so a badge still up at a generous deadline is a real defect and a slow
+// CI runner just costs wall time. The linger-DURATION check is the deliberate
+// exception — it has to discriminate 450 ms from 1000 ms, so it cannot wait
+// longer and measures elapsed time instead.
+bool badgeGoneWithin(HGauge* gauge, int deadlineMs)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (badgeVisible(gauge) && clock.elapsed() < deadlineMs)
+        spin(20);
+    return !badgeVisible(gauge);
+}
+
 HGauge* addGauge(QWidget* host, const char* label)
 {
     auto* gauge = new HGauge(0.0f, 100.0f, 90.0f, QString::fromLatin1(label),
@@ -251,8 +266,12 @@ int main(int argc, char** argv)
             check(!fwd->rect().contains(fwd->mapFromGlobal(QCursor::pos())),
                   "the gauge really did move out from under the pointer");
 
-            spin(kWatchdogMs * 2 + DragValuePopup::kDefaultLingerMs * 3);
-            check(!badgeVisible(fwd),
+            // Recovery is bounded by kHoverWatchdogMs + the linger. Poll to a
+            // multiple of that: with the watchdog disarmed the badge never
+            // goes away at all, so this still fails the mutant, it just does
+            // not race a loaded runner to get there.
+            check(badgeGoneWithin(
+                      fwd, (kWatchdogMs + DragValuePopup::kDefaultLingerMs) * 4),
                   "released itself with no leaveEvent and no new value");
         }
         host.move(400, 400);
@@ -296,15 +315,19 @@ int main(int argc, char** argv)
             check(badgeVisible(fwd), "still up across repeated identical frames");
 
             sendLeave(fwd);
-            spin(DragValuePopup::kDefaultLingerMs * 3);
-            check(!badgeVisible(fwd), "an explicit leave still takes it down");
+            check(badgeGoneWithin(fwd, DragValuePopup::kDefaultLingerMs * 4),
+                  "an explicit leave still takes it down");
         }
     }
 
     // ── hiding the gauge still closes the badge, and re-hover works ──────
-    // The existing hideEvent guard now also releases the app-wide claim; if it
-    // released it without hiding, or hid without releasing, the next hover on
-    // another gauge would misbehave.
+    // hideEvent() closes the badge AND releases the app-wide claim, but only
+    // the close is observable — a claim left dangling at a hidden gauge is
+    // harmless, because the next gauge's showHoverPopup() calls
+    // hideHoverPopupNow() on the stale holder on its way past, and ~HGauge
+    // catches whatever is left. The release is belt-and-braces, so what is
+    // asserted here is the part that can actually go wrong: the badge goes
+    // down, and a later gauge can still raise its own afterwards.
     {
         sendEnter(fwd, fwd->mapToGlobal(fwd->rect().center()));
         check(badgeVisible(fwd), "hovered before the gauge is hidden");

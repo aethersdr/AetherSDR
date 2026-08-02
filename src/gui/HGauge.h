@@ -504,9 +504,16 @@ private:
     // only case that can drop a leave, since the injected ones are delivered
     // by hand.
     void syncHoverWatchdog() {
+        // Already armed and still hovered: the next tick re-validates within
+        // kHoverWatchdogMs, so asking again in between learns nothing. Worth
+        // short-circuiting because pointerPhysicallyInside() goes through
+        // QCursor::pos(), which on XCB is a synchronous round-trip to the
+        // display server — and mouseMoveEvent lands here on every single move
+        // while the pointer is over the bar.
+        if (m_hovered && m_hoverWatchdog.isActive())
+            return;
         if (m_hovered && pointerPhysicallyInside()) {
-            if (!m_hoverWatchdog.isActive())
-                m_hoverWatchdog.start();
+            m_hoverWatchdog.start();
         } else if (!m_hovered) {
             m_hoverWatchdog.stop();
         }

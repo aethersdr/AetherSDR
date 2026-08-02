@@ -1378,9 +1378,9 @@ renders only that widget's own subtree, and the badge is a separate top-level
 `Qt::ToolTip` window anchored 16 px *above* the gauge rect — so the capture
 comes back as a bare bar. To assert *which* badge is up and where, read the
 `DragValuePopup` nodes out of `dumpTree` (each carries `visible` plus
-geometry). Note that a popup is reachable twice in that tree — once as a
-top-level root and once as a child of its owning gauge — so dedupe on geometry
-before counting, or a single badge reads as two.
+geometry). The badge is itself a window, so per the `dumpTree` section above it
+appears exactly **once, as a root**, never nested under the gauge that owns it.
+Walk `roots` to find it; do not look for it under `TxApplet`.
 
 An injected hover holds the badge until an explicit `hover <target> leave`:
 the recovery watchdog that bounds a dropped physical leave is gated on the real
