@@ -22,6 +22,11 @@
 #include <QNetworkRequest>
 #include <QUrl>
 
+// Stall timeout for the AFX pack manifest and archive downloads (#4688 §6).
+// 30 s rather than 15: the archive is large and this clock resets on every
+// byte, so it only fires on a genuinely dead transfer.
+constexpr int kTransferTimeoutMs = 30000;
+
 namespace AetherSDR {
 
 // ─── Platform layout ─────────────────────────────────────────────────────────
@@ -319,7 +324,10 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 NvidiaAfxPack::NvidiaAfxPack(QObject* parent)
-    : QObject(parent), m_nam(new QNetworkAccessManager(this)) {}
+    : QObject(parent), m_nam(new QNetworkAccessManager(this))
+{
+    m_nam->setTransferTimeout(kTransferTimeoutMs);
+}
 
 NvidiaAfxPack::~NvidiaAfxPack() { cancel(); }
 

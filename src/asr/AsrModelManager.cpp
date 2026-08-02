@@ -13,6 +13,11 @@
 #include <QUrl>
 #include <QtConcurrent>
 
+// Stall timeout for model downloads (#4688 §6). 30 s rather than 15: models
+// run to hundreds of MB and this clock resets on every byte, so it only fires
+// on a genuinely dead transfer, not a slow one.
+constexpr int kTransferTimeoutMs = 30000;
+
 namespace AetherSDR {
 
 Q_LOGGING_CATEGORY(lcAsrModel, "aether.asr.model")
@@ -47,6 +52,7 @@ AsrModelManager::AsrModelManager(QString cacheDir, QNetworkAccessManager* nam, Q
 {
     if (m_nam == nullptr) {
         m_nam = new QNetworkAccessManager(this);
+        m_nam->setTransferTimeout(kTransferTimeoutMs);
         m_ownsNam = true;
     }
 }

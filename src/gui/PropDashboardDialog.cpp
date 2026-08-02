@@ -22,6 +22,9 @@
 #include <QVBoxLayout>
 #include "core/ThemeManager.h"
 
+// Stall timeout for the dashboard's space-weather fetches (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+
 namespace AetherSDR {
 
 namespace {
@@ -385,6 +388,7 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
     resize(initialWidth, initialHeight);
 
     m_nam = new QNetworkAccessManager(this);
+    m_nam->setTransferTimeout(kTransferTimeoutMs);
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(10, 10, 10, 10);

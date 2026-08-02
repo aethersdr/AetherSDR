@@ -979,6 +979,10 @@ void TitleBar::showFeatureRequestDialog()
 {
     // Version check guard (#486) — warn if not on latest release
     auto* nam = new QNetworkAccessManager(this);
+    // Bound the version check (#4688 §6). Without it a half-open connection to
+    // api.github.com leaves the reply pending for the lifetime of the window,
+    // holding the manager and the lambda's captures with it.
+    nam->setTransferTimeout(15000);
     auto* reply = nam->get(QNetworkRequest(
         QUrl("https://api.github.com/repos/aethersdr/AetherSDR/releases/latest")));
     connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {

@@ -1381,6 +1381,9 @@ void MainWindow::buildMenuBar()
 
         // Fetch live contributor list from GitHub API
         auto* nam = new QNetworkAccessManager(dlg);
+        // Bound the contributor fetch (#4688 §6) — without it a half-open
+        // connection leaves the About dialog's list pending with no error.
+        nam->setTransferTimeout(15000);
         auto* reply = nam->get(QNetworkRequest(
             QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
         connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {

@@ -11,6 +11,9 @@
 #include <QDir>
 #include <QFileInfo>
 
+// Stall timeout for POTA spot queries (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+
 namespace AetherSDR {
 
 PotaClient::PotaClient(QObject* parent)
@@ -23,6 +26,7 @@ void PotaClient::initialize()
 {
     if (m_nam) return;
     m_nam = new QNetworkAccessManager(this);
+    m_nam->setTransferTimeout(kTransferTimeoutMs);
     m_pollTimer = new QTimer(this);
     m_pollTimer->setSingleShot(false);
     connect(m_pollTimer, &QTimer::timeout, this, &PotaClient::onPollTimer);

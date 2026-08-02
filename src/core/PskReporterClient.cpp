@@ -23,11 +23,15 @@
 
 Q_LOGGING_CATEGORY(lcPskReporter, "aether.pskreporter")
 
+// Stall timeout for PSK Reporter queries (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+
 namespace AetherSDR {
 
 PskReporterClient::PskReporterClient(QObject* parent)
     : QObject(parent)
 {
+    m_nam.setTransferTimeout(kTransferTimeoutMs);
     connect(&m_timer, &QTimer::timeout, this, &PskReporterClient::poll);
 
     // Five-minute MQTT health summary — enough to spot a dead or flapping
