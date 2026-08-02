@@ -36,7 +36,21 @@ void check(bool condition, const char* description)
 
 bool spinUntil(const std::function<bool()>& predicate, int timeoutMs = 2000)
 {
-    return AetherTest::waitFor(predicate, timeoutMs);
+    const bool ok = AetherTest::waitFor(predicate, timeoutMs);
+    // Trailing drain, deliberately preserved from the pre-#4699 helper. Call
+    // sites below wait on one condition and then assert on state that settles an
+    // event hop LATER: the restart check waits for the SERVER to see a pending
+    // connection, then asserts the BRIDGE already counts that client as live.
+    // waitFor() returns the moment its predicate holds, so without this the hop
+    // is lost. Observed: 4 failures of "a live client with the same id is still
+    // refused" across 360 runs under 14-way CPU contention, against 0/360 for
+    // main's version of this file in the same interleaved run. It did not
+    // reproduce in a further 400 runs, so the rate is low and the drain's effect
+    // was never demonstrated by a clean A/B — this is kept because it restores
+    // exactly what the pre-#4699 helper did, not because it was proven to fix
+    // the flake.
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    return ok;
 }
 
 class BridgeClient

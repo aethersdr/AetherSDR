@@ -55,6 +55,34 @@
 // A test that reaches for pumpFor() when it means waitFor() is slow and
 // timing-fragile; one that reaches for waitFor() when it means pumpFor() is
 // asserting on a window it never actually waited out.
+//
+// ---------------------------------------------------------------------------
+// Two things that bite when MIGRATING an existing spin to waitFor()
+// ---------------------------------------------------------------------------
+//
+// 1. No trailing drain. Several of the hand-rolled spins this replaced ran an
+//    unconditional processEvents() AFTER their predicate held. waitFor() returns
+//    the instant the predicate is observed — and returns having processed
+//    nothing at all when it is already true on entry. A call site that waits on
+//    one condition and then asserts on state that settles an event hop later
+//    silently loses that hop. This is not theoretical: tci_automation_test lost
+//    4 runs in 360 under load to it, against 0/360 for its pre-migration self,
+//    on an assertion about state one signal downstream of the awaited condition
+//    (it did not reproduce in a further 400 runs, so the rate is low — but the
+//    mechanism is not in doubt). Both affected call sites keep an explicit
+//    drain; see the comment on tci_automation_test's spinUntil(). Prefer waiting
+//    on the condition you actually assert on — the drain is compatibility with
+//    the old spins, not a design to copy into new tests.
+//
+// 2. deleteLater() now runs. A nested QEventLoop and a top-level processEvents()
+//    spin do not treat DeferredDelete alike: Qt's allowDeferredDelete includes
+//    (!eventLevel && loopLevel > 0), so an object deleteLater()'d at loop level
+//    zero — where these tests issue it — is collected INSIDE waitFor(), where
+//    the old spin never collected it at all. Measured on Qt 6.11.1: COLLECTED
+//    under the nested loop, STRANDED under the spin. That is an improvement, but
+//    it changes object lifetime: something that used to survive a wait is now
+//    destroyed during it, so a raw pointer held across a waitFor() can dangle
+//    where it previously did not.
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
