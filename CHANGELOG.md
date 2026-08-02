@@ -8,134 +8,150 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Fixed: the macOS build keeps GPU spectrum rendering when Qt comes from Qt (#4688, #2191)
+## [v26.8.1] — 2026-08-02
 
-**The Apple Silicon DMG now ships the Qt it says it ships — 6.8.3, the same one
-behind every other download — and keeps drawing the spectrum on the GPU while
-doing it.**
+### Hermes-Lite 2 grows up · settings move to SQLite · capability-gated UI · Qt 6.8 across every build · TCI PTT routing fixed
 
-Until now that DMG took Qt from Homebrew: whatever version Homebrew happened to
-be publishing on the day a release was tagged. That was 6.11.1 while every other
-artifact was pinned to 6.8.3, so the most-downloaded macOS build was the only one
-running a Qt nobody had tested it against — and it could change between two
-releases with no code change anywhere. It is the most likely explanation for
-#2191, where the DMG's Qt behaved differently from a standard install of the
-same version.
+118 commits since v26.7.4.1. The bulk of the work is on the **Hermes-Lite 2**,
+which arrived experimental in v26.7.4 and now runs **four independent
+receivers**, a complete **SSB voice chain**, **CW and RTTY decoding**, **AX.25
+packet** including a mailbox proven on the air, **band switching with hardware
+filters and preamp**, **memory channels**, and a **Radio Health dialog** that
+reports what the radio is actually doing rather than what it was asked to do.
+It remembers where you left it, per radio. FlexRadio remains the supported
+target and nothing here changes the Flex path, but the gap between the two has
+closed a long way.
 
-Pinning it exposed a second problem that had been hiding behind Homebrew. Qt's
-own macOS packages arrange their headers differently from every other platform,
-and AetherSDR's build did not recognise that arrangement — so the GPU spectrum
-renderer quietly switched itself off and the app fell back to CPU drawing, with
-nothing in the build saying so. Both halves are fixed here, and the release now
-refuses to produce a macOS app that has silently lost GPU rendering or that
-bundles a Qt other than the pinned one.
+Underneath that, two structural changes. **Client settings moved to SQLite**
+(RFC #4603) — transactional saves, integrity checks, verified backups,
+credentials out of settings and into the OS keychain, a `--config` command line
+for repairing a store that won't start, and a **Settings Browser** for reading
+and editing the whole thing. And **`RadioCapabilities` now gates the UI**: every
+Flex-only surface hides itself on a backend that has no such thing, declared by
+what the concept *is* rather than by which radio is plugged in.
 
-Also on macOS: SmartLink credential persistence — staying logged in between
-launches — is now built as part of the release rather than picked up from
-Homebrew, and its absence is a build failure instead of a feature that
-disappears without a word.
+The build got the same treatment. **Qt 6.8.3 LTS is now the floor and the pin
+everywhere** — the CI image, both AppImage architectures, the Windows installer
+and both macOS legs — so one Qt version covers every check and every artifact.
+Along the way the Apple Silicon DMG stopped taking whatever Qt Homebrew was
+publishing that day, the ARM AppImage stopped falling back to CPU spectrum
+drawing, and the Linux AppImage started running natively on Wayland.
 
-### Fixed: the Linux AppImage runs natively on Wayland instead of XWayland (#1389, #1233)
+Rounding it out: **TCI PTT keys the slice the client asked for** — the fault two
+operators reported across v26.7.3 and v26.7.4 was four separate defects — the
+**theme system's compiled fallback table is now generated** rather than
+hand-maintained (it had drifted on 9 tokens and was missing 25 more), **RN2 no
+longer pumps on binaural and diversity audio**, and there is a broad wave of
+metering, squelch, demo-mode, macOS, Windows and accessibility fixes.
 
-**On a Wayland desktop the AppImage now uses Wayland directly.** Text and the
-spectrum are sharp under fractional scaling — previously the desktop was
-bitmap-scaling an X11 window — and the AppImage finally receives the fix for the
-GLX crash that could happen when opening a dialog such as Radio Setup on some
-desktops. Every other Linux build has had that fix since v0.8.12; the AppImage
-was the one left out.
+**The Intel Mac build trades a feature for reach:** it runs on **macOS 12.0**
+again, and gives up **speech-to-text** to get there — the speech runtime is
+published at a macOS 15.5 floor that most Intel Macs will never reach, and one
+library's floor becomes the whole bundle's. Apple Silicon is unaffected; see
+*macOS* below.
 
-It was left out to stop a worse problem. The AppImage asked for Wayland without
-carrying the piece of Qt that talks Wayland, so it refused to start at all on
-Ubuntu 24.04 and anything else defaulting to a Wayland session. The quick fix
-was to stop asking for Wayland in the AppImage, which cured the crash and
-stranded those users on XWayland permanently. The Wayland support was in fact
-present in the Qt we build against the whole time — it simply never made it into
-the packaged app, and nothing in the build noticed, because it is loaded on
-demand rather than linked. It is now packaged, and the release build fails if it
-ever goes missing again.
+### Hermes-Lite 2
 
-AetherSDR also now asks for Wayland *with a fallback* rather than demanding it,
-so a machine without Wayland support quietly uses XWayland instead of failing to
-start. If a desktop misbehaves under native Wayland, `QT_QPA_PLATFORM=xcb`
-forces the old path — documented in the README next to `AETHER_NO_GPU`. Setting
-`QT_QPA_PLATFORM` yourself always wins.
+- **Four independent receivers (#4545).** Up to four DDCs, each with its own
+  NCO, slice, WDSP channel, demodulated audio, S-meter and panadapter, added
+  and closed at runtime through *Add Panadapter* and the pane close button.
+  Before this the backend ran one receiver and the count was fixed at connect.
+  The HL2 has one AD9866, so some things are shared by the hardware rather than
+  by choice: sample rate is one register field, which means every pan shows the
+  same span, and LNA gain, band and antenna are radio-wide. Mode, passband, AGC
+  and frequency are per receiver. Both axes ride one 100BASE-T link — four
+  receivers are available through 192 kHz, three at 384 kHz.
 
-Reported by @cjdellis on Ubuntu 24.04.
+- **Band switching, hardware filters and hardware preamp (#4503).** The band
+  sidebar resolved a Flex band-stack key and sent a command the HL2 has no
+  plane for, so the button moved, the setting persisted, and nothing reached
+  the hardware. The app is now authoritative on a backend without a Flex
+  command plane and tunes the slice directly. The same root cause affected the
+  hardware LPF/BPF filter selection and the preamp.
 
-### Changed: the waterfall recolours its history when you change the palette (#4694)
+- **Radio Health dialog (#4503, #4696).** A per-backend health view reporting
+  what the radio itself says — link, temperature, supply, PA current, gateware
+  — rather than what the client asked for. It grew a **Transmit voice chain**
+  section covering mic level and applied gain, mic peak for the current over,
+  the ALC hold threshold, ALC gain and post-ALC peak, the passband in use, and
+  both instantaneous and held forward power.
 
-**Picking a new waterfall Scheme now recolours the waterfall you are already
-looking at, instead of only the rows that arrive next.** Previously the palette
-change took effect at the waterline: everything above it kept the old colours,
-so comparing two schemes meant waiting for the display to scroll clear. The 3D
-spectrum has always recoloured immediately — the 2D waterfall now matches it.
+- **The SSB voice chain is wired (#4609).** The EQ applet, PROC, the Phone
+  applet's TX low-cut and high-cut, eSSB, and the ALC and Compression gauges
+  were all controls that did nothing on this radio — each turns operator intent
+  into a Flex command-plane verb, and none of those reach anything without a
+  Flex command plane. None of it needed new DSP: the Aetherial chain already
+  runs on the HL2's transmit audio and the modulator already computed an ALC
+  gain nothing was reading. They are now connected to it.
 
-Switching *themes* does the same thing, for the same reason: the theme owns the
-gradient behind every preset, so a theme change is a palette change.
+- **CW, RTTY and the QSO recorder work (#4537).** All three bound directly to
+  the panadapter stream's audio signal, which early-returns when there is no
+  stream — so on a radio that demodulates in-process they bound to *nothing*.
+  No error, no log line: the toggle worked, the panel opened, and nothing ever
+  decoded. All three now ride one normalized `rxDemodAudioReady` signal.
 
-Nothing moves while it happens. The waterfall keeps its scroll position, its
-paused scrollback, and its place in the scroll animation — the retained rows
-were always stored as palette-independent intensity, so recolouring is a
-repaint of what is on screen, the same work a pan already does, and the
-scrollback above the viewport recolours as you scroll it back in.
+- **AX.25 packet — APRS, the KISS TNC, the terminal and the mailbox (#4661).**
+  Proven on the air between an HL2 mailbox and a FlexRadio terminal on
+  21.100 MHz: two complete BBS sessions, messages left and retrieved, both
+  ending in a graceful disconnect. AetherModem transmit previously required a
+  FlexRadio DAX stream and simply hung on any radio without one — PTT never
+  engaged and every queued frame was lost when the window closed.
 
-### Fixed: transmit audio breaking up with RN2 enabled (#4584)
+  Connected-mode reliability improved with it, on every radio:
 
-**Your transmitted audio no longer breaks up when RN2 is on.** Remote transmit
-audio reaches the radio as one small Opus packet every 10 ms. RN2 runs on the
-same thread as the timer that paces those packets, so when RN2 delayed a tick
-the pacer had no way to make the time back up — it sent one packet per tick no
-matter how far behind it had fallen. Packets piled up until a 200 ms cap began
-deleting them outright, and the other station heard the gaps. It was worst on
-slower machines and over SmartLink/WAN, and every deleted packet also left a
-hole in the transmit sequence numbering the radio checks.
+  - **Timers are derived from the air interface** instead of hardcoded. The old
+    fixed 6-second retransmit timeout was shorter than the 6.8 seconds it takes
+    to send one full-size frame at 300 baud, so every HF frame timed out before
+    its acknowledgement could physically arrive and the link died. On HF the
+    packet length now defaults to 64 bytes as well — at 300 baud a 128-byte
+    frame is four seconds of continuous transmission, and a single bit error
+    costs the whole frame.
+  - **A lost acknowledgement no longer kills the session.** A repeated frame was
+    treated as a gap in the sequence and answered with silence, so one dropped
+    acknowledgement was unrecoverable. Repeats are now acknowledged again.
+  - **Sessions no longer stall or hang.** A connected link can't come to rest
+    with data still queued; an idle link is polled so a station that disappears
+    can't hold the mailbox open against every other caller (it previously stayed
+    locked out until restarted); and a peer that keeps rejecting can no longer
+    make us retransmit indefinitely.
+  - **Stopping means stopping.** Pressing BYE a second time now ends a
+    disconnect instead of restarting it — repeated presses previously kept the
+    radio transmitting. Switching the modem off now halts transmission and drops
+    any session, where before it stopped only the decoder and kept keying.
+  - **AX.25 v2.2 callers connect immediately.** A SABME connect request is
+    answered rather than ignored, so v2.2 stations fall back to v2.0 at once
+    instead of retrying until they give up.
+  - **New Terminal controls**: Retry, Paclen and TXDELAY default to **Auto**,
+    derived from the current modem profile, and remain overridable. A session's
+    measured round-trip time is shown in `STATUS` and recorded in the log, which
+    is what tells a mis-sized timeout apart from a poor channel.
 
-The pacer now follows real elapsed time and may send a small burst (up to three
-packets) to recover from a late tick, and the sequence number is assigned when a
-packet actually goes out rather than when it is queued, so the numbering stays
-unbroken even if the queue does overflow. An overflow is now written to the log
-instead of failing silently — the old behaviour left no trace in a support
-bundle, which is why this kept arriving as unexplained "audio break up". Live
-pacing counters are exposed to the automation bridge (`get audio` →
-`opusTxPacing`) for diagnosing future reports.
+- **Memory channels on radios that have none (#4590).** Memory was built on
+  four commands the client sends the radio, so on an HL2 saving a channel did
+  nothing, the browse panel stayed empty, and the memory-spot feed had no
+  memories to draw. Channels are now stored on the host when the backend
+  declares it has no slots of its own — with no change to the memory dialog,
+  the browse panel, the CSV codec or the spot feed. The bank is deliberately
+  *shared* across every memory-less radio (HL2, KiwiSDR, demo), like the
+  shack's paper log, rather than scoped per radio (#4623).
 
-Reported by @Bill6000 on a FLEX-6500 under Linux Mint.
+- **The radio remembers where you left it, per radio (#4619).** Frequency,
+  mode, passband and span/sample-rate are restored per MAC address, so two
+  HL2s — or an HL2 and a Radioberry — keep independent state. **TX drive and
+  LNA gain are remembered per band**, so the drive that makes 5 W on 80 m no
+  longer follows you to 10 m, on restore or on a band change.
 
-### Minimum Qt raised to 6.8 — source builds on Ubuntu 24.04 need a newer Qt
+- **Live connection health (#4607).** The title-bar status indicator stayed
+  amber for a whole session instead of blinking green on a live connection, and
+  connection health on the status bar and in the Network Statistics pane was
+  blank or all zeros — none of it was a bug in those surfaces, they simply had
+  no source on a backend with no panadapter stream. All three now read from the
+  backend's own link statistics. No behaviour change on the FlexRadio path.
 
-**Building from source now requires Qt 6.8 or newer.** Nothing changes for
-users of the release binaries: the AppImage, the Windows installer and the
-macOS build were already compiled against Qt 6.8.3 LTS, and still are.
-
-The old floor said 6.2 and nothing enforced it. The only CI leg near it was the
-Linux container on Ubuntu 24.04's **Qt 6.4.2** — seven minor versions behind
-current, and EOL upstream since the 6.4 series ended at 6.4.3. So the project
-was testing a Qt no artifact shipped, and *rejecting* code that is valid on
-every configuration it actually ships: PR #4646 was failed by CI for using
-`QList::assign()`, a Qt 6.6 addition that works fine on all three release
-builds. The reverse risk was live too, since no per-PR Linux job compiled
-against 6.8.3 — the AppImage first sees that Qt at release-tag time.
-
-The CI image now installs Qt 6.8.3 via aqtinstall instead of using the distro's,
-matching `appimage.yml` and the Windows leg, so one Qt version covers every
-check and every artifact. It also builds qtkeychain from source against that Qt,
-since the distro package is compiled against 6.4.2. A side effect: the CI image
-clears the QRhi floor (6.7+), so GPU spectrum rendering is no longer silently
-compiled out of Linux CI builds.
-
-Distro Qt satisfies 6.8 on Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch.
-On **Ubuntu 24.04 LTS** it does not — build against a Qt from aqtinstall or the
-Qt online installer and pass
-`-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64`. See the README's dependency
-section.
-
-### Fixed
-
-- **Hermes-Lite 2: the MIC slider reached nothing, and the wattmeter read voice
-  ~3.5 dB low (#4696).** Reported from the bench as 6 W out on FT8 and WSPR but
-  never more than 1 W on SSB voice, at every mic and RF level, with and without
-  the compressor. Three faults, and the first is why the other two were
-  invisible.
+- **The MIC slider reached nothing, and the wattmeter read voice ~3.5 dB low
+  (#4696).** Reported from the bench as 6 W out on FT8 and WSPR but never more
+  than 1 W on SSB voice, at every mic and RF level, with and without the
+  compressor. Three faults, and the first is why the other two were invisible.
 
   *The wattmeter was measuring the wrong thing on voice.* Forward power was
   published as the raw instantaneous sample from the HL2's directional coupler
@@ -171,61 +187,146 @@ section.
   *And the readback agreed with the failure.* Every readback available while mic
   gain was dead reported the requesting side, so all of them agreed the control
   worked. A confirmation sourced from the requester cannot detect a request that
-  never arrived. The modulator now echoes its own gain, and the Radio Health
-  dialog gained a **Transmit voice chain** section reporting both the operator's
-  request and what the modulator is actually running — mic level and applied
-  gain, mic peak for the current over, the ALC hold threshold, ALC gain and
-  post-ALC peak, the passband in use, and both instantaneous and held forward
-  power.
+  never arrived. The modulator now echoes its own gain.
 
-- **TX meter hover badges no longer stack up two at a time, and they let go
-  (#3936 follow-up).** Traversing the stacked TX meters left **two** value
-  badges on screen at once. Every `HGauge` allocated its own `DragValuePopup`
-  with nothing coordinating them, so entering the SWR bar raised a second badge
-  rather than replacing the RF Pwr one. Those two are consecutive rows two
-  pixels apart and both badges anchor above the pointer, so the pair landed
-  nearly on top of each other, covering the TX Controls header and the RIT/XIT
-  row. The badge is now claimed app-wide — entering a gauge closes whichever
-  one is already showing — so at most one is ever up.
+- **TUNE keys at TUNE power, not RF power (#4551).** Set RF Power 100 and Tune
+  Power 10 — an ordinary configuration — press TUNE, and the radio keyed at
+  100 into whatever was connected, for as long as tune was held. That is the
+  opposite of what the control exists for. The Tune Power slider now reaches
+  the drive register.
 
-  The survivor could also stay up indefinitely. `leaveEvent` starts a hide
-  timer rather than hiding, every meter frame cancelled that timer, and Qt does
-  not guarantee a `leaveEvent` — so one dropped leave pinned the badge on
-  screen, frozen at the anchor the pointer had left it at, for as long as the
-  radio kept reporting. Recovery is now a 250 ms watchdog armed only while the
-  pointer is physically over the bar, which bounds a dropped leave by wall
-  clock whether or not values keep arriving — so a settled meter, or one that
-  stopped reporting on unkey, recovers too.
+- **"Auto-reconnect to last radio" works (#4507).** Saved-radio autoconnect was
+  wired to the FlexRadio discovery signal only. An HL2 arrives on a completely
+  separate UDP sweep and never appeared there, so every launch meant watching
+  the radio show up in the connect list and clicking it by hand, with "Looking
+  for your radio…" on screen the whole time.
 
-  The linger itself drops from a bespoke 1000 ms to the 450 ms every other
-  `DragValuePopup` in the app already uses (settled in #2944), so the readout
-  no longer sits over the next control long after the pointer has gone.
+- **Connect by IP asks which radio you are dialing (#4528).** The page probed
+  for an HL2 first and fell through to the Flex probe, so every Flex connect
+  paid the HL2 timeout and an HL2 operator got no signal about which protocol
+  had been tried when a connect failed. A **Radio type** dropdown now selects
+  the family and probes exactly that one. This is what makes an HL2 reachable
+  over a VPN, where discovery broadcast does not cross.
 
-- **Demo mode no longer opens with a ghost "Slice A" panadapter (#4671).** The
-  demo's simulator claims its panadapter from its own synthetic wire, but the
-  model treated every non-Flex backend as wire-less and minted a *second*,
-  ownerless pan in the neutral id space on the seam's geometry edge — a pane the
-  user could neither use nor delete. The same assumption re-addressed the demo's
-  slice into that neutral space, so the slice pointed at the ghost rather than
-  at its real pan; with the ghost gone it would have pointed at nothing. Both
-  now key off whether the backend vends its own connection, so the demo opens
-  with one panadapter and a slice that belongs to it — restoring the pan title
-  bar, adaptive RX filter, auto-squelch, centre-lock and band recall on demo
-  mode. Hermes-Lite 2 and other wire-less backends keep the neutral mapping.
+- **Connect no longer leaves the passband disagreeing with the mode (#4484).**
+  A fresh connect came up in USB carrying DIGU's passband while the mode
+  indicator read USB the whole time — the unmapped-mode fallback happened to
+  match the backend's member default, so only a real mode *change* re-derived
+  it. Found by the radio bring-up diagnostic's mode-map stage.
 
-- **Demo mode's power-line hum clicked instead of bending when you moved its
-  50/60 Hz slider (#4668).** The hum's six harmonics were synthesized from
-  absolute time × the current mains frequency, so every move of **Power-line**
-  in the Demo applet jumped all six phases at once rather than changing their
-  frequency — and because that jump scales with the harmonic number, the high
-  harmonics stepped hardest and the click grew with how long the session had
-  been running. The hum now accumulates phase per sample the way the CW tone
-  (#4618) and the birdie carrier already did, deriving every harmonic from one
-  shared fundamental so they stay locked to each other, and bends smoothly to
-  the new frequency. This was the last generator in the demo mixer still keyed
-  off absolute time. Demo mode only — no radio, protocol, or transmit path is
-  involved.
+- **The Display ▸ WtrFall Rate slider ran backwards (#4606).** The control is a
+  rate — 1 slow, 100 fast — but it travels under FlexRadio's `line_duration`
+  wire name, which is typed as milliseconds. On a radio whose waterfall this
+  client paces itself, the number was read literally, so 1 gave the fastest
+  scroll and 100 the slowest. 100 is the default, which meant every HL2 session
+  started on the slowest setting at about 10 rows/second. The slider now runs
+  the right way and is linear in rows per second: 0.2 rows/s at the bottom, and
+  at the top the waterfall simply tracks the panadapter's frame rate (which
+  Display ▸ FFT FPS owns) — measured at 25 rows/s on a real HL2. Half-way up the
+  slider is now half speed, which it never was. FlexRadio radios are unaffected:
+  their own display engine has always done this conversion.
 
+  *Adaptive network throttling had the same unit confusion one layer up*: the
+  throttle converted its frame-rate cap straight into a duration and sent it as
+  a rate, so a "Poor" 4 fps cap asked for the *fastest* waterfall setting
+  available. Worse network, faster waterfall.
+
+  *And the waterfall Black Level button offered a hardware mode on radios that
+  have no such thing.* `HW` hands the black-level decision to the radio, which
+  only FlexRadio hardware computes. On an HL2, selecting it sent a command
+  nowhere and left the waterfall waiting for a level that never arrived. The
+  button now cycles `Off ↔ SW` on radios without it. If you chose `HW` on a
+  FlexRadio, that choice is **remembered, not overwritten**.
+
+- **AetherClock decodes on the HL2 (#4615).** It gated its audio connect on the
+  panadapter stream, which a backend that demodulates in-process does not have,
+  so the engine started and no PCM ever arrived. The applet's amber "Bound
+  slice has no DAX channel — no audio" was the closest thing to a diagnosis,
+  and it named the wrong cause.
+
+- **The status bar labels the gateware version, and fits a long nickname on one
+  line (#4596).** The HL2 reports a gateware revision, which the status bar
+  printed as a bare number under the model name, with nothing saying what it
+  counted.
+
+### Client settings store moved to SQLite (RFC #4603)
+
+- **Settings now live in a SQLite database** (`AetherSDR.db` in the config
+  folder) instead of the XML file (#4612). The switch is automatic and verified
+  on first launch; your old `AetherSDR.settings` stays in place untouched, so
+  rolling back to an older release keeps the settings you had at upgrade time
+  (changes made after the upgrade stay with the new version).
+- **Safer storage**: transactional saves (no more full-file rewrites), startup
+  integrity checks, automatic verified backups, and quarantine + restore if the
+  store is ever damaged — with a notice telling you which backup was used.
+  Reset Settings now writes a final backup before wiping. Fixes a latent
+  threading race in the settings core (#4602).
+- **Credentials are never stored in settings anymore.** The MQTT password,
+  automation-bridge token, and remote-ASR API key move to your OS keychain
+  automatically during the upgrade.
+- **New `--config` command line**: `aethersdr --config list|get|set|unset|
+  export|path` inspects or repairs settings without starting the GUI — the
+  escape hatch when a broken stored value prevents startup.
+- **Per-radio feature documents (#4614).** Radio-scoped configuration is stored
+  as one versioned JSON document per (family, radio, feature), with reads
+  falling back exact-radio → family-wide → empty, and writes committed whole in
+  a single transaction. This is what carries the HL2's operating-state restore
+  (#4619) and the band stack.
+- **Bookmarks are durable the moment you make them (#4621).** The BandStack
+  moves to per-radio feature documents with write-through persistence; the
+  separate `save()` step is gone, so a bookmark no longer rides on a later
+  explicit save that a crash could beat. Existing bookmarks are claimed from
+  the legacy store lazily, on first touch.
+- **New Settings Browser** (Settings ▸ Settings Browser…) (#4631): browse and
+  edit the whole settings store — app keys, the station section, and each
+  radio's stored feature documents — with live filtering, guarded editing
+  (True/False picker, JSON validation, confirmations), and a sanitized
+  diagnostic export. Credential-shaped values are masked and read-only; a store
+  from a newer version browses read-only.
+
+### Radio capabilities — the UI follows what the radio can do
+
+- **Flex-only UI hides itself on non-Flex backends (#4508).** The PROF applet
+  and Profile Manager, DAX, the ATU chain, SmartLink, and the rest are each
+  gated on a declared `RadioCapabilities` field named for the *concept* — not
+  on a call site asking "is this a Flex". Every surface that a backend cannot
+  serve is now absent rather than present-and-inert.
+- **GPS presence is gated on both the family capability and the live unit
+  (#4632, #4538).** A Flex with the GPSDO option not fitted no longer shows a
+  GPS stack, and a capability declaration is no longer mistaken for installed
+  hardware. Both `gpsdo_present` and `gnss_present` are recognised, without
+  latching stale truth across sessions.
+- **The status bar's PA supply voltage is gated on declared telemetry (#4597).**
+  On a radio that reports no supply voltage the row still rendered — as
+  `0.00 V`, a fabricated reading presented in the same style as a real one.
+  Where the row is shown but nothing has arrived yet, it renders a dash rather
+  than a zero.
+- **The DVK button follows the radio's SmartSDR+ entitlement (#4653).** DVK
+  requires a subscription and AetherSDR never checked, so on a radio without it
+  the button was fully live: it opened the panel, the radio refused every
+  command, and the feature read as *broken* rather than *unlicensed* — after
+  the operator had already recorded into a slot that was never going to work.
+
+### Transmit, metering & audio
+
+- **The TX filter now says when it is removing your transmit audio (#4649).**
+  A TX low/high cut that excludes the transmit audio keys the radio normally
+  and produces almost no RF, and nothing connected the two. In DIGU/DIGL there
+  was no cue at all — the digital application reported a normal transmit cycle
+  while forward power sat at zero. The radio's own taps either side of the
+  filter are now compared, and a large attenuation between them is reported.
+- **Forward power stopped reporting for ~3 seconds after unkey (#4540).** The
+  raw dBm meter is honest and reads zero within 200 ms, but the derived watts
+  value decayed exponentially from full power — measured on a FLEX-6700 into a
+  500 W dummy load, still showing 3.45 W at the moment the meter read zero.
+  Reflected power, five lines below in the same function and unsmoothed, dropped
+  instantly, so the two directional readings disagreed about whether the radio
+  was transmitting at all.
+- **SWR no longer reports a stale reading while receiving (#4533).** With no
+  transmit for over sixteen minutes the meter kept showing the value measured
+  during the *previous* transmit — a steady `SWR 2.88` on a station that was
+  working perfectly, which reads as a live antenna fault. The staleness was
+  already in the snapshot and simply was not acted on for SWR.
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —
   the ACOM auto-range as forward power outgrows its tier, an SPE LOW/MID/HIGH
@@ -235,11 +336,180 @@ section.
   persisted indefinitely. Measured on the bench: an ACOM reflected-power gauge
   showed **206 W for 120 W** after an auto-range and stayed there, and an SPE
   at a steady 1000 W read 1455 W after MID→HIGH and 688 W after HIGH→MID.
-  Reflected power is the worst case, since that is the reading an operator
-  uses to decide whether to stop transmitting. The fill now follows the axis
+  Reflected power is the worst case, since that is the reading an operator uses
+  to decide whether to stop transmitting. The fill now follows the axis
   immediately — snapped rather than swept, because the scale moved and the
   signal did not. The PA-temperature gauge's °C/°F toggle was already correct
   and is unchanged.
+- **Client-side recording refuses instead of writing an empty file (#4629).**
+  With PC Audio disabled, Client-Side recording produced a correctly named,
+  44-byte, header-only WAV and reported success — found while recording with
+  the monitoring done on the radio's own speaker rather than the PC. The only
+  RX producer for the recorder is a stream that is created only when PC Audio
+  is enabled.
+- **AetherVoice playback, CW sidetone and Quindar tones work on
+  class-compliant multichannel USB interfaces on Windows (#4641).** On devices
+  like the Akai EIE, WASAPI's shared-mode format query reported the device as
+  unable to play any of the negotiated formats, even though the same device was
+  already playing RX audio fine. The three affected paths now open the device
+  the same way the RX sink always has: try each candidate format for real and
+  keep the first one that actually starts, instead of asking the query for
+  permission first. Previously, pressing Record in AetherVoice on an affected
+  device would mute audio and silently never play the recording back.
+- **The WSPR beacon matches WSJT-X on tone convention, frame taper and slot
+  timing (#4605).** The transmitted frame decoded, but differed from the
+  reference implementation in four ways that each cost signal quality or
+  accuracy — including a tone convention 2.2 Hz low. A WSPR frame is judged by
+  decoders we do not own, so its conventions are not ours to choose; WSJT-X's
+  `Modulator.cpp` is the oracle throughout. The reported symptom, "it opens the
+  band in USB, not DIGU, with a very wide open filter", was real and was one of
+  the five things wrong.
+
+### RN2 (RNNoise)
+
+- **RN2 no longer pumps on stereo and binaural receive audio (#4584).** If you
+  listen to RN2 with binaural or diversity receive audio, the noise floor no
+  longer rises every time someone talks. Nothing changes for duplicated-mono
+  slices, and nothing changes in how much noise RN2 removes.
+
+  RN2 used to denoise an L/R downmix, derive a gain envelope from the result and
+  re-apply that one envelope to the original stereo. That is exact when the two
+  channels are proportional to their sum — plain mono, and simple panning — but
+  binaural and diversity audio are not: the downmix has comb-filter nulls the
+  individual channels do not, so the envelope fits neither channel. The audible
+  result was the noise floor breathing with speech, loud under voice and gated
+  between phrases. RN2 now runs one RNNoise instance and one matched resampler
+  pair per receive channel, driven from the same block so the two stay in
+  lockstep. Pan, stereo balance, diversity and binaural phase all survive it. A
+  regression test mixes a steady tone into binaural speech and measures its level
+  during speech against the gaps: the old path modulated it ~15x, the new one
+  ~1.0x.
+
+  The transmit denoiser is unchanged — it still downmixes to mono, which is what
+  a microphone path wants.
+
+- **RN2 can leave a noise floor instead of going silent between phrases.**
+  **New, off by default:** *AetherDSP → RN2 → Noise Floor*. RNNoise gates hard,
+  which some operators hear as the receiver going dead rather than quiet. Raising
+  this leaves that percentage of the original signal under the denoised audio, so
+  the band still sounds live between phrases. 0% is what RN2 has always done and
+  remains the default; 10–20% is a usable floor. Receive only.
+
+  The blend happens inside RNNoise, before its synthesis and overlap-add stage,
+  rather than by mixing a dry copy of the waveform back in afterwards — mixing
+  two waveforms that have been through different delays comb filters, and the
+  whole point is a floor you stop noticing.
+
+- **Transmit audio no longer breaks up with RN2 enabled (#4584).** RN2 runs on
+  the same event loop as the 10 ms remote-audio TX pacing timer. When RN2
+  delayed that loop, Qt coalesced the missed timer events while the callback
+  emitted only one packet per delivered timeout, so the pacer could never repay
+  a lost deadline — recovered microphone frames accumulated until the 20-packet
+  cap discarded audio outright. A new pacer follows elapsed deadlines and drains
+  up to three packets per callback for bounded catch-up, so the stream stays
+  unbroken even if the queue does overflow. An overflow is now written to the
+  log instead of failing silently — the old behaviour left no trace in a support
+  bundle, which is why this kept arriving as unexplained "audio break up". Live
+  pacing counters are exposed to the automation bridge (`get audio` →
+  `opusTxPacing`) for diagnosing future reports.
+
+  Reported by @Bill6000 on a FLEX-6500 under Linux Mint.
+
+### Receive & squelch
+
+- **Manual squelch is remembered per slice again, on every path (#3326,
+  #4592).** Each slice keeps its own manual squelch threshold, but only the RX
+  applet was keeping that memory current. Setting the level any other way —
+  from a non-active slice's own VFO flag, a MIDI or controller squelch knob, or
+  from the radio itself (your own edit on another client, or the radio's session
+  restore) — left the remembered value stale, so the next time you cycled the
+  SQL button that stale value was pushed back to the radio and quietly undid
+  what you had set. Every route now keeps the live level and the remembered one
+  together, and levels the radio reports back update it too — except while Auto
+  is computing them, so Auto's tracking of the noise floor no longer overwrites
+  the threshold you chose by hand. Switching squelch off and back on returns you
+  to your own level rather than the Auto margin.
+- **Squelch is no longer saved between sessions (#4592).** Squelch belongs to
+  the radio, and AetherSDR was also keeping its own copy. On a FLEX that copy
+  was never read back — the radio reports the real level on every connect — so
+  it only added a settings write each time you moved the slider, and risked
+  fighting the radio on reconnect. New slices now start from the radio's own
+  level, and the leftover setting is removed from existing installs on first
+  launch.
+- **The CW APF level slider follows APF engagement (#4658).** With APF
+  disengaged the slider still dragged, the value label still updated, and the
+  command still went to the radio — while the audio was untouched. Every other
+  DSP parameter in the app is unreachable until its filter is on; APF predates
+  that convention and has now joined it.
+
+### Spectrum, waterfall & 3D FFT
+
+- **The waterfall recolours its history when you change the palette (#4694).**
+  Picking a new waterfall Scheme now recolours the waterfall you are already
+  looking at, instead of only the rows that arrive next. Previously the palette
+  change took effect at the waterline: everything above it kept the old colours,
+  so comparing two schemes meant waiting for the display to scroll clear. The 3D
+  spectrum has always recoloured immediately — the 2D waterfall now matches it.
+
+  Switching *themes* does the same thing, for the same reason: the theme owns the
+  gradient behind every preset, so a theme change is a palette change.
+
+  Nothing moves while it happens. The waterfall keeps its scroll position, its
+  paused scrollback, and its place in the scroll animation — the retained rows
+  were always stored as palette-independent intensity, so recolouring is a
+  repaint of what is on screen, the same work a pan already does, and the
+  scrollback above the viewport recolours as you scroll it back in.
+
+- **3D FFT and waterfall history stabilised (#4539).** Repeated zoom, pan, band
+  changes and window resizing still exposed several coupled problems in the
+  shared display pipeline after the v26.7.4 pass: the 3D surface could develop
+  false spikes or flat floor sections, peaks and boundary rows could bounce while
+  scrolling, the surface could shimmer or strobe, pan previews could move faster
+  than the waterfall and snap back on release, and newly exposed frequencies
+  could stay blank even though the radio was already sending wider native tiles.
+- **Fixed a stack overflow that could crash the app on a waterfall source
+  switch (#4595).** `WaterfallStreamState` held a `DssRenderer` by value —
+  ~801 KB of fixed row buffers — and both the save and restore paths
+  materialised stack-local copies to shuffle state between the live renderer and
+  the saved per-source slots, sometimes two alive at once.
+- **A band change can no longer black out the waterfall (#4522).** FLEX band
+  persistence removes and recreates slices during a band change, and the radio
+  can transiently mark a surviving old-band slice active during that
+  reconstruction. AetherSDR treated that as an ordinary selection and revealed
+  the off-screen slice, sending a pan-centre command that could undo the
+  radio-authoritative band change — frames kept arriving, but the old-band tiles
+  no longer overlapped the new frequency range, producing a completely black
+  waterfall.
+- **The AetherVoice channel-strip waveform no longer starves the waterfall
+  (#4616).** It independently requested GPU repaints at 90 Hz, on the same
+  render thread as the panadapter and with work that grows with the strip width,
+  so enlarging the channel strip consumed render time the waterfall needed. It
+  now matches the standalone WAVE applet's 25 Hz cadence.
+
+### KiwiSDR
+
+- **RX audio stays warm (still muted) through transmit (#4380).** Running an
+  RX-only KiwiSDR on one panadapter while transmitting from a Flex-backed slice
+  on another cost about a second of silence on every unkey, followed by an
+  audible re-sync. The transmit mute was destructive: it dropped every incoming
+  packet at the feed gate, wiped the jitter buffers on both PTT edges and reset
+  the NR/DSP state, so each unkey had to re-prime a 360 ms jitter buffer and let
+  NR re-converge from cold. There is a per-profile **Keep audio during TX**
+  option.
+- **New per-profile "Resume audio after TX delay" (#4571)** — suppresses the
+  operator's own transmit tail after unkey, on receivers far enough away to hear
+  it late.
+- **A tuned carrier in CW is audible again (#4423).** KiwiSDR's `SET … freq=`
+  is the BFO/mixdown point, not a dial frequency, and the low/high cuts are an
+  audio passband applied *relative to it* — so sending the carrier frequency put
+  the carrier at 0 Hz, either outside the passband (no tone) or landing as an
+  inaudible DC thump. The BFO is now offset by the radio's CW pitch.
+- **A Kiwi pan keeps its zoom through a tune-driven recentre (#4424).** On a
+  panadapter whose slice uses a KiwiSDR virtual antenna, zooming in and then
+  dragging the slice flag snapped the pan back to the zoom level it had when the
+  Kiwi antenna was assigned — visibly zooming back out mid-drag.
+
+### TCI
 
 - **TCI PTT now keys the slice the client asked for (#4547).** Since v26.7.4 no
   TCI client could activate the slice it named: the requested receiver was
@@ -266,38 +536,14 @@ section.
   PTT. WSJT-X reports those as "TCI failed to set ptt"; they previously arrived
   with no cause at all.
 
-### Added
+- **Receiver numbers are stable across a slice recreate (#4567).** After a slice
+  is genuinely closed mid-session, surviving slices now keep their receiver
+  numbers and the freed number is reused by the next new slice; the old
+  positional policy shifted every later slice down, invalidating a live client's
+  binding. Sessions with no mid-session destroy/recreate are numbered exactly as
+  before.
 
-- **`health` automation-bridge verb (#4696).** Returns the backend's own health
-  snapshot — the rows the Radio Health dialog shows, which until now reached
-  nothing else and so were unavailable to any script or regression test.
-  Deliberately *not* assembled from the models: `get` already reports those, and
-  a model reports what the operator **asked for**, which is why a control whose
-  command was dropped on the way to the radio could read back as working. Every
-  row here comes from the backend instead, so the two can be compared and the
-  comparison is the diagnosis. Read-only and TX-safe — it keys nothing and sets
-  nothing. A `null` value means the radio never reported that row, kept distinct
-  from a zero because "the FIFO is empty" and "we were never told" are different
-  answers.
-
-- **The aarch64 (Raspberry Pi / ARM) AppImage now ships Qt 6.8.3 LTS and
-  GPU spectrum rendering (#4670).** It was the only release artifact still
-  building against the distro's Qt — 6.4.2, while x86_64, macOS and Windows all
-  pinned 6.8.3 — because Qt published no prebuilt ARM64 Linux binaries when that
-  split was made. Qt has shipped them since 6.7, so the ARM build now takes the
-  same aqtinstall recipe as everything else. The visible consequence is the
-  renderer: 6.4.2 sat below the Qt 6.7 floor for `QRhiWidget`, so the ARM
-  AppImage silently fell back to the CPU `QPainter` spectrum path. On 6.8.3 it
-  renders through QRhi like every other platform. If a GPU or driver renders the
-  spectrum incorrectly, `AETHER_NO_GPU=1` forces software OpenGL without a
-  rebuild.
-
-  The Qt bump raises the aarch64 AppImage's glibc floor to 2.38 (Qt's arm64
-  binaries are built on Ubuntu 24.04). Raspberry Pi OS **Trixie** (glibc 2.41)
-  is the supported Pi baseline; Bookworm (2.36) cannot run it — as was already
-  the case for the 2.39-floored builds this replaces.
-
-- **The TCI PTT slice-routing decision is now logged (#4547).** Reports of TCI
+- **The PTT slice-routing decision is now logged (#4547).** Reports of TCI
   keying the wrong slice have been arriving without logs because there were
   none to send: the server logged audio, IQ, DAX and client connections, but
   the decision that picks which slice transmits was silent. One line now
@@ -315,250 +561,527 @@ section.
   resolved slice gone, and transmit-inhibited panadapter — now say so at the
   normal logging level, no rule needed.
 
-### AX.25 packet on the Hermes-Lite 2, and connected-mode reliability
+### Themes
 
-- **AetherModem now transmits on the Hermes-Lite 2.** APRS, the KISS TNC, the
-  terminal and the mailbox all key correctly on a host-modulating radio. TX
-  previously required a FlexRadio DAX stream and simply hung on any radio
-  without one — PTT never engaged and every queued frame was lost when the
-  window closed.
+- **The compiled fallback table is now generated from the bundled theme
+  (#3184, #4582, #4570).** AetherSDR compiles a copy of the default theme into
+  the binary as a fallback for tokens a theme file doesn't define. That table
+  was maintained by hand and had drifted: it said slice A was red (`#ff4040`)
+  while both bundled themes say cyan (`#00d4ff`), and eight more slice colours
+  disagreed the same way. If your theme predates the slice tokens you will see
+  the corrected — cyan — palette. Themes that define their own slice colours are
+  unaffected.
 
-- **Connected-mode timers are derived from the air interface** instead of
-  hardcoded. The old fixed 6-second retransmit timeout was shorter than the
-  6.8 seconds it takes to send one full-size frame at 300 baud, so every HF
-  frame timed out before its acknowledgement could physically arrive and the
-  link died. On HF the packet length now defaults to 64 bytes as well — at
-  300 baud a 128-byte frame is four seconds of continuous transmission, and a
-  single bit error costs the whole frame.
-
-- **A lost acknowledgement no longer kills the session.** A repeated frame was
-  treated as a gap in the sequence and answered with silence, so one dropped
-  acknowledgement was unrecoverable: the far end retransmitted, we said
-  nothing, and the link failed. Repeats are now acknowledged again.
-
-- **Sessions no longer stall or hang.** A connected link can't come to rest
-  with data still queued; an idle link is polled so a station that disappears
-  can't hold the mailbox open against every other caller (it previously stayed
-  locked out until restarted); and a peer that keeps rejecting can no longer
-  make us retransmit indefinitely.
-
-- **Stopping means stopping.** Pressing BYE a second time now ends a
-  disconnect instead of restarting it — repeated presses previously kept the
-  radio transmitting. Switching the modem off now halts transmission and drops
-  any session, where before it stopped only the decoder and kept keying.
-
-- **AX.25 v2.2 callers connect immediately.** A SABME connect request is
-  answered rather than ignored, so v2.2 stations fall back to v2.0 at once
-  instead of retrying until they give up.
-
-- **New Terminal controls**: Retry, Paclen and TXDELAY default to **Auto**,
-  derived from the current modem profile, and remain overridable. A session's
-  measured round-trip time is shown in `STATUS` and recorded in the log, which
-  is what tells a mis-sized timeout apart from a poor channel.
-
-### Theme fallback colours corrected on themes that predate the token (#3184)
-
-- **Slice colours A–H and `color.accent.dim` now match the bundled themes.**
-  AetherSDR compiles a copy of the default theme into the binary as a fallback
-  for tokens a theme file doesn't define. That table was maintained by hand and
-  had drifted: it said slice A was red (`#ff4040`) while both bundled themes say
-  cyan (`#00d4ff`), and eight more slice colours disagreed the same way. If your
-  theme predates the slice tokens you will see the corrected — cyan — palette.
-  Themes that define their own slice colours are unaffected.
-
-- **24 tokens that had no compiled fallback at all now have one.** The dimmed
+  **24 tokens that had no compiled fallback at all now have one.** The dimmed
   slice colours, the highlight and disabled-button colours, and all six
   waterfall colormap gradients previously resolved to *transparent* on a theme
   that predated them. On such a theme the waterfall could render with no
   colormap; it now falls back to the bundled Default Dark gradients.
 
-- The table is generated from `resources/themes/default-dark.json` by
-  `tools/gen_theme_seed.py`, so the two can no longer disagree.
+  The table is generated from `resources/themes/default-dark.json` by
+  `tools/gen_theme_seed.py` and pinned in CI, so the two can no longer disagree.
 
-### Fixed
+- **Three silent round-trip losses in save / export / template resolve
+  (#4573).** Radial gradients lost their centre on every save — the writer
+  emitted two scalars where the reader, and the file format's own documented
+  shape, expect an array. Each of the three failures lost data without reporting
+  anything: the file still loaded and the stylesheet still applied, so nothing
+  announced the loss.
+- **"Reset to default" restored dark values while editing a light theme
+  (#4575).** The factory snapshot was hardcoded to the dark theme and latched
+  once, so pressing Reset on Default Light restored the dark value for 96 of the
+  147 root tokens the two bundled themes share. Theme names also can no longer
+  be interpreted as filesystem paths.
+- **A themed widget reparented after it was styled is re-resolved (#4520).**
+  The frequency display's font reverted to the default after a band change: the
+  re-resolve filter was installed only on tracked widgets, so when an *untracked
+  ancestor* was reparented the tracked child inside it heard nothing.
+- **A colour ratchet in CI (#4569).** Colour *references* are down about 22%
+  against the documented baseline while unique colours went *up* by ~105 — new
+  one-offs were being minted faster than old ones collapsed. The scanner had
+  three defects of its own (including counting issue references as colours),
+  fixed first so the baseline is real, and CI now gates on the counts.
 
-- **The Display ▸ WtrFall Rate slider ran backwards on the Hermes-Lite 2 and
-  the demo rig.** The control is a rate — 1 slow, 100 fast — but it travels
-  under FlexRadio's `line_duration` wire name, which is typed as milliseconds.
-  On a radio whose waterfall this client paces itself, the number was read
-  literally, so 1 gave the fastest scroll and 100 the slowest. 100 is the
-  default, which meant every HL2 session started on the slowest setting at
-  about 10 rows/second. The slider now runs the right way and is linear in
-  rows per second: 0.2 rows/s at the bottom, and at the top the waterfall
-  simply tracks the panadapter's frame rate (which Display ▸ FFT FPS owns) —
-  measured at 25 rows/s on a real HL2. Half-way up the slider is now half
-  speed, which it never was. FlexRadio radios are unaffected: their own
-  display engine has always done this conversion. (#4606)
+### Demo mode
 
-- **Adaptive network throttling sped the waterfall up on a bad connection.**
-  The same unit confusion, one layer up: the throttle converted its frame-rate
-  cap straight into a duration and sent it as a rate, so a "Poor" 4 fps cap
-  asked for the *fastest* waterfall setting available. Worse network, faster
-  waterfall. It now converts through the same law the display uses. (#4606)
+- **Demo mode no longer opens with a ghost "Slice A" panadapter (#4671).** The
+  demo's simulator claims its panadapter from its own synthetic wire, but the
+  model treated every non-Flex backend as wire-less and minted a *second*,
+  ownerless pan in the neutral id space on the seam's geometry edge — a pane the
+  user could neither use nor delete. The same assumption re-addressed the demo's
+  slice into that neutral space, so the slice pointed at the ghost rather than
+  at its real pan; with the ghost gone it would have pointed at nothing. Both
+  now key off whether the backend vends its own connection, so the demo opens
+  with one panadapter and a slice that belongs to it — restoring the pan title
+  bar, adaptive RX filter, auto-squelch, centre-lock and band recall on demo
+  mode. Hermes-Lite 2 and other wire-less backends keep the neutral mapping.
+- **The CW tone clicked instead of sliding when you moved its pitch slider
+  (#4618).** The tone was synthesized from absolute time × the current pitch, so
+  every notch of **CW tone** in the Demo applet jumped the oscillator's phase
+  rather than changing its frequency — a hard click mid-dah, which is exactly
+  the artifact the generator's raised-cosine key edges exist to prevent. The
+  jump grows with how long the session has been running, so after half a minute
+  even a 1 Hz nudge is a full-amplitude step. The tone now accumulates phase per
+  sample, the way the birdie carrier already did. Fixed alongside it: three of
+  the mixer's sample counters were 32-bit on Windows and hit undefined behaviour
+  after about 25 hours of unbroken demo audio.
+- **The power-line hum clicked instead of bending when you moved its 50/60 Hz
+  slider (#4668).** The hum's six harmonics were synthesized from absolute time ×
+  the current mains frequency, so every move of **Power-line** jumped all six
+  phases at once rather than changing their frequency — and because that jump
+  scales with the harmonic number, the high harmonics stepped hardest and the
+  click grew with how long the session had been running. The hum now accumulates
+  phase per sample, deriving every harmonic from one shared fundamental so they
+  stay locked to each other, and bends smoothly. This was the last generator in
+  the demo mixer still keyed off absolute time.
+- **The simulated CW channel sends proper Morse (#4593).** The element table
+  conflated duration with key state, so the inter-element gaps were missing and
+  the character gap keyed as a fifth dah, rendering one continuous ~600 ms tone.
+  The schedule is now built from a message string with standard 1/3/7-dit
+  element, character and word spacing, keeping 18 WPM, the 700 Hz default pitch
+  and the 5 ms raised-cosine edges.
+- **Educational tooltips on every Demo Noise source (#4669).** Each noise-source
+  row explains what causes that noise on a real HF band — cause first, then what
+  to do about it. The two signal rows (CW / voice) teach the complementary
+  lesson: they are the *wanted* signal that NR and notch filters must preserve.
+- **The Demo Noise button strips wrap instead of clipping at docked rail width
+  (#4518).** Docked, the two button strips compressed past their minimum and the
+  centred labels clipped at both ends to mid-word fragments. The wrap-layout fix
+  from SpotHub's band-filter row (#4157) is promoted to a shared class and used
+  for both.
 
-- **The waterfall Black Level button offered a hardware mode on radios that
-  have no such thing.** `HW` hands the black-level decision to the radio, which
-  only FlexRadio hardware computes. On a Hermes-Lite 2, selecting it sent a
-  command nowhere and left the waterfall waiting for a level that never
-  arrived — the button moved, the setting stuck, the picture did not change.
-  The button now cycles `Off ↔ SW` on radios without it, and `SW` (this
-  client's own noise-floor estimate, available on every radio) is what runs.
-  If you chose `HW` on a FlexRadio, that choice is **remembered, not
-  overwritten**: connect an HL2 and the button reads `SW`, reconnect the Flex
-  and it is back on `HW` without you re-selecting it. (#4606)
+  Demo mode changes touch no radio, protocol or transmit path.
 
-- **FlexControl now recovers on its own after losing its USB port.** The knob
-  driver had no error handling at all: if the serial port dropped — a USB
+### Automation bridge
+
+- **New `health` verb (#4696).** Returns the backend's own health snapshot —
+  the rows the Radio Health dialog shows, which until now reached nothing else
+  and so were unavailable to any script or regression test. Deliberately *not*
+  assembled from the models: `get` already reports those, and a model reports
+  what the operator **asked for**, which is why a control whose command was
+  dropped on the way to the radio could read back as working. Every row here
+  comes from the backend instead, so the two can be compared and the comparison
+  is the diagnosis. Read-only and TX-safe — it keys nothing and sets nothing. A
+  `null` value means the radio never reported that row, kept distinct from a
+  zero because "the FIFO is empty" and "we were never told" are different
+  answers.
+- **`tune`, `targettune` and pan centre refuse Hz passed to an MHz verb (#4550,
+  #4568).** `tune 14200000` answered `ok: true` for a frequency it did not
+  apply — the slice stayed where it was. All three verbs now share one guard.
+- **`dumpTree` serializes a floated pan window once, not twice (#4674).** A
+  floated pan's entire subtree appeared twice — two windows, two applets, two
+  VFOs with the same slice id for a single slice — because the window is
+  reachable both as a top-level widget and through its parent. It presented as
+  a real UI duplication and cost an investigation to un-believe.
+
+### Controllers, spotting & operator workflow
+
+- **Stream Deck: slice targeting, connection status and radio-sourced key
+  values (#4513).** Every command previously addressed `trx0`, so the plugin
+  only ever drove slice A, and every key showed a static label from the
+  manifest. A **Slice Target** action now cycles `TRX0 → TX → ACTIVE` across
+  mode, DSP, squelch, lock, RIT/XIT, split, slice volume, slice mute and the
+  VFO dial, and keys show live values from the radio. The default stays `TRX0`,
+  so an existing deck behaves exactly as before.
+- **Ulanzi Dial: PTT (Hold), CW keying release, and mapping persistence
+  (#4611).** A dial button set to **PTT (Hold)** or a CW key did nothing at all,
+  because only the button-down half of each press was being read; the button-up
+  that should un-key never arrived. Press-and-hold now works for PTT, the
+  straight key, both paddles, and held MIDI actions. Releases are honoured even
+  when the dial reports the button and its modifier out of order, and holding
+  two side buttons at once no longer leaves the first one stuck down — so the
+  transmitter always comes back to receive. If the dial disconnects
+  mid-transmission, everything it was holding is released immediately. Button
+  mappings also survive a restart now; existing ones are carried over
+  automatically the first time you run this version, and a mapping you clear
+  stays cleared.
+- **FlexControl recovers on its own after losing its USB port (#4574).** The
+  knob driver had no error handling at all: if the serial port dropped — a USB
   glitch, a driver reset, the host reclaiming the device — nothing noticed, and
   the knob stayed dead for the rest of the session. It now detects the error,
   releases the port, and re-detects the device every couple of seconds until it
   comes back (re-detecting rather than reusing the old name, since a replug can
   hand the device a different COM port). Disconnecting from AetherControl or
   turning FlexControl off in Radio Setup still stops it for good. Enabling the
-  **Ext Devices** log category now also shows the serial error at the moment
-  the port drops, instead of silence. (#4574)
-
-- **Demo mode's CW tone clicked instead of sliding when you moved its pitch
-  slider.** The tone was synthesized from absolute time × the current pitch, so
-  every notch of **CW tone** in the Demo applet jumped the oscillator's phase
-  rather than changing its frequency — a hard click mid-dah, which is exactly
-  the artifact the generator's raised-cosine key edges exist to prevent. The
-  jump grows with how long the session has been running, so after half a minute
-  even a 1 Hz nudge is a full-amplitude step. The tone now accumulates phase per
-  sample, the way the birdie carrier already did, and slides smoothly to the new
-  pitch. Fixed alongside it: three of the mixer's sample counters were 32-bit on
-  Windows and hit undefined behaviour after about 25 hours of unbroken demo
-  audio. Demo mode only — no radio, protocol, or transmit path is involved.
-  (#4618)
-
-### Client settings store moved to SQLite (RFC #4603, phase 1)
-
-- **Settings now live in a SQLite database** (`AetherSDR.db` in the config
-  folder) instead of the XML file. The switch is automatic and verified on
-  first launch; your old `AetherSDR.settings` stays in place untouched, so
-  rolling back to an older release keeps the settings you had at upgrade
-  time (changes made after the upgrade stay with the new version).
-- **Safer storage**: transactional saves (no more full-file rewrites),
-  startup integrity checks, automatic verified backups, and quarantine +
-  restore if the store is ever damaged — with a notice telling you which
-  backup was used. Reset Settings now writes a final backup before wiping.
-- **Credentials are never stored in settings anymore.** The MQTT password,
-  automation-bridge token, and remote-ASR API key move to your OS keychain
-  automatically during the upgrade.
-- **New `--config` command line**: `aethersdr --config list|get|set|unset|
-  export|path` inspects or repairs settings without starting the GUI —
-  the escape hatch when a broken stored value prevents startup.
-- **New Settings Browser** (Settings ▸ Settings Browser…): browse and edit
-  the whole settings store — app keys, the station section, and each
-  radio's stored feature documents — with live filtering, guarded
-  editing (True/False picker, JSON validation, confirmations), and a
-  sanitized diagnostic export. Credential-shaped values are masked and
-  read-only; a store from a newer version browses read-only.
-- Fixes a latent threading race in the settings core (#4602).
-
-### Fixed
-
-- **Frameless window no longer drifts down the screen on Windows (#4328)** —
-  with **Frameless Window** enabled, AetherSDR reopened a title-bar height
-  below where you left it, so a window parked at the top of the screen had to
-  be nudged back up every launch. Qt was reserving room for a title bar the
-  custom frame does not have. The window now reopens exactly where you left
-  it, keeps its full size if you had it filling the screen, and stays put
-  through Minimal Mode round trips.
-- **Copy Assist no longer freezes the app on first use on macOS (#4535)** —
-  turning on ASR could hang the entire interface, on one Intel MacBook Pro for
-  over 75 minutes, with a force-quit as the only way out. The speech-recognition
-  engine was asking macOS to compile its GPU shaders the first time it looked
-  for a graphics card, and on some Intel Macs Apple's shader compiler never
-  finishes. Those shaders are now compiled when AetherSDR is built, so nothing
-  is compiled on your machine and the panel opens immediately. Apple Silicon
-  Macs also stop paying a several-second delay the first time ASR touches the
-  GPU on each cold start.
-- **AetherVoice playback, CW sidetone, and Quindar tones now work on class-
-  compliant multichannel USB audio interfaces on Windows (#4641)** — on
-  devices like the Akai EIE, WASAPI's shared-mode format query reported the
-  device as unable to play any of the negotiated formats, even though the
-  same device was already playing RX audio fine. The three affected paths
-  now open the device the same way the RX sink always has: try each
-  candidate format for real and keep the first one that actually starts,
-  instead of asking the query for permission first. Previously, pressing
-  Record in AetherVoice on an affected device would mute audio and silently
-  never play the recording back.
-- **Manual squelch is remembered per slice again, on every path (#4592)** —
-  each slice keeps its own manual squelch threshold, but only the RX applet
-  was keeping that memory current. Setting the level any other way — from a
-  non-active slice's own VFO flag, a MIDI or controller squelch knob, or from
-  the radio itself (your own edit on another client, or the radio's session
-  restore) — left the remembered value stale, so the next time you cycled the
-  SQL button that stale value was pushed back to the radio and quietly undid
-  what you had set. Every route now keeps the live level and the remembered
-  one together, and levels the radio reports back update it too — except while
-  Auto is computing them, so Auto's tracking of the noise floor no longer
-  overwrites the threshold you chose by hand. Switching squelch off and back
-  on returns you to your own level rather than the Auto margin.
-- **Squelch is no longer saved between sessions (#4592)** — squelch belongs to
-  the radio, and AetherSDR was also keeping its own copy. On a FLEX that copy
-  was never read back — the radio reports the real level on every connect — so
-  it only added a settings write each time you moved the slider, and risked
-  fighting the radio on reconnect. New slices now start from the radio's own
-  level, and the leftover setting is removed from existing installs on first
-  launch.
-- **Ulanzi Dial buttons can now hold PTT and key CW, and remember what you
-  mapped them to (#4611)** — a dial button set to **PTT (Hold)** or a CW key
-  did nothing at all, because only the button-down half of each press was
-  being read; the button-up that should un-key never arrived. Press-and-hold
-  now works for PTT, the straight key, both paddles, and held MIDI actions.
-  Releases are honoured even when the dial reports the button and its modifier
-  out of order, and holding two side buttons at once no longer leaves the
-  first one stuck down — so the transmitter always comes back to receive. If
-  the dial disconnects mid-transmission, everything it was holding is released
-  immediately. Your button mappings also survive a restart now; existing ones
-  are carried over automatically the first time you run this version, and a
-  mapping you clear stays cleared.
+  **Ext Devices** log category now also shows the serial error at the moment the
+  port drops, instead of silence.
+- **The amplifier fan mode is a pull-down instead of a blind cycle button
+  (#3905).** The three modes were hidden behind click-to-cycle, with no way to
+  see the choices without clicking through them.
+- **SpotHub gains a Freeze toggle on the Spot List tab (#4145).** New spots are
+  prepended on every flush tick, so the list was unusable to click a spot
+  mid-scroll. Frozen, spots keep accumulating rather than being lost, and
+  unfreezing flushes immediately.
+- **A collapsed VFO's right-click Add Spot captures the right frequency
+  (#4455).** The collapsed frequency label never reached the VFO's own
+  context-menu handler, so the click fell through to the spectrum's menu, which
+  reports the cursor's step-snapped frequency rather than the VFO's actual one.
+- **Repeater offset controls are visible in DSTR mode (#4240).** DSTR uses DFM
+  as its underlying RF mode, but only FM, NFM and DFM were treated as the
+  FM family, so entering DSTR hid the offset, direction, simplex and reverse
+  controls that already drive the radio's mode-independent offset path. CTCSS
+  stays hidden in DSTR.
+- **The IARU Region 1 80 m band plan is corrected (#4610).** 3.600–3.620 MHz was
+  classified as DIGI with the narrow-band digital colour; it is ALL, matching
+  the adjacent Region 1 segment and the official IARU Region 1 band plan.
+- **The Connect to Radio footer stays reachable (#4515).** The panel was one
+  tall non-scrollable layout whose footer was its final item, so at Windows DPI
+  and font scaling the footer clipped first. The body now scrolls and the status
+  and Disconnect controls are pinned below it; the panel is also fitted to the
+  screen's available geometry, frame margins included.
+- **A rejected GUI client registration is now a clean failure (#4481, #4560).**
+  A radio that refused `client gui` left AetherSDR continuing as an unusable
+  non-GUI client, and result codes were parsed as signed values so fatal
+  responses such as `F3000001` could overflow to zero and appear successful. It
+  now stops post-registration setup, closes the connection, suppresses the
+  automatic retry loops and returns to the Connect panel with the radio's actual
+  error and recovery instructions.
+- **The last-session DAX restore is confined to the post-connect window
+  (#4558).** The per-slice DAX restore is keyed by list position but ran on
+  every slice add. A band-stack switch destroys and recreates its slice, and the
+  recreate re-enters the list at the tail — so with two slices open, the
+  recreated slice resolved the *other* position's persisted key and silently
+  re-assigned that stale channel to itself, stealing the surviving slice's DAX
+  channel.
 - **Screen readers no longer stutter on the ATU relay bars and the CW decoder
-  range sliders (#4565)** — with VoiceOver / NVDA / Orca running, a focused
-  relay bar announced every step of an ATU tune sweep, and the decoder Pitch
-  and WPM sliders announced every repeat of a held arrow key. Both now
-  announce the settled value about ten times a second, matching the S-meter
-  and VFO. Moving between a range slider's low and high handle with Tab still
-  announces immediately, so the handle change is never lost behind a value
-  update, and neither control does any accessibility work when no screen
-  reader is running.
+  range sliders (#4565).** With VoiceOver / NVDA / Orca running, a focused relay
+  bar announced every step of an ATU tune sweep, and the decoder Pitch and WPM
+  sliders announced every repeat of a held arrow key. Both now announce the
+  settled value about ten times a second, matching the S-meter and VFO. Moving
+  between a range slider's low and high handle with Tab still announces
+  immediately, so the handle change is never lost behind a value update, and
+  neither control does any accessibility work when no screen reader is running.
 
-### RN2 no longer pumps on stereo and binaural receive audio
+### Windows
 
-**If you listen to RN2 with binaural or diversity receive audio, the noise
-floor no longer rises every time someone talks.** Nothing changes for
-duplicated-mono slices, and nothing changes in how much noise RN2 removes.
+- **The frameless window no longer drifts down the screen (#4328).** With
+  **Frameless Window** enabled, AetherSDR reopened a title-bar height below
+  where you left it, so a window parked at the top of the screen had to be
+  nudged back up every launch — Qt was reserving room for a title bar the custom
+  frame does not have. The window now reopens exactly where you left it, keeps
+  its full size if you had it filling the screen, and stays put through Minimal
+  Mode round trips.
+- **The D-STAR waveform helper's firewall rule is provisioned (#4317).**
+  AetherSDR could start and register the helper successfully while Windows
+  silently blocked its inbound UDP traffic — the classic installer created no
+  helper-scoped rule, and the Store/MSIX manifest's `internetClientServer`
+  capability does not create a firewall exception for a medium-IL packaged
+  desktop helper. The UI showed the service as running while no D-STAR data or
+  audio could reach the decoder.
+- **`tools/audit_colours.py` runs to completion on a legacy-code-page console
+  (#4475).** It died on the `→` in the migration-target summary — after the CSV
+  was written but before the summary printed, so it looked half-worked with the
+  most useful part of the output exactly the part you never saw.
 
-RN2 used to denoise an L/R downmix, derive a gain envelope from the result and
-re-apply that one envelope to the original stereo. That is exact when the two
-channels are proportional to their sum — plain mono, and simple panning — but
-binaural and diversity audio are not: the downmix has comb-filter nulls the
-individual channels do not, so the envelope fits neither channel. The audible
-result was the noise floor breathing with speech, loud under voice and gated
-between phrases. RN2 now runs one RNNoise instance and one matched resampler
-pair per receive channel, driven from the same block so the two stay in
-lockstep. Pan, stereo balance, diversity and binaural phase all survive it. A
-regression test mixes a steady tone into binaural speech and measures its level
-during speech against the gaps: the old path modulated it ~15x, the new one
-~1.0x.
+### macOS
 
-The transmit denoiser is unchanged — it still downmixes to mono, which is what
-a microphone path wants.
+- **The Intel Mac build runs on macOS 12 again, and gives up speech-to-text to
+  do it (#4706, #4719).** The Intel DMG exists to serve older Intel hardware,
+  and it now declares — and actually honours — a **macOS 12.0** floor. The price
+  is Copy Assist: **speech-to-text no longer ships on Intel Macs.** Apple
+  Silicon is untouched and keeps all three pieces — the Metal GPU backend, the
+  ONNX extras and the sherpa backend — each now a hard build requirement, so a
+  silent compile-out cannot ship there either.
 
-### RN2 can leave a noise floor instead of going silent between phrases
+  The two are mutually exclusive, and not by choice. macOS enforces a minimum OS
+  version on *every* library inside an app bundle, not just on the app's own
+  binary — so the real floor of a DMG is the highest floor of anything in it.
+  The ONNX Runtime the speech features depend on is published at **macOS 15.5**,
+  on both architectures, and no available build lowers it. Bundle it and the
+  whole application refuses to start below 15.5, whatever the app itself claims.
+  That is an OS most Intel Macs will never run — the machines this artifact is
+  for are the ones that stopped at Monterey, Ventura or Sonoma. Shipping
+  speech-to-text on Intel meant shipping a DMG most Intel Macs could not launch.
 
-**New, off by default:** *AetherDSP → RN2 → Noise Floor*. RNNoise gates hard,
-which some operators hear as the receiver going dead rather than quiet. Raising
-this leaves that percentage of the original signal under the denoised audio, so
-the band still sounds live between phrases. 0% is what RN2 has always done and
-remains the default; 10–20% is a usable floor. Receive only.
+  Choosing reach over the feature is what took the Intel floor from 13.0 down to
+  12.0. Dropping the runtime went first (#4706), leaving CPU-only transcription
+  behind; that remainder is what #4719 removes. It had become its own recurring
+  problem — the lower floor moved the leg onto the Metal 2.x shader tier for the
+  first time, where the compiler flag turned out to be misspelled (below) and
+  where nothing past that flag had ever been proven.
 
-The blend happens inside RNNoise, before its synthesis and overlap-add stage,
-rather than by mixing a dry copy of the waveform back in afterwards — mixing
-two waveforms that have been through different delays comb filters, and the
-whole point is a floor you stop noticing.
+  Everything else in the Intel DMG is unchanged. This is also exactly the class
+  of failure `assert-macos-deployment-floor.sh` now catches on every build: it
+  checks every binary in the bundle against the advertised floor, which is how a
+  DMG that launched fine for its maintainers and failed on the older hardware it
+  was built for (#4532) stops being possible.
+
+- **The build keeps GPU spectrum rendering when Qt comes from Qt (#4688,
+  #2191).** The Apple Silicon DMG now ships the Qt it says it ships — 6.8.3, the
+  same one behind every other download — and keeps drawing the spectrum on the
+  GPU while doing it.
+
+  Until now that DMG took Qt from Homebrew: whatever version Homebrew happened to
+  be publishing on the day a release was tagged. That was 6.11.1 while every other
+  artifact was pinned to 6.8.3, so the most-downloaded macOS build was the only one
+  running a Qt nobody had tested it against — and it could change between two
+  releases with no code change anywhere. It is the most likely explanation for
+  #2191, where the DMG's Qt behaved differently from a standard install of the
+  same version.
+
+  Pinning it exposed a second problem that had been hiding behind Homebrew. Qt's
+  own macOS packages arrange their headers differently from every other platform,
+  and AetherSDR's build did not recognise that arrangement — so the GPU spectrum
+  renderer quietly switched itself off and the app fell back to CPU drawing, with
+  nothing in the build saying so. Both halves are fixed here, and the release now
+  refuses to produce a macOS app that has silently lost GPU rendering or that
+  bundles a Qt other than the pinned one.
+
+  Also on macOS: SmartLink credential persistence — staying logged in between
+  launches — is now built as part of the release rather than picked up from
+  Homebrew, and its absence is a build failure instead of a feature that
+  disappears without a word.
+
+- **The Intel leg drops its hand-built Qt, and the deployment floor drops to
+  macOS 12.0 (#4706).** Both macOS legs now install the same Qt 6.8.3 from
+  aqtinstall, retiring an entire workflow. The hand-built Qt existed because
+  *Homebrew's* bottles targeted macOS 14.0 — a diagnosis about Homebrew, not
+  about Qt, and Qt's own binary was never checked.
+
+- **The DMG builds again — five defects on the release path, each hidden behind
+  the last (#4714, #4718).** The workflow that builds the macOS disk images is
+  triggered by a release tag, and no per-PR check runs it, so the Qt changes
+  above reached `main` never having been executed. Dispatching it by hand found
+  five faults in a row; a tag would have published a release with **no macOS
+  artifacts at all**, the same failure shape #4708 had just fixed for the
+  aarch64 AppImage one platform over.
+
+  *The dependency build died four seconds in.* macOS ships **bash 3.2**, where
+  expanding an empty array under `set -u` is an unbound-variable error — bash
+  4.4 fixed that and the runner never sees 4.4. The SIMD-flags array carried the
+  identical latent crash on any architecture taking the fallback branch, and the
+  qtkeychain setup script had the same trap at its own configure call — not on
+  the release path, but on the local developer path its own comment declares
+  supported. That call was also passing the deployment target twice.
+
+  *Then the link failed at 100% with `library 'hidapi' not found`.* The
+  package-config query returns a bare library name, so the link needs the search
+  path that comes with it — and CMake propagates `PRIVATE` link *libraries* to
+  the consuming executable but not `PRIVATE` link *directories*. The core
+  library is static, so the link that has to resolve `-lhidapi` is the
+  executable's. `portaudio` and `fftw3` carried the identical defect and are
+  fixed with it; they had not failed only because their libraries happened to
+  sit on a default search path, which #4706 stopped guaranteeing when it moved
+  all three into a private dependency tree.
+
+  *And the Intel leg died at 32% compiling Metal kernels (#4718)* —
+  `invalid value 'metal2.4' in '-std=metal2.4'`. Metal 3 unified the platforms
+  and dropped the platform prefix; Metal 2 and earlier did not, so the 2.x tier
+  must be spelled `macos-metal2.4` while the 3.x tiers must not be qualified at
+  all. That tier only became reachable when #4706 dropped the Intel deployment
+  target to 12.0. The fix is correct and stays in the tree, but no shipping
+  artifact exercises it any more: with speech-to-text dropped from the Intel
+  build (#4719) that leg compiles no Metal kernels at all, and Apple Silicon is
+  on the 3.x tier. It remains unvalidated end to end, and matters again the day
+  something ships below the Metal 3 floor.
+
+  With those cleared, the Apple Silicon leg is green end to end and
+  `assert-macos-deployment-floor.sh` — the whole point of #4706, and never
+  executed anywhere until now — reports all 37 Mach-O files in the bundle
+  loading on the declared floor, with the bundled Qt matching the 6.8.3 pin,
+  notarization accepted and the DMG stapled.
+
+- **Copy Assist no longer freezes the app on first use (#4535).** Turning on ASR
+  could hang the entire interface, on one Intel MacBook Pro for over 75 minutes,
+  with a force-quit as the only way out. The speech-recognition engine was asking
+  macOS to compile its GPU shaders the first time it looked for a graphics card,
+  and on some Intel Macs Apple's shader compiler never finishes. Those shaders
+  are now compiled when AetherSDR is built, so nothing is compiled on your
+  machine and the panel opens immediately. Apple Silicon Macs also stop paying a
+  several-second delay the first time ASR touches the GPU on each cold start.
+
+- **A crash on the filter passband is avoided (#4525).** The widget installed
+  `Qt::SizeAllCursor` as its resting cursor; on Qt 6.11 / macOS 26, entering it
+  can lazily realise that shape through Cocoa's bitmap-cursor fallback and trap.
+
+- **Copy Assist GPU discovery runs off the UI thread (#4517).** Opening the ASR
+  panel no longer freezes the application or risks interrupting the radio
+  connection. The panel appears immediately with the Compute control disabled
+  and showing `Detecting…`; enabling ASR while discovery is still running defers
+  model loading until it completes. A probe that exceeds 30 seconds logs a
+  warning and falls back to CPU for the session.
+
+### Linux & packaging
+
+- **The AppImage runs natively on Wayland instead of XWayland (#1389, #1233).**
+  On a Wayland desktop the AppImage now uses Wayland directly. Text and the
+  spectrum are sharp under fractional scaling — previously the desktop was
+  bitmap-scaling an X11 window — and the AppImage finally receives the fix for the
+  GLX crash that could happen when opening a dialog such as Radio Setup on some
+  desktops. Every other Linux build has had that fix since v0.8.12; the AppImage
+  was the one left out.
+
+  It was left out to stop a worse problem. The AppImage asked for Wayland without
+  carrying the piece of Qt that talks Wayland, so it refused to start at all on
+  Ubuntu 24.04 and anything else defaulting to a Wayland session. The quick fix
+  was to stop asking for Wayland in the AppImage, which cured the crash and
+  stranded those users on XWayland permanently. The Wayland support was in fact
+  present in the Qt we build against the whole time — it simply never made it into
+  the packaged app, and nothing in the build noticed, because it is loaded on
+  demand rather than linked. It is now packaged, and the release build fails if it
+  ever goes missing again.
+
+  AetherSDR also now asks for Wayland *with a fallback* rather than demanding it,
+  so a machine without Wayland support quietly uses XWayland instead of failing to
+  start. If a desktop misbehaves under native Wayland, `QT_QPA_PLATFORM=xcb`
+  forces the old path — documented in the README next to `AETHER_NO_GPU`. Setting
+  `QT_QPA_PLATFORM` yourself always wins.
+
+  Reported by @cjdellis on Ubuntu 24.04.
+
+- **The aarch64 (Raspberry Pi / ARM) AppImage now ships Qt 6.8.3 LTS and GPU
+  spectrum rendering (#4670).** It was the only release artifact still building
+  against the distro's Qt — 6.4.2, while x86_64, macOS and Windows all pinned
+  6.8.3 — because Qt published no prebuilt ARM64 Linux binaries when that split
+  was made. Qt has shipped them since 6.7, so the ARM build now takes the same
+  recipe as everything else. The visible consequence is the renderer: 6.4.2 sat
+  below the Qt 6.7 floor for `QRhiWidget`, so the ARM AppImage silently fell back
+  to the CPU `QPainter` spectrum path. On 6.8.3 it renders through QRhi like
+  every other platform. If a GPU or driver renders the spectrum incorrectly,
+  `AETHER_NO_GPU=1` forces software OpenGL without a rebuild.
+
+  The Qt bump raises the aarch64 AppImage's glibc floor to 2.38 (Qt's arm64
+  binaries are built on Ubuntu 24.04). Raspberry Pi OS **Trixie** (glibc 2.41)
+  is the supported Pi baseline; Bookworm (2.36) cannot run it — as was already
+  the case for the 2.39-floored builds this replaces.
+
+- **The aarch64 AppImage packages again, and both architectures have audio
+  (#4708).** Qt builds its `linux_arm64` binaries against a newer GStreamer whose
+  media backend plugin needs a library the packaging step did not install, so
+  packaging died at the Qt plugin stage. The ALSA sink is installed with it.
+
+### Build, CI & dependencies
+
+- **Minimum Qt raised to 6.8 (#4686).** Building from source now requires Qt 6.8
+  or newer. Nothing changes for users of the release binaries: the AppImage, the
+  Windows installer and the macOS build were already compiled against Qt 6.8.3
+  LTS, and still are.
+
+  The old floor said 6.2 and nothing enforced it. The only CI leg near it was the
+  Linux container on Ubuntu 24.04's **Qt 6.4.2** — seven minor versions behind
+  current, and EOL upstream since the 6.4 series ended at 6.4.3. So the project
+  was testing a Qt no artifact shipped, and *rejecting* code that is valid on
+  every configuration it actually ships: PR #4646 was failed by CI for using
+  `QList::assign()`, a Qt 6.6 addition that works fine on all three release
+  builds. The reverse risk was live too, since no per-PR Linux job compiled
+  against 6.8.3 — the AppImage first sees that Qt at release-tag time.
+
+  The CI image now installs Qt 6.8.3 via aqtinstall instead of using the distro's
+  (#4685), matching `appimage.yml` and the Windows leg, so one Qt version covers
+  every check and every artifact. It also builds qtkeychain from source against
+  that Qt, since the distro package is compiled against 6.4.2. A side effect: the
+  CI image clears the QRhi floor (6.7+), so GPU spectrum rendering is no longer
+  silently compiled out of Linux CI builds.
+
+  Distro Qt satisfies 6.8 on Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch.
+  On **Ubuntu 24.04 LTS** it does not — build against a Qt from aqtinstall or the
+  Qt online installer and pass
+  `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64`. See the README's dependency
+  section. The Qt 6.5 compatibility fallbacks the old floor kept alive are
+  removed (#4691).
+
+- **The Windows Qt is pinned exactly, and GPU spectrum is asserted on every
+  artifact (#4688).** The Windows installer asked for `6.8.*` while CI pinned
+  `6.8.3`; they agreed only because Qt stopped publishing open-source 6.8.x
+  binaries after 6.8.3 — a licensing accident, not a pin. `AETHER_GPU_SPECTRUM`
+  is a request that CMake can silently flip back off, and the guard that catches
+  that existed on one artifact of three. It now runs on all of them.
+- **Every HTTP client has a transfer timeout (#4688).** Most did not, so a
+  half-open TCP connection left the request pending forever with no `finished()`,
+  no error and no user-visible failure — space-weather panels, POTA spots, PSK
+  Reporter, SmartLink auth, the About dialog's contributor list, the version
+  check, the credits panel and OSM map tiles simply never updated, and the large
+  downloads (ASR models, NVIDIA AFX packs, firmware) sat at a dead progress bar
+  with no way to tell "slow" from "gone".
+- **CI image publishing is restored (#4683).** It had not published since
+  2026-05-04: the build completed and the *push* was denied, because the package
+  lived in a personal namespace the repo-scoped token has no write access to.
+- **Per-PR runner cost cut from ~130 minutes to ~35 (#4655).** Three of the six
+  causes were defects rather than tuning opportunities — including a malformed
+  `cl.exe` flag that had silently disabled the compiler cache on a *required*
+  check since April. No source changes. The system-libraries canary's ccache cap
+  was raised after its first real run saturated it (#4659).
+- **Optional system `libwhisper` (#4516).** Distribution packagers can build
+  against a system whisper library instead of the vendored one.
+- Dependency bumps: `actions/setup-node` 4.4.0 → 7.0.0 (#4664),
+  `docker/login-action` 4.5.1 → 4.6.0 (#4663), `mozilla-actions/sccache-action`
+  0.0.10 → 0.0.11 (#4662).
+
+### Tests
+
+- `radio_capability_gating_test` no longer fails intermittently on assertions
+  unrelated to whatever is under review — its wait loop passed a millisecond
+  argument that is a *maximum, not a wait*, so it spun on an empty queue instead
+  of waiting for the cross-thread relay (#4693, #4697). The corrected wait is
+  hoisted into one shared helper, with the trap itself pinned as a test (#4699).
+- `cross_needle_meter_test` asserts design contracts rather than coincidences,
+  and CI actually runs it — two of its assertions failed on a clean `main`, and
+  nothing executed the target that would have caught them (#4559).
+- The ConnectionPanel growth proof is deterministic instead of relying on font
+  scaling as a proxy for "the body needs more height", which is not portable
+  (#4679); the Connect-to-Radio VPN advanced section is covered by the panel size
+  test (#4643).
+- `local_memory_bank_test` had been failing deterministically on Windows since
+  #4590 — an open read handle, not the re-baselining logic it appeared to be
+  (#4625).
+- The logging category-toggle Info enablement is regression-guarded end to end
+  (#4419).
+
+### Documentation
+
+- **`CHANGELOG.md` is release-prep only (#4707).** An ordinary PR must not add
+  an entry — every entry is prepended to the top of the same list, so any two
+  PRs that both add one conflict with each other. The section is written at
+  release prep from the merged PR bodies. `AGENTS.md` also now spells out all
+  **five** places the version is stated, after v26.7.4.1 shipped with three of
+  them stale (#4519).
+- **The project canon is aligned with the shipped RFC #4603 architecture
+  (#4624).** The Radio-Authoritative Settings Policy was stated family-blind —
+  correct doctrine for Flex, and exactly what the client now does *not* do for
+  the HL2, so an agent following it literally would have flagged shipped
+  behaviour as a violation. It is rewritten capability-shaped.
+- **The README no longer promises a runtime GPU fallback that does not exist
+  (#4705).** `AETHER_GPU_SPECTRUM` selects the spectrum widget's base class at
+  compile time; the CPU `QPainter` path is a build-time alternative, not
+  something that catches a machine whose GPU initialisation fails.
+
+### Contributors
+
+Big thanks to **@ten9876** (maintainer, 29 PRs — the settings-store RFC #4603
+engine, scoped store, BandStack and memory-bank fold-ins and the Settings
+Browser, the Qt 6.8 floor and CI image, the macOS and Windows Qt pins, AppImage
+Wayland and aarch64 packaging, the five-defect DMG rescue and the Intel
+macOS 12 floor, HTTP timeouts, CI
+cost and image publishing, and the documentation pass), **@nigelfenton** (25
+PRs — the generated theme seed and
+the theme round-trip, reset-to-factory and re-resolve fixes, the colour ratchet,
+the demo-mode phase-accumulator work, `HGauge` range re-mapping, FlexControl
+recovery, the meter freshness fixes, the automation Hz guards and `dumpTree`),
+**@rfoust** (17 PRs — the 3D FFT and waterfall stabilisation pass, RN2 stereo
+and TX pacing, the waterfall palette recolour, GUI-registration recovery, the
+Connect panel, D-STAR firewall and DSTR repeater offset, GPS gating, ASR GPU
+discovery, and the band-recall race), **@jensenpat** (16 PRs — four independent
+HL2 receivers, the SSB voice chain, CW/RTTY/QSO-recorder bring-up, AX.25 packet
+and connected-mode reliability, band switching and the Radio Health dialog, the
+capability gating, mic gain and the wattmeter, TCI PTT routing, and the WSPR
+beacon), **@skerker** (6 PRs — TCI receiver-number stability, the DAX restore
+window, the Metal-kernel build fix, demo Morse spacing, the Demo Noise wrap
+layout, and the logging regression guard), **@Ozy311** (5 PRs — the HL2 status
+bar, PA supply-voltage gating, TX filter attenuation reporting, the TCI routing
+log, and AetherClock on backends without DAX), **@M7HNF-Ian** (5 PRs —
+per-slice manual squelch and its follow-up, the SpotHub Freeze toggle, the amp
+fan-mode pull-down, and the collapsed-VFO Add Spot fix), **@quelleck** (3 PRs —
+warm KiwiSDR audio through TX, Resume-after-TX-delay, and the Kiwi pan zoom
+fix), **@wa2n-code** (3 PRs — the KiwiSDR CW BFO offset, the auxiliary-sink
+probe-at-open fix, and the `DssRenderer` stack overflow), **@nonoo** (Ulanzi
+Dial PTT hold, CW keying release and mapping persistence), **@NF0T**
+(client-side recording refusal when PC Audio is off), **@milenjb** (the Stream
+Deck slice-targeting plugin pass), **@w9fyi** (the RelayBar and RangeSlider
+accessibility throttle), **@dawkagaming** (optional system `libwhisper`), and
+**@motoham88** (the Connect-to-Radio panel size test). Dependabot contributed
+3 dependency bumps.
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
 
 ## [v26.7.4.1] — 2026-07-27
 

@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.7.4.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.8.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -328,11 +328,16 @@ Currently in flight:
   lives behind a stable interface. Three backends ride it today (Flex, HL2,
   and the demo simulator); the remaining step is the versioned protocol that
   splits a headless engine from thin UI clients.
-- **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam. Not
-  yet a supported radio family: remaining work is wider mode coverage,
-  panadapter parity with the Flex path, and hardening the raw-IQ DSP chain.
-- **AppSettings nested-JSON refactor**, **TX DSP chain visual rebuild**, and
-  the **Flathub submission**.
+- **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam, now
+  running four independent receivers, the SSB voice chain, CW/RTTY decoding,
+  AX.25 packet, band switching with hardware filters, memory channels and
+  per-radio operating-state restore. Not yet a supported radio family:
+  remaining work is wider mode coverage, panadapter parity with the Flex path,
+  and hardening the raw-IQ DSP chain.
+- **AppSettings nested-JSON refactor** — the storage layer moved to SQLite with
+  per-radio versioned feature documents; the remaining work is migrating the
+  legacy flat keys.
+- **TX DSP chain visual rebuild** and the **Flathub submission**.
 
 See [`ROADMAP.md`](ROADMAP.md) for the full picture and the community backlog,
 and the [issue tracker](https://github.com/aethersdr/AetherSDR/issues) for
