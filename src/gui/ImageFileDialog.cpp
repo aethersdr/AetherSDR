@@ -2,6 +2,7 @@
 
 #include "core/AppSettings.h"
 
+#include <QButtonGroup>
 #include <QDialog>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -232,7 +233,36 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         auto* proxy = new ImageThumbnailProxyModel(&dlg);
         dlg.setProxyModel(proxy);
 
+        // QFileSystemModel populates a directory's rows asynchronously —
+        // rowCount() reads 0 until its background scan finishes and
+        // directoryLoaded() fires. An already-scanned (cached) directory
+        // resolves before the view ever paints, so it looks instant; a
+        // fresh one can leave the view showing zero rows against a root
+        // index that is otherwise perfectly valid, until something else
+        // happens to force a re-layout. Re-applying rootIndex is a public,
+        // idempotent way to force that re-layout (QAbstractItemView
+        // doesn't skip it just because the index value is unchanged).
+        if (auto* fsModel = qobject_cast<QFileSystemModel*>(proxy->sourceModel())) {
+            QObject::connect(fsModel, &QFileSystemModel::directoryLoaded, &dlg,
+                              [listView, treeView](const QString&) {
+                                  listView->setRootIndex(listView->rootIndex());
+                                  if (treeView)
+                                      treeView->setRootIndex(treeView->rootIndex());
+                              });
+        }
+
         const QSize defaultIconSize = listView->iconSize();
+
+        // Two mutually-exclusive view buttons (Explorer-style view switcher)
+        // rather than one checkable toggle: clicking a button always selects
+        // it; clicking the already-active one is a no-op (QButtonGroup
+        // exclusivity), so neither button un-selects itself.
+        auto* smallIconsButton = new QToolButton(&dlg);
+        smallIconsButton->setObjectName(QStringLiteral("imageDialogSmallIconsButton"));
+        smallIconsButton->setCheckable(true);
+        smallIconsButton->setToolTip(QStringLiteral("Small icons"));
+        smallIconsButton->setIcon(dlg.style()->standardIcon(QStyle::SP_FileDialogListView));
+        grid->addWidget(smallIconsButton, 0, grid->columnCount());
 
         auto* thumbButton = new QToolButton(&dlg);
         thumbButton->setObjectName(QStringLiteral("imageDialogThumbnailToggle"));
@@ -240,6 +270,11 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         thumbButton->setToolTip(QStringLiteral("Large thumbnails"));
         thumbButton->setIcon(dlg.style()->standardIcon(QStyle::SP_FileDialogContentsView));
         grid->addWidget(thumbButton, 0, grid->columnCount());
+
+        auto* viewButtons = new QButtonGroup(&dlg);
+        viewButtons->setExclusive(true);
+        viewButtons->addButton(smallIconsButton);
+        viewButtons->addButton(thumbButton);
 
         previewLabel = new QLabel(&dlg);
         previewLabel->setObjectName(QStringLiteral("imageDialogPreviewLabel"));
@@ -261,19 +296,35 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
             }
         };
 
-        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [applyThumbnailMode](bool on) {
-            applyThumbnailMode(on);
+        auto selectMode = [applyThumbnailMode](bool large) {
+            applyThumbnailMode(large);
             auto& s = AppSettings::instance();
             s.setValue(QStringLiteral("ImageFileDialog/ThumbnailView"),
-                       on ? QStringLiteral("True") : QStringLiteral("False"));
+                       large ? QStringLiteral("True") : QStringLiteral("False"));
             s.save();
+        };
+        // Both buttons' toggled(true) fires exactly once per user click (the
+        // group's exclusivity fires toggled(false) on the other button too,
+        // ignored here) — each branch only acts on becoming the active one.
+        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [selectMode](bool on) {
+            if (on)
+                selectMode(true);
+        });
+        QObject::connect(smallIconsButton, &QToolButton::toggled, &dlg, [selectMode](bool on) {
+            if (on)
+                selectMode(false);
         });
 
         auto& s = AppSettings::instance();
         const bool persisted = s.value(QStringLiteral("ImageFileDialog/ThumbnailView"),
                                         QStringLiteral("False")).toString()
             == QStringLiteral("True");
-        thumbButton->setChecked(persisted); // fires toggled() above when true
+        // Exactly one of these fires toggled(true), applying the persisted
+        // mode above.
+        if (persisted)
+            thumbButton->setChecked(true);
+        else
+            smallIconsButton->setChecked(true);
     }
 
     if (previewLabel) {
