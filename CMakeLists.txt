@@ -420,6 +420,30 @@ if(AETHER_GPU_SPECTRUM)
                 set(Qt6GuiPrivate_FOUND TRUE)
                 set(DEBIAN_GPU_FIX_REQUIRED TRUE) # Mark for Step 2 (manual include dirs)
             endif()
+            # macOS framework layout. Qt's own macOS builds — the official
+            # installer and aqtinstall alike — ship QtGui as a framework, so the
+            # private headers live at QtGui.framework/Headers/<ver>/QtGui, one
+            # path component short of the SDK layout probed above (which expects
+            # a further QtGui/ beneath the include root). They also ship no
+            # Qt6GuiPrivate CMake package at all, so nothing above finds them.
+            #
+            # This is not a hypothetical layout: pinning the Apple Silicon DMG
+            # to aqt Qt 6.8.3 (#4688 §1) moved that leg off Homebrew's Qt, which
+            # *does* provide Qt6GuiPrivate — and AETHER_GPU_SPECTRUM promptly
+            # turned itself OFF, with the CPU QPainter fallback compiled in and
+            # the workflow green. Only the #4690 assertion caught it. Probe the
+            # framework layout here so the gate agrees with the wiring in the
+            # AETHER_GPU_SPECTRUM block below, which has always had a branch for
+            # this shape and could never be reached.
+            if(NOT Qt6GuiPrivate_FOUND AND APPLE)
+                foreach(_inc IN LISTS _qt_gui_incs)
+                    if(EXISTS "${_inc}/${Qt6_VERSION}/QtGui/private/qhighdpiscaling_p.h")
+                        set(QT_FRAMEWORK_PRIVATE_INC "${_inc}/${Qt6_VERSION}")
+                        set(Qt6GuiPrivate_FOUND TRUE)
+                        break()
+                    endif()
+                endforeach()
+            endif()
         endif()
 
         if(Qt6GuiPrivate_FOUND)
@@ -2280,13 +2304,26 @@ if(AETHER_GPU_SPECTRUM)
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
         )
+    elseif(QT_FRAMEWORK_PRIVATE_INC)
+        # macOS framework layout located during detection. Both dirs, matching
+        # what Qt's own Qt6::Gui generator expression adds when the private
+        # module is available: <ver>/ resolves QtGui/private/... spellings,
+        # <ver>/QtGui/ resolves the <rhi/qrhi.h> the spectrum widgets include.
+        message(STATUS "Applying framework private QtGui include paths to AetherSDR (${QT_FRAMEWORK_PRIVATE_INC})")
+        target_include_directories(AetherSDR PRIVATE
+            "${QT_FRAMEWORK_PRIVATE_INC}"
+            "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+        )
     endif()
 
     if(TARGET Qt6::GuiPrivate)
         target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
-    elseif(NOT DEBIAN_GPU_FIX_REQUIRED)
-        # No GuiPrivate target and no manual path (e.g. some macOS layouts) —
-        # locate the rhi/ headers within the Qt6::Gui include dirs.
+    elseif(NOT DEBIAN_GPU_FIX_REQUIRED AND NOT QT_FRAMEWORK_PRIVATE_INC)
+        # No GuiPrivate target and neither manual path applied — last resort:
+        # locate the rhi/ headers within the Qt6::Gui include dirs. Qt's macOS
+        # framework layout used to land here and no longer does (the branch
+        # above handles it), so this now covers only distributions that expose
+        # rhi/ directly on the Qt6::Gui include path.
         get_target_property(_qt_gui_inc Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
         foreach(_dir IN LISTS _qt_gui_inc)
             if(EXISTS "${_dir}/rhi/qrhi.h")

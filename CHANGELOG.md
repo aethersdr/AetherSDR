@@ -8,6 +8,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed: the macOS build keeps GPU spectrum rendering when Qt comes from Qt (#4688, #2191)
+
+**The Apple Silicon DMG now ships the Qt it says it ships — 6.8.3, the same one
+behind every other download — and keeps drawing the spectrum on the GPU while
+doing it.**
+
+Until now that DMG took Qt from Homebrew: whatever version Homebrew happened to
+be publishing on the day a release was tagged. That was 6.11.1 while every other
+artifact was pinned to 6.8.3, so the most-downloaded macOS build was the only one
+running a Qt nobody had tested it against — and it could change between two
+releases with no code change anywhere. It is the most likely explanation for
+#2191, where the DMG's Qt behaved differently from a standard install of the
+same version.
+
+Pinning it exposed a second problem that had been hiding behind Homebrew. Qt's
+own macOS packages arrange their headers differently from every other platform,
+and AetherSDR's build did not recognise that arrangement — so the GPU spectrum
+renderer quietly switched itself off and the app fell back to CPU drawing, with
+nothing in the build saying so. Both halves are fixed here, and the release now
+refuses to produce a macOS app that has silently lost GPU rendering or that
+bundles a Qt other than the pinned one.
+
+Also on macOS: SmartLink credential persistence — staying logged in between
+launches — is now built as part of the release rather than picked up from
+Homebrew, and its absence is a build failure instead of a feature that
+disappears without a word.
+
 ### Fixed: the Linux AppImage runs natively on Wayland instead of XWayland (#1389, #1233)
 
 **On a Wayland desktop the AppImage now uses Wayland directly.** Text and the
