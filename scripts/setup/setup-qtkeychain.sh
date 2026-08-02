@@ -27,9 +27,9 @@
 # empty and clang stamps the *runner's* OS into LC_BUILD_VERSION — a dylib with
 # minos 15.0 inside a bundle that advertises 14.0, which dyld refuses to load on
 # macOS 14. The library is copied into Contents/Frameworks (CMakeLists.txt,
-# APPLE branch of the Qt6Keychain block), so it ships with that stamp. The
-# `${VAR:+…}` form is safe under `set -u` and passes nothing when unset, leaving
-# Linux exactly as it was.
+# APPLE branch of the Qt6Keychain block), so it ships with that stamp. The flag
+# is built into QTKEYCHAIN_OSX_TARGET below and passed only on Darwin with the
+# variable set, so Linux is left exactly as it was.
 #
 # Usage: ./setup-qtkeychain.sh
 
@@ -105,6 +105,13 @@ echo "Verified qtkeychain commit $QTKEYCHAIN_COMMIT"
 # host default and has no bundle to break. The release path always sets it, and
 # assert-macos-bundle.sh fails the DMG if it ever stops doing so — so the check
 # that matters is downstream, and this stays usable off CI.
+#
+# Expand it as ${arr[@]+"${arr[@]}"} below, never plain "${arr[@]}": macOS ships
+# bash 3.2, where expanding an EMPTY array under `set -u` is an unbound-variable
+# error. That is the same trap that killed setup-macos-deps.sh four seconds into
+# the DMG build, and the empty case here is the branch this comment is about —
+# the local developer who has not set the variable would get the crash instead
+# of the warning.
 QTKEYCHAIN_OSX_TARGET=()
 if [ "$(uname -s)" = "Darwin" ]; then
     if [ -n "${MACOS_DEPLOYMENT_TARGET:-}" ]; then
@@ -119,15 +126,14 @@ fi
 echo "Building qtkeychain $QTKEYCHAIN_VERSION from source..."
 cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    "${QTKEYCHAIN_OSX_TARGET[@]}" \
+    ${QTKEYCHAIN_OSX_TARGET[@]+"${QTKEYCHAIN_OSX_TARGET[@]}"} \
     -DBUILD_WITH_QT6=ON \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_TRANSLATIONS=OFF \
     -DLIBSECRET_SUPPORT=OFF \
     -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
     -DCMAKE_INSTALL_PREFIX="$OUT_DIR_ABS" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
-    ${MACOS_DEPLOYMENT_TARGET:+-DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET"}
+    -DCMAKE_INSTALL_LIBDIR=lib
 # nproc is GNU coreutils and absent on macOS, where this script now also runs
 # (the Apple Silicon DMG builds qtkeychain against its aqt Qt for the same ABI
 # reason as Linux). sysctl is the BSD equivalent. Fall back to 1 rather than
