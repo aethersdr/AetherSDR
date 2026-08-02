@@ -108,6 +108,30 @@ endif()
 # distro carrying it (Debian Trixie, Ubuntu 25.10+, Fedora 41+, Arch).
 # 6.8 also clears QRhiWidget (6.7+), so the GPU spectrum path is no longer
 # conditionally compiled out on Linux CI.
+#
+# Probe QUIET first so a below-floor Qt gets an actionable error instead of
+# CMake's bare "the version found is not compatible", which names neither the
+# floor as a project decision nor the way out. Ubuntu 24.04 LTS (Qt 6.4.2) is
+# the common case, it has the largest install base of any supported distro, and
+# it was a documented apt line here until this floor moved — so the people most
+# likely to hit this have the least context for it, and the README they need is
+# a document they have already scrolled past.
+#
+# Falls through untouched when Qt is absent entirely (the REQUIRED call below
+# emits the normal not-found error) or already satisfies the floor.
+find_package(Qt6 QUIET COMPONENTS Core)
+if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
+    message(FATAL_ERROR
+        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
+        "This is the Qt every AetherSDR release binary is built against.\n"
+        "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
+        "Fedora 41+ and Arch all ship 6.8 or newer.\n"
+        "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
+        "or the Qt online installer and re-run with "
+        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
+        "\"Building from Source\" dependency section.")
+endif()
+
 find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Concurrent
@@ -350,7 +374,11 @@ endif()
 if(AETHER_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
         set(AETHER_GPU_SPECTRUM OFF)
-        message(STATUS "GPU spectrum rendering disabled (requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.7.x/gcc_64 to use a newer Qt installation)")
+        # 6.8.3, not 6.7.x, in the suggested path: this guard is unreachable
+        # while the floor is 6.8, so if it ever fires the floor has been
+        # lowered — and pointing that reader at a 6.7 install would send them
+        # to a Qt find_package still rejects.
+        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 to use a newer Qt installation)")
     else()
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
