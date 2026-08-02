@@ -14,12 +14,14 @@
 
 Q_LOGGING_CATEGORY(lcPropForecast, "aether.propforecast")
 
+namespace AetherSDR {
+
+namespace {
 // Stall timeout for every request this client issues (#4688 §6). Without one a
 // half-open connection to any of the four space-weather hosts leaves its reply
 // pending forever — the fetch neither completes nor errors.
 constexpr int kTransferTimeoutMs = 15000;
-
-namespace AetherSDR {
+} // namespace
 
 PropForecastClient::PropForecastClient(QObject* parent)
     : QObject(parent)

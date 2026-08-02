@@ -22,12 +22,12 @@
 #include <QVBoxLayout>
 #include "core/ThemeManager.h"
 
-// Stall timeout for the dashboard's space-weather fetches (#4688 §6).
-constexpr int kTransferTimeoutMs = 15000;
-
 namespace AetherSDR {
 
 namespace {
+
+// Stall timeout for the dashboard's space-weather fetches (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
 
 constexpr int kMetricKIndex = 0;
 constexpr int kMetricAIndex = 1;

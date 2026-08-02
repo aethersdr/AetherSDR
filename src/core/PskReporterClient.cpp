@@ -23,10 +23,17 @@
 
 Q_LOGGING_CATEGORY(lcPskReporter, "aether.pskreporter")
 
-// Stall timeout for PSK Reporter queries (#4688 §6).
-constexpr int kTransferTimeoutMs = 15000;
-
 namespace AetherSDR {
+
+namespace {
+// Stall timeout for PSK Reporter queries (#4688 §6). 30 s rather than the 15 s
+// the other interactive clients use: Qt's clock also covers the wait for the
+// FIRST byte, and the initial backfill can ask for the full 24 h window
+// (kMaxLookbackSec), which retrieve.pskreporter.info spends real server-side
+// time assembling before it writes anything. The polling floor is already five
+// minutes (kMinPollMs) for the same reason.
+constexpr int kTransferTimeoutMs = 30000;
+} // namespace
 
 PskReporterClient::PskReporterClient(QObject* parent)
     : QObject(parent)

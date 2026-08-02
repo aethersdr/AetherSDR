@@ -44,6 +44,9 @@
 
 namespace {
 
+// Stall timeout for the Open Collective supporters query (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+
 struct CommunityStar {
     qreal x{0.0};
     qreal y{0.0};
@@ -565,7 +568,7 @@ void fetchOpenCollectiveSupporters(QDialog* owner, CommunityCreditsCanvas* canva
     auto* manager = new QNetworkAccessManager(owner);
     // Bound the Open Collective query (#4688 §6) — without it a half-open
     // connection leaves the credits panel waiting indefinitely with no error.
-    manager->setTransferTimeout(15000);
+    manager->setTransferTimeout(kTransferTimeoutMs);
     QNetworkRequest request{QUrl(QStringLiteral("https://api.opencollective.com/graphql/v2"))};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("User-Agent", "AetherSDR-community-credits");

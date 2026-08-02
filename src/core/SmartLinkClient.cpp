@@ -13,10 +13,12 @@
 #include <qt6keychain/keychain.h>
 #endif
 
+namespace AetherSDR {
+
+namespace {
 // Stall timeout for SmartLink auth/API requests (#4688 §6).
 constexpr int kTransferTimeoutMs = 15000;
-
-namespace AetherSDR {
+} // namespace
 
 // Cap the line-assembly buffer.  A buggy or hostile SmartLink discovery/auth
 // peer that dribbles bytes without ever sending '\n' would otherwise grow

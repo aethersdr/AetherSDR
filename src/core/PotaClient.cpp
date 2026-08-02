@@ -11,10 +11,12 @@
 #include <QDir>
 #include <QFileInfo>
 
+namespace AetherSDR {
+
+namespace {
 // Stall timeout for POTA spot queries (#4688 §6).
 constexpr int kTransferTimeoutMs = 15000;
-
-namespace AetherSDR {
+} // namespace
 
 PotaClient::PotaClient(QObject* parent)
     : QObject(parent)
