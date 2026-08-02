@@ -78,6 +78,40 @@ jobs:
           } >> "$GITHUB_ENV"
           "$QT_ROOT/bin/qmake" -query QT_VERSION
 
+      # Why this guard exists — the history is easy to lose and expensive to
+      # relearn. #711 ("drop aqtinstall, use Homebrew for everything") removed
+      # aqt from macOS precisely because an aqt Qt and a Homebrew Qt visible at
+      # the same time produced "Qt6GuiPrivate and linker failures", and #812 hit
+      # the same clash on Intel against the source-built Qt ("their CMake
+      # configs clash"). The real constraint is not "aqt is wrong on macOS" —
+      # it is that TWO discoverable Qt trees break the build.
+      #
+      # In both incidents the second Qt arrived transitively rather than by
+      # request: brew's qtkeychain depends on qtbase. This job installs neither
+      # qtkeychain nor any Qt formula, so there is exactly one Qt — but
+      # CMAKE_PREFIX_PATH still carries $(brew --prefix) for fftw/portaudio/
+      # hidapi, so a future formula that pulls qtbase in, or a runner image that
+      # ships Qt preinstalled, would silently recreate #711. Assert it.
+      - name: Assert no Homebrew Qt is discoverable (Apple Silicon)
+        if: matrix.label == 'apple-silicon'
+        run: |
+          set -o pipefail
+          if brew list --formula 2>/dev/null | grep -qE '^(qt|qt@[0-9]+|qtbase)$'; then
+            echo "ERROR: a Homebrew Qt is installed alongside the aqt Qt:"
+            brew list --formula | grep -E '^(qt|qt@[0-9]+|qtbase)$'
+            echo "Two discoverable Qt trees is the #711 / #812 failure mode."
+            echo "Find the formula that pulled it in (qtkeychain depends on"
+            echo "qtbase) and drop it, or this build links a mixed Qt."
+            exit 1
+          fi
+          if [ -f "$(brew --prefix)/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "ERROR: a Qt6 CMake config exists under $(brew --prefix)"
+            echo "even though no Qt formula is listed — CMAKE_PREFIX_PATH"
+            echo "includes that prefix and could resolve Qt from it."
+            exit 1
+          fi
+          echo "No Homebrew Qt present; the aqt tree at $QT_ROOT is the only one."
+
       - name: Cache qtkeychain (Apple Silicon)
         if: matrix.label == 'apple-silicon'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9

@@ -516,6 +516,27 @@ jobs:
           } >> "$GITHUB_ENV"
           "$QT_ROOT/bin/qmake" -query QT_VERSION
 
+      # Same guard as macos-dmg.yml, same history: #711 removed aqt from macOS
+      # because two discoverable Qt trees produced Qt6GuiPrivate and linker
+      # failures, and #812 hit it again on Intel. The second Qt arrives
+      # transitively — brew's qtkeychain depends on qtbase — so "we didn't
+      # install Qt" is not sufficient. CMAKE_PREFIX_PATH below still includes
+      # $(brew --prefix) for fftw/portaudio/hidapi.
+      - name: Assert no Homebrew Qt is discoverable
+        run: |
+          set -o pipefail
+          if brew list --formula 2>/dev/null | grep -qE '^(qt|qt@[0-9]+|qtbase)$'; then
+            echo "ERROR: a Homebrew Qt is installed alongside the aqt Qt:"
+            brew list --formula | grep -E '^(qt|qt@[0-9]+|qtbase)$'
+            echo "Two discoverable Qt trees is the #711 / #812 failure mode."
+            exit 1
+          fi
+          if [ -f "$(brew --prefix)/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "ERROR: a Qt6 CMake config exists under $(brew --prefix)"
+            exit 1
+          fi
+          echo "No Homebrew Qt present; the aqt tree at $QT_ROOT is the only one."
+
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
