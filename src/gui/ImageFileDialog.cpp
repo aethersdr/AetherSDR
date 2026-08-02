@@ -21,6 +21,7 @@
 #include <QStringList>
 #include <QStyle>
 #include <QToolButton>
+#include <QTreeView>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFutureWatcher>
 
@@ -102,10 +103,9 @@ void updatePreview(QLabel* label, const QString& path)
 
 // Wraps QFileDialog's internal QFileSystemModel to supply real image
 // thumbnails for Qt::DecorationRole instead of the generic per-filetype
-// icon. QFileDialog::ViewMode has no native thumbnail mode (#4717) — this
-// proxy is what makes IconMode on the internal list view show anything
-// useful. Decoding happens off the GUI thread; results land in a bounded,
-// mtime-keyed QPixmapCache.
+// icon (#4717). Shared between the dialog's listView and treeView so both
+// List and Detail mode show real thumbnails. Decoding happens off the GUI
+// thread; results land in a bounded, mtime-keyed QPixmapCache.
 class ImageThumbnailProxyModel : public QIdentityProxyModel
 {
 public:
@@ -184,17 +184,29 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
     // dialog rather than crashing.
     auto* grid = qobject_cast<QGridLayout*>(dlg.layout());
     auto* listView = dlg.findChild<QListView*>(QStringLiteral("listView"));
+    auto* treeView = dlg.findChild<QTreeView*>(QStringLiteral("treeView"));
     QLabel* previewLabel = nullptr;
 
     if (grid && listView) {
+        // Deliberately not touching QFileDialog's own view/flow/layout
+        // (setViewMode, setFlow, setWrapping, setResizeMode,
+        // setUniformItemSizes): reconfiguring the internal listView into a
+        // wrapped icon grid broke double-click activation on the "Computer"
+        // root (drive entries stopped responding to clicks). Real machine
+        // testing on Windows caught this. Sticking to icon-size-only keeps
+        // native navigation (List and Detail both) completely untouched.
         auto* proxy = new ImageThumbnailProxyModel(&dlg);
         proxy->setSourceModel(listView->model());
         listView->setModel(proxy);
+        if (treeView && treeView->model() == proxy->sourceModel())
+            treeView->setModel(proxy);
+
+        const QSize defaultIconSize = listView->iconSize();
 
         auto* thumbButton = new QToolButton(&dlg);
         thumbButton->setObjectName(QStringLiteral("imageDialogThumbnailToggle"));
         thumbButton->setCheckable(true);
-        thumbButton->setToolTip(QStringLiteral("Thumbnail view"));
+        thumbButton->setToolTip(QStringLiteral("Large thumbnails"));
         thumbButton->setIcon(dlg.style()->standardIcon(QStyle::SP_FileDialogContentsView));
         grid->addWidget(thumbButton, 0, grid->columnCount());
 
@@ -207,26 +219,15 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         const int previewRowSpan = std::max(1, grid->rowCount() - 1);
         grid->addWidget(previewLabel, 1, grid->columnCount(), previewRowSpan, 1, Qt::AlignTop);
 
-        auto applyViewMode = [&dlg, listView](bool thumbnails) {
-            if (thumbnails) {
-                dlg.setViewMode(QFileDialog::List);
-                listView->setViewMode(QListView::IconMode);
-                listView->setIconSize(kThumbnailDecodeSize);
-                listView->setGridSize(kThumbnailDecodeSize + QSize(16, 16));
-                listView->setWrapping(true);
-                listView->setResizeMode(QListView::Adjust);
-                listView->setFlow(QListView::LeftToRight);
-                listView->setUniformItemSizes(true);
-            } else {
-                listView->setViewMode(QListView::ListMode);
-                listView->setFlow(QListView::TopToBottom);
-                listView->setWrapping(false);
-                listView->setGridSize(QSize());
-            }
+        auto applyThumbnailSize = [listView, treeView, defaultIconSize](bool large) {
+            const QSize size = large ? kThumbnailDecodeSize : defaultIconSize;
+            listView->setIconSize(size);
+            if (treeView)
+                treeView->setIconSize(size);
         };
 
-        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [applyViewMode](bool on) {
-            applyViewMode(on);
+        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [applyThumbnailSize](bool on) {
+            applyThumbnailSize(on);
             auto& s = AppSettings::instance();
             s.setValue(QStringLiteral("ImageFileDialog/ThumbnailView"),
                        on ? QStringLiteral("True") : QStringLiteral("False"));
