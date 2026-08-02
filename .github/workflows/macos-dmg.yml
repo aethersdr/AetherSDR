@@ -183,15 +183,36 @@ jobs:
       # Assert on the configure output, not CMakeCache.txt: CMakeLists.txt
       # disables the feature with a plain set(), which shadows the cache entry
       # without rewriting it, so the cache still reads ON when it is off.
+      # -iE, not the -i "a\|b" form appimage.yml uses: that file runs on GNU
+      # grep, where \| is BRE alternation. This one runs on the macOS runner's
+      # BSD grep, which has no BRE alternation and would search for the literal
+      # string "GPU spectrum|Qt6GuiPrivate|private headers" — printing nothing
+      # under the ERROR header, on the one path where this step has to explain
+      # itself. Every other multi-pattern grep in this file already uses -E.
       - name: Assert GPU spectrum rendering actually enabled
         if: matrix.label == 'apple-silicon'
         run: |
           grep -q "GPU spectrum rendering enabled" configure.log || {
             echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
-            grep -i "GPU spectrum\|Qt6GuiPrivate\|private headers" configure.log || true
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
             exit 1
           }
           grep "GPU spectrum rendering enabled" configure.log
+
+      # The mirror of the above, and cheap: the Intel leg asks for OFF because
+      # QRhiWidget misbehaves on older Metal/OpenGL hardware, so a change that
+      # quietly turned it back ON here would ship exactly the artifact that
+      # decision exists to prevent. Asserting both directions is what makes
+      # GPU_FLAG's two values a tested contract rather than a comment.
+      - name: Assert GPU spectrum rendering actually disabled
+        if: matrix.label == 'intel'
+        run: |
+          grep -q "GPU spectrum rendering disabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=OFF but CMake enabled it. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering disabled" configure.log
 
       - name: Build
         # Only the .app bundle ships (+ its aether-dv-waveform helper dependency,
