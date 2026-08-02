@@ -41,5 +41,5 @@ See CONSTITUTION.md for the full list. -->
 - [ ] All meter UI uses `MeterSmoother` (AGENTS.md convention)
 - [ ] Documentation updated if user-visible behavior changed — `docs/` and the
       affected READMEs. **Not `CHANGELOG.md`**, which is a release-prep file a
-      PR must not add to (AGENTS.md); describe the change here instead
+      PR must not add to (AGENTS.md); describe it in the Summary above instead
 - [ ] Security-sensitive changes reference a GHSA if applicable

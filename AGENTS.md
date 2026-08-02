@@ -211,7 +211,9 @@ The table above is the **only** reason to edit `CHANGELOG.md`: a new version
 section, at release prep. An ordinary PR — a fix, a feature, a refactor —
 **must not add an entry**, however user-visible the change is. Describe it in
 the PR body and the commit message instead; those are where the reasoning
-belongs and neither one conflicts with anything.
+belongs and neither one conflicts with anything. At release prep, the section
+is written *from* those PR bodies — `gh pr list --state merged --search
+'merged:>=<last-tag-date>'` is the source of truth for what shipped.
 
 This is a mechanical rule, not a stylistic preference. Every entry is prepended
 to the top of the same `## [Unreleased]` list, so **any two PRs that both add
@@ -224,9 +226,10 @@ so the fix is to stop writing to it outside the one moment that needs it.
 Reviewers: do not ask for a `CHANGELOG.md` entry, and flag one as a change to
 remove if a PR adds it. There has never been a written rule requiring per-PR
 entries — `CONTRIBUTING.md` has never mentioned the file at all — but the habit
-propagated anyway, by agents reading `git log` and copying what they saw. About
-45% of recent merges carry an entry, which is the worst of both worlds: not a
-convention anyone can rely on, and enough churn to conflict constantly.
+propagated anyway, by agents reading `git log` and copying what they saw. When
+this rule landed it sat at 45% of recent merges (18 of the last 40, measured
+2026-08-02), which is the worst of both worlds: not a convention anyone can
+rely on, and enough churn to conflict constantly.
 
 ---
 
