@@ -111,11 +111,23 @@ static void check(bool ok, const char* what)
 // its nested loop from the EMITTING thread, so a cross-thread emission racing
 // loop entry can in principle lose the wake; the outer re-check of count() then
 // recovers it at the cost of one slice, where a single un-sliced wait() would
-// sit out the whole timeout. That race did not reproduce here (Qt 6.10.3,
-// Windows: 440 trials across four emission delays, 220 of them under 14-way CPU
-// contention, zero misses in either form) but it has been measured elsewhere on
-// Qt 6.11, and the slicing costs nothing when it does not trigger. Do not
-// collapse these into a single wait().
+// sit out the whole timeout. That race is REPORTED on Qt 6.11 (a 0 ms emission
+// returning at 102 ms — one slice late, recovered), but it has not reproduced in
+// either attempt to measure it: Qt 6.10.3/Windows, 440 trials across four
+// emission delays with 220 under 14-way CPU contention, and Qt 6.11.1/Linux, 800
+// trials over the same delays with half under load. Both runs put the sliced and
+// un-sliced forms within a millisecond of each other at zero misses.
+//
+// The slicing stays on that asymmetry, then, not on a confirmed race: it costs
+// nothing when it does not trigger, and if the report is right an un-sliced
+// wait() turns one slice of latency into a full-timeout stall. So do not
+// collapse these into a single wait() on the strength of a probe that comes back
+// clean — that is the expected result on both versions measured so far.
+//
+// Retire this helper for AetherTest::waitForSignal() once #4699 lands. That PR
+// consolidates the spellings of this wait into tests/TestEventLoop.h but does
+// not touch this file, so until it is migrated the test that motivated the
+// shared helper is the one place still carrying a private copy of it.
 static bool waitForSpy(QSignalSpy& spy, int timeoutMs = 5000)
 {
     QDeadlineTimer deadline(timeoutMs);
