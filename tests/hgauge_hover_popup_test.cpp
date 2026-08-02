@@ -5,12 +5,18 @@
 // (RF Pwr and SWR are consecutive rows two pixels apart) therefore left the
 // previous gauge's badge on screen alongside the new one, overlapping it.
 //
-// The third case is the one that outlives even that linger: linger() only
-// starts a hide timer and every showValue() cancels it, while setValue()
-// re-shows the badge on each meter frame for as long as m_hovered is true. One
-// dropped leaveEvent — which Qt does not guarantee, and which the hideEvent
-// override in HGauge.h already exists to paper over — pins the badge on screen
-// indefinitely, frozen at the anchor the pointer left it at.
+// The third case outlives even that linger: linger() only starts a hide timer
+// and every showValue() cancels it, while setValue() re-shows the badge on each
+// meter frame for as long as m_hovered is true. One dropped leaveEvent — which
+// Qt does not guarantee, and which the hideEvent override in HGauge.h already
+// exists to paper over — pins the badge on screen indefinitely, frozen at the
+// anchor the pointer left it at. Recovery is a watchdog rather than a check on
+// the value path, because setValue() early-returns on an unchanged reading and
+// a settled meter would never reach it.
+//
+// The fourth case is the converse, and it is why the watchdog is gated on the
+// physical cursor: the automation bridge injects hovers WITHOUT moving the
+// cursor, so a per-frame cursor check would tear a driver's badge down under it.
 //
 // Asserts popup VISIBILITY rather than the hover flags, because the flags are
 // internal and the two-badges-at-once symptom is precisely a case where each
@@ -43,7 +49,32 @@ void check(bool ok, const char* what)
     if (!ok) ++failures;
 }
 
+// An unmet ENVIRONMENT precondition, not a product defect. Printed rather than
+// silently passed — a skipped case that reads as a passing case is worse than
+// a noisy one.
+void skip(const char* what, const char* why)
+{
+    std::printf("[SKIP]  %s  (%s)\n", what, why);
+}
+
 QVector<HGauge::Tick> noTicks() { return {}; }
+
+// Mirrors HGauge's own constant rather than re-stating the number, so the
+// waits below cannot drift away from the interval they are waiting on.
+constexpr int kWatchdogMs = HGauge::kHoverWatchdogMs;
+
+// #3936's bespoke hover linger, superseded by DragValuePopup::kDefaultLingerMs.
+// Deliberately a literal: it is the value this test exists to rule OUT, so it
+// must not follow the shipped constant if that ever changes again.
+constexpr int kSupersededLingerMs = 1000;
+
+// How far past the linger to wait before asserting the badge is gone. Has to
+// leave room for a loaded runner to service the timer, while staying under
+// kSupersededLingerMs or the assertion stops discriminating.
+constexpr int kLingerSlackMs = 250;
+static_assert(DragValuePopup::kDefaultLingerMs + kLingerSlackMs
+                  < kSupersededLingerMs,
+              "the gone-by check must land between the two linger values");
 
 // The badge is parented to the gauge that owns it, so it is findable without
 // widening HGauge's interface just for the test. Looked up by object name
@@ -148,52 +179,125 @@ int main(int argc, char** argv)
     }
 
     // ── the linger is the app-wide 450 ms, not a bespoke 1000 ms ─────────
-    // Bracketed rather than exact so the check is about the shipped duration
-    // being DragValuePopup::kDefaultLingerMs, not about timer precision.
+    // The load-bearing half is the second one: under the old bespoke 1000 ms
+    // the badge would still be up at 450 ms. The first half only shows the
+    // badge does not vanish instantly, and it asserts an upper bound on
+    // elapsed time that spin() cannot guarantee — so it measures and declines
+    // to assert if a loaded runner overshot the linger.
     {
         sendEnter(fwd, fwd->mapToGlobal(fwd->rect().center()));
         check(badgeVisible(fwd), "hovered before the linger measurement");
 
         sendLeave(fwd);
-        spin(DragValuePopup::kDefaultLingerMs / 2);
-        check(badgeVisible(fwd),
-              "still up halfway through the linger — a glance still registers");
+        QElapsedTimer sinceLeave;
+        sinceLeave.start();
+        spin(DragValuePopup::kDefaultLingerMs / 4);
+        if (sinceLeave.elapsed() < DragValuePopup::kDefaultLingerMs)
+            check(badgeVisible(fwd),
+                  "still up early in the linger — a glance still registers");
+        else
+            skip("still up early in the linger",
+                 "runner stalled past the linger; nothing to assert");
 
-        spin(DragValuePopup::kDefaultLingerMs);
-        check(!badgeVisible(fwd),
-              "gone once the linger elapses, well before the old 1000 ms");
+        // The discriminating half. It has to land in the gap BETWEEN the two
+        // durations: waiting "several multiples of 450" would sail past 1000
+        // too, and then #3936's bespoke value would pass this just as happily.
+        // So aim a little past the linger and, if a stalled runner overshoots
+        // the superseded value anyway, say so rather than claim a pass that
+        // proves nothing.
+        while (sinceLeave.elapsed()
+               < DragValuePopup::kDefaultLingerMs + kLingerSlackMs)
+            spin(20);
+        if (sinceLeave.elapsed() < kSupersededLingerMs)
+            check(!badgeVisible(fwd),
+                  "gone once the 450 ms linger elapses — at the old 1000 ms it "
+                  "would still be up");
+        else
+            skip("gone once the 450 ms linger elapses",
+                 "runner stalled past the superseded 1000 ms; cannot discriminate");
     }
 
-    // ── a dropped leaveEvent must not pin the badge forever ──────────────
-    // Live meter frames arrive at 10-30 Hz while transmitting. Each one used to
-    // re-show the badge and cancel the pending hide, so the readout stayed on
-    // screen for as long as the radio kept reporting.
+    // ── a dropped physical leaveEvent must not pin the badge forever ─────
+    // The recovery watchdog is armed only while the REAL pointer is over the
+    // bar, so this drives it by moving the window out from under the cursor
+    // rather than by faking events: park the gauge on the cursor, hover, then
+    // move the host away and drop the leave entirely — what Qt does on the
+    // reparent/occlude paths.
+    //
+    // Deliberately no setValue() calls: the point of moving recovery off the
+    // value path is that a SETTLED meter recovers too. setValue() early-returns
+    // on an unchanged reading, so a meter holding 0 W / 1.0 SWR — or one that
+    // stopped reporting on unkey — never reached the old check.
     {
         const QPoint cursor = QCursor::pos();
-        const bool pointerOutside =
-            !fwd->rect().contains(fwd->mapFromGlobal(cursor));
-        check(pointerOutside,
-              "precondition: the real pointer is not over the gauge");
+        host.move(cursor.x() - 40, cursor.y() - fwd->y() - 12);
+        QApplication::processEvents();
 
-        if (pointerOutside) {
-            // Hover, then drop the leave entirely — exactly what Qt does on the
-            // reparent/occlude paths.
-            sendEnter(fwd, fwd->mapToGlobal(fwd->rect().center()));
-            check(badgeVisible(fwd), "hovered before the leave is dropped");
+        if (!fwd->rect().contains(fwd->mapFromGlobal(cursor))) {
+            skip("dropped-leave recovery",
+                 "could not park the gauge under the pointer");
+        } else {
+            sendEnter(fwd, cursor);
+            check(badgeVisible(fwd), "hovered with the pointer really inside");
 
-            // Meter frames keep arriving with genuinely changing values, so the
-            // badge text changes and the redundant-update cache cannot absorb
-            // them.
-            for (int i = 0; i < 12; ++i) {
-                fwd->setValue(20.0f + static_cast<float>(i));
-                spin(30);
-            }
-            // Past the linger, counted from the LAST frame — so the assertion
-            // is "the frames stopped re-arming it", not "the frames outran a
-            // timer that was already running".
-            spin(DragValuePopup::kDefaultLingerMs * 2);
+            // A resting pointer must not be torn down by the watchdog.
+            spin(kWatchdogMs * 3);
+            check(badgeVisible(fwd),
+                  "a resting pointer keeps the badge up indefinitely");
+
+            // The pointer effectively leaves — and Qt tells us nothing.
+            host.move(cursor.x() + 600, cursor.y() + 400);
+            QApplication::processEvents();
+            check(!fwd->rect().contains(fwd->mapFromGlobal(QCursor::pos())),
+                  "the gauge really did move out from under the pointer");
+
+            spin(kWatchdogMs * 2 + DragValuePopup::kDefaultLingerMs * 3);
             check(!badgeVisible(fwd),
-                  "the badge released itself despite the meter still updating");
+                  "released itself with no leaveEvent and no new value");
+        }
+        host.move(400, 400);
+        QApplication::processEvents();
+        spin(50);
+    }
+
+    // ── an INJECTED hover survives live meter frames ─────────────────────
+    // The automation bridge's `hover` verb sends a QEnterEvent and a no-button
+    // QMouseMove at the widget centre without moving the physical cursor, then
+    // expects the badge up until it sends an explicit leave. Validating hover
+    // against QCursor::pos() on every frame would tear the badge down under the
+    // driver on the first changing value; this pins that it does not.
+    {
+        if (fwd->rect().contains(fwd->mapFromGlobal(QCursor::pos()))) {
+            skip("injected hover survives meter frames",
+                 "the real pointer is over the gauge, so this hover is not injected");
+        } else {
+            sendEnter(fwd, fwd->mapToGlobal(fwd->rect().center()));
+            check(badgeVisible(fwd), "injected hover raises the badge");
+
+            // The loop has to outlast the linger, or a teardown on the FIRST
+            // frame is still on screen when the check runs and this passes for
+            // the wrong reason.
+            const int frames = 12;
+            const int perFrameMs = 60;
+            static_assert(frames * perFrameMs
+                              > DragValuePopup::kDefaultLingerMs,
+                          "frame burst must outlast the linger to be a test");
+            for (int i = 0; i < frames; ++i) {
+                fwd->setValue(30.0f + static_cast<float>(i));
+                spin(perFrameMs);
+            }
+            check(badgeVisible(fwd),
+                  "still up after changing frames — no cursor check tore it down");
+
+            for (int i = 0; i < 5; ++i) {
+                fwd->setValue(39.0f);          // repeated identical frames
+                spin(40);
+            }
+            check(badgeVisible(fwd), "still up across repeated identical frames");
+
+            sendLeave(fwd);
+            spin(DragValuePopup::kDefaultLingerMs * 3);
+            check(!badgeVisible(fwd), "an explicit leave still takes it down");
         }
     }
 

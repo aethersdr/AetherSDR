@@ -1368,10 +1368,24 @@ gauge and check the first's badge within that 450 ms window — a `leave` on the
 first is *not* required, and waiting out the linger between hovers proves
 nothing.
 
-Grab the badge with `grab DragValuePopup`. Each `HGauge` still owns its own
-popup instance, so the name resolves to the first-created one regardless of
-which is showing; when hovering a gauge other than the first, grab via the
-gauge itself (`grab "SWR gauge"`) or hover a single meter per run.
+Grab the badge with `grab DragValuePopup`. Widget resolution ranks visible and
+enabled matches ahead of hidden ones, and the hand-off above guarantees at most
+one badge is visible, so the name resolves to whichever gauge's badge is
+actually on screen — no per-instance disambiguation needed.
+
+`grab` on the *gauge* does not help: `grab` ends in `QWidget::grab()`, which
+renders only that widget's own subtree, and the badge is a separate top-level
+`Qt::ToolTip` window anchored 16 px *above* the gauge rect — so the capture
+comes back as a bare bar. To assert *which* badge is up and where, read the
+`DragValuePopup` nodes out of `dumpTree` (each carries `visible` plus
+geometry). Note that a popup is reachable twice in that tree — once as a
+top-level root and once as a child of its owning gauge — so dedupe on geometry
+before counting, or a single badge reads as two.
+
+An injected hover holds the badge until an explicit `hover <target> leave`:
+the recovery watchdog that bounds a dropped physical leave is gated on the real
+cursor position, and `hover` does not move the cursor, so a driver's badge is
+never torn down underneath it by a live meter frame.
 
 ### `tooltip`
 Force-show a widget's native Qt tooltip, using the widget's current
