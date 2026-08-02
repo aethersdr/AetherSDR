@@ -116,7 +116,11 @@ public:
 
     QVariant data(const QModelIndex& index, int role) const override
     {
-        if (role != Qt::DecorationRole)
+        // Name is column 0; Size/Type/Date Modified are separate indexes on
+        // the same row. Without this check every column got the same
+        // thumbnail for Qt::DecorationRole (the path lookup is column-
+        // agnostic), crowding the attribute columns' text out entirely.
+        if (role != Qt::DecorationRole || index.column() != 0)
             return QIdentityProxyModel::data(index, role);
 
         const QString path = pathForIndex(index);
