@@ -10,6 +10,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Demo mode's power-line hum clicked instead of bending when you moved its
+  50/60 Hz slider (#4668).** The hum's six harmonics were synthesized from
+  absolute time × the current mains frequency, so every move of **Power-line**
+  in the Demo applet jumped all six phases at once rather than changing their
+  frequency — and because that jump scales with the harmonic number, the high
+  harmonics stepped hardest and the click grew with how long the session had
+  been running. The hum now accumulates phase per sample the way the CW tone
+  (#4618) and the birdie carrier already did, deriving every harmonic from one
+  shared fundamental so they stay locked to each other, and bends smoothly to
+  the new frequency. This was the last generator in the demo mixer still keyed
+  off absolute time. Demo mode only — no radio, protocol, or transmit path is
+  involved.
+
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —
   the ACOM auto-range as forward power outgrows its tier, an SPE LOW/MID/HIGH

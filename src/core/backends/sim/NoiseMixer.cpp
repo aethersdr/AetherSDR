@@ -364,8 +364,11 @@ void NoiseMixer::genPowerline(const ChannelState& c, float* out)
         for (int h : {1, 3, 5, 7, 9, 11}) v += (1.0 / h) * std::sin(h * m_plPhaseRad);
         out[i] = static_cast<float>(v * kNoiseRef * 0.5);
         m_plPhaseRad += dphi;
+        // fmod, not a single subtraction, to match genCw and genBirdie: freq is
+        // an unclamped knob, so a caller sending f0 >= kSampleRate would leave a
+        // one-shot subtraction permanently behind and φ would grow without bound.
         if (m_plPhaseRad >= kTwoPi)
-            m_plPhaseRad -= kTwoPi;
+            m_plPhaseRad = std::fmod(m_plPhaseRad, kTwoPi);
     }
 }
 
