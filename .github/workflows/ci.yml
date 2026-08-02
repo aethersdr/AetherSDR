@@ -507,8 +507,12 @@ jobs:
 
       - name: Configure
         run: |
-          # See the Linux build job: pipefail so the tee can't mask a cmake
-          # failure, and AETHER_GPU_SPECTRUM stated rather than defaulted.
+          # pipefail so the tee below can't mask a cmake failure — GitHub's
+          # default bash is -e without it. The Linux build job cannot do this
+          # and redirects instead: it runs in the CI container, which has no
+          # bash, so GitHub falls back to dash. macOS runners have bash.
+          # AETHER_GPU_SPECTRUM is stated rather than defaulted for the same
+          # reason as there — the assertion needs a request to check against.
           set -o pipefail
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
