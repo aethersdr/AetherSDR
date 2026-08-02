@@ -23,6 +23,14 @@
 #include <cstdint>
 #include <utility>
 
+// Hl2Backend.h seeds m_alcHoldBelowDbfs with a literal because it can only
+// forward-declare Hl2TxDsp. This is what stops the two drifting: the seed has
+// to keep meaning "the modulator's own default" for a pre-connect snapshot to
+// be honest, and a silent divergence is exactly the class of readout error this
+// backend's health section exists to eliminate.
+static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcHoldBelowDbfs == -45.0,
+              "Hl2Backend.h seeds m_alcHoldBelowDbfs with this value — keep them equal");
+
 Q_LOGGING_CATEGORY(lcHl2Tx, "aether.hl2.tx")
 
 namespace AetherSDR::hl2 {
@@ -1630,6 +1638,11 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         tc.filterLowHz  = txLo;
         tc.filterHighHz = txHi;
     }
+    // Remember the threshold the modulator was handed, so the health snapshot
+    // and the unkey diagnostic both report what it is RUNNING rather than what
+    // a default-constructed Config would have said. Assigned from `tc` and not
+    // from the default so it stays correct the day this Config sets the field.
+    m_alcHoldBelowDbfs = tc.alcHoldBelowDbfs;
     std::string txErr;
     bool txOk = false;
     QMetaObject::invokeMethod(m_txDsp, [this, &tc, &txErr, &txOk] {
@@ -2288,7 +2301,7 @@ void Hl2Backend::setKeying(bool key)
     // not log per block, and a per-block test would fire on every normal
     // transmission because the pauses between words are what the hold is for.
     if (m_keyed && !key) {
-        constexpr double kHoldDbfs = Hl2TxDsp::Config{}.alcHoldBelowDbfs;
+        const double kHoldDbfs = m_alcHoldBelowDbfs;
         if (m_txMicPeakMaxDbfs > -139.0f
             && m_txMicPeakMaxDbfs < static_cast<float>(kHoldDbfs)) {
             qCInfo(lcHl2) << "HL2 TX: microphone peaked at" << m_txMicPeakMaxDbfs
@@ -2781,9 +2794,18 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // side, and a diagnosis is one comparison rather than a source dive.
     section("micLevel", QStringLiteral("Transmit voice chain"));
     put("micLevel", QStringLiteral("Mic slider (0-100, 50 = unity)"), m_micLevel);
-    put("micGainDb", QStringLiteral("Mic gain requested (dB)"),
-        m_micLevel == 0 ? QVariant(QStringLiteral("muted"))
-                        : QVariant(micSliderToGainDb(m_micLevel)));
+    // NUMERIC ON EVERY PATH. An earlier revision reported the string "muted"
+    // here at slider 0 and a number everywhere else, which reads fine in the
+    // dialog and breaks the bridge: `health` serialises this row straight to
+    // JSON, so any script comparing it changes type underneath itself at
+    // exactly the value most likely to be under a microscope. The mute is a
+    // separate FACT, not a gain — micSliderToLinear() short-circuits to 0.0
+    // rather than resolving the -20 dB this mapping would otherwise give it —
+    // so it is reported as its own row rather than smuggled into this one's
+    // type.
+    put("micGainDb", QStringLiteral("Mic gain requested (dB, continuous mapping)"),
+        micSliderToGainDb(m_micLevel));
+    put("micMuted", QStringLiteral("Mic muted (slider at 0)"), m_micLevel == 0);
     // THE ROW THAT WOULD HAVE CAUGHT THE ORIGINAL BUG. Echoed by the modulator,
     // so it stays absent — "not reported" — if the push never arrived, however
     // confidently the row above claims a value.
@@ -2796,8 +2818,14 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // to lift it and the answer is mic gain.
     put("txMicPeakDbfs", QStringLiteral("Mic peak this over (dBFS)"),
         m_txMicPeakMaxDbfs > -139.0f ? QVariant(m_txMicPeakMaxDbfs) : QVariant());
+    // The threshold the modulator was actually CONFIGURED with, not the one a
+    // default-constructed Config would have. The two agree today because the
+    // Config built in connectRadio() never touches this field — but this row sits
+    // in a section whose thesis is "report what the modulator is running",
+    // and a constant that silently stops matching the modulator is the row
+    // nobody would think to suspect.
     put("alcHoldBelowDbfs", QStringLiteral("ALC hold threshold (dBFS)"),
-        Hl2TxDsp::Config{}.alcHoldBelowDbfs);
+        m_alcHoldBelowDbfs);
     put("alcGainDb", QStringLiteral("ALC gain applied (dB)"),
         std::isnan(m_alcGainDb) ? QVariant() : QVariant(m_alcGainDb));
     put("alcPeakDbfs", QStringLiteral("Post-ALC peak (dBFS)"),
@@ -2838,8 +2866,14 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // On a constant-envelope carrier the two should very nearly agree, and a
     // held value ABOVE the instantaneous on TUNE would mean the release is
     // inflating the reading rather than holding it.
+    //
+    // Gated on the same optional as the instantaneous row above, so the pair
+    // says "never told" or "told" TOGETHER. Reported unconditionally this read
+    // a hard 0.0 before any telemetry, next to a neighbour saying "not
+    // reported" — and "0 W" from a wattmeter reads as a measurement, which is
+    // the one thing nothing in this section is allowed to fake.
     put("forwardPowerPeakW", QStringLiteral("Forward (W, approx — peak estimate)"),
-        m_fwdPeakWatts);
+        m_telemetry.forwardPowerRaw ? QVariant(m_fwdPeakWatts) : QVariant());
     put("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),
         opt(m_telemetry.reversePowerRaw));
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
@@ -2942,6 +2976,25 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_txFilterFromOperator = false;
     m_txFilterLowHz = 300;
     m_txFilterHighHz = 2700;
+    // Everything the voice chain OBSERVED goes back to "never reported". These
+    // rows answer "what was the chain doing on that over?", and carrying radio
+    // A's last ALC figures and held power under radio B's identity is worse
+    // than a blank row: it answers a question about this radio with a confident
+    // number measured on a different one.
+    m_alcGainDb = std::numeric_limits<double>::quiet_NaN();
+    m_alcPeakDbfs = std::numeric_limits<double>::quiet_NaN();
+    m_fwdPeakWatts = 0.0;
+    m_txMicPeakMaxDbfs = -140.0f;
+    // DELIBERATELY NOT RESET: m_micLevel and m_appliedMicGainLinear.
+    //
+    // Those two are not observations and not radio state — they are the
+    // operator's setting on a modulator that lives on THIS HOST, and a
+    // same-family swap does not rebuild it, so Hl2TxDsp genuinely still holds
+    // that gain. Blanking the mirror here would make the snapshot report "not
+    // reported" for a gain the modulator demonstrably has, which is the same
+    // class of lie in the opposite direction — and this section exists to make
+    // the applied gain checkable, not plausible. A swap that DOES rebuild the
+    // backend gets a fresh pair, re-asserted by RadioModel::setupBackend().
 
     RestoredRadioState valid;
     if (state.rfFrequencyHz >= 100'000.0 && state.rfFrequencyHz <= 38'400'000.0)

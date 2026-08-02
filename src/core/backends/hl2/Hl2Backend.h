@@ -563,6 +563,16 @@ private:
     // wattmeter does. Slower would keep a peak past the end of the over; faster
     // would decay between syllables and give the reading back to the average,
     // which is exactly the failure this exists to fix.
+    //
+    // ONE DOWNSTREAM CONSEQUENCE, stated because it is not obvious: TxApplet
+    // runs its own ~2 s PEP hold + linear decay on the FWDPWR gauge (#2561),
+    // fed from MeterModel::txPeakChanged and documented there as taking the
+    // "pre-smoothed" sample. On this backend that sample is now itself held, so
+    // the applet's PEP tick and the gauge fill converge on the same number
+    // where they diverge on a Flex. That is the honest outcome rather than a
+    // defect — the fill is a peak estimate here BECAUSE the hardware gives us
+    // nothing to smooth — but the applet's tick carries no extra information on
+    // an HL2, and anyone reading the two as independent would be wrong.
     static constexpr double kFwdPeakReleaseAlpha = 0.05;
     double m_fwdPeakWatts = 0.0;
 
@@ -595,6 +605,19 @@ private:
     // never landed" is distinguishable from "it landed at unity" — which is the
     // exact pair that was indistinguishable while this control was dead.
     double m_appliedMicGainLinear = std::numeric_limits<double>::quiet_NaN();
+
+    // The ALC hold threshold the modulator was CONFIGURED with, captured from
+    // the Config that connectRadio() hands it. Read by healthSnapshot() and by
+    // setKeying()'s "raise mic gain" diagnostic, both of which previously
+    // re-derived it from a default-constructed Config and so would have gone on
+    // reporting -45 dBFS the day connectRadio() set the field to anything else.
+    //
+    // Seeded with Config's own default so a snapshot taken before the first
+    // connect still reports what the modulator would use. The literal is spelt
+    // out because Hl2TxDsp is only forward-declared in this header — a
+    // static_assert in Hl2Backend.cpp pins it to Config's default, so the two
+    // cannot drift silently.
+    double m_alcHoldBelowDbfs = -45.0;
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.

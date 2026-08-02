@@ -202,6 +202,49 @@ int main(int argc, char** argv)
     check(model.slices().isEmpty(),
           "F1: no slice models carried across the family switches");
 
+    // ── Mic gain survives the backend rebuild ───────────────────────────────
+    //
+    // THE FAILURE THIS PINS. A family switch destroys the backend and builds a
+    // fresh one, so the new Hl2TxDsp starts at its own 1.0 default. But the
+    // seam carrying mic gain to a host-modulating backend fires on operator
+    // INTENT — the slider moving — and a rebuild is not the slider moving.
+    // TransmitModel is never reset and micLevel is not persisted, so without an
+    // explicit re-assert the slider goes on reading the operator's value while
+    // the modulator sits at unity, and the radio transmits several dB below
+    // what every readout claims.
+    //
+    // That is exactly the readback-agrees-with-the-failure shape the mic-gain
+    // fix exists to eliminate, displaced one seam over, so it gets its own pin.
+    // Break it by deleting the re-assert at the end of
+    // RadioModel::setupBackend() and this check fails with micLevel still at
+    // its 50 default.
+    //
+    // Asserted on micLevel rather than on micGainAppliedLinear because the
+    // latter is echoed back from the DSP worker thread and would need a running
+    // event loop to arrive; the modulator-side half is covered by
+    // hl2_txdsp_test and the loopback test. What is proved here is that the
+    // fresh backend was told at all.
+    model.transmitModel().setMicLevel(80);
+    model.connectToRadio(hl2Info());
+    {
+        const auto snap = model.backendHealthSnapshot();
+        check(snap.values.value(QStringLiteral("micLevel")).toInt() == 80,
+              "mic gain is re-asserted into a rebuilt backend (slider and "
+              "modulator cannot silently part on a family switch)");
+    }
+
+    // And the operator's own default is carried just as faithfully: 50 maps to
+    // the modulator's 1.0, so the re-assert itself must not nudge a session
+    // that never touched the slider off unity.
+    model.connectToRadio(flexInfo());
+    model.transmitModel().setMicLevel(50);
+    model.connectToRadio(hl2Info());
+    {
+        const auto snap = model.backendHealthSnapshot();
+        check(snap.values.value(QStringLiteral("micLevel")).toInt() == 50,
+              "an untouched slider still lands on the modulator's unity point");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_family_transition_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

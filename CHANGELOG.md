@@ -10,6 +10,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Hermes-Lite 2: the MIC slider reached nothing, and the wattmeter read voice
+  ~3.5 dB low (#4696).** Reported from the bench as 6 W out on FT8 and WSPR but
+  never more than 1 W on SSB voice, at every mic and RF level, with and without
+  the compressor. Three faults, and the first is why the other two were
+  invisible.
+
+  *The wattmeter was measuring the wrong thing on voice.* Forward power was
+  published as the raw instantaneous sample from the HL2's directional coupler
+  — one 12-bit conversion from the `slow_adc` I2C converter, round-robined with
+  reverse power, temperature and bias current, with no peak detector and no
+  averaging anywhere in the gateware, reaching us at 10 Hz. Speech peaks last
+  tens of milliseconds, so sampling that envelope at 10 Hz lands on a peak
+  essentially never, while a constant-envelope FT8 or WSPR transmission — where
+  every instant *is* the peak — read full scale. The same transmitter making the
+  same power read very differently depending on what was modulating it. It is
+  now published through a peak hold (instant attack, ~2 s release, in watts
+  because the calibration curve is markedly non-linear). This does not recover
+  an instantaneous PEP reading — no filter can recover a peak that was never
+  sampled — it accumulates the maximum across a transmission, so the reading
+  climbs toward PEP as the over goes on; the meter is labelled "peak estimate"
+  rather than claiming to be a measurement. Measured on a live HL2 into a dummy
+  load, voice peaks now read **4.6 W where they read 1.7 W before**, and a
+  constant carrier is unchanged (2.642 W held against 2.637 W instantaneous),
+  which is the control case a hold must not inflate. `MeterModel`'s own
+  ballistics are untouched, so no Flex behaviour changes.
+
+  *Mic gain was wired to nothing.* The Phone applet's MIC slider emits a Flex
+  `transmit set miclevel=` verb, which a backend with no command plane drops,
+  and nothing bridged it to the host modulator — so sweeping the slider end to
+  end changed nothing on the air. The client-side fallback could not fire
+  either, being gated on a `mic_selection` an HL2 never reports. The slider now
+  reaches the modulator's pre-ALC gain through the same seam the TX passband
+  uses, with 50 as unity so an untouched slider leaves every existing install
+  exactly where it was. This is what carries a quiet microphone over the ALC's
+  hold threshold, which is what the "raise mic gain" diagnostic has been
+  advising since it shipped — at a control that did nothing on this backend.
+
+  *And the readback agreed with the failure.* Every readback available while mic
+  gain was dead reported the requesting side, so all of them agreed the control
+  worked. A confirmation sourced from the requester cannot detect a request that
+  never arrived. The modulator now echoes its own gain, and the Radio Health
+  dialog gained a **Transmit voice chain** section reporting both the operator's
+  request and what the modulator is actually running — mic level and applied
+  gain, mic peak for the current over, the ALC hold threshold, ALC gain and
+  post-ALC peak, the passband in use, and both instantaneous and held forward
+  power.
+
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —
   the ACOM auto-range as forward power outgrows its tier, an SPE LOW/MID/HIGH
@@ -51,6 +98,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   with no cause at all.
 
 ### Added
+
+- **`health` automation-bridge verb (#4696).** Returns the backend's own health
+  snapshot — the rows the Radio Health dialog shows, which until now reached
+  nothing else and so were unavailable to any script or regression test.
+  Deliberately *not* assembled from the models: `get` already reports those, and
+  a model reports what the operator **asked for**, which is why a control whose
+  command was dropped on the way to the radio could read back as working. Every
+  row here comes from the backend instead, so the two can be compared and the
+  comparison is the diagnosis. Read-only and TX-safe — it keys nothing and sets
+  nothing. A `null` value means the radio never reported that row, kept distinct
+  from a zero because "the FIFO is empty" and "we were never told" are different
+  answers.
 
 - **The aarch64 (Raspberry Pi / ARM) AppImage now ships Qt 6.8.3 LTS and
   GPU spectrum rendering (#4670).** It was the only release artifact still

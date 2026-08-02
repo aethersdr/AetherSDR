@@ -44,6 +44,18 @@ namespace AetherSDR::hl2 {
 // anyway, so without the special case "0" would sound barely different from
 // "50", which is the sort of control that teaches an operator to distrust every
 // other one on the panel.
+//
+// SCOPE, because "mic" undersells it: this multiplier is applied to everything
+// entering Hl2TxDsp::processAudioBlock, and on a host-modulating backend that
+// includes digital-mode and WSPR-beacon audio arriving through submitTxAudio,
+// not only voice. Above the ALC's hold threshold that is very nearly a no-op —
+// the ALC normalizes each block's peak to alcTargetPeak and hands the gain
+// straight back. At 0 it is not: the block is silent, silence sits below the
+// hold threshold so the ALC declines to lift it, and the beacon goes out muted
+// along with the microphone. That is the honest reading of a slider at the
+// bottom of its travel on a host modulator — there is one modulator and it is
+// off — but it is worth knowing before parking the control at 0 between voice
+// sessions.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept
 {
     if (level <= 0)
