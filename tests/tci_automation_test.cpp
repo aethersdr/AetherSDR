@@ -1,4 +1,5 @@
 #include "TestSettingsProfile.h"
+#include "TestEventLoop.h"
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
@@ -37,14 +38,7 @@ void check(bool condition, const char* description)
 
 bool spinUntil(const std::function<bool()>& predicate, int timeoutMs = 2000)
 {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-        QThread::msleep(1);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    return predicate();
+    return AetherTest::waitFor(predicate, timeoutMs);
 }
 
 class BridgeClient

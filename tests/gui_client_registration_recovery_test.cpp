@@ -1,4 +1,5 @@
 #include "TestSettingsProfile.h"
+#include "TestEventLoop.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 
@@ -29,14 +30,7 @@ void check(bool condition, const char* description)
 
 bool waitFor(const std::function<bool()>& predicate, int timeoutMs)
 {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-        QThread::msleep(5);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-    return predicate();
+    return AetherTest::waitFor(predicate, timeoutMs);
 }
 
 int commandCount(const QStringList& commands, const QString& prefix)

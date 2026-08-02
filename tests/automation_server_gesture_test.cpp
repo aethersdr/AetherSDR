@@ -1,4 +1,5 @@
 #include "TestSettingsProfile.h"
+#include "TestEventLoop.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
@@ -32,14 +33,11 @@ void expect(const char* name, bool condition)
     }
 }
 
+// Kept as a thin alias so this file's many call sites read unchanged; the
+// waiting itself is tests/TestEventLoop.h. (#4693)
 bool waitUntil(const std::function<bool()>& condition, int timeoutMs = 2000)
 {
-    QElapsedTimer timer;
-    timer.start();
-    while (!condition() && timer.elapsed() < timeoutMs) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    }
-    return condition();
+    return AetherTest::waitFor(condition, timeoutMs);
 }
 
 bool connectClient(QLocalSocket* socket, const QString& name)
