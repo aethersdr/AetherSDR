@@ -38,6 +38,18 @@ section.
 
 ### Fixed
 
+- **Demo mode no longer opens with a ghost "Slice A" panadapter (#4671).** The
+  demo's simulator claims its panadapter from its own synthetic wire, but the
+  model treated every non-Flex backend as wire-less and minted a *second*,
+  ownerless pan in the neutral id space on the seam's geometry edge — a pane the
+  user could neither use nor delete. The same assumption re-addressed the demo's
+  slice into that neutral space, so the slice pointed at the ghost rather than
+  at its real pan; with the ghost gone it would have pointed at nothing. Both
+  now key off whether the backend vends its own connection, so the demo opens
+  with one panadapter and a slice that belongs to it — restoring the pan title
+  bar, adaptive RX filter, auto-squelch, centre-lock and band recall on demo
+  mode. Hermes-Lite 2 and other wire-less backends keep the neutral mapping.
+
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —
   the ACOM auto-range as forward power outgrows its tier, an SPE LOW/MID/HIGH

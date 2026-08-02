@@ -140,6 +140,18 @@ int main(int argc, char** argv)
                 neutralGhost = true;
         check(!neutralGhost,
               "R4: no pan lives in the neutral 0xE1000000 space on the demo");
+
+        // …and the slice the demo announced points AT that pan. SimBackend sends
+        // slice.panId = "0x40000000", already a model key, so the sliceChanged
+        // handler must not rewrite it into the neutral space either. Killing the
+        // ghost without this turns "binds to the wrong pan" into "binds to
+        // nothing" — every slice-to-pane lookup is an exact panId match. (#4671)
+        for (const SliceModel* s : model.slices())
+            std::fprintf(stderr, "  slice %d panId=%s\n",
+                         s->sliceId(), qPrintable(s->panId()));
+        for (const SliceModel* s : model.slices())
+            check(!s->panId().isEmpty() && model.panadapter(s->panId()) != nullptr,
+                  "R4: the demo slice points at a panadapter that exists");
     }
 
     // ---- sim -> flex round trip ----

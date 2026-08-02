@@ -941,8 +941,16 @@ void RadioModel::setupBackend(const QString& family)
         // unmapped the slice belongs to no pan, so no slice flag is drawn on the
         // panadapter even though the VFO shows the right frequency. Re-address the
         // delta at the pan we materialised.
+        //
+        // ...but ONLY when we materialised one. A backend that vends its own
+        // RadioConnection claims its pans from its own wire, so its pan ids ARE
+        // the model keys — the same discriminator resolveBackendPan() uses. The
+        // demo announces slice.panId = "0x40000000", already a key; rewriting it
+        // into the neutral space pointed the slice at a pan nothing holds, and
+        // every slice-to-pane association keys off that exact equality (pan title
+        // bar, adaptive RX filter, auto-squelch, centre-lock, band recall). (#4671)
         SliceDelta mapped = delta;
-        if (!m_flexBackend && mapped.panId) {
+        if (!m_flexBackend && !m_connection && mapped.panId) {
             // Through the SAME allocator the geometry handler uses, so a slice
             // lands on the pane its own receiver feeds. Pinned to index 0 while
             // one pan existed; at four receivers that put every slice flag on
@@ -7323,10 +7331,14 @@ PanadapterModel* RadioModel::resolveBackendPan(const QString& backendPanId)
     // like Flex — its pan ids ARE the model keys. Exact lookup, deliberately NOT
     // resolvePan(): a geometry edge can outrun the wire claim during connect,
     // and the active-pan fallback would re-introduce the wrong-pan hazard this
-    // helper exists to prevent. A miss returns null and the caller skips; the
-    // wire claim carries the same values moments later. (#4671)
+    // helper exists to prevent. A miss returns null and the caller skips — and on
+    // the demo that DROPS the geometry rather than deferring it: the synthetic
+    // wire's `display pan center=…` is decoded only through m_flexBackend (see
+    // handlePanadapterStatus), which is why RFC #4288 added this seam emit at all.
+    // What keeps the ordering safe is SimBackend's 150 ms delay before
+    // emitInitialState() (SimBackend.cpp) — do not shorten it. (#4671)
     if (m_connection)
-        return panadapter(backendPanId);
+        return panadapter(normalizePanadapterId(backendPanId));
     return panadapter(neutralPanIdString(neutralPanIndexFor(backendPanId)));
 }
 
