@@ -131,11 +131,19 @@ for precision in double single; do
     float_flag=()
     [ "$precision" = "single" ] && float_flag=(--enable-float)
     echo "Building FFTW $FFTW_VERSION ($precision) for macOS $TARGET..."
+    # ${arr[@]+"${arr[@]}"}, not "${arr[@]}": macOS ships bash 3.2, where
+    # expanding an EMPTY array under `set -u` is an unbound-variable error.
+    # bash 4.4 fixed that, but the runner never sees 4.4. float_flag is empty on
+    # the first iteration (double), so the plain form killed this script four
+    # seconds in — before anything it builds, and before the deployment-floor
+    # assert that is the whole point of the step. FFTW_SIMD takes the same guard:
+    # it is empty on any arch that hits the `*)` case above.
     ( cd "$build" && "$WORK_DIR/fftw-$FFTW_VERSION/configure" \
         --prefix="$PREFIX" \
         --enable-shared --disable-static \
         --disable-fortran --disable-doc \
-        "${float_flag[@]}" "${FFTW_SIMD[@]}" >/dev/null )
+        ${float_flag[@]+"${float_flag[@]}"} \
+        ${FFTW_SIMD[@]+"${FFTW_SIMD[@]}"} >/dev/null )
     make -C "$build" -j"$JOBS" >/dev/null
     make -C "$build" install >/dev/null
 done
