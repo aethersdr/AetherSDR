@@ -257,15 +257,18 @@ int main(int argc, char* argv[])
     // "no Qt platform plugin could be initialized".
     //
     // That abort is precisely what #1389 was. The AppImage forced plain
-    // "wayland" while bundling no qtwayland module at all, so every Wayland-
-    // session user got a binary that would not start. The carve-out added
-    // then — skip this block under APPIMAGE — treated the symptom, and its
-    // stated reason (a bundled plugin mismatching the compositor's protocol
+    // "wayland" while shipping no Wayland platform plugin inside the AppDir.
+    // The plugin was never missing from the Qt build — qtwayland rides in the
+    // base aqt package — but linuxdeploy-plugin-qt deploys platforms/libqxcb.so
+    // and nothing else unless EXTRA_PLATFORM_PLUGINS names more, so every
+    // Wayland-session user got a binary that would not start. The carve-out
+    // added then — skip this block under APPIMAGE — treated the symptom, and
+    // its stated reason (a bundled plugin mismatching the compositor's protocol
     // version) described something that never happened: there was no bundled
     // plugin to mismatch.
     //
     // The carve-out is gone because both of its causes are: appimage.yml now
-    // installs qtwayland and asserts the platform plugin reached the AppDir,
+    // deploys the Wayland platform plugin and asserts it reached the AppDir,
     // and this fallback turns a missing plugin into a downgrade to XWayland
     // rather than a failure to start. Removing it also closes a real gap —
     // AppImage users were the only Linux users not receiving the #1233
