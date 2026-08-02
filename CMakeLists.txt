@@ -1502,7 +1502,29 @@ if (ENABLE_ASR)
             #    and have the runtime clamp has_bfloat to match, the same way it
             #    already clamps has_tensor. This is not a preference: asking for 3.1
             #    against a 13.0 deployment target is a hard compile error.
-            if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
+            #
+            #    The mapping is one shader-language version per macOS release —
+            #    metal2.4 = macOS 12, metal3.0 = 13, metal3.1 = 14 — so the tier has
+            #    to follow the deployment target exactly, and the same hard error
+            #    applies at every step. The Intel DMG dropped to 12.0 once its Qt
+            #    stopped being hand-built at 13.0 (its floor was the deployment
+            #    target of that hand-built Qt, not a product decision), which is why
+            #    a third tier exists here at all.
+            #
+            #    ggml's own shader carries exactly one version guard,
+            #    `__METAL_VERSION__ < 310`, i.e. the bf16 kernels already handled by
+            #    NO_BF16 — nothing in it distinguishes 3.0 from 2.4. That makes the
+            #    2.4 build plausible but NOT proven: ggml may still use unguarded
+            #    Metal-3 intrinsics. REQUIRE_ASR_GPU=ON on the DMG job means a wrong
+            #    answer is a loud build failure rather than a silently CPU-only
+            #    artifact, so this is safe to discover in CI — but it does need a
+            #    macOS run to confirm, and it has not had one.
+            if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 13.0)
+                set(GGML_METAL_STD "metal2.4" CACHE STRING "" FORCE)
+                set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
+                message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
+                    "(metal2.4, no bf16 — props.has_bfloat clamped to match)")
+            elseif (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
                 set(GGML_METAL_STD "metal3.0" CACHE STRING "" FORCE)
                 set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
                 message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
