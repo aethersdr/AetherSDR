@@ -2528,7 +2528,14 @@ if(HIDAPI_FOUND)
     # CMake still reported "Found hidapi, version 0.15.0" from the .pc file and
     # the DMG build then died at 100% with "ld: library 'hidapi' not found".
     # Empty on Windows, where HIDAPI_LIBRARIES is a full path — a no-op there.
-    target_link_directories(aethercore PRIVATE ${HIDAPI_LIBRARY_DIRS})
+    #
+    # PUBLIC, not PRIVATE: aethercore is a STATIC library, so the link that has
+    # to resolve -lhidapi is the AetherSDR executable's. PRIVATE link libraries
+    # still reach it (CMake records them behind $<LINK_ONLY:>), but PRIVATE link
+    # DIRECTORIES do not — which produces exactly one symptom, -lhidapi on the
+    # exe link line with no -L to find it by. PRIVATE here was tried first and
+    # failed the DMG build the same way.
+    target_link_directories(aethercore PUBLIC ${HIDAPI_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${HIDAPI_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND HIDAPI_DLL)
@@ -2634,7 +2641,12 @@ if(PORTAUDIO_FOUND)
     target_sources(aethercore PRIVATE src/core/CwSidetonePortAudioSink.cpp)
     target_compile_definitions(aethercore PUBLIC HAVE_PORTAUDIO)
     target_include_directories(aethercore PRIVATE ${PORTAUDIO_INCLUDE_DIRS})
-    target_link_directories(aethercore PRIVATE ${PORTAUDIO_LIBRARY_DIRS})
+    # PUBLIC for the reason spelled out at the hidapi block above: aethercore is
+    # static, so a PRIVATE link directory never reaches the executable that does
+    # the linking. portaudio has not failed yet only because its library has so
+    # far always sat on a default search path; that stopped being guaranteed when
+    # #4706 moved it into third_party/macos-deps.
+    target_link_directories(aethercore PUBLIC ${PORTAUDIO_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${PORTAUDIO_LIBRARIES})
 endif()
 
@@ -2651,7 +2663,8 @@ if(FFTW3_FOUND)
     # bundled third_party/fftw3). The library link stays PRIVATE (symbols reach
     # the exe transitively through the static lib).
     target_include_directories(aethercore PUBLIC ${FFTW3_INCLUDE_DIRS})
-    target_link_directories(aethercore PRIVATE ${FFTW3_LIBRARY_DIRS})
+    # PUBLIC — same static-library propagation rule as hidapi and portaudio.
+    target_link_directories(aethercore PUBLIC ${FFTW3_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${FFTW3_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND FFTW3_DLL)
