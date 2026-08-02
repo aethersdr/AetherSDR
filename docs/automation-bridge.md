@@ -873,7 +873,7 @@ cost a few integer adds per frame.
 | `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained compact-intensity-history write rates/cost (history is written only for the visible source) |
 | `dssLiveRows*` / `dssHistoryRows*` | 96-row live 3D surface work versus deep retained scrollback work; `dssHiddenLiveRowsPerSec` exposes the hidden-Flex live-ring warming (#4081) — hidden sources retain no deep history |
 | `waterfallAllocatedBytes` / `dssAllocatedBytes` | current plus cached Flex/Kiwi/profile storage; waterfall history is counted by actually allocated lazy chunks, not logical capacity |
-| `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
+| `paintsPerSec` / `paintMsPerSec` | software-QPainter path — always 0 in a GPU build, where `SpectrumWidget::paintEvent()` is not compiled at all (see README ▸ GPU Spectrum Rendering); non-zero only in a build configured `-DAETHER_GPU_SPECTRUM=OFF` |
 | `renderScheduler` | shared panadapter repaint scheduler counters; `coalescedRequests` and `avgWidgetsPerFlush` show cross-pan request coalescing |
 
 `selector` filters by pan index (`get panstats 0`) or objectName. `property`

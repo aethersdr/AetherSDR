@@ -224,9 +224,15 @@ cmake --build build --target AetherSDR
 
 ### GPU Spectrum Rendering
 
-GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). Since the build now requires Qt 6.8 as a minimum, every build — source or release binary, the aarch64 AppImage included — clears that floor and renders via QRhi. The CPU-based `QPainter` path remains as a runtime fallback for machines where GPU initialisation fails, not as a Qt-version fallback.
+GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). Since the build now requires Qt 6.8 as a minimum, every build — source or release binary, the aarch64 AppImage included — clears that floor and renders via QRhi.
 
-Going the other way, `AETHER_NO_GPU=1` forces software OpenGL on an already-built binary, without a rebuild:
+The CPU `QPainter` path is a **build-time alternative, not a runtime fallback**. `AETHER_GPU_SPECTRUM` selects `SpectrumWidget`'s base class — `QRhiWidget` or `QWidget` — so a GPU-enabled binary does not contain the `QPainter` path at all; its `paintEvent()` is never compiled. Of the shipped artifacts only the Intel macOS DMG is built the other way, and deliberately: `QRhiWidget` misbehaves on older Metal/OpenGL hardware.
+
+Having no GPU is usually a non-event, because in practice "no GPU" means a software rasterizer rather than nothing. QRhi comes up on whatever the platform provides — llvmpipe or softpipe (Mesa), WARP or Microsoft Basic Render (D3D11), SwiftShader — and the app detects it and says so: **Help ▸ About** shows a `Renderer:` line reading `CPU QRhi (…)` rather than `GPU QRhi (…)`, naming the backend and device. Rendering is correct, just slow.
+
+If QRhi cannot initialise at all — no usable GL/D3D/Metal, as on a headless host, in some VMs, or behind a broken driver — there is nothing to fall back to. The spectrum does not draw, and the log records `SpectrumWidget: QRhi initialization failed — no GPU backend`. The rest of the app (controls, audio, radio I/O) is unaffected.
+
+`AETHER_NO_GPU=1` forces software OpenGL on an already-built binary, without a rebuild:
 
 ```bash
 AETHER_NO_GPU=1 ./AetherSDR-*.AppImage
