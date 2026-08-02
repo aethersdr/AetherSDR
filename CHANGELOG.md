@@ -8,6 +8,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed: transmit audio breaking up with RN2 enabled (#4584)
+
+**Your transmitted audio no longer breaks up when RN2 is on.** Remote transmit
+audio reaches the radio as one small Opus packet every 10 ms. RN2 runs on the
+same thread as the timer that paces those packets, so when RN2 delayed a tick
+the pacer had no way to make the time back up — it sent one packet per tick no
+matter how far behind it had fallen. Packets piled up until a 200 ms cap began
+deleting them outright, and the other station heard the gaps. It was worst on
+slower machines and over SmartLink/WAN, and every deleted packet also left a
+hole in the transmit sequence numbering the radio checks.
+
+The pacer now follows real elapsed time and may send a small burst (up to three
+packets) to recover from a late tick, and the sequence number is assigned when a
+packet actually goes out rather than when it is queued, so the numbering stays
+unbroken even if the queue does overflow. An overflow is now written to the log
+instead of failing silently — the old behaviour left no trace in a support
+bundle, which is why this kept arriving as unexplained "audio break up". Live
+pacing counters are exposed to the automation bridge (`get audio` →
+`opusTxPacing`) for diagnosing future reports.
+
+Reported by @Bill6000 on a FLEX-6500 under Linux Mint.
+
 ### Minimum Qt raised to 6.8 — source builds on Ubuntu 24.04 need a newer Qt
 
 **Building from source now requires Qt 6.8 or newer.** Nothing changes for

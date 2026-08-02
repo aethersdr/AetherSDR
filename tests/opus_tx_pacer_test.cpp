@@ -2,6 +2,7 @@
 
 #include <QtEndian>
 
+#include <algorithm>
 #include <cstdio>
 #include <limits>
 
@@ -9,15 +10,26 @@ using AetherSDR::OpusTxPacer;
 
 namespace {
 
+constexpr quint32 kHeaderWithoutCount = 0x38D00010u;
+constexpr int kMarkerOffset = OpusTxPacer::kVitaHeaderBytes;
+
+// A packet shaped like the ones AudioEngine::onTxAudioReady() builds: a full
+// 28-byte VITA-49 ExtDataWithStream header followed by payload. The marker
+// byte sits in the payload so a test can follow an individual packet through
+// the queue without disturbing any header field.
 QByteArray makePacket(quint8 marker)
 {
-    constexpr quint32 kHeaderWithoutCount = 0x38D00010u;
-    QByteArray packet(8, '\0');
+    QByteArray packet(OpusTxPacer::kVitaHeaderBytes + 4, '\0');
     qToBigEndian<quint32>(
         kHeaderWithoutCount,
         reinterpret_cast<uchar*>(packet.data()));
-    packet[4] = static_cast<char>(marker);
+    packet[kMarkerOffset] = static_cast<char>(marker);
     return packet;
+}
+
+quint8 markerOf(const QByteArray& packet)
+{
+    return static_cast<quint8>(packet[kMarkerOffset]);
 }
 
 int packetCount(const QByteArray& packet)
@@ -30,12 +42,13 @@ int packetCount(const QByteArray& packet)
 bool packetHeaderExceptCountIsPreserved(const QByteArray& packet)
 {
     constexpr quint32 kCountMask = 0x000F0000u;
-    constexpr quint32 kHeaderWithoutCount = 0x38D00010u;
     const quint32 header = qFromBigEndian<quint32>(
         reinterpret_cast<const uchar*>(packet.constData()));
     return (header & ~kCountMask) == kHeaderWithoutCount;
 }
 
+// A genuinely late timer event — packets were queued and waiting across the
+// missed deadlines, so the pacer legitimately owes catch-up.
 bool testLateTimerCatchesUp()
 {
     OpusTxPacer pacer;
@@ -102,7 +115,7 @@ bool testOverflowKeepsWireCountsContiguous()
     }
 
     if (sent.size() != OpusTxPacer::kMaxQueuePackets
-        || static_cast<quint8>(sent.first()[4]) != 1) {
+        || markerOf(sent.first()) != 1) {
         std::printf("overflow did not discard exactly the oldest packet\n");
         return false;
     }
@@ -138,7 +151,10 @@ bool testIdleQueueResumesWithoutDelay()
     return true;
 }
 
-bool testLateProducerUsesExistingSchedule()
+// A drained queue must not bank catch-up credit. Ticks 110 and 120 find the
+// queue empty; nothing was owed on them, so the packets that arrive afterwards
+// are paced normally rather than flushed as a burst.
+bool testDrainedQueueDoesNotBankCatchUp()
 {
     OpusTxPacer pacer;
     quint8 count = 0;
@@ -148,18 +164,96 @@ bool testLateProducerUsesExistingSchedule()
         return false;
     }
 
+    pacer.takeDue(110, count);   // free-running timer, nothing queued
+    pacer.takeDue(120, count);
+
     for (int i = 1; i <= 4; ++i) {
         pacer.enqueue(makePacket(static_cast<quint8>(i)));
     }
-    const OpusTxPacer::DrainResult recovered = pacer.takeDue(130, count);
-    if (recovered.packets.size() != 3
-        || recovered.catchUpPackets != 2
-        || pacer.queueDepth() != 1) {
+    const OpusTxPacer::DrainResult resumed = pacer.takeDue(130, count);
+    if (resumed.packets.size() != 1
+        || resumed.catchUpPackets != 0
+        || pacer.queueDepth() != 3) {
         std::printf(
-            "drained queue lost its schedule: sent=%lld catchUp=%d depth=%d\n",
-            static_cast<long long>(recovered.packets.size()),
-            recovered.catchUpPackets,
+            "drained queue banked catch-up: sent=%lld catchUp=%d depth=%d\n",
+            static_cast<long long>(resumed.packets.size()),
+            resumed.catchUpPackets,
             pacer.queueDepth());
+        return false;
+    }
+    return true;
+}
+
+// End-to-end regression for the pacer's whole reason to exist, driven the way
+// AudioEngine drives it: a free-running 10 ms timer plus a bursty QAudioSource
+// producer, with a mid-transmission producer drought. Before the empty-tick
+// re-anchor in takeDue(), a drought as short as 30 ms permanently converted the
+// pacer into "flush kMaxPacketsPerDrain back-to-back, then idle" — the jitter
+// the pacer was added to remove.
+bool testPacingSurvivesProducerDrought()
+{
+    for (const qint64 droughtMs : {30, 100, 1000}) {
+        OpusTxPacer pacer;
+        quint8 count = 0;
+        qint64 t = 0;
+
+        // Audio flowing at real time — primes the schedule.
+        for (int i = 0; i < 20; ++i, t += OpusTxPacer::kPacketIntervalMs) {
+            pacer.enqueue(makePacket(0));
+            pacer.takeDue(t, count);
+        }
+
+        // Producer stalls; the pacing timer keeps firing on an empty queue.
+        for (qint64 end = t + droughtMs; t < end;
+             t += OpusTxPacer::kPacketIntervalMs) {
+            pacer.takeDue(t, count);
+        }
+
+        // Producer resumes, handing over four 10 ms packets every 40 ms.
+        int worstTick = 0;
+        for (int i = 0; i < 200; ++i, t += OpusTxPacer::kPacketIntervalMs) {
+            if (i % 4 == 0) {
+                for (int k = 0; k < 4; ++k) {
+                    pacer.enqueue(makePacket(0));
+                }
+            }
+            worstTick = std::max<int>(
+                worstTick, pacer.takeDue(t, count).packets.size());
+        }
+
+        if (worstTick != 1) {
+            std::printf(
+                "pacing lost after %lld ms drought: %d packets in one tick\n",
+                static_cast<long long>(droughtMs), worstTick);
+            return false;
+        }
+        if (pacer.droppedPackets() != 0) {
+            std::printf("unexpected drops after %lld ms drought: %llu\n",
+                        static_cast<long long>(droughtMs),
+                        static_cast<unsigned long long>(pacer.droppedPackets()));
+            return false;
+        }
+    }
+    return true;
+}
+
+// Anything shorter than the VITA header is not ours to rewrite.
+bool testShortPacketIsNotStamped()
+{
+    OpusTxPacer pacer;
+    quint8 count = 7;
+    QByteArray runt(OpusTxPacer::kVitaHeaderBytes - 1, '\0');
+    const QByteArray original = runt;
+    pacer.enqueue(runt);
+
+    const OpusTxPacer::DrainResult drained = pacer.takeDue(0, count);
+    if (drained.packets.size() != 1 || drained.packets.first() != original) {
+        std::printf("short packet was modified\n");
+        return false;
+    }
+    // The wire counter still advances so a following full packet is contiguous.
+    if (count != 8) {
+        std::printf("packet count did not advance: %d\n", int(count));
         return false;
     }
     return true;
@@ -173,7 +267,9 @@ int main()
         || !testCatchUpIsBounded()
         || !testOverflowKeepsWireCountsContiguous()
         || !testIdleQueueResumesWithoutDelay()
-        || !testLateProducerUsesExistingSchedule()) {
+        || !testDrainedQueueDoesNotBankCatchUp()
+        || !testPacingSurvivesProducerDrought()
+        || !testShortPacketIsNotStamped()) {
         return 1;
     }
     std::printf("opus_tx_pacer_test passed\n");

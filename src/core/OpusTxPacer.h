@@ -9,11 +9,18 @@ namespace AetherSDR {
 // QAudioSource and DSP processing share AudioEngine's event loop with the
 // pacing timer, so a late timer event must recover missed deadlines instead of
 // permanently falling behind the microphone producer.
+//
+// Catch-up is owed only for deadlines that passed with audio actually waiting.
+// Ticks that find the queue empty re-anchor the schedule instead — see
+// takeDue() — so a silent gap cannot leave the pacer permanently "behind" and
+// flushing bursts.
 class OpusTxPacer {
 public:
     static constexpr qint64 kPacketIntervalMs = 10;
     static constexpr int kMaxQueuePackets = 20;
     static constexpr int kMaxPacketsPerDrain = 3;
+    // VITA-49 ExtDataWithStream header AudioEngine prepends to every payload.
+    static constexpr int kVitaHeaderBytes = 28;
 
     struct DrainResult {
         QVector<QByteArray> packets;

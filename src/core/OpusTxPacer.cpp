@@ -27,6 +27,18 @@ OpusTxPacer::DrainResult OpusTxPacer::takeDue(qint64 nowMs,
 {
     DrainResult result;
     if (m_queue.isEmpty()) {
+        // The pacing timer free-runs from the AudioEngine constructor, so this
+        // fires on every 10 ms tick with no audio queued — between overs, on a
+        // mic xrun, while RN2 re-warms. No deadline was actually missed on
+        // those ticks, so re-anchor to the next interval. Leaving the deadline
+        // behind the wall clock books debt repayable only at one extra packet
+        // per drain, which a real-time producer never affords: the pacer would
+        // degrade into "flush up to kMaxPacketsPerDrain whenever packets exist"
+        // for the rest of the over — the back-to-back bursts it exists to
+        // smooth. A 30 ms drought was enough to trigger this permanently.
+        if (m_nextSendDeadlineMs >= 0 && nowMs >= m_nextSendDeadlineMs) {
+            m_nextSendDeadlineMs = nowMs + kPacketIntervalMs;
+        }
         return result;
     }
 
@@ -69,7 +81,11 @@ void OpusTxPacer::clear()
 
 void OpusTxPacer::stampPacketCount(QByteArray& packet, quint8 packetCount)
 {
-    if (packet.size() < static_cast<int>(sizeof(quint32))) {
+    // The only producer builds a full 28-byte VITA-49 ExtDataWithStream
+    // header (AudioEngine::onTxAudioReady). Anything shorter is not a packet
+    // this pacer knows how to stamp, so leave it untouched rather than
+    // rewriting whatever happens to occupy the first word.
+    if (packet.size() < kVitaHeaderBytes) {
         return;
     }
 
