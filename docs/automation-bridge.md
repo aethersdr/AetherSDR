@@ -408,6 +408,11 @@ your "DOM snapshot" for controls.
 ← {"ok":true,"roots":[ <node>, <node>, … ]}
 ```
 
+A widget that is itself a window — a floated pan, a dialog, a popup menu —
+appears exactly once, as a **root**, never nested under its `QObject` parent
+even when it has one. Walk `roots` to find them; do not expect to reach a
+floated pan (or a parented context menu) by descending from `MainWindow`.
+
 Each `<node>`:
 
 ```jsonc

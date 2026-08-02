@@ -554,12 +554,15 @@ QJsonObject describeWidget(const QWidget* w)
     const QObjectList children = w->children();
     for (const QObject* child : children) {
         if (auto* cw = qobject_cast<const QWidget*>(child)) {
-            // A child that is itself a window (a floated pan's
-            // PanFloatingWindow is a Qt::Window parented to MainWindow for
-            // z-order/lifetime) is already enumerated by doDumpTree()'s
-            // topLevelWidgets() loop. Describing it here too serialized the
-            // whole window twice, so every widget inside a floated pan
-            // appeared as a duplicate — two VfoWidgets for one slice.
+            // Any child that is itself a window is already enumerated by
+            // doDumpTree()'s topLevelWidgets() loop — in Qt 6 that list is
+            // exactly the isWindow() set, so skipping here drops a duplicate
+            // and never the only copy. This covers a floated pan's
+            // PanFloatingWindow (a Qt::Window parented to MainWindow for
+            // z-order/lifetime) and equally parented QMenu popups and
+            // dialogs. Describing them here too serialized the whole window
+            // twice, so every widget inside a floated pan appeared as a
+            // duplicate — two VfoWidgets for one slice.
             if (cw->isWindow())
                 continue;
             kids.append(describeWidget(cw));
@@ -3466,11 +3469,21 @@ QJsonObject AutomationServer::doDumpTree() const
 QJsonObject AutomationServer::doFloors() const
 {
     QJsonArray arr;
+    QSet<const QWidget*> visited;
     const QWidgetList tops = QApplication::topLevelWidgets();
     for (QWidget* tlw : tops) {
         QList<QWidget*> scan = tlw->findChildren<QWidget*>();
         scan.prepend(tlw);
         for (QWidget* w : scan) {
+            // findChildren() recurses straight through a parented Qt::Window,
+            // which is ALSO its own entry in tops — so a floated pan's
+            // SpectrumWidget was reached twice and emitted two entries with the
+            // same panIndex. floors is documented for 20 Hz polling, so a driver
+            // that averages or zips the array silently double-weighted every
+            // floated pan. Visit each widget once. (#4674)
+            if (visited.contains(w))
+                continue;
+            visited.insert(w);
             const QVariant nf = w->property("noiseFloorDbm");
             if (!nf.isValid())
                 continue;   // not a spectrum — property absent
