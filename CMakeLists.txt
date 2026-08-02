@@ -3545,8 +3545,10 @@ target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
 target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
 add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
 
+qt_add_resources(RNNOISE_FILTER_TEST_RESOURCES resources/resources.qrc)
 add_executable(rnnoise_filter_test
     tests/rnnoise_filter_test.cpp
+    ${RNNOISE_FILTER_TEST_RESOURCES}
 )
 target_link_libraries(rnnoise_filter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)

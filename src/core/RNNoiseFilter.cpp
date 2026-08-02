@@ -2,136 +2,210 @@
 #include "Resampler.h"
 #include "rnnoise.h"
 
-#include <cstring>
-#include <vector>
+#include <QFuture>
+#include <QtConcurrent/QtConcurrentRun>
+
+#include <algorithm>
+#include <array>
+#include <limits>
 
 namespace AetherSDR {
 
 // RNNoise frame size: 480 samples at 48kHz = 10ms
 static constexpr int FRAME_SIZE = 480;
+// Keep a fixed portion of the original spectrum in each RNNoise frame so weak
+// speech is not fully gated. Mixing before the shared synthesis/overlap-add
+// avoids the comb filtering caused by summing separate wet and dry waveforms.
+static constexpr float kRxDryMix = 0.15f;
 
-RNNoiseFilter::RNNoiseFilter(OutputMode outputMode)
-    : m_state(rnnoise_create(nullptr))
-    , m_up(std::make_unique<Resampler>(24000, 48000))
-    , m_down(std::make_unique<Resampler>(48000, 24000))
-    , m_outputMode(outputMode)
-{}
-
-RNNoiseFilter::~RNNoiseFilter()
-{
-    if (m_state)
-        rnnoise_destroy(m_state);
+RNNoiseFilter::RNNoiseFilter(OutputMode outputMode) : m_outputMode(outputMode) {
+  m_channelPool.setMaxThreadCount(1);
+  m_channelPool.setExpiryTimeout(-1);
+  const int channels = m_outputMode == OutputMode::PreserveRxStereo ? 2 : 1;
+  for (int channel = 0; channel < channels; ++channel) {
+    m_states[channel] = rnnoise_create(nullptr);
+    m_up[channel] = std::make_unique<Resampler>(24000, 48000);
+    m_down[channel] = std::make_unique<Resampler>(48000, 24000);
+  }
 }
 
-void RNNoiseFilter::reset()
-{
-    if (m_state)
-        rnnoise_destroy(m_state);
-    m_state = rnnoise_create(nullptr);
-    m_up = std::make_unique<Resampler>(24000, 48000);
-    m_down = std::make_unique<Resampler>(48000, 24000);
-    m_inAccum.clear();
-    m_outAccum.clear();
-    m_stereoAdapter.reset();
+RNNoiseFilter::~RNNoiseFilter() {
+  m_channelPool.waitForDone();
+  for (DenoiseState *state : m_states) {
+    if (state) {
+      rnnoise_destroy(state);
+    }
+  }
 }
 
-QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
-{
-    if (!m_state || pcm24kStereo.isEmpty())
-        return pcm24kStereo;
+bool RNNoiseFilter::isValid() const {
+  return m_states[0] &&
+         (m_outputMode == OutputMode::ProcessedMono || m_states[1]);
+}
 
-    const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
-    const int stereoFrames = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
-    if (m_outputMode == OutputMode::PreserveRxStereo) {
-        m_stereoAdapter.pushDryStereo(pcm24kStereo);
+void RNNoiseFilter::reset() {
+  const int channels = m_outputMode == OutputMode::PreserveRxStereo ? 2 : 1;
+  for (int channel = 0; channel < 2; ++channel) {
+    if (m_states[channel]) {
+      rnnoise_destroy(m_states[channel]);
     }
+    m_states[channel] = channel < channels ? rnnoise_create(nullptr) : nullptr;
+    m_up[channel] = channel < channels
+                        ? std::make_unique<Resampler>(24000, 48000)
+                        : nullptr;
+    m_down[channel] = channel < channels
+                          ? std::make_unique<Resampler>(48000, 24000)
+                          : nullptr;
+    m_inAccum[channel].clear();
+    m_input24k[channel].clear();
+    m_processed48k[channel].clear();
+    m_processed48kFloat[channel].clear();
+  }
+  m_outAccum.clear();
+}
 
-    // 1. Downmix, then upsample 24kHz mono float32 → 48kHz mono float32 via r8brain.
-    // The dry stereo stays queued so the RNNoise gain can be applied to both channels.
-    m_mono24k.resize(stereoFrames);
-    for (int i = 0; i < stereoFrames; ++i) {
-        m_mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+QByteArray RNNoiseFilter::process(const QByteArray &pcm24kStereo) {
+  if (!isValid() || pcm24kStereo.isEmpty()) {
+    return pcm24kStereo;
+  }
+
+  const auto *src = reinterpret_cast<const float *>(pcm24kStereo.constData());
+  const int stereoFrames =
+      pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
+  const int processingChannels =
+      m_outputMode == OutputMode::PreserveRxStereo ? 2 : 1;
+
+  // 1. Split RX stereo into matched channel paths. ProcessedMono is the TX
+  // path and intentionally retains the historical L/R downmix.
+  for (int channel = 0; channel < processingChannels; ++channel) {
+    m_input24k[channel].resize(stereoFrames);
+  }
+  for (int i = 0; i < stereoFrames; ++i) {
+    if (processingChannels == 2) {
+      m_input24k[0][i] = src[i * 2];
+      m_input24k[1][i] = src[i * 2 + 1];
+    } else {
+      m_input24k[0][i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
     }
-    QByteArray mono48k = m_up->process(m_mono24k.data(), stereoFrames);
+  }
 
-    const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
+  // 2. Append to input accumulator and process complete 480-sample frames
+  //    RNNoise expects [-32768, 32768] range, so scale from [-1, 1]
+  std::array<int, 2> totalAccumSamples{0, 0};
+  int completeFrames = std::numeric_limits<int>::max();
+  for (int channel = 0; channel < processingChannels; ++channel) {
+    const QByteArray mono48k =
+        m_up[channel]->process(m_input24k[channel].data(), stereoFrames);
+    const auto *mono48kSamples =
+        reinterpret_cast<const float *>(mono48k.constData());
     const int monoSamples48k = mono48k.size() / static_cast<int>(sizeof(float));
+    const int prevAccumSamples =
+        m_inAccum[channel].size() / static_cast<int>(sizeof(float));
+    const int startIdx = prevAccumSamples;
+    m_inAccum[channel].resize((startIdx + monoSamples48k) *
+                              static_cast<int>(sizeof(float)));
+    auto *floatBuf = reinterpret_cast<float *>(m_inAccum[channel].data());
+    for (int i = 0; i < monoSamples48k; ++i) {
+      floatBuf[startIdx + i] = mono48kSamples[i] * 32768.0f;
+    }
+    totalAccumSamples[channel] = prevAccumSamples + monoSamples48k;
+    completeFrames =
+        std::min(completeFrames, totalAccumSamples[channel] / FRAME_SIZE);
+  }
 
-    // 2. Append to input accumulator and process complete 480-sample frames
-    //    RNNoise expects [-32768, 32768] range, so scale from [-1, 1]
-    const int prevAccumSamples = m_inAccum.size() / static_cast<int>(sizeof(float));
-    {
-        const int startIdx = prevAccumSamples;
-        m_inAccum.resize((startIdx + monoSamples48k) * sizeof(float));
-        auto* floatBuf = reinterpret_cast<float*>(m_inAccum.data());
-        for (int i = 0; i < monoSamples48k; ++i)
-            floatBuf[startIdx + i] = mono48kSamples[i] * 32768.0f;
+  if (completeFrames > 0) {
+    const int consumedSamples = completeFrames * FRAME_SIZE;
+    const int outputMonoSamples = consumedSamples;
+    std::array<QByteArray, 2> downsampled;
+
+    for (int channel = 0; channel < processingChannels; ++channel) {
+      m_processed48k[channel].resize(outputMonoSamples);
     }
 
-    const int totalAccumSamples = prevAccumSamples + monoSamples48k;
-    const int completeFrames = totalAccumSamples / FRAME_SIZE;
-
-    if (completeFrames > 0) {
-        auto* accumData = reinterpret_cast<float*>(m_inAccum.data());
-        m_processed48k.resize(completeFrames * FRAME_SIZE);
-
-        for (int f = 0; f < completeFrames; ++f) {
-            rnnoise_process_frame(m_state,
-                                  &m_processed48k[f * FRAME_SIZE],
-                                  &accumData[f * FRAME_SIZE]);
-        }
-
-        // Keep leftover input samples
-        const int consumedSamples = completeFrames * FRAME_SIZE;
-        const int leftoverSamples = totalAccumSamples - consumedSamples;
-        if (leftoverSamples > 0) {
-            QByteArray leftover(reinterpret_cast<const char*>(&accumData[consumedSamples]),
-                                leftoverSamples * sizeof(float));
-            m_inAccum = leftover;
-        } else {
-            m_inAccum.clear();
-        }
-
-        // 3. Scale processed 48kHz float from RNNoise range [-32768,32768] to [-1,1],
-        //    then downsample to 24kHz stereo float32
-        const int outputMonoSamples = completeFrames * FRAME_SIZE;
-        m_processed48kFloat.resize(outputMonoSamples);
-        for (int i = 0; i < outputMonoSamples; ++i)
-            m_processed48kFloat[i] = m_processed48k[i] / 32768.0f;
-
-        // Downsample 48kHz mono → 24kHz mono, then apply the shared gain envelope
-        // to the delayed dry stereo so slice/diversity balance survives RN2.
-        QByteArray downsampled = m_down->process(
-            m_processed48kFloat.data(), outputMonoSamples);
-        const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
-        const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
-
+    const auto processChannel = [this, completeFrames](int channel) {
+      auto *accumData = reinterpret_cast<float *>(m_inAccum[channel].data());
+      for (int f = 0; f < completeFrames; ++f) {
         if (m_outputMode == OutputMode::PreserveRxStereo) {
-            m_outAccum.append(
-                m_stereoAdapter.takeProcessedMono(downsampledMono, downsampledFrames));
+          rnnoise_process_frame_with_dry_mix(
+              m_states[channel],
+              &m_processed48k[channel][f * FRAME_SIZE],
+              &accumData[f * FRAME_SIZE], kRxDryMix);
         } else {
-            QByteArray processedStereo(
-                downsampledFrames * 2 * static_cast<int>(sizeof(float)),
-                Qt::Uninitialized);
-            auto* stereo = reinterpret_cast<float*>(processedStereo.data());
-            for (int i = 0; i < downsampledFrames; ++i) {
-                stereo[i * 2] = downsampledMono[i];
-                stereo[i * 2 + 1] = downsampledMono[i];
-            }
-            m_outAccum.append(processedStereo);
+          rnnoise_process_frame(m_states[channel],
+                                &m_processed48k[channel][f * FRAME_SIZE],
+                                &accumData[f * FRAME_SIZE]);
         }
+      }
+    };
+
+    QFuture<void> rightFuture;
+    if (processingChannels == 2) {
+      rightFuture = QtConcurrent::run(&m_channelPool, [&processChannel]() {
+        processChannel(1);
+      });
+    }
+    processChannel(0);
+    if (processingChannels == 2) {
+      rightFuture.waitForFinished();
     }
 
-    // 4. Return exactly the same number of bytes as input
-    const int needed = pcm24kStereo.size();
-    if (m_outAccum.size() >= needed) {
-        QByteArray result = m_outAccum.left(needed);
-        m_outAccum.remove(0, needed);
-        return result;
+    for (int channel = 0; channel < processingChannels; ++channel) {
+      auto *accumData = reinterpret_cast<float *>(m_inAccum[channel].data());
+      const int leftoverSamples = totalAccumSamples[channel] - consumedSamples;
+      if (leftoverSamples > 0) {
+        m_inAccum[channel] = QByteArray(
+            reinterpret_cast<const char *>(&accumData[consumedSamples]),
+            leftoverSamples * static_cast<int>(sizeof(float)));
+      } else {
+        m_inAccum[channel].clear();
+      }
+
+      // 3. Scale RNNoise output back to [-1, 1], then downsample each
+      // channel through its matched 48 kHz -> 24 kHz path.
+      m_processed48kFloat[channel].resize(outputMonoSamples);
+      for (int i = 0; i < outputMonoSamples; ++i) {
+        m_processed48kFloat[channel][i] = m_processed48k[channel][i] / 32768.0f;
+      }
+      downsampled[channel] = m_down[channel]->process(
+          m_processed48kFloat[channel].data(), outputMonoSamples);
     }
 
-    // Not enough output yet — return silence (only happens during startup)
-    return QByteArray(needed, '\0');
+    int downsampledFrames =
+        downsampled[0].size() / static_cast<int>(sizeof(float));
+    if (processingChannels == 2) {
+      downsampledFrames =
+          std::min(downsampledFrames, static_cast<int>(downsampled[1].size()) /
+                                          static_cast<int>(sizeof(float)));
+    }
+
+    QByteArray processedStereo(downsampledFrames * 2 *
+                                   static_cast<int>(sizeof(float)),
+                               Qt::Uninitialized);
+    auto *stereo = reinterpret_cast<float *>(processedStereo.data());
+    const auto *left =
+        reinterpret_cast<const float *>(downsampled[0].constData());
+    const auto *right =
+        processingChannels == 2
+            ? reinterpret_cast<const float *>(downsampled[1].constData())
+            : left;
+    for (int i = 0; i < downsampledFrames; ++i) {
+      stereo[i * 2] = left[i];
+      stereo[i * 2 + 1] = right[i];
+    }
+
+    m_outAccum.append(processedStereo);
+  }
+
+  // 4. Return exactly the same number of bytes as input
+  const int needed = pcm24kStereo.size();
+  if (m_outAccum.size() >= needed) {
+    QByteArray result = m_outAccum.left(needed);
+    m_outAccum.remove(0, needed);
+    return result;
+  }
+
+  // Not enough output yet — return silence (only happens during startup)
+  return QByteArray(needed, '\0');
 }
 
 } // namespace AetherSDR
