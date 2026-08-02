@@ -914,6 +914,7 @@ private:
     QRect waterfallLiveButtonRect(const QRect& wfRect) const;
     QRect waterfallTimeScaleRect(const QRect& wfRect) const;
     void ensureWaterfallHistory();
+    void recolorWaterfallViewport();
     void rebuildWaterfallViewport();
     void rebuildWaterfallViewportForFrame(double centerMhz, double bandwidthMhz);
     void rebuildDssViewportFromHistory();
@@ -1556,6 +1557,7 @@ private:
     FrequencyRangeCommandThrottle m_frequencyRangeCommandThrottle;
     quint64 m_frequencyRangeCommandCount{0};
     bool m_frequencyPreviewActive{false};
+    bool m_waterfallPaletteRefreshPending{false};
     double m_frequencyPreviewBaseCenterMhz{0.0};
     double m_frequencyPreviewBaseBandwidthMhz{0.0};
     double m_frequencyPreviewTargetCenterMhz{0.0};
