@@ -244,9 +244,10 @@ jobs:
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)
-        # ONNX Runtime 1.27 ships no Intel-macOS prebuilt (Apple-Silicon only), so
-        # the Intel DMG builds without the ONNX ASR features (CPU whisper + Metal
-        # still ship). Apple Silicon requires them (below).
+        # ONNX Runtime 1.27 ships no Intel-macOS prebuilt (Apple-Silicon only).
+        # That was the first reason the Intel DMG went without the ONNX ASR
+        # features; it now ships no ASR at all (ENABLE_ASR=OFF, see Configure).
+        # Apple Silicon requires them.
         if: matrix.label == 'apple-silicon'
         run: bash scripts/setup/setup-onnxruntime.sh
 
@@ -260,12 +261,13 @@ jobs:
         # advertise macOS 15.5 to be honest about what it ships, which is
         # useless on hardware that mostly stops at 13.
         #
-        # Intel therefore ships whisper.cpp ASR (built from source here, so it
-        # takes the deployment target) without the sherpa backend or the
-        # ONNX-based extras. setup-sherpa-onnx.sh drops sherpa's bundled ORT on
-        # macOS so the Apple Silicon leg carries exactly one runtime — the
-        # upstream 14.0 build staged above — instead of silently preferring the
-        # 15.5 copy.
+        # That left Intel on whisper.cpp alone, and it no longer ships even that:
+        # ENABLE_ASR=OFF on that leg (see Configure for the reasoning). This step
+        # and the ONNX one above are Apple-Silicon-only for both reasons now.
+        #
+        # setup-sherpa-onnx.sh drops sherpa's bundled ORT on macOS so the Apple
+        # Silicon leg carries exactly one runtime — the upstream 14.0 build
+        # staged above — instead of silently preferring the 15.5 copy.
         if: matrix.label == 'apple-silicon'
         run: bash scripts/setup/setup-sherpa-onnx.sh
 
@@ -282,6 +284,10 @@ jobs:
         # runtime-compile path. Xcode 16 bundles the component (probe succeeds,
         # step is a no-op); Xcode 26 ships it as a separate download, so this is
         # what keeps a runner-image bump from breaking a release tag build.
+        #
+        # Apple Silicon only: the Intel leg builds ENABLE_ASR=OFF, so it compiles
+        # no Metal kernels and has no use for the toolchain.
+        if: matrix.label == 'apple-silicon'
         run: |
           xcrun -sdk macosx metal --version >/dev/null 2>&1 || \
             sudo xcodebuild -downloadComponent MetalToolchain
@@ -314,21 +320,32 @@ jobs:
           if [ "${{ matrix.label }}" = "intel" ]; then
             GPU_FLAG="-DAETHER_GPU_SPECTRUM=OFF"
           fi
-          # Require the ONNX ASR features only on Apple Silicon (ONNX Runtime 1.27
-          # has no Intel-macOS prebuilt). REQUIRE_ASR_GPU=ON on both: the Metal
-          # backend must build (the macOS runners have full Xcode with the metal
-          # compiler + the GGML_METAL_EMBED_LIBRARY fix), so a broken Metal
-          # toolchain fails the build instead of silently shipping CPU-only.
-          # ONNX and sherpa are Apple-Silicon-only, both for the ORT deployment
-          # floor explained on the sherpa setup step above. Requiring them where
-          # they are staged keeps a silent compile-out from shipping; not
-          # requiring them on Intel is the deliberate feature split, not an
-          # oversight.
-          ONNX_FLAG=""
-          SHERPA_FLAG=""
+          # ASR is an Apple-Silicon-only feature of the macOS DMGs, and the split
+          # is now total rather than partial. Apple Silicon requires all three
+          # pieces — the Metal GPU backend, the ONNX extras and the sherpa
+          # backend — so that a silent compile-out cannot ship. Requiring them
+          # where they are staged is what keeps that honest.
+          #
+          # Intel builds ENABLE_ASR=OFF outright. #4706 had already stripped it
+          # to CPU whisper alone (no ONNX, no sherpa: their ONNX Runtime carries
+          # a minos 15.5 floor no prebuilt can lower, and the Intel DMG exists to
+          # serve hardware that mostly stops at 13). What remained then broke on
+          # its own: dropping the Intel floor to 12.0 moved that leg onto the
+          # metal2.x shader tier for the first time, which #4718 found to be
+          # misspelled and which is unproven beyond that — ggml's kernels may use
+          # unguarded Metal-3 intrinsics that cannot compile at 2.4 at all.
+          #
+          # Rather than keep discovering that a release-day workflow at a time,
+          # the Intel artifact drops speech-to-text. It is a deliberate product
+          # call on fewer than 30 Intel-Mac users in the download figures, not a
+          # build workaround: an Intel Mac has no GPU worth running ASR on, and
+          # CPU-only whisper on that hardware is not a feature worth the release
+          # risk. REQUIRE_ASR_GPU therefore is NOT passed on Intel — with ASR off
+          # there is no GPU backend to require, and asking for one would fail
+          # configure.
+          ASR_FLAGS="-DENABLE_ASR=OFF"
           if [ "${{ matrix.label }}" = "apple-silicon" ]; then
-            ONNX_FLAG="-DREQUIRE_ASR_ONNX=ON"
-            SHERPA_FLAG="-DREQUIRE_ASR_SHERPA=ON"
+            ASR_FLAGS="-DREQUIRE_ASR_GPU=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON"
           fi
           # Both legs: qtkeychain is built from source against the aqt Qt, so
           # make its absence fatal. find_package(Qt6Keychain QUIET) otherwise
@@ -344,9 +361,7 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}" \
             -DCMAKE_PREFIX_PATH="$QT_PREFIX;$DEPS_PREFIX;$(brew --prefix)" \
             -DMQTT_TLS=OFF \
-            -DREQUIRE_ASR_GPU=ON \
-            $SHERPA_FLAG \
-            $ONNX_FLAG \
+            $ASR_FLAGS \
             $KEYCHAIN_FLAG \
             $GPU_FLAG 2>&1 | tee configure.log
 
