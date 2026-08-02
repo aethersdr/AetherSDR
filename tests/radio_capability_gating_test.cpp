@@ -106,6 +106,16 @@ static void check(bool ok, const char* what)
 // count() is tested FIRST because wait() waits for the NEXT emission and would
 // miss one already delivered. 5 s is a timeout, not a duration: the normal path
 // returns in well under a millisecond.
+//
+// Sliced rather than one wait(timeoutMs) call, deliberately. QSignalSpy exits
+// its nested loop from the EMITTING thread, so a cross-thread emission racing
+// loop entry can in principle lose the wake; the outer re-check of count() then
+// recovers it at the cost of one slice, where a single un-sliced wait() would
+// sit out the whole timeout. That race did not reproduce here (Qt 6.10.3,
+// Windows: 440 trials across four emission delays, 220 of them under 14-way CPU
+// contention, zero misses in either form) but it has been measured elsewhere on
+// Qt 6.11, and the slicing costs nothing when it does not trigger. Do not
+// collapse these into a single wait().
 static bool waitForSpy(QSignalSpy& spy, int timeoutMs = 5000)
 {
     QDeadlineTimer deadline(timeoutMs);
