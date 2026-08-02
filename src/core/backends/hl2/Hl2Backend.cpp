@@ -2828,9 +2828,18 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     section("forwardPowerRaw", QStringLiteral("Directional coupler (uncalibrated)"));
     put("forwardPowerRaw", QStringLiteral("Forward (raw counts)"),
         opt(m_telemetry.forwardPowerRaw));
-    put("forwardPowerW", QStringLiteral("Forward (W, approx)"),
+    put("forwardPowerW", QStringLiteral("Forward (W, approx — instantaneous)"),
         m_telemetry.forwardPowerRaw
             ? QVariant(directionalWatts(*m_telemetry.forwardPowerRaw)) : QVariant());
+    // The value the FWDPWR meter is actually driven from, next to the raw
+    // instantaneous sample it is derived from. Both, because the difference
+    // between them IS the diagnosis on SSB: a wide gap means the envelope is
+    // being sampled off its peaks, which is the whole reason the hold exists.
+    // On a constant-envelope carrier the two should very nearly agree, and a
+    // held value ABOVE the instantaneous on TUNE would mean the release is
+    // inflating the reading rather than holding it.
+    put("forwardPowerPeakW", QStringLiteral("Forward (W, approx — peak estimate)"),
+        m_fwdPeakWatts);
     put("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),
         opt(m_telemetry.reversePowerRaw));
     put("reversePowerW", QStringLiteral("Reverse (W, approx)"),
