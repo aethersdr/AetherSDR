@@ -5,6 +5,7 @@
 
 #include <QAccessible>
 #include <QAccessibleWidget>
+#include <QCursor>
 #include <QEnterEvent>
 #include <QEvent>
 #include <QFocusEvent>
@@ -67,6 +68,13 @@ public:
         publishAutomationState();
     }
 
+    ~HGauge() override {
+        // Drop the app-wide "badge on screen" claim so it can't dangle at a
+        // destroyed gauge (see activeHoverGauge()).
+        if (activeHoverGauge() == this)
+            activeHoverGauge() = nullptr;
+    }
+
     void setLabel(const QString& label) {
         if (m_label == label) return;
         m_label = label;
@@ -98,8 +106,7 @@ public:
             m_animTimer.start();
         }
         publishAutomationState();
-        if (m_hovered)
-            showHoverPopup(m_lastHoverGlobal);
+        refreshHoverPopup();
     }
 
     void setValueImmediate(float v) {
@@ -109,8 +116,7 @@ public:
         m_smooth.snapToTarget();
         publishAutomationState();
         update();
-        if (m_hovered)
-            showHoverPopup(m_lastHoverGlobal);
+        refreshHoverPopup();
     }
 
     void setPeakValue(float v) {
@@ -189,6 +195,14 @@ public:
     // meters (SWR / forward power / ALC) where the bar scale alone doesn't
     // give an exact reading.  The badge lingers briefly after the pointer
     // leaves so a quick glance-and-move still registers. (#3936)
+    //
+    // Only ONE badge is ever on screen app-wide: showHoverPopup() closes the
+    // previously-showing gauge's badge before raising its own. Each gauge owns
+    // its own DragValuePopup (a lifetime choice — a shared static QWidget would
+    // outlive QApplication), so without that hand-off nothing would ever hide
+    // gauge A's badge on entering gauge B, and the linger below would leave two
+    // stacked on screen at once. The stacked meters in TxApplet/PhoneCwApplet
+    // sit two pixels apart, so the two badges land nearly on top of each other.
     using HoverValueFormatter = std::function<QString(float)>;
 
     void setHoverValueFormatter(HoverValueFormatter formatter) {
@@ -198,8 +212,8 @@ public:
     void setHoverValuePopupEnabled(bool enabled) {
         m_hoverPopupEnabled = enabled;
         setMouseTracking(enabled);
-        if (!enabled && m_hoverPopup)
-            m_hoverPopup->hideNow();
+        if (!enabled)
+            hideHoverPopupNow();
     }
 
 protected:
@@ -213,6 +227,12 @@ protected:
     void mouseMoveEvent(QMouseEvent* ev) override {
         QWidget::mouseMoveEvent(ev);
         m_lastHoverGlobal = ev->globalPosition().toPoint();
+        // HGauge never grabs the mouse, so a no-button move under mouse
+        // tracking means the pointer really is over the bar — treat it as
+        // authoritative, so a dropped enterEvent can't suppress the readout
+        // for the whole time the pointer sits there.
+        if (ev->buttons() == Qt::NoButton)
+            m_hovered = true;
         if (m_hovered)
             showHoverPopup(m_lastHoverGlobal);
     }
@@ -220,9 +240,7 @@ protected:
     void leaveEvent(QEvent* ev) override {
         QWidget::leaveEvent(ev);
         m_hovered = false;
-        // Fade the readout one second after the pointer leaves the bar.
-        if (m_hoverPopup)
-            m_hoverPopup->linger(kHoverLingerMs);
+        beginHoverLinger();
     }
 
     void hideEvent(QHideEvent* ev) override {
@@ -234,8 +252,7 @@ protected:
         // it immediately and clear the hover state so it can't reappear stale
         // when the gauge is shown again.
         m_hovered = false;
-        if (m_hoverPopup)
-            m_hoverPopup->hideNow();
+        hideHoverPopupNow();
     }
 
     void paintEvent(QPaintEvent*) override {
@@ -394,9 +411,62 @@ private:
         return text;
     }
 
+    // The one gauge whose badge is currently claimed to be on screen, app-wide.
+    // A raw non-owning pointer rather than a shared popup widget: DragValuePopup
+    // is a top-level QWidget, and a function-local static one would be destroyed
+    // after QApplication. Cleared by hideHoverPopupNow() and by ~HGauge.
+    static HGauge*& activeHoverGauge() {
+        static HGauge* gauge = nullptr;
+        return gauge;
+    }
+
+    // Close this gauge's badge immediately and release the app-wide claim.
+    // Reached cross-instance from another gauge's showHoverPopup() (same class,
+    // so the private access holds) as well as from this gauge's own teardown
+    // paths.
+    void hideHoverPopupNow() {
+        if (m_hoverPopup)
+            m_hoverPopup->hideNow();
+        if (activeHoverGauge() == this)
+            activeHoverGauge() = nullptr;
+    }
+
+    void beginHoverLinger() {
+        if (m_hoverPopup)
+            m_hoverPopup->linger(kHoverLingerMs);
+        // The claim is deliberately NOT released here. The badge is still on
+        // screen for kHoverLingerMs, so it must stay findable — that is exactly
+        // the window in which the next gauge needs to close it.
+    }
+
+    // Re-drive the badge from a value change. Called on every meter frame while
+    // hovered, so it also re-validates the hover state against the real cursor
+    // position: Qt does not guarantee a leaveEvent in every case (the hideEvent
+    // override above exists for the same reason), and each showValue() cancels
+    // the pending hide timer. Without this check a single dropped leave pins the
+    // badge on screen for as long as the meter keeps updating — frozen at the
+    // anchor where the pointer used to be, which is the "stuck forever" report.
+    void refreshHoverPopup() {
+        if (!m_hovered)
+            return;
+        if (!isVisible() || !rect().contains(mapFromGlobal(QCursor::pos()))) {
+            m_hovered = false;
+            beginHoverLinger();
+            return;
+        }
+        showHoverPopup(m_lastHoverGlobal);
+    }
+
     void showHoverPopup(const QPoint& globalAnchor) {
         if (!m_hoverPopupEnabled)
             return;
+        // Hand the badge over: close whichever gauge is currently showing one
+        // before raising ours, so a traverse across adjacent meters can never
+        // leave the previous gauge's badge lingering alongside this one.
+        HGauge*& active = activeHoverGauge();
+        if (active && active != this)
+            active->hideHoverPopupNow();
+        active = this;
         if (!m_hoverPopup)
             m_hoverPopup = new AetherSDR::DragValuePopup(this);
         // setValue() fires at ballistics-animation rate while hovered, but the
@@ -425,7 +495,13 @@ private:
     QVector<Tick> m_ticks;
 
     // Hover value readout state (see setHoverValuePopupEnabled).
-    static constexpr int kHoverLingerMs = 1000;
+    //
+    // The badge fades on the same schedule as every other DragValuePopup in the
+    // app. #3936 shipped a bespoke 1000 ms here, but PR #2944 had already tested
+    // that dimension and settled on 450 ms — 250 ms read as too fleeting, 750 ms
+    // as sluggish. At 1000 ms a leave-and-move-on left the readout sitting over
+    // the next control long after the pointer had gone.
+    static constexpr int kHoverLingerMs = AetherSDR::DragValuePopup::kDefaultLingerMs;
     HoverValueFormatter m_hoverFormatter;
     AetherSDR::DragValuePopup* m_hoverPopup{nullptr};
     bool m_hoverPopupEnabled{false};

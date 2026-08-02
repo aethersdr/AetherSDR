@@ -1359,10 +1359,19 @@ plus a no-button `QMouseMove` at the widget centre; the `leave` form fires a
 Used to prove the TX meter mouse-over value readout: the SWR / forward-power /
 ALC / mic-level / compression `HGauge`s pop a `DragValuePopup` badge (the same
 one the sliders flash) showing the live numeric value while hovered, which fades
-one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
-— note each `HGauge` owns its own popup, so with several meters hovered the name
-resolves to the first-created one; hover a single meter per instance for an
-unambiguous grab.
+`DragValuePopup::kDefaultLingerMs` (450 ms) after the pointer leaves.
+
+**At most one badge is visible app-wide.** Entering a second gauge closes the
+first one's badge, so a traverse across the stacked TX meters can never leave
+two overlapping. A driver asserting the hand-off should `hover` the second
+gauge and check the first's badge within that 450 ms window — a `leave` on the
+first is *not* required, and waiting out the linger between hovers proves
+nothing.
+
+Grab the badge with `grab DragValuePopup`. Each `HGauge` still owns its own
+popup instance, so the name resolves to the first-created one regardless of
+which is showing; when hovering a gauge other than the first, grab via the
+gauge itself (`grab "SWR gauge"`) or hover a single meter per run.
 
 ### `tooltip`
 Force-show a widget's native Qt tooltip, using the widget's current
