@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed: the waterfall recolours its history when you change the palette (#4694)
+
+**Picking a new waterfall Scheme now recolours the waterfall you are already
+looking at, instead of only the rows that arrive next.** Previously the palette
+change took effect at the waterline: everything above it kept the old colours,
+so comparing two schemes meant waiting for the display to scroll clear. The 3D
+spectrum has always recoloured immediately — the 2D waterfall now matches it.
+
+Switching *themes* does the same thing, for the same reason: the theme owns the
+gradient behind every preset, so a theme change is a palette change.
+
+Nothing moves while it happens. The waterfall keeps its scroll position, its
+paused scrollback, and its place in the scroll animation — the retained rows
+were always stored as palette-independent intensity, so recolouring is a
+repaint of what is on screen, the same work a pan already does, and the
+scrollback above the viewport recolours as you scroll it back in.
+
 ### Fixed: transmit audio breaking up with RN2 enabled (#4584)
 
 **Your transmitted audio no longer breaks up when RN2 is on.** Remote transmit

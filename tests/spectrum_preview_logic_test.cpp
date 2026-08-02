@@ -416,6 +416,65 @@ int testWaterfallPaletteRecolorPlan()
     return 0;
 }
 
+// The property a palette recolour has to hold and a viewport rebuild does not:
+// recolouring in place may not move, drop, or duplicate a single visible row.
+// A rebuild gets away with re-laying the ring out from scanline 0 only because
+// it repaints everything at once; a recolour keeps the live write row, so the
+// age → scanline map is the whole correctness argument.
+int testWaterfallVisibleRowForAge()
+{
+    using namespace AetherSDR;
+    constexpr int kHeight = 7;
+
+    // Age 0 is the newest row and sits on the origin itself — that is where
+    // appendVisibleRow() last wrote, and where drawWaterfall() starts blitting.
+    if (waterfallVisibleRowForAge(3, 0, kHeight) != 3
+        || waterfallVisibleRowForAge(0, 0, kHeight) != 0) {
+        return fail("age 0 must land on the write row");
+    }
+
+    // Older rows walk downward and wrap.
+    if (waterfallVisibleRowForAge(5, 1, kHeight) != 6
+        || waterfallVisibleRowForAge(5, 2, kHeight) != 0
+        || waterfallVisibleRowForAge(5, 3, kHeight) != 1) {
+        return fail("increasing age must walk down the ring and wrap");
+    }
+
+    // A full sweep covers every scanline exactly once, from any origin. This
+    // is what "the waterfall cannot move under a palette change" reduces to.
+    for (int origin = 0; origin < kHeight; ++origin) {
+        bool seen[kHeight] = {};
+        for (int age = 0; age < kHeight; ++age) {
+            const int row = waterfallVisibleRowForAge(origin, age, kHeight);
+            if (row < 0 || row >= kHeight || seen[row]) {
+                return fail("a full age sweep must be a permutation of rows");
+            }
+            seen[row] = true;
+        }
+    }
+
+    // Origin 0 is the rebuild path: age is the scanline, unchanged.
+    for (int age = 0; age < kHeight; ++age) {
+        if (waterfallVisibleRowForAge(0, age, kHeight) != age) {
+            return fail("origin 0 must reproduce the plain rebuild layout");
+        }
+    }
+
+    // m_wfWriteRow is decremented modulo the image height by appendVisibleRow,
+    // but a restored stream state can carry one from a differently sized image.
+    if (waterfallVisibleRowForAge(-2, 0, kHeight) != 5
+        || waterfallVisibleRowForAge(kHeight + 2, 0, kHeight) != 2
+        || waterfallVisibleRowForAge(1, -1, kHeight) != 0) {
+        return fail("out-of-range origin and age must normalise, not index OOB");
+    }
+
+    if (waterfallVisibleRowForAge(0, 0, 0) != -1
+        || waterfallVisibleRowForAge(0, 0, -4) != -1) {
+        return fail("an empty image must report no destination row");
+    }
+    return 0;
+}
+
 int testWaterfallScrollProgress()
 {
     using namespace AetherSDR;
@@ -886,6 +945,9 @@ int main()
         return result;
     }
     if (const int result = testWaterfallPaletteRecolorPlan(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallVisibleRowForAge(); result != 0) {
         return result;
     }
     if (const int result = testWaterfallScrollProgress(); result != 0) {
