@@ -95,6 +95,8 @@ jobs:
           # merge commit) is what surfaced it. Installed on both legs: the
           # package exists on jammy and noble alike, and one shared list beats a
           # conditional that has to be revisited every time the matrix moves.
+          # On x86_64 it is a runner-side no-op — linuxdeploy bundles only what
+          # the deployed ELFs actually link, and nothing there links libgstplay.
           sudo apt-get install -y cmake ninja-build pkg-config \
             libvulkan-dev spirv-headers \
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
