@@ -157,8 +157,16 @@ jobs:
       - name: Install Qt 6.8.3 LTS via aqtinstall
         run: |
           pip3 install aqtinstall
+          # qtwayland: without it the AppImage ships no Wayland platform plugin,
+          # which is what #1389 actually was — src/main.cpp forced
+          # QT_QPA_PLATFORM=wayland and Qt aborted with "no Qt platform plugin
+          # could be initialized" on every Wayland session. The workaround then
+          # was to stop preferring Wayland under APPIMAGE, which left AppImage
+          # users on XWayland and so the only Linux users not receiving the
+          # #1233 GLX BadAccess fix. Bundling the plugin is the fix proposed on
+          # #1389 at the time and never landed.
           aqt install-qt ${{ matrix.qt_host }} desktop 6.8.3 ${{ matrix.qt_arch }} \
-            -m qtmultimedia qtwebsockets qtserialport qtshadertools \
+            -m qtmultimedia qtwebsockets qtserialport qtshadertools qtwayland \
             --outputdir ${{ github.workspace }}/Qt
           # aqt lays the install down under <version>/<arch minus the host
           # prefix>: linux_gcc_64 -> gcc_64, linux_gcc_arm64 -> gcc_arm64.
@@ -300,7 +308,11 @@ jobs:
       - name: Build AppImage
         env:
           QT_SELECT: qt6
-          EXTRA_QT_PLUGINS: multimedia
+          # The wayland-* entries pull in the client-side decoration, shell
+          # integration and graphics integration plugins that the Wayland
+          # platform plugin dlopen()s at runtime — they are not NEEDED entries
+          # on any binary, so nothing would deploy them by dependency walking.
+          EXTRA_QT_PLUGINS: multimedia;wayland-decoration-client;wayland-graphics-integration-client;wayland-shell-integration
         run: |
           # Sanitize the ref for the output filename: a workflow_dispatch on a
           # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
@@ -326,6 +338,32 @@ jobs:
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             --output appimage
+
+      # The Wayland platform plugin is the whole point of adding qtwayland, and
+      # nothing else in the build would notice its absence: it is dlopen()ed by
+      # Qt at runtime, not linked, so no dependency walk covers it and the
+      # AppImage packages happily without it. That is exactly how #1389 shipped.
+      #
+      # This is a quality gate, not a safety gate. src/main.cpp now asks for
+      # "wayland;xcb", so a missing plugin costs the Wayland improvement and
+      # falls back to XWayland rather than failing to start. Failing the build
+      # is still right — silently reverting to the old behaviour while the
+      # release notes claim native Wayland is worse than a red run.
+      - name: Assert the Wayland platform plugin was bundled
+        run: |
+          set -o pipefail
+          found=$(find AppDir -name 'libqwayland*.so' -print 2>/dev/null | sort)
+          if [ -z "$found" ]; then
+            echo "ERROR: no Wayland platform plugin in AppDir — the AppImage would"
+            echo "silently fall back to XWayland (the #1389 shape)."
+            echo "Qt plugin dirs actually deployed:"
+            find AppDir -type d -name platforms -o -type d -name 'wayland-*' | sort
+            exit 1
+          fi
+          echo "Wayland platform plugin(s) bundled:"
+          echo "$found"
+          echo "Wayland integration plugin dirs:"
+          find AppDir -type d -name 'wayland-*' | sort
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
