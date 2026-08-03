@@ -8,6 +8,21 @@
 
 namespace AetherSDR {
 
+enum class DssOutlinePipelineMode {
+    DedicatedRibbonPipeline,
+    SharedFillPipeline,
+};
+
+// The OpenGL backend reuses the fill program for ribbon outlines: its separate
+// program loses the mesh resources despite the same shader/SRB configuration.
+constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
+    bool openGlBackend)
+{
+    return openGlBackend
+        ? DssOutlinePipelineMode::SharedFillPipeline
+        : DssOutlinePipelineMode::DedicatedRibbonPipeline;
+}
+
 struct FrequencyFrame {
     double centerMhz{0.0};
     double bandwidthMhz{0.0};

@@ -737,6 +737,18 @@ int testDssStartupHistoryAvailability()
     return 0;
 }
 
+int testDssOutlinePipelinePolicy()
+{
+    using namespace AetherSDR;
+    if (dssOutlinePipelineModeForBackend(true)
+            != DssOutlinePipelineMode::SharedFillPipeline
+        || dssOutlinePipelineModeForBackend(false)
+            != DssOutlinePipelineMode::DedicatedRibbonPipeline) {
+        return fail("3D FFT outline pipeline policy is incorrect");
+    }
+    return 0;
+}
+
 int testObservedWaterfallCadence()
 {
     using namespace AetherSDR;
@@ -957,6 +969,9 @@ int main()
         return result;
     }
     if (const int result = testDssStartupHistoryAvailability(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssOutlinePipelinePolicy(); result != 0) {
         return result;
     }
     if (const int result = testObservedWaterfallCadence(); result != 0) {
