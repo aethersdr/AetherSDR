@@ -27,6 +27,7 @@ option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
 option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
 option(USE_SYSTEM_LIBWHISPER   "Use system libwhisper"   OFF)
+option(USE_SYSTEM_SQLITE       "Use system sqlite3"      OFF)
 
 # Build features options
 
@@ -1164,29 +1165,38 @@ message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-
 # exists (the pre-QApplication bootstrap reads in main.cpp / GpuSelector).
 # The ONLY permitted consumer is src/core/SettingsDatabase.cpp — see
 # third_party/sqlite/README.md.
-add_library(aether_sqlite3 STATIC
-    third_party/sqlite/sqlite3.c
-)
-target_include_directories(aether_sqlite3 PUBLIC
-    ${CMAKE_SOURCE_DIR}/third_party/sqlite
-)
-target_compile_definitions(aether_sqlite3 PRIVATE
-    SQLITE_THREADSAFE=1              # serialized mode; AppSettings adds its own cache lock
-    SQLITE_DQS=0                     # no double-quoted string literals
-    SQLITE_DEFAULT_WAL_SYNCHRONOUS=1 # NORMAL is durability-sufficient under WAL
-    SQLITE_DEFAULT_FILE_PERMISSIONS=0600  # settings dir is user-private (unix)
-    SQLITE_LIKE_DOESNT_MATCH_BLOBS
-    SQLITE_MAX_EXPR_DEPTH=0
-    SQLITE_OMIT_DEPRECATED
-    SQLITE_OMIT_LOAD_EXTENSION
-    SQLITE_OMIT_SHARED_CACHE
-)
-if(MSVC)
-    target_compile_options(aether_sqlite3 PRIVATE /w)
+if(USE_SYSTEM_SQLITE)
+    find_package(PkgConfig REQUIRED)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET sqlite3)
+
+        add_library(aether_sqlite3 ALIAS PkgConfig::sqlite3)
+    endif()
 else()
-    target_compile_options(aether_sqlite3 PRIVATE -w)
+    add_library(aether_sqlite3 STATIC
+        third_party/sqlite/sqlite3.c
+    )
+    target_include_directories(aether_sqlite3 PUBLIC
+        ${CMAKE_SOURCE_DIR}/third_party/sqlite
+    )
+    target_compile_definitions(aether_sqlite3 PRIVATE
+        SQLITE_THREADSAFE=1              # serialized mode; AppSettings adds its own cache lock
+        SQLITE_DQS=0                     # no double-quoted string literals
+        SQLITE_DEFAULT_WAL_SYNCHRONOUS=1 # NORMAL is durability-sufficient under WAL
+        SQLITE_DEFAULT_FILE_PERMISSIONS=0600  # settings dir is user-private (unix)
+        SQLITE_LIKE_DOESNT_MATCH_BLOBS
+        SQLITE_MAX_EXPR_DEPTH=0
+        SQLITE_OMIT_DEPRECATED
+        SQLITE_OMIT_LOAD_EXTENSION
+        SQLITE_OMIT_SHARED_CACHE
+    )
+    if(MSVC)
+        target_compile_options(aether_sqlite3 PRIVATE /w)
+    else()
+        target_compile_options(aether_sqlite3 PRIVATE -w)
+    endif()
+    message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
 endif()
-message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
 
 # Bundled liquid-dsp (MIT) — comprehensive DSP toolkit covering modems
 # (PSK/QAM/FSK/GMSK/OFDM), FEC (Hamming/Golay/RS/convolutional), adaptive
