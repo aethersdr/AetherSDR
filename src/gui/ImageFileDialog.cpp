@@ -1,7 +1,5 @@
 #include "ImageFileDialog.h"
 
-#include "core/AppSettings.h"
-
 #include <QButtonGroup>
 #include <QDialog>
 #include <QFileDialog>
@@ -306,35 +304,22 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
             }
         };
 
-        auto selectMode = [applyThumbnailMode](bool large) {
-            applyThumbnailMode(large);
-            auto& s = AppSettings::instance();
-            s.setValue(QStringLiteral("ImageFileDialogThumbnailView"),
-                       large ? QStringLiteral("True") : QStringLiteral("False"));
-            s.save();
-        };
         // Both buttons' toggled(true) fires exactly once per user click (the
         // group's exclusivity fires toggled(false) on the other button too,
         // ignored here) — each branch only acts on becoming the active one.
-        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [selectMode](bool on) {
+        QObject::connect(thumbButton, &QToolButton::toggled, &dlg, [applyThumbnailMode](bool on) {
             if (on)
-                selectMode(true);
+                applyThumbnailMode(true);
         });
-        QObject::connect(smallIconsButton, &QToolButton::toggled, &dlg, [selectMode](bool on) {
+        QObject::connect(smallIconsButton, &QToolButton::toggled, &dlg, [applyThumbnailMode](bool on) {
             if (on)
-                selectMode(false);
+                applyThumbnailMode(false);
         });
 
-        auto& s = AppSettings::instance();
-        const bool persisted = s.value(QStringLiteral("ImageFileDialogThumbnailView"),
-                                        QStringLiteral("False")).toString()
-            == QStringLiteral("True");
-        // Exactly one of these fires toggled(true), applying the persisted
-        // mode above.
-        if (persisted)
-            thumbButton->setChecked(true);
-        else
-            smallIconsButton->setChecked(true);
+        // Always open in Detail + small icons, matching the dialog's
+        // pre-#4717 behavior; the view mode isn't persisted across opens,
+        // only within the current dialog session via the toggle above.
+        smallIconsButton->setChecked(true);
     }
 
     if (previewLabel) {
