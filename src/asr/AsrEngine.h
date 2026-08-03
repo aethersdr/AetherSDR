@@ -23,6 +23,11 @@ class SpeakerEmbedder;
 // Factory that constructs an ASR backend. Invoked on the worker thread so the
 // backend (and any model context) lives entirely there.
 using AsrBackendFactory = std::function<std::unique_ptr<IAsrBackend>()>;
+// Creates a fully loaded speaker embedder on the ASR worker thread. Production
+// uses the default loader; tests may inject a deterministic slow loader to
+// prove model preparation never occupies the caller thread.
+using AsrSpeakerEmbedderFactory =
+    std::function<std::unique_ptr<SpeakerEmbedder>(const QString& modelPath)>;
 
 // Worker half of the ASR engine — runs on a dedicated thread, owns the backend
 // and the segmenter, and does all CPU-heavy work (segmentation + inference).
@@ -31,7 +36,8 @@ using AsrBackendFactory = std::function<std::unique_ptr<IAsrBackend>()>;
 class AsrWorker : public QObject {
     Q_OBJECT
 public:
-    AsrWorker(AsrBackendFactory factory, AsrSegmenter::Config segConfig);
+    AsrWorker(AsrBackendFactory factory, AsrSegmenter::Config segConfig,
+              AsrSpeakerEmbedderFactory speakerEmbedderFactory);
     ~AsrWorker() override;
 
     // Thread-safe; call directly (NOT via a queued signal — the whole point is
@@ -45,6 +51,8 @@ public:
 public slots:
     void init();                                   // create backend on this thread
     void loadModel(const QString& modelPath);
+    void loadSpeakerModel(const QString& modelPath);
+    void setSpeakerLabelingEnabled(bool on);
     // Mono float samples at sampleRate; resampled to whisper's 16 kHz on this
     // (worker) thread before segmentation — never on the audio/caller thread.
     void processAudio(const QVector<float>& monoSamples, int sampleRate);
@@ -57,6 +65,7 @@ public slots:
 signals:
     void loaded();
     void loadFailed(const QString& error);
+    void speakerModelLoaded(const QString& modelPath, bool loaded);
     // speaker: 0-based cluster index (A/B/C…), or -1 when labeling is off.
     void segmentText(const QString& text, float confidence, int speaker);
     void processedMs(double ms); // this chunk fully handled (for the backlog meter)
@@ -68,6 +77,7 @@ private:
     std::vector<float> toSixteenK(const QVector<float>& monoSamples, int sampleRate);
 
     AsrBackendFactory m_factory;
+    AsrSpeakerEmbedderFactory m_speakerEmbedderFactory;
     std::unique_ptr<IAsrBackend> m_backend;
     AsrSegmenter m_segmenter;
     std::unique_ptr<SileroVad> m_vad;   // built in init() when a model path is set
@@ -75,6 +85,7 @@ private:
     std::unique_ptr<SpeakerEmbedder> m_embedder; // built in init() when a path is set
     SpeakerClusterer m_clusterer;       // online A/B/C… labeling
     std::string m_speakerModelPath;     // optional speaker-embedding .onnx
+    bool m_speakerLabelingEnabled = false;
     std::unique_ptr<Resampler> m_resampler;
     int m_resamplerSrcRate = 0;
     bool m_warnedNoModel = false;
@@ -92,7 +103,8 @@ public:
     // whisperAsrBackendFactory(); tests pass a deterministic fake.
     explicit AsrEngine(AsrBackendFactory factory, QObject* parent = nullptr);
     AsrEngine(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,
-              QObject* parent = nullptr);
+              QObject* parent = nullptr,
+              AsrSpeakerEmbedderFactory speakerEmbedderFactory = {});
     ~AsrEngine() override;
 
     // Disabling drops any already-queued backlog (see AsrWorker::setCancelPending)
@@ -105,6 +117,12 @@ public:
     void setModelPath(const QString& modelPath);
     QString modelPath() const { return m_modelPath; }
     bool isReady() const { return m_ready; }
+
+    // Speaker labeling is independent from the ASR backend. Loading is queued
+    // onto the worker so UI toggles never tear down a busy inference thread.
+    void setSpeakerModelPath(const QString& modelPath);
+    void setSpeakerLabelingEnabled(bool on);
+    bool isSpeakerLabelingEnabled() const { return m_speakerLabelingEnabled; }
 
     // Feed mono audio at its native sampleRate (e.g. the 24 kHz RX pipeline).
     // Ignored unless enabled. Cheap — copies and posts to the worker, which
@@ -126,6 +144,7 @@ public:
 signals:
     void ready();
     void loadFailed(const QString& error);
+    void speakerModelLoaded(const QString& modelPath, bool loaded);
     // speaker: 0-based speaker index (A/B/C…), or -1 when labeling is off.
     void finalText(const QString& text, float confidence, int speaker);
     // Transcription backlog: seconds of received audio not yet handled by the
@@ -135,6 +154,8 @@ signals:
 
     // Internal: engine -> worker (queued). Not part of the public contract.
     void requestLoad(const QString& modelPath);
+    void requestLoadSpeakerModel(const QString& modelPath);
+    void requestSetSpeakerLabelingEnabled(bool on);
     void requestProcess(const QVector<float>& monoSamples, int sampleRate);
     void requestSetMaxSegmentMs(int ms);
     void requestSetSpeechRms(float rms);
@@ -143,7 +164,8 @@ signals:
     void requestReset();
 
 private:
-    void startThread(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig);
+    void startThread(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,
+                     AsrSpeakerEmbedderFactory speakerEmbedderFactory);
 
     void updateBacklog(); // recompute lag = pushed − processed, emit if it moved
 
@@ -152,6 +174,7 @@ private:
     bool m_enabled = false;
     bool m_ready = false;
     QString m_modelPath;
+    bool m_speakerLabelingEnabled = false;
     double m_pushedMs = 0.0;         // audio handed to the engine (main thread)
     double m_processedMs = 0.0;      // audio the worker reports as handled
     double m_lastBacklogTenths = -1; // last emitted backlog (0.1 s units) — dedup

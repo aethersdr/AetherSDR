@@ -5,11 +5,14 @@
 
 #include "asr/AsrEngine.h"
 #include "asr/IAsrBackend.h"
+#include "asr/SpeakerEmbedder.h"
+#include "gui/CopyAssistController.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QThread>
+#include <QTimer>
 #include <QVector>
 
 #include <cmath>
@@ -100,6 +103,16 @@ AsrBackendFactory slowFactory(int delayMs)
     return [delayMs] { return std::unique_ptr<IAsrBackend>(new SlowBackend(delayMs)); };
 }
 
+AsrSpeakerEmbedderFactory slowSpeakerFactory(int delayMs)
+{
+    return [delayMs](const QString&) {
+        QThread::msleep(delayMs);
+        // No ONNX fixture is needed here: the delay models session preparation,
+        // while the null result exercises the regular failed-load completion.
+        return std::unique_ptr<SpeakerEmbedder>{};
+    };
+}
+
 // Generate at the real RX pipeline rate (24 kHz) so the engine must resample
 // 24k -> 16k on its worker before segmenting.
 constexpr int kSrcRate = 24000;
@@ -124,6 +137,38 @@ QVector<float> silence(int ms)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    // ---- Engine replacement discards only per-engine speaker state --------
+    {
+        SpeakerLoadLifecycle lifecycle;
+        lifecycle.begin(QStringLiteral("/old-engine.onnx"));
+        expect(lifecycle.isPending(QStringLiteral("/old-engine.onnx")),
+               "matching speaker load is recognized as already pending");
+        expect(!lifecycle.isPending(QStringLiteral("/different-model.onnx")),
+               "a different speaker model is not deduplicated");
+        lifecycle.begin(QStringLiteral("/custom-speaker.onnx"));
+        expect(lifecycle.isPending(QStringLiteral("/custom-speaker.onnx")),
+               "custom speaker off/on recognizes the in-flight path for deduplication");
+        lifecycle.resetForEngineReplacement();
+        expect(!lifecycle.isPending(), "engine replacement clears pending speaker load");
+        expect(!lifecycle.isLoaded(QStringLiteral("/old-engine.onnx")),
+               "engine replacement does not carry a stale loaded model");
+
+        lifecycle.begin(QStringLiteral("/replayed-intent.onnx"));
+        expect(!lifecycle.complete(QStringLiteral("/old-engine.onnx"), true),
+               "late old-engine completion cannot settle replayed intent");
+        expect(lifecycle.isPending(), "late old-engine completion leaves replay pending");
+        expect(lifecycle.complete(QStringLiteral("/replayed-intent.onnx"), true),
+               "replayed speaker intent settles on the replacement engine");
+        expect(lifecycle.isLoaded(QStringLiteral("/replayed-intent.onnx")),
+               "replacement engine caches its own loaded speaker model");
+
+        lifecycle.begin(QStringLiteral("/failed-replacement.onnx"));
+        expect(lifecycle.complete(QStringLiteral("/failed-replacement.onnx"), false),
+               "failed replacement settles its pending load");
+        expect(!lifecycle.isLoaded(QStringLiteral("/replayed-intent.onnx")),
+               "failed replacement clears stale cached speaker state");
+    }
 
     // ---- Async load emits ready() -----------------------------------------
     {
@@ -191,6 +236,47 @@ int main(int argc, char** argv)
         delete engine; // must not block until the whole backlog finishes
         expect(timer.elapsed() < kDelayMs * 2,
                "destructor returns promptly despite a queued backlog");
+    }
+
+    // ---- Speaker preparation stays off the caller thread ------------------
+    {
+        constexpr int kDelayMs = 300;
+        AsrEngine engine(factory(true), AsrSegmenter::Config{}, nullptr,
+                         slowSpeakerFactory(kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "speaker-load test: engine ready");
+
+        QSignalSpy speakerSpy(&engine, &AsrEngine::speakerModelLoaded);
+        QElapsedTimer timer;
+        timer.start();
+        engine.setSpeakerModelPath(QStringLiteral("/slow-speaker.onnx"));
+        expect(timer.elapsed() < 50,
+               "setSpeakerModelPath returns without waiting for speaker preparation");
+
+        engine.setSpeakerLabelingEnabled(true);
+        engine.setSpeakerLabelingEnabled(false); // latest intent wins behind the slow load
+        expect(!engine.isSpeakerLabelingEnabled(),
+               "speaker labeling disable takes effect immediately on the caller thread");
+
+        bool eventLoopTicked = false;
+        QTimer::singleShot(30, &app, [&eventLoopTicked] { eventLoopTicked = true; });
+        expect(speakerSpy.wait(5000), "slow speaker preparation completes asynchronously");
+        expect(eventLoopTicked,
+               "main event loop remains responsive while speaker preparation is in flight");
+        if (!speakerSpy.isEmpty()) {
+            const QList<QVariant> args = speakerSpy.first();
+            expect(args.at(0).toString() == QStringLiteral("/slow-speaker.onnx"),
+                   "speaker completion identifies the requested model path");
+            expect(!args.at(1).toBool(), "failed injected speaker loader is reported");
+        }
+
+        speakerSpy.clear();
+        engine.setSpeakerLabelingEnabled(true);
+        engine.setSpeakerModelPath(QStringLiteral("/failed-replacement.onnx"));
+        expect(speakerSpy.wait(5000), "failed speaker replacement completes");
+        expect(!engine.isSpeakerLabelingEnabled(),
+               "failed speaker replacement disables labeling instead of reusing stale state");
     }
 
     // ---- Disabling drops a queued backlog instead of transcribing it ------
