@@ -37,6 +37,9 @@ namespace {
 // (CallsignCard::setPhotoPath) — a small file can still claim a huge pixel
 // count, which would freeze/OOM the GUI on decode.
 constexpr int kMaxDecodeDimension = 4096;
+// 4096 x 4096 x 4 bytes (ARGB32), i.e. the same worst case the dimension
+// guard above already allows through when size() is known.
+constexpr int kMaxDecodeAllocationMiB = 64;
 const QSize kThumbnailDecodeSize(96, 96);
 // Caps the preview decode target: the preview label grows with the dialog
 // (Expanding size policy), so decoding at its raw size could mean decoding
@@ -95,17 +98,22 @@ QImage decodeThumbnail(const QString& path, const QSize& targetSize)
     // Preserve aspect ratio rather than stretching into a square: when the
     // reader can report the source size up front, scale to the largest size
     // that fits targetSize (cheap, since e.g. JPEG decodes DCT-scaled at the
-    // computed size). When it can't, we still always set a scaled decode
-    // target before read() -- capped at kMaxDecodeDimension, mirroring the
-    // guard above that this path skips because dim is invalid -- so a huge
-    // or hostile source image can't force a full-resolution decode; the
-    // aspect ratio is then fixed up on the (already bounded) returned image.
-    reader.setScaledSize(dim.isValid() ? dim.scaled(cap, Qt::KeepAspectRatio)
-                                        : QSize(kMaxDecodeDimension, kMaxDecodeDimension));
+    // computed size).
+    if (dim.isValid()) {
+        reader.setScaledSize(dim.scaled(cap, Qt::KeepAspectRatio));
+        return reader.read();
+    }
+    // dim invalid: we can't precompute an aspect-correct scaled size, and
+    // requesting an arbitrary scaled decode target here wouldn't bound the
+    // expensive part anyway -- only JPEG's DCT scaling decodes directly at
+    // the requested size; every other format handler still fully decodes at
+    // native resolution first and downscales afterward. setAllocationLimit()
+    // aborts the decode (returning a null image) once it would exceed this
+    // budget, which is what actually guards against a decompression bomb
+    // when the pre-decode dimension check above can't run.
+    reader.setAllocationLimit(kMaxDecodeAllocationMiB);
     const QImage img = reader.read();
-    if (img.isNull() || dim.isValid())
-        return img;
-    return img.scaled(cap, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    return img.isNull() ? img : img.scaled(cap, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
 
 void updatePreview(QLabel* label, const QString& path)
