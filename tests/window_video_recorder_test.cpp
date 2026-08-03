@@ -57,20 +57,22 @@ int main(int argc, char** argv)
     AppSettings::instance().save();
     EXPECT_TRUE(tmp.isValid());
 
-    // Print supported media formats and codecs for diagnostics
-    qWarning() << "=== SUPPORTED FILE FORMATS ===";
-    for (auto format : QMediaFormat().supportedFileFormats(QMediaFormat::Encode)) {
-        qWarning() << "Format:" << format;
+    // Print supported media formats and codecs for diagnostics when requested
+    if (qEnvironmentVariableIsSet("AETHER_TEST_VERBOSE")) {
+        qWarning() << "=== SUPPORTED FILE FORMATS ===";
+        for (auto format : QMediaFormat().supportedFileFormats(QMediaFormat::Encode)) {
+            qWarning() << "Format:" << format;
+        }
+        qWarning() << "=== SUPPORTED VIDEO CODECS ===";
+        for (auto codec : QMediaFormat().supportedVideoCodecs(QMediaFormat::Encode)) {
+            qWarning() << "Video Codec:" << codec;
+        }
+        qWarning() << "=== SUPPORTED AUDIO CODECS ===";
+        for (auto codec : QMediaFormat().supportedAudioCodecs(QMediaFormat::Encode)) {
+            qWarning() << "Audio Codec:" << codec;
+        }
+        qWarning() << "==============================";
     }
-    qWarning() << "=== SUPPORTED VIDEO CODECS ===";
-    for (auto codec : QMediaFormat().supportedVideoCodecs(QMediaFormat::Encode)) {
-        qWarning() << "Video Codec:" << codec;
-    }
-    qWarning() << "=== SUPPORTED AUDIO CODECS ===";
-    for (auto codec : QMediaFormat().supportedAudioCodecs(QMediaFormat::Encode)) {
-        qWarning() << "Audio Codec:" << codec;
-    }
-    qWarning() << "==============================";
 
     // Skip (rather than fail) when this build of Qt Multimedia cannot encode
     // MP4/H.264/AAC — the assertions below require a working encoder, which is

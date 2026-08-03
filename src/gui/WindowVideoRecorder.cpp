@@ -570,7 +570,7 @@ void WindowVideoRecorder::captureFrame()
     qint64 ptsUs = m_recordTimer.isValid() ? (m_recordTimer.nsecsElapsed() / 1000) : (m_frameCount * 40000);
 
     // Keep audio stream synchronized with video timestamp to prevent FFmpeg muxer queue deadlocks
-    if (!m_hasRealAudio && static_cast<qint64>((m_audioSamplesSent * 1000000) / 24000) < ptsUs + 40000) {
+    while (!m_hasRealAudio && static_cast<qint64>((m_audioSamplesSent * 1000000) / 24000) < ptsUs + 40000) {
         sendSilentAudio(ptsUs);
     }
 
