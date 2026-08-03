@@ -13,8 +13,8 @@ enum class DssOutlinePipelineMode {
     SharedFillPipeline,
 };
 
-// The OpenGL backend reuses the fill program for ribbon outlines: its separate
-// program loses the mesh resources despite the same shader/SRB configuration.
+// The OpenGL backend reuses the fill program for ribbon outlines: live probes
+// showed flat/stale outlines with a separate, identically configured program.
 constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
     bool openGlBackend)
 {

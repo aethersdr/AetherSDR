@@ -12586,21 +12586,21 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssMeshFillPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_dssMeshFillPipeline->setTargetBlends({fillBlend});
 
-    // OpenGL reuses the fill program below for this unchanged ribbon VBO. The
-    // probe proved its separate program loses mesh resource bindings, while the
-    // fill program already sees the same shader inputs correctly.
-    QRhiGraphicsPipeline::TargetBlend lblend;
-    lblend.enable = true;
-    lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
-    lblend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-    lblend.srcAlpha = QRhiGraphicsPipeline::One;
-    lblend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    // OpenGL reuses the fill program below for this unchanged ribbon VBO: live
+    // probes showed flat/stale outlines only after switching to a separate,
+    // identically configured program. Keep the proven Metal/D3D11 path intact.
     if (!m_dssMeshFillPipeline->create()) {
-        qCWarning(lcGui) << "SpectrumWidget: dss_mesh pipeline create failed";
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh fill pipeline create failed";
         return;
     }
     if (m_dssOutlinePipelineMode
         == DssOutlinePipelineMode::DedicatedRibbonPipeline) {
+        QRhiGraphicsPipeline::TargetBlend lblend;
+        lblend.enable = true;
+        lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+        lblend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+        lblend.srcAlpha = QRhiGraphicsPipeline::One;
+        lblend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
         m_dssMeshLinePipeline = r->newGraphicsPipeline();
         m_dssMeshLinePipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
         m_dssMeshLinePipeline->setVertexInputLayout(layout);
@@ -12609,7 +12609,7 @@ void SpectrumWidget::initDssMeshPipeline()
         m_dssMeshLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
         m_dssMeshLinePipeline->setTargetBlends({lblend});
         if (!m_dssMeshLinePipeline->create()) {
-            qCWarning(lcGui) << "SpectrumWidget: dss_mesh pipeline create failed";
+            qCWarning(lcGui) << "SpectrumWidget: dss_mesh outline pipeline create failed";
             return;
         }
     }
@@ -14316,8 +14316,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             static_cast<float>(specContentW) * dpr,
             static_cast<float>(specRect.height()) * dpr);
         // Reuse the working OpenGL fill program for ribbon outlines. Its blend
-        // state matches the dedicated outline pipeline; only the program switch
-        // differed when the flat-probe rows exposed the binding failure.
+        // state matches the dedicated outline pipeline; live probes isolated
+        // the flat/stale rows to the separate-program path.
         cb->setGraphicsPipeline(outlinePipeline);
         cb->setShaderResources(m_dssMeshSrb);
         cb->setViewport(vp);
