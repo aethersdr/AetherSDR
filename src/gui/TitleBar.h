@@ -15,7 +15,6 @@ class QHBoxLayout;
 class QTimer;
 class QGraphicsOpacityEffect;
 class QPropertyAnimation;
-class QVariantAnimation;
 
 namespace AetherSDR {
 

@@ -18,6 +18,9 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QMediaFormat>
+#include <QCursor>
+#include <QEventLoop>
+#include <QPoint>
 #include <cstdio>
 
 using namespace AetherSDR;
