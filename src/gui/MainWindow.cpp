@@ -169,7 +169,6 @@
 #include <QScreen>
 #include <QTimer>
 #include <QDateTime>
-#include <QPropertyAnimation>
 #include <QIcon>
 #include <QCursor>
 #include <QKeyEvent>
@@ -7780,6 +7779,12 @@ void MainWindow::updateNr2Availability()
 
 void MainWindow::enableNr2WithWisdom()
 {
+    if (m_nr2WisdomDialog) {
+        m_nr2WisdomDialog->show();
+        m_nr2WisdomDialog->raise();
+        return;
+    }
+
     if (AudioEngine::needsWisdomGeneration()) {
         const auto cancelled = std::make_shared<std::atomic_bool>(false);
         const auto result = std::make_shared<std::atomic<int>>(
@@ -7789,9 +7794,11 @@ void MainWindow::enableNr2WithWisdom()
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
 
         auto* dlg = new QDialog(this);
+        dlg->setObjectName("nr2WisdomDialog");
         dlg->setWindowTitle("AetherSDR — FFTW Wisdom");
-        if (frameless)
+        if (frameless) {
             dlg->setWindowFlag(Qt::FramelessWindowHint, true);
+        }
         // Modeless — wisdom generation can take minutes; locking the
         // operator out of the radio for that whole window was a worse UX
         // than letting them keep operating while the worker thread runs
@@ -7805,6 +7812,9 @@ void MainWindow::enableNr2WithWisdom()
         // when the operator clicks back to the main UI.
         dlg->setWindowFlag(Qt::Tool, true);
         dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
+#ifdef Q_OS_MAC
+        dlg->setAttribute(Qt::WA_MacAlwaysShowToolWindow, true);
+#endif
         dlg->setMinimumWidth(500);
         AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: #050710; }"
             "QLabel { color: {{color.text.secondary}}; background: transparent; }"
@@ -7834,6 +7844,7 @@ void MainWindow::enableNr2WithWisdom()
         body->addWidget(label);
 
         auto* progress = new QProgressBar(content);
+        progress->setObjectName("nr2WisdomProgressBar");
         progress->setRange(0, 100);
         progress->setValue(0);
         body->addWidget(progress);
@@ -7847,18 +7858,13 @@ void MainWindow::enableNr2WithWisdom()
         body->addLayout(buttonRow);
         root->addWidget(content);
 
+        m_nr2WisdomDialog = dlg;
         dlg->show();
 
-        auto* breathe = new QPropertyAnimation(dlg, "windowOpacity", dlg);
-        breathe->setDuration(1500);
-        breathe->setStartValue(1.0);
-        breathe->setKeyValueAt(0.5, 0.55);
-        breathe->setEndValue(1.0);
-        breathe->setLoopCount(-1);
-
         const auto requestCancel = [cancelled, label, progress, cancelButton]() {
-            if (cancelled->exchange(true))
+            if (cancelled->exchange(true)) {
                 return;
+            }
             cancelButton->setEnabled(false);
             progress->setRange(0, 0);
             label->setText("Canceling FFTW wisdom generation...\n\n"
@@ -7868,23 +7874,24 @@ void MainWindow::enableNr2WithWisdom()
         connect(dlg, &QDialog::rejected, dlg, requestCancel);
 
         const QPointer<QDialog> dlgGuard(dlg);
-        auto* thread = QThread::create([cancelled, result, dlgGuard, breathe, label, progress]() {
+        auto* thread = QThread::create([cancelled, result, dlgGuard, label, progress]() {
             const auto wisdomResult = AudioEngine::generateWisdom(
-                [cancelled, dlgGuard, breathe, label, progress](int step, int total, const std::string& desc) {
-                    if (!dlgGuard)
+                [cancelled, dlgGuard, label, progress](int step, int total, const std::string& desc) {
+                    if (!dlgGuard) {
                         return;
-                    if (cancelled->load())
+                    }
+                    if (cancelled->load()) {
                         return;
+                    }
                     int pct = total > 0 ? (step * 100 / total) : 0;
                     QString d = QString::fromStdString(desc);
-                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, breathe, label, progress, pct, d]() {
-                        if (!dlgGuard)
+                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, label, progress, pct, d]() {
+                        if (!dlgGuard) {
                             return;
+                        }
                         if (!d.isEmpty()) {
                             label->setText(d + "\n\n"
                                 "This window will automatically close when wisdom generation is complete.");
-                            if (progress->value() >= 90 && breathe->state() != QAbstractAnimation::Running)
-                                breathe->start();
                         } else {
                             progress->setValue(pct);
                         }
@@ -7893,13 +7900,11 @@ void MainWindow::enableNr2WithWisdom()
                 [cancelled]() { return cancelled->load(); });
             result->store(static_cast<int>(wisdomResult));
         });
-        connect(thread, &QThread::finished, this, [this, dlg, breathe, progress, label, thread, result]() {
+        connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result]() {
             const auto wisdomResult =
                 static_cast<SpectralNR::WisdomResult>(result->load());
             const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
                             || wisdomResult == SpectralNR::WisdomResult::Generated;
-            breathe->stop();
-            dlg->setWindowOpacity(1.0);
             progress->setRange(0, 100);
             progress->setValue(ready ? 100 : 0);
 
@@ -7908,11 +7913,13 @@ void MainWindow::enableNr2WithWisdom()
                     ? "Wisdom generation canceled. Audio was left unchanged."
                     : "Wisdom generation failed. Audio was left unchanged.");
                 if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
-                    if (auto* w = a->widget())
+                    if (auto* w = a->widget()) {
                         w->syncFromEngine();
+                    }
                 }
-                if (m_dspDialog)
+                if (m_dspDialog) {
                     m_dspDialog->syncFromEngine();
+                }
                 statusBar()->showMessage("NR2 was not enabled; audio is unchanged", 4000);
                 QTimer::singleShot(800, this, [dlg, thread]() {
                     dlg->accept();

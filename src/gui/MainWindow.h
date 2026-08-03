@@ -77,6 +77,7 @@
 #include <QSplitter>
 #include <QPointer>
 
+class QDialog;
 class QMessageBox;
 #include <QLabel>
 #include <QList>
@@ -1295,6 +1296,7 @@ private:
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<ContributeDialog> m_contributeDialog;
     QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
 #endif
