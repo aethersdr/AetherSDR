@@ -2,6 +2,7 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/FramelessMessageBox.h"
 #include "gui/SliceColorManager.h"
+#include "gui/recording/MediaBackendProbe.h"
 #include "core/AppSettings.h"
 #include "core/SettingsBootstrap.h"
 #include "core/SettingsCredentialPolicy.h"
@@ -232,6 +233,10 @@ int main(int argc, char* argv[])
     }
 
     // ── Pre-QApplication environment setup ────────────────────────────────
+    // QT_MEDIA_BACKEND is set AFTER QApplication exists — see below. Probing
+    // plugin paths before QCoreApplication is constructed misses app-local
+    // libraryPaths() and can leave Windows on the WMF backend that cannot
+    // drive QVideoFrameInput/QAudioBufferInput.
 
     // AETHER_NO_GPU: runtime toggle to force software OpenGL rendering.
     // Unlike the compile-time AETHER_GPU_SPECTRUM CMake flag, this works on
@@ -349,6 +354,21 @@ int main(int argc, char* argv[])
                    "handler after GUI initialization; refusing to continue.\n",
                    stderr);
         return EXIT_FAILURE;
+    }
+#endif
+
+    // Prefer the FFmpeg backend on Windows/macOS: it is the only one that
+    // supports the custom video/audio capture streams the window recorder needs
+    // (Qt 6.8+). Must run after QApplication so libraryPaths() includes the
+    // app-local plugin roots deployqt/qt.conf install. Only set when the
+    // plugin is actually present — forcing it unconditionally made
+    // WindowVideoRecorder's capability check observe nothing but this line,
+    // so the native WMF/AVFoundation writers became unreachable on machines
+    // that need them. Still before any QMedia* object is constructed.
+#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
+    if (!qEnvironmentVariableIsSet("QT_MEDIA_BACKEND")
+        && AetherSDR::ffmpegMediaBackendAvailable()) {
+        qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     }
 #endif
 

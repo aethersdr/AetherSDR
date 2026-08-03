@@ -26,6 +26,8 @@
 #include <QAbstractAnimation>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
+#include <QVariantAnimation>
+#include <QColor>
 #include <QWindow>
 #include <QMenu>
 #include <QNetworkAccessManager>
@@ -282,6 +284,50 @@ TitleBar::TitleBar(QWidget* parent)
         if (m_txTimerOpacity->opacity() <= 0.01)
             m_txTimerLabel->setVisible(false);
     });
+
+    // Record toggle
+    m_recordPulseAnim = new QVariantAnimation(this);
+    m_recordPulseAnim->setDuration(1200);
+    m_recordPulseAnim->setStartValue(QColor("#601a1a"));
+    m_recordPulseAnim->setKeyValueAt(0.5, QColor("#b82828"));
+    m_recordPulseAnim->setEndValue(QColor("#601a1a"));
+    m_recordPulseAnim->setEasingCurve(QEasingCurve::InOutSine);
+    m_recordPulseAnim->setLoopCount(-1);
+
+    m_recordBtn = new QPushButton("🎬 REC");
+    m_recordBtn->setCheckable(true);
+    m_recordBtn->setFixedHeight(22);
+    m_recordBtn->setFixedWidth(70);
+    m_recordBtn->setAccessibleName("Record");
+    m_recordBtn->setAccessibleDescription("Toggle recording of the AetherSDR window");
+    m_recordBtn->setToolTip("Record the AetherSDR window to an MP4 video file");
+
+    connect(m_recordPulseAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+        QColor color = value.value<QColor>();
+        if (m_recordBtn && m_recordBtn->isChecked()) {
+            QString style = QString(
+                "QPushButton { background: %1; color: #ff8080; border: 1px solid #a02020; "
+                "border-radius: 3px; font-size: 10px; font-weight: bold; }"
+                "QPushButton:hover { background: #702020; }"
+            ).arg(color.name());
+            m_recordBtn->setStyleSheet(style);
+        }
+    });
+
+    updateRecordStyle();
+
+    connect(m_recordBtn, &QPushButton::toggled, this, [this](bool on) {
+        updateRecordStyle();
+        emit recordWindowToggled(on);
+    });
+    m_hbox->addWidget(m_recordBtn);
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+    m_recordBtn->setVisible(false);
+    m_recordBtn->setEnabled(false);
+#endif
+
+    m_hbox->addSpacing(6);
 
     // PC Audio toggle
     m_pcBtn = new QPushButton("PC Audio");
@@ -832,6 +878,14 @@ void TitleBar::setPcAudioEnabled(bool on)
           "QPushButton:hover { background: #243848; }");
 }
 
+void TitleBar::setRecordWindowEnabled(bool on)
+{
+    if (!m_recordBtn) return;
+    QSignalBlocker b(m_recordBtn);
+    m_recordBtn->setChecked(on);
+    updateRecordStyle();
+}
+
 void TitleBar::setPcAudioDevices(const QString& inputDevice, const QString& outputDevice)
 {
     m_pcAudioInputDevice = inputDevice.trimmed();
@@ -1282,6 +1336,7 @@ void TitleBar::setMinimalMode(bool on)
     // Hide non-essential controls so status badges fit in the narrow strip.
     if (m_menuBar) m_menuBar->setVisible(!on);
     if (m_appNameLabel) m_appNameLabel->setVisible(!on);
+    if (m_recordBtn) m_recordBtn->setVisible(!on);
     m_pcBtn->setVisible(!on);
     m_speakerBtn->setVisible(!on);
     m_headphoneBtn->setVisible(!on);
@@ -1300,4 +1355,32 @@ void TitleBar::setMinimalMode(bool on)
     updateMaximizeIcon();
 }
 
+void TitleBar::updateRecordStyle()
+{
+    if (!m_recordBtn) {
+        return;
+    }
+    if (m_recordBtn->isChecked()) {
+        if (m_recordPulseAnim) {
+            if (m_recordPulseAnim->state() != QAbstractAnimation::Running) {
+                m_recordPulseAnim->start();
+            }
+        } else {
+            m_recordBtn->setStyleSheet(
+                "QPushButton { background: #601a1a; color: #ff8080; border: 1px solid #a02020; "
+                "border-radius: 3px; font-size: 10px; font-weight: bold; }"
+                "QPushButton:hover { background: #702020; }");
+        }
+    } else {
+        if (m_recordPulseAnim) {
+            m_recordPulseAnim->stop();
+        }
+        m_recordBtn->setStyleSheet(
+            "QPushButton { background: #1a2a3a; color: #607080; border: 1px solid #304050; "
+            "border-radius: 3px; font-size: 10px; font-weight: bold; }"
+            "QPushButton:hover { background: #243848; }");
+    }
+}
+
 } // namespace AetherSDR
+

@@ -34,6 +34,7 @@
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
+#include "gui/WindowVideoRecorder.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/AudioOutputRouter.h"
 #include "core/DxClusterClient.h"
@@ -949,6 +950,14 @@ private:
     void showRecorderNotice(const QString& key,
                             const QString& title,
                             const QString& text);
+    WindowVideoRecorder* m_windowVideoRecorder{nullptr};
+    bool              m_waitingForRecorderToStop{false};
+    bool              m_recorderCloseForced{false};
+    // Window video recording — MainWindow_Recording.cpp
+    void wireWindowVideoRecorder();
+    void onRecordWindowToggled(bool on);
+    // True when close() must be deferred until the encoder has finalized.
+    bool deferCloseForWindowRecorder();
     std::unique_ptr<AutomationServer> m_automation;  // agent bridge (#3646); nullptr when off
     ClientPuduMonitor* m_finalMonitor{nullptr};
     AudioOutputRouter* m_outputRouter{nullptr};   // registry for output-following sinks (#3306)

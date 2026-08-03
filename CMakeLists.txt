@@ -841,6 +841,10 @@ add_subdirectory(third_party/QGeoView/lib EXCLUDE_FROM_ALL)
 set(GUI_SOURCES
     src/gui/Contribute.cpp
     src/gui/MainWindow.cpp
+    src/gui/WindowVideoRecorder.cpp
+    src/gui/MainWindow_Recording.cpp
+    src/gui/recording/INativeVideoWriter.h
+    src/gui/recording/MediaBackendProbe.h
     src/gui/MainWindowHelpers.cpp
     src/gui/WindowGeometryRestore.cpp
     src/gui/MainWindow_Controllers.cpp
@@ -1035,6 +1039,21 @@ set(GUI_SOURCES
     src/gui/TokenEditorWidget.cpp
     src/gui/CompactColorPicker.cpp
 )
+
+# Native Video Recording Fallback Sources list
+if(WIN32)
+    set(WMF_LIBRARIES mfreadwrite mfplat mfuuid)
+    list(APPEND GUI_SOURCES
+        src/gui/recording/WmfVideoWriter.cpp
+        src/gui/recording/WmfVideoWriter.h
+    )
+elseif(APPLE)
+    enable_language(OBJCXX)
+    list(APPEND GUI_SOURCES
+        src/gui/recording/AvfVideoWriter.mm
+        src/gui/recording/AvfVideoWriter.h
+    )
+endif()
 
 # Bundled RNNoise (Mozilla/Xiph BSD-3) — client-side neural noise suppression
 set(RNNOISE_DIR ${CMAKE_SOURCE_DIR}/third_party/rnnoise)
@@ -1290,7 +1309,7 @@ add_library(aethercore STATIC
     ${RADE_SOURCES}
     ${SPECBLEACH_SOURCES}
 )
-target_link_libraries(aethercore PRIVATE aether::wdsp)
+target_link_libraries(aethercore PRIVATE aether::wdsp ${WMF_LIBRARIES})
 
 add_executable(AetherSDR
     src/main.cpp
@@ -1675,6 +1694,22 @@ else()
     message(STATUS "ASR: disabled (-DENABLE_ASR=OFF)")
 endif()
 # ----------------------------------------------------------------------------
+
+# Native Video Recording Fallback Libraries
+if(WIN32)
+    target_link_libraries(AetherSDR PRIVATE ${WMF_LIBRARIES} ole32)
+elseif(APPLE)
+    find_library(COCOA_LIBRARY Cocoa REQUIRED)
+    find_library(AVFOUNDATION_LIBRARY AVFoundation REQUIRED)
+    find_library(COREMEDIA_LIBRARY CoreMedia REQUIRED)
+    find_library(COREVIDEO_LIBRARY CoreVideo REQUIRED)
+    target_link_libraries(AetherSDR PRIVATE 
+        ${COCOA_LIBRARY} 
+        ${AVFOUNDATION_LIBRARY} 
+        ${COREMEDIA_LIBRARY} 
+        ${COREVIDEO_LIBRARY}
+    )
+endif()
 
 if (USE_SYSTEM_ZLIB)
     target_link_libraries(aethercore PRIVATE PkgConfig::zlib)      # core: ZipArchive
@@ -3582,6 +3617,38 @@ target_include_directories(qso_recorder_pc_audio_guard_test PRIVATE
 )
 target_link_libraries(qso_recorder_pc_audio_guard_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_pc_audio_guard_test COMMAND qso_recorder_pc_audio_guard_test)
+
+# Unit test for WindowVideoRecorder
+add_executable(window_video_recorder_test
+    tests/window_video_recorder_test.cpp
+    src/gui/WindowVideoRecorder.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+if(WIN32)
+    target_sources(window_video_recorder_test PRIVATE src/gui/recording/WmfVideoWriter.cpp)
+    target_link_libraries(window_video_recorder_test PRIVATE ${WMF_LIBRARIES} ole32)
+elseif(APPLE)
+    target_sources(window_video_recorder_test PRIVATE src/gui/recording/AvfVideoWriter.mm)
+    target_link_libraries(window_video_recorder_test PRIVATE "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
+endif()
+target_include_directories(window_video_recorder_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(window_video_recorder_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Multimedia Qt6::Test)
+add_test(NAME window_video_recorder_test COMMAND window_video_recorder_test)
+# Headless CI has no display, and no MP4/H.264/AAC encoder is guaranteed —
+# the test returns 77 (skip) when Qt Multimedia cannot encode.
+set_tests_properties(window_video_recorder_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    SKIP_RETURN_CODE 77)
 
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
@@ -5621,6 +5688,7 @@ endif()
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    window_video_recorder_test
     slice_label_test
     ulanzi_mapping_migration_test
     theme_manager_test

@@ -28,6 +28,7 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | `MainWindow_Spots.cpp` | 2b | `wireSpotSubsystem()` — DX Cluster / RBN / WSJT-X / SpotCollector / POTA clients and their UI plumbing. |
 | `MainWindow_Session.cpp` | 2c | `wireDiscovery()` / `wireRadioModel()` / `wirePanLifecycle()` — LAN + SmartLink discovery, heartbeat/disconnect detection, connection-state routing, and pan-stream lifecycle: the wiring that constitutes "a connected radio". Seed of the future `RadioSession` aggregate (#3445). |
 | `MainWindow_DspApplets.cpp` | 2d | `wirePooDooTiles()` + `wireDspApplets()` — PooDoo RX status tiles and the client-DSP applet family (Compressor / Gate / De-esser / Tube / Reverb / AetherDSP / PUDU TX+RX) plus TX signal-chain wiring. |
+| `MainWindow_Recording.cpp` | 2e | `wireWindowVideoRecorder()` / `onRecordWindowToggled()` / `deferCloseForWindowRecorder()` — `WindowVideoRecorder` creation, its TitleBar + status-bar state sync, RX/TX audio taps, and the close-while-recording finalize handshake (including the watchdog). |
 | `MainWindowHelpers.{h,cpp}` | 0 | Stateless formatters / value transforms with **no** `MainWindow` dependency (tooltip builders, spot-ID math, client-list parsing, small pixmap painters). |
 | `MainWindowShortcutState.h` | 1b | Internal shared shortcut state — **not** a public API; only `MainWindow*.cpp` TUs include it. |
 
@@ -39,6 +40,7 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | Wiring a newly-created slice / pan / VFO / DSP *widget* to the UI | `MainWindow_Wiring.cpp` |
 | Discovery / connection-state / pan-stream-lifecycle wiring | `MainWindow_Session.cpp` (not `_Wiring`) |
 | Client-DSP applet or PooDoo-tile wiring | `MainWindow_DspApplets.cpp` (not `_Wiring`) |
+| Window video-recording wiring or its close/finalize handshake | `MainWindow_Recording.cpp` |
 | A new menu item or action | `MainWindow_Menus.cpp` |
 | A new keyboard shortcut | `MainWindow_Shortcuts.cpp` |
 | A stateless formatter/helper with no `MainWindow` dependency | `MainWindowHelpers.{h,cpp}` |
