@@ -15,10 +15,13 @@
 #include <QPersistentModelIndex>
 #include <QPixmap>
 #include <QPixmapCache>
+#include <QResizeEvent>
 #include <QSet>
 #include <QSize>
+#include <QSizePolicy>
 #include <QStringList>
 #include <QStyle>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
 #include <QtConcurrent/QtConcurrentRun>
@@ -109,6 +112,42 @@ void updatePreview(QLabel* label, const QString& path)
     }
     label->setPixmap(QPixmap::fromImage(img));
 }
+
+// Preview pane (#4717): grows with the dialog instead of staying pinned at
+// its initial size, matching the platform file picker's resizable preview.
+// Re-decoding at the new size on every intermediate frame of a live resize
+// drag would stutter, so resizeEvent debounces via a timer rather than
+// refreshing immediately; setPreviewPath() (a selection change, not a
+// resize) still refreshes right away.
+class PreviewLabel : public QLabel
+{
+public:
+    explicit PreviewLabel(QWidget* parent)
+        : QLabel(parent)
+    {
+        m_refreshTimer.setSingleShot(true);
+        m_refreshTimer.setInterval(50);
+        connect(&m_refreshTimer, &QTimer::timeout, this, [this] { updatePreview(this, m_path); });
+    }
+
+    void setPreviewPath(const QString& path)
+    {
+        m_path = path;
+        updatePreview(this, m_path);
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QLabel::resizeEvent(event);
+        if (!m_path.isEmpty())
+            m_refreshTimer.start();
+    }
+
+private:
+    QString m_path;
+    QTimer m_refreshTimer;
+};
 
 // Wraps QFileDialog's internal QFileSystemModel to supply real image
 // thumbnails for Qt::DecorationRole instead of the generic per-filetype
@@ -220,7 +259,7 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
     auto* grid = qobject_cast<QGridLayout*>(dlg.layout());
     auto* listView = dlg.findChild<QListView*>(QStringLiteral("listView"));
     auto* treeView = dlg.findChild<QTreeView*>(QStringLiteral("treeView"));
-    QLabel* previewLabel = nullptr;
+    PreviewLabel* previewLabel = nullptr;
 
     if (grid && listView) {
         // Deliberately not touching QFileDialog's own view/flow/layout
@@ -284,14 +323,21 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         viewButtons->addButton(smallIconsButton);
         viewButtons->addButton(thumbButton);
 
-        previewLabel = new QLabel(&dlg);
+        previewLabel = new PreviewLabel(&dlg);
         previewLabel->setObjectName(QStringLiteral("imageDialogPreviewLabel"));
-        previewLabel->setFixedSize(180, 180);
+        previewLabel->setMinimumSize(180, 180);
+        previewLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         previewLabel->setAlignment(Qt::AlignCenter);
         previewLabel->setFrameShape(QFrame::StyledPanel);
         previewLabel->setScaledContents(false);
+        const int previewColumn = grid->columnCount();
         const int previewRowSpan = std::max(1, grid->rowCount() - 1);
-        grid->addWidget(previewLabel, 1, grid->columnCount(), previewRowSpan, 1, Qt::AlignTop);
+        // No alignment argument: passing one (e.g. the old Qt::AlignTop)
+        // pins the widget to its size hint within the cell instead of
+        // stretching it to fill the cell, which is what let the dialog grow
+        // around it without the preview itself growing.
+        grid->addWidget(previewLabel, 1, previewColumn, previewRowSpan, 1);
+        grid->setColumnStretch(previewColumn, 1);
 
         auto applyThumbnailMode = [listView, treeView, proxy, defaultIconSize](bool large) {
             proxy->setShowThumbnails(large);
@@ -324,7 +370,7 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
 
     if (previewLabel) {
         QObject::connect(&dlg, &QFileDialog::currentChanged, &dlg,
-                          [previewLabel](const QString& path) { updatePreview(previewLabel, path); });
+                          [previewLabel](const QString& path) { previewLabel->setPreviewPath(path); });
     }
 
     if (dlg.exec() != QDialog::Accepted)
