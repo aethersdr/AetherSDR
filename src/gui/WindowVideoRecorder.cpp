@@ -567,7 +567,9 @@ void WindowVideoRecorder::captureFrame()
 
     // Keep audio stream synchronized with video timestamp to prevent FFmpeg muxer queue deadlocks
     while (!m_hasRealAudio && static_cast<qint64>((m_audioSamplesSent * 1000000) / 24000) < ptsUs + 40000) {
-        sendSilentAudio(ptsUs);
+        if (!sendSilentAudio(ptsUs)) {
+            break;
+        }
     }
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
@@ -709,12 +711,12 @@ QByteArray float32ToInt16(const QByteArray& pcm)
 
 } // namespace
 
-void WindowVideoRecorder::sendSilentAudio(qint64 startTimeUs)
+bool WindowVideoRecorder::sendSilentAudio(qint64 startTimeUs)
 {
     Q_UNUSED(startTimeUs);
     // Provide 40ms of silent audio: 24000 samples/sec * 4 bytes/sample (stereo int16) * 0.040s = 3840 bytes
     QByteArray silentBytes(3840, 0);
-    sendAudioData(silentBytes);
+    return sendAudioData(silentBytes);
 }
 
 void WindowVideoRecorder::feedRxAudio(const QByteArray& pcm)
@@ -741,15 +743,15 @@ void WindowVideoRecorder::onMoxChanged(bool mox)
     m_transmitting = mox;
 }
 
-void WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
+bool WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
 {
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (!m_recording || (!m_useFallback && !m_audioBufferInput)) {
-        return;
+        return false;
     }
 #else
     if (!m_recording || !m_audioBufferInput) {
-        return;
+        return false;
     }
 #endif
 
@@ -772,9 +774,11 @@ void WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
-        m_fallbackWriter->writeAudioSamples(int16Stereo, ptsUs);
-        m_audioSamplesSent += numFrames;
-        return;
+        bool ok = m_fallbackWriter->writeAudioSamples(int16Stereo, ptsUs);
+        if (ok) {
+            m_audioSamplesSent += numFrames;
+        }
+        return ok;
     }
 #endif
 
@@ -785,7 +789,9 @@ void WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
     // actually written.
     if (buffer.isValid() && m_audioBufferInput->sendAudioBuffer(buffer)) {
         m_audioSamplesSent += numFrames;
+        return true;
     }
+    return false;
 }
 
 QString WindowVideoRecorder::buildFilename() const

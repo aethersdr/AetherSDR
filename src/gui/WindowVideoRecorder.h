@@ -56,7 +56,7 @@ signals:
 
 private slots:
     void captureFrame();
-    void sendSilentAudio(qint64 startTimeUs);
+    bool sendSilentAudio(qint64 startTimeUs);
 
 private:
     QString buildFilename() const;
@@ -88,7 +88,7 @@ private:
     bool m_transmitting{false};
     bool m_hasRealAudio{false};
     quint64 m_audioSamplesSent{0};
-    void sendAudioData(const QByteArray& int16Stereo);
+    bool sendAudioData(const QByteArray& int16Stereo);
     void initQtMultimediaPipeline();
     void cleanupQtInputs();
     void finalizeStop();
