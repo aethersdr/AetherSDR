@@ -358,6 +358,13 @@ bool WindowVideoRecorder::startRecording()
 
     m_frameCount = 0;
 
+    m_rhiWidgetsCache.clear();
+    if (m_mainWindow) {
+        for (auto* rhi : m_mainWindow->findChildren<QRhiWidget*>()) {
+            m_rhiWidgetsCache.append(rhi);
+        }
+    }
+
     if (m_slice) {
         m_freqMhz = m_slice->frequency();
         m_mode = m_slice->mode();
@@ -437,11 +444,6 @@ bool WindowVideoRecorder::startRecording()
         emit recordingError(QStringLiteral("Failed to initialize Qt video recording engine."));
         return false;
     }
-
-    // Use standard Format_BGRA8888 for video frame input to let Qt handle conversions
-    QVideoFrameFormat videoFormat(QSize(m_videoWidth, m_videoHeight), QVideoFrameFormat::Format_BGRA8888);
-    videoFormat.setStreamFrameRate(25.0);
-    qCDebug(lcWindowVideoRecorder) << "Using BGRA8888 standard video format for recording";
 
     cleanupQtInputs();
 
@@ -584,21 +586,23 @@ void WindowVideoRecorder::captureFrame()
     m_mainWindow->render(&img);
 
     // Composite any GPU-accelerated QRhiWidgets (such as SpectrumWidget) on top of the CPU render
-    for (auto* rhi : m_mainWindow->findChildren<QRhiWidget*>()) {
-        if (rhi->isVisible()) {
-            QImage childImg = rhi->grabFramebuffer();
-            if (!childImg.isNull()) {
-                QPoint pos = rhi->mapTo(m_mainWindow, QPoint(0, 0));
-                QPainter painter(&img);
-                painter.drawImage(pos, childImg);
-            }
+    for (const auto& widget : m_rhiWidgetsCache) {
+        if (widget && widget->isVisible()) {
+            if (auto* rhi = qobject_cast<QRhiWidget*>(widget.data())) {
+                QImage childImg = rhi->grabFramebuffer();
+                if (!childImg.isNull()) {
+                    QPoint pos = rhi->mapTo(m_mainWindow, QPoint(0, 0));
+                    QPainter painter(&img);
+                    painter.drawImage(pos, childImg);
+                }
 
-            // Render standard child widgets of the QRhiWidget on top
-            for (QObject* obj : rhi->children()) {
-                if (auto* w = qobject_cast<QWidget*>(obj)) {
-                    if (w->isVisible() && !w->inherits("QRhiWidget")) {
-                        QPoint pos = w->mapTo(m_mainWindow, QPoint(0, 0));
-                        w->render(&img, pos);
+                // Render standard child widgets of the QRhiWidget on top
+                for (QObject* obj : rhi->children()) {
+                    if (auto* w = qobject_cast<QWidget*>(obj)) {
+                        if (w->isVisible() && !w->inherits("QRhiWidget")) {
+                            QPoint pos = w->mapTo(m_mainWindow, QPoint(0, 0));
+                            w->render(&img, pos);
+                        }
                     }
                 }
             }

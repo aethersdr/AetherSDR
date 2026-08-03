@@ -7,6 +7,8 @@
 #include <QTimer>
 #include <QImage>
 #include <QElapsedTimer>
+#include <QPointer>
+#include <QList>
 
 #include <memory>
 
@@ -100,9 +102,11 @@ private:
     int m_readySignalCount{0};
 
     bool m_useFallback{false};
+
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     std::unique_ptr<INativeVideoWriter> m_fallbackWriter;
 #endif
+    QList<QPointer<QWidget>> m_rhiWidgetsCache;
 };
 
 } // namespace AetherSDR

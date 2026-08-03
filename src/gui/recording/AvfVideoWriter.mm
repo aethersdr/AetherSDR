@@ -56,7 +56,7 @@ AvfVideoWriter::~AvfVideoWriter()
 
 bool AvfVideoWriter::open(const QString& filePath, int width, int height, int fps)
 {
-    qWarning() << "[AvfVideoWriter] open() called:" << filePath
+    qInfo() << "[AvfVideoWriter] open() called:" << filePath
                << "width:" << width << "height:" << height << "fps:" << fps;
     AVFWriterObjC* wrapper = asWriter(m_opaqueWriter);
     if (!wrapper) {
@@ -151,7 +151,7 @@ bool AvfVideoWriter::open(const QString& filePath, int width, int height, int fp
     [wrapper.writer startSessionAtSourceTime:kCMTimeZero];
 
     wrapper.initialized = YES;
-    qWarning() << "[AvfVideoWriter] open() SUCCEEDED!";
+    qInfo() << "[AvfVideoWriter] open() SUCCEEDED!";
     return true;
 }
 
