@@ -7004,20 +7004,28 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     // docs/architecture/spe-expert-amplifier-design.md for the design note.
     if (m_spe) {
         const int row = 6;
+        auto& speTheme = AetherSDR::ThemeManager::instance();
+        // Themed (token) styles rather than the ACOM row's raw-hex ones —
+        // the hardcoded-colour ratchet gates new hex references, and the
+        // tokens re-resolve on theme change for free.
         static const QString kComboStyle =
-            "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
-            "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
             "QComboBox::drop-down { border: none; }";
+        static const QString kStatusOkStyle =
+            "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        static const QString kStatusIdleStyle =
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
 
         auto* devWidget = new QWidget;
         auto* devLay = new QVBoxLayout(devWidget);
         devLay->setContentsMargins(0, 0, 0, 0);
         devLay->setSpacing(2);
         auto* devLbl = new QLabel("SPE Expert Amplifier");
-        devLbl->setStyleSheet(kLabelStyle);
+        speTheme.applyStyleSheet(devLbl, kLabelStyle);
         devLay->addWidget(devLbl);
         auto* modeCombo = new QComboBox;
-        modeCombo->setStyleSheet(kComboStyle);
+        speTheme.applyStyleSheet(modeCombo, kComboStyle);
 #ifdef HAVE_SERIALPORT
         modeCombo->addItem("Serial", "Serial");
 #endif
@@ -7056,10 +7064,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             auto* lay = new QHBoxLayout(serialPage);
             lay->setContentsMargins(0, 0, 0, 0);
             serialCombo = new QComboBox;
-            serialCombo->setStyleSheet(kComboStyle);
+            speTheme.applyStyleSheet(serialCombo, kComboStyle);
             serialCustomEdit = new QLineEdit;
             serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
-            serialCustomEdit->setStyleSheet(kEditStyle);
+            speTheme.applyStyleSheet(serialCustomEdit, kEditStyle);
             const QString savedSerialPort = PeripheralSettings::deviceString("SpeExpert", "SerialPort");
             populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
             serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
@@ -7077,7 +7085,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         netLay->setContentsMargins(0, 0, 0, 0);
         auto* netIpEdit = new QLineEdit;
         netIpEdit->setPlaceholderText("ser2net host — e.g. 192.168.1.52");
-        netIpEdit->setStyleSheet(kEditStyle);
+        speTheme.applyStyleSheet(netIpEdit, kEditStyle);
         netIpEdit->setToolTip(speSer2netTip);
         netIpEdit->setText(PeripheralSettings::deviceString("SpeExpert", "ManualIp"));
         netLay->addWidget(netIpEdit);
@@ -7092,7 +7100,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 #ifdef HAVE_SERIALPORT
         {
             auto* fixedLbl = new QLabel("115200 8N1");
-            fixedLbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+            speTheme.applyStyleSheet(fixedLbl, kStatusIdleStyle);
             serialBaudIdx = portStack->addWidget(fixedLbl);
         }
 #endif
@@ -7136,29 +7144,28 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
 
         auto* statusLbl = new QLabel(m_spe->isConnected() ? "Connected" : "Not connected");
-        statusLbl->setStyleSheet(m_spe->isConnected()
-            ? "QLabel { color: #00e060; font-size: 11px; }"
-            : "QLabel { color: #8aa8c0; font-size: 11px; }");
+        speTheme.applyStyleSheet(statusLbl,
+            m_spe->isConnected() ? kStatusOkStyle : kStatusIdleStyle);
         grid->addWidget(statusLbl, row, 4);
 
         auto* speBtn = new QPushButton(m_spe->isConnected() ? "Disconnect" : "Connect");
-        speBtn->setStyleSheet(kBtnStyle);
+        speTheme.applyStyleSheet(speBtn, kBtnStyle);
         grid->addWidget(speBtn, row, 3);
 
         auto updateSpeState = [this, speBtn, statusLbl]() {
             const bool conn = m_spe->isConnected();
             speBtn->setText(conn ? "Disconnect" : "Connect");
             statusLbl->setText(conn ? "Connected" : "Not connected");
-            statusLbl->setStyleSheet(conn
-                ? "QLabel { color: #00e060; font-size: 11px; }"
-                : "QLabel { color: #8aa8c0; font-size: 11px; }");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                conn ? kStatusOkStyle : kStatusIdleStyle);
         };
         connect(m_spe, &SpeConnection::connected, this, updateSpeState);
         connect(m_spe, &SpeConnection::disconnected, this, updateSpeState);
         connect(m_spe, &SpeConnection::connectionFailed, this,
                 [statusLbl](const QString& err) {
             statusLbl->setText("Error: " + err);
-            statusLbl->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
         });
 
         connect(speBtn, &QPushButton::clicked, this, [=, this]() {

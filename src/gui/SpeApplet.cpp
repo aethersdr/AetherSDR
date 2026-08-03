@@ -1,4 +1,5 @@
 #include "SpeApplet.h"
+#include "AmpAppletStyles.h"
 #include "HGauge.h"
 #include "core/ThemeManager.h"
 #include "MeterSmoother.h"
@@ -27,60 +28,35 @@ QVector<HGauge::Tick> evenTicks(float max)
 // Left-side label+value, fixed width so all gauge rows line up — matches
 // AcomApplet/AmpApplet's makeValueLabel convention. Slightly wider than
 // ACOM's 46px: the ATU row label ("ATU  1.2:1") is the longest in the family.
+// Themed rather than raw-styled so the colour re-resolves on theme change
+// (and stays off the hardcoded-colour ratchet).
 QLabel* makeValueLabel(QWidget* parent)
 {
     auto* lbl = new QLabel(parent);
     lbl->setFixedWidth(52);
     lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl,
+        "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }");
     return lbl;
 }
 
-enum class PillState { OperateTx, OperateRx, Standby, Unknown };
-
-QString pillStyle(PillState state)
+QString pillText(AmpPillState state)
 {
     switch (state) {
-        case PillState::OperateTx:
-            return "QLabel { background: #3a1418; color: #ff8080; border: 1px solid #ff4d4d; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
-        case PillState::OperateRx:
-            return "QLabel { background: #0f2a1c; color: #6be899; border: 1px solid #4dd87a; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
-        case PillState::Standby:
-            return "QLabel { background: #12222e; color: #7fc4dc; border: 1px solid #2a5a70; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
-        default:
-            return "QLabel { background: #1c222a; color: #6b7684; border: 1px solid #303a44; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
+        case AmpPillState::OperateTx: return QStringLiteral("OPR · TX");
+        case AmpPillState::OperateRx: return QStringLiteral("OPR · RX");
+        case AmpPillState::Standby:   return QStringLiteral("STANDBY");
+        default:                      return QStringLiteral("—");
     }
 }
 
-QString pillText(PillState state)
-{
-    switch (state) {
-        case PillState::OperateTx: return QStringLiteral("OPR · TX");
-        case PillState::OperateRx: return QStringLiteral("OPR · RX");
-        case PillState::Standby:   return QStringLiteral("STANDBY");
-        default:                   return QStringLiteral("—");
-    }
-}
-
-QString activeBtnStyle(const QString& bg, const QString& border)
-{
-    return QStringLiteral(
-        "QPushButton { background: %1; border: 1px solid %2; border-radius: 3px; "
-        "color: {{color.text.primary}}; font-size: 10px; font-weight: bold; } "
-        "QPushButton:hover { background: %1; }").arg(bg, border);
-}
-
+// The family's shared neutral button, plus SPE's disabled tint — most of
+// this applet's keys disable while the amp is silent (updateCommandsEnabled),
+// which the push-driven ACOM never needs.
 QString neutralBtnStyle()
 {
-    return QStringLiteral(
-        "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"
-        "QPushButton:disabled { color: #3a4552; }");
+    return ampNeutralBtnStyle()
+        + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; }");
 }
 
 }  // namespace
@@ -94,12 +70,15 @@ SpeApplet::SpeApplet(QWidget* parent)
     vbox->setSpacing(2);
 
     // ── Header: source (connection status) + model + status pill (mode) ───
+    auto& theme = AetherSDR::ThemeManager::instance();
     m_sourceLabel = new QLabel("● —", this);
-    m_sourceLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 9px; }");
+    theme.applyStyleSheet(m_sourceLabel,
+        "QLabel { color: {{color.accent}}; font-size: 9px; }");
     m_modelLabel = new QLabel(this);
-    m_modelLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 9px; font-weight: bold; }");
-    m_statusPill = new QLabel(pillText(PillState::Unknown), this);
-    m_statusPill->setStyleSheet(pillStyle(PillState::Unknown));
+    theme.applyStyleSheet(m_modelLabel,
+        "QLabel { color: {{color.text.secondary}}; font-size: 9px; font-weight: bold; }");
+    m_statusPill = new QLabel(pillText(AmpPillState::Neutral), this);
+    theme.applyStyleSheet(m_statusPill, ampPillStyle(AmpPillState::Neutral));
     m_statusPill->setAlignment(Qt::AlignCenter);
     auto* headerRow = new QHBoxLayout;
     headerRow->addWidget(m_sourceLabel);
@@ -151,27 +130,27 @@ SpeApplet::SpeApplet(QWidget* parent)
     vbox->addSpacing(4);
 
     // ── Info grid: temp / V / I, then band / antenna / input·level ─────────
-    static const char* kTelStyle = "QLabel { color: #c8d8e8; font-size: 10px; }";
+    static const char* kTelStyle = "QLabel { color: {{color.text.primary}}; font-size: 10px; }";
 
     m_tempLabel = new QLabel("TEMP  —", this);
-    m_tempLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_tempLabel, kTelStyle);
     // The amplifier reports temperature in whichever unit its own display is
     // configured for, without indicating which on the wire (spec §5) — so
     // the readout carries a bare degree sign and no C/F toggle.
     m_tempLabel->setToolTip(tr("Heatsink temperature, in the unit the amplifier's"
                                " own display is configured for"));
     m_voltLabel = new QLabel("V  — V", this);
-    m_voltLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_voltLabel, kTelStyle);
     m_currLabel = new QLabel("I  — A", this);
-    m_currLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_currLabel, kTelStyle);
     m_bandLabel = new QLabel(this);
-    m_bandLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_bandLabel, kTelStyle);
     m_bandLabel->hide();
     m_antLabel = new QLabel(this);
-    m_antLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_antLabel, kTelStyle);
     m_antLabel->hide();
     m_inputLabel = new QLabel(this);
-    m_inputLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_inputLabel, kTelStyle);
     m_inputLabel->hide();
 
     auto* infoGrid = new QGridLayout;
@@ -190,15 +169,14 @@ SpeApplet::SpeApplet(QWidget* parent)
     // ── Fault banner (own row, full width, only shown when active) ─────────
     m_faultLabel = new QLabel(this);
     m_faultLabel->setWordWrap(true);
-    m_faultLabel->setStyleSheet(
-        "QLabel { color: #ff8080; font-size: 10px; font-weight: bold; }");
+    theme.applyStyleSheet(m_faultLabel,
+        "QLabel { color: {{color.accent.danger}}; font-size: 10px; font-weight: bold; }");
     m_faultLabel->hide();
     vbox->addWidget(m_faultLabel);
 
     // ── Button rows: OPER/STBY · power level · TUNE · OFF, then INPUT/ANT
     //    and the drive-power arrows. Every button is a literal front-panel
     //    keystroke.
-    auto& theme = AetherSDR::ThemeManager::instance();
     auto makeKeyBtn = [this, &theme](const QString& text) {
         auto* btn = new QPushButton(text, this);
         btn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
@@ -213,7 +191,9 @@ SpeApplet::SpeApplet(QWidget* parent)
     // see updateCommandsEnabled).
     m_onBtn = new QPushButton("ON", this);
     m_onBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-    theme.applyStyleSheet(m_onBtn, activeBtnStyle("#0f2a1c", "#2a6a45"));
+    // The family's operate-green (same pair as ACOM's engaged OPERATE) —
+    // an "energize" affordance, not a new colour.
+    theme.applyStyleSheet(m_onBtn, ampOperateActiveBtnStyle());
     m_onBtn->setToolTip(tr("Power the amplifier ON — pulses the serial control"
                            " lines (over the network this needs an"
                            " rfc2217-enabled ser2net port; see the Radio Setup"
@@ -402,10 +382,10 @@ void SpeApplet::setMode(bool operate, bool transmitting)
 
 void SpeApplet::applyModePill()
 {
-    PillState state = PillState::Unknown;
+    AmpPillState state = AmpPillState::Neutral;
     if (m_connected && m_responding)
-        state = !m_operate ? PillState::Standby
-              : (m_transmitting ? PillState::OperateTx : PillState::OperateRx);
+        state = !m_operate ? AmpPillState::Standby
+              : (m_transmitting ? AmpPillState::OperateTx : AmpPillState::OperateRx);
     // This runs on every status frame, i.e. at the 10 Hz poll rate, and both
     // setStyleSheet() and ThemeManager::applyStyleSheet() re-resolve and
     // re-polish unconditionally — neither has a no-op guard. pillText() is
@@ -414,14 +394,14 @@ void SpeApplet::applyModePill()
     if (m_statusPill->text() == pill)
         return;
     m_statusPill->setText(pill);
-    m_statusPill->setStyleSheet(pillStyle(state));
 
     auto& theme = AetherSDR::ThemeManager::instance();
-    const bool operateActive = (state == PillState::OperateRx || state == PillState::OperateTx);
+    theme.applyStyleSheet(m_statusPill, ampPillStyle(state));
+    const bool operateActive = (state == AmpPillState::OperateRx || state == AmpPillState::OperateTx);
     // Short labels — OPERATE/STANDBY clip at default applet width.
     m_operateBtn->setText(operateActive ? QStringLiteral("STBY") : QStringLiteral("OPER"));
     theme.applyStyleSheet(m_operateBtn,
-        operateActive ? activeBtnStyle("#006030", "#008040") : neutralBtnStyle());
+        operateActive ? ampOperateActiveBtnStyle() : neutralBtnStyle());
 }
 
 void SpeApplet::setFaultText(const QString& text)
