@@ -244,19 +244,19 @@ no entry — the manifest tracks `core/`/`models/` headers, not `gui/` files.
 
 ## 9. Open questions (for maintainer input)
 
-- **What is the Expert's correct idle state for DTR?** The power-ON pulse is
-  carried verbatim from the field-proven reference application and its
-  terminal step is `setControlLines(true, false)` — RTS (which carries the
-  1 s pulse) returns low, but DTR is left **high**. `connectSerial()`
-  meanwhile brings both lines up low. So the resting state of DTR depends on
-  whether ON was pressed this session, and a reconnect drops it, producing an
-  edge on that line. Both behaviours are as-shipped and hardware-validated in
-  isolation; what is missing is a ruling on which is *correct*, which needs an
-  Expert on the bench. The amplifier's own warning table has a code for this
-  class of condition (`R` — "Power switch held by remote"), so it is not
-  hypothetical. Until this is answered the code deliberately does not
-  second-guess the field-proven sequence, and the comments describe what it
-  actually does rather than asserting an invariant it does not hold.
+- **DTR idle level — RESOLVED on the bench (real 1.5K-FA, 2026-08-03).**
+  With DTR held high after the power-ON pulse: no `R` ("Power switch held
+  by remote") warning in the status stream, SWITCH OFF and every other
+  keystroke work normally, and repeated ON→OFF cycles behave. The power
+  switch rides the RTS pulse alone. Ruling: **DTR-high is the harmless
+  idle state**; `connectSerial()` now comes up DTR-high/RTS-low to match
+  the pulse's terminal step, so the resting state no longer depends on
+  session history and reconnects produce no edge. Same bench session also
+  established that ser2net 4.3.11 with a plain `accepter: telnet` port
+  replies `DONT COM-PORT-OPTION` yet still **executes** SET-CONTROL —
+  the pulse works even where negotiation says refused (the
+  `telnet(rfc2217=true)` config stays the documented recommendation; the
+  REFUSED log wording says "may not have reached" accordingly).
 - 1.3K-FA / 2K-FA gauge thresholds are derived (§5) — need owners to
   confirm.
 - Whether the ACK for a keystroke should drive optimistic UI updates.

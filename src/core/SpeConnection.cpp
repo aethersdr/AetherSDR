@@ -99,18 +99,15 @@ void SpeConnection::connectSerial(const QString& portName)
         if (m_autoReconnect) { armReconnect(); }
         return;
     }
-    // Start with DTR/RTS low — on the Expert the power-switch line is driven
-    // through the serial interface's control signals (that is how remote
-    // power-on works, see powerOn()), so coming up with them asserted risks
-    // holding the amp's power switch. Same precaution AcomConnection takes.
-    //
-    // Note this is the state at CONNECT, not an invariant for the session:
-    // the power-ON pulse deliberately ends with DTR high (RTS, which carries
-    // the pulse, does return low). Whether DTR-high is the Expert's correct
-    // idle state is an open hardware question — design note §9 — and until
-    // it is answered a reconnect will drop DTR back low, producing an edge
-    // on that line.
-    m_serialPort->setDataTerminalReady(false);
+    // Idle line state: DTR HIGH, RTS low — matching the power-ON pulse's
+    // terminal step, so the resting state no longer depends on whether ON
+    // was pressed this session and a reconnect produces no edge on either
+    // line. Bench-ruled on a real 1.5K-FA (design note §9): with DTR held
+    // high the amplifier raises no `R` ("Power switch held by remote")
+    // warning, keystrokes including SWITCH OFF work normally, and repeated
+    // power cycles behave — the power switch rides the RTS pulse alone,
+    // which is why RTS (and only RTS) must stay low at rest.
+    m_serialPort->setDataTerminalReady(true);
     m_serialPort->setRequestToSend(false);
 
     m_device = m_serialPort;
@@ -373,11 +370,18 @@ void SpeConnection::powerOnStep()
             // noise), so sending is harmless — claiming it landed is not.
             if (m_mode == Mode::Network
                 && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
+                // "May", not "did not": ser2net 4.3.11 with a plain
+                // `accepter: telnet` port answers DONT yet still executes
+                // SET-CONTROL — bench-verified on a real 1.5K-FA (design
+                // note §9). The explicit rfc2217=true config remains the
+                // recommendation because that behaviour is unspecified.
                 qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
                                       " the proxy REFUSED RFC 2217 COM-port"
-                                      " control, so it almost certainly did"
-                                      " not reach the amplifier. Configure the"
-                                      " ser2net port as `accepter:"
+                                      " control, so it may not have reached"
+                                      " the amplifier (some ser2net builds"
+                                      " act on it anyway — watch whether"
+                                      " status polls resume). Recommended"
+                                      " config: `accepter:"
                                       " telnet(rfc2217=true),<port>`.";
             } else if (m_mode == Mode::Network
                        && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
