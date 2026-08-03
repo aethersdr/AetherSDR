@@ -105,16 +105,27 @@ void settle()
     }
 }
 
-// QObject::receivers() is protected, so borrow it the sanctioned way: a
-// throwaway subclass exposing the count for the signal we care about.
+// QObject::receivers() is protected. Reaching it by declaring a subclass and
+// downcasting the widget to it is undefined behaviour — no object of that
+// subclass ever exists, and UBSan's vptr check rejects the cast outright
+// (#4740: "downcast of address ... which does not point to an object of type
+// 'Probe'", which reds the weekly ASan+UBSan run since the flags include
+// -fno-sanitize-recover=undefined).
+//
+// Access control is what we need to satisfy, not the object model: a
+// pointer-to-member formed inside a derived class may name a protected base
+// member, and converting it back to a base member pointer lets us apply it to
+// the real object. No fake type, no cast of the instance.
 bool cellActivatedIsUnconnected(QTableWidget* table)
 {
     struct Probe : QTableWidget {
-        using QTableWidget::receivers;
+        static constexpr auto receiversOf()
+        {
+            return static_cast<int (QObject::*)(const char*) const>(
+                &Probe::receivers);
+        }
     };
-    return static_cast<Probe*>(table)->receivers(
-               SIGNAL(cellActivated(int, int)))
-           == 0;
+    return (table->*Probe::receiversOf())(SIGNAL(cellActivated(int, int))) == 0;
 }
 
 // Double-click the centre of a cell and count how many modal viewers the
