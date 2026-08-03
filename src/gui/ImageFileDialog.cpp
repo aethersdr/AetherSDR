@@ -84,8 +84,18 @@ QImage decodeThumbnail(const QString& path, const QSize& targetSize)
     if (dim.isValid() && (dim.width() > kMaxDecodeDimension || dim.height() > kMaxDecodeDimension))
         return {};
     reader.setAutoTransform(true);
-    reader.setScaledSize(targetSize.expandedTo(QSize(1, 1)));
-    return reader.read();
+    // Preserve aspect ratio rather than stretching into a square: when the
+    // reader can report the source size up front, scale to the largest size
+    // that fits targetSize (cheap, since e.g. JPEG decodes DCT-scaled at the
+    // computed size); otherwise fall back to scaling after the full decode.
+    if (dim.isValid()) {
+        reader.setScaledSize(dim.scaled(targetSize.expandedTo(QSize(1, 1)), Qt::KeepAspectRatio));
+        return reader.read();
+    }
+    const QImage img = reader.read();
+    return img.isNull() ? img
+                         : img.scaled(targetSize.expandedTo(QSize(1, 1)), Qt::KeepAspectRatio,
+                                      Qt::SmoothTransformation);
 }
 
 void updatePreview(QLabel* label, const QString& path)
@@ -299,7 +309,7 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         auto selectMode = [applyThumbnailMode](bool large) {
             applyThumbnailMode(large);
             auto& s = AppSettings::instance();
-            s.setValue(QStringLiteral("ImageFileDialog/ThumbnailView"),
+            s.setValue(QStringLiteral("ImageFileDialogThumbnailView"),
                        large ? QStringLiteral("True") : QStringLiteral("False"));
             s.save();
         };
@@ -316,7 +326,7 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         });
 
         auto& s = AppSettings::instance();
-        const bool persisted = s.value(QStringLiteral("ImageFileDialog/ThumbnailView"),
+        const bool persisted = s.value(QStringLiteral("ImageFileDialogThumbnailView"),
                                         QStringLiteral("False")).toString()
             == QStringLiteral("True");
         // Exactly one of these fires toggled(true), applying the persisted
