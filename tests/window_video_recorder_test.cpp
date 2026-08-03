@@ -112,9 +112,17 @@ int main(int argc, char** argv)
         rec.startRecording();
         EXPECT_TRUE(rec.isRecording());
 
-        // Let the capture timer produce ~2s of frames.
+        // Wait for recordingStarted (or error) before beginning the timed capture window
         QElapsedTimer t;
         t.start();
+        while (startedSpy.isEmpty() && errorSpy.isEmpty() && t.elapsed() < 10000) {
+            app.processEvents(QEventLoop::AllEvents, 50);
+        }
+        EXPECT_TRUE(!startedSpy.isEmpty());
+        EXPECT_TRUE(errorSpy.isEmpty());
+
+        // Let the capture timer produce ~2s of frames.
+        t.restart();
         while (t.elapsed() < 2000) {
             app.processEvents(QEventLoop::AllEvents, 50);
         }
@@ -172,9 +180,17 @@ int main(int argc, char** argv)
         rec.startRecording();
         EXPECT_TRUE(rec.isRecording());
 
-        // Capture a few frames (~2s)
+        // Wait for recordingStarted (or error) before beginning the timed capture window
         QElapsedTimer t;
         t.start();
+        while (startedSpy.isEmpty() && errorSpy.isEmpty() && t.elapsed() < 10000) {
+            app.processEvents(QEventLoop::AllEvents, 50);
+        }
+        EXPECT_TRUE(!startedSpy.isEmpty());
+        EXPECT_TRUE(errorSpy.isEmpty());
+
+        // Capture a few frames (~2s)
+        t.restart();
         while (t.elapsed() < 2000) {
             app.processEvents(QEventLoop::AllEvents, 50);
         }

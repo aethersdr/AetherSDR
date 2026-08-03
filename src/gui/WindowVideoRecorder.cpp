@@ -552,27 +552,33 @@ void WindowVideoRecorder::stopRecording()
 void WindowVideoRecorder::captureFrame()
 {
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
-    if (!m_recording || !m_mainWindow || (!m_useFallback && !m_videoFrameInput)) {
-        return;
-    }
-    if (!m_useFallback && !m_readyToSend) {
+    if (!m_recording || !m_mainWindow || (!m_useFallback && (!m_videoFrameInput || !m_audioBufferInput))) {
         return;
     }
 #else
-    if (!m_recording || !m_mainWindow || !m_videoFrameInput) {
-        return;
-    }
-    if (!m_readyToSend) {
+    if (!m_recording || !m_mainWindow || !m_videoFrameInput || !m_audioBufferInput) {
         return;
     }
 #endif
 
-    qint64 ptsUs = m_recordTimer.isValid() ? (m_recordTimer.nsecsElapsed() / 1000) : (m_frameCount * 40000);
+    const qint64 ptsUs = m_recordTimer.isValid()
+        ? (m_recordTimer.nsecsElapsed() / 1000)
+        : (m_frameCount * 40000);
 
     // Keep audio stream synchronized with video timestamp to prevent FFmpeg muxer queue deadlocks
     while (!m_hasRealAudio && static_cast<qint64>((m_audioSamplesSent * 1000000) / 24000) < ptsUs + 40000) {
         sendSilentAudio(ptsUs);
     }
+
+#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
+    if (!m_useFallback && !m_readyToSend) {
+        return;
+    }
+#else
+    if (!m_readyToSend) {
+        return;
+    }
+#endif
 
 
     QSize mainSize = m_mainWindow->size();
