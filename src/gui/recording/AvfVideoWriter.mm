@@ -236,8 +236,11 @@ bool AvfVideoWriter::writeVideoFrame(const QImage& frame, qint64 ptsUs)
 bool AvfVideoWriter::writeAudioSamples(const QByteArray& pcmData, qint64 ptsUs)
 {
     AVFWriterObjC* wrapper = asWriter(m_opaqueWriter);
-    if (!wrapper || !wrapper.initialized || !wrapper.audioInput) {
+    if (!wrapper || !wrapper.initialized) {
         return false;
+    }
+    if (!wrapper.audioInput) {
+        return true; // Video-only fallback session; audio samples are ignored without error
     }
     if (!wrapper.audioInput.isReadyForMoreMediaData) {
         return true;

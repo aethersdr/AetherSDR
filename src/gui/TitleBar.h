@@ -142,7 +142,8 @@ private:
     QLabel*      m_heartbeat{nullptr};
     QTimer*      m_heartbeatOffTimer{nullptr};   // 100ms green→grey
     QTimer*      m_heartbeatAlarmTimer{nullptr}; // 500ms red/grey blink
-    QVariantAnimation* m_recordPulseAnim{nullptr}; // Pulsating effect for recording
+    QGraphicsOpacityEffect* m_recordOpacity{nullptr};
+    QPropertyAnimation*     m_recordPulseAnim{nullptr}; // Pulsating opacity effect for recording
     int          m_missedBeats{0};
     bool         m_alarmRed{false};
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"

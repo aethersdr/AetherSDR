@@ -110,7 +110,7 @@ int main(int argc, char** argv)
         // Let the capture timer produce ~2s of frames.
         QElapsedTimer t;
         t.start();
-        while (t.elapsed() < 5000) {
+        while (t.elapsed() < 2000) {
             app.processEvents(QEventLoop::AllEvents, 50);
         }
 
@@ -167,10 +167,10 @@ int main(int argc, char** argv)
         rec.startRecording();
         EXPECT_TRUE(rec.isRecording());
 
-        // Capture a few frames
+        // Capture a few frames (~2s)
         QElapsedTimer t;
         t.start();
-        while (t.elapsed() < 5000) {
+        while (t.elapsed() < 2000) {
             app.processEvents(QEventLoop::AllEvents, 50);
         }
 
