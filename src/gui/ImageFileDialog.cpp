@@ -38,6 +38,12 @@ namespace {
 // count, which would freeze/OOM the GUI on decode.
 constexpr int kMaxDecodeDimension = 4096;
 const QSize kThumbnailDecodeSize(96, 96);
+// Caps the preview decode target: the preview label grows with the dialog
+// (Expanding size policy), so decoding at its raw size could mean decoding
+// at whatever huge size the user resizes the dialog to. QLabel centers the
+// (unscaled) pixmap within the available space, so capping here doesn't
+// change what's visible for any label smaller than this.
+const QSize kPreviewMaxDecodeSize(512, 512);
 
 const QSet<QByteArray>& supportedImageFormats()
 {
@@ -105,7 +111,7 @@ void updatePreview(QLabel* label, const QString& path)
         label->clear();
         return;
     }
-    const QImage img = decodeThumbnail(path, label->size());
+    const QImage img = decodeThumbnail(path, label->size().boundedTo(kPreviewMaxDecodeSize));
     if (img.isNull()) {
         label->clear();
         return;
@@ -309,6 +315,11 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         smallIconsButton->setCheckable(true);
         smallIconsButton->setToolTip(QStringLiteral("Small icons"));
         smallIconsButton->setIcon(dlg.style()->standardIcon(QStyle::SP_FileDialogListView));
+        // Tooltips aren't reliably exposed to assistive tech on icon-only
+        // buttons; set the accessible name/description explicitly.
+        smallIconsButton->setAccessibleName(QStringLiteral("Small icons"));
+        smallIconsButton->setAccessibleDescription(
+            QStringLiteral("Show the file list with small icons"));
         grid->addWidget(smallIconsButton, 0, grid->columnCount());
 
         auto* thumbButton = new QToolButton(&dlg);
@@ -316,6 +327,9 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         thumbButton->setCheckable(true);
         thumbButton->setToolTip(QStringLiteral("Large thumbnails"));
         thumbButton->setIcon(dlg.style()->standardIcon(QStyle::SP_FileDialogContentsView));
+        thumbButton->setAccessibleName(QStringLiteral("Large thumbnails"));
+        thumbButton->setAccessibleDescription(
+            QStringLiteral("Show the file list with large image thumbnails"));
         grid->addWidget(thumbButton, 0, grid->columnCount());
 
         auto* viewButtons = new QButtonGroup(&dlg);
@@ -330,6 +344,9 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
         previewLabel->setAlignment(Qt::AlignCenter);
         previewLabel->setFrameShape(QFrame::StyledPanel);
         previewLabel->setScaledContents(false);
+        previewLabel->setAccessibleName(QStringLiteral("Image preview"));
+        previewLabel->setAccessibleDescription(
+            QStringLiteral("Preview of the currently selected image file"));
         const int previewColumn = grid->columnCount();
         const int previewRowSpan = std::max(1, grid->rowCount() - 1);
         // No alignment argument: passing one (e.g. the old Qt::AlignTop)
