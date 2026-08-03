@@ -91,18 +91,21 @@ QImage decodeThumbnail(const QString& path, const QSize& targetSize)
     if (dim.isValid() && (dim.width() > kMaxDecodeDimension || dim.height() > kMaxDecodeDimension))
         return {};
     reader.setAutoTransform(true);
+    const QSize cap = targetSize.expandedTo(QSize(1, 1));
     // Preserve aspect ratio rather than stretching into a square: when the
     // reader can report the source size up front, scale to the largest size
     // that fits targetSize (cheap, since e.g. JPEG decodes DCT-scaled at the
-    // computed size); otherwise fall back to scaling after the full decode.
-    if (dim.isValid()) {
-        reader.setScaledSize(dim.scaled(targetSize.expandedTo(QSize(1, 1)), Qt::KeepAspectRatio));
-        return reader.read();
-    }
+    // computed size). When it can't, we still always set a scaled decode
+    // target before read() -- capped at kMaxDecodeDimension, mirroring the
+    // guard above that this path skips because dim is invalid -- so a huge
+    // or hostile source image can't force a full-resolution decode; the
+    // aspect ratio is then fixed up on the (already bounded) returned image.
+    reader.setScaledSize(dim.isValid() ? dim.scaled(cap, Qt::KeepAspectRatio)
+                                        : QSize(kMaxDecodeDimension, kMaxDecodeDimension));
     const QImage img = reader.read();
-    return img.isNull() ? img
-                         : img.scaled(targetSize.expandedTo(QSize(1, 1)), Qt::KeepAspectRatio,
-                                      Qt::SmoothTransformation);
+    if (img.isNull() || dim.isValid())
+        return img;
+    return img.scaled(cap, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
 
 void updatePreview(QLabel* label, const QString& path)
