@@ -1309,7 +1309,7 @@ add_library(aethercore STATIC
     ${RADE_SOURCES}
     ${SPECBLEACH_SOURCES}
 )
-target_link_libraries(aethercore PRIVATE aether::wdsp ${WMF_LIBRARIES})
+target_link_libraries(aethercore PRIVATE aether::wdsp)
 
 add_executable(AetherSDR
     src/main.cpp

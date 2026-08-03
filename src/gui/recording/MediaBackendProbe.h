@@ -5,6 +5,7 @@
 #include <QLibraryInfo>
 #include <QString>
 #include <QStringList>
+#include <utility>
 
 namespace AetherSDR {
 

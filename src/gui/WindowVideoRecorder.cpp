@@ -584,23 +584,21 @@ void WindowVideoRecorder::captureFrame()
     m_mainWindow->render(&img);
 
     // Composite any GPU-accelerated QRhiWidgets (such as SpectrumWidget) on top of the CPU render
-    for (auto* child : m_mainWindow->findChildren<QWidget*>()) {
-        if (child->isVisible() && child->inherits("QRhiWidget")) {
-            if (auto* rhi = qobject_cast<QRhiWidget*>(child)) {
-                QImage childImg = rhi->grabFramebuffer();
-                if (!childImg.isNull()) {
-                    QPoint pos = child->mapTo(m_mainWindow, QPoint(0, 0));
-                    QPainter painter(&img);
-                    painter.drawImage(pos, childImg);
-                }
+    for (auto* rhi : m_mainWindow->findChildren<QRhiWidget*>()) {
+        if (rhi->isVisible()) {
+            QImage childImg = rhi->grabFramebuffer();
+            if (!childImg.isNull()) {
+                QPoint pos = rhi->mapTo(m_mainWindow, QPoint(0, 0));
+                QPainter painter(&img);
+                painter.drawImage(pos, childImg);
+            }
 
-                // Render standard child widgets of the QRhiWidget on top
-                for (QObject* obj : child->children()) {
-                    if (auto* w = qobject_cast<QWidget*>(obj)) {
-                        if (w->isVisible() && !w->inherits("QRhiWidget")) {
-                            QPoint pos = w->mapTo(m_mainWindow, QPoint(0, 0));
-                            w->render(&img, pos);
-                        }
+            // Render standard child widgets of the QRhiWidget on top
+            for (QObject* obj : rhi->children()) {
+                if (auto* w = qobject_cast<QWidget*>(obj)) {
+                    if (w->isVisible() && !w->inherits("QRhiWidget")) {
+                        QPoint pos = w->mapTo(m_mainWindow, QPoint(0, 0));
+                        w->render(&img, pos);
                     }
                 }
             }
@@ -632,7 +630,9 @@ void WindowVideoRecorder::captureFrame()
     }
 
     // Scale to macroblock-aligned target resolution if needed
-    QImage scaledImg = img.scaled(QSize(m_videoWidth, m_videoHeight), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    QImage scaledImg = (img.size() == QSize(m_videoWidth, m_videoHeight))
+        ? img
+        : img.scaled(QSize(m_videoWidth, m_videoHeight), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
