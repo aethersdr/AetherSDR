@@ -288,9 +288,11 @@ TitleBar::TitleBar(QWidget* parent)
     // Record toggle
     m_recordPulseAnim = new QVariantAnimation(this);
     m_recordPulseAnim->setDuration(1200);
-    m_recordPulseAnim->setStartValue(QColor("#601a1a"));
-    m_recordPulseAnim->setKeyValueAt(0.5, QColor("#b82828"));
-    m_recordPulseAnim->setEndValue(QColor("#601a1a"));
+    QColor startColor = AetherSDR::ThemeManager::instance().color("color.button.danger.background.disabled");
+    QColor peakColor = AetherSDR::ThemeManager::instance().color("color.accent.danger").darker(180);
+    m_recordPulseAnim->setStartValue(startColor);
+    m_recordPulseAnim->setKeyValueAt(0.5, peakColor);
+    m_recordPulseAnim->setEndValue(startColor);
     m_recordPulseAnim->setEasingCurve(QEasingCurve::InOutSine);
     m_recordPulseAnim->setLoopCount(-1);
 
@@ -305,12 +307,12 @@ TitleBar::TitleBar(QWidget* parent)
     connect(m_recordPulseAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
         QColor color = value.value<QColor>();
         if (m_recordBtn && m_recordBtn->isChecked()) {
-            QString style = QString(
-                "QPushButton { background: %1; color: #ff8080; border: 1px solid #a02020; "
-                "border-radius: 3px; font-size: 10px; font-weight: bold; }"
-                "QPushButton:hover { background: #702020; }"
-            ).arg(color.name());
-            m_recordBtn->setStyleSheet(style);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                m_recordBtn,
+                QString("QPushButton { background: %1; color: {{color.accent.danger}}; border: 1px solid {{color.button.danger.border.disabled}}; "
+                        "border-radius: 3px; font-size: 10px; font-weight: bold; }"
+                        "QPushButton:hover { background: {{color.button.danger.background.disabled}}; }")
+                    .arg(color.name()));
         }
     });
 
@@ -1366,19 +1368,21 @@ void TitleBar::updateRecordStyle()
                 m_recordPulseAnim->start();
             }
         } else {
-            m_recordBtn->setStyleSheet(
-                "QPushButton { background: #601a1a; color: #ff8080; border: 1px solid #a02020; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                m_recordBtn,
+                "QPushButton { background: {{color.button.danger.background.disabled}}; color: {{color.accent.danger}}; border: 1px solid {{color.button.danger.border.disabled}}; "
                 "border-radius: 3px; font-size: 10px; font-weight: bold; }"
-                "QPushButton:hover { background: #702020; }");
+                "QPushButton:hover { background: {{color.button.danger.background.disabled}}; }");
         }
     } else {
         if (m_recordPulseAnim) {
             m_recordPulseAnim->stop();
         }
-        m_recordBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; color: #607080; border: 1px solid #304050; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            m_recordBtn,
+            "QPushButton { background: {{color.background.1}}; color: {{color.text.label}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: #243848; }");
+            "QPushButton:hover { background: {{color.background.2}}; }");
     }
 }
 
