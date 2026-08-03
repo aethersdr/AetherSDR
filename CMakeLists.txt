@@ -2382,9 +2382,27 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
             resources/shaders/panscope.frag
+            resources/shaders/wavescope.frag
+    )
+
+    # dss_mesh (3D-FFT stacked-trace) is the only shader that uses the `flat`
+    # interpolation qualifier — added for ridge stability in #4539 — which is
+    # legal only in GLSL 130 and later. Bake it exclusively as flat-capable
+    # slices: 140 (desktop OpenGL 3.1, e.g. the Raspberry Pi's v3d driver), 150
+    # (OpenGL 3.2+), and 300es (OpenGL ES 3). The qsb default (100es, 120, 150)
+    # would offer a 120 slice, where `flat` is illegal — so on a driver that
+    # reports GLSL 1.40 (no 140 baked → falls back to 120) the shader failed to
+    # compile and the 3D FFT was disabled. Restricting the target set means QRhi
+    # never selects a slice this shader can't compile in; on an older GL<=3.0 /
+    # GLES2 context no slice matches and the pipeline is skipped cleanly (the CPU
+    # image fallback still renders the 3D FFT). No shader-source change — #4539's
+    # `flat` is preserved. Complementary to #4730 (OpenGL outline rendering).
+    qt_add_shaders(AetherSDR "aether_dss_shaders"
+        PREFIX "/shaders"
+        GLSL "140,150,300es"
+        FILES
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
-            resources/shaders/wavescope.frag
     )
 endif()
 
