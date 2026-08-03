@@ -6,6 +6,7 @@
 #include "NativeWidgetTopology.h"
 #include "PanadapterRenderScheduler.h"
 #include "PanadapterMessageOverlay.h"
+#include "SoftwareOpenGlRequest.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "DisplaySettings.h"
@@ -874,13 +875,6 @@ static QRgb interpolateGradient(float t, const WfGradientStop* stops, int n)
 }
 
 #ifdef AETHER_GPU_SPECTRUM
-static bool qtSoftwareOpenGlRequested()
-{
-    return qEnvironmentVariableIsSet("AETHER_NO_GPU")
-        || qEnvironmentVariable("QT_OPENGL").compare(
-            QStringLiteral("software"), Qt::CaseInsensitive) == 0;
-}
-
 static bool qrhiDeviceNameLooksSoftware(const QString& deviceName)
 {
     const QString lower = deviceName.toLower();
@@ -905,7 +899,7 @@ QString SpectrumWidget::rendererDescription() const
     const QRhiDriverInfo driverInfo = currentRhi->driverInfo();
     const QString deviceName = QString::fromUtf8(driverInfo.deviceName).trimmed();
     const bool softwareOpenGl = currentRhi->backend() == QRhi::OpenGLES2
-        && qtSoftwareOpenGlRequested();
+        && softwareOpenGlRequested();
     const bool cpuDevice = driverInfo.deviceType == QRhiDriverInfo::CpuDevice
         || softwareOpenGl
         || qrhiDeviceNameLooksSoftware(deviceName);
@@ -1896,7 +1890,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // QT_OPENGL entirely, making the flag a silent no-op there (#3597). On Linux
     // the default backend is already OpenGL, so this is a harmless explicit
     // restatement that keeps the two platforms on the same code path.
-    if (qtSoftwareOpenGlRequested()) {
+    if (softwareOpenGlRequested()) {
         setApi(QRhiWidget::Api::OpenGL);
         qInfo() << "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software — forcing "
                    "OpenGL QRhi backend (software rasterizer) instead of D3D11";

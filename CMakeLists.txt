@@ -3763,6 +3763,13 @@ target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
+add_executable(software_opengl_request_test
+    tests/software_opengl_request_test.cpp
+)
+target_include_directories(software_opengl_request_test PRIVATE src)
+target_link_libraries(software_opengl_request_test PRIVATE Qt6::Core)
+add_test(NAME software_opengl_request_test COMMAND software_opengl_request_test)
+
 # Kiwi-display recenter write policy — pins that tune-driven recenters on a
 # kiwi-display pan stay widget-local (never pairing a new center with the
 # frozen PanadapterModel bandwidth, which snapped the zoom back to the
