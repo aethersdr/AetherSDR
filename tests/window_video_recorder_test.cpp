@@ -77,22 +77,18 @@ int main(int argc, char** argv)
         qWarning() << "==============================";
     }
 
-    // Skip (rather than fail) when the environment has no working encoder
-    // (neither Qt Multimedia MP4/H.264/AAC nor native WMF/AVFoundation writers).
-    bool hasEncoder = false;
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
-    hasEncoder = true; // Native WMF / AVFoundation video writer is available
-#else
-    QMediaFormat probe(QMediaFormat::MPEG4);
-    probe.setVideoCodec(QMediaFormat::VideoCodec::H264);
-    probe.setAudioCodec(QMediaFormat::AudioCodec::AAC);
-    hasEncoder = probe.isSupported(QMediaFormat::Encode);
-#endif
-
-    if (!hasEncoder) {
-        std::fprintf(stderr,
-                     "SKIP: No video encoding backend available in this environment\n");
-        return 77;
+    // Skip (rather than fail) when this environment cannot encode MP4/H.264/AAC.
+    // The assertions below require a working encoder, which is an environment
+    // property, not a property of the code under test.
+    {
+        QMediaFormat probe(QMediaFormat::MPEG4);
+        probe.setVideoCodec(QMediaFormat::VideoCodec::H264);
+        probe.setAudioCodec(QMediaFormat::AudioCodec::AAC);
+        if (!probe.isSupported(QMediaFormat::Encode)) {
+            std::fprintf(stderr,
+                         "SKIP: Qt Multimedia cannot encode MP4/H.264/AAC in this environment\n");
+            return 77;
+        }
     }
 
     QWidget parentWidget;

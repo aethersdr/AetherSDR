@@ -315,9 +315,9 @@ TitleBar::TitleBar(QWidget* parent)
 #if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
     m_recordBtn->setVisible(false);
     m_recordBtn->setEnabled(false);
-#endif
-
+#else
     m_hbox->addSpacing(6);
+#endif
 
     // PC Audio toggle
     m_pcBtn = new QPushButton("PC Audio");
