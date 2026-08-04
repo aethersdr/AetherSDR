@@ -360,14 +360,6 @@ bool WindowVideoRecorder::startRecording()
         return false;
     }
 
-    if (lcWindowVideoRecorder().isDebugEnabled()) {
-        qputenv("AV_LOG_LEVEL", "info");
-        setFFmpegLogLevel(32); // AV_LOG_INFO
-    } else {
-        qputenv("AV_LOG_LEVEL", "error");
-        setFFmpegLogLevel(16); // AV_LOG_ERROR
-    }
-
     m_frameCount = 0;
 
     m_rhiWidgetsCache.clear();
@@ -455,6 +447,16 @@ bool WindowVideoRecorder::startRecording()
     if (!m_recorder || !m_session) {
         emit recordingError(QStringLiteral("Failed to initialize Qt video recording engine."));
         return false;
+    }
+
+    if (ffmpegMediaBackendAvailable()) {
+        if (lcWindowVideoRecorder().isDebugEnabled()) {
+            qputenv("AV_LOG_LEVEL", "info");
+            setFFmpegLogLevel(32); // AV_LOG_INFO
+        } else {
+            qputenv("AV_LOG_LEVEL", "error");
+            setFFmpegLogLevel(16); // AV_LOG_ERROR
+        }
     }
 
     cleanupQtInputs();

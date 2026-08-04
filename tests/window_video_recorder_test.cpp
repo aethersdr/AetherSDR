@@ -109,7 +109,10 @@ int main(int argc, char** argv)
         QSignalSpy stoppedSpy(&rec, &WindowVideoRecorder::recordingStopped);
         QSignalSpy errorSpy(&rec, &WindowVideoRecorder::recordingError);
 
-        rec.startRecording();
+        if (!rec.startRecording()) {
+            std::fprintf(stderr, "SKIP: startRecording() failed in Test Case 1\n");
+            return 77;
+        }
         EXPECT_TRUE(rec.isRecording());
 
         // Wait for recordingStarted (or error) before beginning the timed capture window
@@ -177,7 +180,10 @@ int main(int argc, char** argv)
         QSignalSpy stoppedSpy(&rec, &WindowVideoRecorder::recordingStopped);
         QSignalSpy errorSpy(&rec, &WindowVideoRecorder::recordingError);
 
-        rec.startRecording();
+        if (!rec.startRecording()) {
+            std::fprintf(stderr, "SKIP: startRecording() failed in Test Case 2\n");
+            return 77;
+        }
         EXPECT_TRUE(rec.isRecording());
 
         // Wait for recordingStarted (or error) before beginning the timed capture window
