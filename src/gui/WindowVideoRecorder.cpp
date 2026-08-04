@@ -724,8 +724,8 @@ bool WindowVideoRecorder::sendSilentAudio(qint64 startTimeUs)
     Q_UNUSED(startTimeUs);
     constexpr int samplesPerChunk = (kAudioSampleRate * kSilenceChunkMs) / 1000;
     constexpr int bufferSize = samplesPerChunk * kAudioBytesPerFrame;
-    QByteArray silentBytes(bufferSize, 0);
-    return sendAudioData(silentBytes);
+    static const QByteArray kSilentBytes(bufferSize, 0);
+    return sendAudioData(kSilentBytes);
 }
 
 void WindowVideoRecorder::feedRxAudio(const QByteArray& pcm)
@@ -773,10 +773,13 @@ bool WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
     // first synthetic silence chunk latch the flag and permanently disable the
     // silence priming it gates.
 
-    QAudioFormat format;
-    format.setSampleRate(kAudioSampleRate);
-    format.setChannelCount(kAudioChannels);
-    format.setSampleFormat(QAudioFormat::Int16);
+    static const QAudioFormat kFormat = []() {
+        QAudioFormat fmt;
+        fmt.setSampleRate(kAudioSampleRate);
+        fmt.setChannelCount(kAudioChannels);
+        fmt.setSampleFormat(QAudioFormat::Int16);
+        return fmt;
+    }();
 
     qint64 ptsUs = (m_audioSamplesSent * 1000000) / kAudioSampleRate;
     int numFrames = int16Stereo.size() / kAudioBytesPerFrame;
@@ -791,7 +794,7 @@ bool WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
     }
 #endif
 
-    QAudioBuffer buffer(int16Stereo, format, ptsUs);
+    QAudioBuffer buffer(int16Stereo, kFormat, ptsUs);
     // Only accepted samples advance the clock: the FFmpeg backend concatenates
     // the buffers it takes and ignores their start times, so counting a
     // rejected buffer would shift every later timestamp ahead of the audio
