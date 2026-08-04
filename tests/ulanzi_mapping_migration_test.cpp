@@ -167,9 +167,9 @@ int main(int argc, char** argv)
                  "legacy flat key UlanziDialRotaryAction is removed after adoption");
 
     // ── mapping-layer round-trip: unrecognized action id is preserved ─────
-    // Verify setRotaryAction returns true for an unrecognized action id,
-    // persists to disk, and survives a reload as-is without silent fallback
-    // or mutation.
+    // Verify setRotaryAction accepts and persists an unrecognized action id,
+    // and survives a reload as-is without silent fallback or mutation at
+    // the settings store layer.
     ok &= expect(UlanziDialMappings::setRotaryAction(QStringLiteral("WheelCorruptAction4756")),
                  "setting unrecognized rotary action id succeeds");
     s.reset();
