@@ -606,8 +606,10 @@ void WindowVideoRecorder::captureFrame()
                 QImage childImg = rhi->grabFramebuffer();
                 if (!childImg.isNull()) {
                     QPoint pos = rhi->mapTo(m_mainWindow, QPoint(0, 0));
-                    QPainter painter(&img);
-                    painter.drawImage(pos, childImg);
+                    {
+                        QPainter painter(&img);
+                        painter.drawImage(pos, childImg);
+                    }
                 }
 
                 // Render standard child widgets of the QRhiWidget on top

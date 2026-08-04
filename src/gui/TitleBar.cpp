@@ -289,9 +289,9 @@ TitleBar::TitleBar(QWidget* parent)
     m_recordBtn->setCheckable(true);
     m_recordBtn->setFixedHeight(22);
     m_recordBtn->setFixedWidth(70);
-    m_recordBtn->setAccessibleName("Record");
-    m_recordBtn->setAccessibleDescription("Toggle recording of the AetherSDR window");
-    m_recordBtn->setToolTip("Record the AetherSDR window to an MP4 video file");
+    m_recordBtn->setAccessibleName(tr("Record"));
+    m_recordBtn->setAccessibleDescription(tr("Toggle recording of the AetherSDR window"));
+    m_recordBtn->setToolTip(tr("Record the AetherSDR window to an MP4 video file"));
 
     m_recordOpacity = new QGraphicsOpacityEffect(this);
     m_recordOpacity->setOpacity(1.0);
