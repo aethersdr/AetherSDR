@@ -3741,6 +3741,15 @@ set_target_properties(kiwi_sdr_manager_password_test PROPERTIES AUTOMOC ON)
 add_test(NAME kiwi_sdr_manager_password_test
          COMMAND kiwi_sdr_manager_password_test)
 
+add_executable(kiwi_sdr_manager_csv_test
+    tests/kiwi_sdr_manager_csv_test.cpp
+)
+target_include_directories(kiwi_sdr_manager_csv_test PRIVATE src)
+target_link_libraries(kiwi_sdr_manager_csv_test PRIVATE
+    aethercore Qt6::Core Qt6::Test)
+set_target_properties(kiwi_sdr_manager_csv_test PROPERTIES AUTOMOC ON)
+add_test(NAME kiwi_sdr_manager_csv_test COMMAND kiwi_sdr_manager_csv_test)
+
 add_executable(kiwi_sdr_trace_math_test
     tests/kiwi_sdr_trace_math_test.cpp
 )
