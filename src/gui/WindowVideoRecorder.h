@@ -62,7 +62,7 @@ private:
     QString buildFilename() const;
 
     QWidget* m_mainWindow{nullptr};
-    SliceModel* m_slice{nullptr};
+    QPointer<SliceModel> m_slice;
 
     bool m_recording{false};
     bool m_stopping{false};
