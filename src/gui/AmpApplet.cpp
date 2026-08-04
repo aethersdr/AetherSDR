@@ -3,6 +3,7 @@
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
 
+#include <QAbstractItemView>
 #include <QAccessible>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -200,13 +201,19 @@ AmpApplet::AmpApplet(QWidget* parent)
     // fanModeChanged contract ("uppercase, ready for sendCommand") is
     // unchanged. Hidden until a direct PGXL connection delivers the first
     // fanmode status.
+    // The popup view is a separate top-level (Qt::Popup) window, so it
+    // doesn't inherit the combo's font — it must be set explicitly here or
+    // the popup paints at the app's default UI font while the combo's own
+    // width (and elision) is computed from the 10px rule below. On a
+    // larger-than-default UI font that mismatch elides "Fan: Contest", the
+    // longest item, into a garbled label (#4731).
     static const char* kComboStyle =
         "QComboBox { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; padding: 1px 4px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
         "QComboBox:hover { background: {{color.background.1}}; }"
-        "QComboBox::drop-down { border: none; }"
+        "QComboBox::drop-down { border: none; width: 14px; }"
         "QComboBox QAbstractItemView { background: {{color.background.2}}; color: {{color.text.primary}}; "
-        "selection-background-color: {{color.background.1}}; }";
+        "selection-background-color: {{color.background.1}}; font-size: 10px; font-weight: bold; }";
     // GuardedComboBox (not plain QComboBox): this is a hardware control, so
     // an accidental mouse-wheel scroll while just hovering over it must not
     // silently change fan mode and send a command to the amp — it only
@@ -215,6 +222,15 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_fanCombo->setObjectName(QStringLiteral("ampFanModeCombo"));
     for (const QString& mode : {QStringLiteral("STANDARD"), QStringLiteral("CONTEST"), QStringLiteral("BROADCAST")})
         m_fanCombo->addItem(fanModeLabel(mode), mode);
+    // Let the widest item ("Fan: Contest") drive the combo's width instead
+    // of leaving it pinned to whatever the stylesheet happens to compute
+    // (#4731) — matches the pattern used by every other combo in the app,
+    // e.g. ProfileSwitcherApplet, AdaptiveFilterControls.
+    m_fanCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_fanCombo->setMinimumContentsLength(12);
+    // Belt-and-braces: if a future label ever outgrows the combo anyway,
+    // fail visibly (clipped) rather than silently mislabelling the mode.
+    m_fanCombo->view()->setTextElideMode(Qt::ElideNone);
     m_fanCombo->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_fanCombo->setFocusPolicy(Qt::TabFocus);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_fanCombo, kComboStyle);
