@@ -77,10 +77,9 @@ public:
     void cycleStepDown();
 
     // Step the active slice's RX passband through the per-mode filter preset
-    // list by steps position offsets (+ steps widens toward larger presets, -
-    // steps narrows toward smaller presets, scaled by magnitude). Routes
-    // through applyFilterPreset so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get
-    // mode-correct edge geometry.
+    // list by steps position offsets (+ steps forward, - steps backward in
+    // preset list, scaled by magnitude). Routes through applyFilterPreset
+    // so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get mode-correct edge geometry.
     void stepFilterWidth(int steps);
 
     // Connect to transmit model for QSK (break_in) indicator.
