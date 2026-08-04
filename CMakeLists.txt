@@ -2370,6 +2370,10 @@ if(AETHER_GPU_SPECTRUM)
         endforeach()
     endif()
 
+    # Shaders in this list get qsb's default GLSL set (100es/120/150). Anything
+    # using GLSL 130+ syntax (e.g. the `flat` qualifier) must NOT go here — the
+    # 120 slice would bake illegal code that only the driver rejects, on-device,
+    # where CI can't see it. Put such shaders in the dss block below instead.
     qt_add_shaders(AetherSDR "aether_shaders"
         PREFIX "/shaders"
         FILES
@@ -2388,18 +2392,22 @@ if(AETHER_GPU_SPECTRUM)
     # dss_mesh (3D-FFT stacked-trace) is the only shader that uses the `flat`
     # interpolation qualifier — added for ridge stability in #4539 — which is
     # legal only in GLSL 130 and later. Bake it exclusively as flat-capable
-    # slices: 140 (desktop OpenGL 3.1, e.g. the Raspberry Pi's v3d driver), 150
-    # (OpenGL 3.2+), and 300es (OpenGL ES 3). The qsb default (100es, 120, 150)
-    # would offer a 120 slice, where `flat` is illegal — so on a driver that
-    # reports GLSL 1.40 (no 140 baked → falls back to 120) the shader failed to
-    # compile and the 3D FFT was disabled. Restricting the target set means QRhi
-    # never selects a slice this shader can't compile in; on an older GL<=3.0 /
-    # GLES2 context no slice matches and the pipeline is skipped cleanly (the CPU
-    # image fallback still renders the 3D FFT). No shader-source change — #4539's
-    # `flat` is preserved. Complementary to #4730 (OpenGL outline rendering).
+    # slices: 130 (OpenGL 3.0, incl. Mesa compat-profile caps and the
+    # `opengl32sw` software-GL Qt ships on Windows), 140 (desktop OpenGL 3.1,
+    # e.g. the Raspberry Pi's v3d driver), 150 (OpenGL 3.2+), and 300es
+    # (OpenGL ES 3). The qsb default (100es, 120, 150) would offer a 120 slice,
+    # where `flat` is illegal — so on a driver that reports GLSL 1.40 (no 140
+    # baked → falls back to 120) the shader failed to compile and the 3D FFT was
+    # disabled. Restricting the target set means QRhi never selects a slice this
+    # shader can't compile in; on an older GL<3.0 / GLES2 context no slice
+    # matches, so QRhi finds no GLSL code and the m_dssMeshFillPipeline->create()
+    # call in SpectrumWidget::initDssMeshPipeline fails — m_dssMeshReady stays
+    # false and the CPU image fallback still renders the 3D FFT. No shader-source
+    # change — #4539's `flat` is preserved. Complementary to #4730 (OpenGL
+    # outline rendering).
     qt_add_shaders(AetherSDR "aether_dss_shaders"
         PREFIX "/shaders"
-        GLSL "140,150,300es"
+        GLSL "130,140,150,300es"
         FILES
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
