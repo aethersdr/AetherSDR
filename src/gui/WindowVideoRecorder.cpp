@@ -310,6 +310,12 @@ void WindowVideoRecorder::finalizeStop()
 
 WindowVideoRecorder::~WindowVideoRecorder()
 {
+    // Disconnect/block signals before teardown so destruction is strictly side-effect-free
+    blockSignals(true);
+    if (m_recorder) {
+        m_recorder->disconnect();
+    }
+
     if (m_recording || m_stopping) {
         // Best-effort sync teardown on destroy (no further UI signals needed).
         m_stopping = true;
