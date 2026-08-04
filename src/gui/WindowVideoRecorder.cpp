@@ -615,54 +615,56 @@ void WindowVideoRecorder::captureFrame()
     m_frameBuffer.fill(Qt::black);
     m_mainWindow->render(&m_frameBuffer);
 
-    // Composite any GPU-accelerated QRhiWidgets (such as SpectrumWidget) on top of the CPU render
-    for (const auto& widget : m_rhiWidgetsCache) {
-        if (widget && widget->isVisible()) {
-            if (auto* rhi = qobject_cast<QRhiWidget*>(widget.data())) {
-                QImage childImg = rhi->grabFramebuffer();
-                if (!childImg.isNull()) {
-                    QPoint pos = rhi->mapTo(m_mainWindow, QPoint(0, 0));
-                    {
-                        QPainter painter(&m_frameBuffer);
+    // Composite GPU-accelerated QRhiWidgets (such as SpectrumWidget) and cursor on top
+    QPoint globalPos = QCursor::pos();
+    QPoint localPos = m_mainWindow->mapFromGlobal(globalPos);
+    const bool drawCursor = m_mainWindow->rect().contains(localPos);
+
+    if (!m_rhiWidgetsCache.isEmpty() || drawCursor) {
+        QPainter painter(&m_frameBuffer);
+
+        for (const auto& widget : m_rhiWidgetsCache) {
+            if (widget && widget->isVisible()) {
+                if (auto* rhi = qobject_cast<QRhiWidget*>(widget.data())) {
+                    QImage childImg = rhi->grabFramebuffer();
+                    if (!childImg.isNull()) {
+                        QPoint pos = rhi->mapTo(m_mainWindow, QPoint(0, 0));
                         painter.drawImage(pos, childImg);
                     }
-                }
 
-                // Render standard child widgets of the QRhiWidget on top
-                for (QObject* obj : rhi->children()) {
-                    if (auto* w = qobject_cast<QWidget*>(obj)) {
-                        if (w->isVisible() && !w->inherits("QRhiWidget")) {
-                            QPoint pos = w->mapTo(m_mainWindow, QPoint(0, 0));
-                            w->render(&m_frameBuffer, pos);
+                    // Render standard child widgets of the QRhiWidget on top
+                    for (QObject* obj : rhi->children()) {
+                        if (auto* w = qobject_cast<QWidget*>(obj)) {
+                            if (w->isVisible() && !w->inherits("QRhiWidget")) {
+                                QPoint pos = w->mapTo(m_mainWindow, QPoint(0, 0));
+                                w->render(&painter, pos);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    // Overlay mouse cursor if it is currently inside the window bounds
-    QPoint globalPos = QCursor::pos();
-    QPoint localPos = m_mainWindow->mapFromGlobal(globalPos);
-    if (m_mainWindow->rect().contains(localPos)) {
-        QPainter painter(&m_frameBuffer);
-        painter.setRenderHint(QPainter::Antialiasing);
+        // Overlay mouse cursor if it is currently inside the window bounds
+        if (drawCursor) {
+            painter.setRenderHint(QPainter::Antialiasing);
 
-        // Classic black cursor with a crisp white outline for high contrast
-        painter.setPen(QPen(Qt::white, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.setBrush(Qt::black);
+            // Classic black cursor with a crisp white outline for high contrast
+            painter.setPen(QPen(Qt::white, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.setBrush(Qt::black);
 
-        QPainterPath path;
-        path.moveTo(localPos);
-        path.lineTo(localPos + QPoint(0, 17));
-        path.lineTo(localPos + QPoint(4, 13));
-        path.lineTo(localPos + QPoint(8, 20));
-        path.lineTo(localPos + QPoint(11, 18));
-        path.lineTo(localPos + QPoint(7, 12));
-        path.lineTo(localPos + QPoint(12, 12));
-        path.closeSubpath();
+            QPainterPath path;
+            path.moveTo(localPos);
+            path.lineTo(localPos + QPoint(0, 17));
+            path.lineTo(localPos + QPoint(4, 13));
+            path.lineTo(localPos + QPoint(8, 20));
+            path.lineTo(localPos + QPoint(11, 18));
+            path.lineTo(localPos + QPoint(7, 12));
+            path.lineTo(localPos + QPoint(12, 12));
+            path.closeSubpath();
 
-        painter.drawPath(path);
+            painter.drawPath(path);
+        }
     }
 
     // Scale to macroblock-aligned target resolution if needed
