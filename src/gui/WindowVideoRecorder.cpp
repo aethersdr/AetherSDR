@@ -652,18 +652,17 @@ void WindowVideoRecorder::captureFrame()
 
     // Scale to macroblock-aligned target resolution if needed
     const QSize targetSize(m_videoWidth, m_videoHeight);
-    if (m_frameBuffer.size() == targetSize) {
-        m_scaledBuffer = m_frameBuffer;
-    } else {
+    if (m_frameBuffer.size() != targetSize) {
         m_scaledBuffer = m_frameBuffer.scaled(targetSize, Qt::IgnoreAspectRatio, Qt::FastTransformation);
     }
+    const QImage& frameToEncode = (m_frameBuffer.size() == targetSize) ? m_frameBuffer : m_scaledBuffer;
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
         if (static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs) {
             sendSilentAudio(ptsUs);
         }
-        bool success = m_fallbackWriter->writeVideoFrame(m_scaledBuffer, ptsUs);
+        bool success = m_fallbackWriter->writeVideoFrame(frameToEncode, ptsUs);
         if (!success) {
             emit recordingError(QStringLiteral("Failed to write video frame to native container"));
             stopRecording();
@@ -675,7 +674,7 @@ void WindowVideoRecorder::captureFrame()
 #endif
 
     // Construct QVideoFrame directly from the scaled image
-    QVideoFrame frame(m_scaledBuffer);
+    QVideoFrame frame(frameToEncode);
 
     if (frame.isValid()) {
         frame.setStartTime(ptsUs);

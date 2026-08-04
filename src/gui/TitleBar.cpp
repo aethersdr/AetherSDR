@@ -26,7 +26,6 @@
 #include <QAbstractAnimation>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
-#include <QColor>
 #include <QWindow>
 #include <QMenu>
 #include <QNetworkAccessManager>

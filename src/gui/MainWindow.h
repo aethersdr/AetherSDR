@@ -34,7 +34,6 @@
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
-#include "gui/WindowVideoRecorder.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/AudioOutputRouter.h"
 #include "core/DxClusterClient.h"
@@ -136,6 +135,7 @@ class MemoryDialog;
 class NetSchedulerDialog;
 class NetReminderBanner;
 class NetScheduler;
+class WindowVideoRecorder;
 struct NetEntry;
 struct MemoryEntry;
 class PropDashboardDialog;
