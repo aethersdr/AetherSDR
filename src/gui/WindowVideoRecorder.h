@@ -77,6 +77,8 @@ private:
     QElapsedTimer m_recordTimer;
     int m_videoWidth{1280};
     int m_videoHeight{720};
+    QImage m_frameBuffer;
+    QImage m_scaledBuffer;
 
     QMediaCaptureSession* m_session{nullptr};
     // Not parented to the session: it does not take ownership, and these are

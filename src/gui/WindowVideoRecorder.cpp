@@ -594,10 +594,11 @@ void WindowVideoRecorder::captureFrame()
         return;
     }
 
-    // Render the main window directly via standard QWidget::render() (100% robust and fast)
-    QImage img(mainSize, QImage::Format_ARGB32);
-    img.fill(Qt::black);
-    m_mainWindow->render(&img);
+    if (m_frameBuffer.size() != mainSize || m_frameBuffer.format() != QImage::Format_ARGB32) {
+        m_frameBuffer = QImage(mainSize, QImage::Format_ARGB32);
+    }
+    m_frameBuffer.fill(Qt::black);
+    m_mainWindow->render(&m_frameBuffer);
 
     // Composite any GPU-accelerated QRhiWidgets (such as SpectrumWidget) on top of the CPU render
     for (const auto& widget : m_rhiWidgetsCache) {
@@ -607,7 +608,7 @@ void WindowVideoRecorder::captureFrame()
                 if (!childImg.isNull()) {
                     QPoint pos = rhi->mapTo(m_mainWindow, QPoint(0, 0));
                     {
-                        QPainter painter(&img);
+                        QPainter painter(&m_frameBuffer);
                         painter.drawImage(pos, childImg);
                     }
                 }
@@ -617,7 +618,7 @@ void WindowVideoRecorder::captureFrame()
                     if (auto* w = qobject_cast<QWidget*>(obj)) {
                         if (w->isVisible() && !w->inherits("QRhiWidget")) {
                             QPoint pos = w->mapTo(m_mainWindow, QPoint(0, 0));
-                            w->render(&img, pos);
+                            w->render(&m_frameBuffer, pos);
                         }
                     }
                 }
@@ -629,7 +630,7 @@ void WindowVideoRecorder::captureFrame()
     QPoint globalPos = QCursor::pos();
     QPoint localPos = m_mainWindow->mapFromGlobal(globalPos);
     if (m_mainWindow->rect().contains(localPos)) {
-        QPainter painter(&img);
+        QPainter painter(&m_frameBuffer);
         painter.setRenderHint(QPainter::Antialiasing);
 
         // Classic black cursor with a crisp white outline for high contrast
@@ -650,16 +651,19 @@ void WindowVideoRecorder::captureFrame()
     }
 
     // Scale to macroblock-aligned target resolution if needed
-    QImage scaledImg = (img.size() == QSize(m_videoWidth, m_videoHeight))
-        ? img
-        : img.scaled(QSize(m_videoWidth, m_videoHeight), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    const QSize targetSize(m_videoWidth, m_videoHeight);
+    if (m_frameBuffer.size() == targetSize) {
+        m_scaledBuffer = m_frameBuffer;
+    } else {
+        m_scaledBuffer = m_frameBuffer.scaled(targetSize, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
         if (static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs) {
             sendSilentAudio(ptsUs);
         }
-        bool success = m_fallbackWriter->writeVideoFrame(scaledImg, ptsUs);
+        bool success = m_fallbackWriter->writeVideoFrame(m_scaledBuffer, ptsUs);
         if (!success) {
             emit recordingError(QStringLiteral("Failed to write video frame to native container"));
             stopRecording();
@@ -671,7 +675,7 @@ void WindowVideoRecorder::captureFrame()
 #endif
 
     // Construct QVideoFrame directly from the scaled image
-    QVideoFrame frame(scaledImg);
+    QVideoFrame frame(m_scaledBuffer);
 
     if (frame.isValid()) {
         frame.setStartTime(ptsUs);

@@ -365,7 +365,7 @@ int main(int argc, char* argv[])
     // WindowVideoRecorder's capability check observe nothing but this line,
     // so the native WMF/AVFoundation writers became unreachable on machines
     // that need them. Still before any QMedia* object is constructed.
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
+#if (defined(Q_OS_WIN) || defined(Q_OS_MAC)) && QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     if (!qEnvironmentVariableIsSet("QT_MEDIA_BACKEND")
         && AetherSDR::ffmpegMediaBackendAvailable()) {
         qputenv("QT_MEDIA_BACKEND", "ffmpeg");
