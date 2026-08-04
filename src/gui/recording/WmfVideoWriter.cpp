@@ -234,14 +234,18 @@ bool WmfVideoWriter::writeVideoFrame(const QImage& frame, qint64 ptsUs) {
         std::memcpy(dstData + (static_cast<size_t>(y) * m_width * 4), frame.constScanLine(y), m_width * 4);
     }
     buffer->Unlock();
-    buffer->SetCurrentLength(numBytes);
+    hr = buffer->SetCurrentLength(numBytes);
+    if (FAILED(hr)) {
+        buffer->Release();
+        return false;
+    }
 
     hr = MFCreateSample(&sample);
     if (SUCCEEDED(hr)) {
-        sample->AddBuffer(buffer);
-        sample->SetSampleTime(ptsUs * 10); // MF units are 100ns intervals
-        sample->SetSampleDuration((1000000 / m_fps) * 10);
-        hr = m_sinkWriter->WriteSample(m_videoStreamIndex, sample);
+        if (SUCCEEDED(hr)) hr = sample->AddBuffer(buffer);
+        if (SUCCEEDED(hr)) hr = sample->SetSampleTime(ptsUs * 10); // MF units are 100ns intervals
+        if (SUCCEEDED(hr)) hr = sample->SetSampleDuration((1000000 / m_fps) * 10);
+        if (SUCCEEDED(hr)) hr = m_sinkWriter->WriteSample(m_videoStreamIndex, sample);
         sample->Release();
     }
     buffer->Release();
@@ -287,15 +291,19 @@ bool WmfVideoWriter::writeAudioSamples(const QByteArray& pcmData, qint64 ptsUs) 
     }
     std::memcpy(data, upsampled.constData(), upsampled.size());
     buffer->Unlock();
-    buffer->SetCurrentLength(upsampled.size());
+    hr = buffer->SetCurrentLength(upsampled.size());
+    if (FAILED(hr)) {
+        buffer->Release();
+        return false;
+    }
 
     hr = MFCreateSample(&sample);
     if (SUCCEEDED(hr)) {
-        sample->AddBuffer(buffer);
-        sample->SetSampleTime(ptsUs * 10);
+        if (SUCCEEDED(hr)) hr = sample->AddBuffer(buffer);
+        if (SUCCEEDED(hr)) hr = sample->SetSampleTime(ptsUs * 10);
         // 48 kHz stereo int16 → 4 bytes per frame; duration in 100 ns units.
-        sample->SetSampleDuration((static_cast<LONGLONG>(numInSamples) * 2 * 10000000) / 48000);
-        hr = m_sinkWriter->WriteSample(m_audioStreamIndex, sample);
+        if (SUCCEEDED(hr)) hr = sample->SetSampleDuration((static_cast<LONGLONG>(numInSamples) * 2 * 10000000) / 48000);
+        if (SUCCEEDED(hr)) hr = m_sinkWriter->WriteSample(m_audioStreamIndex, sample);
         sample->Release();
     }
     buffer->Release();
