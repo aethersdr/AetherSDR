@@ -656,7 +656,7 @@ void WindowVideoRecorder::captureFrame()
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
-        if (static_cast<qint64>((m_audioSamplesSent * 1000000) / 24000) < ptsUs) {
+        if (static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs) {
             sendSilentAudio(ptsUs);
         }
         bool success = m_fallbackWriter->writeVideoFrame(scaledImg, ptsUs);
@@ -677,7 +677,7 @@ void WindowVideoRecorder::captureFrame()
         frame.setStartTime(ptsUs);
         frame.setEndTime(ptsUs + 40000); // 40ms frame duration at 25 fps (microseconds)
 
-        if (static_cast<qint64>((m_audioSamplesSent * 1000000) / 24000) < ptsUs) {
+        if (static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs) {
             sendSilentAudio(ptsUs);
         }
 
@@ -773,6 +773,15 @@ bool WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
     // first synthetic silence chunk latch the flag and permanently disable the
     // silence priming it gates.
 
+    QByteArray pcmData = int16Stereo;
+    const int remainder = pcmData.size() % kAudioBytesPerFrame;
+    if (remainder != 0) {
+        pcmData.truncate(pcmData.size() - remainder);
+    }
+    if (pcmData.isEmpty()) {
+        return false;
+    }
+
     static const QAudioFormat kFormat = []() {
         QAudioFormat fmt;
         fmt.setSampleRate(kAudioSampleRate);
@@ -782,11 +791,11 @@ bool WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
     }();
 
     qint64 ptsUs = (m_audioSamplesSent * 1000000) / kAudioSampleRate;
-    int numFrames = int16Stereo.size() / kAudioBytesPerFrame;
+    int numFrames = pcmData.size() / kAudioBytesPerFrame;
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
-        bool ok = m_fallbackWriter->writeAudioSamples(int16Stereo, ptsUs);
+        bool ok = m_fallbackWriter->writeAudioSamples(pcmData, ptsUs);
         if (ok) {
             m_audioSamplesSent += numFrames;
         }
@@ -794,7 +803,7 @@ bool WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
     }
 #endif
 
-    QAudioBuffer buffer(int16Stereo, kFormat, ptsUs);
+    QAudioBuffer buffer(pcmData, kFormat, ptsUs);
     // Only accepted samples advance the clock: the FFmpeg backend concatenates
     // the buffers it takes and ignores their start times, so counting a
     // rejected buffer would shift every later timestamp ahead of the audio
