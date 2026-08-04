@@ -753,9 +753,10 @@ void WindowVideoRecorder::feedRxAudio(const QByteArray& pcm)
     if (!m_recording || m_transmitting) {
         return;
     }
-    m_hasRealAudio = true;
     QByteArray converted = float32ToInt16(pcm);
-    sendAudioData(converted);
+    if (sendAudioData(converted)) {
+        m_hasRealAudio = true;
+    }
 }
 
 void WindowVideoRecorder::feedTxAudio(const QByteArray& int16Stereo)
@@ -763,8 +764,9 @@ void WindowVideoRecorder::feedTxAudio(const QByteArray& int16Stereo)
     if (!m_recording || !m_transmitting) {
         return;
     }
-    m_hasRealAudio = true;
-    sendAudioData(int16Stereo);
+    if (sendAudioData(int16Stereo)) {
+        m_hasRealAudio = true;
+    }
 }
 
 void WindowVideoRecorder::onMoxChanged(bool mox)
