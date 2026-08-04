@@ -1327,7 +1327,7 @@ void TitleBar::setMinimalMode(bool on)
     // Hide non-essential controls so status badges fit in the narrow strip.
     if (m_menuBar) m_menuBar->setVisible(!on);
     if (m_appNameLabel) m_appNameLabel->setVisible(!on);
-    if (m_recordBtn) m_recordBtn->setVisible(!on);
+    if (m_recordBtn) m_recordBtn->setVisible(!on || m_recordBtn->isChecked());
     m_pcBtn->setVisible(!on);
     m_speakerBtn->setVisible(!on);
     m_headphoneBtn->setVisible(!on);
@@ -1352,6 +1352,7 @@ void TitleBar::updateRecordStyle()
         return;
     }
     if (m_recordBtn->isChecked()) {
+        m_recordBtn->setVisible(true);
         AetherSDR::ThemeManager::instance().applyStyleSheet(
             m_recordBtn,
             "QPushButton { background: {{color.button.danger.background.disabled}}; color: {{color.accent.danger}}; border: 1px solid {{color.button.danger.border.disabled}}; "
@@ -1361,6 +1362,9 @@ void TitleBar::updateRecordStyle()
             m_recordPulseAnim->start();
         }
     } else {
+        if (m_minimalMode) {
+            m_recordBtn->setVisible(false);
+        }
         if (m_recordPulseAnim) {
             m_recordPulseAnim->stop();
         }

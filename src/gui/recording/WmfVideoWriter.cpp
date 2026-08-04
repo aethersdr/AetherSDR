@@ -2,7 +2,6 @@
 #include <QDebug>
 #include <QDir>
 #include <cstring>
-#include <shlwapi.h>
 
 namespace AetherSDR {
 

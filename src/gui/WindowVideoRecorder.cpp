@@ -595,7 +595,7 @@ void WindowVideoRecorder::captureFrame()
     }
 
     // Render the main window directly via standard QWidget::render() (100% robust and fast)
-    QImage img(mainSize, QImage::Format_ARGB32);
+    QImage img(mainSize, QImage::Format_ARGB32_Premultiplied);
     img.fill(Qt::black);
     m_mainWindow->render(&img);
 
