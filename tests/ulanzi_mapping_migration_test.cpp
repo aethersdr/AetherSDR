@@ -166,6 +166,17 @@ int main(int argc, char** argv)
     ok &= expect(!s.contains(QStringLiteral("UlanziDialRotaryAction")),
                  "legacy flat key UlanziDialRotaryAction is removed after adoption");
 
+    // ── mapping-layer round-trip: unrecognized action id is preserved ─────
+    // Verify setRotaryAction returns true for an unrecognized action id,
+    // persists to disk, and survives a reload as-is without silent fallback
+    // or mutation.
+    ok &= expect(UlanziDialMappings::setRotaryAction(QStringLiteral("WheelCorruptAction4756")),
+                 "setting unrecognized rotary action id succeeds");
+    s.reset();
+    s.load();
+    ok &= expect(UlanziDialMappings::rotaryAction() == QStringLiteral("WheelCorruptAction4756"),
+                 "unrecognized rotary action id survives reload and round-trips as-is");
+
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;
 }

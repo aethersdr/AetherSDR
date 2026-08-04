@@ -1476,7 +1476,10 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             rx->stepFilterWidth(steps);
         }
     } else if (actionId == "PanadapterZoom") {
-        const double baseFactor = steps > 0 ? 0.8 : 1.25;
+        // Rotary dial uses a finer per-detent factor (1.25 vs keyboard 1.5 in
+        // MainWindow_Shortcuts.cpp) so multi-detent spins give smooth control.
+        static constexpr double kRotaryPanZoomFactor = 1.25;
+        const double baseFactor = steps > 0 ? (1.0 / kRotaryPanZoomFactor) : kRotaryPanZoomFactor;
         const double factor = std::pow(baseFactor, std::abs(steps));
         zoomActivePanadapter(factor);
     } else if (actionId == "WheelRfGain") {

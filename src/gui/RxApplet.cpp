@@ -2558,14 +2558,14 @@ void RxApplet::applyFilterPreset(int widthHz)
     m_slice->setFilterWidth(lo, hi);
 }
 
-void RxApplet::stepFilterWidth(int direction)
+void RxApplet::stepFilterWidth(int steps)
 {
     // ONE list, searched, clamped and applied — see FilterStepMath.h for why
     // that is stated rather than assumed.
     const QVector<int>& stepWidths = effectiveFilterWidths();
     if (!m_slice) return;
     const int currentWidth = m_slice->filterHigh() - m_slice->filterLow();
-    const int next = steppedFilterWidthIndex(stepWidths, currentWidth, direction);
+    const int next = steppedFilterWidthIndex(stepWidths, currentWidth, steps);
     if (next < 0) return;
     applyFilterPreset(stepWidths[next]);
 }
