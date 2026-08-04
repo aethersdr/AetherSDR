@@ -953,6 +953,7 @@ private:
     WindowVideoRecorder* m_windowVideoRecorder{nullptr};
     bool              m_waitingForRecorderToStop{false};
     bool              m_recorderCloseForced{false};
+    bool              m_windowRecorderHadError{false};
     // Window video recording — MainWindow_Recording.cpp
     void wireWindowVideoRecorder();
     void onRecordWindowToggled(bool on);

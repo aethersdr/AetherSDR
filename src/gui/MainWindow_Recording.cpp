@@ -41,19 +41,23 @@ void MainWindow::wireWindowVideoRecorder()
     connect(m_windowVideoRecorder, &WindowVideoRecorder::recordingStarted,
             this, [this](const QString& filePath) {
         Q_UNUSED(filePath);
+        m_windowRecorderHadError = false;
         m_titleBar->setRecordWindowEnabled(true);
     });
     connect(m_windowVideoRecorder, &WindowVideoRecorder::recordingStopped,
             this, [this](const QString& filePath, int durationSecs) {
-        statusBar()->showMessage(
-            tr("🎬 Video saved (%1s): %2")
-                .arg(durationSecs)
-                .arg(QDir::toNativeSeparators(filePath)),
-            5000);
+        if (!m_windowRecorderHadError) {
+            statusBar()->showMessage(
+                tr("🎬 Video saved (%1s): %2")
+                    .arg(durationSecs)
+                    .arg(QDir::toNativeSeparators(filePath)),
+                5000);
+        }
         m_titleBar->setRecordWindowEnabled(false);
     });
     connect(m_windowVideoRecorder, &WindowVideoRecorder::recordingError,
             this, [this](const QString& message) {
+        m_windowRecorderHadError = true;
         statusBar()->showMessage(tr("🎬 Recording error: %1").arg(message), 5000);
         m_titleBar->setRecordWindowEnabled(false);
         // Ensure the encoder session stops; UI unchecked must match capture state.

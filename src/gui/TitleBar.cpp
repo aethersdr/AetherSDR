@@ -1326,7 +1326,7 @@ void TitleBar::setMinimalMode(bool on)
     // Hide non-essential controls so status badges fit in the narrow strip.
     if (m_menuBar) m_menuBar->setVisible(!on);
     if (m_appNameLabel) m_appNameLabel->setVisible(!on);
-    if (m_recordBtn) m_recordBtn->setVisible(!on || m_recordBtn->isChecked());
+    if (m_recordBtn) m_recordBtn->setVisible(m_recordBtn->isEnabled() && (!on || m_recordBtn->isChecked()));
     m_pcBtn->setVisible(!on);
     m_speakerBtn->setVisible(!on);
     m_headphoneBtn->setVisible(!on);
