@@ -43,6 +43,12 @@
 namespace {
 Q_LOGGING_CATEGORY(lcWindowVideoRecorder, "aether.windowvideorecorder")
 
+constexpr int kAudioSampleRate = 24000;
+constexpr int kAudioChannels = 2;
+constexpr int kAudioBytesPerSample = static_cast<int>(sizeof(int16_t));
+constexpr int kAudioBytesPerFrame = kAudioChannels * kAudioBytesPerSample;
+constexpr int kSilenceChunkMs = 40; // 40 ms silent chunk (matching 25 fps frame step)
+
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
 // True when Qt Multimedia can drive custom QVideoFrameInput/QAudioBufferInput
 // capture into an MP4/H.264/AAC encode. Construction of QVideoFrameInput is not
@@ -566,7 +572,7 @@ void WindowVideoRecorder::captureFrame()
         : (m_frameCount * 40000);
 
     // Keep audio stream synchronized with video timestamp to prevent FFmpeg muxer queue deadlocks
-    while (!m_hasRealAudio && static_cast<qint64>((m_audioSamplesSent * 1000000) / 24000) < ptsUs + 40000) {
+    while (!m_hasRealAudio && static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs + (kSilenceChunkMs * 1000)) {
         if (!sendSilentAudio(ptsUs)) {
             break;
         }
@@ -714,8 +720,9 @@ QByteArray float32ToInt16(const QByteArray& pcm)
 bool WindowVideoRecorder::sendSilentAudio(qint64 startTimeUs)
 {
     Q_UNUSED(startTimeUs);
-    // Provide 40ms of silent audio: 24000 samples/sec * 4 bytes/sample (stereo int16) * 0.040s = 3840 bytes
-    QByteArray silentBytes(3840, 0);
+    constexpr int samplesPerChunk = (kAudioSampleRate * kSilenceChunkMs) / 1000;
+    constexpr int bufferSize = samplesPerChunk * kAudioBytesPerFrame;
+    QByteArray silentBytes(bufferSize, 0);
     return sendAudioData(silentBytes);
 }
 
@@ -765,12 +772,12 @@ bool WindowVideoRecorder::sendAudioData(const QByteArray& int16Stereo)
     // silence priming it gates.
 
     QAudioFormat format;
-    format.setSampleRate(24000);
-    format.setChannelCount(2);
+    format.setSampleRate(kAudioSampleRate);
+    format.setChannelCount(kAudioChannels);
     format.setSampleFormat(QAudioFormat::Int16);
 
-    qint64 ptsUs = (m_audioSamplesSent * 1000000) / 24000;
-    int numFrames = int16Stereo.size() / 4; // 2 channels * 2 bytes = 4 bytes per frame
+    qint64 ptsUs = (m_audioSamplesSent * 1000000) / kAudioSampleRate;
+    int numFrames = int16Stereo.size() / kAudioBytesPerFrame;
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
