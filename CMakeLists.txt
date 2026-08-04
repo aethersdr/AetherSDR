@@ -5065,6 +5065,11 @@ target_link_libraries(location_address_resolver_test PRIVATE
 set_target_properties(location_address_resolver_test PROPERTIES AUTOMOC ON)
 add_test(NAME location_address_resolver_test COMMAND location_address_resolver_test)
 
+add_executable(display_presence_test tests/display_presence_test.cpp)
+target_include_directories(display_presence_test PRIVATE src)
+target_link_libraries(display_presence_test PRIVATE Qt6::Core)
+add_test(NAME display_presence_test COMMAND display_presence_test)
+
 add_executable(amp_model_test tests/amp_model_test.cpp)
 target_include_directories(amp_model_test PRIVATE src)
 target_link_libraries(amp_model_test PRIVATE aethercore Qt6::Core Qt6::Test)

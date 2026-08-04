@@ -10,6 +10,7 @@
 #include "core/SettingsSanitizer.h"
 #include "models/Nr2SettingsModel.h"
 #include "core/AutomationBridgeSettings.h"
+#include "core/DisplayPresence.h"
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
@@ -279,7 +280,26 @@ int main(int argc, char* argv[])
     if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
-            qputenv("QT_QPA_PLATFORM", "wayland;xcb");
+#ifdef __linux__
+            // Only override to xcb when we AFFIRMATIVELY detect a headless
+            // session — DRM connectors present, none connected (e.g. a Pi 5
+            // reached over wayvnc). Native-Wayland hardware GL cannot allocate a
+            // window surface with no DRM scanout, so the panadapter renders
+            // black under an EGL_BAD_MATCH storm (QT_OPENGL=software does NOT
+            // help — the failure is the wayland-egl surface, not the renderer).
+            // XWayland renders fine; "xcb;wayland" still falls back to wayland if
+            // the xcb plugin is absent. If we cannot tell (no DRM connectors
+            // found — a container, an unusual driver), keep the native-Wayland
+            // default rather than assume headless. A physical display restores
+            // it too.
+            if (AetherSDR::detectDisplayPresence()
+                == AetherSDR::DisplayPresence::Headless) {
+                qputenv("QT_QPA_PLATFORM", "xcb;wayland");
+            } else
+#endif
+            {
+                qputenv("QT_QPA_PLATFORM", "wayland;xcb");
+            }
         }
     }
 
