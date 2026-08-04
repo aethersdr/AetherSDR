@@ -167,7 +167,9 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
+#include <QAccessible>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QDateTime>
 #include <QIcon>
 #include <QCursor>
@@ -7840,6 +7842,7 @@ void MainWindow::enableNr2WithWisdom()
             "Optimizing FFT plans for NR2...\n\n"
             "This window will automatically close when wisdom generation is complete.",
             content);
+        label->setObjectName("nr2WisdomStatusLabel");
         label->setWordWrap(true);
         body->addWidget(label);
 
@@ -7849,9 +7852,37 @@ void MainWindow::enableNr2WithWisdom()
         progress->setValue(0);
         body->addWidget(progress);
 
+        auto* activityRow = new QHBoxLayout();
+        activityRow->setContentsMargins(0, 0, 0, 0);
+        auto* activityLabel = new QLabel("Working", content);
+        activityLabel->setObjectName("nr2WisdomActivityLabel");
+        activityLabel->setAccessibleName("FFTW wisdom generation activity");
+        activityRow->addWidget(activityLabel);
+        activityRow->addStretch();
+        auto* elapsedLabel = new QLabel("Elapsed: 0:00", content);
+        elapsedLabel->setObjectName("nr2WisdomElapsedTimeLabel");
+        elapsedLabel->setAccessibleName("Elapsed time");
+        activityRow->addWidget(elapsedLabel);
+        body->addLayout(activityRow);
+
+        auto* reassuranceLabel = new QLabel(
+            "Still working — FFTW planning can take several minutes on some systems.", content);
+        reassuranceLabel->setObjectName("nr2WisdomReassuranceLabel");
+        reassuranceLabel->setAccessibleName("FFTW wisdom generation reassurance");
+        reassuranceLabel->setWordWrap(true);
+        reassuranceLabel->hide();
+        body->addWidget(reassuranceLabel);
+
+        const auto announceLabel = [](QLabel* target) {
+            target->setAccessibleName(target->text());
+            QAccessibleEvent event(target, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&event);
+        };
+
         auto* buttonRow = new QHBoxLayout();
         buttonRow->addStretch();
         auto* cancelButton = new QPushButton("Cancel", content);
+        cancelButton->setObjectName("nr2WisdomCancelButton");
         cancelButton->setAutoDefault(false);
         cancelButton->setDefault(false);
         buttonRow->addWidget(cancelButton);
@@ -7861,10 +7892,49 @@ void MainWindow::enableNr2WithWisdom()
         m_nr2WisdomDialog = dlg;
         dlg->show();
 
-        const auto requestCancel = [cancelled, label, progress, cancelButton]() {
+        auto* activityTimer = new QTimer(dlg);
+        activityTimer->setInterval(500);
+        const auto elapsedTimer = std::make_shared<QElapsedTimer>();
+        const auto lastCallbackTimer = std::make_shared<QElapsedTimer>();
+        elapsedTimer->start();
+        lastCallbackTimer->start();
+        connect(activityTimer, &QTimer::timeout, dlg,
+            [cancelled, activityLabel, elapsedLabel, reassuranceLabel,
+                elapsedTimer, lastCallbackTimer, announceLabel]() {
+                const qint64 elapsedSeconds = elapsedTimer->elapsed() / 1000;
+                elapsedLabel->setText(QString("Elapsed: %1:%2")
+                    .arg(elapsedSeconds / 60)
+                    .arg(elapsedSeconds % 60, 2, 10, QLatin1Char('0')));
+                const int dotCount = static_cast<int>((elapsedTimer->elapsed() / 500) % 4);
+                activityLabel->setText(QString("%1%2")
+                    .arg(cancelled->load() ? "Canceling" : "Working")
+                    .arg(QString(dotCount, QLatin1Char('.'))));
+                if (cancelled->load()) {
+                    reassuranceLabel->setText(
+                        "Cancel requested — waiting for the current FFT plan to finish.");
+                    reassuranceLabel->show();
+                } else {
+                    const bool quiet = lastCallbackTimer->elapsed() >= 10000;
+                    if (quiet && !reassuranceLabel->isVisible()) {
+                        reassuranceLabel->show();
+                        announceLabel(reassuranceLabel);
+                    } else if (!quiet) {
+                        reassuranceLabel->hide();
+                    }
+                }
+            });
+        activityTimer->start();
+
+        const auto requestCancel = [cancelled, label, progress, cancelButton,
+                                       activityLabel, reassuranceLabel, announceLabel]() {
             if (cancelled->exchange(true)) {
                 return;
             }
+            activityLabel->setText("Cancel requested");
+            reassuranceLabel->setText(
+                "Cancel requested — waiting for the current FFT plan to finish.");
+            reassuranceLabel->show();
+            announceLabel(reassuranceLabel);
             cancelButton->setEnabled(false);
             progress->setRange(0, 0);
             label->setText("Canceling FFTW wisdom generation...\n\n"
@@ -7874,9 +7944,11 @@ void MainWindow::enableNr2WithWisdom()
         connect(dlg, &QDialog::rejected, dlg, requestCancel);
 
         const QPointer<QDialog> dlgGuard(dlg);
-        auto* thread = QThread::create([cancelled, result, dlgGuard, label, progress]() {
+        auto* thread = QThread::create([cancelled, result, dlgGuard, label, progress,
+                                           reassuranceLabel, lastCallbackTimer]() {
             const auto wisdomResult = AudioEngine::generateWisdom(
-                [cancelled, dlgGuard, label, progress](int step, int total, const std::string& desc) {
+                [cancelled, dlgGuard, label, progress, reassuranceLabel,
+                    lastCallbackTimer](int step, int total, const std::string& desc) {
                     if (!dlgGuard) {
                         return;
                     }
@@ -7885,10 +7957,13 @@ void MainWindow::enableNr2WithWisdom()
                     }
                     int pct = total > 0 ? (step * 100 / total) : 0;
                     QString d = QString::fromStdString(desc);
-                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, label, progress, pct, d]() {
+                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, label, progress, reassuranceLabel,
+                                                                  lastCallbackTimer, pct, d]() {
                         if (!dlgGuard) {
                             return;
                         }
+                        lastCallbackTimer->restart();
+                        reassuranceLabel->hide();
                         if (!d.isEmpty()) {
                             label->setText(d + "\n\n"
                                 "This window will automatically close when wisdom generation is complete.");
@@ -7900,18 +7975,24 @@ void MainWindow::enableNr2WithWisdom()
                 [cancelled]() { return cancelled->load(); });
             result->store(static_cast<int>(wisdomResult));
         });
-        connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result]() {
+        connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result,
+                                                     activityTimer, activityLabel, reassuranceLabel,
+                                                     announceLabel]() {
             const auto wisdomResult =
                 static_cast<SpectralNR::WisdomResult>(result->load());
             const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
                             || wisdomResult == SpectralNR::WisdomResult::Generated;
+            activityTimer->stop();
+            reassuranceLabel->hide();
             progress->setRange(0, 100);
             progress->setValue(ready ? 100 : 0);
 
             if (!ready) {
+                activityLabel->setText("Stopped");
                 label->setText(wisdomResult == SpectralNR::WisdomResult::Cancelled
                     ? "Wisdom generation canceled. Audio was left unchanged."
                     : "Wisdom generation failed. Audio was left unchanged.");
+                announceLabel(label);
                 if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
                     if (auto* w = a->widget()) {
                         w->syncFromEngine();
@@ -7929,7 +8010,9 @@ void MainWindow::enableNr2WithWisdom()
                 return;
             }
 
+            activityLabel->setText("Complete");
             label->setText("Wisdom generation complete!");
+            announceLabel(label);
             QTimer::singleShot(800, this, [this, dlg, thread]() {
                 dlg->accept();
                 dlg->deleteLater();
