@@ -1,6 +1,7 @@
 #include "WmfVideoWriter.h"
 #include <QDebug>
 #include <QDir>
+#include <cstdint>
 #include <cstring>
 
 namespace AetherSDR {

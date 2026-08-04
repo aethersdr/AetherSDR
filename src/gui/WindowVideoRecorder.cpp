@@ -30,6 +30,7 @@
 #include <QLibrary>
 #include <QRhiWidget>
 #include <algorithm>
+#include <cstdint>
 #include <utility>
 
 #include "recording/INativeVideoWriter.h"

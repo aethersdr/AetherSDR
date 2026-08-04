@@ -4,6 +4,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <CoreMedia/CoreMedia.h>
 #include <QDebug>
+#include <cstdint>
 #include <cstring>
 
 // ARC-correct ownership model for the C++/ObjC boundary:
