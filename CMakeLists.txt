@@ -3636,7 +3636,7 @@ if(WIN32)
     target_link_libraries(window_video_recorder_test PRIVATE ${WMF_LIBRARIES} ole32)
 elseif(APPLE)
     target_sources(window_video_recorder_test PRIVATE src/gui/recording/AvfVideoWriter.mm)
-    target_link_libraries(window_video_recorder_test PRIVATE "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
+    target_link_libraries(window_video_recorder_test PRIVATE "-framework Foundation" "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
 endif()
 target_include_directories(window_video_recorder_test PRIVATE
     src

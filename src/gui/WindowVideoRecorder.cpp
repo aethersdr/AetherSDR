@@ -115,6 +115,7 @@ void setFFmpegLogLevel(int level)
                 QLibrary::resolve(QStringLiteral("libavutil"), "av_log_set_level"));
         }
 
+#if defined(Q_OS_LINUX)
         // 2. Unversioned soname.
         if (!setLevel) {
             avutilLib.setFileName(QStringLiteral("avutil"));
@@ -134,6 +135,7 @@ void setFFmpegLogLevel(int level)
                 setLevel = tryResolve(avutilLib);
             }
         }
+#endif
     }
 
     if (setLevel) {

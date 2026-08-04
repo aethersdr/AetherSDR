@@ -23,7 +23,7 @@ inline bool ffmpegMediaBackendAvailable()
     QStringList roots = QCoreApplication::libraryPaths();
     roots << QLibraryInfo::path(QLibraryInfo::PluginsPath);
 
-    for (const QString& root : std::as_const(roots)) {
+    for (const QString& root : roots) {
         if (root.isEmpty()) {
             continue;
         }
