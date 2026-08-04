@@ -554,6 +554,15 @@ void WindowVideoRecorder::stopRecording()
         // callers always observe recordingStopped.
         if (m_stopping && m_recorder->recorderState() == QMediaRecorder::StoppedState) {
             finalizeStop();
+        } else if (m_stopping) {
+            // Watchdog fallback: if backend stalls or fails to emit StoppedState within 3s,
+            // force finalizeStop() so session is not permanently stuck in finalizing state.
+            QTimer::singleShot(3000, this, [this]() {
+                if (m_stopping) {
+                    qCWarning(lcWindowVideoRecorder) << "Stop timeout (3s) elapsed waiting for StoppedState; forcing finalizeStop()";
+                    finalizeStop();
+                }
+            });
         }
         return;
     }
