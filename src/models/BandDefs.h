@@ -19,7 +19,10 @@ inline constexpr BandDef kBands[] = {
     {"630m",   0.472,    0.479,    0.475,   "CW"},
     {"160m",   1.800,    2.000,    1.900,   "LSB"},
     {"80m",    3.500,    4.000,    3.800,   "LSB"},
-    {"60m",    5.330,    5.405,    5.357,   "USB"},
+    // 60m upper edge is 5.4065, not 5.405: the 5405 kHz channel is a 2.8 kHz
+    // slot starting at the 5403.5 dial, so it runs to 5.4063. Clipping at
+    // 5.405 made frequency->band lookup miss the top of the channel (#4723).
+    {"60m",    5.3305,   5.4065,   5.357,   "USB"},
     {"40m",    7.000,    7.300,    7.200,   "LSB"},
     {"30m",   10.100,   10.150,   10.125,   "DIGU"},
     {"20m",   14.000,   14.350,   14.225,   "USB"},
