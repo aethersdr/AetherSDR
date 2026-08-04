@@ -13,12 +13,13 @@ enum class DssOutlinePipelineMode {
     SharedFillPipeline,
 };
 
-// The OpenGL backend reuses the fill program for ribbon outlines: live probes
-// showed flat/stale outlines with a separate, identically configured program.
+// QRhi's OpenGLES2 backend, which covers desktop GL as well as GLES, reuses the
+// fill program for ribbon outlines: live probes showed flat/stale outlines
+// with a separate, identically configured program.
 constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
-    bool openGlBackend)
+    bool openGlEs2Backend)
 {
-    return openGlBackend
+    return openGlEs2Backend
         ? DssOutlinePipelineMode::SharedFillPipeline
         : DssOutlinePipelineMode::DedicatedRibbonPipeline;
 }

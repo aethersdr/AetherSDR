@@ -14318,6 +14318,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         // Reuse the working OpenGL fill program for ribbon outlines. Its blend
         // state matches the dedicated outline pipeline; live probes isolated
         // the flat/stale rows to the separate-program path.
+        //
+        // On the shared-fill path this rebind is deliberately a no-op: the fill
+        // draw above leaves m_dssMeshFillPipeline current, so QRhi skips the GL
+        // program switch and this draw inherits its state. Do not bind another
+        // pipeline between that draw and this one; doing so reintroduces the
+        // Linux-only flat-row failure that this path avoids.
         cb->setGraphicsPipeline(outlinePipeline);
         cb->setShaderResources(m_dssMeshSrb);
         cb->setViewport(vp);
