@@ -48,12 +48,12 @@ static int g_failures = 0;
 int main(int argc, char** argv)
 {
     qputenv("AV_LOG_LEVEL", "error");
-    // Need QApplication instead of QCoreApplication because WindowVideoRecorder uses QWidget/QPixmap grab
-    QApplication app(argc, argv);
     TestSettingsProfile settingsProfile(QStringLiteral("aether-window-video-recorder-test"));
     if (!settingsProfile.isValid()) {
         return 1;
     }
+    // Need QApplication instead of QCoreApplication because WindowVideoRecorder uses QWidget/QPixmap grab
+    QApplication app(argc, argv);
     AppSettings::instance().load();
     QTemporaryDir tmp;
     AppSettings::instance().setValue("QsoRecordingDir", tmp.path());
