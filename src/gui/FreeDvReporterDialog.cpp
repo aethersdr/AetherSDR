@@ -196,7 +196,10 @@ void FreeDvReporterDialog::buildBody()
         "  border: 1px solid {{color.background.2}};"
         "  padding: 2px 10px;"
         "}"
-        "QPushButton:hover { background-color: {{color.background.2}}; }"
+        // background.1, not background.2 again — the existing Close button
+        // below has this same-as-base no-op already (pre-existing, out of
+        // scope here); this button shouldn't repeat it (#4231 review).
+        "QPushButton:hover { background-color: {{color.background.1}}; }"
         "QPushButton:disabled { color: {{color.text.secondary}}; }"
     );
     msgRow->addWidget(m_msgSendBtn);

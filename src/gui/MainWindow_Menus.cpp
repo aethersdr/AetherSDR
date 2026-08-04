@@ -370,6 +370,15 @@ void MainWindow::buildMenuBar()
                               m_freedvClient,
 #endif
                               &m_radioModel, &m_dxccProvider);
+#ifdef HAVE_WEBSOCKETS
+        // Every open, not just the first: this dialog is a persistent
+        // singleton, so without this the field would only ever show
+        // whatever FreeDvMyMessage was at first construction, silently
+        // reverting anything sent from the FreeDV Reporter panel since
+        // (#4231 review).
+        if (m_spotHubDialog)
+            m_spotHubDialog->reloadFreedvMessage();
+#endif
         if (!wasFresh || !m_spotHubDialog) return;
         auto* dlg = m_spotHubDialog.data();
         dlg->setTotalSpots(m_radioModel.spotModel().spots().size());

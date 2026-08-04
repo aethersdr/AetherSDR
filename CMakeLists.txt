@@ -5235,6 +5235,8 @@ if(Qt6WebSockets_FOUND)
     set_target_properties(freedv_reporter_message_test PROPERTIES AUTOMOC ON)
     add_test(NAME freedv_reporter_message_test
              COMMAND freedv_reporter_message_test)
+    set_tests_properties(freedv_reporter_message_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 # Regression guard for #3662: the AetherControl window must never demand a

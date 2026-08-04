@@ -2811,6 +2811,19 @@ void DxClusterDialog::setTotalSpots(int count)
         m_totalSpotsLabel->setText(QString::number(count));
 }
 
+#ifdef HAVE_WEBSOCKETS
+void DxClusterDialog::reloadFreedvMessage()
+{
+    if (!m_fdvMessageEdit) return;
+
+    const QString stored = AppSettings::instance()
+                               .value("FreeDvMyMessage", "").toString();
+    // Don't clobber an in-progress edit the operator hasn't sent yet.
+    if (!m_fdvMessageEdit->hasFocus() && m_fdvMessageEdit->text() != stored)
+        m_fdvMessageEdit->setText(stored);
+}
+#endif
+
 void DxClusterDialog::flushSpotBatch()
 {
     if (m_spotListFrozen) {
