@@ -182,9 +182,14 @@ QVariant SpotTableModel::data(const QModelIndex& index, int role) const
         if (index.column() == ColFreq)
             return QColor(0xe0, 0xd0, 0x60);  // yellow-ish
     }
-    // Store freq in UserRole for sorting
+    // Store freq/time in UserRole so QSortFilterProxyModel can sort on them
+    // (#4749: Time was the only always-visible column with no sortable
+    // value, so clicking it did nothing and there was no way back to
+    // newest-first order once Freq had been sorted).
     if (role == Qt::UserRole && index.column() == ColFreq)
         return spot.freqMhz;
+    if (role == Qt::UserRole && index.column() == ColTime)
+        return spot.utcTime;
 
     return {};
 }
