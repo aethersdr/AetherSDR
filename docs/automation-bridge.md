@@ -723,8 +723,8 @@ handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 capacity during TCI suppression. An Active-to-Idle transition with suppressed
 callbacks and unread bytes remains a fallback for backends that do not expose a
 useful capacity. The same evidence is written to the Audio Summary support log
-only when Help → Support's **CAT/rigctld** logging toggle (the category used by
-TCI debug logging) is enabled; TX capture-health summaries are off by default.
+only when Help → Support's **TCI / CAT / rigctld** logging toggle is enabled;
+TX capture-health summaries are off by default.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies
