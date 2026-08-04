@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QByteArray>
 #include <QDateTime>
 #include <QWidget>
 #include <QTimer>
