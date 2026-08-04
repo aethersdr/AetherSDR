@@ -5213,6 +5213,30 @@ target_link_libraries(help_dialog_test PRIVATE
 )
 set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
 
+# FreeDV Reporter status-message row (#4231). Guarded like the dialog
+# itself — FreeDvReporterDialog only exists when WebSockets are available.
+# Dialog-side only: the test never reaches qso.freedv.org.
+if(Qt6WebSockets_FOUND)
+    # src/gui/ sources belong to the AetherSDR executable rather than
+    # aethercore, so the dialog's GUI dependencies are listed explicitly;
+    # SliceModel/ThemeManager/settings come in via aethercore.
+    add_executable(freedv_reporter_message_test
+        tests/freedv_reporter_message_test.cpp
+        src/gui/FreeDvReporterDialog.cpp
+        src/gui/FreeDvReporterModel.cpp
+        src/gui/PersistentDialog.cpp
+        src/gui/FramelessResizer.cpp
+        src/gui/FramelessWindowTitleBar.cpp
+    )
+    target_include_directories(freedv_reporter_message_test PRIVATE src)
+    target_link_libraries(freedv_reporter_message_test PRIVATE
+        aethercore Qt6::Core Qt6::Widgets Qt6::Test
+    )
+    set_target_properties(freedv_reporter_message_test PROPERTIES AUTOMOC ON)
+    add_test(NAME freedv_reporter_message_test
+             COMMAND freedv_reporter_message_test)
+endif()
+
 # Regression guard for #3662: the AetherControl window must never demand a
 # minimum height taller than the screen (auto-engages compact when it would).
 add_executable(flex_control_dialog_size_test
