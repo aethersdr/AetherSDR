@@ -174,6 +174,9 @@ int main(int argc, char** argv)
                  "setting unrecognized rotary action id succeeds");
     s.reset();
     s.load();
+    const QJsonObject reloadedDoc = storedDocument();
+    ok &= expect(reloadedDoc.value(QStringLiteral("rotary_action")).toString() == QStringLiteral("WheelCorruptAction4756"),
+                 "unrecognized rotary action id persists in on-disk AppSettings row after reload");
     ok &= expect(UlanziDialMappings::rotaryAction() == QStringLiteral("WheelCorruptAction4756"),
                  "unrecognized rotary action id survives reload and round-trips as-is");
 
