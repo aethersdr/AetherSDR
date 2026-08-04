@@ -56,7 +56,7 @@ signals:
 
 private slots:
     void captureFrame();
-    bool sendSilentAudio(qint64 startTimeUs);
+    bool sendSilentAudio();
 
 private:
     QString buildFilename() const;

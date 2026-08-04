@@ -588,7 +588,7 @@ void WindowVideoRecorder::captureFrame()
 
     // Keep audio stream synchronized with video timestamp to prevent FFmpeg muxer queue deadlocks
     while (!m_hasRealAudio && static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs + (kSilenceChunkMs * 1000)) {
-        if (!sendSilentAudio(ptsUs)) {
+        if (!sendSilentAudio()) {
             break;
         }
     }
@@ -675,7 +675,7 @@ void WindowVideoRecorder::captureFrame()
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     if (m_useFallback && m_fallbackWriter) {
         if (static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs) {
-            sendSilentAudio(ptsUs);
+            sendSilentAudio();
         }
         bool success = m_fallbackWriter->writeVideoFrame(frameToEncode, ptsUs);
         if (!success) {
@@ -696,7 +696,7 @@ void WindowVideoRecorder::captureFrame()
         frame.setEndTime(ptsUs + 40000); // 40ms frame duration at 25 fps (microseconds)
 
         if (static_cast<qint64>((m_audioSamplesSent * 1000000) / kAudioSampleRate) < ptsUs) {
-            sendSilentAudio(ptsUs);
+            sendSilentAudio();
         }
 
         bool sent = m_videoFrameInput->sendVideoFrame(frame);
@@ -737,9 +737,8 @@ QByteArray float32ToInt16(const QByteArray& pcm)
 
 } // namespace
 
-bool WindowVideoRecorder::sendSilentAudio(qint64 startTimeUs)
+bool WindowVideoRecorder::sendSilentAudio()
 {
-    Q_UNUSED(startTimeUs);
     constexpr int samplesPerChunk = (kAudioSampleRate * kSilenceChunkMs) / 1000;
     constexpr int bufferSize = samplesPerChunk * kAudioBytesPerFrame;
     static const QByteArray kSilentBytes(bufferSize, 0);
