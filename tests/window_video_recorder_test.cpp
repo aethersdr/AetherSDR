@@ -236,8 +236,7 @@ int main(int argc, char** argv)
 int main()
 {
     std::fprintf(stderr, "WARNING: Skipped WindowVideoRecorder tests because Qt version is < 6.8 (compiled with %s)\n", QT_VERSION_STR);
-    std::printf("PASS\n");
-    return 0;
+    return 77;
 }
 
 #endif

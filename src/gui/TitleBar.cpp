@@ -292,11 +292,11 @@ TitleBar::TitleBar(QWidget* parent)
     m_recordBtn->setAccessibleDescription(tr("Toggle recording of the AetherSDR window"));
     m_recordBtn->setToolTip(tr("Record the AetherSDR window to an MP4 video file"));
 
-    m_recordOpacity = new QGraphicsOpacityEffect(this);
+    m_recordOpacity = new QGraphicsOpacityEffect(m_recordBtn);
     m_recordOpacity->setOpacity(1.0);
     m_recordBtn->setGraphicsEffect(m_recordOpacity);
 
-    m_recordPulseAnim = new QPropertyAnimation(m_recordOpacity, "opacity", this);
+    m_recordPulseAnim = new QPropertyAnimation(m_recordOpacity, "opacity", m_recordBtn);
     m_recordPulseAnim->setDuration(1200);
     m_recordPulseAnim->setStartValue(1.0);
     m_recordPulseAnim->setKeyValueAt(0.5, 0.4);

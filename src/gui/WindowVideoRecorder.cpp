@@ -509,10 +509,8 @@ bool WindowVideoRecorder::startRecording()
     // the meantime is silently discarded, which desynchronises the file.
     m_recordTimer.invalidate();
 
-#if !defined(Q_OS_MAC)
     qCDebug(lcWindowVideoRecorder) << "Calling m_recorder->record(). Current state:" << m_recorder->recorderState();
     m_recorder->record();
-#endif
 
     // Start video capture at 25 fps (40 ms) on Main Thread
     m_captureTimer->start(40);
