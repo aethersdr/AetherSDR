@@ -59,7 +59,8 @@ public:
                              int renderMode = 0,
                              int dssFloorDepth = 6,
                              int dssGain = 70,
-                             const QColor& lineColor = QColor(0x00, 0xe5, 0xff));
+                             const QColor& lineColor = QColor(0x00, 0xe5, 0xff),
+                             int dssRowSpan = 100);
     // Update only the radio-owned pan processing controls from live status.
     // Signal blockers keep status echoes from generating commands back to the
     // radio.
@@ -184,6 +185,7 @@ signals:
     void spectrumRenderModeChanged(int mode);
     void dssFloorDepthChanged(int dB);
     void dssGainChanged(int pct);
+    void dssRowSpanChanged(int pct);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
     // Emitted when user selects a band from the sub-panel.  stackKeyHint is
@@ -374,6 +376,8 @@ private:
     QLabel*      m_dssFloorLabel{nullptr};
     QSlider*     m_dssGainSlider{nullptr};  // 3DSS colour floor (0-100)
     QLabel*      m_dssGainLabel{nullptr};
+    QSlider*     m_dssRowSpanSlider{nullptr};  // 3DSS wedge close-in (0-100)
+    QLabel*      m_dssRowSpanLabel{nullptr};
     QComboBox*   m_gpuCombo{nullptr};   // render-GPU selector (multi-GPU only)
     QSlider*     m_rateSlider{nullptr};
     QLabel*      m_rateLabel{nullptr};

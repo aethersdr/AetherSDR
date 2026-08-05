@@ -1915,6 +1915,25 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         emit dssGainChanged(v);
     });
 
+    // ── 3D span — how far the near rows overhang the plot edges ───────────
+    // Caps how much of the radio's offscreen spectrum the surface may use to
+    // close the empty wedges beside it. 100 spends everything available, so a
+    // source that ships no overhang is unaffected at any setting.
+    makeRow("3D Span:", 0, 100, 100, m_dssRowSpanSlider, m_dssRowSpanLabel);
+    if (m_dssRowSpanSlider) {
+        m_dssRowSpanSlider->setObjectName("dssRowSpanSlider");
+        m_dssRowSpanSlider->setToolTip(
+            "3D surface width: how far the nearest traces overhang the plot "
+            "edges,\nusing spectrum the radio sends from outside the "
+            "panadapter.\nHigher = the empty wedges beside the surface close "
+            "from the front;\n0 = the classic narrowing trapezoid. Limited by "
+            "how much\noffscreen spectrum the source actually provides.");
+    }
+    connect(m_dssRowSpanSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (m_dssRowSpanLabel) m_dssRowSpanLabel->setText(QString::number(v));
+        emit dssRowSpanChanged(v);
+    });
+
     makeHeader("SYSTEM");
 
     // ── Render GPU (multi-GPU systems only) ───────────────────────────────
@@ -2136,7 +2155,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                int renderMode,
                                                int dssFloorDepth,
                                                int dssGain,
-                                               const QColor& lineColor)
+                                               const QColor& lineColor,
+                                               int dssRowSpan)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -2211,6 +2231,13 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
         QSignalBlocker bc(m_dssGainSlider);
         m_dssGainSlider->setValue(dssGain);
         if (m_dssGainLabel) m_dssGainLabel->setText(QString::number(dssGain));
+    }
+    if (m_dssRowSpanSlider) {
+        QSignalBlocker bs(m_dssRowSpanSlider);
+        m_dssRowSpanSlider->setValue(dssRowSpan);
+        if (m_dssRowSpanLabel) {
+            m_dssRowSpanLabel->setText(QString::number(dssRowSpan));
+        }
     }
 }
 

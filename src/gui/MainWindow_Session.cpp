@@ -1426,6 +1426,8 @@ void MainWindow::wirePanLifecycle()
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
             sw->setDssGain(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
+            sw->setDssRowSpan(
+                s.value(sw->settingsKey("Display3DSpan"), "100").toInt());
         }
     });
     // NOTE: panadapterLevelChanged → spectrum()::setDbmRange has been removed.

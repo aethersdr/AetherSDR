@@ -50,14 +50,74 @@ public:
     // span. Otherwise a high Ref level compresses every real signal into blue.
     static constexpr float kColorSpanDb        = 45.0f;
 
+    // ── Wedge-closing row span ──────────────────────────────────────────────
+    // Because every row covers the SAME frequency span while the far rows
+    // narrow to kBackWidthFrac, the surface leaves two empty triangles beside
+    // it. Widen the span each row covers instead: the near rows then run off
+    // both edges of the plot and the existing perspective narrowing walks them
+    // back in, closing the wedge from the front. The projection below is
+    // untouched, so the converging slant, the frequency ruler and every marker
+    // stay put. dss_mesh.vert applies the SAME formulas.
+
+    // Span at which the DEEPEST row lands exactly on the plot edge. Beyond this
+    // the surface only overhangs further without revealing more of the plot.
+    static constexpr float kMaxRowSpanFactor = 1.0f / kBackWidthFrac;
+
+    // Perspective narrowing with depth — the only thing that places a frequency.
+    static float depthScale(float depth)
+    {
+        return 1.0f - std::clamp(depth, 0.0f, 1.0f) * (1.0f - kBackWidthFrac);
+    }
+
+    // Mesh column (0..1 across the drawn row) -> frequency in viewport units,
+    // where 0..1 spans the on-screen bandwidth. Depth-independent by design.
+    static float rowFrequencyUnit(float meshUnit, float rowSpanFactor)
+    {
+        return 0.5f + (meshUnit - 0.5f) * rowSpanFactor;
+    }
+
+    // Fraction of the plot width a row at `depth` covers. >= 1 means that row
+    // reaches both edges and leaves no wedge; the front row is the widest.
+    static float rowScreenCoverage(float depth, float rowSpanFactor)
+    {
+        return depthScale(depth) * rowSpanFactor;
+    }
+
+    // Shallowest depth still leaving a wedge, or 1 when the surface is closed
+    // all the way to the back. Lets the host report how much a given overhang
+    // actually bought.
+    static float wedgeFreeDepth(float rowSpanFactor)
+    {
+        if (rowSpanFactor <= 1.0f) {
+            return 0.0f;
+        }
+        if (rowSpanFactor >= kMaxRowSpanFactor) {
+            return 1.0f;
+        }
+        return (1.0f - 1.0f / rowSpanFactor) / (1.0f - kBackWidthFrac);
+    }
+
+    // Usable span for an overhang of `spanFactor` x the viewport bandwidth.
+    // Clamped at kMaxRowSpanFactor: past it the extra data is off-plot anyway.
+    static float rowSpanFactorForOverhang(float spanFactor)
+    {
+        if (!(spanFactor > 1.0f) || !std::isfinite(spanFactor)) {
+            return 1.0f;
+        }
+        return std::min(spanFactor, kMaxRowSpanFactor);
+    }
+
     // Project a normalized frequency coordinate onto the same perspective
     // plane used by both DSS renderers. depth=0 is the full-width front edge;
     // depth=1 is the narrowed back edge. Slice overlays use this helper so
     // their apparent angle cannot drift from the FFT surface.
+    //
+    // Frequency-in / screen-out, and independent of rowSpanFactor: widening a
+    // row extends the frequency range it covers, never where a frequency lands.
     static QPointF projectPerspective(float frequencyUnit, float depth)
     {
         const float d = std::clamp(depth, 0.0f, 1.0f);
-        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        const float width = depthScale(d);
         return QPointF(0.5f + (frequencyUnit - 0.5f) * width,
                        1.0f - d * kDepthSpanFrac);
     }
@@ -69,7 +129,7 @@ public:
                                   float floorDbm, float rangeDb, float zCurve)
     {
         const float d = std::clamp(depth, 0.0f, 1.0f);
-        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        const float width = depthScale(d);
         const float finiteDbm = std::isfinite(dbm) ? dbm : floorDbm;
         const float strengthLinear = std::clamp(
             (finiteDbm - floorDbm) / std::max(rangeDb, 1.0f),

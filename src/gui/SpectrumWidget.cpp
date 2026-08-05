@@ -2426,6 +2426,8 @@ void SpectrumWidget::loadSettings()
                    0, static_cast<int>(WfColorScheme::Count) - 1));
     m_dssGain = std::clamp(
         s.value(settingsKey("Display3DGain"), "70").toInt(), 0, 100);
+    m_dssRowSpanPct = std::clamp(
+        s.value(settingsKey("Display3DSpan"), "100").toInt(), 0, 100);
     m_spectrumRenderMode = static_cast<SpectrumRenderMode>(
         std::clamp(s.value(settingsKey("DisplaySpectrumRenderMode"), "0").toInt(),
                    0, static_cast<int>(SpectrumRenderMode::Count) - 1));
@@ -2458,7 +2460,7 @@ void SpectrumWidget::loadSettings()
             m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
             m_fftLineWidth, m_wfAutoBlackRadioSide,
             static_cast<int>(m_spectrumRenderMode), dssFloorDepth(),
-            m_dssGain, m_fftLineColor);
+            m_dssGain, m_fftLineColor, m_dssRowSpanPct);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
             m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor,
             m_freqScaleFontPt);
@@ -4525,6 +4527,21 @@ void SpectrumWidget::setDssGain(int pct) {
 #endif
         m_dss.invalidate();     // CPU fallback surface re-colours too
     }
+    update();
+}
+
+void SpectrumWidget::setDssRowSpan(int pct) {
+    pct = std::clamp(pct, 0, 100);
+    if (pct == m_dssRowSpanPct) {
+        return;
+    }
+    m_dssRowSpanPct = pct;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("Display3DSpan"), QString::number(pct));
+    s.save();
+    // Geometry only: the mesh reads it as a uniform and the row store is
+    // untouched, so nothing needs re-uploading. The eased approach in
+    // renderGpuFrame carries the change over the next few frames.
     update();
 }
 
@@ -12488,6 +12505,51 @@ void SpectrumWidget::uploadDssPaletteLut(QRhiResourceUpdateBatch* batch,
     m_dssLutToken = token;
 }
 
+float SpectrumWidget::dssRowSpanTarget(double targetBandwidthMhz) const
+{
+    // A/B override: AETHER_DSS_ROW_SPAN=1 pins today's clipped trapezoid, 1.667
+    // forces the widest useful frustum (the near rows overhang the plot and any
+    // column with no data behind it feathers out), anything between scales it.
+    if (qEnvironmentVariableIsSet("AETHER_DSS_ROW_SPAN")) {
+        bool ok = false;
+        const float forced =
+            qEnvironmentVariable("AETHER_DSS_ROW_SPAN").toFloat(&ok);
+        if (ok) {
+            // Wins over the slider: this is the A/B lever, and it must be able
+            // to demand more span than the source can fill so the coverage
+            // feather itself can be exercised.
+            return std::clamp(forced, 1.0f, DssRenderer::kMaxRowSpanFactor);
+        }
+    }
+
+    // The newest row is the live edge and the only one guaranteed to carry a
+    // calibrated tile overhang: Kiwi, the fallback producer, and anything
+    // rebuilt from retained history all drop supplemental, so driving the span
+    // off the minimum across rows would collapse it to 1.0 after every pan.
+    // dss_mesh.vert feathers those rows out per-vertex instead.
+    const double supplementalBandwidthMhz =
+        m_dss.rowSupplementalBandwidthMhzAtAge(0);
+    if (!std::isfinite(targetBandwidthMhz) || targetBandwidthMhz <= 0.0
+        || !std::isfinite(supplementalBandwidthMhz)
+        || supplementalBandwidthMhz <= targetBandwidthMhz) {
+        return 1.0f;
+    }
+
+    // Closing the wedge all the way to the back needs 1 / kBackWidthFrac
+    // (1.667x, i.e. +33% per side). A FLEX waterfall tile runs about 1.2x, which
+    // overhangs the near rows and closes the wedge for the front third.
+    const float available = DssRenderer::rowSpanFactorForOverhang(
+        static_cast<float>(supplementalBandwidthMhz / targetBandwidthMhz));
+
+    // "3D Span" scales how much of the AVAILABLE overhang to spend, not how
+    // much of the absolute maximum. Against a 1.15x tile the absolute reading
+    // would clamp everything above ~22% to the same picture, leaving most of
+    // the travel dead; this way 100 always means "all the source gives" and
+    // every step below it visibly narrows the surface.
+    return 1.0f
+        + (static_cast<float>(m_dssRowSpanPct) / 100.0f) * (available - 1.0f);
+}
+
 void SpectrumWidget::initDssMeshPipeline()
 {
     QRhi* r = rhi();
@@ -13847,7 +13909,20 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // UBO would swallow a short initializer list (breaking e.g. preview
             // zoom/pan) without complaint; the shadow descriptors are filled
             // separately below.
-            constexpr int kDssMeshScalarFields = 24;  // through the bgFill vec4
+            // Overhang the near rows past the plot edges by as much as the
+            // offscreen spectrum supports, easing so a zoom or a stream switch
+            // can't snap the silhouette. See dss_mesh.vert's rowSpanFactor.
+            {
+                const float target =
+                    dssRowSpanTarget(dssTargetBandwidthMhz);
+                constexpr float kRowSpanAlpha = 0.12f;
+                m_dssRowSpanFactor += kRowSpanAlpha
+                    * (target - m_dssRowSpanFactor);
+                if (std::abs(target - m_dssRowSpanFactor) < 0.002f) {
+                    m_dssRowSpanFactor = target;
+                }
+            }
+            constexpr int kDssMeshScalarFields = 28;  // through the bgFill vec4
             const float uboScalars[] = {
                 rowOffset,
                 floorDbm, rangeDb, m_dssZCurve,
@@ -13863,6 +13938,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 static_cast<float>(DssRenderer::kVisibleRows),
                 static_cast<float>(specContentW * dpr),
                 static_cast<float>(specRect.height() * dpr),
+                m_dssRowSpanFactor,
+                // std140 rounds the 21-float scalar run up to bgFill's vec4
+                // alignment. These three are the hole, not fields.
+                0.0f, 0.0f, 0.0f,
                 static_cast<float>(m_bgFillColor.redF()),
                 static_cast<float>(m_bgFillColor.greenF()),
                 static_cast<float>(m_bgFillColor.blueF()),
@@ -13877,7 +13956,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // Slice shadows are decals evaluated by the DSS shader itself.
             // Because the mask modifies the existing curtain/ridge fragments,
             // it cannot hover above or cut through the rendered surface.
-            constexpr int kShadowBandsOffset = 24;
+            constexpr int kShadowBandsOffset = 28;
             static_assert(kShadowBandsOffset == kDssMeshScalarFields,
                 "shadow descriptors must begin right after the scalar prefix");
             constexpr int kShadowStylesOffset =
@@ -13891,6 +13970,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             const double shadowEndMhz =
                 shadowCenterMhz + shadowBandwidthMhz * 0.5;
             int shadowCount = 0;
+            // A widened row covers frequencies outside the on-screen viewport,
+            // so slice decals now live on [-margin, 1+margin] in target-frame
+            // units rather than [0,1]. margin is 0 at span 1.0, which restores
+            // the old clamps exactly.
+            const float shadowUnitMargin =
+                (m_dssRowSpanFactor - 1.0f) * 0.5f;
+            const float shadowUnitLow = -shadowUnitMargin;
+            const float shadowUnitHigh = 1.0f + shadowUnitMargin;
             const auto unitForShadowMhz = [&](double mhz) {
                 return static_cast<float>(
                     (mhz - shadowStartMhz) / shadowBandwidthMhz);
@@ -13906,9 +13993,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     return false;
                 }
                 const int bandBase = kShadowBandsOffset + shadowCount * 4;
-                ubo.at(bandBase) = std::clamp(low, 0.0f, 1.0f);
-                ubo.at(bandBase + 1) = std::clamp(high, 0.0f, 1.0f);
-                ubo.at(bandBase + 2) = std::clamp(cueCenter, 0.0f, 1.0f);
+                ubo.at(bandBase) =
+                    std::clamp(low, shadowUnitLow, shadowUnitHigh);
+                ubo.at(bandBase + 1) =
+                    std::clamp(high, shadowUnitLow, shadowUnitHigh);
+                ubo.at(bandBase + 2) =
+                    std::clamp(cueCenter, shadowUnitLow, shadowUnitHigh);
                 ubo.at(bandBase + 3) =
                     bandVisible ? (active ? 0.42f : 0.17f) : 0.0f;
                 const int styleBase = kShadowStylesOffset + shadowCount * 4;
@@ -13926,11 +14016,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // mark+space pair rather than a carrier cue; markerWidth == 0 draws
             // the passband with no cue at all.
             const auto appendShadow = [&](const SliceOverlay& so) {
+                const double shadowMarginMhz =
+                    static_cast<double>(shadowUnitMargin) * shadowBandwidthMhz;
                 if (shadowCount >= kDssMeshShadowSlices
                     || !std::isfinite(shadowBandwidthMhz)
                     || shadowBandwidthMhz <= 0.0
-                    || so.freqMhz < shadowStartMhz
-                    || so.freqMhz > shadowEndMhz) {
+                    || so.freqMhz < shadowStartMhz - shadowMarginMhz
+                    || so.freqMhz > shadowEndMhz + shadowMarginMhz) {
                     return;
                 }
                 float low = unitForShadowMhz(
@@ -13940,7 +14032,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 if (low > high) {
                     std::swap(low, high);
                 }
-                const bool bandVisible = !(high < 0.0f || low > 1.0f);
+                const bool bandVisible =
+                    !(high < shadowUnitLow || low > shadowUnitHigh);
 
                 struct ShadowCue { float center; QColor color; };
                 std::array<ShadowCue, 2> cues;
@@ -13968,7 +14061,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 std::array<ShadowCue, 2> visible;
                 int visibleCount = 0;
                 for (int i = 0; i < cueCount; ++i) {
-                    if (cues[i].center >= 0.0f && cues[i].center <= 1.0f) {
+                    if (cues[i].center >= shadowUnitLow
+                        && cues[i].center <= shadowUnitHigh) {
                         visible[visibleCount++] = cues[i];
                     }
                 }

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -556,6 +557,112 @@ int testDcEdgeSpikeFlattening()
     return 0;
 }
 
+int testRowSpanGeometry()
+{
+    constexpr float kMax = DssRenderer::kMaxRowSpanFactor;
+
+    // Span 1.0 is a strict identity: the CPU fallback and every existing caller
+    // depend on today's rendering being untouched when no overhang exists.
+    for (const float meshUnit : {0.0f, 0.25f, 0.5f, 1.0f}) {
+        if (std::abs(DssRenderer::rowFrequencyUnit(meshUnit, 1.0f) - meshUnit)
+                > 0.0001f) {
+            return fail("span 1.0 must map mesh columns to themselves");
+        }
+    }
+    for (const float depth : {0.0f, 0.5f, 1.0f}) {
+        if (std::abs(DssRenderer::rowScreenCoverage(depth, 1.0f)
+                     - DssRenderer::depthScale(depth)) > 0.0001f) {
+            return fail("span 1.0 must leave row coverage untouched");
+        }
+    }
+    if (DssRenderer::wedgeFreeDepth(1.0f) != 0.0f) {
+        return fail("span 1.0 must close no part of the wedge");
+    }
+
+    // The point of the whole change: at the widest useful span the NEAR rows
+    // overhang the plot and the DEEPEST row lands exactly on its edge, so no
+    // depth is left with a wedge.
+    if (!(DssRenderer::rowScreenCoverage(0.0f, kMax) > 1.0f)) {
+        return fail("the front row must overhang the plot edges");
+    }
+    if (std::abs(DssRenderer::rowScreenCoverage(1.0f, kMax) - 1.0f) > 0.0001f) {
+        return fail("the deepest row must land exactly on the plot edge");
+    }
+    if (std::abs(DssRenderer::wedgeFreeDepth(kMax) - 1.0f) > 0.0001f) {
+        return fail("the widest span must close the wedge at every depth");
+    }
+    // Coverage must fall monotonically front to back and never dip below the
+    // plot until the wedge-free depth is passed.
+    float previous = DssRenderer::rowScreenCoverage(0.0f, kMax);
+    for (int step = 1; step <= 20; ++step) {
+        const float depth = static_cast<float>(step) / 20.0f;
+        const float coverage = DssRenderer::rowScreenCoverage(depth, kMax);
+        if (coverage > previous + 0.0001f) {
+            return fail("row coverage must narrow with depth");
+        }
+        if (coverage < 1.0f - 0.0001f) {
+            return fail("no row may fall inside the plot at the widest span");
+        }
+        previous = coverage;
+    }
+
+    // A partial overhang closes the wedge from the FRONT, and wedgeFreeDepth
+    // must agree with where coverage actually crosses the plot edge.
+    constexpr float kFlexSpan = 1.2f;   // a FLEX tile runs about 1.2x
+    const float flexSpan = DssRenderer::rowSpanFactorForOverhang(kFlexSpan);
+    if (std::abs(flexSpan - kFlexSpan) > 0.0001f) {
+        return fail("an overhang below the cap should be used in full");
+    }
+    if (!(DssRenderer::rowScreenCoverage(0.0f, flexSpan) > 1.0f)
+        || !(DssRenderer::rowScreenCoverage(1.0f, flexSpan) < 1.0f)) {
+        return fail("a partial overhang must overhang the front and not the back");
+    }
+    const float crossing = DssRenderer::wedgeFreeDepth(flexSpan);
+    if (!(crossing > 0.0f) || !(crossing < 1.0f)) {
+        return fail("a partial overhang must close part of the wedge");
+    }
+    if (std::abs(DssRenderer::rowScreenCoverage(crossing, flexSpan) - 1.0f)
+            > 0.0001f) {
+        return fail("wedgeFreeDepth must be where coverage reaches the edge");
+    }
+
+    // Data past the cap is off-plot; taking it would only overhang further.
+    if (std::abs(DssRenderer::rowSpanFactorForOverhang(4.0f) - kMax) > 0.0001f) {
+        return fail("overhang beyond the cap must clamp");
+    }
+    // No overhang, or a degenerate one, must keep the clipped trapezoid rather
+    // than widening into spectrum that was never captured.
+    if (DssRenderer::rowSpanFactorForOverhang(1.0f) != 1.0f
+        || DssRenderer::rowSpanFactorForOverhang(0.5f) != 1.0f
+        || DssRenderer::rowSpanFactorForOverhang(
+               std::numeric_limits<float>::quiet_NaN()) != 1.0f) {
+        return fail("a missing overhang must keep the clipped trapezoid");
+    }
+
+    // The projection must be span-INDEPENDENT: widening changes what a row
+    // covers, never where a frequency lands. This is what keeps the converging
+    // slant, the frequency ruler and every marker exactly where they were.
+    for (const float span : {1.0f, 1.2f, kMax}) {
+        for (const float depth : {0.0f, 0.4f, 1.0f}) {
+            constexpr float kSignalUnit = 0.3f;
+            // Solve for the mesh column carrying this frequency, project it,
+            // and it must land on the unwidened position.
+            const float meshUnit = 0.5f + (kSignalUnit - 0.5f) / span;
+            const float freqUnit =
+                DssRenderer::rowFrequencyUnit(meshUnit, span);
+            const double screenX =
+                0.5 + (freqUnit - 0.5) * DssRenderer::depthScale(depth);
+            if (std::abs(screenX
+                         - DssRenderer::projectPerspective(
+                               kSignalUnit, depth).x()) > 0.0001) {
+                return fail("widening a row must not move an in-band signal");
+            }
+        }
+    }
+
+    return 0;
+}
+
 int testPerspectiveProjection()
 {
     const QPointF frontLeft =
@@ -701,6 +808,9 @@ int main()
         return rc;
     }
     if (int rc = testDcEdgeSpikeFlattening(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testRowSpanGeometry(); rc != 0) {
         return rc;
     }
     if (int rc = testPerspectiveProjection(); rc != 0) {
