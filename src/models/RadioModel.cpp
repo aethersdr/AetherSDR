@@ -862,10 +862,34 @@ void RadioModel::setupBackend(const QString& family)
     // only, exactly as the old inline handleMeterStatus parse did) and drives the
     // MeterModel. Meter *values* stay on the VITA-49 data plane (below).
     // #4070: the backend now emits a typed MeterDef — no key-string reconstruction.
+    // THE METER LIST ARRIVES AFTER THE CONNECT EDGE, and one capability gate
+    // reads it — so that gate has to be re-evaluated when it changes.
+    //
+    // MainWindow's mic-level gauge follows hasMicPeakMeter() rather than a
+    // capability flag, which is right: a Flex forbids mic-input selection too
+    // and still publishes MICPEAK, so only the meter's absence means the face
+    // can never move. But applyCapabilitiesToUi() runs on capabilitiesChanged,
+    // and FlexBackend never emits it — grep says the only backend that does is
+    // Sim. So on a Flex the gate ran exactly once, at connect, while
+    // m_micPeakIdx was still -1, and hid a gauge that was about to start
+    // working. Its visibility then depended on whether an unrelated oscillator
+    // or GPS status message happened to land afterwards.
     connect(m_backend.get(), &IRadioBackend::meterDefined, this,
-            [this](const MeterDef& def) { m_meterModel.defineMeter(def); });
+            [this](const MeterDef& def) {
+        const bool hadMicPeak = m_meterModel.hasMicPeakMeter();
+        m_meterModel.defineMeter(def);
+        if (hadMicPeak != m_meterModel.hasMicPeakMeter())
+            publishCapabilities(isConnected());
+    });
     connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
-            [this](int index) { m_meterModel.removeMeter(index); });
+            [this](int index) {
+        const bool hadMicPeak = m_meterModel.hasMicPeakMeter();
+        m_meterModel.removeMeter(index);
+        // Symmetric on purpose: a meter that goes away must hide the face
+        // again, or a radio swap leaves a dead gauge on screen.
+        if (hadMicPeak != m_meterModel.hasMicPeakMeter())
+            publishCapabilities(isConnected());
+    });
 
     // A backend may revise its own capabilities mid-session (SimBackend does so
     // on connect; a Flex refines its seeded table as touchpoints convert), and

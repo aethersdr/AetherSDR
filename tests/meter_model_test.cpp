@@ -256,6 +256,25 @@ void testRemovingAdjacentMetersDoesNotClearCompPeak()
 // THE UNIT CONTRACT. This model used to interpret a meter purely by NAME and
 // apply a unit it assumed, so a backend publishing its radio's honest unit was
 // silently mis-rendered. Both cases below reproduce a live IC-705 defect.
+// hasMicPeakMeter() is what MainWindow's mic-gauge visibility follows, and it
+// flips LATE — the meter list arrives after the connect edge. RadioModel
+// re-publishes capabilities on that transition, so the predicate has to be
+// honest in both directions or the gauge sticks.
+void testMicPeakAvailabilityTracksTheMeterList()
+{
+    MeterModel model;
+    report("no mic-peak meter before the radio declares one", !model.hasMicPeakMeter());
+
+    model.defineMeter(slcMeter(10, 0));
+    report("an unrelated meter does not make one appear", !model.hasMicPeakMeter());
+
+    model.defineMeter(txMeter(31, "MICPEAK", "dBFS"));
+    report("MICPEAK makes it available", model.hasMicPeakMeter());
+
+    model.removeMeter(31);
+    report("and removing it makes it unavailable again", !model.hasMicPeakMeter());
+}
+
 void testForwardPowerHonoursItsDeclaredUnit()
 {
     // Watts, declared. 5 W must stay 5 W.
@@ -846,6 +865,7 @@ int main(int argc, char** argv)
     testAfterEqAndScMicDoNotAffectCompression();
     testRemovingCompPeakMarksCompressionUnavailable();
     testRemovingAdjacentMetersDoesNotClearCompPeak();
+    testMicPeakAvailabilityTracksTheMeterList();
     testForwardPowerHonoursItsDeclaredUnit();
     testAlcPercentIsMappedOntoTheGaugeRange();
     testDirectionalPowerUsesDirectReflectedMeter();
