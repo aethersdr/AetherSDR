@@ -205,6 +205,50 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- transmit audio is gated on keying --------------------------------
+    //
+    // A SAFETY GATE, not an optimisation. AudioEngine does not PTT-gate the tap
+    // that feeds submitTxAudio, on purpose and by documented contract, so if
+    // the backend does not gate then nothing does and the operator's live
+    // microphone streams to the radio's modulation input for the whole session
+    // — which a radio with VOX enabled keys on (Principle VI).
+    {
+        const int before = radio.audioPacketsFromClient();
+        QByteArray pcm(1024 * 2 * static_cast<int>(sizeof(qint16)), 0);
+        auto* w = reinterpret_cast<qint16*>(pcm.data());
+        for (int i = 0; i < 1024; ++i) {
+            const auto v = static_cast<qint16>(8000 * std::sin(2.0 * M_PI * 1000.0 * i / 24000.0));
+            w[i * 2] = v;
+            w[i * 2 + 1] = v;
+        }
+
+        // UNKEYED: nothing may reach the radio.
+        for (int i = 0; i < 20; ++i)
+            backend.submitTxAudio(pcm, 24000);
+        QTest::qWait(120);
+        check(radio.audioPacketsFromClient() == before,
+              "transmit audio is DROPPED while unkeyed");
+
+        // KEYED: the same buffers must arrive.
+        backend.setKeying(true);
+        for (int i = 0; i < 20; ++i)
+            backend.submitTxAudio(pcm, 24000);
+        QTest::qWait(200);
+        const int keyed = radio.audioPacketsFromClient();
+        check(keyed > before, "and flows once keyed");
+        backend.setKeying(false);
+
+        // ...and stops again on unkey, rather than draining a backlog into the
+        // next transmission.
+        QTest::qWait(120);
+        const int afterUnkey = radio.audioPacketsFromClient();
+        for (int i = 0; i < 20; ++i)
+            backend.submitTxAudio(pcm, 24000);
+        QTest::qWait(120);
+        check(radio.audioPacketsFromClient() == afterUnkey,
+              "and stops again on unkey");
+    }
+
     // ---- the pan intents --------------------------------------------------
     //
     // The sweep pushed above put the radio at a 100 kHz span (200 kHz wide),

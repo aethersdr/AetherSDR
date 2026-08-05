@@ -738,6 +738,33 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
 {
     if (!m_session || !m_connected)
         return;
+
+    // ONLY WHILE KEYED — and the engine is relying on us for this.
+    //
+    // AudioEngine deliberately does NOT PTT-gate the tap that feeds this
+    // ("No PTT gate here: Hl2Backend::submitTxAudio drops audio unless keyed"),
+    // because the seam contract puts the gate in the backend. This one had no
+    // gate at any layer: not here, not in IcomSession::sendAudio, and not in
+    // onTxPump. So the operator's live microphone streamed into the radio's
+    // WLAN modulation input for the entire session.
+    //
+    // Two things that costs, and the first is a transmit-safety question. A
+    // radio with VOX enabled keys on that feed, with no intent expressed
+    // anywhere in this client — and this backend can neither read nor clear VOX
+    // (Principle VI: nothing automates into a keyed transmitter). The second is
+    // that TxPacketizer caps at 250 ms and drops the OLDEST on overflow, so a
+    // continuously-fed queue saturates and then sheds periodically.
+    //
+    // SAFE TO GATE, because the audio stream does not depend on this traffic to
+    // stay up: IcomStream runs its own idle and ping timers, and RS-BA1's
+    // keepalive is the 0x00 idle packet rather than the audio payload. Stopping
+    // audio between overs stops audio, not the session.
+    //
+    // m_tuning is included because a TUNE carrier is synthesised in place of
+    // this buffer further down and must still reach the radio.
+    if (!m_keyed && !m_tuning) {
+        return;
+    }
     // The engine hands us interleaved int16 stereo; the radio wants mono at its
     // negotiated rate. Downmix here rather than in IcomSession so the session
     // stays a transport.
