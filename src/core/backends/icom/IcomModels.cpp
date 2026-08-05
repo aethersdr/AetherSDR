@@ -36,6 +36,20 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*verified*/ true,
     },
     {
+        // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),
+        // not read from the guide, so `verified` stays false: that flag means
+        // "confirmed against this model's own CI-V Reference Guide" and this
+        // evidence is a different kind.
+        //
+        // 618 consecutive scope frames off an IC-9700 at 10.0.0.7, every one
+        // 475 pixels wide, decoded through the RS-BA1 CI-V data stream. The
+        // frame's own bounds header cross-checks: centre 439.864060 MHz (where
+        // the radio was tuned) and a 500 kHz span, giving 1052.6 Hz per pixel.
+        //
+        // So the 475/160/11 inherited from the IC-705 turn out to be RIGHT for
+        // this model — worth recording precisely because it could not be
+        // assumed. The IC-7610 row below is the counter-example: 689 points and
+        // a 0..200 range.
         0xA2, "IC-9700", 2, 2,
         /*hasNetwork*/ true, /*hasWifi*/ false,
         /*hasScope*/ true, 475, 160, 11,
