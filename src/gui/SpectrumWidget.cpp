@@ -12509,47 +12509,36 @@ void SpectrumWidget::uploadDssPaletteLut(QRhiResourceUpdateBatch* batch,
 
 float SpectrumWidget::dssRowSpanTarget(double targetBandwidthMhz) const
 {
-    // A/B override: AETHER_DSS_ROW_SPAN=1 pins today's clipped trapezoid, 1.667
-    // forces the widest useful frustum (the near rows overhang the plot and any
-    // column with no data behind it feathers out), anything between scales it.
-    if (qEnvironmentVariableIsSet("AETHER_DSS_ROW_SPAN")) {
+    // A/B override, read once: this sits in the per-frame render path, and the
+    // environment cannot change under a running process. AETHER_DSS_ROW_SPAN=1
+    // pins the classic clipped trapezoid, 1.667 forces the widest useful
+    // frustum. Negative means "unset or unparseable", so the slider decides.
+    //
+    // Unlike the slider it can demand more span than the source can fill, which
+    // is what exercises the coverage feather in dss_mesh.vert.
+    static const float kForcedSpan = [] {
+        if (!qEnvironmentVariableIsSet("AETHER_DSS_ROW_SPAN")) {
+            return -1.0f;
+        }
         bool ok = false;
         const float forced =
             qEnvironmentVariable("AETHER_DSS_ROW_SPAN").toFloat(&ok);
-        if (ok) {
-            // Wins over the slider: this is the A/B lever, and it must be able
-            // to demand more span than the source can fill so the coverage
-            // feather itself can be exercised.
-            return std::clamp(forced, 1.0f, DssRenderer::kMaxRowSpanFactor);
-        }
+        return ok ? std::clamp(forced, 1.0f, DssRenderer::kMaxRowSpanFactor)
+                  : -1.0f;
+    }();
+    if (kForcedSpan > 0.0f) {
+        return kForcedSpan;
     }
 
-    // The newest row is the live edge and the only one guaranteed to carry a
-    // calibrated tile overhang: Kiwi, the fallback producer, and anything
-    // rebuilt from retained history all drop supplemental, so driving the span
-    // off the minimum across rows would collapse it to 1.0 after every pan.
+    // Age 0 is the live edge and the only row guaranteed to carry a calibrated
+    // tile overhang: Kiwi, the fallback producer, and anything rebuilt from
+    // retained history all drop supplemental, so driving the span off the
+    // minimum across rows would collapse it to 1.0 after every pan.
     // dss_mesh.vert feathers those rows out per-vertex instead.
-    const double supplementalBandwidthMhz =
-        m_dss.rowSupplementalBandwidthMhzAtAge(0);
-    if (!std::isfinite(targetBandwidthMhz) || targetBandwidthMhz <= 0.0
-        || !std::isfinite(supplementalBandwidthMhz)
-        || supplementalBandwidthMhz <= targetBandwidthMhz) {
-        return 1.0f;
-    }
-
-    // Closing the wedge all the way to the back needs 1 / kBackWidthFrac
-    // (1.667x, i.e. +33% per side). A FLEX waterfall tile runs about 1.2x, which
-    // overhangs the near rows and closes the wedge for the front third.
-    const float available = DssRenderer::rowSpanFactorForOverhang(
-        static_cast<float>(supplementalBandwidthMhz / targetBandwidthMhz));
-
-    // "3D Span" scales how much of the AVAILABLE overhang to spend, not how
-    // much of the absolute maximum. Against a 1.15x tile the absolute reading
-    // would clamp everything above ~22% to the same picture, leaving most of
-    // the travel dead; this way 100 always means "all the source gives" and
-    // every step below it visibly narrows the surface.
-    return 1.0f
-        + (static_cast<float>(m_dssRowSpanPct) / 100.0f) * (available - 1.0f);
+    return DssRenderer::rowSpanFactorFor(
+        m_dss.rowSupplementalBandwidthMhzAtAge(0),
+        targetBandwidthMhz,
+        m_dssRowSpanPct);
 }
 
 void SpectrumWidget::initDssMeshPipeline()

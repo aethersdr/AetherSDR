@@ -125,6 +125,33 @@ public:
         return std::min(spanFactor, kMaxRowSpanFactor);
     }
 
+    // Row span for a source whose calibrated overhang spans
+    // supplementalBandwidthMhz against a targetBandwidthMhz viewport, scaled by
+    // a 0-100 operator setting. Anything that cannot be trusted -- a
+    // non-positive or non-finite bandwidth, or an overhang no wider than the
+    // viewport -- yields 1.0, the clipped trapezoid, rather than widening into
+    // spectrum that was never captured.
+    //
+    // The percentage scales the AVAILABLE span, not the absolute maximum:
+    // against a ~1.15x tile an absolute reading would clamp everything above
+    // ~22% to the same picture, leaving most of the control's travel dead.
+    static float rowSpanFactorFor(double supplementalBandwidthMhz,
+                                  double targetBandwidthMhz,
+                                  int spanPercent)
+    {
+        if (!std::isfinite(targetBandwidthMhz) || targetBandwidthMhz <= 0.0
+            || !std::isfinite(supplementalBandwidthMhz)
+            || supplementalBandwidthMhz <= targetBandwidthMhz) {
+            return 1.0f;
+        }
+        const float available = rowSpanFactorForOverhang(
+            static_cast<float>(
+                supplementalBandwidthMhz / targetBandwidthMhz));
+        const float fraction =
+            static_cast<float>(std::clamp(spanPercent, 0, 100)) / 100.0f;
+        return 1.0f + fraction * (available - 1.0f);
+    }
+
     // Project a normalized frequency coordinate onto the same perspective
     // plane used by both DSS renderers. depth=0 is the full-width front edge;
     // depth=1 is the narrowed back edge. Slice overlays use this helper so

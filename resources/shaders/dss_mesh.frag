@@ -51,7 +51,7 @@ layout(binding = 2) uniform sampler2D paletteLut;  // 256x1 RGBA8, floor(0)->pea
 
 layout(location = 0) out vec4 fragColor;
 
-vec3 applySliceShadow(vec3 surfaceColor, float depthFade, float freqUnit)
+vec3 applySliceShadow(vec3 surfaceColor, float depthFade)
 {
     if (shadowMeta.y < 0.5) {
         return surfaceColor;
@@ -60,7 +60,7 @@ vec3 applySliceShadow(vec3 surfaceColor, float depthFade, float freqUnit)
     int descriptorCount = int(clamp(shadowMeta.x, 0.0, 8.0));
     float shadowPlotWidthPx = max(shadowMeta.z, 1.0);
     float frequencyPixel =
-        max(fwidth(freqUnit), 1.0 / shadowPlotWidthPx);
+        max(fwidth(vFrequency), 1.0 / shadowPlotWidthPx);
     vec3 color = surfaceColor;
     for (int i = 0; i < 8; ++i) {
         if (i >= descriptorCount) {
@@ -70,9 +70,9 @@ vec3 applySliceShadow(vec3 surfaceColor, float depthFade, float freqUnit)
         vec4 style = shadowStyles[i];
         float edgeSoftness = frequencyPixel * 0.8;
         float insideLow = smoothstep(
-            band.x - edgeSoftness, band.x + edgeSoftness, freqUnit);
+            band.x - edgeSoftness, band.x + edgeSoftness, vFrequency);
         float insideHigh = 1.0 - smoothstep(
-            band.y - edgeSoftness, band.y + edgeSoftness, freqUnit);
+            band.y - edgeSoftness, band.y + edgeSoftness, vFrequency);
         float bandMask = insideLow * insideHigh;
 
         // Near-black with a trace of the slice hue: this darkens the existing
@@ -85,7 +85,7 @@ vec3 applySliceShadow(vec3 surfaceColor, float depthFade, float freqUnit)
         float lineHalfWidth = frequencyPixel * 1.4;
         float lineMask = 1.0 - smoothstep(
             lineHalfWidth, lineHalfWidth * 2.1,
-            abs(freqUnit - band.z));
+            abs(vFrequency - band.z));
         vec3 cueColor = mix(shadowColor, style.rgb, 0.42);
         color = mix(
             color, cueColor,
@@ -100,7 +100,6 @@ void main()
         discard;
     }
     float fade = clamp(1.0 - vDepth, 0.0, 1.0);   // 1 at front, 0 at back
-    float freqUnit = vFrequency;
     float shadowFade = pow(fade, 1.15);
 
     if (vEdge < -0.5) {
@@ -109,7 +108,7 @@ void main()
         // analytical edge coverage changes continuously as the trace moves
         // through subpixels instead of toggling whole pixels on and off.
         vec3 oc = mix(bgFill.rgb, vec3(0.92), 0.45 + 0.55 * fade);
-        oc = applySliceShadow(oc, shadowFade, freqUnit);
+        oc = applySliceShadow(oc, shadowFade);
         float flatOutline = 1.0 - smoothstep(0.0, 0.035, vLut);
         float flatOutlineScale = mix(1.0, 0.42, flatOutline);
         float ribbonCoverage =
@@ -146,7 +145,7 @@ void main()
     vec3 c = texture(paletteLut, vec2(clamp(vLut, 0.0, 1.0), 0.5)).rgb;
     c = mix(c, bgFill.rgb, clamp(vDepth * haze, 0.0, 1.0));
     c = mix(bgFill.rgb, c, vBoundaryFade);
-    c = applySliceShadow(c, shadowFade, freqUnit);
+    c = applySliceShadow(c, shadowFade);
     float sideDistancePx =
         max(vSideDistance, 0.0) * max(plotWidthPx, 1.0);
     // The curtain has the same exposed stacked endpoints as the ridge. Fade

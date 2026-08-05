@@ -557,6 +557,77 @@ int testDcEdgeSpikeFlattening()
     return 0;
 }
 
+int testRowSpanTaper()
+{
+    constexpr float kMax = DssRenderer::kMaxRowSpanFactor;
+    const auto span = [](double supp, double target, int pct) {
+        return DssRenderer::rowSpanFactorFor(supp, target, pct);
+    };
+
+    // A source with no usable overhang must keep the clipped trapezoid at EVERY
+    // setting — the slider must never widen into spectrum never captured.
+    for (const int pct : {0, 50, 100}) {
+        if (span(0.2, 0.2, pct) != 1.0f        // exactly the viewport
+            || span(0.1, 0.2, pct) != 1.0f     // narrower than the viewport
+            || span(0.0, 0.2, pct) != 1.0f) {
+            return fail("no overhang must keep the clipped trapezoid");
+        }
+    }
+
+    // Degenerate frames must not widen either. A zero/negative target would
+    // divide by zero and a NaN would poison the mesh uniform.
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for (const int pct : {0, 100}) {
+        if (span(0.23, 0.0, pct) != 1.0f
+            || span(0.23, -0.2, pct) != 1.0f
+            || span(0.23, nan, pct) != 1.0f
+            || span(nan, 0.2, pct) != 1.0f
+            || span(inf, 0.2, pct) != 1.0f
+            || span(0.23, inf, pct) != 1.0f) {
+            return fail("a degenerate frequency frame must not widen the mesh");
+        }
+    }
+
+    // The percentage scales the AVAILABLE span, not the absolute maximum: with
+    // a 1.2x tile, 100 must reach exactly 1.2 and 50 exactly halfway. An
+    // absolute reading would put 50 at 1.333 and clamp it back to 1.2, which is
+    // the dead-travel bug this mapping exists to avoid.
+    if (std::abs(span(0.24, 0.2, 100) - 1.2f) > 0.0001f) {
+        return fail("100% must spend the whole available overhang");
+    }
+    if (std::abs(span(0.24, 0.2, 50) - 1.1f) > 0.0001f) {
+        return fail("50% must spend half the available overhang");
+    }
+    if (span(0.24, 0.2, 0) != 1.0f) {
+        return fail("0% must restore the clipped trapezoid");
+    }
+
+    // Monotone in the setting, so every step of the control does something.
+    float previous = span(0.24, 0.2, 0);
+    for (int pct = 10; pct <= 100; pct += 10) {
+        const float current = span(0.24, 0.2, pct);
+        if (!(current > previous)) {
+            return fail("every step of the span control must widen the surface");
+        }
+        previous = current;
+    }
+
+    // An overhang past the cap saturates rather than overhanging pointlessly.
+    if (std::abs(span(2.0, 0.2, 100) - kMax) > 0.0001f) {
+        return fail("an overhang beyond the cap must saturate");
+    }
+
+    // Out-of-range settings clamp rather than extrapolating past the cap or
+    // inverting the surface.
+    if (span(0.24, 0.2, -50) != 1.0f
+        || std::abs(span(0.24, 0.2, 500) - 1.2f) > 0.0001f) {
+        return fail("the span setting must clamp to 0..100");
+    }
+
+    return 0;
+}
+
 int testRowSpanGeometry()
 {
     constexpr float kMax = DssRenderer::kMaxRowSpanFactor;
@@ -808,6 +879,9 @@ int main()
         return rc;
     }
     if (int rc = testDcEdgeSpikeFlattening(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testRowSpanTaper(); rc != 0) {
         return rc;
     }
     if (int rc = testRowSpanGeometry(); rc != 0) {

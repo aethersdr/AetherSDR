@@ -250,9 +250,11 @@ void main()
     float ridge = sH * frontMaxRidgeFrac * w;          // far ridges shorter
     float topY  = baseY - ridge;                       // up = smaller y
     float plotY = edge > 0.5 ? 1.0 : topY;
-    // Half the row's on-screen width, times how far this column sits from the
-    // nearer end. Off-screen ends give a large value, so the fade correctly
-    // leaves them alone.
+    // Distance from this column to the nearer silhouette edge, in plot-width
+    // units. It reaches 0 at both mesh ends, so the side fade always applies
+    // there; on a widened row those ends sit outside the plot and the fade is
+    // clipped away with them, which is why widening shows no fade band inside
+    // the viewport.
     vSideDistance = min(u, 1.0 - u) * rowSpanFactor * w;
 
     vec2 ndc = vec2(plotX * 2.0 - 1.0, 1.0 - plotY * 2.0);
