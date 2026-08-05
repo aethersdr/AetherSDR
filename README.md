@@ -279,20 +279,32 @@ That is the escape hatch if a GPU or driver renders the spectrum incorrectly —
 
 ### Wayland and XWayland
 
-On a Wayland session AetherSDR asks Qt for `wayland;xcb` — native Wayland when
-the platform plugin is available, XWayland otherwise. Native Wayland avoids the
-GLX `BadAccess` crash that XWayland can produce when opening child dialogs on
-some compositors, and renders correctly under fractional scaling instead of
-being bitmap-scaled by the compositor.
+On a Wayland session AetherSDR chooses the Qt platform based on whether a
+display is attached:
 
-If a compositor misbehaves under native Wayland, force XWayland:
+- **A display is connected** → `wayland;xcb` (native Wayland when the platform
+  plugin is available, XWayland otherwise). Native Wayland avoids the GLX
+  `BadAccess` crash that XWayland can produce when opening child dialogs on some
+  compositors, and renders correctly under fractional scaling instead of being
+  bitmap-scaled by the compositor.
+- **Headless** — no connected display, e.g. a remote Raspberry Pi reached over
+  VNC — → `xcb;wayland`. With no DRM scanout, native-Wayland hardware GL cannot
+  allocate a window surface and the spectrum renders black under an
+  `EGL_BAD_MATCH` error storm; XWayland allocates its buffers through the X
+  server and works. AetherSDR detects this from the DRM connector status and
+  flips the order automatically; the chosen platform is recorded at startup in
+  the log (`Platform: Wayland session, display presence …`).
+
+Setting `QT_QPA_PLATFORM` yourself always wins — override in either direction:
 
 ```bash
-QT_QPA_PLATFORM=xcb ./AetherSDR-*.AppImage
+QT_QPA_PLATFORM=xcb ./AetherSDR-*.AppImage            # force XWayland
+QT_QPA_PLATFORM='wayland;xcb' ./AetherSDR-*.AppImage  # force native Wayland
 ```
 
-Setting `QT_QPA_PLATFORM` yourself always wins — AetherSDR only supplies a
-default when the variable is unset.
+The second form is the way back to native Wayland on a headless session whose
+XWayland mishandles child dialogs (the GLX `BadAccess` above) — the automatic
+choice there is `xcb;wayland`, so you would otherwise be on XWayland.
 
 On a distribution whose Qt is older than the required 6.8 (notably Ubuntu 24.04 LTS at 6.4.2), install a newer Qt manually:
 

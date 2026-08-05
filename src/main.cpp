@@ -226,6 +226,26 @@ static int runConfigCli(int argc, char* argv[])
     return usage();
 }
 
+// The Qt platform-selection decision made on a Wayland session, recorded before
+// the log handler exists and re-emitted next to the GpuSelector summary once
+// logging is up — so a Support bundle shows why we chose xcb vs wayland (the
+// first "why am I on XWayland / why did fractional scaling change" question).
+// nullptr choice = no override applied (not a Wayland session, or the user set
+// QT_QPA_PLATFORM already).
+static const char* g_qpaPlatformChoice = nullptr;
+static AetherSDR::DisplayPresence g_displayPresence =
+    AetherSDR::DisplayPresence::Unknown;
+
+static const char* displayPresenceName(AetherSDR::DisplayPresence p)
+{
+    switch (p) {
+        case AetherSDR::DisplayPresence::Connected: return "connected";
+        case AetherSDR::DisplayPresence::Headless:  return "headless";
+        case AetherSDR::DisplayPresence::Unknown:   return "unknown";
+    }
+    return "unknown";
+}
+
 int main(int argc, char* argv[])
 {
     if (argc >= 2 && qstrcmp(argv[1], "--config") == 0) {
@@ -280,26 +300,33 @@ int main(int argc, char* argv[])
     if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
-#ifdef __linux__
             // Only override to xcb when we AFFIRMATIVELY detect a headless
-            // session — DRM connectors present, none connected (e.g. a Pi 5
-            // reached over wayvnc). Native-Wayland hardware GL cannot allocate a
-            // window surface with no DRM scanout, so the panadapter renders
-            // black under an EGL_BAD_MATCH storm (QT_OPENGL=software does NOT
-            // help — the failure is the wayland-egl surface, not the renderer).
-            // XWayland renders fine; "xcb;wayland" still falls back to wayland if
-            // the xcb plugin is absent. If we cannot tell (no DRM connectors
-            // found — a container, an unusual driver), keep the native-Wayland
-            // default rather than assume headless. A physical display restores
-            // it too.
-            if (AetherSDR::detectDisplayPresence()
-                == AetherSDR::DisplayPresence::Headless) {
-                qputenv("QT_QPA_PLATFORM", "xcb;wayland");
-            } else
+            // session — DRM connectors present, at least one "disconnected",
+            // none connected (e.g. a Pi 5 reached over wayvnc). Native-Wayland
+            // hardware GL cannot allocate a window surface with no DRM scanout,
+            // so the panadapter renders black under an EGL_BAD_MATCH storm
+            // (QT_OPENGL=software does NOT help — the failure is the wayland-egl
+            // surface, not the renderer). XWayland renders fine; "xcb;wayland"
+            // still falls back to wayland if the xcb plugin is absent. If we
+            // cannot tell (no DRM connectors, or every connector reports
+            // "unknown"), keep the native-Wayland default rather than assume
+            // headless. A physical display restores it too.
+            //
+            // Detect on Linux only; a bool with an #else arm keeps the branch
+            // below preprocessor-safe (an added branch can't silently rebind
+            // the non-Linux case).
+#ifdef __linux__
+            const AetherSDR::DisplayPresence presence =
+                AetherSDR::detectDisplayPresence();
+            const bool headless =
+                presence == AetherSDR::DisplayPresence::Headless;
+            g_displayPresence = presence;
+#else
+            constexpr bool headless = false;
 #endif
-            {
-                qputenv("QT_QPA_PLATFORM", "wayland;xcb");
-            }
+            const char* platform = headless ? "xcb;wayland" : "wayland;xcb";
+            qputenv("QT_QPA_PLATFORM", platform);
+            g_qpaPlatformChoice = platform;  // re-emitted once logging is up
         }
     }
 
@@ -609,6 +636,14 @@ int main(int argc, char* argv[])
         // (GpuSelector::applyAtStartup() ran before logging was available).
         qInfo().noquote() << "GpuSelector: render GPU ->"
                           << AetherSDR::GpuSelector::appliedSummary();
+
+        // Likewise the Wayland platform choice (decided before logging existed).
+        if (g_qpaPlatformChoice) {
+            qInfo().noquote()
+                << "Platform: Wayland session, display presence"
+                << displayPresenceName(g_displayPresence) << "-> QT_QPA_PLATFORM"
+                << g_qpaPlatformChoice;
+        }
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)
         const QString symlink = logDir + "/aethersdr.log";

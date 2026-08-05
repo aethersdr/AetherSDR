@@ -99,6 +99,18 @@ int main(int argc, char** argv)
               == DisplayPresence::Unknown);
     }
 
+    // 9. Every connector reports "unknown" (all writeback/virtual, or a panel
+    //    that can't hotplug-detect: DPI, composite, some DSI) -> Unknown, NOT
+    //    Headless — we cannot tell, so don't push such a display onto XWayland.
+    {
+        QTemporaryDir dir;
+        makeConnector(dir.path(), QStringLiteral("card1-DSI-1"),
+                      QStringLiteral("unknown"));
+        makeConnector(dir.path(), QStringLiteral("card1-Writeback-1"),
+                      QStringLiteral("unknown"));
+        CHECK(detectDisplayPresence(dir.path()) == DisplayPresence::Unknown);
+    }
+
     if (g_failures == 0) {
         std::fprintf(stderr, "display_presence_test: all checks passed\n");
     }
