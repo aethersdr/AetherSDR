@@ -5485,6 +5485,33 @@ add_test(NAME hl2_pc_audio_lock_test COMMAND hl2_pc_audio_lock_test)
 set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Title-bar headphone mute reconcile contract (#4722) — needs QApplication +
+# Widgets, same dependency set as hl2_pc_audio_lock_test above.
+add_executable(titlebar_headphone_mute_test
+    tests/titlebar_headphone_mute_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's dialogs are frameless, so the resizer + frameless title bar
+    # come along; ThemeManager pulls its logging deps.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(titlebar_headphone_mute_test PRIVATE src tests)
+target_link_libraries(titlebar_headphone_mute_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(titlebar_headphone_mute_test PROPERTIES AUTOMOC ON)
+add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
+set_tests_properties(titlebar_headphone_mute_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
@@ -5692,6 +5719,7 @@ set(AETHER_SETTINGS_CONSUMERS
     transmit_model_test
     container_widget_test
     hl2_pc_audio_lock_test
+    titlebar_headphone_mute_test
     amp_applet_test
     container_manager_test
     container_nesting_test
