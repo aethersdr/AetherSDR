@@ -2110,10 +2110,17 @@ void Hl2Backend::createNotch(double centerHz, double widthHz)
     m_notches.push_back(notch);
 
     for (const Receiver& r : m_rx) {
-        if (r.dsp)
-            QMetaObject::invokeMethod(r.dsp, "addNotch", Qt::QueuedConnection,
-                Q_ARG(int, index), Q_ARG(double, notch.centerHz),
-                Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
+        if (!r.dsp)
+            continue;
+        // Re-assert the axis before every placement rather than trusting that
+        // some earlier setup path did it. It is one cheap queued call that WDSP
+        // no-ops when unchanged, and the failure it prevents is silent: a notch
+        // measured from a stale tune frequency lands outside the passband and
+        // is dropped without an error, while still reading back as present.
+        pushNotchTune(r);
+        QMetaObject::invokeMethod(r.dsp, "addNotch", Qt::QueuedConnection,
+            Q_ARG(int, index), Q_ARG(double, notch.centerHz),
+            Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
     }
 
     // The id is minted HERE, so nothing above knows about this notch until it
@@ -3511,6 +3518,13 @@ void Hl2Backend::pushInitialState()
             Q_ARG(double, static_cast<double>(r.filterHighHz)));
         QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
             Q_ARG(bool, false));
+        // The notch axis, which is measured from the NCO and defaults to ZERO.
+        // Miss this and a notch is placed ~10 MHz outside the passband, where
+        // WDSP finds no notch to apply and simply builds an unnotched filter —
+        // no error, no notch, and a `notch list` that reports it as present.
+        // createPanadapter() seeded the receivers it creates; the ones built at
+        // connect need it too, which is the whole set on a normal session.
+        seedNotches(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);
