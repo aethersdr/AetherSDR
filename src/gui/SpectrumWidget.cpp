@@ -14305,10 +14305,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         cb->draw(4);
     }
 
-    QRhiGraphicsPipeline* outlinePipeline =
-        m_dssOutlinePipelineMode == DssOutlinePipelineMode::SharedFillPipeline
-        ? m_dssMeshFillPipeline
-        : m_dssMeshLinePipeline;
+    QRhiGraphicsPipeline* outlinePipeline = dssOutlinePipelineFor(
+        m_dssOutlinePipelineMode, m_dssMeshFillPipeline, m_dssMeshLinePipeline);
     if (dssMeshOutlineRows > 0 && outlinePipeline && m_dssMeshSrb) {
         const QRhiViewport vp(
             static_cast<float>(specRect.x()) * dpr,
