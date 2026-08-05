@@ -58,6 +58,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "core/DisplayPresence.h"
 #include "core/KiwiSdrProtocol.h"
 #include "InteractionSettings.h"
 #include "models/BandPlanManager.h"
@@ -1900,17 +1901,35 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // main.cpp normally forces native Wayland, but log it if we ended up here.
     if (QGuiApplication::platformName() == QLatin1String("xcb")
         && qEnvironmentVariable("XDG_SESSION_TYPE") == QLatin1String("wayland")) {
-        // Don't advise "set QT_QPA_PLATFORM=wayland" here. Reaching this line on
-        // a Wayland session means either main.cpp already asked for
-        // "wayland;xcb" and the Wayland plugin would not load, or the user
-        // forced xcb — so the old advice was a no-op in the first case and a
-        // startup abort in the second, which is how #1389 happened. Name the
-        // workaround that always applies, and the override only where it helps.
-        qWarning() << "SpectrumWidget: running under XWayland with OpenGL — "
-                      "GLX context issues may occur. The Wayland platform plugin "
-                      "is unavailable or overridden; set AETHER_NO_GPU=1 to work "
-                      "around, or QT_QPA_PLATFORM='wayland;xcb' if you forced "
-                      "xcb yourself (#1233)";
+        if (AetherSDR::detectedDisplayPresence()
+            == AetherSDR::DisplayPresence::Headless) {
+            // main.cpp deliberately prefers xcb on a headless Wayland session
+            // (#4747) — with no DRM scanout, native-Wayland GL cannot allocate a
+            // window surface (the panadapter renders black under an
+            // EGL_BAD_MATCH storm). This is the intended, working path, NOT a
+            // plugin failure — so don't tell this user their Wayland plugin is
+            // missing, and above all don't send them to "wayland;xcb", which is
+            // the #4747 bug. #1233 (GLX child-dialog BadAccess) can still bite
+            // under XWayland but was verified clean on labwc.
+            qInfo() << "SpectrumWidget: headless Wayland session — using XWayland "
+                       "by design (#4747; no DRM scanout for a native-Wayland GL "
+                       "surface). If a real display is attached and you want "
+                       "native Wayland, set QT_QPA_PLATFORM='wayland;xcb' (#1233).";
+        } else {
+            // Display present (or user-forced xcb). Don't advise "set
+            // QT_QPA_PLATFORM=wayland" here: reaching this line means either
+            // main.cpp asked for "wayland;xcb" and the Wayland plugin would not
+            // load, or the user forced xcb — so the old advice was a no-op in the
+            // first case and a startup abort in the second, which is how #1389
+            // happened. Name the workaround that always applies, and the override
+            // only where it helps.
+            qWarning() << "SpectrumWidget: running under XWayland with OpenGL — "
+                          "GLX context issues may occur. The Wayland platform "
+                          "plugin is unavailable or overridden; set "
+                          "AETHER_NO_GPU=1 to work around, or "
+                          "QT_QPA_PLATFORM='wayland;xcb' if you forced xcb "
+                          "yourself (#1233)";
+        }
     }
 #  endif
 #endif

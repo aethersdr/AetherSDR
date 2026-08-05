@@ -63,7 +63,26 @@ inline DisplayPresence detectDisplayPresence(
     // No connector said "connected". Only claim Headless if at least one said
     // "disconnected"; an all-"unknown" set (writeback/virtual, or a panel that
     // can't hotplug-detect) means we cannot tell.
+    //
+    // Caveat: this is a host-level probe standing in for a session-level fact.
+    // A compositor on a headless backend running on a host that does have a
+    // monitor attached elsewhere (second seat, VM guest) reports Connected and
+    // keeps native Wayland. Detecting that needs a wl_output roundtrip, which
+    // is not available this early; the startup log line makes it diagnosable.
     return sawDisconnected ? DisplayPresence::Headless : DisplayPresence::Unknown;
 }
+
+// The display presence detected at startup, recorded so code that runs later —
+// e.g. SpectrumWidget's XWayland warning — can tell a deliberate headless->xcb
+// platform choice from a genuine Wayland-plugin failure or a user override.
+// Set once in main() before QApplication; read anywhere after. The static lives
+// in an inline function, so every translation unit shares the one instance.
+inline DisplayPresence& detectedDisplayPresenceRef()
+{
+    static DisplayPresence presence = DisplayPresence::Unknown;
+    return presence;
+}
+inline void setDetectedDisplayPresence(DisplayPresence p) { detectedDisplayPresenceRef() = p; }
+inline DisplayPresence detectedDisplayPresence() { return detectedDisplayPresenceRef(); }
 
 }  // namespace AetherSDR

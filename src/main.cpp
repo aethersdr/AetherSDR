@@ -231,10 +231,9 @@ static int runConfigCli(int argc, char* argv[])
 // logging is up — so a Support bundle shows why we chose xcb vs wayland (the
 // first "why am I on XWayland / why did fractional scaling change" question).
 // nullptr choice = no override applied (not a Wayland session, or the user set
-// QT_QPA_PLATFORM already).
+// QT_QPA_PLATFORM already). The presence itself lives in DisplayPresence.h's
+// accessor (setDetectedDisplayPresence) so SpectrumWidget can read it too.
 static const char* g_qpaPlatformChoice = nullptr;
-static AetherSDR::DisplayPresence g_displayPresence =
-    AetherSDR::DisplayPresence::Unknown;
 
 static const char* displayPresenceName(AetherSDR::DisplayPresence p)
 {
@@ -261,10 +260,14 @@ int main(int argc, char* argv[])
         qputenv("QT_OPENGL", "software");
     }
 
-    // Render-adapter selection on multi-GPU systems.  Must run before the GL/D3D
-    // context is created (i.e. before QApplication): sets PRIME offload (Linux)
-    // or QT_D3D_ADAPTER_INDEX (Windows) from the persisted Display-menu choice.
-    AetherSDR::GpuSelector::applyAtStartup();
+    // NOTE ON ORDER: the QT_QPA_PLATFORM block runs BEFORE
+    // GpuSelector::applyAtStartup() below. GpuSelector::willUseWayland() reads
+    // QT_QPA_PLATFORM to decide whether to apply the X11/GLX NVIDIA vendor hint
+    // (__GLX_VENDOR_LIBRARY_NAME), so our platform choice must be in the
+    // environment before it runs — otherwise a headless box that we route to
+    // XWayland/GLX would be mistaken for EGL/Wayland and lose PRIME offload.
+    // applyAtStartup() is otherwise independent (pure sysfs reads + PRIME-var
+    // qputenv, no Qt/GL dependency), so nothing here needs it to go first.
 
     // Prefer native Wayland when running under a Wayland session (#1233).
     // Without this, Qt may fall back to XWayland (xcb platform) where GLX
@@ -320,7 +323,7 @@ int main(int argc, char* argv[])
                 AetherSDR::detectDisplayPresence();
             const bool headless =
                 presence == AetherSDR::DisplayPresence::Headless;
-            g_displayPresence = presence;
+            AetherSDR::setDetectedDisplayPresence(presence);
 #else
             constexpr bool headless = false;
 #endif
@@ -329,6 +332,13 @@ int main(int argc, char* argv[])
             g_qpaPlatformChoice = platform;  // re-emitted once logging is up
         }
     }
+
+    // Render-adapter selection on multi-GPU systems.  Must run before the GL/D3D
+    // context is created (i.e. before QApplication): sets PRIME offload (Linux)
+    // or QT_D3D_ADAPTER_INDEX (Windows) from the persisted Display-menu choice.
+    // Runs AFTER the QT_QPA_PLATFORM block above so GpuSelector::willUseWayland()
+    // reads the platform we actually chose (see the ORDER note above).
+    AetherSDR::GpuSelector::applyAtStartup();
 
 #ifdef __linux__
     // Install a tolerant X11 error handler before QApplication and before any
@@ -641,8 +651,8 @@ int main(int argc, char* argv[])
         if (g_qpaPlatformChoice) {
             qInfo().noquote()
                 << "Platform: Wayland session, display presence"
-                << displayPresenceName(g_displayPresence) << "-> QT_QPA_PLATFORM"
-                << g_qpaPlatformChoice;
+                << displayPresenceName(AetherSDR::detectedDisplayPresence())
+                << "-> QT_QPA_PLATFORM" << g_qpaPlatformChoice;
         }
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)
