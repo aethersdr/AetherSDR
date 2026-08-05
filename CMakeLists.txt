@@ -619,6 +619,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
+    src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
@@ -3060,6 +3061,15 @@ target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
 
 # HL2 backend — IRadioBackend seam contract against a capped fake HL2.
+# HL2 manual frequency calibration — simulates the gateware's own NCO arithmetic
+# (radio.v freqcomp/M2/M3) on a deliberately wrong master clock, so the
+# correction is checked against the hardware's behaviour rather than against its
+# own algebra. Also pins the sign convention and the wire command banks.
+add_executable(hl2_freq_cal_test tests/hl2_freq_cal_test.cpp)
+target_include_directories(hl2_freq_cal_test PRIVATE src)
+target_link_libraries(hl2_freq_cal_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_freq_cal_test COMMAND hl2_freq_cal_test)
+
 add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)
 target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

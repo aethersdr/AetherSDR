@@ -14,6 +14,8 @@
 
 #include "core/AutomationBridgeSettings.h"
 #include "core/LogManager.h"
+#include "core/RadioSettingsScope.h"
+#include "core/backends/hl2/Hl2FreqCal.h"
 #include "core/backends/hl2/Hl2Settings.h"
 
 #include <QByteArray>
@@ -826,10 +828,10 @@ bool Hl2Backend::createPanadapter()
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
-            Q_ARG(std::uint32_t, static_cast<std::uint32_t>(r.ncoHz < 0 ? 0 : r.ncoHz)));
+            Q_ARG(std::uint32_t, ncoCommandHz(r.ncoHz)));
     }
     QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
-        Q_ARG(double, r.sliceFreqHz - r.ncoHz));
+        Q_ARG(double, dspShiftHz(r.sliceFreqHz, r.ncoHz)));
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -965,8 +967,7 @@ bool Hl2Backend::removePanadapter(const QString& panId)
             if (const Receiver* sr = rx(s.ddcIndex)) {
                 QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
                     Q_ARG(int, s.ddcIndex),
-                    Q_ARG(std::uint32_t,
-                          static_cast<std::uint32_t>(sr->ncoHz < 0 ? 0 : sr->ncoHz)));
+                    Q_ARG(std::uint32_t, ncoCommandHz(sr->ncoHz)));
             }
         }
     }
@@ -1288,6 +1289,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasTuner = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
+    // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
+    // HPSDR map can be told the crystal's real error — so the correction is ours
+    // or it does not happen. See Hl2FreqCal for the derivation.
+    c.hostFrequencyCalibration = true;
     // No on-radio configuration store. The HL2 holds no state across a
     // connection beyond its registers — everything the operator can change
     // lives in this application, so there is nothing for a profile to name.
@@ -1344,6 +1349,25 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // A new connect re-derives the passband from the mode; a mid-session linkUp
     // (EP6 silence then resume) does not. See m_passbandDerivedThisConnect.
     m_passbandDerivedThisConnect = false;
+
+    // This radio's manual frequency calibration, FIRST — before any frequency is
+    // computed below, because the seed at mp.rxFrequencyHz is a commanded value
+    // and would otherwise go out uncorrected. The operator would hear the first
+    // moments of every session on the uncalibrated frequency and watch it jump
+    // when they next touched the dial.
+    //
+    // Keyed by the radio's MAC: the calibration describes one physical crystal,
+    // so a second HL2 must not inherit the first one's number. An empty serial
+    // (a hand-built connect request with no identity) yields the family-wide
+    // row, which is empty by default — i.e. uncalibrated, not someone else's.
+    m_radioSerial = request.serial;
+    m_freqCalPpb = Hl2FreqCal::loadPpb(
+        RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
+    m_freqCalScale = Hl2FreqCal::scaleForPpb(m_freqCalPpb);
+    if (m_freqCalPpb != 0)
+        qCInfo(lcHl2) << "HL2: frequency calibration" << m_freqCalPpb << "ppb"
+                      << "— effective clock"
+                      << Hl2FreqCal::effectiveClockHz(m_freqCalPpb) << "Hz";
 
     // The span the operator last chose, snapped to a rate we can actually run
     // and to the current low-bandwidth ceiling. Applied BEFORE the explicit
@@ -1453,7 +1477,10 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.host = host;
     mp.port = request.port ? request.port : kMetisPort;
     mp.sampleRate = sampleRateEnum(m_sampleRateHz);
-    mp.rxFrequencyHz = static_cast<std::uint32_t>(startFreqHz < 0 ? 0 : startFreqHz);
+    // COMMANDED, not true-RF: this seeds MetisClient's initial RX and TX
+    // command banks, which are register contents. Everything else in this
+    // function keeps startFreqHz in the true-RF domain.
+    mp.rxFrequencyHz = ncoCommandHz(startFreqHz);
     mp.lnaGainDb = m_lnaGainDb;
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
@@ -1740,7 +1767,7 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
             // is the whole reason the receivers can sit on different bands.
             QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
                 Q_ARG(int, ddc),
-                Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz < 0 ? 0 : hz)));
+                Q_ARG(std::uint32_t, ncoCommandHz(hz)));
     }
 
     // Shift by the slice's offset from the NCO, with the SAME sign.
@@ -1753,7 +1780,7 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // why the stage looked correct only in LSB.)
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
-            Q_ARG(double, r->sliceFreqHz - r->ncoHz));
+            Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
 
     // The TX NCO is a SEPARATE register (addr 0x01) from the RX DDC and does not
     // follow the receiver. Without this the transmit oscillator keeps whatever
@@ -2035,10 +2062,10 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz)
     if (m_metis)
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
-            Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz)));
+            Q_ARG(std::uint32_t, ncoCommandHz(hz)));
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
-            Q_ARG(double, r->sliceFreqHz - r->ncoHz));
+            Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");
@@ -2419,8 +2446,67 @@ void Hl2Backend::setTxFrequency(double hz)
 {
     if (!m_metis || hz <= 0.0)
         return;
+    // Scaled like every RX NCO, and for a reason worth stating: the gateware
+    // derives BOTH oscillators from one freqcomp (radio.v assigns tx_phase0 and
+    // rx_phase[] from the same value), so a calibration that corrected receive
+    // and not transmit would put the operator's signal where they used to hear
+    // themselves — off frequency by the full error, on the air.
+    //
+    // TX is single-stage: there is no software shift behind this the way there
+    // is on receive, so the 1 Hz register granularity is the floor here. At
+    // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
     QMetaObject::invokeMethod(m_metis, "setTxFrequencyHz", Qt::QueuedConnection,
-        Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz)));
+        Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+}
+
+std::uint32_t Hl2Backend::ncoCommandHz(double trueHz) const noexcept
+{
+    return Hl2FreqCal::ncoCommandHz(trueHz, m_freqCalScale);
+}
+
+double Hl2Backend::dspShiftHz(double sliceTrueHz, double ncoTrueHz) const noexcept
+{
+    return Hl2FreqCal::dspShiftHz(sliceTrueHz, ncoCommandHz(ncoTrueHz),
+                                  m_freqCalScale);
+}
+
+void Hl2Backend::repushAllFrequencies()
+{
+    if (!m_metis)
+        return;
+    for (const auto& s : m_ids.all()) {
+        const Receiver* r = rx(s.ddcIndex);
+        if (!r)
+            continue;
+        QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
+            Q_ARG(int, s.ddcIndex),
+            Q_ARG(std::uint32_t, ncoCommandHz(r->ncoHz)));
+        if (r->dsp)
+            QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
+                Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
+    }
+    // The transmit oscillator does not follow a receiver on its own — it is a
+    // separate register that only setTxFrequency() writes. Omitting it here
+    // would leave transmit on the OLD calibration until the next tune, which is
+    // exactly the window an operator calibrating before a contest would key in.
+    if (const Receiver* txRx = rx(m_txDdc); txRx && txRx->sliceFreqHz > 0.0)
+        setTxFrequency(txRx->sliceFreqHz);
+}
+
+void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
+{
+    const int clamped = Hl2FreqCal::clampPpb(ppb);
+    if (persist)
+        Hl2FreqCal::savePpb(RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial),
+                            clamped);
+    if (clamped == m_freqCalPpb)
+        return;                       // no-op: do not churn every NCO for nothing
+    m_freqCalPpb = clamped;
+    m_freqCalScale = Hl2FreqCal::scaleForPpb(clamped);
+    qCInfo(lcHl2) << "HL2: frequency calibration" << clamped << "ppb"
+                  << "— effective clock"
+                  << Hl2FreqCal::effectiveClockHz(clamped) << "Hz";
+    repushAllFrequencies();
 }
 
 void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
@@ -2720,10 +2806,34 @@ void Hl2Backend::setTxDriveLevel(int level)
         Q_ARG(int, level));
 }
 
-void Hl2Backend::invokeExtension(const QString& /*ns*/, const QString& /*verb*/, quint64 requestId,
-                                 const QVariant& /*arg*/)
+void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
+                                 const QVariant& arg)
 {
-    // No HL2 extension verbs yet; honor the async contract without hanging.
+    if (ns == QLatin1String("hl2")) {
+        // Manual frequency calibration. Completes LOCALLY — unlike the Flex
+        // tuner/amp verbs this namespace is modelled on, there is no device
+        // round trip to await: the correction is a host-side scalar and the
+        // radio is never asked about it. So the reply is emitted synchronously
+        // rather than fabricated later.
+        if (verb == QLatin1String("freqcal.set")) {
+            applyFreqCalPpb(arg.toInt(), /*persist=*/true);
+            if (requestId != 0)
+                emit extensionResult(requestId, QVariant(m_freqCalPpb));
+            return;
+        }
+        if (verb == QLatin1String("freqcal.get")) {
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("ppb"), m_freqCalPpb},
+                    {QStringLiteral("effectiveClockHz"),
+                     Hl2FreqCal::effectiveClockHz(m_freqCalPpb)},
+                    {QStringLiteral("scale"), m_freqCalScale},
+                });
+            }
+            return;
+        }
+    }
+    // No other HL2 extension verbs; honor the async contract without hanging.
     if (requestId != 0)
         emit extensionError(requestId, QStringLiteral("hl2: no extension verbs implemented"));
 }

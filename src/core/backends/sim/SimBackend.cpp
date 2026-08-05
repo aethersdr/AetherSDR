@@ -304,6 +304,9 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
+    // Synthesised signals come out exactly where the demo says they are; there
+    // is no oscillator to be wrong about.
+    caps.hostFrequencyCalibration = false;
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     // Synthetic audio only; nothing to route to a virtual device.

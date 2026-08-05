@@ -8,6 +8,7 @@
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
+#include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -16,6 +17,7 @@
 #include "core/PeripheralSettings.h"
 #include <QApplication>
 #include <QAbstractItemView>
+#include <QLocale>
 #include <QSysInfo>
 #include "core/AudioEngine.h"
 #ifdef HAVE_SERIALPORT
@@ -754,6 +756,18 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("rx receive calibration rf gain preamp"), [this] { return buildRxTab(); });
     addPage(signalCategory, QStringLiteral("Filters"),
         QStringLiteral("filter bandwidth low high cut mode"), [this] { return buildFiltersTab(); });
+    // Calibration page (HL2 and any future family that cannot calibrate itself).
+    // Gated on the CAPABILITY, not on the family name: "does this radio correct
+    // its own oscillator" is the question, and a Flex answers it on the Receive
+    // page with its own hardware calibration.
+    QTreeWidgetItem* calItem = addPage(radioCategory, QStringLiteral("Calibration"),
+        QStringLiteral("frequency calibration ppb ppm oscillator crystal clock error wwv gpsdo zero beat"),
+        [this] { return buildCalibrationTab(); });
+    m_calibrationPageIndex = m_pageIndexes.value(QStringLiteral("Calibration"));
+    calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this, calItem] {
+        calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+    });
     addPage(hardwareCategory, QStringLiteral("Antennas"),
         QStringLiteral("antenna names ant1 ant2 rx in transverter"), [this] { return buildAntennaNamesTab(); });
     addPage(hardwareCategory, QStringLiteral("Transverters"),
@@ -2744,6 +2758,283 @@ QWidget* RadioSetupDialog::buildRxTab()
     vbox->addStretch(1);
     return page;
 }
+// ── Calibration tab ──────────────────────────────────────────────────────────
+
+QWidget* RadioSetupDialog::buildCalibrationTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto* group = new QGroupBox("Frequency Calibration");
+    group->setStyleSheet(kGroupStyle);
+    auto* gvb = new QVBoxLayout(group);
+    gvb->setSpacing(8);
+
+    {
+        auto* intro = new QLabel(
+            "This radio tunes from a free-running crystal and cannot measure its own error, "
+            "so the correction is applied here. Receive a signal of known frequency, tune "
+            "until it zero-beats, and press Calibrate — or enter an error you already know.");
+        intro->setStyleSheet(kLabelStyle);
+        intro->setWordWrap(true);
+        gvb->addWidget(intro);
+
+        auto* warmup = new QLabel(
+            "Let the radio warm up for 15 minutes first. The oscillator drifts as it heats.");
+        warmup->setStyleSheet("QLabel { color: #c0a000; font-size: 12px; }");
+        warmup->setWordWrap(true);
+        gvb->addWidget(warmup);
+    }
+
+    auto* grid = new QGridLayout;
+    grid->setSpacing(6);
+    // Keep the controls next to their labels instead of letting the value
+    // column absorb the dialog's full width. Column 3 takes the slack.
+    grid->setColumnStretch(0, 0);
+    grid->setColumnStretch(1, 0);
+    grid->setColumnStretch(2, 0);
+    grid->setColumnStretch(3, 1);
+    int row = 0;
+
+    // ── Reference ────────────────────────────────────────────────────────────
+    auto* refLbl = new QLabel("Reference:");
+    refLbl->setStyleSheet(kLabelStyle);
+    grid->addWidget(refLbl, row, 0);
+
+    auto* refCombo = new QComboBox;
+    AetherSDR::applyComboStyle(refCombo);
+    // Standards first, then Custom. A bench GPSDO or a signal generator locked
+    // to one is the BEST reference available — no ionospheric Doppler (which
+    // wanders ~10 ppb at 10 MHz on an HF path), no fading mid-null — so Custom
+    // is a first-class entry here, not a fallback.
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 10 MHz"), 10'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 5 MHz"), 5'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 15 MHz"), 15'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 20 MHz"), 20'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 25 MHz"), 25'000'000.0);
+    refCombo->addItem(QStringLiteral("WWV / WWVH — 2.5 MHz"), 2'500'000.0);
+    refCombo->addItem(QStringLiteral("CHU — 7.850 MHz"), 7'850'000.0);
+    refCombo->addItem(QStringLiteral("CHU — 3.330 MHz"), 3'330'000.0);
+    refCombo->addItem(QStringLiteral("CHU — 14.670 MHz"), 14'670'000.0);
+    refCombo->addItem(QStringLiteral("GPSDO / signal generator (custom)"), 0.0);
+    refCombo->setToolTip(
+        QStringLiteral("The true frequency of the signal you are zero-beating.\n"
+                       "A local GPSDO is the most accurate choice — attenuate it "
+                       "at least 30 dB or couple loosely, its output will overload "
+                       "the receiver."));
+    refCombo->setMinimumWidth(230);
+    grid->addWidget(refCombo, row, 1);
+
+    auto* customEdit = new QLineEdit(QStringLiteral("10.000000"));
+    customEdit->setStyleSheet(kEditStyle);
+    customEdit->setFixedWidth(110);
+    customEdit->setValidator(new QDoubleValidator(0.1, 38.4, 6, customEdit));
+    customEdit->setToolTip(QStringLiteral("Reference frequency in MHz"));
+    customEdit->setVisible(false);
+    grid->addWidget(customEdit, row, 2);
+    ++row;
+
+    auto referenceHz = [refCombo, customEdit]() -> double {
+        const double fixed = refCombo->currentData().toDouble();
+        if (fixed > 0.0)
+            return fixed;
+        return customEdit->text().toDouble() * 1.0e6;
+    };
+    connect(refCombo, &QComboBox::currentIndexChanged, this, [refCombo, customEdit](int) {
+        customEdit->setVisible(refCombo->currentData().toDouble() <= 0.0);
+    });
+
+    // ── Error, in ppb — the ONE stored number ────────────────────────────────
+    auto* ppbLbl = new QLabel("Error:");
+    ppbLbl->setStyleSheet(kLabelStyle);
+    grid->addWidget(ppbLbl, row, 0);
+
+    auto* ppbSpin = new QSpinBox;
+    ppbSpin->setObjectName(QStringLiteral("hl2FreqCalPpb"));
+    ppbSpin->setRange(Hl2FreqCal::kMinPpb, Hl2FreqCal::kMaxPpb);
+    ppbSpin->setSingleStep(10);
+    ppbSpin->setSuffix(QStringLiteral(" ppb"));
+    ppbSpin->setFixedWidth(120);
+    ppbSpin->setAccessibleName(QStringLiteral("Frequency error in parts per billion"));
+    ppbSpin->setToolTip(
+        QStringLiteral("Positive = the radio's clock runs fast, so signals appear low.\n"
+                       "100 ppb is 1 Hz at 10 MHz."));
+    ppbSpin->setValue(Hl2FreqCal::loadPpb(m_model->settingsScope()));
+    grid->addWidget(ppbSpin, row, 1);
+
+    auto* resetBtn = new QPushButton("Reset");
+    resetBtn->setStyleSheet(kKiwiActionButtonStyle);
+    resetBtn->setFixedWidth(70);
+    resetBtn->setToolTip(QStringLiteral("Return this radio to uncalibrated (0 ppb)"));
+    grid->addWidget(resetBtn, row, 2);
+    ++row;
+
+    // The single write path for the page: adopt into the backend (which
+    // persists, re-pushes every NCO, and moves transmit with them) and refresh
+    // the readout. Everything below drives the spinbox; only this applies it.
+    auto* readout = new QLabel;
+    readout->setObjectName(QStringLiteral("hl2FreqCalReadout"));
+    readout->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(readout,
+        "QLabel { color: {{color.accent.bright}}; font-size: 12px; font-weight: bold; }");
+
+    auto activeSliceHz = [this]() -> double {
+        for (SliceModel* s : m_model->slices()) {
+            if (s && s->isActive())
+                return s->frequency() * 1.0e6;   // SliceModel carries MHz
+        }
+        return 0.0;
+    };
+
+    auto refreshReadout = [readout, ppbSpin, activeSliceHz] {
+        const int ppb = ppbSpin->value();
+        const double clock = Hl2FreqCal::effectiveClockHz(ppb);
+        QString text = QStringLiteral("Effective clock %1 Hz  ·  %2 ppb (%3 ppm)")
+            .arg(QLocale::system().toString(qRound64(clock)))
+            .arg(ppb)
+            .arg(ppb / 1000.0, 0, 'f', 3);
+        // The line that makes ppb mean something. "-182 ppb" is abstract;
+        // "-5.2 Hz at 28.500 MHz" is the error the operator was looking at.
+        if (const double rf = activeSliceHz(); rf > 0.0) {
+            text += QStringLiteral("\nWithout this correction, %1 MHz would be off by %2 Hz.")
+                .arg(rf / 1.0e6, 0, 'f', 6)
+                .arg(Hl2FreqCal::errorHzAt(rf, ppb), 0, 'f', 2);
+        }
+        readout->setText(text);
+    };
+
+    auto apply = [this, ppbSpin, refreshReadout](int ppb) {
+        QSignalBlocker blocker(ppbSpin);
+        ppbSpin->setValue(Hl2FreqCal::clampPpb(ppb));
+        // The backend owns clamping, persistence and the re-push. Going through
+        // it rather than writing settings here is what keeps a mid-session
+        // change audible immediately instead of at the next tune.
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        QStringLiteral("freqcal.set"), 0,
+                                        QVariant(ppbSpin->value()));
+        refreshReadout();
+    };
+
+    connect(ppbSpin, &QSpinBox::valueChanged, this, [apply](int v) { apply(v); });
+    connect(resetBtn, &QPushButton::clicked, this, [apply] { apply(0); });
+
+    // ── Trim ─────────────────────────────────────────────────────────────────
+    //
+    // Steps are labelled in Hz-at-10-MHz because that is the unit an operator
+    // nulling a beat note is actually hearing. The STORED value stays ppb: the
+    // error is fractional, so a step that means 1 Hz on 10 MHz means 0.1 Hz on
+    // 160 m, and storing Hz would be right on exactly one band.
+    auto* trimLbl = new QLabel("Trim:");
+    trimLbl->setStyleSheet(kLabelStyle);
+    grid->addWidget(trimLbl, row, 0);
+
+    auto* trimRow = new QWidget;
+    auto* trimBox = new QHBoxLayout(trimRow);
+    trimBox->setContentsMargins(0, 0, 0, 0);
+    trimBox->setSpacing(6);
+
+    auto* stepCombo = new QComboBox;
+    AetherSDR::applyComboStyle(stepCombo);
+    stepCombo->addItem(QStringLiteral("0.1 Hz @ 10 MHz"), 10);
+    stepCombo->addItem(QStringLiteral("1 Hz @ 10 MHz"), 100);
+    stepCombo->addItem(QStringLiteral("10 Hz @ 10 MHz"), 1000);
+    stepCombo->setCurrentIndex(1);
+
+    auto* downBtn = new QPushButton(QStringLiteral("−"));
+    auto* upBtn = new QPushButton(QStringLiteral("+"));
+    for (QPushButton* b : {downBtn, upBtn}) {
+        b->setStyleSheet(kKiwiActionButtonStyle);
+        b->setFixedWidth(44);
+        b->setAutoRepeat(true);
+        b->setAutoRepeatDelay(400);
+        b->setAutoRepeatInterval(120);
+    }
+    downBtn->setAccessibleName(QStringLiteral("Decrease frequency calibration"));
+    upBtn->setAccessibleName(QStringLiteral("Increase frequency calibration"));
+    trimBox->addWidget(downBtn);
+    trimBox->addWidget(upBtn);
+    trimBox->addWidget(stepCombo);
+    trimBox->addStretch(1);
+    grid->addWidget(trimRow, row, 1, 1, 2);
+    ++row;
+
+    connect(downBtn, &QPushButton::clicked, this, [apply, ppbSpin, stepCombo] {
+        apply(ppbSpin->value() - stepCombo->currentData().toInt());
+    });
+    connect(upBtn, &QPushButton::clicked, this, [apply, ppbSpin, stepCombo] {
+        apply(ppbSpin->value() + stepCombo->currentData().toInt());
+    });
+
+    gvb->addLayout(grid);
+
+    // ── Calibrate from the current VFO ───────────────────────────────────────
+    auto* calRow = new QHBoxLayout;
+    calRow->setSpacing(8);
+    auto* calBtn = new QPushButton("Calibrate from current VFO");
+    calBtn->setObjectName(QStringLiteral("hl2FreqCalCapture"));
+    calBtn->setStyleSheet(kKiwiActionButtonStyle);
+    auto* calStatus = new QLabel;
+    calStatus->setWordWrap(true);
+    calRow->addWidget(calBtn);
+    calRow->addWidget(calStatus, 1);
+    gvb->addLayout(calRow);
+
+    auto setStatus = [calStatus](const QString& text, const QString& color) {
+        calStatus->setText(text);
+        calStatus->setStyleSheet(
+            QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
+    };
+
+    connect(calBtn, &QPushButton::clicked, this,
+            [this, apply, referenceHz, activeSliceHz, setStatus] {
+        const double ref = referenceHz();
+        if (!(ref > 0.0)) {
+            setStatus(QStringLiteral("Enter a reference frequency."), "#e0a050");
+            return;
+        }
+        const double dialled = activeSliceHz();
+        if (!(dialled > 0.0)) {
+            setStatus(QStringLiteral("No active slice to read."), "#e0a050");
+            return;
+        }
+        const int ppb = Hl2FreqCal::ppbFromZeroBeat(ref, dialled);
+        // Refuse an implausible result rather than committing it. Zero-beating
+        // the wrong signal — a harmonic, the opposite sideband, the wrong
+        // station — produces a number that would move every band by kilohertz,
+        // and the operator would have no way to tell that from a real reading.
+        if (ppb == Hl2FreqCal::kMinPpb || ppb == Hl2FreqCal::kMaxPpb) {
+            setStatus(QStringLiteral("That is more than 50 ppm off (%1 MHz vs %2 MHz "
+                                     "reference) — check you are on the right signal.")
+                          .arg(dialled / 1.0e6, 0, 'f', 6)
+                          .arg(ref / 1.0e6, 0, 'f', 6),
+                      "#e05050");
+            return;
+        }
+        apply(ppb);
+        setStatus(QStringLiteral("Calibrated: %1 MHz reads as %2 MHz → %3 ppb.")
+                      .arg(ref / 1.0e6, 0, 'f', 6)
+                      .arg(dialled / 1.0e6, 0, 'f', 6)
+                      .arg(ppb),
+                  "#00c040");
+    });
+
+    gvb->addWidget(readout);
+    vbox->addWidget(group);
+
+    // Keep the "off by N Hz at this frequency" line honest as the operator
+    // tunes around looking for the reference.
+    for (SliceModel* s : m_model->slices()) {
+        if (s)
+            connect(s, &SliceModel::frequencyChanged, this,
+                    [refreshReadout] { refreshReadout(); });
+    }
+    refreshReadout();
+
+    vbox->addStretch(1);
+    return page;
+}
+
 // ── Audio tab ────────────────────────────────────────────────────────────────
 
 QWidget* RadioSetupDialog::buildAudioTab()

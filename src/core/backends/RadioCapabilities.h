@@ -105,6 +105,19 @@ struct RadioCapabilities {
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
 
+    // The radio tunes off an oscillator it cannot characterise, so the CLIENT
+    // owns the frequency-error correction and must offer the operator a way to
+    // enter one. True for the HL2: its 76.8 MHz NCO scale is a localparam in
+    // the gateware bitstream and no register in the HPSDR map can be told the
+    // crystal's real error, so a host-side scalar is the only correction there
+    // is. False for a radio that owns its own reference and its own calibration
+    // command (Flex: `radio set cal_freq` / `freq_error_ppb`, which is why its
+    // calibration UI lives on the Flex path and not behind this flag).
+    //
+    // NOT "does this radio have a frequency error" — every radio does. What
+    // varies is whether correcting it is the client's job.
+    bool hostFrequencyCalibration = false;
+
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
     bool hasTuner = false;         // antenna tuner / ATU

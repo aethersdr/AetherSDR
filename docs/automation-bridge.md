@@ -1147,6 +1147,45 @@ rejects or clamps still returns `ok:true` with the requested value echoed back.
 Read the frequency back with [`get slices`](#get) if you need to know where the
 radio actually landed.
 
+### `freqcal`
+Manual frequency calibration, for radios that cannot correct their own
+oscillator. Available only where `hostFrequencyCalibration` is set (the
+Hermes-Lite 2 today); it **refuses** on a Flex, which calibrates itself. The
+stored quantity is a single error in parts per billion — the error is
+fractional, so one number covers every band.
+
+Sign convention: **positive ppb means the clock runs fast, so signals appear
+low.** 100 ppb is 1 Hz at 10 MHz.
+
+```json
+→ {"cmd":"freqcal"}
+← {"ok":true,"freqcal":"get","ppb":0,"ppm":0,"effectiveClockHz":76800000}
+
+→ {"cmd":"freqcal","action":"set","value":"-178"}
+← {"ok":true,"freqcal":"set","ppb":-178,"ppm":-0.178,"effectiveClockHz":76799986.3}
+
+→ {"cmd":"freqcal","action":"reset"}
+← {"ok":true,"freqcal":"reset","ppb":0,"ppm":0,"effectiveClockHz":76800000}
+```
+
+`from_vfo` is the workflow the Calibration page uses: zero-beat a reference of
+known frequency with the normal tuning controls, then capture. It reads the
+**active slice's** frequency and derives the error from it.
+
+```json
+→ {"cmd":"freqcal","action":"from_vfo","value":"10.0"}
+← {"ok":true,"freqcal":"from_vfo","ppb":-178,"ppm":-0.178,
+   "effectiveClockHz":76799986.3,"referenceMhz":10.0,"dialledMhz":10.00000178}
+```
+
+A capture more than 50 ppm off is **refused**, not clamped — that magnitude
+means the wrong signal was nulled (a harmonic, the opposite sideband), and
+committing it would move every band by kilohertz.
+
+A change takes effect immediately: every RX NCO, every DSP shift and the TX
+oscillator are re-pushed, so a bridge test can set a calibration and tune in the
+same script without a reconnect.
+
 ### `targettune`
 Tune through the same absolute-target policy used by typed frequency entry and
 other commanded jumps. Unlike `tune`, this can preselect a different band stack
@@ -2961,7 +3000,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 58 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 59 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2993,6 +3032,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
+| `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
