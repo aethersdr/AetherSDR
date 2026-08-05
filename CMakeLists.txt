@@ -3451,6 +3451,23 @@ target_include_directories(band_edges_test PRIVATE src)
 target_link_libraries(band_edges_test PRIVATE Qt6::Core)
 add_test(NAME band_edges_test COMMAND band_edges_test)
 
+# Band-plan segment labels feed isVoiceSegmentLabel(), which gates S-History /
+# QRM voice detection — a label carrying no recognised emission token silently
+# switches voice markers off for that spectrum. Reads the shipped resource, so
+# the assertion is about the file that actually ships (#4723).
+qt_add_resources(BANDPLAN_VOICE_LABELS_TEST_RESOURCES resources/resources.qrc)
+add_executable(bandplan_voice_labels_test
+    tests/bandplan_voice_labels_test.cpp
+    src/core/VoiceSignalDetector.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    ${BANDPLAN_VOICE_LABELS_TEST_RESOURCES}
+)
+target_include_directories(bandplan_voice_labels_test PRIVATE src)
+target_link_libraries(bandplan_voice_labels_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME bandplan_voice_labels_test COMMAND bandplan_voice_labels_test)
+
 add_executable(radio_discovery_test
     tests/radio_discovery_test.cpp
     src/core/RadioDiscovery.cpp
@@ -5774,6 +5791,7 @@ set(AETHER_SETTINGS_CONSUMERS
     container_manager_test
     container_nesting_test
     log_manager_filter_rules_test
+    bandplan_voice_labels_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

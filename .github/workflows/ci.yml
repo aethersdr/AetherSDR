@@ -180,8 +180,12 @@ jobs:
       # over constexpr data — no widgets, no event loop, no wall clock — so it
       # is deterministic everywhere and gating it on Linux alone is enough.
       # Runtime is milliseconds and the Build step already compiled it.
-      - name: Test band edges
-        run: ctest --test-dir build -R "band_edges_test" --output-on-failure
+      # bandplan_voice_labels_test rides along for the same reason and reads the
+      # shipped resource rather than a fixture, so a relabel that drops the
+      # emission token out of a 60m segment fails here rather than showing up as
+      # voice markers that quietly never appear.
+      - name: Test band edges and band-plan voice labels
+        run: ctest --test-dir build -R "band_edges_test|bandplan_voice_labels_test" --output-on-failure
 
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
