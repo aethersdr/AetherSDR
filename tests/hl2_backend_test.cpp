@@ -17,6 +17,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QNetworkDatagram>
@@ -28,6 +29,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 
 using namespace AetherSDR;
 using AetherSDR::hl2::Hl2Backend;
@@ -59,6 +61,24 @@ static void spin(int ms)
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
+}
+
+// Wait for a CONDITION, with a wall-clock cap that is only a backstop.
+//
+// The connect's WDSP channel opens are asynchronous (Hl2Backend::beginDspSetup),
+// so the wire does not start until they finish — and this test runs on an
+// isolated HOME, which means an empty FFTW wisdom cache and a first open that
+// genuinely takes tens of seconds of plan measurement. That cost is not a
+// property of the radio or of anything under test, so waiting a fixed number of
+// milliseconds for it would be measuring the host's CPU. The timing assertions
+// that follow a connect still use spin(), because those ARE the assertion.
+static bool spinUntil(const std::function<bool()>& done, int timeoutMs)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (!done() && clock.elapsed() < timeoutMs)
+        spin(10);
+    return done();
 }
 
 // Decode the TX drive level out of an EP2 packet, if this one happens to be
@@ -212,8 +232,11 @@ int main(int argc, char** argv)
     // session leftovers, so anything emitted before connected() is discarded.
     check(!connectedSpy.count(), "connect leaves connected() pending until the first EP6");
 
-    // Stay inside kSilenceTimeoutMs (2 s): the fake radio stops after kCap
-    // frames, and the EP6 silence watchdog legitimately drops the link after it.
+    // The DSP has to finish opening before the wire starts; wait on that rather
+    // than on a clock. Once EP6 flows, stay inside kSilenceTimeoutMs (2 s): the
+    // fake radio stops after kCap frames and the silence watchdog legitimately
+    // drops the link after it.
+    spinUntil([&] { return connectedSpy.count() >= 1; }, 120000);
     spin(1200);   // capped ping-pong delivers EP6 + at least one spectrum frame
 
     check(connectedSpy.count() == 1, "connected() on the first EP6");

@@ -232,6 +232,7 @@
 #endif
 #include "core/PanadapterStream.h"
 #include "core/backends/IRadioBackend.h"   // seam: SimBackend::audioFrameReady wiring
+#include "core/backends/hl2/Hl2Backend.h"  // dynamic_cast for WDSP setup progress
 #include "core/backends/sim/SimBackend.h"  // dynamic_cast for demo noise controls
 #if defined(Q_OS_MAC)
 #include "core/VirtualAudioBridge.h"
@@ -6160,6 +6161,33 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     if (dynamic_cast<SimBackend*>(backend) != nullptr) {
         connect(backend, &IRadioBackend::audioFrameReady,
                 m_audio, &AudioEngine::feedAudioData);
+    }
+
+    // HL2 only, and deliberately: the client-side WDSP chains are this family's
+    // alone. Opening them measures FFTW plans, which on a machine with no cached
+    // wisdom takes tens of seconds — long enough that a silent connect animation
+    // reads as a hung application. Say what is happening in the label that is
+    // already on screen rather than adding a dialog for it.
+    if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(backend)) {
+        connect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this,
+                [this](const QString& stage, int done, int total) {
+            // Only while the connect animation is up. A DSP rebuild can happen
+            // mid-session (a span change), and hijacking the panadapter with a
+            // connect label for it would be a worse lie than saying nothing.
+            if (!m_panadapterConnectionAnimationVisible)
+                return;
+            const QString label = total > 1
+                ? tr("%1 (%2 of %3)").arg(stage).arg(done + 1).arg(total)
+                : stage;
+            setPanadapterConnectionAnimation(true, label);
+        });
+        // Put the label back to the generic one, so what remains of the connect
+        // — the wire coming up, the first EP6 packet — is not still described as
+        // DSP setup.
+        connect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this, [this] {
+            if (m_panadapterConnectionAnimationVisible)
+                setPanadapterConnectionAnimation(true, tr("Connecting to radio…"));
+        });
     }
 
     // The demo delivers native 128-sample frames, which the improved 1024/4 NR2
