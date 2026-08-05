@@ -36,11 +36,13 @@
 #include <QElapsedTimer>
 #include <QtGlobal>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <thread>
+#include <vector>
 
 #ifdef Q_OS_MACOS
 #include <sys/sysctl.h>
@@ -83,6 +85,66 @@ int main()
     }).detach();
 
     ggml_log_set(captureGgmlLog, nullptr);
+
+    // ---- #4502 pure contracts -------------------------------------------------
+    // Host-independent, and run before anything touches ggml so a GPU-less or
+    // hostile-driver machine still exercises them.
+    //
+    // Default resolution: the first usable device wins; no usable device means
+    // CPU (-1). Selecting a device that cannot run the decode is the failure
+    // these pin — it yields wrong output at every tier, and on a driver that
+    // cannot create a device at all it is the crash path of #4502.
+    {
+        const std::vector<AsrGpuDevice> noneUsable = {
+            {0, QStringLiteral("dGPU"), false}, {1, QStringLiteral("iGPU"), false}};
+        const std::vector<AsrGpuDevice> secondUsable = {
+            {0, QStringLiteral("dGPU"), false}, {1, QStringLiteral("iGPU"), true}};
+        const std::vector<AsrGpuDevice> bothUsable = {
+            {0, QStringLiteral("dGPU"), true}, {1, QStringLiteral("iGPU"), true}};
+        if (asrResolveDefaultGpuIndex({}) != -1
+            || asrResolveDefaultGpuIndex(noneUsable) != -1
+            || asrResolveDefaultGpuIndex(secondUsable) != 1
+            || asrResolveDefaultGpuIndex(bothUsable) != 0) {
+            std::fprintf(stderr, "[FAIL] asrResolveDefaultGpuIndex contract broken "
+                                 "(empty/none-usable/second-usable/first-usable) "
+                                 "(#4502)\n");
+            return 1;
+        }
+        std::printf("[ok] #4502 default-resolution contract\n");
+    }
+
+    // Session failure latch: one-way, and it must survive being asked twice.
+    // A device latched here is never handed to whisper again this process —
+    // that is what stops the second device-creation attempt, which is the
+    // attempt that faults below any catchable level (#4502).
+    {
+        // A high index no real enumeration reaches, so latching it cannot
+        // change what the hardware cases below are allowed to resolve to.
+        constexpr int kSyntheticDevice = 4502;
+        if (asrGpuDeviceFailed(kSyntheticDevice)) {
+            std::fprintf(stderr, "[FAIL] latch reports a device failed before "
+                                 "anything marked it (#4502)\n");
+            return 1;
+        }
+        asrMarkGpuDeviceFailed(kSyntheticDevice);
+        if (!asrGpuDeviceFailed(kSyntheticDevice)) {
+            std::fprintf(stderr, "[FAIL] latch did not hold after marking (#4502)\n");
+            return 1;
+        }
+        asrMarkGpuDeviceFailed(kSyntheticDevice); // idempotent
+        if (!asrGpuDeviceFailed(kSyntheticDevice)) {
+            std::fprintf(stderr, "[FAIL] latch cleared on a second mark (#4502)\n");
+            return 1;
+        }
+        // CPU (-1) is the fallback target and must never be latched out.
+        asrMarkGpuDeviceFailed(-1);
+        if (asrGpuDeviceFailed(-1)) {
+            std::fprintf(stderr, "[FAIL] CPU was latched out - the fallback target "
+                                 "must always stay available (#4502)\n");
+            return 1;
+        }
+        std::printf("[ok] #4502 session failure latch (one-way, idempotent, CPU exempt)\n");
+    }
 
     QElapsedTimer timer;
 
@@ -143,8 +205,39 @@ int main()
     std::printf("[ok] full GPU probe returned: %zu device(s) in %lld ms\n",
                 devices.size(), static_cast<long long>(probeMs));
     for (const AsrGpuDevice& d : devices) {
-        std::printf("     device %d: %s\n", d.index, qPrintable(d.name));
+        std::printf("     device %d: %s (usable=%s)\n", d.index, qPrintable(d.name),
+                    d.usable ? "true" : "false");
     }
+
+    // #4502 default-selection contract, on the real enumeration this time: the
+    // resolved default is either CPU (-1) or a device that actually passed the
+    // probe. Never a device we already know cannot run the decode.
+    {
+        const int def = asrResolveDefaultGpuIndex(devices);
+        if (def != -1) {
+            const auto it = std::find_if(devices.begin(), devices.end(),
+                                         [def](const AsrGpuDevice& d) { return d.index == def; });
+            if (it == devices.end() || !it->usable) {
+                std::fprintf(stderr, "[FAIL] default resolved to device %d, which is not "
+                                     "a usable enumerated device (#4502)\n", def);
+                return 1;
+            }
+        }
+        std::printf("[ok] #4502 default resolution on this host: %d\n", def);
+    }
+
+    // A device the probe rejected must also be latched, so a later explicit
+    // pick or a restored preference cannot walk back into it. (A probe that
+    // merely reports unusable without throwing does not latch — that device
+    // was created fine — so this only asserts the implication one way.)
+    for (const AsrGpuDevice& d : devices) {
+        if (asrGpuDeviceFailed(d.index) && d.usable) {
+            std::fprintf(stderr, "[FAIL] device %d is latched as failed but still "
+                                 "reported usable (#4502)\n", d.index);
+            return 1;
+        }
+    }
+    std::printf("[ok] #4502 latched devices are never reported usable\n");
 
 #ifdef Q_OS_MACOS
     // Everything below is about the embedded-metallib load path, which only

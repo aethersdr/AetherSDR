@@ -466,6 +466,13 @@ void CopyAssistController::startGpuDiscovery()
 
 void CopyAssistController::reconcileAfterGpuFallback()
 {
+    // Reached from the event loop, so re-check the condition the caller saw:
+    // between queueing and running, the operator may have picked another device
+    // or an earlier fallback may already have reconciled this one.
+    if (m_gpuDevice < 0 || !asrGpuDeviceFailed(m_gpuDevice)) {
+        return;
+    }
+
     // The backend already retried on CPU and is running; this only brings the
     // UI and the stored resolution in line with what actually happened, so the
     // next load does not aim at the failed device again.
@@ -640,9 +647,15 @@ void CopyAssistController::buildEngine()
         // a successful fallback still reports ready() — so ask it, then make
         // the selectors tell the truth instead of naming a device that is not
         // running the decode (#4502).
+        //
+        // Queued, not direct: reconciling can change the resolved device, and
+        // that rebuilds the engine — which deletes the AsrEngine whose ready()
+        // emission this lambda is running inside. Deferring to the event loop
+        // lets that emission unwind before its sender is destroyed.
         if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
             && asrGpuDeviceFailed(m_gpuDevice)) {
-            reconcileAfterGpuFallback();
+            QMetaObject::invokeMethod(
+                this, [this] { reconcileAfterGpuFallback(); }, Qt::QueuedConnection);
         }
     });
     connect(m_asr, &AsrEngine::loadFailed, this, [this](const QString& err) {

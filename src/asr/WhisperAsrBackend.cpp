@@ -353,9 +353,11 @@ void asrMarkGpuDeviceFailed(int index)
     }
     const std::lock_guard<std::mutex> lock(asrFailedGpuMutex());
     if (asrFailedGpuDevices().insert(index).second) {
+        // Reached from both the probe and the model load, so the reason is not
+        // named here — the caller logs it.
         qCWarning(lcAsrWhisper)
             << "GPU device" << index
-            << "marked unusable for the rest of this session after a failed load";
+            << "marked unusable for the rest of this session; it will not be tried again";
     }
 }
 
