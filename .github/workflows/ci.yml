@@ -171,6 +171,18 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test|hgauge_hover_popup_test" --output-on-failure
 
+      # band_edges_test joins the gate for the reason stated above the meter
+      # tests: it pins a defect that every existing assertion in the tree was
+      # blind to. #4723 shipped a 60m upper edge 1.3 kHz below the top of a
+      # legal channel, so band grouping, the per-band auto-save cap, digital
+      # mode matching and the TX-filter PTT preflight all quietly disagreed
+      # with the FCC allocation, and nothing went red. It is pure arithmetic
+      # over constexpr data — no widgets, no event loop, no wall clock — so it
+      # is deterministic everywhere and gating it on Linux alone is enough.
+      # Runtime is milliseconds and the Build step already compiled it.
+      - name: Test band edges
+        run: ctest --test-dir build -R "band_edges_test" --output-on-failure
+
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted

@@ -3401,6 +3401,18 @@ target_include_directories(declared_bands_test PRIVATE src)
 target_link_libraries(declared_bands_test PRIVATE Qt6::Core)
 add_test(NAME declared_bands_test COMMAND declared_bands_test)
 
+# Pins the BandDefs.h band edges through BandSettings::bandForFrequency() —
+# the lookup every frequency->band consumer shares, including the TX-filter
+# PTT preflight. #4723 shipped a 60m upper edge 1.3 kHz below the top of a
+# legal channel and nothing in the tree noticed.
+add_executable(band_edges_test
+    tests/band_edges_test.cpp
+    src/models/BandSettings.cpp
+)
+target_include_directories(band_edges_test PRIVATE src)
+target_link_libraries(band_edges_test PRIVATE Qt6::Core)
+add_test(NAME band_edges_test COMMAND band_edges_test)
+
 add_executable(radio_discovery_test
     tests/radio_discovery_test.cpp
     src/core/RadioDiscovery.cpp
