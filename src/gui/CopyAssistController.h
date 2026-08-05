@@ -122,6 +122,10 @@ private:
     void queueSpeakerModelLoad(const QString& path);
     void onSpeakerModelLoaded(const QString& path, bool loaded);
     void replaySpeakerConfiguration();
+    // Put the panel back on its steady-state text after a speaker-model step
+    // left a transient "Preparing…"/"Downloading…" message on screen, replaying
+    // the frequency marker the skipped ready() body owed the log.
+    void restoreListeningStatus();
     void rebuildEngine();  // rebuild only for backend/VAD/GPU changes
     static AsrModelTier sileroVadTier();       // default downloadable Silero VAD model
     static AsrModelTier speakerEmbedderTier(); // default downloadable speaker model

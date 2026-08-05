@@ -103,13 +103,19 @@ AsrBackendFactory slowFactory(int delayMs)
     return [delayMs] { return std::unique_ptr<IAsrBackend>(new SlowBackend(delayMs)); };
 }
 
-AsrSpeakerEmbedderFactory slowSpeakerFactory(int delayMs)
+// Deterministic stand-in for building the ~24 MB ECAPA session: the sleep is
+// what the caller must not wait on. `succeed` picks which completion branch of
+// AsrWorker::loadSpeakerModel() runs. The success branch hands back a default-
+// constructed SpeakerEmbedder — enough to prove the embedder is installed, the
+// clusterer reset and speakerModelLoaded(path, true) emitted, but NOT that a
+// label comes out the other end: embed() needs a real ONNX model for that, and
+// SpeakerEmbedder is concrete (no seam to fake one). Label emission stays
+// covered by the ONNX-gated fixtures, not here.
+AsrSpeakerEmbedderFactory speakerFactory(bool succeed, int delayMs)
 {
-    return [delayMs](const QString&) {
+    return [succeed, delayMs](const QString&) {
         QThread::msleep(delayMs);
-        // No ONNX fixture is needed here: the delay models session preparation,
-        // while the null result exercises the regular failed-load completion.
-        return std::unique_ptr<SpeakerEmbedder>{};
+        return succeed ? std::make_unique<SpeakerEmbedder>() : std::unique_ptr<SpeakerEmbedder>{};
     };
 }
 
@@ -242,7 +248,7 @@ int main(int argc, char** argv)
     {
         constexpr int kDelayMs = 300;
         AsrEngine engine(factory(true), AsrSegmenter::Config{}, nullptr,
-                         slowSpeakerFactory(kDelayMs));
+                         speakerFactory(false, kDelayMs));
         QSignalSpy readySpy(&engine, &AsrEngine::ready);
         engine.setModelPath(QStringLiteral("/does/not/matter"));
         expect(readySpy.wait(5000), "speaker-load test: engine ready");
@@ -251,7 +257,10 @@ int main(int argc, char** argv)
         QElapsedTimer timer;
         timer.start();
         engine.setSpeakerModelPath(QStringLiteral("/slow-speaker.onnx"));
-        expect(timer.elapsed() < 50,
+        // Half the loader delay, not a small absolute bound: the property is
+        // "did not wait for the load", and a loaded runner must make this test
+        // slower rather than red. The blocking (pre-fix) shape costs >= kDelayMs.
+        expect(timer.elapsed() < kDelayMs / 2,
                "setSpeakerModelPath returns without waiting for speaker preparation");
 
         engine.setSpeakerLabelingEnabled(true);
@@ -275,8 +284,73 @@ int main(int argc, char** argv)
         engine.setSpeakerLabelingEnabled(true);
         engine.setSpeakerModelPath(QStringLiteral("/failed-replacement.onnx"));
         expect(speakerSpy.wait(5000), "failed speaker replacement completes");
+        // The flag is operator intent and nothing but setSpeakerLabelingEnabled()
+        // writes it, so a failed load leaves it alone; the worker dropping its
+        // embedder is what stops labels. Owning that distinction is what lets the
+        // controller decide whether to un-check the box.
+        expect(engine.isSpeakerLabelingEnabled(),
+               "a failed speaker load does not silently rewrite the operator's intent");
+    }
+
+    // ---- A successful speaker load arms labeling and keeps intent ---------
+    {
+        constexpr int kDelayMs = 50;
+        AsrEngine engine(factory(true), AsrSegmenter::Config{}, nullptr,
+                         speakerFactory(true, kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "speaker-success test: engine ready");
+
+        QSignalSpy speakerSpy(&engine, &AsrEngine::speakerModelLoaded);
+        engine.setSpeakerLabelingEnabled(true);
+        engine.setSpeakerModelPath(QStringLiteral("/good-speaker.onnx"));
+        expect(speakerSpy.wait(5000), "successful speaker preparation completes");
+        if (!speakerSpy.isEmpty()) {
+            const QList<QVariant> args = speakerSpy.first();
+            expect(args.at(0).toString() == QStringLiteral("/good-speaker.onnx"),
+                   "successful completion identifies the requested model path");
+            expect(args.at(1).toBool(), "successful speaker load is reported as loaded");
+        }
+        expect(engine.isSpeakerLabelingEnabled(),
+               "a successful speaker load leaves labeling intent on");
+
+        // Replacing a good model with another good one must not disturb intent
+        // either — the cached embedder is swapped, not the operator's choice.
+        speakerSpy.clear();
+        engine.setSpeakerModelPath(QStringLiteral("/second-speaker.onnx"));
+        expect(speakerSpy.wait(5000), "speaker model replacement completes");
+        expect(engine.isSpeakerLabelingEnabled(),
+               "replacing a loaded speaker model keeps labeling intent on");
+
+        // Toggling off keeps the loaded embedder (that is the whole point of
+        // #4737's fix) — only the intent flips, with no engine teardown.
+        engine.setSpeakerLabelingEnabled(false);
         expect(!engine.isSpeakerLabelingEnabled(),
-               "failed speaker replacement disables labeling instead of reusing stale state");
+               "toggling labeling off flips intent without a reload");
+    }
+
+    // ---- Shutdown skips speaker loads that have not started ---------------
+    // A backend/GPU/language change destroys the engine, and ~AsrEngine() joins
+    // the worker. A speaker session build cannot be aborted once running, so the
+    // bound that matters is "one in-flight stage", not "every queued stage".
+    {
+        constexpr int kDelayMs = 300;
+        auto* engine = new AsrEngine(factory(true), AsrSegmenter::Config{}, nullptr,
+                                     speakerFactory(false, kDelayMs));
+        QSignalSpy readySpy(engine, &AsrEngine::ready);
+        engine->setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "speaker-shutdown test: engine ready");
+
+        engine->setSpeakerModelPath(QStringLiteral("/first.onnx"));
+        engine->setSpeakerModelPath(QStringLiteral("/second.onnx"));
+        engine->setSpeakerModelPath(QStringLiteral("/third.onnx"));
+        QThread::msleep(50); // let the worker start on the first
+
+        QElapsedTimer timer;
+        timer.start();
+        delete engine; // must wait out one load, not all three (~900 ms)
+        expect(timer.elapsed() < kDelayMs * 2,
+               "destructor skips speaker loads that have not started");
     }
 
     // ---- Disabling drops a queued backlog instead of transcribing it ------

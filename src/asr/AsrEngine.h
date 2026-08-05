@@ -48,6 +48,13 @@ public:
     // backlog of queued segments to finish (each includes a blocking transcribe).
     void setCancelPending(bool cancel) { m_cancelPending.store(cancel, std::memory_order_relaxed); }
 
+    // Thread-safe; set once by ~AsrEngine() before it joins this thread. Distinct
+    // from setCancelPending() above, which is ALSO raised on every ASR-disable
+    // (i.e. whenever the audio tap goes off) and so cannot mean "shutting down".
+    // Stages that would otherwise lengthen the join — backend/VAD creation and
+    // the ~24 MB speaker ONNX session — check this before starting (#4737).
+    void requestShutdown() { m_shuttingDown.store(true, std::memory_order_relaxed); }
+
 public slots:
     void init();                                   // create backend on this thread
     void loadModel(const QString& modelPath);
@@ -82,14 +89,15 @@ private:
     AsrSegmenter m_segmenter;
     std::unique_ptr<SileroVad> m_vad;   // built in init() when a model path is set
     std::string m_vadModelPath;         // optional Silero VAD .onnx (empty = energy)
-    std::unique_ptr<SpeakerEmbedder> m_embedder; // built in init() when a path is set
+    std::unique_ptr<SpeakerEmbedder> m_embedder; // built by loadSpeakerModel()
     SpeakerClusterer m_clusterer;       // online A/B/C… labeling
-    std::string m_speakerModelPath;     // optional speaker-embedding .onnx
-    bool m_speakerLabelingEnabled = false;
+    std::string m_speakerModelPath;     // path m_embedder was built from ("" = none)
+    bool m_speakerLabelingEnabled = false; // operator intent; embedder presence gates
     std::unique_ptr<Resampler> m_resampler;
     int m_resamplerSrcRate = 0;
     bool m_warnedNoModel = false;
     std::atomic<bool> m_cancelPending{false}; // see setCancelPending()
+    std::atomic<bool> m_shuttingDown{false};  // see requestShutdown()
 };
 
 // Engine half — main-thread facing. Accepts 16 kHz mono audio, ships it to the
@@ -122,6 +130,9 @@ public:
     // onto the worker so UI toggles never tear down a busy inference thread.
     void setSpeakerModelPath(const QString& modelPath);
     void setSpeakerLabelingEnabled(bool on);
+    // Pure operator intent: only setSpeakerLabelingEnabled() writes it, so it
+    // stays true after a failed load. Whether labels are actually produced is
+    // gated by the worker holding an embedder, which a failed load drops.
     bool isSpeakerLabelingEnabled() const { return m_speakerLabelingEnabled; }
 
     // Feed mono audio at its native sampleRate (e.g. the 24 kHz RX pipeline).

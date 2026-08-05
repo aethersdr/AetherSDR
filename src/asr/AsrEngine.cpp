@@ -34,8 +34,6 @@ AsrWorker::AsrWorker(AsrBackendFactory factory, AsrSegmenter::Config segConfig,
     , m_segmenter(segConfig)
     , m_vadModelPath(segConfig.vadModelPath)
     , m_clusterer(segConfig.speakerThreshold)
-    , m_speakerModelPath(segConfig.speakerModelPath)
-    , m_speakerLabelingEnabled(!segConfig.speakerModelPath.empty())
 {
 }
 
@@ -48,9 +46,19 @@ AsrWorker::~AsrWorker()
 
 void AsrWorker::init()
 {
+    // ~AsrEngine() joins this thread, so every stage that can run long is a
+    // stage the GUI thread may end up waiting on. A stage already in flight
+    // still has to finish, but one that has not started must not begin after
+    // shutdown was requested — that is what bounds the join (#4737).
+    if (m_shuttingDown.load(std::memory_order_relaxed)) {
+        return;
+    }
     m_backend = m_factory ? m_factory() : nullptr;
     if (m_backend == nullptr) {
         emit errorOccurred(QStringLiteral("ASR backend could not be created."));
+    }
+    if (m_shuttingDown.load(std::memory_order_relaxed)) {
+        return;
     }
 
     // Build the learned VAD on the worker thread (the ONNX session must live
@@ -68,10 +76,9 @@ void AsrWorker::init()
         }
     }
 
-    // Speaker-embedding model for per-utterance A/B/C labeling (worker thread).
-    if (!m_speakerModelPath.empty()) {
-        loadSpeakerModel(QString::fromStdString(m_speakerModelPath));
-    }
+    // No speaker embedder is built here: it is a runtime property loaded via
+    // loadSpeakerModel() so the operator's labeling toggle never rebuilds the
+    // engine (#4737). AsrEngine::setSpeakerModelPath() is its only entry point.
 }
 
 void AsrWorker::loadModel(const QString& modelPath)
@@ -96,6 +103,15 @@ void AsrWorker::loadSpeakerModel(const QString& modelPath)
     if (modelPath.isEmpty()) {
         return;
     }
+    if (m_shuttingDown.load(std::memory_order_relaxed)) {
+        // Building the ~24 MB ECAPA session here would be time the destructor's
+        // join has to wait out. Report the request as unfulfilled instead; the
+        // engine is going away, so nothing is left to observe it. NOT gated on
+        // m_cancelPending — that flag is also set whenever the tap is disabled,
+        // which is exactly when a speaker load is queued.
+        emit speakerModelLoaded(modelPath, false);
+        return;
+    }
 
     std::unique_ptr<SpeakerEmbedder> embedder;
     if (m_speakerEmbedderFactory) {
@@ -116,11 +132,12 @@ void AsrWorker::loadSpeakerModel(const QString& modelPath)
         emit speakerModelLoaded(modelPath, true);
     } else {
         // A replacement that fails must not keep assigning labels through the
-        // previous model. The controller will reflect this as labeling off.
+        // previous model. Dropping the embedder is what guarantees that —
+        // m_speakerLabelingEnabled stays the operator's intent and is left
+        // alone, so the two never disagree about who owns which fact.
         m_embedder.reset();
         m_clusterer.reset();
         m_speakerModelPath.clear();
-        m_speakerLabelingEnabled = false;
         qCWarning(lcAsrEngine, "ASR: speaker embedder load failed (%s) — no labeling",
                   qPrintable(modelPath));
         emit speakerModelLoaded(modelPath, false);
@@ -262,7 +279,6 @@ AsrEngine::AsrEngine(AsrBackendFactory factory, QObject* parent)
 AsrEngine::AsrEngine(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,
                      QObject* parent, AsrSpeakerEmbedderFactory speakerEmbedderFactory)
     : QObject(parent)
-    , m_speakerLabelingEnabled(!segConfig.speakerModelPath.empty())
 {
     startThread(std::move(factory), segConfig, std::move(speakerEmbedderFactory));
 }
@@ -302,13 +318,13 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
         m_ready = false;
         emit loadFailed(err);
     });
+    // Forwarded verbatim: a failed load does NOT clear m_speakerLabelingEnabled.
+    // That flag is the operator's intent and only setSpeakerLabelingEnabled()
+    // writes it; the worker having dropped its embedder is what guarantees no
+    // labels are produced. Deciding what a failure means for the UI (status,
+    // un-checking the box) belongs to the controller, which owns that intent.
     connect(m_worker, &AsrWorker::speakerModelLoaded, this,
-            [this](const QString& modelPath, bool loaded) {
-                if (!loaded) {
-                    m_speakerLabelingEnabled = false;
-                }
-                emit speakerModelLoaded(modelPath, loaded);
-            });
+            &AsrEngine::speakerModelLoaded);
     connect(m_worker, &AsrWorker::segmentText, this,
             [this](const QString& text, float confidence, int speaker) {
                 // A queued worker toggle can be behind an in-flight decode. Mask
@@ -338,6 +354,11 @@ AsrEngine::~AsrEngine()
             // whisper decode, or a remote HTTP round-trip up to its own
             // timeout) — quit()+wait() below still waits for that one.
             m_worker->setCancelPending(true);
+            // Separate from the cancel flag above, which is also raised every
+            // time the audio tap is disabled: this one is set only here, so
+            // init()/loadSpeakerModel() can skip a stage that has not started
+            // without ever refusing a legitimate load (#4737).
+            m_worker->requestShutdown();
         }
         m_thread->quit();
         m_thread->wait();

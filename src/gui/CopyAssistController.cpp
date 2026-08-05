@@ -306,6 +306,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // per-utterance A/B/C labeling.
     m_speakerModels = new AsrModelManager(this);
     connect(m_speakerModels, &AsrModelManager::progress, this, [this](qint64 got, qint64 total) {
+        if (!m_defaultSpeakerRequestPending) {
+            return; // labeling switched off mid-download — stop repainting progress
+        }
         m_panel->setStatus(total > 0
                                ? tr("Downloading speaker model… %1%").arg(static_cast<int>(got * 100 / total))
                                : tr("Downloading speaker model…"));
@@ -315,10 +318,16 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     connect(m_speakerModels, &AsrModelManager::finished, this,
             [this](const QString& path) { onSpeakerModelReady(path); });
     connect(m_speakerModels, &AsrModelManager::failed, this, [this](const QString& err) {
-        if (!m_defaultSpeakerRequestPending || !m_settings->labelSpeakers()) {
+        const bool stillWanted = m_defaultSpeakerRequestPending && m_settings->labelSpeakers();
+        // Always clear the intent, including on the path that swallows the
+        // error: leaving it set would make the next completion look current.
+        m_defaultSpeakerRequestPending = false;
+        if (!stillWanted) {
+            // The operator already turned labeling off. Drop the error, but
+            // don't strand the panel on the abandoned download's progress text.
+            restoreListeningStatus();
             return;
         }
-        m_defaultSpeakerRequestPending = false;
         m_panel->setStatus(tr("Speaker model download failed: %1").arg(err));
         m_settings->setLabelSpeakers(false);
     });
@@ -344,8 +353,14 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             ensureSpeakerModel();
         } else {
             m_defaultSpeakerRequestPending = false;
-            if (!m_speakerLoad.isPending() && m_enabled && m_asr->isReady()) {
-                m_tap->setEnabled(true);
+            if (!m_speakerLoad.isPending()) {
+                if (m_enabled && m_asr->isReady()) {
+                    m_tap->setEnabled(true);
+                }
+                // A "Preparing…"/"Downloading…" message may still be on screen
+                // from the enable this cancels; a load still in flight restores
+                // it from onSpeakerModelLoaded() instead.
+                restoreListeningStatus();
             }
         }
     });
@@ -739,6 +754,15 @@ void CopyAssistController::requestEnable()
 void CopyAssistController::beginEnable()
 {
     m_panel->setBusy(true);
+    // Arm speaker labeling here rather than from buildEngine(): pressing Enable
+    // is the operator action that justifies fetching the ~24 MB model when the
+    // cache is missing it, whereas constructing an engine is not (#4737).
+    // Idempotent — a model already loaded into this engine is a no-op, and a
+    // download already in flight is left alone. Runs before the ASR-model
+    // status lines below so the headline stays the whisper/remote load.
+    if (m_settings->labelSpeakers()) {
+        ensureSpeakerModel();
+    }
     if (m_backend == AsrBackendKind::Remote) {
         // No local model to fetch — the remote endpoint is contacted per
         // utterance. load() just marks the backend ready.
@@ -1004,7 +1028,11 @@ void CopyAssistController::queueSpeakerModelLoad(const QString& path)
 
     m_speakerLoad.begin(path);
     m_panel->setStatus(tr("Preparing speaker model…"));
-    // Do not queue lossless RX audio behind ONNX session preparation. The tap
+    // Stop feeding the worker while it prepares. This is not a priority boost:
+    // loadSpeakerModel() is queued BEHIND whatever audio is already backlogged
+    // on that same thread, so on a deep backlog "Preparing speaker model…" can
+    // sit for a while either way. What it avoids is piling up further decodes
+    // that the operator's pending labeling choice may make moot. The tap
     // resumes from onSpeakerModelLoaded() on the controller thread.
     m_tap->setEnabled(false);
     m_asr->setSpeakerModelPath(path);
@@ -1016,18 +1044,36 @@ void CopyAssistController::onSpeakerModelLoaded(const QString& path, bool loaded
         return; // a superseded custom/default request is still queued behind it
     }
 
+    // Latched rather than re-derived: setLabelSpeakers(false) below flips
+    // labelSpeakers() as a side effect, so testing it again afterwards would
+    // overwrite the failure message with "Listening…".
+    bool reportedFailure = false;
     if (!loaded && m_settings->labelSpeakers()) {
         m_panel->setStatus(tr("Speaker model load failed."));
         m_settings->setLabelSpeakers(false);
+        reportedFailure = true;
     }
     m_asr->setSpeakerLabelingEnabled(m_settings->labelSpeakers());
     if (m_enabled && m_asr->isReady()) {
         m_tap->setEnabled(true);
-        if (loaded) {
-            m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
-                                                                   : tr("Listening…"));
-        }
     }
+    if (!reportedFailure) {
+        restoreListeningStatus();
+    }
+}
+
+void CopyAssistController::restoreListeningStatus()
+{
+    if (!m_enabled || !m_asr->isReady()) {
+        return; // not listening — leave "Disabled"/"Loading model…" alone
+    }
+    m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
+                                                           : tr("Listening…"));
+    // The ready() lambda skips its whole body while a speaker load is pending,
+    // so this resume point owes the log the same "on start" frequency header it
+    // would have written. writeFreqMarkerIfNeeded() dedups, so the ordinary
+    // "already marked" case costs nothing.
+    writeFreqMarkerIfNeeded();
 }
 
 void CopyAssistController::replaySpeakerConfiguration()
@@ -1052,9 +1098,21 @@ void CopyAssistController::replaySpeakerConfiguration()
         return;
     }
 
-    // This also preserves a busy default download across replacement: ensure()
-    // is skipped while busy, but m_defaultSpeakerRequestPending remains the
-    // current intent and its completion will load into this new engine.
+    // Building an engine must never START a download. ensure() fetches ~24 MB
+    // unprompted when the file is absent, and buildEngine() runs from the
+    // constructor and from every GPU/language/VAD/tier change — so without this
+    // guard a stale "labeling on" setting would pull the model at app launch
+    // with Copy Assist switched off. Fetching stays operator-driven (the
+    // labeling toggle); replay only re-arms what is already on disk.
+    if (!QFileInfo::exists(m_speakerModels->modelPath(speakerEmbedderTier()))) {
+        return;
+    }
+
+    // This also preserves a busy default download across replacement: the file
+    // is absent while it downloads, so the guard above returns early, but
+    // m_defaultSpeakerRequestPending survives resetForEngineReplacement() (it is
+    // controller state, not per-engine) and its completion loads into this new
+    // engine via onSpeakerModelReady().
     ensureSpeakerModel();
 }
 
