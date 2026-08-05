@@ -307,6 +307,11 @@ RadioCapabilities SimBackend::capabilities() const
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
+
+    // The demo has no transmitter and no radio to ship audio to.
+    caps.takesTxAudioOverSeam = false;
+    // Continuous/unknown — the operator keeps their own width list.
+    caps.rxFilterWidthsHz = {};
     // Synthetic audio only; nothing to route to a virtual device.
     caps.hasDaxStreams = false;
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP

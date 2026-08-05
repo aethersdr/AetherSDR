@@ -39,7 +39,10 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `model` | from provider | `"Hermes-Lite 2"` | `"AetherSDR Demo"` | `FlexBackend::capabilities` | Key into the ModelCapabilities table |
 | `tuningMinHz` / `tuningMaxHz` | — (0/0) | 0.1–38.4 MHz | — (0/0) | `MainWindow_Wiring.cpp`, `applyTuningRangeToOverlayMenu` | Refuses band buttons the receiver cannot reach. 0/0 means unconstrained |
 | `canTransmit` | ✅ | `m_txAllowed` | ❌ | `RadioModel::setTransmit`, MOX/TUNE key guards | **TX safety gate.** Fail-closed: false denies any keying intent |
-| `hostModulates` | — (❌) | ✅ | — (❌) | `TciServer`, `MainWindow_Session` | Mic source collapses to PC; PC-audio lock |
+| `hostModulates` | — (❌) | ✅ | — (❌) | `TciServer`, `MainWindow_Session` | Mic source collapses to PC; PC-audio lock. **Not the same question as `takesTxAudioOverSeam`** — see below |
+| `takesTxAudioOverSeam` | ❌ | ✅ | ❌ | `MainWindow_Session` (capture, TX stream, PC-audio lock), `AudioEngine::setHostModulation`, `RadioModel::ensureDaxTxStream` | Whether transmit audio leaves through `submitTxAudio` rather than a DAX/VITA-49 stream. Icom: ✅ |
+| `hasSelectableMicInputs` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneCwApplet::setSelectableMicInputs` | The MIC/BAL/LINE/ACC/PC list. False collapses it to PC and adopts that into TransmitModel. Icom: ❌ (the radio picks its own input) |
+| `rxFilterWidthsHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `RxApplet::setRadioFilterWidths` | The RX filter widths a radio can actually reach. **Empty = continuous or unknown**, and the operator's configurable list stays in force. Icom: `{1800, 2400, 3000}` — three fixed IF filters |
 | `canReboot` | ✅ | ❌ | — (❌) | `RadioSetupDialog` | Enables the Reboot button |
 | `hasTuner` | ✅ | ❌ | ❌ | `TransmitModel::setHasTuner` → `TxApplet` | ATU / MEM dimming |
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
@@ -63,6 +66,27 @@ edges and on any mid-session revision by the backend. Add a capability by adding
 one owning call there — not another connect-time lambda. With several flags in
 play, scattered lambdas are how two callers end up both driving one widget's
 `setVisible()` and whichever fires last wins.
+
+### `hostModulates` vs `takesTxAudioOverSeam`
+
+They look like one question and are two, and conflating them cost a working
+transmitter on the Icom bring-up. `hostModulates` asks **who runs the
+modulator**; `takesTxAudioOverSeam` asks **how transmit audio reaches the
+radio**. There are three cases, not two:
+
+| | modulator | audio route | `hostModulates` | `takesTxAudioOverSeam` |
+|---|---|---|---|---|
+| Flex | radio | DAX / VITA-49 | ❌ | ❌ |
+| HL2 | host | the seam | ✅ | ✅ |
+| Icom | radio | the seam | ❌ | ✅ |
+
+`AudioEngine` gated its entire transmit chain on the first flag, and
+`MainWindow_Session` gated capture, the TX stream and the PC-audio lock on it
+too. An Icom therefore captured nothing, processed nothing and keyed with no
+modulation at all, while TCI's transmit path asked for a DAX stream and failed
+with "this radio has no command plane". Everything about the AUDIO now keys off
+the second flag; `hostModulates` keeps only the questions that are genuinely
+about the modulator.
 
 ### What `hasRadioSideDsp` must never hide
 

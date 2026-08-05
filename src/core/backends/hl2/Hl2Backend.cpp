@@ -1339,6 +1339,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // lives in this application, so there is nothing for a profile to name.
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
+
+    // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
+    c.rxFilterWidthsHz = {};
     // No per-slice audio or per-pan IQ stream plane: the HL2 sends one raw IQ
     // feed and this host demodulates it.
     c.hasDaxStreams = false;

@@ -152,6 +152,18 @@ RadioCapabilities FlexBackend::capabilities() const
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
     caps.hasSelectableMicInputs = true;
+
+    // FALSE, and stated rather than left to the default. A Flex modulates on
+    // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one
+    // family for which "the host ships the audio" is wrong — the seam verb is
+    // never called and MainWindow's transmit-audio gate must stay closed. An
+    // omitted field is indistinguishable here from a considered false, which is
+    // what this file's ADDING-A-FIELD note exists to prevent.
+    caps.takesTxAudioOverSeam = false;
+
+    // EMPTY = continuous or unknown, so the RX applet keeps the operator's own
+    // configurable width list. A Flex's filters are continuous.
+    caps.rxFilterWidthsHz = {};
     // DAX audio + DAX IQ ride PanadapterStream's VITA-49 plane, which only this
     // backend owns.
     caps.hasDaxStreams = true;
