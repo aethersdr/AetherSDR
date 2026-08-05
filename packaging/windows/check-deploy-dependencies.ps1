@@ -47,6 +47,12 @@ $ErrorActionPreference = "Stop"
 
 # msvcrt.dll (no digits after the prefix) is the OS-provided legacy CRT and is
 # intentionally NOT matched — only the redistributable, versioned runtimes are.
+#
+# An "mfc" hit means "add the Microsoft.VC<nnn>.MFC redist directory to
+# stage-msvc-runtime.ps1", not "the payload is broken": MFC ships in a third
+# sibling of the CRT/OpenMP dirs that the staging script does not copy. Very
+# unlikely for a Qt app, but the entry stays so it fails loudly rather than
+# resolving from the machine's redistributable.
 $RuntimeDllPattern = '^(msvcp|msvcr|vcruntime|vcomp|concrt|vccorlib|mfc)\d'
 $ApiSetPattern     = '^(api-ms-win-|ext-ms-)'
 
@@ -87,7 +93,16 @@ function Get-PeDependencies {
         [string]$ImagePath
     )
 
-    $output = & $Dumpbin /nologo /dependents $ImagePath 2>&1
+    # Scope ErrorActionPreference around the native call. Windows PowerShell 5.1
+    # (what the CI step invokes, not pwsh 7) turns each stderr line of a native
+    # command redirected with 2>&1 into an ErrorRecord, and under "Stop" that is
+    # a terminating NativeCommandError raised before $LASTEXITCODE is read — so
+    # a benign dumpbin warning (LNK4048 on a file that is not a well-formed PE)
+    # would kill the job with an opaque error instead of the message below.
+    $output = & {
+        $ErrorActionPreference = "Continue"
+        & $Dumpbin /nologo /dependents $ImagePath 2>&1
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "dumpbin failed on ${ImagePath}: $($output -join [Environment]::NewLine)"
     }
@@ -165,8 +180,11 @@ if (-not $images) {
     throw "No .dll/.exe images found under $resolvedDeployDir."
 }
 
-# Every shipped file resolves an import, not just the ones we walk — Qt plugins
-# live in subdirectories but load from the app directory, so index by name.
+# Index every shipped file by bare name, including the ones in subdirectories.
+# That is deliberately more permissive than the real loader — a DLL sitting only
+# in deploy\imageformats\ would not satisfy an import from deploy\platforms\ —
+# and it errs toward passing on purpose: a false failure blocking a release is
+# worse than missing an exotic cross-plugin case.
 $shippedFiles = @{}
 foreach ($image in $images) {
     $shippedFiles[$image.Name.ToLowerInvariant()] = $true

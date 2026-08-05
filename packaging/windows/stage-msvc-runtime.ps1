@@ -83,12 +83,17 @@ if (-not $runtimeDir) {
     throw "Could not find an x64 Microsoft.VC*.CRT runtime directory. Make sure the MSVC redist components are installed."
 }
 
-# Take the OpenMP redist as a SIBLING of the chosen CRT directory rather than
-# searching independently: siblings share the toolset version by construction,
-# so vcomp140.dll can never end up mismatched against the CRT it was built with.
+# Take the OpenMP redist as a SIBLING of the chosen CRT directory, deriving its
+# name from that directory instead of globbing independently: the CRT search
+# above sorts descending to take the newest, so an independent search with its
+# own ordering could silently pick a different toolset the moment the redist
+# layout stops being version-scoped. Deriving the name makes the version match
+# an invariant rather than a coincidence — Microsoft.VC143.CRT pairs with
+# Microsoft.VC143.OpenMP, and nothing else.
 $redistArchRoot = Split-Path -Parent $runtimeDir.FullName
-$openMpDir = Get-ChildItem -LiteralPath $redistArchRoot -Directory -Filter "Microsoft.VC*.OpenMP" -ErrorAction SilentlyContinue |
-    Sort-Object FullName |
+$openMpDirName = $runtimeDir.Name -replace '\.CRT$', '.OpenMP'
+$expectedOpenMpDir = Join-Path $redistArchRoot $openMpDirName
+$openMpDir = Get-ChildItem -LiteralPath $redistArchRoot -Directory -Filter $openMpDirName -ErrorAction SilentlyContinue |
     Select-Object -First 1
 
 if (-not $openMpDir) {
@@ -96,7 +101,7 @@ if (-not $openMpDir) {
     # bug in #4781, and a broken installer is far more expensive than a red CI
     # run. The OpenMP redist installs with the "MSVC v143 - VS 2022 C++ x64/x86
     # build tools" component that already provides the CRT redist next to it.
-    throw "Could not find a Microsoft.VC*.OpenMP runtime directory next to $($runtimeDir.FullName). " +
+    throw "Could not find the OpenMP runtime directory $expectedOpenMpDir (sibling of the chosen CRT redist $($runtimeDir.FullName)). " +
           "AetherSDR.exe imports vcomp140.dll (ggml is built with /openmp), so it must ship app-local. " +
           "Install the MSVC v143 C++ build tools redist component and retry."
 }

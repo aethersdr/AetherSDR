@@ -177,6 +177,11 @@ if ($Installer) {
     Assert-Tool iscc "Install Inno Setup 6 (provides ISCC.exe) to build the installer."
     Write-Host "== Staging MSVC runtime + building installer ==" -ForegroundColor Cyan
     & powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\stage-msvc-runtime.ps1 -OutputDir installer-runtime
+    # Surface the staging script's own message. Without this the common local
+    # failure — a VS install missing the OpenMP redist component — shows up as
+    # the Copy-Item below erroring on an absent directory, which reads as a path
+    # problem rather than "install the MSVC v143 redist component".
+    if ($LASTEXITCODE -ne 0) { throw "MSVC runtime staging failed — see the output above." }
     Copy-Item installer-runtime\*.dll $deploy\ -Force
     # Same gate CI runs — catch a payload that leans on the machine's own VC++
     # redistributable here rather than on a user's machine (#4781).
