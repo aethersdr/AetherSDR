@@ -30,6 +30,21 @@ public:
     // HL2 IQ rate and the audio rate — see the note in configure().
     static constexpr int kWdspDspSampleRateHz = 48000;
 
+    // RX filter length. This is also the manual-notch resolution: WDSP's
+    // narrowest notch is 1600 / (taps/256) Hz at kWdspDspSampleRateHz, and it
+    // WIDENS a narrower request instead of rejecting it. 8192 taps buys a 50 Hz
+    // floor (pihpsdr's value); WDSP's own default of 2048 would floor it at
+    // 200 Hz, wide enough to swallow a CW signal next to the carrier being
+    // notched. Keep kMinNotchWidthHz in step if this changes — the UI offers
+    // widths from it.
+    static constexpr int kRxFilterTaps = 8192;
+    static constexpr double kMinNotchWidthHz =
+        1600.0 / (static_cast<double>(kRxFilterTaps) / 256.0)
+        * (static_cast<double>(kWdspDspSampleRateHz) / 48000.0);
+    static_assert(kMinNotchWidthHz <= 50.0,
+                  "RX filter taps no longer allow a 50 Hz notch; the width "
+                  "presets in the TNF menu assume one.");
+
     struct Config {
         int inputSampleRateHz = 48000;   // HL2 IQ sample rate
         // Demodulated-audio rate. 24 kHz because that is AudioEngine's native

@@ -65,6 +65,13 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     wc.agcMode = config.agcMode;
     wc.maximumAgcGainDb = config.maximumAgcGainDb;
     wc.blockForOutput = config.blockForOutput;
+    // Filter length. WDSP's default of 2048 is fine for a passband edge, but it
+    // also sets the NARROWEST POSSIBLE NOTCH — min_notch_width is
+    // 1600 / (nc/256) Hz at 48 kHz, so 2048 taps floors a notch at 200 Hz and
+    // WDSP silently widens anything narrower rather than refusing it. A carrier
+    // heterodyne wants ~50 Hz, which needs 8192. That is what pihpsdr runs
+    // (receiver.c), and the cost is filter-delay, not CPU.
+    wc.filterTaps = kRxFilterTaps;
 
     auto channel = WdspChannel::create(wc, error);
     if (!channel)
