@@ -726,3 +726,127 @@ exists to keep visible:
 12. **A revoked session still looks healthy.** The backend swallows a post-grant
     auth failure as "the previous session's teardown" — right for a reconnect,
     wrong when the radio really has withdrawn this one. It should disconnect.
+
+---
+
+## Appendix E — CI-V capability sweep, observed on the wire
+
+A black-box read-only sweep of an IC-705 (firmware E1.40), driven through
+`civ send` / `civ trace`. Raw results: [`docs/data/icom-ic705-civ-sweep.json`];
+the sweeper is `tools/icom_civ_sweep.py`.
+
+**Provenance.** Every fact below is a response this radio gave to a command we
+sent. Nothing here is derived from a firmware image, and it must stay that way —
+Principle IV is explicit that decompiled protocol *knowledge* contaminates
+everything written from it, and equally explicit that "capturing and studying
+the protocol as it actually behaves on the wire" is clean. This appendix is the
+second thing.
+
+**Safety.** Read forms only, against a hard exclusion list. Unknown CI-V space
+is not inert: it contains `18 00` (power off — a one-way trip over WiFi, since
+the WLAN interface goes with it), `1C 00` (keying), `1C 01` (the tuner cycle),
+plus scan and memory writes. A read is `cmd + sub` with NO payload; adding a
+payload is what makes it a set.
+
+### E.1 Method, and the two ways it lied first
+
+Worth recording, because both failures produced confident wrong answers rather
+than errors:
+
+1. **Scanning the trace ring newest-first** matched the app's OWN metering — an
+   S-meter poll every 100 ms, a transmit-state poll every 250 — so probes were
+   answered by somebody else's reply. Commands we *know* work came back
+   "silent" while the sweep looked plausible. §1.9's shape exactly: a
+   measurement that looks in the wrong place reads as absence.
+2. **Diffing the ring by index** then returned nothing at all, because the ring
+   is capped at 200 frames: once full its length stops growing. Every probe
+   still reported success and the whole sweep came back blank.
+
+Correlating by `ageMs` works, because age survives eviction. And a single-pass
+negative is NOT evidence of absence — re-probing the misses three times each
+recovered seven commands that had simply answered slower than the window. Any
+future sweep must keep that retry pass.
+
+**A command the app itself polls cannot be cleanly attributed** by this method,
+since a matching reply may be the app's rather than ours. For `15 02`, `15 15`
+and `1C 00` we already have ground truth from the implementation, so the sweep
+is a discovery tool for everything ELSE.
+
+### E.2 What the radio answers that we do not map
+
+**Levels (`14 xx`)** — the radio answers 14, we map 10:
+
+| CI-V | Read back | What it is | Note |
+|---|---|---|---|
+| `14 07` | 128 | **TWIN PBT (PBT1)** position | 0 = full CCW, 128 = centre, 255 = full CW |
+| `14 08` | 128 | **TWIN PBT (PBT2)** position | the pair shifts and narrows the IF passband |
+| `14 16` | 128 | VOX gain | |
+| `14 19` | 128 | LCD backlight | not ours to drive |
+
+**PBT is the interesting one.** We report the IF filter as three fixed widths
+because that is all `filterForWidthHz` can reach — but the radio has a
+continuous passband-tuning pair underneath it. A client that drove `14 07` /
+`14 08` could offer real passband control on a radio we currently describe as
+having three filters. That is a feature, not a defect, and it is the single
+largest capability this sweep found.
+
+**Functions (`16 xx`)** — the radio answers 21, we map 10:
+
+| CI-V | Read back | What it is |
+|---|---|---|
+| `16 42` | 0 | Repeater tone |
+| `16 43` | 0 | Tone squelch |
+| `16 47` | 0 | **BK-IN** — 00 off / 01 semi / 02 full |
+| `16 4B` | 0 | DTCS |
+| `16 4F` | 0 | Twin peak filter (RTTY) |
+| `16 56` | **1** | DSP IF filter type — 00 SHARP / 01 SOFT |
+| `16 57` | **1** | Manual notch width — W/M/N |
+| `16 58` | 0 | SSB TX bandwidth — W/M/N |
+| `16 5B` | 0 | DSQL / CSQL (DV) |
+| `16 5C` | 0 | GPS TX mode |
+| `16 5D` | 0 | Tone squelch type |
+
+`16 47` is the one that matters for operators: CW break-in is unreachable today
+and the radio plainly supports it.
+
+### E.3 The questions this was run to answer
+
+**Battery.** There is no battery command, and there does not need to be: on an
+IC-705 `15 15` (Vd) IS the battery gauge. Read **7.98 V** on this radio — a
+BP-272 pack at roughly 60–70 %, not a 13.8 V supply, which reads ~13.8 on the
+same meter. One meter, two meanings, distinguished only by the value. We already
+publish it to the status bar; what we do NOT do is say which of the two it is.
+
+**Temperature.** Confirmed absent for the third time, now empirically as well as
+from the guide. The `15 xx` space answers at `01, 02, 05, 07, 11, 12, 13, 14,
+15, 16` and nothing else. There is no PA-temperature meter on this radio.
+
+**WiFi signal strength and network health.** Nothing in CI-V. Network health is
+an RS-BA1 property, not a CI-V one, and we already measure it ourselves —
+per-stream RTT, jitter, gap and packet loss, surfaced through `liveness`. Signal
+strength is a radio-display value with no command behind it.
+
+**Counters.** None. CI-V has no packet, error or uptime counters of any kind;
+every counter AetherSDR shows for this radio is one it computes from the
+transport.
+
+### E.4 Scope geometry, confirmed
+
+`27 12` and `27 13` both answer `00` and nothing else — one receiver, one scope,
+exactly as `IcomModels` already assumes for the IC-705. `27 10` and `27 11`
+answer `01`, confirming both switches are on: the scope is running AND its data
+is being sent to us, which is the pair whose asymmetry is the number-one cause
+of a black panadapter.
+
+### E.5 What to do with this
+
+1. **`16 47` BK-IN** — real operator feature, radio supports it, no seam verb.
+2. **`14 07` / `14 08` TWIN PBT** — would turn our three-filter story into real
+   passband tuning. Needs a UI decision, not just a verb.
+3. **`16 56` / `16 57` / `16 58`** — SHARP/SOFT, notch width, TX bandwidth. All
+   trivial once the DSP verbs exist.
+4. **Say which Vd means.** A voltage that is a battery gauge below ~9 V and a
+   supply rail above it should be labelled as such, not left as a bare number.
+5. **Re-run this sweep against the IC-7300MK2** when one is available. The
+   sweeper is model-agnostic and the JSON diffs cleanly, which is the cheapest
+   possible way to establish a second model's capability set.
