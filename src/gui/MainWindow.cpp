@@ -7781,6 +7781,20 @@ void MainWindow::updateNr2Availability()
 
 void MainWindow::enableNr2WithWisdom()
 {
+    // Single-session guard.  All six call sites (the DSP applet, two
+    // shortcut paths, two wiring paths and the menu) funnel through here,
+    // and the wisdom cache does not exist until generation *completes* —
+    // so without this, a second NR2 request mid-generation stacks a second
+    // dialog and a second generateWisdom() worker, and the two race on the
+    // wisdom temp/final files in SpectralNR.cpp.
+    //
+    // Deliberately NOT cleared when the operator cancels: cancellation is
+    // cooperative and only takes effect when the in-flight FFTW_PATIENT
+    // plan finishes, which on the size-262144 tail is minutes away.  The
+    // guard has to outlive the cancel request and stay up until the worker
+    // actually exits, or a restart during that window recreates exactly
+    // the file race above.  The teardown paths below clear it via the
+    // QPointer when the dialog is deleted.
     if (m_nr2WisdomDialog) {
         m_nr2WisdomDialog->show();
         m_nr2WisdomDialog->raise();
@@ -7815,6 +7829,14 @@ void MainWindow::enableNr2WithWisdom()
         dlg->setWindowFlag(Qt::Tool, true);
         dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
 #ifdef Q_OS_MAC
+        // Qt maps Qt::Tool to an NSPanel, which AppKit hides whenever the
+        // application deactivates — fatal for a dialog that is modeless by
+        // design and lives for minutes.  This attribute is what turns that
+        // off: QWidgetPrivate::create() forwards it to the QWindow property
+        // _q_macAlwaysShowToolWindow, which QCocoaWindow reads to decide
+        // NSWindow.hidesOnDeactivate.  It is read during window creation, so
+        // it MUST stay ahead of the first show()/winId() — moving it below
+        // would silently no-op on macOS with nothing failing elsewhere.
         dlg->setAttribute(Qt::WA_MacAlwaysShowToolWindow, true);
 #endif
         dlg->setMinimumWidth(500);
@@ -7870,6 +7892,15 @@ void MainWindow::enableNr2WithWisdom()
         reassuranceLabel->setObjectName("nr2WisdomReassuranceLabel");
         reassuranceLabel->setAccessibleName("FFTW wisdom generation reassurance");
         reassuranceLabel->setWordWrap(true);
+        // Reserve the row while hidden.  This line toggles on every quiet
+        // interval, and without the reservation each toggle relayouts the
+        // dialog — the tool window grows when it appears and is left with
+        // dead space when it goes.  #4728 is a report about this window
+        // being visually unstable at exactly this point in the run, so the
+        // replacement liveness cue must not reintroduce geometry churn.
+        QSizePolicy reassurancePolicy = reassuranceLabel->sizePolicy();
+        reassurancePolicy.setRetainSizeWhenHidden(true);
+        reassuranceLabel->setSizePolicy(reassurancePolicy);
         reassuranceLabel->hide();
         body->addWidget(reassuranceLabel);
 
@@ -7930,7 +7961,12 @@ void MainWindow::enableNr2WithWisdom()
             if (cancelled->exchange(true)) {
                 return;
             }
-            activityLabel->setText("Cancel requested");
+            // activityLabel is left to the activity timer: it reads
+            // `cancelled` and switches to the animated "Canceling..." on its
+            // next tick.  Setting a static string here would be overwritten
+            // within 500 ms, and the animated form is the better affordance
+            // anyway — it keeps proving the app is alive while the in-flight
+            // FFT plan finishes.
             reassuranceLabel->setText(
                 "Cancel requested — waiting for the current FFT plan to finish.");
             reassuranceLabel->show();
