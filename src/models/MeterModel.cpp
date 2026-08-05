@@ -124,8 +124,10 @@ void MeterModel::defineMeter(const MeterDef& def)
         m_fwdPwrIdx = def.index;
         m_fwdPwrUnit = def.unit;
     }
-    else if (def.source.startsWith("TX") && def.name == "REFPWR")
+    else if (def.source.startsWith("TX") && def.name == "REFPWR") {
         m_refPwrIdx = def.index;
+        m_refPwrUnit = def.unit;
+    }
     else if (def.source.startsWith("TX") && def.name == "SWR")
         m_swrIdx = def.index;
     else if (def.name == "MICPEAK")
@@ -231,6 +233,7 @@ void MeterModel::removeMeter(int index)
     if (index == m_fwdPwrIdx) { m_fwdPwrIdx = -1; m_fwdPwrUnit.clear(); }
     if (index == m_refPwrIdx) {
         m_refPwrIdx = -1;
+    m_refPwrUnit.clear();
         m_reflectedPower = 0.0f;
         m_lastReflectedPowerUpdateMs = 0;
     }
@@ -343,6 +346,7 @@ void MeterModel::clear()
     m_fwdPwrIdx = -1;
     m_fwdPwrUnit.clear();
     m_refPwrIdx = -1;
+    m_refPwrUnit.clear();
     m_swrIdx = -1;
     m_micPeakIdx = -1;
     m_micLevelIdx = -1;
@@ -725,9 +729,22 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
         } else if (idx == m_refPwrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;
             m_lastReflectedPowerUpdateMs = m_lastTxMeterUpdateMs;
-            // REFPWR is an independent directional-coupler reading in dBm.
-            // Preserve it as watts rather than reconstructing it from SWR.
-            m_reflectedPower = std::pow(10.0f, v / 10.0f) / 1000.0f;
+            // REFPWR is an independent directional-coupler reading. Preserve it
+            // as watts rather than reconstructing it from SWR — and HONOUR THE
+            // DECLARED UNIT, exactly as forward power does.
+            //
+            // This one was missed when FWDPWR and ALC were fixed, and the gap
+            // was worse than the original bug: MeterSurfaces.h advertises this
+            // consumer as accepting Watts, so `liveness` reported a
+            // watts-declaring backend as unit-AGREEING while the value was
+            // still being converted from dBm — 0.5 W arriving as 0.0011 W with
+            // the diagnostic vouching for it. Nothing publishes REFPWR in watts
+            // today, which is precisely why it would have been found the hard
+            // way.
+            const bool refAlreadyWatts =
+                m_refPwrUnit.compare(QLatin1String("Watts"), Qt::CaseInsensitive) == 0
+                || m_refPwrUnit.compare(QLatin1String("W"), Qt::CaseInsensitive) == 0;
+            m_reflectedPower = refAlreadyWatts ? v : std::pow(10.0f, v / 10.0f) / 1000.0f;
             directionalChanged = true;
         } else if (idx == m_swrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;

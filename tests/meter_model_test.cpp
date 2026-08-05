@@ -308,6 +308,30 @@ void testForwardPowerHonoursItsDeclaredUnit()
     }
 }
 
+// REFPWR was missed when FWDPWR and ALC were fixed, and MeterSurfaces.h already
+// advertised this consumer as accepting Watts — so the join reported a
+// watts-declaring backend as unit-agreeing while the value was still converted
+// from dBm. The diagnostic vouching for the bug is worse than the bug.
+void testReflectedPowerHonoursItsDeclaredUnit()
+{
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "Watts"));
+        model.defineMeter(txMeter(9, "REFPWR", "Watts"));
+        model.updateValues({8, 9}, {10, 1});
+        report("a REFPWR meter declared in Watts is NOT converted from dBm",
+               nearlyEqual(model.reflectedPower(), 1.0f));
+    }
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+        model.defineMeter(txMeter(9, "REFPWR", "dBm"));
+        model.updateValues({8, 9}, {rawDb(50.0f), rawDb(36.0206f)});
+        report("and a dBm one still converts, as every existing backend expects",
+               nearlyEqual(model.reflectedPower(), 4.0f));
+    }
+}
+
 void testAlcPercentIsMappedOntoTheGaugeRange()
 {
     // The ALC consumers are a -20..0 dBFS gauge. A radio running its own ALC
@@ -867,6 +891,7 @@ int main(int argc, char** argv)
     testRemovingAdjacentMetersDoesNotClearCompPeak();
     testMicPeakAvailabilityTracksTheMeterList();
     testForwardPowerHonoursItsDeclaredUnit();
+    testReflectedPowerHonoursItsDeclaredUnit();
     testAlcPercentIsMappedOntoTheGaugeRange();
     testDirectionalPowerUsesDirectReflectedMeter();
     testNativeSwrRemainsRadioProvidedAtLowPower();

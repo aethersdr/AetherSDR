@@ -329,6 +329,7 @@ private:
     // is being misread", which is why they survived a certification run that
     // correctly reported both as fed.
     QString m_fwdPwrUnit;
+    QString m_refPwrUnit;
     QString m_swAlcUnit;
 
     int m_fwdPwrIdx{-1};     // "FWDPWR"
