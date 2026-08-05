@@ -45,6 +45,46 @@ int main(int argc, char** argv)
 
     bool ok = true;
 
+    // ---- forced mic selection is ADOPTED, never commanded --------------------
+    //
+    // On a radio whose input a client cannot choose (an Icom picks its own from
+    // its MOD Input menu), the Phone applet collapses the source list to PC.
+    // The model has to agree with what the screen shows — it did not, and
+    // reported MIC through a whole session, which made radiocert warn that
+    // transmit audio capture was not running on a radio where that is simply
+    // not how audio gets there.
+    //
+    // But the fix must NOT go through setMicSelection(): that is the operator
+    // intent path, and pushing a capability-forced value back out as intent is
+    // how a capability turns into a command nobody issued (Principle II). So
+    // this asserts the state changed AND that nothing went on the wire.
+    commands.clear();
+    ok &= expect(tx.micSelection() == QStringLiteral("MIC"),
+                 "the model starts on MIC, as a Flex would report");
+    ok &= expect(tx.applyMicSelectionState(QStringLiteral("PC")),
+                 "adopting a forced selection reports that it changed something");
+    ok &= expect(tx.micSelection() == QStringLiteral("PC"),
+                 "and the model now agrees with the screen");
+    ok &= expect(commands.isEmpty(),
+                 "WITHOUT emitting a command — a forced value is not operator intent");
+
+    ok &= expect(!tx.applyMicSelectionState(QStringLiteral("PC")),
+                 "re-adopting the same value is a no-op");
+    ok &= expect(!tx.applyMicSelectionState(QString()),
+                 "and an empty selection is refused rather than stored");
+    ok &= expect(tx.micSelection() == QStringLiteral("PC"),
+                 "so the last good value survives");
+    ok &= expect(commands.isEmpty(), "none of which touched the wire");
+
+    // The operator's own path still commands, so adopting did not break it.
+    tx.setMicSelection(QStringLiteral("MIC"));
+    ok &= expect(!commands.isEmpty(),
+                 "the OPERATOR choosing a source still emits a command");
+    // Leave the recorder clean: the assertions below compare `commands`
+    // EXACTLY, so anything left here fails a test that has nothing to do with
+    // mic selection.
+    commands.clear();
+
     tx.startTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
