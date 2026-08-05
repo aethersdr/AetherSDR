@@ -161,6 +161,14 @@ RadioCapabilities FlexBackend::capabilities() const
     // asked (`display panafall set <id> auto_black=1`), so HW is a real
     // choice on the Display panel's Black Level button.
     caps.hasRadioSideWaterfallAutoBlack = true;
+    // The CWX text keyer, the digital voice keyer and full duplex are SmartSDR
+    // command-plane features carried by this backend: `cwx …`, `dvk …`,
+    // `radio set full_duplex_enabled=`. hasVoiceKeyer says the radio HAS a
+    // voice keyer; whether this operator is licensed for it is the separate
+    // SmartSDR+ entitlement gate.
+    caps.hasRadioSideCwKeyer = true;
+    caps.hasVoiceKeyer = true;
+    caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
     // GPSDO / on-board GNSS, reported through the `gps` status.

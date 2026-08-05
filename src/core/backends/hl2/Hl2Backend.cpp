@@ -1304,6 +1304,15 @@ RadioCapabilities Hl2Backend::capabilities() const
     // waterfall black level, so the Black Level button's HW position would be
     // a mode that never produces one. Off <-> SW only. (#4606)
     c.hasRadioSideWaterfallAutoBlack = false;
+    // No command plane to carry any of these. The HL2 has no text buffer for a
+    // CW keyer, no voice recorder and no full-duplex setting — so the three
+    // status-bar toggles that drive them go away rather than sitting greyed
+    // out. The host-side equivalents are untouched: this radio still transmits
+    // CW, and this client's own noise modules are the only DSP it has. TNF is
+    // deliberately NOT gated — see the note in RadioCapabilities.h.
+    c.hasRadioSideCwKeyer = false;
+    c.hasVoiceKeyer = false;
+    c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
     c.hasGpsLocation = false;           // no GNSS receiver on the board

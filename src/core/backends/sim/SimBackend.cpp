@@ -311,6 +311,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
     // No radio-side display engine either — the demo's rows carry no black level.
     caps.hasRadioSideWaterfallAutoBlack = false;
+    // No command plane at all: no radio-side CW text keyer, no voice keyer, and
+    // a simulator that cannot key has nothing to be full duplex about.
+    caps.hasRadioSideCwKeyer = false;
+    caps.hasVoiceKeyer = false;
+    caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
     caps.hasGpsLocation = false;         // synthetic radio has no position source

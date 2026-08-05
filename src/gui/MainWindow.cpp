@@ -6647,6 +6647,56 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         updateStatusBarMinimumWidth();
     }
 
+    // ── The status-bar CWX / DVK / FDX toggles ──────────────────────────────
+    //
+    // HIDDEN, not disabled. Each of these three is a verb the radio's firmware
+    // executes — `cwx …`, `dvk …`, `radio set full_duplex_enabled=` — and on a
+    // backend with no command plane to carry it the control has nothing behind
+    // it at all. A greyed-out button says "not right now"; these are "not on
+    // this radio, ever", and permanently dim labels in the status bar read as a
+    // fault the operator can go looking for.
+    //
+    // TWO neighbours in this row are deliberately NOT gated:
+    //
+    //   ASR — Copy Assist is host-side. AsrAudioTap subscribes to the engine's
+    //   post-DSP RX audio and whisper runs here, so it works on every family.
+    //   Hiding it would remove a working control, the mistake the hardware EQ
+    //   gate above documents.
+    //
+    //   TNF — `tnf` is a Flex command-plane verb and by the test above it looks
+    //   like it belongs here, but a host-side notch is landing and these are
+    //   the surfaces it will drive. Gating it now would mean deleting the
+    //   control and putting it straight back. See RadioCapabilities.h.
+    //
+    // The panels are hidden with their buttons. CWX and DVK are dockable
+    // splitter children that survive a reconnect, so a panel left open from a
+    // Flex session would otherwise stay on screen next to a hidden button, its
+    // F-key rows still drawn against a radio that refuses every send.
+    const bool cwx = !connected || caps.hasRadioSideCwKeyer;
+    const bool dvk = !connected || caps.hasVoiceKeyer;
+    const bool fdx = !connected || caps.hasFullDuplex;
+
+    if (m_cwxIndicator) {
+        m_cwxIndicator->setVisible(cwx);
+    }
+    if (!cwx && m_cwxPanel) {
+        m_cwxPanel->hide();
+    }
+    if (m_dvkIndicator) {
+        m_dvkIndicator->setVisible(dvk);
+    }
+    if (!dvk && m_dvkPanel) {
+        m_dvkPanel->hide();
+    }
+    if (m_fdxIndicator) {
+        m_fdxIndicator->setVisible(fdx);
+    }
+    // updateKeyerAvailability() owns the enabled/dim state and the F1-F12 arming
+    // for the two keyers, and applies the same capabilities. Run it here so a
+    // mid-session revision disarms the shortcuts at the moment the buttons go,
+    // rather than waiting for the next TX-slice mode change.
+    updateKeyerAvailability();
+
     // ── Flex platform features that are not DSP ─────────────────────────────
     if (m_waveformsAction) {
         m_waveformsAction->setVisible(!connected || caps.hasWaveforms);
@@ -8630,7 +8680,29 @@ void MainWindow::updateKeyerAvailability()
     // activatedAmbiguously (#2464, #2582, #4173).
     SliceModel* txSlice = m_radioModel.txSlice();
     const QString txMode = txSlice ? txSlice->mode() : QString();
-    const bool txIsCw  = (txMode == "CW" || txMode == "CWL");
+    // Both keyers carry a family gate ahead of the mode gate: a radio with no
+    // text buffer and no voice recorder never gains one by switching mode, so
+    // the capability is ANDed into the availability that drives the enabled
+    // state, the panel auto-hide AND the F1-F12 arming below.
+    //
+    // The BUTTONS are hidden entirely by applyCapabilitiesToUi(); this exists
+    // because the shortcuts are ApplicationShortcuts that stay armed whether or
+    // not their button is on screen. Without it an HL2 in CW would keep F1-F12
+    // firing `cwx send` into a backend that has no such verb — a keypress that
+    // does nothing, which is exactly the report the DVK entitlement gate below
+    // was added for.
+    //
+    // Reads through backendCapabilities() rather than a cached flag so the
+    // disconnected case answers permissively via the same struct every other
+    // gate here uses: with nothing attached the default-constructed capabilities
+    // would say false, so the connected test is explicit.
+    const RadioCapabilities keyerCaps = m_radioModel.backendCapabilities();
+    const bool radioConnected = m_radioModel.isConnected();
+    const bool hasCwKeyer = !radioConnected || keyerCaps.hasRadioSideCwKeyer;
+    const bool hasVoiceKeyer = !radioConnected || keyerCaps.hasVoiceKeyer;
+
+    const bool txIsCw  = hasCwKeyer
+                         && (txMode == "CW" || txMode == "CWL");
     const bool txIsSsb = (txMode == "USB" || txMode == "LSB"
                           || txMode == "AM" || txMode == "SAM"
                           || txMode == "FM" || txMode == "NFM"
@@ -8645,7 +8717,12 @@ void MainWindow::updateKeyerAvailability()
         txIsSsb,
         m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
         m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature));
-    const bool dvkAvailable = (dvkBlocker == DvkIndicatorBlocker::None);
+    // hasVoiceKeyer is ANDed in HERE rather than into txIsSsb, because txIsSsb
+    // also drives the ASR indicator further down and Copy Assist is host-side —
+    // folding a voice-keyer capability into the shared mode test would take a
+    // working transcription feature down with the keyer.
+    const bool dvkAvailable = hasVoiceKeyer
+                              && (dvkBlocker == DvkIndicatorBlocker::None);
     const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
 
     if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(txIsCw);
