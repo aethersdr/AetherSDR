@@ -200,7 +200,15 @@ void FreeDvReporterDialog::buildBody()
         // below has this same-as-base no-op already (pre-existing, out of
         // scope here); this button shouldn't repeat it (#4231 review).
         "QPushButton:hover { background-color: {{color.background.1}}; }"
-        "QPushButton:disabled { color: {{color.text.secondary}}; }"
+        // Widget×state tokens rather than generic chrome (docs/a11y.md):
+        // dimming the text alone left the disabled button reading as absent
+        // rather than greyed-out, which undercuts the row's own gating
+        // (#4231 review).
+        "QPushButton:disabled {"
+        "  background-color: {{color.button.background.disabled}};"
+        "  color: {{color.button.foreground.disabled}};"
+        "  border: 1px solid {{color.button.border.disabled}};"
+        "}"
     );
     msgRow->addWidget(m_msgSendBtn);
 
@@ -400,8 +408,12 @@ void FreeDvReporterDialog::reloadMessage()
 {
     const QString stored = AppSettings::instance()
                                .value("FreeDvMyMessage", "").toString();
-    // Don't clobber an in-progress edit the operator hasn't sent yet.
-    if (!m_msgEdit->hasFocus() && m_msgEdit->text() != stored)
+    // isModified(), not hasFocus(): the point is to protect an unsent draft,
+    // and focus has already moved away by the time the operator clicks the
+    // menu to re-show this dialog — so a focus test would let the draft be
+    // silently replaced in exactly the case it exists to cover. setText()
+    // clears the flag, so this composes with commitMessage() (#4231 review).
+    if (!m_msgEdit->isModified() && m_msgEdit->text() != stored)
         m_msgEdit->setText(stored);
 }
 
@@ -420,8 +432,13 @@ void FreeDvReporterDialog::setReportingActive(bool active)
                          "in SpotHub → FreeDV, or start RADE on a slice.");
     // On the container, not the children: disabled widgets get no tooltip.
     m_msgRowWidget->setToolTip(tip);
-    // The placeholder carries the reason too, so it's readable without
-    // hovering — the field is greyed but its placeholder still paints.
+    // The label carries the state, not just the placeholder: Qt only paints a
+    // placeholder on an *empty* field, and this one is seeded from
+    // FreeDvMyMessage — so for anyone who has ever set a message (i.e. the
+    // people this feature is for) the placeholder never shows and the tooltip
+    // would be the only remedy (#4231 review).
+    m_msgLabel->setText(active ? QStringLiteral("Message")
+                               : QStringLiteral("Message (reporting off)"));
     m_msgEdit->setPlaceholderText(
         active ? QStringLiteral("Optional status shown on the reporter map")
                : QStringLiteral("Enable FreeDV reporting to send a status message"));
@@ -436,6 +453,9 @@ void FreeDvReporterDialog::commitMessage()
     // Write back the trimmed form so what's stored is what was sent.
     if (m_msgEdit->text() != msg)
         m_msgEdit->setText(msg);
+    // Sent, so no longer an unsent draft — lets reloadMessage() track the
+    // setting again.
+    m_msgEdit->setModified(false);
 
     auto& s = AppSettings::instance();
     s.setValue("FreeDvMyMessage", msg);

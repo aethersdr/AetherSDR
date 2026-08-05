@@ -180,23 +180,31 @@ void testReloadFromSettings()
     report("reload picks up an external edit",
            edit->text() == QStringLiteral("set from SpotHub"), edit->text());
 
-    // An unfocused field tracks the setting; a focused one is left alone so
-    // a half-typed message survives the dialog being reopened.
-    edit->setText("half-typed, not sent");
-    edit->setFocus();
-    const bool focused = edit->hasFocus();
+    // An untouched field tracks the setting; a typed-but-unsent draft is
+    // left alone. The guard is the modified flag rather than focus — focus
+    // has already moved away by the time the operator re-opens the dialog,
+    // so a focus test would never fire in the case it exists to cover (and,
+    // being unreachable offscreen, would never be tested either).
+    // insert() rather than setText(): setText() clears the modified flag,
+    // which is exactly the distinction under test here.
+    edit->clear();
+    edit->insert(QStringLiteral("half-typed, not sent"));
+    report("typing marks the field modified", edit->isModified());
+
     s.setValue("FreeDvMyMessage", "changed underneath");
     s.save();
     dlg.reloadMessage();
-    if (focused) {
-        report("reload does not clobber a focused in-progress edit",
-               edit->text() == QStringLiteral("half-typed, not sent"), edit->text());
-    } else {
-        // Offscreen platforms may refuse focus; the unfocused path is the
-        // one being exercised then, so assert that instead.
-        report("reload refreshes an unfocused field",
-               edit->text() == QStringLiteral("changed underneath"), edit->text());
-    }
+    report("reload does not clobber an unsent draft",
+           edit->text() == QStringLiteral("half-typed, not sent"), edit->text());
+
+    // Sending clears the draft state, so the field tracks the setting again.
+    msgSendBtn(dlg)->click();
+    report("send clears the modified flag", !edit->isModified());
+    s.setValue("FreeDvMyMessage", "changed again");
+    s.save();
+    dlg.reloadMessage();
+    report("reload refreshes once the draft has been sent",
+           edit->text() == QStringLiteral("changed again"), edit->text());
 }
 
 } // namespace
