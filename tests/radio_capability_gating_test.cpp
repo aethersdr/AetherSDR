@@ -67,10 +67,11 @@
 //                 (#4210) and would otherwise leave DVK live on every radio
 //                 that reports none at all. Both flags are read through
 //                 RadioModel::hasRadioSideCwKeyer() / hasVoiceKeyer(), because
-//                 the `cwx` verb has four more entry points than the buttons —
+//                 the `cwx` verb has six more entry points than the buttons —
 //                 the FlexControl/Ulanzi macro action, the MQTT cw/transmit
-//                 topic, TCI cw_msg / cw_macros and the bridge's `cwx` verb —
-//                 and all of them ask the accessor.
+//                 topic, TCI cw_msg / cw_macros, rigctl send_morse / stop_morse,
+//                 SmartCAT KY and the bridge's `cwx` verb — and all of them ask
+//                 the accessor.
 //
 // A NOTE ON WHAT THE HELPERS BELOW DO AND DO NOT PIN. This target links
 // aethercore, not the GUI (CMakeLists.txt), so nothing here can call
@@ -145,8 +146,8 @@ static bool uiWouldShow(bool connected, bool declared)
 // PRODUCTION accessor and not a paraphrase of it: RadioModel::hasRadioSideCwKeyer()
 // / hasVoiceKeyer() carry the permissive disconnected rule themselves, and they
 // are the same call MainWindow makes — and the same one the FlexControl macro
-// action, the MQTT cw/transmit topic, TCI's cw_msg / cw_macros and the automation
-// bridge's `cwx` verb make. Only the mode half is restated, because MainWindow is
+// action, the MQTT cw/transmit topic, TCI's cw_msg / cw_macros, rigctl's
+// send_morse, SmartCAT's KY and the automation bridge's `cwx` verb make. Only the mode half is restated, because MainWindow is
 // not linkable from this target (it links aethercore, not the GUI).
 static bool cwxShortcutsWouldArm(const RadioModel& model, bool txModeIsCw)
 {
@@ -452,10 +453,11 @@ int main(int argc, char** argv)
         // connects — so this is the only place the permissive rule inside them
         // can be shown to be off rather than assumed. Five surfaces ask through
         // here: the status-bar gate, the FlexControl/Ulanzi CwxF1..F12 macro
-        // action, the MQTT cw/transmit topic, TCI cw_msg / cw_macros and the
-        // automation bridge's `cwx` verb. The last four reach CwxModel without
-        // passing the status bar at all, and each would otherwise emit
-        // `cwx send` at a radio with no such verb.
+        // action, the MQTT cw/transmit topic, TCI cw_msg / cw_macros, rigctl
+        // send_morse / stop_morse, SmartCAT KY and the automation bridge's
+        // `cwx` verb. All but the first reach CwxModel without passing the
+        // status bar at all, and each would otherwise emit `cwx send` at a radio
+        // with no such verb.
         check(!model.hasRadioSideCwKeyer(),
               "connected Sim: hasRadioSideCwKeyer() is false through the accessor");
         check(!model.hasVoiceKeyer(),

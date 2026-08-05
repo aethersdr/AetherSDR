@@ -219,10 +219,12 @@ struct RadioCapabilities {
     // `cwx send` is the "silently does nothing" shape the DVK entitlement gate
     // already exists to prevent. The buttons are not the only surface: the
     // FlexControl/Ulanzi macro action, the MQTT cw/transmit topic, TCI's
-    // cw_msg / cw_macros and the automation bridge's `cwx` verb all reach
-    // CwxModel without passing the status bar, so all of them ask
-    // RadioModel::hasRadioSideCwKeyer() — read through the accessor, never
-    // inline, so the permissive disconnected rule cannot be forgotten at a site.
+    // cw_msg / cw_macros, rigctl's send_morse / stop_morse, SmartCAT's KY and
+    // the automation bridge's `cwx` verb all reach CwxModel without passing the
+    // status bar, so all of them ask RadioModel::hasRadioSideCwKeyer() — read
+    // through the accessor, never inline, so the permissive disconnected rule
+    // cannot be forgotten at a site. The three that owe a caller an answer
+    // (bridge, rigctl, SmartCAT) return an error rather than a cheerful ok.
     //
     // NOT about CW. A radio reporting false still transmits CW perfectly well
     // from a key, a paddle or the host's own keying path; what it lacks is a

@@ -328,10 +328,12 @@ public:
     // These are accessors rather than inline capability reads because the `cwx`
     // and `dvk` verbs have more entry points than the status-bar buttons: the
     // FlexControl/Ulanzi macro actions, the MQTT CW-transmit topic, the TCI
-    // cw_msg / cw_macros commands and the automation bridge's `cwx` verb all
-    // reach CwxModel without passing through MainWindow's keyer gate. Every one
-    // of them asks here, so "the radio has no such verb" is answered in one
-    // place instead of once per surface.
+    // cw_msg / cw_macros commands, rigctl's send_morse / stop_morse, SmartCAT's
+    // KY and the automation bridge's `cwx` verb all reach CwxModel without
+    // passing through MainWindow's keyer gate. Every one of them asks here, so
+    // "the radio has no such verb" is answered in one place instead of once per
+    // surface — and the ones that owe a caller a return code answer with an
+    // error instead of a success for work that never happened.
     //
     // Says nothing about CW itself: a radio reporting hasRadioSideCwKeyer=false
     // still transmits CW from a key, a paddle or the host keying path; what it

@@ -165,6 +165,13 @@ permissive disconnected rule themselves — rather than inline at each site:
 | MQTT `aethersdr/cw/transmit` | `MainWindow::wireSpotSubsystem` | Ignored, `qCWarning(lcMqtt)` |
 | TCI `cw_msg`, `cw_macros`, `cw_macros_stop` | `TciProtocol` | Ignored, `qCWarning(lcCat)`. Checked inside the queued lambda, on the model's thread — the TCI socket thread must not read `RadioModel` |
 | Automation bridge `cwx send\|speed\|stop` | `AutomationServer::doCwx` | Returns an error rather than `ok:true`, so a caller polling `get_state cwx` has something to blame |
+| rigctl `send_morse` / `b`, `stop_morse` | `RigctlProtocol` | `RPRT -11` (RIG_ENAVAIL) instead of `RPRT 0` — Not1MM/N1MM must not be told a contest exchange went out |
+| SmartCAT (Kenwood) `KY` | `SmartCatProtocol::cmdKY` | `?;` for both set and query; the query would otherwise answer `KY0;` "buffer empty" forever |
+
+The two CAT surfaces read the accessor SYNCHRONOUSLY, on their own socket
+thread — the same direct-read posture those files already take for
+`isConnected()` / `cwxActive()`, and the only way to answer a protocol that
+wants a return code. Only the mutation takes the queued hop to the model thread.
 
 An `ok` for work that never happens is the same defect as a permanently dim
 button, one plane over.
