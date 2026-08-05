@@ -43,8 +43,10 @@ layout(std140, binding = 0) uniform U {
     // on the plot edge and no wedge remains at any depth; the host clamps
     // there and otherwise tapers to the overhang actually available.
     float rowSpanFactor;
-    // std140 rounds this 21-float scalar run up to the next vec4 boundary.
-    // SpectrumWidget writes three explicit zeros to match — see kDssMeshUboFloats.
+    float meshCols;           // mesh columns per row; >= texCols so a widened
+                              // row still samples every texel on screen
+    // std140 rounds this 22-float scalar run up to the next vec4 boundary.
+    // SpectrumWidget writes two explicit zeros to match — see kDssMeshUboFloats.
     vec4  bgFill;             // plot background colour (for haze)
     vec4  shadowBands[8];     // low u, high u, centre u, band alpha
     vec4  shadowStyles[8];    // cue rgb, centre-line alpha
@@ -259,7 +261,9 @@ void main()
         // through subpixels, producing a whole-surface strobe. Expand each
         // outline into a two-pixel screen-space ribbon; the fragment shader
         // analytically softens its edges.
-        float du = 1.0 / max(texCols - 1.0, 1.0);
+        // One MESH column, which is no longer one texel: the mesh is wider than
+        // the viewport so its column pitch is the tangent's natural step.
+        float du = 1.0 / max(meshCols - 1.0, 1.0);
         float previousU = max(u - du, 0.0);
         float nextU = min(u + du, 1.0);
         float previousFreq = dssFreqUnit(previousU);

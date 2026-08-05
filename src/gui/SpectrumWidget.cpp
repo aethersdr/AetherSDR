@@ -133,15 +133,17 @@ bool waterfallFrameResizeFailureForced()
 constexpr int dssFillVerticesPerRow()
 {
     // Two exact-row crossfade layers, each with two triangles per column.
-    // Together with the matching ribbon VBO this is about 20.2 MiB of static
-    // vertex storage at 768 columns x 96 visible rows (about 7.3 MiB before
-    // fixed-grid crossfading). It is built once, never rebuilt while scrolling.
-    return (DssRenderer::kCols - 1) * 6 * 2;
+    // Together with the matching ribbon VBO this is about 33.7 MiB of static
+    // vertex storage at kMeshCols (1280) columns x 96 visible rows. It is built
+    // once, never rebuilt while scrolling. The column count is kMeshCols rather
+    // than kCols so the on-screen part of a row widened by rowSpanFactor still
+    // samples the height texture at least once per texel — see kMeshCols.
+    return (DssRenderer::kMeshCols - 1) * 6 * 2;
 }
 
 constexpr int dssLineVerticesPerRow()
 {
-    return (DssRenderer::kCols - 1) * 6 * 2;
+    return (DssRenderer::kMeshCols - 1) * 6 * 2;
 }
 
 constexpr int kMaxWaterfallRowsPerUpdate = 1;
@@ -12596,8 +12598,11 @@ void SpectrumWidget::initDssMeshPipeline()
         return;
     }
 
-    // Height sampled in the vertex stage; Nearest is enough (the grid is as dense
-    // as the texture). Palette is Linear for a smooth floor->peak gradient.
+    // Height sampled in the vertex stage; Nearest is enough because the mesh grid
+    // is never sparser than the texture — kMeshCols is sized so that even at the
+    // widest rowSpanFactor the on-screen columns still cover every texel, so no
+    // bin can fall between two samples. Palette is Linear for a smooth
+    // floor->peak gradient.
     m_dssHeightSampler = r->newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest,
         QRhiSampler::None, QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     m_dssPaletteSampler = r->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
@@ -12892,7 +12897,9 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     // 3DSS mesh: build the static perspective grid once (geometry never changes —
     // height comes from the ring-buffered texture sampled per-vertex).
     if (m_dssMeshReady) {
-        const int cols = m_dss.cols();
+        // Mesh columns, NOT texture columns: the mesh is wider than the
+        // viewport so a widened row keeps texel density on screen.
+        const int cols = DssRenderer::kMeshCols;
         const int rows = DssRenderer::kVisibleRows;
         QVector<float> fill;
         QVector<float> line;
@@ -13920,6 +13927,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     * (target - m_dssRowSpanFactor);
                 if (std::abs(target - m_dssRowSpanFactor) < 0.002f) {
                     m_dssRowSpanFactor = target;
+                } else {
+                    // The ease advances one step per PRESENTED frame, so it has
+                    // to keep its own frames coming. Without this it stalls
+                    // wherever the last repaint left it whenever nothing else is
+                    // driving the pane — an idle or disconnected stream leaves
+                    // the slider reading 100 over a half-widened surface.
+                    coalescedUpdate();
                 }
             }
             constexpr int kDssMeshScalarFields = 28;  // through the bgFill vec4
@@ -13939,9 +13953,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 static_cast<float>(specContentW * dpr),
                 static_cast<float>(specRect.height() * dpr),
                 m_dssRowSpanFactor,
-                // std140 rounds the 21-float scalar run up to bgFill's vec4
-                // alignment. These three are the hole, not fields.
-                0.0f, 0.0f, 0.0f,
+                static_cast<float>(DssRenderer::kMeshCols),
+                // std140 rounds the 22-float scalar run up to bgFill's vec4
+                // alignment. These two are the hole, not fields.
+                0.0f, 0.0f,
                 static_cast<float>(m_bgFillColor.redF()),
                 static_cast<float>(m_bgFillColor.greenF()),
                 static_cast<float>(m_bgFillColor.blueF()),

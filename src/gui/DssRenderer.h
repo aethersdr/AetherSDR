@@ -63,6 +63,24 @@ public:
     // the surface only overhangs further without revealing more of the plot.
     static constexpr float kMaxRowSpanFactor = 1.0f / kBackWidthFrac;
 
+    // Mesh columns per row for the GPU path. The mesh spans rowSpanFactor x the
+    // viewport, while the height texture holds kCols texels ACROSS THE VIEWPORT
+    // — so a kCols-wide mesh would leave (span-1)/span of those texels unread.
+    // That is not shimmer: the mesh-column-to-frequency mapping is static, so
+    // the same texels are missed every frame and a narrow carrier landing on one
+    // is permanently invisible at a fixed screen position. Size the mesh for the
+    // widest span instead, so the on-screen region is never sparser than the
+    // texture it samples. Below the widest span it merely oversamples, which
+    // Nearest filtering absorbs by repeating texels.
+    static constexpr int kMeshCols =
+        static_cast<int>(kCols * kMaxRowSpanFactor) + 1;
+    // The invariant dss_mesh.vert's Nearest height sampler depends on: at the
+    // widest span the on-screen columns (kMeshCols / kMaxRowSpanFactor) must
+    // still be at least kCols, or bins fall between samples and vanish.
+    static_assert(static_cast<float>(kMeshCols) >= kCols * kMaxRowSpanFactor,
+                  "kMeshCols must keep the on-screen grid at texel density "
+                  "at kMaxRowSpanFactor");
+
     // Perspective narrowing with depth — the only thing that places a frequency.
     static float depthScale(float depth)
     {
