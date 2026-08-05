@@ -2373,7 +2373,8 @@ if(AETHER_GPU_SPECTRUM)
     # Shaders in this list get qsb's default GLSL set (100es/120/150). Anything
     # using GLSL 130+ syntax (e.g. the `flat` qualifier) must NOT go here — the
     # 120 slice would bake illegal code that only the driver rejects, on-device,
-    # where CI can't see it. Put such shaders in the dss block below instead.
+    # where CI can't see it. Put such shaders in the GLSL-130+ block below;
+    # tools/check_shader_dialects.py fails the build-gate if they land here.
     qt_add_shaders(AetherSDR "aether_shaders"
         PREFIX "/shaders"
         FILES
@@ -2389,23 +2390,34 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/wavescope.frag
     )
 
-    # dss_mesh (3D-FFT stacked-trace) is the only shader that uses the `flat`
-    # interpolation qualifier — added for ridge stability in #4539 — which is
-    # legal only in GLSL 130 and later. Bake it exclusively as flat-capable
-    # slices: 130 (OpenGL 3.0, incl. Mesa compat-profile caps and the
-    # `opengl32sw` software-GL Qt ships on Windows), 140 (desktop OpenGL 3.1,
-    # e.g. the Raspberry Pi's v3d driver), 150 (OpenGL 3.2+), and 300es
-    # (OpenGL ES 3). The qsb default (100es, 120, 150) would offer a 120 slice,
-    # where `flat` is illegal — so on a driver that reports GLSL 1.40 (no 140
-    # baked → falls back to 120) the shader failed to compile and the 3D FFT was
-    # disabled. Restricting the target set means QRhi never selects a slice this
-    # shader can't compile in; on an older GL<3.0 / GLES2 context no slice
-    # matches, so QRhi finds no GLSL code and the m_dssMeshFillPipeline->create()
-    # call in SpectrumWidget::initDssMeshPipeline fails — m_dssMeshReady stays
-    # false and the CPU image fallback still renders the 3D FFT. No shader-source
-    # change — #4539's `flat` is preserved. Complementary to #4730 (OpenGL
-    # outline rendering).
-    qt_add_shaders(AetherSDR "aether_dss_shaders"
+    # Shaders needing GLSL 130+. dss_mesh (3D-FFT stacked-trace) is the only one
+    # today: it uses the `flat` interpolation qualifier — added for ridge
+    # stability in #4539 — which is legal only in GLSL 130 / ES 300 and later.
+    # SPIRV-Cross cannot lower an interpolation qualifier the way it lowers
+    # explicit locations and UBO blocks, so `flat` reaches every baked slice
+    # verbatim; the qsb default (100es, 120, 150) therefore bakes a 120 slice
+    # containing `flat varying float …`, which is a syntax error, and a 100es
+    # slice where `flat` is a reserved word. Both still BAKE — qsb exits 0 — so
+    # the only symptom is a driver rejecting the shader at runtime.
+    #
+    # Bake instead the flat-capable slices our GL backends actually report:
+    # 130 (OpenGL 3.0, e.g. Mesa compat-profile caps), 140 (desktop OpenGL 3.1 —
+    # the Raspberry Pi's v3d driver, which is what #4746 hit: no 140 slice baked,
+    # so QRhi fell back to 120 and the 3D FFT was silently disabled), 150
+    # (OpenGL 3.2+, what desktop GPUs already selected — byte-identical to
+    # before), and 300es (OpenGL ES 3, which previously matched only the illegal
+    # 100es slice). HLSL 50 / MSL 12 / SPIR-V are untouched: only GLSL is
+    # overridden, so the D3D11, Metal and Vulkan paths bake exactly as before.
+    #
+    # On an older GL<3.0 / GLES2 context no slice matches. QShader stays valid,
+    # so this is NOT caught by the vs.isValid() guard — QRhi finds no GLSL code
+    # and the m_dssMeshFillPipeline->create() call in
+    # SpectrumWidget::initDssMeshPipeline fails, m_dssMeshReady stays false, and
+    # the CPU image fallback still renders the 3D FFT. That is no worse than
+    # before: those contexts previously selected 120/100es, which never
+    # compiled. No shader-source change — #4539's `flat` is preserved.
+    # Complementary to #4730 (OpenGL outline rendering).
+    qt_add_shaders(AetherSDR "aether_shaders_glsl130"
         PREFIX "/shaders"
         GLSL "130,140,150,300es"
         FILES
