@@ -47,8 +47,8 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
 | `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
-| `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `updateKeyerAvailability` | Status-bar CWX indicator, the CWX panel, and its F1-F12 arming |
-| `hasVoiceKeyer` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `updateKeyerAvailability` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
+| `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar CWX indicator, the CWX panel and its F1-F12 arming, plus every other `cwx` entry point — see below |
+| `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
@@ -153,6 +153,21 @@ screen, so `updateKeyerAvailability()` ANDs both capabilities into the same
 availability that drives the enabled state and the panel auto-hide. Without
 that, an HL2 in CW keeps F1-F12 firing `cwx send` into a backend with no such
 verb.
+
+And the buttons are not the last of it. `cwx` has four entry points that never
+touch the status bar at all, so both keyer capabilities are read through
+`RadioModel::hasRadioSideCwKeyer()` / `hasVoiceKeyer()` — which carry the
+permissive disconnected rule themselves — rather than inline at each site:
+
+| Surface | Where | On a radio that declares false |
+|---|---|---|
+| FlexControl / Ulanzi `CwxF1`..`CwxF12` macro action | `MainWindow::applyFlexControlAction` | Ignored, logged under `aether.cw`. The binding stays assignable — it is operator-scoped and outlives any one radio |
+| MQTT `aethersdr/cw/transmit` | `MainWindow::wireSpotSubsystem` | Ignored, `qCWarning(lcMqtt)` |
+| TCI `cw_msg`, `cw_macros`, `cw_macros_stop` | `TciProtocol` | Ignored, `qCWarning(lcCat)`. Checked inside the queued lambda, on the model's thread — the TCI socket thread must not read `RadioModel` |
+| Automation bridge `cwx send\|speed\|stop` | `AutomationServer::doCwx` | Returns an error rather than `ok:true`, so a caller polling `get_state cwx` has something to blame |
+
+An `ok` for work that never happens is the same defect as a permanently dim
+button, one plane over.
 
 `hasVoiceKeyer` is evaluated **ahead of** `DvkAvailabilityGate`'s SmartSDR+
 entitlement check, and the ordering is load-bearing. That gate fails *open* when

@@ -8670,6 +8670,19 @@ void MainWindow::updateKeyerAvailability()
     static const QString kAvail    = "QLabel { color: #404858; font-weight: bold; font-size: 24px; }";
     static const QString kDisabled = "QLabel { color: #252530; font-weight: bold; font-size: 24px; }";
 
+    // QWidget::setStyleSheet() does not compare before it acts — it unpolishes
+    // and repolishes the widget every call. This function is no longer reached
+    // only on mode and connection edges: applyCapabilitiesToUi() calls it, and
+    // that slot is itself re-invoked from the gpsStatusChanged lambda, which a
+    // GPSDO Flex drives periodically because the status carries UTC time. Three
+    // labels restyled per second for no change is cheap but pointless, so the
+    // rewrite is skipped when the sheet already matches.
+    const auto setIndicatorStyle = [](QLabel* label, const QString& sheet) {
+        if (label && label->styleSheet() != sheet) {
+            label->setStyleSheet(sheet);
+        }
+    };
+
     // CWX and DVK both key the radio's TX slice, so their availability and
     // F1-F12 shortcuts follow that slice — not the selected RX slice.  FlexLib
     // scopes CWX to the TX slice (reference/FlexLib_API_v4.1.5.39794/FlexLib/
@@ -8692,14 +8705,14 @@ void MainWindow::updateKeyerAvailability()
     // does nothing, which is exactly the report the DVK entitlement gate below
     // was added for.
     //
-    // Reads through backendCapabilities() rather than a cached flag so the
-    // disconnected case answers permissively via the same struct every other
-    // gate here uses: with nothing attached the default-constructed capabilities
-    // would say false, so the connected test is explicit.
-    const RadioCapabilities keyerCaps = m_radioModel.backendCapabilities();
-    const bool radioConnected = m_radioModel.isConnected();
-    const bool hasCwKeyer = !radioConnected || keyerCaps.hasRadioSideCwKeyer;
-    const bool hasVoiceKeyer = !radioConnected || keyerCaps.hasVoiceKeyer;
+    // Through RadioModel's accessors, not a local backendCapabilities() read:
+    // the same two questions are asked by the FlexControl macro action, the MQTT
+    // CW-transmit topic, TCI's cw_msg / cw_macros and the bridge's `cwx` verb,
+    // and they carry the permissive disconnected rule with them so no caller can
+    // forget it. A default-constructed RadioCapabilities says false, so a raw
+    // read here would hide the keyers with nothing attached.
+    const bool hasCwKeyer = m_radioModel.hasRadioSideCwKeyer();
+    const bool hasVoiceKeyer = m_radioModel.hasVoiceKeyer();
 
     const bool txIsCw  = hasCwKeyer
                          && (txMode == "CW" || txMode == "CWL");
@@ -8736,11 +8749,11 @@ void MainWindow::updateKeyerAvailability()
     m_cwxIndicator->setEnabled(txIsCw);
     if (txSlice && !txIsCw && m_cwxPanel->isVisible()) {
         m_cwxPanel->hide();
-        m_cwxIndicator->setStyleSheet(kDisabled);
+        setIndicatorStyle(m_cwxIndicator, kDisabled);
     } else if (m_cwxPanel->isVisible()) {
-        m_cwxIndicator->setStyleSheet(kActive);
+        setIndicatorStyle(m_cwxIndicator, kActive);
     } else {
-        m_cwxIndicator->setStyleSheet(txIsCw ? kAvail : kDisabled);
+        setIndicatorStyle(m_cwxIndicator, txIsCw ? kAvail : kDisabled);
     }
     m_cwxIndicator->setCursor(txIsCw ? Qt::PointingHandCursor : Qt::ArrowCursor);
 
@@ -8752,11 +8765,11 @@ void MainWindow::updateKeyerAvailability()
     // transient no-TX-slice" caveat (#4173) applies only to the mode gate.
     if ((dvkUnlicensed || (txSlice && !txIsSsb)) && m_dvkPanel->isVisible()) {
         m_dvkPanel->hide();
-        m_dvkIndicator->setStyleSheet(kDisabled);
+        setIndicatorStyle(m_dvkIndicator, kDisabled);
     } else if (m_dvkPanel->isVisible()) {
-        m_dvkIndicator->setStyleSheet(kActive);
+        setIndicatorStyle(m_dvkIndicator, kActive);
     } else {
-        m_dvkIndicator->setStyleSheet(dvkAvailable ? kAvail : kDisabled);
+        setIndicatorStyle(m_dvkIndicator, dvkAvailable ? kAvail : kDisabled);
     }
     m_dvkIndicator->setCursor(dvkAvailable ? Qt::PointingHandCursor
                                            : Qt::ArrowCursor);
@@ -8775,11 +8788,11 @@ void MainWindow::updateKeyerAvailability()
             m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
         if (txSlice && !txIsSsb && asrVisible) {
             m_copyAssistApplet->setCopyAssistVisible(false);
-            m_asrIndicator->setStyleSheet(kDisabled);
+            setIndicatorStyle(m_asrIndicator, kDisabled);
         } else if (asrVisible) {
-            m_asrIndicator->setStyleSheet(kActive);
+            setIndicatorStyle(m_asrIndicator, kActive);
         } else {
-            m_asrIndicator->setStyleSheet(txIsSsb ? kAvail : kDisabled);
+            setIndicatorStyle(m_asrIndicator, txIsSsb ? kAvail : kDisabled);
         }
         m_asrIndicator->setCursor(txIsSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
     }

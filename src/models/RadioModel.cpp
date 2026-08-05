@@ -3215,6 +3215,22 @@ bool RadioModel::hasRadioSideWaterfallAutoBlack() const
     return backendCapabilities().hasRadioSideWaterfallAutoBlack;
 }
 
+bool RadioModel::hasRadioSideCwKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasRadioSideCwKeyer;
+}
+
+bool RadioModel::hasVoiceKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasVoiceKeyer;
+}
+
 bool RadioModel::hasDaxStreams() const
 {
     if (!m_backend || !isConnected()) {

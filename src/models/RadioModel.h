@@ -320,6 +320,24 @@ public:
     // Says nothing about auto-black itself: the client-side (SW) estimate works
     // on every family and is never gated on this.
     bool hasRadioSideWaterfallAutoBlack() const;
+    // Whether the RADIO buffers CW text and sends it on its own keyer
+    // (RadioCapabilities::hasRadioSideCwKeyer), and whether it records and
+    // plays back voice-keyer messages (RadioCapabilities::hasVoiceKeyer). Same
+    // permissive disconnected rule as hasRadioSideDsp().
+    //
+    // These are accessors rather than inline capability reads because the `cwx`
+    // and `dvk` verbs have more entry points than the status-bar buttons: the
+    // FlexControl/Ulanzi macro actions, the MQTT CW-transmit topic, the TCI
+    // cw_msg / cw_macros commands and the automation bridge's `cwx` verb all
+    // reach CwxModel without passing through MainWindow's keyer gate. Every one
+    // of them asks here, so "the radio has no such verb" is answered in one
+    // place instead of once per surface.
+    //
+    // Says nothing about CW itself: a radio reporting hasRadioSideCwKeyer=false
+    // still transmits CW from a key, a paddle or the host keying path; what it
+    // lacks is a text buffer.
+    bool hasRadioSideCwKeyer() const;
+    bool hasVoiceKeyer() const;
     // Whether this radio has DAX audio/IQ channels. Same permissive
     // disconnected rule as hasRadioSideDsp(): with nothing attached there is
     // nothing to be honest about, and blanking the controls on unplug would look

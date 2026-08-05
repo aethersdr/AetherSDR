@@ -505,10 +505,20 @@ void MainWindow::handleFlexControlButton(int button, int action)
             disableSplit();
         }
     } else if (actionName.startsWith("CwxF")) {
-        bool ok = false;
-        const int idx = actionName.mid(4).toInt(&ok);
-        if (ok && idx >= 1 && idx <= 12)
-            m_radioModel.cwxModel().sendMacro(idx);
+        // Same gate the panel's own F1-F12 shortcuts carry: a radio with no CWX
+        // text buffer never gains one, and a mapped hardware button that emits
+        // `cwx send` into a backend with no such verb is the "silently does
+        // nothing" report, not a working control. The action stays assignable —
+        // the binding is operator-scoped and outlives any one radio.
+        if (!m_radioModel.hasRadioSideCwKeyer()) {
+            qCDebug(lcCw) << "CWX macro action" << actionName
+                          << "ignored: radio has no radio-side CW keyer";
+        } else {
+            bool ok = false;
+            const int idx = actionName.mid(4).toInt(&ok);
+            if (ok && idx >= 1 && idx <= 12)
+                m_radioModel.cwxModel().sendMacro(idx);
+        }
     }
 
     syncFlexControlDialog();

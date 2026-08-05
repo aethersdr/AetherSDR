@@ -2773,6 +2773,18 @@ Drive the CWX CW keyer — the easy repro for post-TX FFT-floor recovery (#3804)
 Stage the slice into a CW mode first (`invoke sliceModeCombo setCurrentText CW`)
 for the radio to actually emit.
 
+Every action here emits a `cwx` verb at the radio, so on a connected backend that
+declares `hasRadioSideCwKeyer=false` (an HL2, the demo) all three return an error
+rather than `ok:true` for work the radio would silently drop:
+
+```json
+→ {"cmd":"cwx","action":"send","value":"CQ"}
+← {"ok":false,"error":"cwx unavailable: this radio has no radio-side CW keyer (no `cwx` command plane)"}
+```
+
+Disconnected it still answers, like every other capability gate here — with
+nothing attached there is nothing to be honest about.
+
 ### `txtest`
 Two-tone TX test signal (for IMD / PA / meter measurements).
 

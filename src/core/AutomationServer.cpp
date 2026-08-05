@@ -6625,6 +6625,14 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
+    // All three actions below emit a `cwx` verb at the radio — `cwx send`,
+    // `cwx wpm`, `cwx clear` — so a backend with no radio-side text buffer
+    // swallows every one of them. An honest error beats an ok:true for work
+    // that never happened: a caller polling `get_state cwx` would otherwise
+    // watch a keyer that never starts with nothing to blame.
+    if (!m_radioModel->hasRadioSideCwKeyer())
+        return err(QStringLiteral("cwx unavailable: this radio has no radio-side "
+                                  "CW keyer (no `cwx` command plane)"));
     CwxModel& cwx = m_radioModel->cwxModel();
     const QString a = action.trimmed().toLower();
 
