@@ -285,6 +285,16 @@ public:
     double rowBandwidthMhzAtAge(int age) const;
     double rowSupplementalCenterMhzAtAge(int age) const;
     double rowSupplementalBandwidthMhzAtAge(int age) const;
+    // Bandwidth of the newest VISIBLE row carrying a calibrated overhang wider
+    // than targetBandwidthMhz, or 0 when no such row is on screen.
+    //
+    // The front row is deliberately not authoritative: the FFT-derived producer
+    // that paces rows during TX and during the RX stale-native fallback appends
+    // with no supplemental at all, so keying up would otherwise drop the
+    // overhang to nothing while 90-odd rows of it are still on screen. Once the
+    // last covered row scrolls out, returning 0 is the correct answer.
+    double newestSupplementalBandwidthMhz(double targetBandwidthMhz) const;
+
     RowStats rowStats(int age, float epsilonDb = 0.01f) const;
     quint64 rowGeneration() const { return m_rowGeneration; }
 

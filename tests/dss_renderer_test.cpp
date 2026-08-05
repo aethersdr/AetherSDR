@@ -557,6 +557,64 @@ int testDcEdgeSpikeFlattening()
     return 0;
 }
 
+int testOverhangSurvivesUncoveredRows()
+{
+    // Reproduces the transmit case: the FFT-derived producer that paces rows
+    // during TX appends with NO supplemental, so the front row loses its
+    // overhang while the rest of the screen still has it. Driving the span off
+    // the front row alone collapsed the whole surface on every over.
+    constexpr double kTargetBw = 0.2;
+    constexpr double kTileBw = 0.24;
+    DssRenderer renderer;
+    QVector<float> fft(DssRenderer::kCols, -95.0f);
+    QVector<float> tile(DssRenderer::kCols, -100.0f);
+
+    for (int i = 0; i < 8; ++i) {
+        renderer.pushRowWithSupplemental(
+            fft, 14.1, kTargetBw, tile, 14.1, kTileBw);
+    }
+    if (std::abs(renderer.newestSupplementalBandwidthMhz(kTargetBw) - kTileBw)
+            > 1.0e-9) {
+        return fail("a covered front row must report its own overhang");
+    }
+
+    // Key up: several supplemental-less rows arrive on top.
+    for (int i = 0; i < 5; ++i) {
+        renderer.pushRow(fft, 14.1, kTargetBw);
+    }
+    if (renderer.rowSupplementalBandwidthMhzAtAge(0) != 0.0) {
+        return fail("the transmit-era front row should carry no overhang");
+    }
+    if (std::abs(renderer.newestSupplementalBandwidthMhz(kTargetBw) - kTileBw)
+            > 1.0e-9) {
+        return fail("overhang must survive uncovered rows at the front while "
+                    "covered rows are still on screen");
+    }
+
+    // Once every covered row has scrolled out of the VISIBLE ring there really
+    // is no overhang on screen, and reporting none is then correct.
+    for (int i = 0; i < DssRenderer::kVisibleRows; ++i) {
+        renderer.pushRow(fft, 14.1, kTargetBw);
+    }
+    if (renderer.newestSupplementalBandwidthMhz(kTargetBw) != 0.0) {
+        return fail("overhang must lapse once no covered row remains visible");
+    }
+
+    // A tile no wider than the viewport is not an overhang, and a degenerate
+    // target must not be divided by downstream.
+    DssRenderer narrow;
+    narrow.pushRowWithSupplemental(fft, 14.1, kTargetBw, tile, 14.1, kTargetBw);
+    if (narrow.newestSupplementalBandwidthMhz(kTargetBw) != 0.0) {
+        return fail("a tile no wider than the viewport is not an overhang");
+    }
+    if (renderer.newestSupplementalBandwidthMhz(0.0) != 0.0
+        || renderer.newestSupplementalBandwidthMhz(
+               std::numeric_limits<double>::quiet_NaN()) != 0.0) {
+        return fail("a degenerate viewport width must report no overhang");
+    }
+    return 0;
+}
+
 int testRowSpanTaper()
 {
     constexpr float kMax = DssRenderer::kMaxRowSpanFactor;
@@ -879,6 +937,9 @@ int main()
         return rc;
     }
     if (int rc = testDcEdgeSpikeFlattening(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testOverhangSurvivesUncoveredRows(); rc != 0) {
         return rc;
     }
     if (int rc = testRowSpanTaper(); rc != 0) {

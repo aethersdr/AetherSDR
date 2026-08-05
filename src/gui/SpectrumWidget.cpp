@@ -12596,13 +12596,22 @@ float SpectrumWidget::dssRowSpanTarget(double targetBandwidthMhz) const
         return kForcedSpan;
     }
 
-    // Age 0 is the live edge and the only row guaranteed to carry a calibrated
-    // tile overhang: Kiwi, the fallback producer, and anything rebuilt from
-    // retained history all drop supplemental, so driving the span off the
-    // minimum across rows would collapse it to 1.0 after every pan.
-    // dss_mesh.vert feathers those rows out per-vertex instead.
+    // Age 0 is NOT authoritative. pushWaterfallRow() -- the FFT-derived producer
+    // that paces rows during TX and during the RX stale-native fallback --
+    // appends with no supplemental at all, so keying up drops age 0's overhang
+    // to zero and would walk the whole surface back to the clipped trapezoid
+    // over ~30 frames, then back out on unkey, on every single over.
+    //
+    // Take the newest row that actually carries a tile instead. dss_mesh.vert
+    // already feathers the rows that genuinely have none, so the host does not
+    // need the front row to be the one with data -- that split is the whole
+    // point of the per-vertex coverage test. Once the last such row scrolls out
+    // of the visible ring there really is no overhang left on screen, and
+    // relaxing to the trapezoid is then the correct answer rather than a
+    // flicker. Also covers Kiwi and anything rebuilt from retained history,
+    // which drop supplemental the same way.
     return DssRenderer::rowSpanFactorFor(
-        m_dss.rowSupplementalBandwidthMhzAtAge(0),
+        m_dss.newestSupplementalBandwidthMhz(targetBandwidthMhz),
         targetBandwidthMhz,
         m_dssRowSpanPct);
 }
@@ -12938,6 +12947,12 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     initOverlayPipeline();
     initSpectrumPipeline();
     initDssMeshPipeline();
+    if (m_overlayMenu) {
+        // m_dssMeshReady is only final once every pipeline, texture and sampler
+        // in initDssMeshPipeline() has succeeded, so ask after it returns
+        // rather than from inside it.
+        m_overlayMenu->setDssRowSpanSupported(m_dssMeshReady);
+    }
     // initDssDepthPipeline() is deliberately NOT called here — its ~458 KB VBO
     // and pipeline are only used on the CPU-image fallback, which most GPU
     // systems never hit. Built lazily on first fallback use in renderGpuFrame.
