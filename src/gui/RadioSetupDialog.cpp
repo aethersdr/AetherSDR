@@ -2525,7 +2525,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                  calibrationRun, setCalStatus] {
             const QString calFreq = calEdit->text().trimmed();
             if (calFreq.isEmpty()) {
-                setCalStatus("Enter cal frequency", "#e0a050");
+                setCalStatus("Enter cal frequency", "color.accent.warning");
                 return;
             }
 
@@ -2766,8 +2766,27 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);
 
+    // Themed throughout — every style on this page goes through ThemeManager
+    // rather than a literal hex, so the page follows the active theme and the
+    // hardcoded-colour ratchet stays flat.
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto themed = [&theme](QWidget* w, const QString& tpl) { theme.applyStyleSheet(w, tpl); };
+
+    static const QString kCalLabel =
+        QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+    static const QString kCalButton =
+        QStringLiteral("QPushButton { background: {{color.background.1}}; "
+                       "border: 1px solid {{color.background.2}}; border-radius: 4px; "
+                       "color: {{color.text.primary}}; font-size: 12px; font-weight: bold; "
+                       "padding: 4px 10px; }"
+                       "QPushButton:hover { background: {{color.background.2}}; }");
+
     auto* group = new QGroupBox("Frequency Calibration");
-    group->setStyleSheet(kGroupStyle);
+    themed(group, QStringLiteral(
+        "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
+        "margin-top: 8px; padding-top: 12px; font-weight: bold; "
+        "color: {{color.text.secondary}}; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"));
     auto* gvb = new QVBoxLayout(group);
     gvb->setSpacing(8);
 
@@ -2776,13 +2795,14 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
             "This radio tunes from a free-running crystal and cannot measure its own error, "
             "so the correction is applied here. Receive a signal of known frequency, tune "
             "until it zero-beats, and press Calibrate — or enter an error you already know.");
-        intro->setStyleSheet(kLabelStyle);
+        themed(intro, kCalLabel);
         intro->setWordWrap(true);
         gvb->addWidget(intro);
 
         auto* warmup = new QLabel(
             "Let the radio warm up for 15 minutes first. The oscillator drifts as it heats.");
-        warmup->setStyleSheet("QLabel { color: #c0a000; font-size: 12px; }");
+        themed(warmup, QStringLiteral(
+            "QLabel { color: {{color.accent.warning}}; font-size: 12px; }"));
         warmup->setWordWrap(true);
         gvb->addWidget(warmup);
     }
@@ -2799,7 +2819,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
 
     // ── Reference ────────────────────────────────────────────────────────────
     auto* refLbl = new QLabel("Reference:");
-    refLbl->setStyleSheet(kLabelStyle);
+    themed(refLbl, kCalLabel);
     grid->addWidget(refLbl, row, 0);
 
     auto* refCombo = new QComboBox;
@@ -2827,7 +2847,10 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     grid->addWidget(refCombo, row, 1);
 
     auto* customEdit = new QLineEdit(QStringLiteral("10.000000"));
-    customEdit->setStyleSheet(kEditStyle);
+    themed(customEdit, QStringLiteral(
+        "QLineEdit { background: {{color.background.1}}; "
+        "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+        "color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"));
     customEdit->setFixedWidth(110);
     customEdit->setValidator(new QDoubleValidator(0.1, 38.4, 6, customEdit));
     customEdit->setToolTip(QStringLiteral("Reference frequency in MHz"));
@@ -2847,7 +2870,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
 
     // ── Error, in ppb — the ONE stored number ────────────────────────────────
     auto* ppbLbl = new QLabel("Error:");
-    ppbLbl->setStyleSheet(kLabelStyle);
+    themed(ppbLbl, kCalLabel);
     grid->addWidget(ppbLbl, row, 0);
 
     auto* ppbSpin = new QSpinBox;
@@ -2864,7 +2887,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     grid->addWidget(ppbSpin, row, 1);
 
     auto* resetBtn = new QPushButton("Reset");
-    resetBtn->setStyleSheet(kKiwiActionButtonStyle);
+    themed(resetBtn, kCalButton);
     resetBtn->setFixedWidth(70);
     resetBtn->setToolTip(QStringLiteral("Return this radio to uncalibrated (0 ppb)"));
     grid->addWidget(resetBtn, row, 2);
@@ -2926,7 +2949,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     // error is fractional, so a step that means 1 Hz on 10 MHz means 0.1 Hz on
     // 160 m, and storing Hz would be right on exactly one band.
     auto* trimLbl = new QLabel("Trim:");
-    trimLbl->setStyleSheet(kLabelStyle);
+    themed(trimLbl, kCalLabel);
     grid->addWidget(trimLbl, row, 0);
 
     auto* trimRow = new QWidget;
@@ -2944,7 +2967,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     auto* downBtn = new QPushButton(QStringLiteral("−"));
     auto* upBtn = new QPushButton(QStringLiteral("+"));
     for (QPushButton* b : {downBtn, upBtn}) {
-        b->setStyleSheet(kKiwiActionButtonStyle);
+        themed(b, kCalButton);
         b->setFixedWidth(44);
         b->setAutoRepeat(true);
         b->setAutoRepeatDelay(400);
@@ -2973,29 +2996,31 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     calRow->setSpacing(8);
     auto* calBtn = new QPushButton("Calibrate from current VFO");
     calBtn->setObjectName(QStringLiteral("hl2FreqCalCapture"));
-    calBtn->setStyleSheet(kKiwiActionButtonStyle);
+    themed(calBtn, kCalButton);
     auto* calStatus = new QLabel;
     calStatus->setWordWrap(true);
     calRow->addWidget(calBtn);
     calRow->addWidget(calStatus, 1);
     gvb->addLayout(calRow);
 
-    auto setStatus = [calStatus](const QString& text, const QString& color) {
+    // Takes a THEME TOKEN, not a colour. Keeps the status line on the same
+    // palette as the rest of the dialog in every theme.
+    auto setStatus = [calStatus, &theme](const QString& text, const QString& token) {
         calStatus->setText(text);
-        calStatus->setStyleSheet(
-            QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
+        theme.applyStyleSheet(calStatus,
+            QStringLiteral("QLabel { color: {{%1}}; font-size: 11px; }").arg(token));
     };
 
     connect(calBtn, &QPushButton::clicked, this,
             [this, apply, referenceHz, activeSliceHz, setStatus] {
         const double ref = referenceHz();
         if (!(ref > 0.0)) {
-            setStatus(QStringLiteral("Enter a reference frequency."), "#e0a050");
+            setStatus(QStringLiteral("Enter a reference frequency."), "color.accent.warning");
             return;
         }
         const double dialled = activeSliceHz();
         if (!(dialled > 0.0)) {
-            setStatus(QStringLiteral("No active slice to read."), "#e0a050");
+            setStatus(QStringLiteral("No active slice to read."), "color.accent.warning");
             return;
         }
         const int ppb = Hl2FreqCal::ppbFromZeroBeat(ref, dialled);
@@ -3008,7 +3033,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
                                      "reference) — check you are on the right signal.")
                           .arg(dialled / 1.0e6, 0, 'f', 6)
                           .arg(ref / 1.0e6, 0, 'f', 6),
-                      "#e05050");
+                      "color.accent.danger");
             return;
         }
         apply(ppb);
@@ -3016,7 +3041,7 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
                       .arg(ref / 1.0e6, 0, 'f', 6)
                       .arg(dialled / 1.0e6, 0, 'f', 6)
                       .arg(ppb),
-                  "#00c040");
+                  "color.accent.success");
     });
 
     gvb->addWidget(readout);
