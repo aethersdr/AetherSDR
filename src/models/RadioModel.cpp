@@ -511,6 +511,14 @@ void RadioModel::setupBackend(const QString& family)
     // the lambda body talks to m_backend: re-reading m_backend and m_family at
     // call time is exactly what makes a once-installed callback correct across
     // a swap.
+    //
+    // One carve-out, already below: the per-slice intents wired inside the
+    // sliceChanged handler name a SliceModel as sender, and that is a RadioModel
+    // child, so teardownBackend() does not drop those either. They are still
+    // right here — each connect runs once per slice CREATION (guarded on !s),
+    // and dropAllSessionModelsForFamilySwitch() deletes every slice before the
+    // swap. What the rule is really about is a sender that lives as long as the
+    // RadioModel: `this`, or a value member such as m_transmitModel.
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
 
     {
@@ -1452,8 +1460,10 @@ RadioModel::RadioModel(QObject* parent)
 
     // ── Model-lifetime wiring ───────────────────────────────────────────────
     //
-    // Every connection below has RadioModel on BOTH ends: `this` as receiver,
-    // and as sender either `this` or a RadioModel value member. Nothing here
+    // Every connection in THIS BLOCK (down to the aetherd RFC 2.2b note) has
+    // RadioModel on BOTH ends: `this` as receiver, and as sender either `this`
+    // or a RadioModel value member. The rest of the constructor is ordinary
+    // model wiring and carries no such claim. Nothing here
     // dies with the backend, so nothing here may live in the rerunnable
     // setupBackend() — installed there, these survived teardownBackend() and
     // accumulated one live copy per family switch for the rest of the session
@@ -1550,8 +1560,10 @@ RadioModel::RadioModel(QObject* parent)
     // all the signal wiring and command/WAN orchestration below is byte-for-byte
     // as before — the move is ownership-only.
     //
-    // Note: the threads now start here (as the ctor's first statement) rather
-    // than adjacent to their signal wiring below. Safe because RadioConnection::
+    // Note: the threads start at THIS call rather than adjacent to their signal
+    // wiring below. (It used to be the ctor's first statement; the model-lifetime
+    // block above and the DV/meter wiring before it now precede it, and none of
+    // that touches the wire.) Safe because RadioConnection::
     // init()/PanadapterStream::init() only allocate sockets/timers and neither
     // auto-connects nor emits — so there is no lost-signal window before our
     // statusReceived/etc. connections are made. Keep that true if init() grows.
