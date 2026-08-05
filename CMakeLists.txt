@@ -5708,6 +5708,12 @@ add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
 set_tests_properties(titlebar_headphone_mute_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
+add_executable(rx_filter_step_test tests/rx_filter_step_test.cpp)
+target_include_directories(rx_filter_step_test PRIVATE src)
+target_link_libraries(rx_filter_step_test PRIVATE Qt6::Core)
+add_test(NAME rx_filter_step_test COMMAND rx_filter_step_test)
+
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp

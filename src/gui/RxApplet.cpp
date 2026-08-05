@@ -1,4 +1,6 @@
 #include "RxApplet.h"
+
+#include "gui/FilterStepMath.h"
 #include "FilterPassbandWidget.h"
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
@@ -2558,20 +2560,14 @@ void RxApplet::applyFilterPreset(int widthHz)
 
 void RxApplet::stepFilterWidth(int direction)
 {
+    // ONE list, searched, clamped and applied — see FilterStepMath.h for why
+    // that is stated rather than assumed.
     const QVector<int>& stepWidths = effectiveFilterWidths();
-    if (!m_slice || stepWidths.isEmpty() || direction == 0) return;
-
+    if (!m_slice) return;
     const int currentWidth = m_slice->filterHigh() - m_slice->filterLow();
-    int idx = 0;
-    int bestDist = std::numeric_limits<int>::max();
-    for (int i = 0; i < stepWidths.size(); ++i) {
-        const int dist = std::abs(currentWidth - stepWidths[i]);
-        if (dist < bestDist) { bestDist = dist; idx = i; }
-    }
-    const int next = std::clamp(idx + (direction > 0 ? 1 : -1),
-                                0, static_cast<int>(m_filterWidths.size()) - 1);
-    if (next == idx && bestDist == 0) return;
-    applyFilterPreset(m_filterWidths[next]);
+    const int next = steppedFilterWidthIndex(stepWidths, currentWidth, direction);
+    if (next < 0) return;
+    applyFilterPreset(stepWidths[next]);
 }
 
 void RxApplet::updateFilterButtons()
@@ -2779,61 +2775,76 @@ void RxApplet::rebuildFilterButtons()
             }
         });
 
-        // Right-click to customize this preset
-        btn->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {
-            QMenu menu;
-            menu.addAction("Set Custom Edges...", [this, i] {
-                if (!m_slice) return;
-                QDialog dlg(this);
-                dlg.setWindowTitle("Set Custom Filter Edges");
-                auto* form = new QFormLayout(&dlg);
-                auto* loSpin = new QSpinBox(&dlg);
-                auto* hiSpin = new QSpinBox(&dlg);
-                loSpin->setRange(-20000, 20000);
-                hiSpin->setRange(-20000, 20000);
-                loSpin->setSingleStep(50);
-                hiSpin->setSingleStep(50);
-                loSpin->setSuffix(" Hz");
-                hiSpin->setSuffix(" Hz");
-                int curLo = m_filterCustomLo[i] != INT_MIN
-                                ? m_filterCustomLo[i] : m_slice->filterLow();
-                int curHi = m_filterCustomHi[i] != INT_MIN
-                                ? m_filterCustomHi[i] : m_slice->filterHigh();
-                loSpin->setValue(curLo);
-                hiSpin->setValue(curHi);
-                form->addRow("Low edge:", loSpin);
-                form->addRow("High edge:", hiSpin);
-                auto* btns = new QDialogButtonBox(
-                    QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-                QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-                QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-                form->addRow(btns);
-                if (dlg.exec() != QDialog::Accepted) return;
-                int lo = loSpin->value();
-                int hi = hiSpin->value();
-                if (hi <= lo) return;
-                m_filterCustomLo[i] = lo;
-                m_filterCustomHi[i] = hi;
-                m_filterWidths[i] = hi - lo;
-                saveFilterPresets();
-                rebuildFilterButtons();
-                m_slice->setFilterWidth(lo, hi);
+        // Right-click to customize this preset — ONLY when the presets are the
+        // OPERATOR'S. The click handler above got this guard; this menu did not,
+        // and it indexes all three operator arrays with `i` from the radio list:
+        // m_filterCustomLo/Hi are read and then WRITTEN, and m_filterWidths is
+        // written and persisted. m_filterWidths is built from the saved
+        // FilterPresets_<mode> string, which legitimately parses to 1-6 entries,
+        // so with two saved presets and a radio declaring three widths the third
+        // button is an out-of-range read and an out-of-range write on accept.
+        // Even in range it edits the wrong preset silently.
+        //
+        // Not installed rather than guarded inside, which is also what the
+        // customisable comment already argues: a radio-declared set is fixed
+        // hardware and has no edge to customise.
+        if (customisable) {
+            btn->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {
+                QMenu menu;
+                menu.addAction("Set Custom Edges...", [this, i] {
+                    if (!m_slice) return;
+                    QDialog dlg(this);
+                    dlg.setWindowTitle("Set Custom Filter Edges");
+                    auto* form = new QFormLayout(&dlg);
+                    auto* loSpin = new QSpinBox(&dlg);
+                    auto* hiSpin = new QSpinBox(&dlg);
+                    loSpin->setRange(-20000, 20000);
+                    hiSpin->setRange(-20000, 20000);
+                    loSpin->setSingleStep(50);
+                    hiSpin->setSingleStep(50);
+                    loSpin->setSuffix(" Hz");
+                    hiSpin->setSuffix(" Hz");
+                    int curLo = m_filterCustomLo[i] != INT_MIN
+                                    ? m_filterCustomLo[i] : m_slice->filterLow();
+                    int curHi = m_filterCustomHi[i] != INT_MIN
+                                    ? m_filterCustomHi[i] : m_slice->filterHigh();
+                    loSpin->setValue(curLo);
+                    hiSpin->setValue(curHi);
+                    form->addRow("Low edge:", loSpin);
+                    form->addRow("High edge:", hiSpin);
+                    auto* btns = new QDialogButtonBox(
+                        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+                    QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+                    QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+                    form->addRow(btns);
+                    if (dlg.exec() != QDialog::Accepted) return;
+                    int lo = loSpin->value();
+                    int hi = hiSpin->value();
+                    if (hi <= lo) return;
+                    m_filterCustomLo[i] = lo;
+                    m_filterCustomHi[i] = hi;
+                    m_filterWidths[i] = hi - lo;
+                    saveFilterPresets();
+                    rebuildFilterButtons();
+                    m_slice->setFilterWidth(lo, hi);
+                });
+                menu.addAction("Reset to Default", [this, i] {
+                    if (!m_slice) return;
+                    const auto& factory = modeSettingsFor(m_slice->mode()).filterWidths;
+                    if (i >= factory.size()) return;
+                    m_filterWidths[i] = factory[i];
+                    m_filterCustomLo[i] = INT_MIN;
+                    m_filterCustomHi[i] = INT_MIN;
+                    saveFilterPresets();
+                    rebuildFilterButtons();
+                    applyFilterPreset(m_filterWidths[i]);
+                });
+                menu.exec(btn->mapToGlobal(pos));
             });
-            menu.addAction("Reset to Default", [this, i] {
-                if (!m_slice) return;
-                const auto& factory = modeSettingsFor(m_slice->mode()).filterWidths;
-                if (i >= factory.size()) return;
-                m_filterWidths[i] = factory[i];
-                m_filterCustomLo[i] = INT_MIN;
-                m_filterCustomHi[i] = INT_MIN;
-                saveFilterPresets();
-                rebuildFilterButtons();
-                applyFilterPreset(m_filterWidths[i]);
-            });
-            menu.exec(btn->mapToGlobal(pos));
-        });
+        }   // if (customisable)
 
+        // OUTSIDE the guard: the button itself is always created and shown.
         m_filterBtns.append(btn);
         m_filterGrid->addWidget(btn, i / 3, i % 3);
     }
