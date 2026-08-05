@@ -522,6 +522,11 @@ public:
     // widest useful span. Capped by the offscreen spectrum the source provides.
     void setDssRowSpan(int pct);
     int  dssRowSpan() const { return m_dssRowSpanPct; }
+    // Re-read the owned 3D config object (profile recall re-applies it per pan).
+    // legacyGain seeds 3D Gain when no object has been written yet.
+    void loadDisplay3DSettings(int legacyGain = 70);
+    // Restore both 3D controls to defaults and persist the object as a unit.
+    void resetDisplay3DSettings();
     void resetWfTimeScale();
     int   wfColorGain() const          { return m_wfColorGain; }
     int   wfBlackLevel() const         { return m_wfBlackLevel; }
@@ -1175,6 +1180,13 @@ private:
     // can persist; startup/enable/layout refreshes only rebuild transient state.
     void refreshNoiseFloorTarget(bool captureCurrentScale = false, bool persistCapture = false);
     bool captureNoiseFloorTargetFromCurrentScale(bool notify, bool persist);
+    // ── Display3DSettings — the 3D view's owned configuration object ───────
+    // Principle V: one self-contained, versioned, atomically-written object
+    // rather than loose flat keys. Holds the 3D Gain and 3D Span controls.
+    // (3D Floor is per-source and already owned by DisplaySourceTraceSettings.)
+    QString display3DSettingsKey() const;
+    void saveDisplay3DSettings();
+
     QString displaySourceTraceSettingsKey() const;
     void loadDisplaySourceTraceSettings(int legacyNoiseFloorPosition,
                                         int legacyDssFloorDepth);

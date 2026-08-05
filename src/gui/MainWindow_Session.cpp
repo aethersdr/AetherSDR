@@ -1424,10 +1424,10 @@ void MainWindow::wirePanLifecycle()
             // DisplaySourceTraceSettings; do not reapply legacy flat keys here.
             sw->setSpectrumRenderMode(
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
-            sw->setDssGain(
+            // Principle V: one owned object, re-applied as a unit. The legacy
+            // flat gain key only seeds it when nothing has been written yet.
+            sw->loadDisplay3DSettings(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
-            sw->setDssRowSpan(
-                s.value(sw->settingsKey("Display3DSpan"), "100").toInt());
         }
     });
     // NOTE: panadapterLevelChanged → spectrum()::setDbmRange has been removed.

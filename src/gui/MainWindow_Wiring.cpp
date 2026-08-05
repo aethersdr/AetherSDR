@@ -4183,16 +4183,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                        "\"version\":1}"));
         s.setValue(sw->settingsKey("DisplaySpectrumRenderMode"),  "0");
         s.setValue(sw->settingsKey("Display3DFloorDepth"),        "6");
-        s.setValue(sw->settingsKey("Display3DGain"),        "70");
-        s.setValue(sw->settingsKey("Display3DSpan"),        "100");
         s.save();
 
         // Apply the render-mode + 3D-floor reset to the widget too (the keys
         // above only update settings, not the live SpectrumWidget).
         sw->setSpectrumRenderMode(0);
         sw->setDssFloorDepth(6);
-        sw->setDssGain(70);
-        sw->setDssRowSpan(100);
+        // Writes the whole 3D object once, and unconditionally — the setters
+        // early-return when a value already matches, which would otherwise
+        // leave a stale object behind on a partial reset.
+        sw->resetDisplay3DSettings();
 
         // Sync all Display panel UI controls (incl. the 2D/3D combo + 3D Floor).
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),

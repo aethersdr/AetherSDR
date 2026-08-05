@@ -1922,6 +1922,11 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     makeRow("3D Span:", 0, 100, 100, m_dssRowSpanSlider, m_dssRowSpanLabel);
     if (m_dssRowSpanSlider) {
         m_dssRowSpanSlider->setObjectName("dssRowSpanSlider");
+        m_dssRowSpanSlider->setAccessibleName(tr("3D Span"));
+        m_dssRowSpanSlider->setAccessibleDescription(
+            tr("How far the nearest 3D traces overhang the plot edges, using "
+               "spectrum from outside the panadapter. 0 keeps the classic "
+               "narrowing trapezoid."));
         m_dssRowSpanSlider->setToolTip(
             "3D surface width: how far the nearest traces overhang the plot "
             "edges,\nusing spectrum the radio sends from outside the "
@@ -1930,7 +1935,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             "how much\noffscreen spectrum the source actually provides.");
     }
     connect(m_dssRowSpanSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (m_dssRowSpanLabel) m_dssRowSpanLabel->setText(QString::number(v));
+        if (m_dssRowSpanLabel) {
+            m_dssRowSpanLabel->setText(QString::number(v));
+        }
         emit dssRowSpanChanged(v);
     });
 
