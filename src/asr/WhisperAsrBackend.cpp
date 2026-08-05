@@ -5,6 +5,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <exception>
 
 #include <ggml-backend.h>
 #include <whisper.h>
@@ -83,6 +84,33 @@ bool asrMetalUsableHost()
     return true;
 #endif
 }
+
+// whisper_init_from_file_with_params() reaches real GPU device and context
+// creation inside ggml (Vulkan on Linux/Windows, Metal on Apple Silicon). A
+// broken driver stack there surfaces as a thrown exception — e.g. vulkan-hpp's
+// vk::SystemError escaping ggml_vk_instance_init()/ggml_vk_get_device(), which
+// unlike ggml_backend_vk_reg() have no internal guard. Unguarded, that
+// exception unwinds out of the ASR worker's slot and terminates the whole app
+// (#4502). Catch it and report through the backend's error path, mirroring the
+// ONNX backends (SileroVad/SpeakerEmbedder). ggml's GGML_ABORT paths call
+// abort() and cannot be caught; this covers the throwing half only.
+whisper_context* initWhisperContext(const QByteArray& pathUtf8,
+                                    const whisper_context_params& cparams,
+                                    QString* failure)
+{
+    try {
+        return whisper_init_from_file_with_params(pathUtf8.constData(), cparams);
+    } catch (const std::exception& e) {
+        if (failure != nullptr) {
+            *failure = QString::fromUtf8(e.what());
+        }
+    } catch (...) {
+        if (failure != nullptr) {
+            *failure = QStringLiteral("unknown exception");
+        }
+    }
+    return nullptr;
+}
 } // namespace
 
 WhisperAsrBackend::WhisperAsrBackend()
@@ -122,10 +150,25 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
     cparams.gpu_device = useGpu ? m_gpuDevice : 0;
 
     const QByteArray pathUtf8 = modelPath.toUtf8();
-    m_ctx = whisper_init_from_file_with_params(pathUtf8.constData(), cparams);
+    QString failure;
+    m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
+    if (m_ctx == nullptr && useGpu) {
+        // A GPU that enumerates can still be unusable at load time, and
+        // ggml-vulkan's instance state is sticky per process — a second GPU
+        // attempt re-enters the half-built state (the fail-then-crash pattern
+        // of #4502). Retry once on CPU, which never touches the GPU backend.
+        qCWarning(lcAsrWhisper) << "GPU model load failed"
+                                << (failure.isEmpty() ? QStringLiteral("(null context)") : failure)
+                                << "- retrying on CPU";
+        cparams.use_gpu = false;
+        cparams.gpu_device = 0;
+        m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
+    }
     if (m_ctx == nullptr) {
         if (error != nullptr) {
-            *error = QStringLiteral("whisper failed to load model: %1").arg(modelPath);
+            *error = failure.isEmpty()
+                ? QStringLiteral("whisper failed to load model: %1").arg(modelPath)
+                : QStringLiteral("whisper failed to load model: %1 (%2)").arg(modelPath, failure);
         }
         return false;
     }
@@ -169,7 +212,23 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     wparams.language = autoDetect ? "auto" : langUtf8.constData();
     wparams.detect_language = false;
 
-    if (whisper_full(m_ctx, wparams, pcm16k.data(), static_cast<int>(pcm16k.size())) != 0) {
+    // Same guard as the load path: inference reaches the GPU backend too, and
+    // an exception escaping the worker thread would terminate the app.
+    int status = -1;
+    try {
+        status = whisper_full(m_ctx, wparams, pcm16k.data(), static_cast<int>(pcm16k.size()));
+    } catch (const std::exception& e) {
+        if (error != nullptr) {
+            *error = QStringLiteral("whisper_full() failed: %1").arg(QString::fromUtf8(e.what()));
+        }
+        return {};
+    } catch (...) {
+        if (error != nullptr) {
+            *error = QStringLiteral("whisper_full() failed: unknown exception");
+        }
+        return {};
+    }
+    if (status != 0) {
         if (error != nullptr) {
             *error = QStringLiteral("whisper_full() failed");
         }
@@ -230,17 +289,33 @@ std::vector<AsrGpuDevice> asrGpuDevices()
 
     // Enumerate GPU + integrated-GPU devices in the same order whisper's
     // gpu_device indexes them (see whisper_backend_init_gpu).
+    //
+    // The first call in the process constructs ggml's backend registry, and
+    // the Vulkan per-device queries sit beyond ggml_backend_vk_reg()'s
+    // internal guard — on a hostile driver stack they throw (#4509 analysis),
+    // which from here would terminate the process. Degrade to "no devices"
+    // (CPU-only) instead; a partial enumeration is discarded rather than
+    // returned, so an index never points at a device other than the one
+    // whisper would pick.
     std::vector<AsrGpuDevice> devices;
-    int index = 0;
-    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        const auto type = ggml_backend_dev_type(dev);
-        if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-            AsrGpuDevice d;
-            d.index = index++;
-            d.name = QString::fromUtf8(ggml_backend_dev_description(dev));
-            devices.push_back(std::move(d));
+    try {
+        int index = 0;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            const auto type = ggml_backend_dev_type(dev);
+            if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                AsrGpuDevice d;
+                d.index = index++;
+                d.name = QString::fromUtf8(ggml_backend_dev_description(dev));
+                devices.push_back(std::move(d));
+            }
         }
+    } catch (const std::exception& e) {
+        qCWarning(lcAsrWhisper) << "GPU device enumeration failed:" << e.what();
+        devices.clear();
+    } catch (...) {
+        qCWarning(lcAsrWhisper) << "GPU device enumeration failed: unknown exception";
+        devices.clear();
     }
     return devices;
 }
