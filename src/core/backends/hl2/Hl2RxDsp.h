@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <cmath>
 #include <complex>
 #include <memory>
 #include <vector>
@@ -146,8 +147,70 @@ private:
     // the demodulator takes the raw wire. A member rather than a local: this
     // runs per IQ block on the I/O thread.
     std::vector<std::complex<float>> m_conjugated;
+    // Demodulated-audio DC blocker, one pole per channel.
+    //
+    // WDSP's AM/SAM detector is an ENVELOPE detector — amd.c emits
+    // sqrt(I^2 + Q^2), which is strictly non-negative — so the carrier arrives
+    // as a DC pedestal. Nothing upstream removes it:
+    //
+    //   * `levelfade` (ON by default, RXA.c) computes
+    //     `audio += dc_insert - dc` from an 8 Hz-corner and a 0.11 Hz-corner
+    //     average. That cancels FADING and deliberately holds the pedestal at
+    //     the long-term carrier level; it is not a DC blocker.
+    //   * The AM/SAM passband is symmetric about the carrier ({-4000, +4000}
+    //     in Hl2Backend::defaultPassbandForMode) because both detectors need
+    //     it that way, which puts 0 Hz mid-band.
+    //
+    // Left in, the pedestal eats output headroom and skews every
+    // zero-referenced consumer downstream — the WAVE applet draws `peak` and
+    // `rms`, both magnitudes, mirrored about a hard centreline, so a DC-shifted
+    // trace renders as a second inverted phantom copy of itself in the lower
+    // half.
+    //
+    // SCOPE: this runs on WdspChannel's OUTPUT, downstream of the whole RXA
+    // chain, so it fixes the audio we deliver but NOT what WDSP itself saw.
+    // wcpAGC sits after amd INSIDE RXA and still rides the pedestal; correcting
+    // that would need DC removal between the two, which WDSP exposes no hook
+    // for. Turning `levelfade` off does not help either — it only stops the
+    // fade correction, leaving sqrt(I^2+Q^2) just as non-negative.
+    //
+    // Applied to EVERY mode rather than switched on for AM/SAM: SSB, CW and
+    // the digital modes are already zero-mean so it is a no-op there, FM wants
+    // it for the same reason AM does, and an unconditional filter has no
+    // mode-change state that can be got wrong.
+    struct DcBlocker {
+        float r = 0.0f;    // pole radius, set by configure(); <= 0 bypasses
+        float x1 = 0.0f;
+        float y1 = 0.0f;
+
+        [[nodiscard]] float process(float x) noexcept
+        {
+            // Bypass rather than filter when unconfigured. `y = x - x1 + r*y1`
+            // at r = 0 is a DIFFERENTIATOR, not a passthrough, so a missed
+            // configure() would otherwise gut the low end of the audio.
+            if (!(r > 0.0f))
+                return x;
+            float y = x - x1 + r * y1;
+            // Flush to zero. During silence y1 decays geometrically toward
+            // denormal, and denormal arithmetic is punitively slow on x86.
+            if (!(std::fabs(y) > 1e-20f))
+                y = 0.0f;
+            x1 = x;
+            y1 = y;
+            return y;
+        }
+
+        void reset() noexcept { x1 = 0.0f; y1 = 0.0f; }
+    };
+
+    // -3 dB corner, Hz. Well below the 100 Hz that even a wide AM passband
+    // carries as audio, and far below the CW pitch, so it removes the pedestal
+    // without touching program material.
+    static constexpr double kDcBlockerCornerHz = 20.0;
+
     std::vector<float> m_i, m_q;                    // deinterleaved input scratch
     std::vector<float> m_left, m_right;             // WdspChannel output scratch
+    DcBlocker m_dcBlockL, m_dcBlockR;               // applied to m_left/m_right
     std::vector<float> m_stereo;                    // interleaved audio out
     std::vector<float> m_bins;                      // spectrum scratch
 };
