@@ -8,6 +8,39 @@
 
 namespace AetherSDR {
 
+enum class DssOutlinePipelineMode {
+    DedicatedRibbonPipeline,
+    SharedFillPipeline,
+};
+
+// QRhi's OpenGLES2 backend, which covers desktop GL as well as GLES, reuses the
+// fill program for ribbon outlines: live probes showed flat/stale outlines
+// with a separate, identically configured program.
+constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
+    bool openGlEs2Backend)
+{
+    return openGlEs2Backend
+        ? DssOutlinePipelineMode::SharedFillPipeline
+        : DssOutlinePipelineMode::DedicatedRibbonPipeline;
+}
+
+// The pipeline the outline draw binds, given the mode above. Templated on the
+// pipeline type purely so the selection stays testable without a QRhi device:
+// SpectrumWidget instantiates it with QRhiGraphicsPipeline*. Keeping the
+// selection here rather than as a ternary at the draw site is what lets
+// spectrum_preview_logic_test pin the mapping the renderer actually uses.
+// dedicatedPipeline is null on OpenGL — never created — so the shared-fill
+// answer must not depend on it.
+template <typename PipelineT>
+constexpr PipelineT* dssOutlinePipelineFor(DssOutlinePipelineMode mode,
+                                           PipelineT* fillPipeline,
+                                           PipelineT* dedicatedPipeline)
+{
+    return mode == DssOutlinePipelineMode::SharedFillPipeline
+        ? fillPipeline
+        : dedicatedPipeline;
+}
+
 struct FrequencyFrame {
     double centerMhz{0.0};
     double bandwidthMhz{0.0};

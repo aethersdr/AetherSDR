@@ -105,16 +105,34 @@ void settle()
     }
 }
 
-// QObject::receivers() is protected, so borrow it the sanctioned way: a
-// throwaway subclass exposing the count for the signal we care about.
+// QObject::receivers() is protected. Reaching it by declaring a subclass and
+// downcasting the widget to it is undefined behaviour — no object of that
+// subclass ever exists, and UBSan's vptr check rejects the cast outright
+// (#4740: "downcast of address ... which does not point to an object of type
+// 'Probe'", which reds the weekly ASan+UBSan run since the flags include
+// -fno-sanitize-recover=undefined).
+//
+// Access control is what we need to satisfy, not the object model: a
+// pointer-to-member formed inside a derived class may name a protected base
+// member, and converting it back to a base member pointer lets us apply it to
+// the real object. No fake type, no cast of the instance.
+//
+// The member belongs to QObject, so that is what the probe derives from — the
+// widget type is irrelevant to the access we are borrowing. Keep the
+// static_cast: on GCC and Clang &Probe::receivers already has the QObject
+// member-pointer type and it converts nothing, but derived-to-base is NOT an
+// implicit member-pointer conversion (only base-to-derived is), so on any
+// implementation that types it as Probe's the cast is what makes this compile.
 bool cellActivatedIsUnconnected(QTableWidget* table)
 {
-    struct Probe : QTableWidget {
-        using QTableWidget::receivers;
+    struct Probe : QObject {
+        static int receiversOf(const QObject* object, const char* signal)
+        {
+            return (object->*static_cast<int (QObject::*)(const char*) const>(
+                        &Probe::receivers))(signal);
+        }
     };
-    return static_cast<Probe*>(table)->receivers(
-               SIGNAL(cellActivated(int, int)))
-           == 0;
+    return Probe::receiversOf(table, SIGNAL(cellActivated(int, int))) == 0;
 }
 
 // Double-click the centre of a cell and count how many modal viewers the

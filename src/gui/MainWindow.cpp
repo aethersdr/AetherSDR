@@ -167,9 +167,10 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
+#include <QAccessible>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QDateTime>
-#include <QPropertyAnimation>
 #include <QIcon>
 #include <QCursor>
 #include <QKeyEvent>
@@ -1936,11 +1937,11 @@ MainWindow::MainWindow(QWidget* parent)
     // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
     wirePooDooTiles();
 
-    connect(m_titleBar, &TitleBar::headphoneMuteChanged, this, [this](bool muted) {
-        m_radioModel.sendCommand(QString("mixer headphone mute %1").arg(muted ? 1 : 0));
-    });
+    connect(m_titleBar, &TitleBar::headphoneMuteChanged,
+            &m_radioModel, &RadioModel::setHeadphoneMute);
     connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
         m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
+        m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
     });
 
     // Multi-Flex: show when another client is transmitting
@@ -7780,6 +7781,26 @@ void MainWindow::updateNr2Availability()
 
 void MainWindow::enableNr2WithWisdom()
 {
+    // Single-session guard.  All six call sites (the DSP applet, two
+    // shortcut paths, two wiring paths and the menu) funnel through here,
+    // and the wisdom cache does not exist until generation *completes* —
+    // so without this, a second NR2 request mid-generation stacks a second
+    // dialog and a second generateWisdom() worker, and the two race on the
+    // wisdom temp/final files in SpectralNR.cpp.
+    //
+    // Deliberately NOT cleared when the operator cancels: cancellation is
+    // cooperative and only takes effect when the in-flight FFTW_PATIENT
+    // plan finishes, which on the size-262144 tail is minutes away.  The
+    // guard has to outlive the cancel request and stay up until the worker
+    // actually exits, or a restart during that window recreates exactly
+    // the file race above.  The teardown paths below clear it via the
+    // QPointer when the dialog is deleted.
+    if (m_nr2WisdomDialog) {
+        m_nr2WisdomDialog->show();
+        m_nr2WisdomDialog->raise();
+        return;
+    }
+
     if (AudioEngine::needsWisdomGeneration()) {
         const auto cancelled = std::make_shared<std::atomic_bool>(false);
         const auto result = std::make_shared<std::atomic<int>>(
@@ -7789,9 +7810,11 @@ void MainWindow::enableNr2WithWisdom()
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
 
         auto* dlg = new QDialog(this);
+        dlg->setObjectName("nr2WisdomDialog");
         dlg->setWindowTitle("AetherSDR — FFTW Wisdom");
-        if (frameless)
+        if (frameless) {
             dlg->setWindowFlag(Qt::FramelessWindowHint, true);
+        }
         // Modeless — wisdom generation can take minutes; locking the
         // operator out of the radio for that whole window was a worse UX
         // than letting them keep operating while the worker thread runs
@@ -7805,6 +7828,17 @@ void MainWindow::enableNr2WithWisdom()
         // when the operator clicks back to the main UI.
         dlg->setWindowFlag(Qt::Tool, true);
         dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
+#ifdef Q_OS_MAC
+        // Qt maps Qt::Tool to an NSPanel, which AppKit hides whenever the
+        // application deactivates — fatal for a dialog that is modeless by
+        // design and lives for minutes.  This attribute is what turns that
+        // off: QWidgetPrivate::create() forwards it to the QWindow property
+        // _q_macAlwaysShowToolWindow, which QCocoaWindow reads to decide
+        // NSWindow.hidesOnDeactivate.  It is read during window creation, so
+        // it MUST stay ahead of the first show()/winId() — moving it below
+        // would silently no-op on macOS with nothing failing elsewhere.
+        dlg->setAttribute(Qt::WA_MacAlwaysShowToolWindow, true);
+#endif
         dlg->setMinimumWidth(500);
         AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: #050710; }"
             "QLabel { color: {{color.text.secondary}}; background: transparent; }"
@@ -7830,35 +7864,113 @@ void MainWindow::enableNr2WithWisdom()
             "Optimizing FFT plans for NR2...\n\n"
             "This window will automatically close when wisdom generation is complete.",
             content);
+        label->setObjectName("nr2WisdomStatusLabel");
         label->setWordWrap(true);
         body->addWidget(label);
 
         auto* progress = new QProgressBar(content);
+        progress->setObjectName("nr2WisdomProgressBar");
         progress->setRange(0, 100);
         progress->setValue(0);
         body->addWidget(progress);
 
+        auto* activityRow = new QHBoxLayout();
+        activityRow->setContentsMargins(0, 0, 0, 0);
+        auto* activityLabel = new QLabel("Working", content);
+        activityLabel->setObjectName("nr2WisdomActivityLabel");
+        activityLabel->setAccessibleName("FFTW wisdom generation activity");
+        activityRow->addWidget(activityLabel);
+        activityRow->addStretch();
+        auto* elapsedLabel = new QLabel("Elapsed: 0:00", content);
+        elapsedLabel->setObjectName("nr2WisdomElapsedTimeLabel");
+        elapsedLabel->setAccessibleName("Elapsed time");
+        activityRow->addWidget(elapsedLabel);
+        body->addLayout(activityRow);
+
+        auto* reassuranceLabel = new QLabel(
+            "Still working — FFTW planning can take several minutes on some systems.", content);
+        reassuranceLabel->setObjectName("nr2WisdomReassuranceLabel");
+        reassuranceLabel->setAccessibleName("FFTW wisdom generation reassurance");
+        reassuranceLabel->setWordWrap(true);
+        // Reserve the row while hidden.  This line toggles on every quiet
+        // interval, and without the reservation each toggle relayouts the
+        // dialog — the tool window grows when it appears and is left with
+        // dead space when it goes.  #4728 is a report about this window
+        // being visually unstable at exactly this point in the run, so the
+        // replacement liveness cue must not reintroduce geometry churn.
+        QSizePolicy reassurancePolicy = reassuranceLabel->sizePolicy();
+        reassurancePolicy.setRetainSizeWhenHidden(true);
+        reassuranceLabel->setSizePolicy(reassurancePolicy);
+        reassuranceLabel->hide();
+        body->addWidget(reassuranceLabel);
+
+        const auto announceLabel = [](QLabel* target) {
+            target->setAccessibleName(target->text());
+            QAccessibleEvent event(target, QAccessible::NameChanged);
+            QAccessible::updateAccessibility(&event);
+        };
+
         auto* buttonRow = new QHBoxLayout();
         buttonRow->addStretch();
         auto* cancelButton = new QPushButton("Cancel", content);
+        cancelButton->setObjectName("nr2WisdomCancelButton");
         cancelButton->setAutoDefault(false);
         cancelButton->setDefault(false);
         buttonRow->addWidget(cancelButton);
         body->addLayout(buttonRow);
         root->addWidget(content);
 
+        m_nr2WisdomDialog = dlg;
         dlg->show();
 
-        auto* breathe = new QPropertyAnimation(dlg, "windowOpacity", dlg);
-        breathe->setDuration(1500);
-        breathe->setStartValue(1.0);
-        breathe->setKeyValueAt(0.5, 0.55);
-        breathe->setEndValue(1.0);
-        breathe->setLoopCount(-1);
+        auto* activityTimer = new QTimer(dlg);
+        activityTimer->setInterval(500);
+        const auto elapsedTimer = std::make_shared<QElapsedTimer>();
+        const auto lastCallbackTimer = std::make_shared<QElapsedTimer>();
+        elapsedTimer->start();
+        lastCallbackTimer->start();
+        connect(activityTimer, &QTimer::timeout, dlg,
+            [cancelled, activityLabel, elapsedLabel, reassuranceLabel,
+                elapsedTimer, lastCallbackTimer, announceLabel]() {
+                const qint64 elapsedSeconds = elapsedTimer->elapsed() / 1000;
+                elapsedLabel->setText(QString("Elapsed: %1:%2")
+                    .arg(elapsedSeconds / 60)
+                    .arg(elapsedSeconds % 60, 2, 10, QLatin1Char('0')));
+                const int dotCount = static_cast<int>((elapsedTimer->elapsed() / 500) % 4);
+                activityLabel->setText(QString("%1%2")
+                    .arg(cancelled->load() ? "Canceling" : "Working")
+                    .arg(QString(dotCount, QLatin1Char('.'))));
+                if (cancelled->load()) {
+                    reassuranceLabel->setText(
+                        "Cancel requested — waiting for the current FFT plan to finish.");
+                    reassuranceLabel->show();
+                } else {
+                    const bool quiet = lastCallbackTimer->elapsed() >= 10000;
+                    if (quiet && !reassuranceLabel->isVisible()) {
+                        reassuranceLabel->show();
+                        announceLabel(reassuranceLabel);
+                    } else if (!quiet) {
+                        reassuranceLabel->hide();
+                    }
+                }
+            });
+        activityTimer->start();
 
-        const auto requestCancel = [cancelled, label, progress, cancelButton]() {
-            if (cancelled->exchange(true))
+        const auto requestCancel = [cancelled, label, progress, cancelButton,
+                                       activityLabel, reassuranceLabel, announceLabel]() {
+            if (cancelled->exchange(true)) {
                 return;
+            }
+            // activityLabel is left to the activity timer: it reads
+            // `cancelled` and switches to the animated "Canceling..." on its
+            // next tick.  Setting a static string here would be overwritten
+            // within 500 ms, and the animated form is the better affordance
+            // anyway — it keeps proving the app is alive while the in-flight
+            // FFT plan finishes.
+            reassuranceLabel->setText(
+                "Cancel requested — waiting for the current FFT plan to finish.");
+            reassuranceLabel->show();
+            announceLabel(reassuranceLabel);
             cancelButton->setEnabled(false);
             progress->setRange(0, 0);
             label->setText("Canceling FFTW wisdom generation...\n\n"
@@ -7868,23 +7980,29 @@ void MainWindow::enableNr2WithWisdom()
         connect(dlg, &QDialog::rejected, dlg, requestCancel);
 
         const QPointer<QDialog> dlgGuard(dlg);
-        auto* thread = QThread::create([cancelled, result, dlgGuard, breathe, label, progress]() {
+        auto* thread = QThread::create([cancelled, result, dlgGuard, label, progress,
+                                           reassuranceLabel, lastCallbackTimer]() {
             const auto wisdomResult = AudioEngine::generateWisdom(
-                [cancelled, dlgGuard, breathe, label, progress](int step, int total, const std::string& desc) {
-                    if (!dlgGuard)
+                [cancelled, dlgGuard, label, progress, reassuranceLabel,
+                    lastCallbackTimer](int step, int total, const std::string& desc) {
+                    if (!dlgGuard) {
                         return;
-                    if (cancelled->load())
+                    }
+                    if (cancelled->load()) {
                         return;
+                    }
                     int pct = total > 0 ? (step * 100 / total) : 0;
                     QString d = QString::fromStdString(desc);
-                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, breathe, label, progress, pct, d]() {
-                        if (!dlgGuard)
+                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, label, progress, reassuranceLabel,
+                                                                  lastCallbackTimer, pct, d]() {
+                        if (!dlgGuard) {
                             return;
+                        }
+                        lastCallbackTimer->restart();
+                        reassuranceLabel->hide();
                         if (!d.isEmpty()) {
                             label->setText(d + "\n\n"
                                 "This window will automatically close when wisdom generation is complete.");
-                            if (progress->value() >= 90 && breathe->state() != QAbstractAnimation::Running)
-                                breathe->start();
                         } else {
                             progress->setValue(pct);
                         }
@@ -7893,26 +8011,32 @@ void MainWindow::enableNr2WithWisdom()
                 [cancelled]() { return cancelled->load(); });
             result->store(static_cast<int>(wisdomResult));
         });
-        connect(thread, &QThread::finished, this, [this, dlg, breathe, progress, label, thread, result]() {
+        connect(thread, &QThread::finished, this, [this, dlg, progress, label, thread, result,
+                                                     activityTimer, activityLabel, reassuranceLabel,
+                                                     announceLabel]() {
             const auto wisdomResult =
                 static_cast<SpectralNR::WisdomResult>(result->load());
             const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
                             || wisdomResult == SpectralNR::WisdomResult::Generated;
-            breathe->stop();
-            dlg->setWindowOpacity(1.0);
+            activityTimer->stop();
+            reassuranceLabel->hide();
             progress->setRange(0, 100);
             progress->setValue(ready ? 100 : 0);
 
             if (!ready) {
+                activityLabel->setText("Stopped");
                 label->setText(wisdomResult == SpectralNR::WisdomResult::Cancelled
                     ? "Wisdom generation canceled. Audio was left unchanged."
                     : "Wisdom generation failed. Audio was left unchanged.");
+                announceLabel(label);
                 if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
-                    if (auto* w = a->widget())
+                    if (auto* w = a->widget()) {
                         w->syncFromEngine();
+                    }
                 }
-                if (m_dspDialog)
+                if (m_dspDialog) {
                     m_dspDialog->syncFromEngine();
+                }
                 statusBar()->showMessage("NR2 was not enabled; audio is unchanged", 4000);
                 QTimer::singleShot(800, this, [dlg, thread]() {
                     dlg->accept();
@@ -7922,7 +8046,9 @@ void MainWindow::enableNr2WithWisdom()
                 return;
             }
 
+            activityLabel->setText("Complete");
             label->setText("Wisdom generation complete!");
+            announceLabel(label);
             QTimer::singleShot(800, this, [this, dlg, thread]() {
                 dlg->accept();
                 dlg->deleteLater();

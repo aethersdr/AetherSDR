@@ -27,10 +27,13 @@ on:
     paths:
       - "src/**"
       - "resources/themes/**"
+      - "resources/shaders/**"
+      - "CMakeLists.txt"
       - "tools/audit_colours.py"
       - "tools/check_a11y.py"
       - "tools/check_engine_boundary.py"
       - "tools/check_network_timeouts.py"
+      - "tools/check_shader_dialects.py"
       - "tools/check_theme_seed.py"
       - "tools/gen_theme_seed.py"
       - ".github/workflows/static-checks.yml"
@@ -108,6 +111,23 @@ jobs:
       - name: Theme seed vs bundled JSON
         if: ${{ !cancelled() }}
         run: python tools/check_theme_seed.py --strict
+
+      # ── Shader/GLSL-dialect ratchet (#4746). qt_add_shaders bakes one slice
+      # per target dialect and QRhi picks the highest slice <= what the driver
+      # reports. A shader using an interpolation qualifier that some baked slice
+      # cannot express still BAKES — qsb emits the illegal text and exits 0 — so
+      # the build is green, the .qsb is produced, and the only symptom is a
+      # driver rejecting it at runtime. #4746 was exactly that: `flat` (#4539)
+      # baked into a GLSL 120 slice, invisible on every GL 3.2+ desktop GPU and
+      # on CI, and a dead 3D FFT on the Raspberry Pi's GL 3.1 v3d driver.
+      #
+      # This is the one class of shader bug CI structurally cannot catch by
+      # building, so it gets a source gate instead (--strict). Matches only
+      # interpolation qualifiers, which SPIRV-Cross passes through verbatim —
+      # everything else it lowers, and a gate with false positives gets ignored.
+      - name: Shader GLSL dialects
+        if: ${{ !cancelled() }}
+        run: python tools/check_shader_dialects.py --strict
 
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:

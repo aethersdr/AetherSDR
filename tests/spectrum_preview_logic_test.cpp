@@ -737,6 +737,57 @@ int testDssStartupHistoryAvailability()
     return 0;
 }
 
+int testDssOutlinePipelinePolicy()
+{
+    using namespace AetherSDR;
+    if (dssOutlinePipelineModeForBackend(true)
+            != DssOutlinePipelineMode::SharedFillPipeline
+        || dssOutlinePipelineModeForBackend(false)
+            != DssOutlinePipelineMode::DedicatedRibbonPipeline) {
+        return fail("3D FFT outline pipeline policy is incorrect");
+    }
+    return 0;
+}
+
+// The policy above only names a mode; this pins the pipeline the outline draw
+// actually binds, which is the half that can regress on its own. Renderer proof
+// still comes from the three-backend manual verification — no headless test can
+// reach a QRhi draw — but the selection itself no longer rests on a ternary
+// duplicated at the draw site.
+int testDssOutlinePipelineSelection()
+{
+    using namespace AetherSDR;
+    struct FakePipeline {
+        int id{0};
+    };
+    FakePipeline fill{1};
+    FakePipeline dedicated{2};
+
+    // OpenGL must land on the fill pipeline. That is what makes the rebind at
+    // the outline draw a no-op, so no GL program switch separates it from the
+    // fill draw — the whole point of the Linux fix.
+    if (dssOutlinePipelineFor(dssOutlinePipelineModeForBackend(true), &fill,
+                              &dedicated)
+        != &fill) {
+        return fail("OpenGL outline draw must reuse the fill pipeline");
+    }
+    // Metal/D3D11 keep the already-validated dedicated ribbon pipeline.
+    if (dssOutlinePipelineFor(dssOutlinePipelineModeForBackend(false), &fill,
+                              &dedicated)
+        != &dedicated) {
+        return fail("non-OpenGL outline draw must use the ribbon pipeline");
+    }
+    // initDssMeshPipeline never creates the dedicated pipeline on OpenGL, so
+    // the shared-fill answer must survive a null one rather than disabling
+    // outlines the way a `m_dssMeshLinePipeline`-based guard would.
+    if (dssOutlinePipelineFor(DssOutlinePipelineMode::SharedFillPipeline, &fill,
+                              static_cast<FakePipeline*>(nullptr))
+        != &fill) {
+        return fail("shared-fill outline selection must not need a ribbon pipeline");
+    }
+    return 0;
+}
+
 int testObservedWaterfallCadence()
 {
     using namespace AetherSDR;
@@ -957,6 +1008,12 @@ int main()
         return result;
     }
     if (const int result = testDssStartupHistoryAvailability(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssOutlinePipelinePolicy(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssOutlinePipelineSelection(); result != 0) {
         return result;
     }
     if (const int result = testObservedWaterfallCadence(); result != 0) {

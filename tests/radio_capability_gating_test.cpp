@@ -421,6 +421,43 @@ int main(int argc, char** argv)
               "disconnected: hasRadioSideWaterfallAutoBlack() goes permissive, HW back");
     }
 
+    // ---- The TX-intent callbacks are installed once too --------------------
+    //
+    // Same ownership rule as the connection-edge relay checked further down, on
+    // the other three connections setupBackend() used to make with RadioModel on
+    // both ends: rfPowerChanged, moxCommandIssued and tuneCommandIssued (sender
+    // &m_transmitModel, a RadioModel value member; receiver `this`). They are
+    // installed as one block, so counting one of them counts all three.
+    // setupBackend() has run three times by here — ctor Flex, HL2, Sim — so a
+    // per-backend installation leaves three live copies.
+    //
+    // Counted through the refusal cascade, the one publicly observable
+    // consequence of a duplicate: the sim declares canTransmit=false, so a TUNE
+    // intent is refused, and the refusal calls TransmitModel::stopTune(), which
+    // re-emits tuneCommandIssued(false) unconditionally. One live callback =>
+    // one unlatch. Nothing is keyed and nothing reaches a radio: the model is
+    // disconnected, the backend is the simulator, and the path under test is the
+    // one that REFUSES to transmit.
+    //
+    // The signal is invoked directly for the same reason the relay check does
+    // it below — this asserts the WIRING, not TransmitModel's PTT preflight.
+    // (If stopTune() ever stops re-emitting unconditionally the count changes;
+    // this comment is the place to start reading when it does.)
+    {
+        check(!model.isConnected() && model.family() == QLatin1String("sim"),
+              "TX-intent ownership check runs disconnected, on the sim backend");
+        check(!model.backendCapabilities().canTransmit,
+              "TX-intent ownership check runs against an RX-only backend");
+        QSignalSpy spy(&model.transmitModel(), &TransmitModel::tuneCommandIssued);
+        const bool invoked = QMetaObject::invokeMethod(
+            &model.transmitModel(), "tuneCommandIssued", Qt::DirectConnection,
+            Q_ARG(bool, true));
+        check(invoked, "tuneCommandIssued can be invoked for the ownership check");
+        check(spy.count() == 2,
+              "family swaps leave exactly one TX-intent callback (one TUNE "
+              "intent, one refusal unlatch)");
+    }
+
     // ---- Round-trip back to Flex ------------------------------------------
     //
     // Capabilities track the LIVE backend, so nothing an earlier family
@@ -449,6 +486,28 @@ int main(int argc, char** argv)
         // baseline. A cached flag would show up right here.
         check(caps.hasSupplyVoltageTelemetry,
               "round-trip: Flex regains hasSupplyVoltageTelemetry after sim -> Flex");
+    }
+
+    // ---- Family swaps do not duplicate the connection-edge relay -----------
+    //
+    // setupBackend() ran once for each of Flex -> HL2 -> Sim -> Flex above.
+    // A RadioModel-owned connection installed there survives teardownBackend(),
+    // so one connectionStateChanged edge would fan out once per family visited.
+    // Invoke the signal synchronously to isolate this ownership invariant from
+    // any backend's asynchronous connect lifecycle or capabilitiesChanged signal.
+    //
+    // The TX-power push installed beside the relay has no observable of its own
+    // (it calls IRadioBackend::setTxPower and nothing else), but the two are one
+    // adjacent block in the constructor, so this count stands for both — the
+    // same reasoning the TX-intent check above uses for its three.
+    {
+        QSignalSpy spy(&model, &RadioModel::capabilitiesChanged);
+        const bool invoked = QMetaObject::invokeMethod(
+            &model, "connectionStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, true));
+        check(invoked, "connectionStateChanged can be invoked for the ownership check");
+        check(spy.count() == 1,
+              "family swaps leave exactly one connection-edge capability relay");
     }
 
     // ---- Flex extended DSP is unchanged by the reconciliation -------------

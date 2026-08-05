@@ -12492,6 +12492,8 @@ void SpectrumWidget::initDssMeshPipeline()
 {
     QRhi* r = rhi();
     m_dssMeshReady = false;
+    m_dssOutlinePipelineMode = dssOutlinePipelineModeForBackend(
+        r->backend() == QRhi::OpenGLES2);
 
     // R stores dBm and G stores captured-frequency coverage. The second channel
     // keeps zoom-created floor spans colour-stable without hiding their lines.
@@ -12578,26 +12580,32 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssMeshFillPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_dssMeshFillPipeline->setTargetBlends({fillBlend});
 
-    // Outline pipeline — alpha-blended screen-space ribbons on a fixed
-    // perspective grid. The shader crossfades exact FFT shapes in place, so
-    // neither native line coverage nor translated ribbon coverage can strobe.
-    QRhiGraphicsPipeline::TargetBlend lblend;
-    lblend.enable = true;
-    lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
-    lblend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-    lblend.srcAlpha = QRhiGraphicsPipeline::One;
-    lblend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-    m_dssMeshLinePipeline = r->newGraphicsPipeline();
-    m_dssMeshLinePipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
-    m_dssMeshLinePipeline->setVertexInputLayout(layout);
-    m_dssMeshLinePipeline->setTopology(QRhiGraphicsPipeline::Triangles);
-    m_dssMeshLinePipeline->setShaderResourceBindings(m_dssMeshSrb);
-    m_dssMeshLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
-    m_dssMeshLinePipeline->setTargetBlends({lblend});
-
-    if (!m_dssMeshFillPipeline->create() || !m_dssMeshLinePipeline->create()) {
-        qCWarning(lcGui) << "SpectrumWidget: dss_mesh pipeline create failed";
+    // OpenGL reuses the fill program below for this unchanged ribbon VBO: live
+    // probes showed flat/stale outlines only after switching to a separate,
+    // identically configured program. Keep the proven Metal/D3D11 path intact.
+    if (!m_dssMeshFillPipeline->create()) {
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh fill pipeline create failed";
         return;
+    }
+    if (m_dssOutlinePipelineMode
+        == DssOutlinePipelineMode::DedicatedRibbonPipeline) {
+        QRhiGraphicsPipeline::TargetBlend lblend;
+        lblend.enable = true;
+        lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+        lblend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+        lblend.srcAlpha = QRhiGraphicsPipeline::One;
+        lblend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+        m_dssMeshLinePipeline = r->newGraphicsPipeline();
+        m_dssMeshLinePipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
+        m_dssMeshLinePipeline->setVertexInputLayout(layout);
+        m_dssMeshLinePipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        m_dssMeshLinePipeline->setShaderResourceBindings(m_dssMeshSrb);
+        m_dssMeshLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_dssMeshLinePipeline->setTargetBlends({lblend});
+        if (!m_dssMeshLinePipeline->create()) {
+            qCWarning(lcGui) << "SpectrumWidget: dss_mesh outline pipeline create failed";
+            return;
+        }
     }
 
     m_dssMeshHeadUploaded = -1;
@@ -12605,7 +12613,12 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssLutToken = ~0ull;
     m_dssMeshReady = true;
     qDebug() << "SpectrumWidget: stacked-trace mesh pipeline created"
-             << cols << "x" << textureRows;
+             << cols << "x" << textureRows
+             << "outline pipeline" << (m_dssOutlinePipelineMode
+                 == DssOutlinePipelineMode::SharedFillPipeline
+                     ? "shared-fill-pipeline" : "dedicated-ribbon-pipeline")
+             << "outline vertices/row"
+             << dssLineVerticesPerRow();
 }
 
 void SpectrumWidget::initDssDepthPipeline()
@@ -14286,13 +14299,24 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         cb->draw(4);
     }
 
-    if (dssMeshOutlineRows > 0 && m_dssMeshLinePipeline && m_dssMeshSrb) {
+    QRhiGraphicsPipeline* outlinePipeline = dssOutlinePipelineFor(
+        m_dssOutlinePipelineMode, m_dssMeshFillPipeline, m_dssMeshLinePipeline);
+    if (dssMeshOutlineRows > 0 && outlinePipeline && m_dssMeshSrb) {
         const QRhiViewport vp(
             static_cast<float>(specRect.x()) * dpr,
             static_cast<float>(h - specRect.bottom() - 1) * dpr,
             static_cast<float>(specContentW) * dpr,
             static_cast<float>(specRect.height()) * dpr);
-        cb->setGraphicsPipeline(m_dssMeshLinePipeline);
+        // Reuse the working OpenGL fill program for ribbon outlines. Its blend
+        // state matches the dedicated outline pipeline; live probes isolated
+        // the flat/stale rows to the separate-program path.
+        //
+        // On the shared-fill path this rebind is deliberately a no-op: the fill
+        // draw above leaves m_dssMeshFillPipeline current, so QRhi skips the GL
+        // program switch and this draw inherits its state. Do not bind another
+        // pipeline between that draw and this one; doing so reintroduces the
+        // Linux-only flat-row failure that this path avoids.
+        cb->setGraphicsPipeline(outlinePipeline);
         cb->setShaderResources(m_dssMeshSrb);
         cb->setViewport(vp);
         const QRhiCommandBuffer::VertexInput vbuf(m_dssMeshLineVbo, 0);
