@@ -2,6 +2,7 @@
 
 #include "InteractionSettings.h"
 #include "NativeWidgetTopology.h"
+#include "SoftwareOpenGlRequest.h"
 #include "core/AppSettings.h"
 
 #include <QApplication>
@@ -111,6 +112,10 @@ WaveformWidget::WaveformWidget(Profile profile, QWidget* parent)
     // the waveform composited into its ancestor backing store so resize,
     // scrolling, and clipping remain QWidget-owned.
     setApi(QRhiWidget::Api::Metal);
+#elif defined(AETHER_GPU_SPECTRUM)
+    if (softwareOpenGlRequested()) {
+        setApi(QRhiWidget::Api::OpenGL);
+    }
 #endif
     setToolTip("Click to pause/resume waveform capture; double-click for WAVE settings");
     setObjectName(profile == Profile::Strip ? QStringLiteral("stripWaveformScope")

@@ -79,14 +79,33 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
+          # libgstreamer-plugins-bad1.0-0 is here for libgstplay-1.0.so.0, which
+          # Qt's own multimedia backend plugin links. It looks like an odd thing
+          # for this app to need, and it is arch-asymmetric for a reason worth
+          # writing down: Qt builds its linux_arm64 binaries on Ubuntu 24.04
+          # against GStreamer 1.24, whose libgstreamermediaplugin.so pulls in
+          # libgstplay; the linux_gcc_64 binaries are built on RHEL 8.10 against
+          # an older GStreamer that has no such dependency. So linuxdeploy's
+          # dependency walk dies with "Could not find dependency:
+          # libgstplay-1.0.so.0" on aarch64 only, while x86_64 sails through.
+          #
+          # That became reachable when #4670 moved aarch64 onto aqt Qt 6.8.3, and
+          # stayed invisible because this workflow runs only on tag pushes and
+          # workflow_dispatch — the first dispatch after #4670 (on the #4692
+          # merge commit) is what surfaced it. Installed on both legs: the
+          # package exists on jammy and noble alike, and one shared list beats a
+          # conditional that has to be revisited every time the matrix moves.
+          # On x86_64 it is a runner-side no-op — linuxdeploy bundles only what
+          # the deployed ELFs actually link, and nothing there links libgstplay.
           sudo apt-get install -y cmake ninja-build pkg-config \
             libvulkan-dev spirv-headers \
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
             libxcb-render-util0 libxcb-xinerama0 libxcb-randr0 libxcb-xfixes0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-            gstreamer1.0-pulseaudio gstreamer1.0-gl \
+            gstreamer1.0-alsa gstreamer1.0-pulseaudio gstreamer1.0-gl \
             libgstreamer-gl1.0-0 libgstreamer-plugins-base1.0-0 \
+            libgstreamer-plugins-bad1.0-0 \
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
             libfftw3-dev libhidapi-dev portaudio19-dev
@@ -317,13 +336,34 @@ jobs:
           cp -v "$QT_PLUGIN_PATH"/wayland-graphics-integration-client/* \
             AppDir/usr/plugins/wayland-graphics-integration-client/
 
-          # Bundle essential GStreamer plugins for audio
+          # Bundle essential GStreamer plugins for audio. linuxdeploy's dependency
+          # walk pulls the GStreamer *core* into the AppDir off Qt's media backend
+          # plugin, so that bundled core is what resolves elements at runtime, not
+          # the host's. An element missing from this directory is an element the
+          # app does not have, on any host.
+          #
+          # No `2>/dev/null || true`, for the reason the multimedia backend copy
+          # above already dropped it: a silent miss ships a green build with
+          # broken audio. That was not hypothetical here. libgstalsa.so has been
+          # named in this list from the start, but `gstreamer1.0-alsa` was never
+          # in the apt list above, so the copy failed on every run and every
+          # release to date shipped with pulsesink as its only output sink — no
+          # ALSA fallback on hosts without PulseAudio or pipewire-pulse, which is
+          # a normal configuration on the headless ARM targets. Fixed by adding
+          # the package; kept fixed by letting a miss fail the job. See #4712.
           GST_PATH=$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || echo "/usr/lib/$(uname -m)-linux-gnu/gstreamer-1.0")
           mkdir -p AppDir/usr/lib/gstreamer-1.0
-          for p in libgstpulseaudio.so libgstpipewiresrc.so libgstalsa.so libgstaudioconvert.so \
-                   libgstaudioresample.so libgstautodetect.so libgstcoreelements.so libgsttypefindfunctions.so; do
-            cp -v "$GST_PATH/$p" AppDir/usr/lib/gstreamer-1.0/ 2>/dev/null || true
+          for p in libgstcoreelements.so libgsttypefindfunctions.so libgstaudioconvert.so \
+                   libgstaudioresample.so libgstautodetect.so libgstpulseaudio.so \
+                   libgstalsa.so; do
+            cp -v "$GST_PATH/$p" AppDir/usr/lib/gstreamer-1.0/
           done
+          # pipewiresrc is the one genuine maybe, so it stays tolerant but noisy:
+          # it is a capture source rather than a sink, PipeWire hosts already get
+          # pulsesrc/pulsesink through pipewire-pulse, and gstreamer1.0-pipewire
+          # is deliberately not in the apt list. A line in the log beats silence.
+          cp -v "$GST_PATH/libgstpipewiresrc.so" AppDir/usr/lib/gstreamer-1.0/ || \
+            echo "note: libgstpipewiresrc.so absent; PipeWire hosts use pulsesrc via pipewire-pulse"
 
       - name: Download linuxdeploy + Qt plugin
         run: |

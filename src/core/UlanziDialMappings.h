@@ -40,6 +40,12 @@ public:
     // removed. Returns the number of bindings adopted.
     static int migrateLegacyKeys(const QStringList& pillIds);
 
+    // Bound rotary action for the dial wheel, or "WheelFrequency" by default.
+    static QString rotaryAction();
+
+    // Bind rotary action and persist immediately inside the UlanziDialMappings root document.
+    static bool setRotaryAction(const QString& actionId);
+
     // Pre-#4611 per-pill key names, retained only as migration sources.
     static QString legacyUnderscoreKey(const QString& pillId);
     static QString legacySlashKey(const QString& pillId);

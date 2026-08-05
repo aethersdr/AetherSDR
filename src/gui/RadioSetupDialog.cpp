@@ -58,6 +58,8 @@
 #include <QUrl>
 #include <QMediaDevices>
 #include <QAudioDevice>
+#include <QDateTime>
+#include <QDir>
 #include <QFileDialog>
 #include <QStandardPaths>
 #include <QFileInfo>
@@ -3616,6 +3618,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
     vbox->addWidget(group, 1);
 
     QVBoxLayout* kiwiRowsLayout = nullptr;
+    QVBoxLayout* kiwiLayout = nullptr;
 
 #ifdef HAVE_KEYCHAIN
     const QString kiwiPasswordHelpText =
@@ -3640,7 +3643,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
     if (m_kiwiSdrManager) {
         auto* kiwiGroup = new QGroupBox("KiwiSDR RX Antennas");
         kiwiGroup->setStyleSheet(kGroupStyle);
-        auto* kiwiLayout = new QVBoxLayout(kiwiGroup);
+        kiwiLayout = new QVBoxLayout(kiwiGroup);
         kiwiLayout->setSpacing(6);
 
         auto* kiwiHelp = new QLabel(
@@ -3702,6 +3705,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         kiwiRowsLayout->setAlignment(Qt::AlignTop);
         kiwiScroll->setWidget(kiwiRowsWidget);
         kiwiLayout->addWidget(kiwiScroll);
+
         vbox->addWidget(kiwiGroup, 0);
     }
 
@@ -4352,6 +4356,127 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 kiwiTelemetryRefreshTimer->start();
             }
         });
+
+        // Import/export the receiver list as a CSV (#4586) — passwords are
+        // never included (they live in the OS credential store), so a
+        // password-protected receiver needs its password re-entered after
+        // import. Remembers its own last-used folder, independent of any
+        // other CSV import/export elsewhere in the app (mirrors
+        // ShortcutDialog's pattern). Reuses styleKiwiButton (declared above
+        // for the per-row Connect/Add-receiver buttons) instead of adding a
+        // fresh setStyleSheet() call site the colour-audit ratchet counts.
+        auto kiwiTransferDirectory = [] {
+            const QString saved = AppSettings::instance()
+                .value(QStringLiteral("KiwiSdrImportExportPath"), QString())
+                .toString();
+            if (!saved.isEmpty() && QDir(saved).exists()) {
+                return saved;
+            }
+            const QString docs = QStandardPaths::writableLocation(
+                QStandardPaths::DocumentsLocation);
+            return docs.isEmpty() ? QDir::homePath() : docs;
+        };
+        auto rememberKiwiTransferDirectory = [](const QString& path) {
+            const QFileInfo info(path);
+            if (!info.absolutePath().isEmpty()) {
+                AppSettings::instance().setValue(
+                    QStringLiteral("KiwiSdrImportExportPath"), info.absolutePath());
+            }
+        };
+
+        auto* kiwiTransferRow = new QHBoxLayout;
+        kiwiTransferRow->addStretch(1);
+
+        auto* kiwiImportBtn = new QPushButton("Import...");
+        kiwiImportBtn->setObjectName(QStringLiteral("kiwiImportButton"));
+        kiwiImportBtn->setAccessibleName("Import KiwiSDR receivers");
+        kiwiImportBtn->setAccessibleDescription(
+            "Import KiwiSDR receivers from a CSV file. A receiver whose "
+            "endpoint matches one already saved is updated in place.");
+        styleKiwiButton(kiwiImportBtn);
+        connect(kiwiImportBtn, &QPushButton::clicked, this,
+                [this, kiwiTransferDirectory, rememberKiwiTransferDirectory] {
+            QFileDialog dialog(this, QStringLiteral("Import KiwiSDR Receivers"),
+                               kiwiTransferDirectory(),
+                               QStringLiteral("CSV Files (*.csv)"));
+            dialog.setAcceptMode(QFileDialog::AcceptOpen);
+            dialog.setFileMode(QFileDialog::ExistingFile);
+            dialog.setDefaultSuffix(QStringLiteral("csv"));
+            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+                return;
+            }
+            const QString path = dialog.selectedFiles().first();
+            rememberKiwiTransferDirectory(path);
+
+            const KiwiSdrCsvImportResult result =
+                m_kiwiSdrManager->importFromFile(path);
+            if (!result.ok() && result.addedCount == 0 && result.mergedCount == 0) {
+                QMessageBox box(QMessageBox::Warning,
+                                QStringLiteral("Import KiwiSDR Receivers"),
+                                QStringLiteral("No receivers were imported from %1.")
+                                    .arg(QFileInfo(path).fileName()),
+                                QMessageBox::Ok, this);
+                box.setDetailedText(result.errors.join(QLatin1Char('\n')));
+                box.exec();
+                return;
+            }
+
+            QMessageBox box(result.errors.isEmpty()
+                                ? QMessageBox::Information : QMessageBox::Warning,
+                            QStringLiteral("Import KiwiSDR Receivers"),
+                            QStringLiteral("Added %1 and updated %2 receiver(s) from %3.")
+                                .arg(result.addedCount)
+                                .arg(result.mergedCount)
+                                .arg(QFileInfo(path).fileName()),
+                            QMessageBox::Ok, this);
+            if (!result.errors.isEmpty()) {
+                box.setInformativeText(
+                    QStringLiteral("%1 row(s) could not be imported.")
+                        .arg(result.errors.size()));
+                box.setDetailedText(result.errors.join(QLatin1Char('\n')));
+            }
+            box.exec();
+        });
+        kiwiTransferRow->addWidget(kiwiImportBtn);
+
+        auto* kiwiExportBtn = new QPushButton("Export...");
+        kiwiExportBtn->setObjectName(QStringLiteral("kiwiExportButton"));
+        kiwiExportBtn->setAccessibleName("Export KiwiSDR receivers");
+        kiwiExportBtn->setAccessibleDescription(
+            "Export the saved KiwiSDR receivers to a CSV file. Passwords "
+            "are not included.");
+        styleKiwiButton(kiwiExportBtn);
+        connect(kiwiExportBtn, &QPushButton::clicked, this,
+                [this, kiwiTransferDirectory, rememberKiwiTransferDirectory] {
+            const QString fileName = QStringLiteral("AetherSDR_KiwiSDR_Receivers_%1.csv")
+                                         .arg(QDateTime::currentDateTime().toString(
+                                             QStringLiteral("yyyyMMdd_HHmmss")));
+            QFileDialog dialog(this, QStringLiteral("Export KiwiSDR Receivers"),
+                               QDir(kiwiTransferDirectory()).filePath(fileName),
+                               QStringLiteral("CSV Files (*.csv)"));
+            dialog.setAcceptMode(QFileDialog::AcceptSave);
+            dialog.setDefaultSuffix(QStringLiteral("csv"));
+            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+                return;
+            }
+            const QString path = dialog.selectedFiles().first();
+            rememberKiwiTransferDirectory(path);
+
+            const KiwiSdrCsvExportResult result = m_kiwiSdrManager->exportToFile(path);
+            if (!result.ok()) {
+                QMessageBox::warning(this, QStringLiteral("Export KiwiSDR Receivers"),
+                                     result.error);
+                return;
+            }
+            QMessageBox::information(
+                this, QStringLiteral("Export KiwiSDR Receivers"),
+                QStringLiteral("Exported %1 receiver(s) to %2. Passwords are not "
+                               "included; re-enter them after importing elsewhere.")
+                    .arg(result.exportedCount)
+                    .arg(QFileInfo(path).fileName()));
+        });
+        kiwiTransferRow->addWidget(kiwiExportBtn);
+        kiwiLayout->addLayout(kiwiTransferRow);
     }
 
     (*refresh)();

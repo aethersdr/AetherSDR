@@ -124,6 +124,10 @@ private:
     QList<Pill> m_pills;
     bool m_isLoading{false};
 
+    QLabel*    m_rotaryLabel{nullptr};
+    QComboBox* m_rotaryCombo{nullptr};
+    QLabel*    m_singleTapLabel{nullptr};
+
     QLabel* m_statusLabel{nullptr};
     QLabel* m_lastEventLabel{nullptr};
     QPushButton* m_resetBtn{nullptr};
@@ -134,4 +138,3 @@ private:
 };
 
 } // namespace AetherSDR
-

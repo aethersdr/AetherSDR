@@ -3,8 +3,10 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <cmath>
 #include <complex>
 #include <memory>
+#include <numbers>
 #include <vector>
 
 #include "core/backends/hl2/Hl2Spectrum.h"
@@ -115,6 +117,91 @@ public:
         return m_channel ? m_channel->channelIdForTest() : -1;
     }
 
+    // Demodulated-audio DC blocker, one pole per channel.
+    //
+    // WDSP's AM/SAM detector is an ENVELOPE detector — amd.c emits
+    // sqrt(I^2 + Q^2), which is strictly non-negative — so the carrier arrives
+    // as a DC pedestal. Nothing upstream removes it:
+    //
+    //   * `levelfade` (ON by default, RXA.c) computes
+    //     `audio += dc_insert - dc` from an 8 Hz-corner and a 0.11 Hz-corner
+    //     average. That cancels FADING and deliberately holds the pedestal at
+    //     the long-term carrier level; it is not a DC blocker.
+    //   * The AM/SAM passband is symmetric about the carrier ({-4000, +4000}
+    //     in Hl2Backend::defaultPassbandForMode) because both detectors need
+    //     it that way, which puts 0 Hz mid-band.
+    //
+    // Left in, the pedestal eats output headroom and skews every
+    // zero-referenced consumer downstream — the WAVE applet draws `peak` and
+    // `rms`, both magnitudes, mirrored about a hard centreline, so a DC-shifted
+    // trace renders as a second inverted phantom copy of itself in the lower
+    // half.
+    //
+    // SCOPE: this runs on WdspChannel's OUTPUT, downstream of the whole RXA
+    // chain, so it fixes the audio we deliver but NOT what WDSP itself saw.
+    // wcpAGC sits after amd INSIDE RXA and still rides the pedestal; correcting
+    // that would need DC removal between the two, which WDSP exposes no hook
+    // for. Turning `levelfade` off does not help either — it only stops the
+    // fade correction, leaving sqrt(I^2+Q^2) just as non-negative.
+    //
+    // WHY HERE AND NOT IN WdspChannel: the root cause is amd's envelope
+    // detector, which belongs to WDSP, so a blocker on WdspChannel's own RX
+    // output would fix it once for every future consumer instead of per caller.
+    // Hl2RxDsp is the only WDSP RECEIVE consumer in the tree today — Hl2TxDsp is
+    // the one other user and is transmit-only — so per-caller costs nothing yet.
+    // It does mean the next WDSP RX path added will NOT inherit this: whoever
+    // adds one should push the blocker down into WdspChannel rather than repeat
+    // it here.
+    //
+    // Applied to EVERY mode rather than switched on for AM/SAM: SSB, CW and
+    // the digital modes are already zero-mean so it is a no-op there, FM wants
+    // it for the same reason AM does, and an unconditional filter has no
+    // mode-change state that can be got wrong.
+    //
+    // Public, with the pole helper below, so hl2_am_dcblock_test can pin the
+    // unconfigured bypass and the rate-dependent corner directly. Neither is
+    // reachable through configure(), which only ever hands it a valid rate.
+    struct DcBlocker {
+        float r = 0.0f;    // pole radius, set by configure(); <= 0 bypasses
+        float x1 = 0.0f;
+        float y1 = 0.0f;
+
+        [[nodiscard]] float process(float x) noexcept
+        {
+            // Bypass rather than filter when unconfigured. `y = x - x1 + r*y1`
+            // at r = 0 is a DIFFERENTIATOR, not a passthrough, so a missed
+            // configure() would otherwise gut the low end of the audio.
+            if (!(r > 0.0f))
+                return x;
+            float y = x - x1 + r * y1;
+            // Flush to zero. During silence y1 decays geometrically toward
+            // denormal, and denormal arithmetic is punitively slow on x86.
+            if (!(std::fabs(y) > 1e-20f))
+                y = 0.0f;
+            x1 = x;
+            y1 = y;
+            return y;
+        }
+
+        void reset() noexcept { x1 = 0.0f; y1 = 0.0f; }
+    };
+
+    // -3 dB corner, Hz. Well below the 100 Hz that even a wide AM passband
+    // carries as audio, and far below the CW pitch, so it removes the pedestal
+    // without touching program material.
+    static constexpr double kDcBlockerCornerHz = 20.0;
+
+    // Pole radius placing DcBlocker's -3 dB corner at `cornerHz`. Split out of
+    // configure() so the corner can be asserted at more than one audio rate:
+    // hardcoding the pole for one rate leaves the filter working and the corner
+    // silently wrong, which no end-to-end DC measurement notices.
+    [[nodiscard]] static float dcBlockerPole(double cornerHz,
+                                             double sampleRateHz) noexcept
+    {
+        return static_cast<float>(
+            std::exp(-2.0 * std::numbers::pi * cornerHz / sampleRateHz));
+    }
+
 public slots:
     // Feed one IQ block (normalized complex<float>). Emits spectrumReady per FFT
     // frame and audioReady/meterUpdate per completed WdspChannel block.
@@ -148,6 +235,9 @@ private:
     std::vector<std::complex<float>> m_conjugated;
     std::vector<float> m_i, m_q;                    // deinterleaved input scratch
     std::vector<float> m_left, m_right;             // WdspChannel output scratch
+    // Applied to m_left/m_right on the way into m_stereo. See DcBlocker above
+    // for why AM/SAM need it, and for what it deliberately does not fix.
+    DcBlocker m_dcBlockL, m_dcBlockR;
     std::vector<float> m_stereo;                    // interleaved audio out
     std::vector<float> m_bins;                      // spectrum scratch
 };

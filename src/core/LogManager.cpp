@@ -69,7 +69,20 @@ LogManager::LogManager()
         {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
         {"aether.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},
         {"aether.smartlink",  "SmartLink",    "Auth0 login, TLS tunnel, WAN streaming"},
-        {"aether.cat",        "CAT/rigctld",  "rigctld TCP servers, PTY virtual serial ports"},
+        // Label leads with TCI because TciServer.cpp owns the large majority of
+        // this category's call sites — 53 of 76 as of #4750, with CatPort.cpp
+        // next at 15 and the rest scattered. The old "CAT/rigctld" label named
+        // only the minority user, so someone chasing a TCI problem scanned the
+        // checkbox list, saw nothing about TCI, and concluded AetherSDR had no
+        // TCI logging to turn on. It has more than any other rig-control
+        // surface; it was just filed under another name. Deliberately NOT split
+        // into a new aether.tci category: the id is what filter rules and saved
+        // settings key off, so renaming it would silently drop every user's
+        // existing preference for this category, and the two surfaces genuinely
+        // share the rig-control plumbing that the qCInfo lines report on.
+        // The description names the TX-summary fields (blocks/peak/rms/clips)
+        // because those are the tokens an operator greps a support log for.
+        {"aether.cat",        "TCI / CAT / rigctld",  "TCI server (slice and DAX arming, TX audio summary: blocks, peak, rms, clips), rigctld TCP servers, PTY virtual serial ports"},
         {"aether.dax",        "DAX",          "Virtual audio bridge (PipeWire/CoreAudio)"},
         {"aether.meters",     "Meters",       "Meter definitions and value conversion"},
         {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},

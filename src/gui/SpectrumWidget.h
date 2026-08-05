@@ -1951,8 +1951,8 @@ private:
     // perspective grid samples it in dss_mesh.vert. Geometry never rebuilds,
     // so pan/zoom are free. Falls back to the cached-image quad above when the
     // pipeline can't be created.
-    QRhiGraphicsPipeline* m_dssMeshFillPipeline{nullptr};  // Triangles, opaque
-    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // AA ribbon triangles
+    QRhiGraphicsPipeline* m_dssMeshFillPipeline{nullptr};  // alpha-blended triangles; outlines on OpenGL
+    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // dedicated ribbon triangles; null on OpenGL
     QRhiShaderResourceBindings* m_dssMeshSrb{nullptr};
     QRhiBuffer* m_dssMeshVbo{nullptr};       // batched curtain triangles, static
     QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge ribbons, static
@@ -1973,6 +1973,8 @@ private:
     QRhiSampler* m_dssHeightSampler{nullptr};
     QRhiSampler* m_dssPaletteSampler{nullptr};
     bool m_dssMeshReady{false};
+    DssOutlinePipelineMode m_dssOutlinePipelineMode{
+        DssOutlinePipelineMode::DedicatedRibbonPipeline};
     int  m_dssMeshHeadUploaded{-1};          // ring head last uploaded to heightTex
     quint64 m_dssMeshRowGenUploaded{~0ull};  // DssRenderer rowGeneration uploaded
     quint64 m_dssLutToken{~0ull};            // token of the palette LUT last baked

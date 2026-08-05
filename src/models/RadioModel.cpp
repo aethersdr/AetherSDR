@@ -538,6 +538,24 @@ void RadioModel::setupBackend(const QString& family)
     // connection made here has the backend (or a backend-owned object) as sender
     // or receiver, so destroying the old backend in teardownBackend() removes
     // them all automatically and re-running cannot duplicate them.
+    //
+    // That is a RULE for anything added here, not an observation. Qt drops a
+    // connection only when one of its two objects dies, so a connection whose
+    // sender AND receiver both outlive the backend — `this` on both ends, or a
+    // RadioModel value member such as m_transmitModel as sender — is invisible
+    // to teardownBackend() and gains one live copy per family switch (#4599).
+    // Those belong in the constructor's model-lifetime block instead, even when
+    // the lambda body talks to m_backend: re-reading m_backend and m_family at
+    // call time is exactly what makes a once-installed callback correct across
+    // a swap.
+    //
+    // One carve-out, already below: the per-slice intents wired inside the
+    // sliceChanged handler name a SliceModel as sender, and that is a RadioModel
+    // child, so teardownBackend() does not drop those either. They are still
+    // right here — each connect runs once per slice CREATION (guarded on !s),
+    // and dropAllSessionModelsForFamilySwitch() deletes every slice before the
+    // swap. What the rule is really about is a sender that lives as long as the
+    // RadioModel: `this`, or a value member such as m_transmitModel.
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
 
     {
@@ -849,32 +867,6 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
             [this](int index) { m_meterModel.removeMeter(index); });
 
-    // RF power to a backend that owns a drive register. Flex takes it as a text
-    // command from TransmitModel and ignores this.
-    connect(&m_transmitModel, &TransmitModel::rfPowerChanged, this,
-            [this](int percent) {
-        if (m_backend)
-            m_backend->setTxPower(percent);
-    });
-    // The speech processor to a backend that owns its own compressor.
-    //
-    // OPERATOR INTENT ONLY — speechProcessorCommandIssued, never micStateChanged.
-    // The distinction is the one TransmitModel documents at the declaration: a
-    // state-mirroring signal would hand the radio's own echo back as a fresh
-    // command. Flex takes this as text and ignores the seam; a host-modulating
-    // backend runs the compressor in our DSP and also ignores it.
-    connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
-            [this](bool on, int level) {
-        if (m_backend && !m_flexBackend)
-            m_backend->setSpeechProcessor(on, level);
-    });
-
-    // Tell the transmit model whether the HOST modulates. It drives the
-    // mic-source list: a backend that modulates here has no physical input jacks
-    // to choose between, so "PC" is the only truthful answer.
-    connect(this, &RadioModel::connectionStateChanged, this,
-            [this](bool connected) { publishCapabilities(connected); });
-
     // A backend may revise its own capabilities mid-session (SimBackend does so
     // on connect; a Flex refines its seeded table as touchpoints convert), and
     // until now nothing above the seam listened — connectionStateChanged was the
@@ -903,70 +895,6 @@ void RadioModel::setupBackend(const QString& family)
     // the last tune before Disconnect was exactly the state being lost).
     connect(m_backend.get(), &IRadioBackend::disconnected, this,
             &RadioModel::flushPendingOperatingState);
-
-    // Keying and tune from the GUI.
-    //
-    // These paths never reached a non-Flex backend: the MOX button goes through
-    // TransmitModel::setMox, which emits the Flex text command "xmit 1" and
-    // nothing else, and TUNE emits "transmit tune 1" the same way. Only the
-    // automation bridge's key verb went through setTransmit() and therefore
-    // through the seam — which is exactly why keying worked under test and did
-    // nothing when the operator pressed MOX.
-    //
-    // Gated to non-Flex families ON PURPOSE: for Flex the text command above
-    // already keys the radio, and routing this as well would send "xmit 1"
-    // twice.
-    connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
-            [this](bool on) {
-        if (m_backend && m_family != QLatin1String("flex")) {
-            if (on && !refuseKeyOnTransmitIncapableBackend())
-                return;
-            m_backend->setKeying(on);
-            // The MOX button and the PTT coordinator key here, NOT through
-            // setTransmit(), so the raw-TX edge has to be published on this path
-            // too — otherwise a TCI client watching an operator-initiated
-            // transmit sees nothing. See publishBackendTransmitEdge().
-            publishBackendTransmitEdge(on);
-        }
-    });
-    connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
-            [this](bool on) {
-        if (m_backend && m_family != QLatin1String("flex")) {
-            if (on && !refuseKeyOnTransmitIncapableBackend()) {
-                // Un-latch TUNE as well. m_tune was already set optimistically
-                // (TransmitModel::startTune), and the button's toggle reads it,
-                // so leaving it set would strand TUNE "on" against a radio that
-                // never keyed. The re-entry through this same slot carries
-                // on=false and so skips the guard.
-                m_transmitModel.stopTune();
-                return;
-            }
-            // Hand the backend the operator's TUNE power. A host-modulated
-            // backend has no other path to it — see IRadioBackend::setTune().
-            m_backend->setTune(on, m_transmitModel.tunePower());
-            // A tune carrier is a transmission. Hl2Backend::setTune() calls
-            // setKeying(), so the radio is on the air — the raw-TX edge has to
-            // be published here for the same reason it is on the MOX path, and
-            // for one more that is specific to tune: TciServer's
-            // "already transmitting" guard reads isRadioTransmitting(), so
-            // leaving it false let a TCI client key ON TOP of a live tune
-            // carrier, and that client's unkey then dropped the key while tune
-            // still believed it owned it. A TCI-driven amplifier also never saw
-            // trx:true for the carrier operators most often tune INTO an amp.
-            publishBackendTransmitEdge(on);
-        }
-    });
-
-    // Push the CURRENT power on connect, not only on change. rfPowerChanged
-    // fires on edges, so a session that never touches the control left the
-    // radio at whatever its own default was — on the HL2 that is drive 0, which
-    // also leaves the PA disabled, so a perfectly correct keyed transmission
-    // produced no RF at all. Measured: forward-power counts stuck at zero.
-    connect(this, &RadioModel::connectionStateChanged, this,
-            [this](bool connected) {
-        if (connected && m_backend)
-            m_backend->setTxPower(m_transmitModel.rfPower());
-    });
 
     // Meter VALUES from a backend that decodes its own telemetry.
     //
@@ -1610,6 +1538,120 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
 
+    // ── Model-lifetime wiring ───────────────────────────────────────────────
+    //
+    // Every connection in THIS BLOCK (down to the aetherd RFC 2.2b note) has
+    // RadioModel on BOTH ends: `this` as receiver, and as sender either `this`
+    // or a RadioModel value member. The rest of the constructor is ordinary
+    // model wiring and carries no such claim. Nothing here
+    // dies with the backend, so nothing here may live in the rerunnable
+    // setupBackend() — installed there, these survived teardownBackend() and
+    // accumulated one live copy per family switch for the rest of the session
+    // (#4599). They follow whichever backend is current all the same, because
+    // each lambda re-reads m_backend / m_family at call time.
+    //
+    // Installed BEFORE the first setupBackend() below so no connection edge can
+    // ever precede its own callback. Nothing emits during setupBackend() today;
+    // this makes that a property of the code rather than of an audit.
+
+    // Tell the transmit model whether the HOST modulates. It drives the
+    // mic-source list: a backend that modulates here has no physical input jacks
+    // to choose between, so "PC" is the only truthful answer.
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) { publishCapabilities(connected); });
+
+    // Push the CURRENT power on connect, not only on change. rfPowerChanged
+    // fires on edges, so a session that never touches the control left the
+    // radio at whatever its own default was — on the HL2 that is drive 0, which
+    // also leaves the PA disabled, so a perfectly correct keyed transmission
+    // produced no RF at all. Measured: forward-power counts stuck at zero.
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) {
+        if (connected && m_backend) {
+            m_backend->setTxPower(m_transmitModel.rfPower());
+        }
+    });
+
+    // RF power to a backend that owns a drive register. Flex takes it as a text
+    // command from TransmitModel and ignores this.
+    connect(&m_transmitModel, &TransmitModel::rfPowerChanged, this,
+            [this](int percent) {
+        if (m_backend)
+            m_backend->setTxPower(percent);
+    });
+
+    // The speech processor to a backend that owns its own compressor.
+    //
+    // HERE, not in setupBackend(): m_transmitModel is a RadioModel value member,
+    // so this connection outlives every backend and installing it in the
+    // rerunnable path would accumulate one live copy per family switch — the
+    // exact defect #4599 fixed, where N switches turn one operator press into N
+    // commands.
+    //
+    // OPERATOR INTENT ONLY — speechProcessorCommandIssued, never micStateChanged.
+    // The distinction is the one TransmitModel documents at the declaration: a
+    // state-mirroring signal would hand the radio's own echo back as a fresh
+    // command. Flex takes this as text and ignores the seam; a host-modulating
+    // backend runs the compressor in our DSP and also ignores it.
+    connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
+            [this](bool on, int level) {
+        if (m_backend && !m_flexBackend)
+            m_backend->setSpeechProcessor(on, level);
+    });
+
+    // Keying and tune from the GUI.
+    //
+    // These paths never reached a non-Flex backend: the MOX button goes through
+    // TransmitModel::setMox, which emits the Flex text command "xmit 1" and
+    // nothing else, and TUNE emits "transmit tune 1" the same way. Only the
+    // automation bridge's key verb went through setTransmit() and therefore
+    // through the seam — which is exactly why keying worked under test and did
+    // nothing when the operator pressed MOX.
+    //
+    // Gated to non-Flex families ON PURPOSE: for Flex the text command above
+    // already keys the radio, and routing this as well would send "xmit 1"
+    // twice.
+    connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
+            [this](bool on) {
+        if (m_backend && m_family != QLatin1String("flex")) {
+            if (on && !refuseKeyOnTransmitIncapableBackend())
+                return;
+            m_backend->setKeying(on);
+            // The MOX button and the PTT coordinator key here, NOT through
+            // setTransmit(), so the raw-TX edge has to be published on this path
+            // too — otherwise a TCI client watching an operator-initiated
+            // transmit sees nothing. See publishBackendTransmitEdge().
+            publishBackendTransmitEdge(on);
+        }
+    });
+    connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
+            [this](bool on) {
+        if (m_backend && m_family != QLatin1String("flex")) {
+            if (on && !refuseKeyOnTransmitIncapableBackend()) {
+                // Un-latch TUNE as well. m_tune was already set optimistically
+                // (TransmitModel::startTune), and the button's toggle reads it,
+                // so leaving it set would strand TUNE "on" against a radio that
+                // never keyed. The re-entry through this same slot carries
+                // on=false and so skips the guard.
+                m_transmitModel.stopTune();
+                return;
+            }
+            // Hand the backend the operator's TUNE power. A host-modulated
+            // backend has no other path to it — see IRadioBackend::setTune().
+            m_backend->setTune(on, m_transmitModel.tunePower());
+            // A tune carrier is a transmission. Hl2Backend::setTune() calls
+            // setKeying(), so the radio is on the air — the raw-TX edge has to
+            // be published here for the same reason it is on the MOX path, and
+            // for one more that is specific to tune: TciServer's
+            // "already transmitting" guard reads isRadioTransmitting(), so
+            // leaving it false let a TCI client key ON TOP of a live tune
+            // carrier, and that client's unkey then dropped the key while tune
+            // still believed it owned it. A TCI-driven amplifier also never saw
+            // trx:true for the carrier operators most often tune INTO an amp.
+            publishBackendTransmitEdge(on);
+        }
+    });
+
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
     // FlexBackend creates the RadioConnection and PanadapterStream on their
     // worker threads (in the load-bearing #502 order — panStream first) and
@@ -1617,8 +1659,10 @@ RadioModel::RadioModel(QObject* parent)
     // all the signal wiring and command/WAN orchestration below is byte-for-byte
     // as before — the move is ownership-only.
     //
-    // Note: the threads now start here (as the ctor's first statement) rather
-    // than adjacent to their signal wiring below. Safe because RadioConnection::
+    // Note: the threads start at THIS call rather than adjacent to their signal
+    // wiring below. (It used to be the ctor's first statement; the model-lifetime
+    // block above and the DV/meter wiring before it now precede it, and none of
+    // that touches the wire.) Safe because RadioConnection::
     // init()/PanadapterStream::init() only allocate sockets/timers and neither
     // auto-connects nor emits — so there is no lost-signal window before our
     // statusReceived/etc. connections are made. Keep that true if init() grows.
@@ -3273,6 +3317,22 @@ bool RadioModel::hasRadioSideWaterfallAutoBlack() const
         return true;   // nothing attached — assume present, see the header
     }
     return backendCapabilities().hasRadioSideWaterfallAutoBlack;
+}
+
+bool RadioModel::hasRadioSideCwKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasRadioSideCwKeyer;
+}
+
+bool RadioModel::hasVoiceKeyer() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasVoiceKeyer;
 }
 
 bool RadioModel::hasDaxStreams() const

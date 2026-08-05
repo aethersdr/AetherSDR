@@ -36,6 +36,10 @@ namespace AetherSDR {
 //     bin/, which the loader searches via LOAD_WITH_ALTERED_SEARCH_PATH (so no
 //     symlink step). Hosting the slim AFX zip keeps it a ~33 MB release asset.
 namespace {
+// Stall timeout for the AFX pack manifest and archive downloads (#4688 §6).
+// 30 s rather than 15: the archive is large and this clock resets on every
+// byte, so it only fires on a genuinely dead transfer.
+constexpr int kTransferTimeoutMs = 30000;
 #if defined(_WIN32)
 constexpr char kCoreRelPath[] = "bin/NVAudioEffects.dll";
 constexpr char kPlatformTag[] = "windows-x86_64";
@@ -319,7 +323,10 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 NvidiaAfxPack::NvidiaAfxPack(QObject* parent)
-    : QObject(parent), m_nam(new QNetworkAccessManager(this)) {}
+    : QObject(parent), m_nam(new QNetworkAccessManager(this))
+{
+    m_nam->setTransferTimeout(kTransferTimeoutMs);
+}
 
 NvidiaAfxPack::~NvidiaAfxPack() { cancel(); }
 

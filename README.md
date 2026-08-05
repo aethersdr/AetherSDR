@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.7.4.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.8.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -32,7 +32,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, and FreeDV Reporter spots with auto-mode switch
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key & iambic paddles with full QSK, optional Quindar tones
-- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence color-coding; CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, and an optional remote OpenAI-compatible endpoint (see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md))
+- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence color-coding; CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, and an optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — it would force a macOS 15.5 floor on hardware that mostly cannot reach it (see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md))
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
 - **Broad hardware control** — rigctld + virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
@@ -117,6 +117,8 @@ it on Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch. It does **not** clear
 on **Ubuntu 24.04 LTS**, which ships Qt 6.4.2 — build there against a Qt from
 [aqtinstall](https://github.com/miurahr/aqtinstall) or the Qt online installer
 and point CMake at it with `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64`.
+On **macOS** the Qt does not come from Homebrew at all — see the macOS note
+below the install commands.
 
 ```bash
 # Arch / CachyOS / Manjaro
@@ -139,10 +141,45 @@ sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-deve
   cmake ninja-build autoconf automake libtool \
   fftw3-devel portaudio-devel hidapi-devel qtkeychain-qt6-devel
 
-# macOS (Homebrew)
-brew install qt@6 ninja cmake pkgconf autoconf automake libtool \
-  fftw portaudio hidapi qtkeychain
+# macOS (Homebrew) — everything EXCEPT Qt and qtkeychain; see the note below
+brew install ninja cmake pkgconf autoconf automake libtool \
+  fftw portaudio hidapi
 ```
+
+> **macOS note — Qt and qtkeychain do not come from Homebrew.** Homebrew's `qt`
+> formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.1 at the time
+> of writing — while the DMG ships 6.8.3 LTS like every other artifact. Building
+> against Homebrew's Qt means testing a Qt no release ships. Install the matching
+> one and point CMake at it:
+>
+> ```bash
+> # A venv rather than a bare `pip install`: a PEP 668 python3 refuses the latter.
+> python3 -m venv ~/.venv/aqt && ~/.venv/aqt/bin/pip install aqtinstall
+> ~/.venv/aqt/bin/aqt install-qt mac desktop 6.8.3 clang_64 \
+>   -m qtmultimedia qtwebsockets qtserialport qtshadertools \
+>   --outputdir ~/Qt
+> cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos;$(brew --prefix)"
+> ```
+>
+> `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
+> there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
+> path for fftw, portaudio and hidapi.
+>
+> Homebrew's `qtkeychain` is left out for a related reason: the formula depends
+> on `qtbase`, so installing it pulls a second Qt in behind your back. Build it
+> against the Qt you just installed instead — or skip it and build without
+> SmartLink credential persistence:
+>
+> ```bash
+> CMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos" bash scripts/setup/setup-qtkeychain.sh
+> ```
+>
+> **Two Qt installations visible to CMake at once is a real failure, not a
+> theoretical one** — it is what #711 and #812 were, and `CMakeLists.txt` puts
+> `$(brew --prefix)/include` on the global include path on macOS, so a Homebrew
+> Qt is discoverable whether or not you asked for it. If you have one,
+> `brew uninstall qt` (plus whatever pulled it in) before building. The release
+> workflow asserts this; your machine will not.
 
 <details>
 <summary>What each dependency enables</summary>
@@ -291,11 +328,16 @@ Currently in flight:
   lives behind a stable interface. Three backends ride it today (Flex, HL2,
   and the demo simulator); the remaining step is the versioned protocol that
   splits a headless engine from thin UI clients.
-- **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam. Not
-  yet a supported radio family: remaining work is wider mode coverage,
-  panadapter parity with the Flex path, and hardening the raw-IQ DSP chain.
-- **AppSettings nested-JSON refactor**, **TX DSP chain visual rebuild**, and
-  the **Flathub submission**.
+- **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam, now
+  running four independent receivers, the SSB voice chain, CW/RTTY decoding,
+  AX.25 packet, band switching with hardware filters, memory channels and
+  per-radio operating-state restore. Not yet a supported radio family:
+  remaining work is wider mode coverage, panadapter parity with the Flex path,
+  and hardening the raw-IQ DSP chain.
+- **AppSettings nested-JSON refactor** — the storage layer moved to SQLite with
+  per-radio versioned feature documents; the remaining work is migrating the
+  legacy flat keys.
+- **TX DSP chain visual rebuild** and the **Flathub submission**.
 
 See [`ROADMAP.md`](ROADMAP.md) for the full picture and the community backlog,
 and the [issue tracker](https://github.com/aethersdr/AetherSDR/issues) for

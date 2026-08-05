@@ -47,6 +47,9 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
 | `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
+| `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar CWX indicator, the CWX panel and its F1-F12 arming, plus every other `cwx` entry point — see below |
+| `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
+| `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar |
@@ -112,6 +115,74 @@ wrong in both directions:
 Both predicates therefore turn on whether the operator has actually moved one of
 the Flex-shaped controls in this process.
 `tests/host_voice_chain_policy_test.cpp` pins the truth table.
+
+### The status-bar row: hidden, not dimmed — and what stays
+
+`CWX`, `DVK` and `FDX` are three labels in the status bar whose entire
+implementation is a verb the radio's firmware executes: `cwx …`, `dvk …`,
+`radio set full_duplex_enabled=`. They pass the `hasRadioSideDsp` test above,
+but each got its own flag rather than riding that one — a family could plausibly
+have a voice keyer without full duplex, and merging them would make the first
+such backend a rewrite.
+
+They are **hidden**, not disabled. A greyed-out control says "not right now";
+these are "not on this radio, ever", and permanently dim labels read as a fault
+the operator can go looking for.
+
+Three things do **not** move with them:
+
+- **ASR (Copy Assist)** sits in the same row and is host-side. `AsrAudioTap`
+  subscribes to `AudioEngine::receivePresentationPostDspAudioReady` and whisper
+  runs on this machine, so it works on every family. Gating it would remove a
+  working control — the `EQ`-applet mistake above, one row over.
+- **TNF**, and its `+TNF` sibling in the pan overlay menu. `tnf create/remove/
+  set` and `sub tnf all` are Flex command-plane verbs, so by the test above TNF
+  looks like a fourth member of this group — and it was written as one before
+  being pulled back out. It stays ungated because the control is about to stop
+  being empty: a host-side notch is landing and these are the surfaces it will
+  drive. Gating it now would mean deleting the control and putting it straight
+  back, which is precisely the round trip the `EQ` applet already made. If that
+  notch does not land, reconsider this — but reconsider it as "is the control
+  still empty", not as "is this a Flex feature".
+- **CW itself.** A radio with `hasRadioSideCwKeyer = false` still transmits CW
+  from a key, a paddle or the host keying path. What it lacks is a text buffer.
+
+The **shortcuts** need the flag too, not just the buttons. The keyer F1-F12 keys
+are `ApplicationShortcut`s that stay armed whether or not their button is on
+screen, so `updateKeyerAvailability()` ANDs both capabilities into the same
+availability that drives the enabled state and the panel auto-hide. Without
+that, an HL2 in CW keeps F1-F12 firing `cwx send` into a backend with no such
+verb.
+
+And the buttons are not the last of it. `cwx` has four entry points that never
+touch the status bar at all, so both keyer capabilities are read through
+`RadioModel::hasRadioSideCwKeyer()` / `hasVoiceKeyer()` — which carry the
+permissive disconnected rule themselves — rather than inline at each site:
+
+| Surface | Where | On a radio that declares false |
+|---|---|---|
+| FlexControl / Ulanzi `CwxF1`..`CwxF12` macro action | `MainWindow::applyFlexControlAction` | Ignored, logged under `aether.cw`. The binding stays assignable — it is operator-scoped and outlives any one radio |
+| MQTT `aethersdr/cw/transmit` | `MainWindow::wireSpotSubsystem` | Ignored, `qCWarning(lcMqtt)` |
+| TCI `cw_msg`, `cw_macros`, `cw_macros_stop` | `TciProtocol` | Ignored, `qCWarning(lcCat)`. Checked inside the queued lambda, on the model's thread — the TCI socket thread must not read `RadioModel` |
+| Automation bridge `cwx send\|speed\|stop` | `AutomationServer::doCwx` | Returns an error rather than `ok:true`, so a caller polling `get_state cwx` has something to blame |
+| rigctl `send_morse` / `b`, `stop_morse` | `RigctlProtocol` | `RPRT -11` (RIG_ENAVAIL) instead of `RPRT 0` — Not1MM/N1MM must not be told a contest exchange went out |
+| SmartCAT (Kenwood) `KY` | `SmartCatProtocol::cmdKY` | `?;` for both set and query; the query would otherwise answer `KY0;` "buffer empty" forever |
+
+The two CAT surfaces read the accessor SYNCHRONOUSLY, on their own socket
+thread — the same direct-read posture those files already take for
+`isConnected()` / `cwxActive()`, and the only way to answer a protocol that
+wants a return code. Only the mutation takes the queued hop to the model thread.
+
+An `ok` for work that never happens is the same defect as a permanently dim
+button, one plane over.
+
+`hasVoiceKeyer` is evaluated **ahead of** `DvkAvailabilityGate`'s SmartSDR+
+entitlement check, and the ordering is load-bearing. That gate fails *open* when
+the entitlement is unknown (#4210 — the radio must say no before the UI does),
+which is right for a Flex mid-handshake and would otherwise leave a live DVK
+button on every radio that never reports a license at all. "Is this radio
+licensed for the feature" is a question only a radio that *has* the feature can
+be asked.
 
 ### What `hasRadioSideWaterfallAutoBlack` must never hide
 

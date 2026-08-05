@@ -171,6 +171,37 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test|hgauge_hover_popup_test" --output-on-failure
 
+      # band_edges_test joins the gate for the reason stated above the meter
+      # tests: it pins a defect that every existing assertion in the tree was
+      # blind to. #4723 shipped a 60m upper edge 1.3 kHz below the top of a
+      # legal channel, so band grouping, the per-band auto-save cap, digital
+      # mode matching and the TX-filter PTT preflight all quietly disagreed
+      # with the FCC allocation, and nothing went red. It is pure arithmetic
+      # over constexpr data — no widgets, no event loop, no wall clock — so it
+      # is deterministic everywhere and gating it on Linux alone is enough.
+      # Runtime is milliseconds and the Build step already compiled it.
+      # bandplan_voice_labels_test rides along for the same reason and reads the
+      # shipped resource rather than a fixture, so a relabel that drops the
+      # emission token out of a 60m segment fails here rather than showing up as
+      # voice markers that quietly never appear.
+      - name: Test band edges and band-plan voice labels
+        run: ctest --test-dir build -R "band_edges_test|bandplan_voice_labels_test" --output-on-failure
+
+      # hl2_am_dcblock_test joins the gate on the same test as the two steps
+      # above — it pins a defect nothing else in the tree could see. The AM/SAM
+      # carrier arrived in the demodulated audio as a DC pedestal 79% past full
+      # scale, and every existing HL2 assertion stayed green through it, because
+      # they all measure things a constant offset does not move. It is an offline
+      # burst feed with blockForOutput, so no wall clock and no event loop, and
+      # it runs in well under a second against a target the Build step already
+      # linked.
+      #
+      # The rest of the HL2 suite is deliberately NOT here: hl2_backend_test and
+      # friends run tens of seconds apiece against timers and sockets, which is
+      # what the weekly full-suite sanitizers job is for.
+      - name: Test HL2 AM/SAM DC blocker
+        run: ctest --test-dir build -R "hl2_am_dcblock_test" --output-on-failure
+
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted
@@ -479,16 +510,103 @@ jobs:
   # Apple Silicon runner only; Intel coverage remains release-time-only.
   check-macos:
     runs-on: macos-15
+
+    # One place each for the two versions this job pins, and for the deployment
+    # target. MACOS_DEPLOYMENT_TARGET is consumed by setup-qtkeychain.sh and
+    # must match macos-dmg.yml's apple-silicon DEPLOY_TARGET: the two jobs share
+    # a qtkeychain cache key, so whichever runs first produces the dylib the
+    # other ships, and a mismatch would put a minos-15 library inside a bundle
+    # that advertises 14.0.
+    env:
+      QT_VERSION: '6.8.3'
+      AQTINSTALL_VERSION: '3.3.0'
+      MACOS_DEPLOYMENT_TARGET: '14.0'
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install dependencies via Homebrew
-        # Mirrors macos-dmg.yml's apple-silicon path.  Homebrew Qt targets
-        # the current OS, which is fine for the arm64 CI check; deployment-
-        # target pinning is a release-time concern handled in macos-dmg.yml.
+        # Mirrors macos-dmg.yml's apple-silicon path — which no longer takes Qt
+        # from Homebrew, so neither does this. Leaving qt@6 here would put the
+        # per-PR macOS check on a rolling Qt (6.11.1 today) while the DMG ships
+        # 6.8.3, i.e. CI green would say nothing about the artifact.
         run: |
-          brew install ninja qt@6 qtkeychain fftw portaudio hidapi \
+          brew install ninja fftw portaudio hidapi \
             autoconf automake libtool
+
+      # ~1.3 GB downloaded on every PR otherwise, and it showed: this job went
+      # from ~6 min to ~18 min the first time it took Qt from aqt.
+      # check-windows gets caching for free from jurplel/install-qt-action; aqt
+      # has no such wrapper, so cache the tree explicitly. Keyed on everything
+      # that changes its contents — the Qt version, the module set, and the aqt
+      # version that resolved them — so the entry is written once and then just
+      # restored, which is what keeps it from churning the repo's 10 GB cache
+      # budget the way a per-run key would.
+      - name: Cache Qt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-qt-mac
+        with:
+          path: ${{ github.workspace }}/Qt
+          key: qt-${{ env.QT_VERSION }}-macos-clang64-aqt${{ env.AQTINSTALL_VERSION }}-mm.ws.sp.st
+
+      - name: Install Qt LTS via aqtinstall
+        if: steps.cache-qt-mac.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          # aqt goes in a venv, and is pinned: it is the tool that decides what
+          # Qt lands here, so an unreviewed aqt upgrade is an unreviewed change
+          # to the Qt the per-PR macOS check builds against — the same argument
+          # this job exists to make about Qt itself. Matches
+          # .github/docker/Dockerfile, which pins for that reason.
+          python3 -m venv "$RUNNER_TEMP/aqtvenv"
+          "$RUNNER_TEMP/aqtvenv/bin/pip" install -q "aqtinstall==${AQTINSTALL_VERSION}"
+          "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
+            -m qtmultimedia qtwebsockets qtserialport qtshadertools \
+            --outputdir "${{ github.workspace }}/Qt"
+
+      # Separate from the install so it also runs on a cache hit.
+      - name: Export Qt environment
+        run: |
+          set -o pipefail
+          QT_ROOT="${{ github.workspace }}/Qt/$QT_VERSION/macos"
+          if [ ! -x "$QT_ROOT/bin/qmake" ]; then
+            echo "ERROR: no qmake at $QT_ROOT — aqt layout changed, or a stale cache entry"
+            ls -la "${{ github.workspace }}/Qt/$QT_VERSION/" || true
+            exit 1
+          fi
+          # CMAKE_PREFIX_PATH matters beyond the Configure step:
+          # setup-qtkeychain.sh locates Qt via CMAKE_PREFIX_PATH, then Qt6_DIR,
+          # then qmake on PATH. Exporting only QT_ROOT would leave it with none
+          # of the three, and it would exit "Qt6 not found" before building.
+          # PATH goes through GITHUB_PATH rather than GITHUB_ENV so it prepends
+          # instead of freezing this step's PATH for every later step.
+          {
+            echo "QT_ROOT=$QT_ROOT"
+            echo "CMAKE_PREFIX_PATH=$QT_ROOT"
+          } >> "$GITHUB_ENV"
+          echo "$QT_ROOT/bin" >> "$GITHUB_PATH"
+          "$QT_ROOT/bin/qmake" -query QT_VERSION
+
+      # Same guard as macos-dmg.yml, same history: #711 removed aqt from macOS
+      # because two discoverable Qt trees produced Qt6GuiPrivate and linker
+      # failures, and #812 hit it again on Intel. The second Qt arrives
+      # transitively — brew's qtkeychain depends on qtbase — so "we didn't
+      # install Qt" is not sufficient. CMAKE_PREFIX_PATH below still includes
+      # $(brew --prefix) for fftw/portaudio/hidapi.
+      - name: Assert no Homebrew Qt is discoverable
+        run: |
+          set -o pipefail
+          if brew list --formula 2>/dev/null | grep -qE '^(qt|qt@[0-9]+|qtbase)$'; then
+            echo "ERROR: a Homebrew Qt is installed alongside the aqt Qt:"
+            brew list --formula | grep -E '^(qt|qt@[0-9]+|qtbase)$'
+            echo "Two discoverable Qt trees is the #711 / #812 failure mode."
+            exit 1
+          fi
+          if [ -f "$(brew --prefix)/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "ERROR: a Qt6 CMake config exists under $(brew --prefix)"
+            exit 1
+          fi
+          echo "No Homebrew Qt present; the aqt tree at $QT_ROOT is the only one."
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -500,6 +618,29 @@ jobs:
       - name: Setup DeepFilterNet3 (DFNR)
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
+
+      - name: Cache qtkeychain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-qtkeychain-mac
+        with:
+          path: third_party/qtkeychain
+          # Deliberately identical to macos-dmg.yml's key: both jobs build the
+          # same source against the same Qt at the same deployment target, so
+          # sharing the entry is the point. That makes every input that changes
+          # the dylib part of the key — Qt version, deployment target, script
+          # hash — because this job runs on push:main and default-branch caches
+          # are visible to every ref, so the entry the *tag* build restores is
+          # normally the one this job wrote.
+          key: qtkeychain-macos-arm64-qt${{ env.QT_VERSION }}-deploy${{ env.MACOS_DEPLOYMENT_TARGET }}-${{ hashFiles('scripts/setup/setup-qtkeychain.sh') }}
+
+      # Dropping Homebrew's qtkeychain along with its Qt would have quietly
+      # removed credential-persistence compile coverage from every PR, since
+      # find_package(Qt6Keychain QUIET) just compiles it out — the #3639 shape.
+      # Build it from source against the same aqt Qt the DMG uses, and pair it
+      # with REQUIRE_KEYCHAIN=ON at configure so a regression is a red run.
+      - name: Setup qtkeychain (SmartLink credential persistence)
+        if: steps.cache-qtkeychain-mac.outputs.cache-hit != 'true'
+        run: bash scripts/setup/setup-qtkeychain.sh
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03
@@ -529,13 +670,19 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix)" \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT;$(brew --prefix)" \
             -DAETHER_GPU_SPECTRUM=ON \
+            -DREQUIRE_KEYCHAIN=ON \
             -DMQTT_TLS=OFF 2>&1 | tee configure.log
 
       # Same guard as the Linux build job above. -iE rather than the -i "a\|b"
       # form: this runs on the macOS runner's BSD grep, which has no BRE
       # alternation and would search for the literal "a|b".
+      #
+      # This assertion is the one that caught the aqt Qt having no Qt6GuiPrivate
+      # CMake package where Homebrew's had one — see the CMakeLists.txt macOS
+      # framework-layout probe. Homebrew Qt was carrying this leg; the pin
+      # exposed that, which is exactly what a guard is for.
       - name: Assert GPU spectrum rendering actually enabled
         run: |
           grep -q "GPU spectrum rendering enabled" configure.log || {

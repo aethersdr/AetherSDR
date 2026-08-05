@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-qtkeychain.sh — Build qtkeychain for Linux release packaging.
+# setup-qtkeychain.sh — Build qtkeychain for Linux and macOS release packaging.
 #
 # Downloads the qtkeychain source, builds it from source against the Qt6
 # installation in use (aqt-provided or system), and installs it into
@@ -17,9 +17,19 @@
 # LIBSECRET_SUPPORT is OFF on purpose: that selects qtkeychain's pure
 # Qt-D-Bus Secret Service backend, which talks to KDE Wallet (kwalletd) and
 # GNOME Keyring over the session bus with no extra native runtime deps to
-# bundle — only Qt6 D-Bus, which linuxdeploy already carries.
+# bundle — only Qt6 D-Bus, which linuxdeploy already carries. It has no effect
+# on macOS, where qtkeychain always uses the native Keychain backend.
 #
 # Requires: cmake, ninja, a C++ compiler, git, and a discoverable Qt6.
+#
+# MACOS_DEPLOYMENT_TARGET (optional, macOS only) must be set to the SAME value
+# the app is built with. CMake otherwise leaves CMAKE_OSX_DEPLOYMENT_TARGET
+# empty and clang stamps the *runner's* OS into LC_BUILD_VERSION — a dylib with
+# minos 15.0 inside a bundle that advertises 14.0, which dyld refuses to load on
+# macOS 14. The library is copied into Contents/Frameworks (CMakeLists.txt,
+# APPLE branch of the Qt6Keychain block), so it ships with that stamp. The flag
+# is built into QTKEYCHAIN_OSX_TARGET below and passed only on Darwin with the
+# variable set, so Linux is left exactly as it was.
 #
 # Usage: ./setup-qtkeychain.sh
 
@@ -33,8 +43,14 @@ QTKEYCHAIN_COMMIT="aa6da344e1a20b9194e12bace3665caeea6b6304"
 OUT_DIR="third_party/qtkeychain"
 
 # ── Already set up? (lets CI cache third_party/qtkeychain) ───────────────
-if [ -f "$OUT_DIR/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" ]; then
-    echo "qtkeychain already set up in $OUT_DIR"
+# The stamp carries the deployment target as well, so switching targets rebuilds
+# instead of reusing a dylib built for a different floor — the reuse would be
+# invisible until the DMG failed to launch on the older OS.
+STAMP="$OUT_DIR/.build-stamp"
+STAMP_CONTENT="version=$QTKEYCHAIN_VERSION target=${MACOS_DEPLOYMENT_TARGET:-host}"
+if [ -f "$OUT_DIR/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" ] &&
+   [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$STAMP_CONTENT" ]; then
+    echo "qtkeychain already set up in $OUT_DIR ($STAMP_CONTENT)"
     exit 0
 fi
 
@@ -76,9 +92,41 @@ fi
 echo "Verified qtkeychain commit $QTKEYCHAIN_COMMIT"
 
 # ── Build + install ──────────────────────────────────────────────────────
+# On macOS the deployment target has to be passed through, not left to default.
+# Without it clang targets the BUILD HOST, so a macos-15 runner produces a dylib
+# with LC_BUILD_VERSION minos 15.0 — and since CMakeLists.txt copies
+# libqt6keychain.1.dylib into Contents/Frameworks, dyld then refuses to load it
+# on anything older and the app dies at launch rather than degrading. The bundle
+# floor is the MAX minos across everything staged, so one unpinned dependency
+# silently overrides the deployment target of the whole DMG. Same reasoning as
+# scripts/setup/setup-macos-deps.sh; asserted after macdeployqt by
+# scripts/build/assert-macos-bundle.sh.
+# Warn rather than fail when it is unset: a developer building locally wants the
+# host default and has no bundle to break. The release path always sets it, and
+# assert-macos-bundle.sh fails the DMG if it ever stops doing so — so the check
+# that matters is downstream, and this stays usable off CI.
+#
+# Expand it as ${arr[@]+"${arr[@]}"} below, never plain "${arr[@]}": macOS ships
+# bash 3.2, where expanding an EMPTY array under `set -u` is an unbound-variable
+# error. That is the same trap that killed setup-macos-deps.sh four seconds into
+# the DMG build, and the empty case here is the branch this comment is about —
+# the local developer who has not set the variable would get the crash instead
+# of the warning.
+QTKEYCHAIN_OSX_TARGET=()
+if [ "$(uname -s)" = "Darwin" ]; then
+    if [ -n "${MACOS_DEPLOYMENT_TARGET:-}" ]; then
+        QTKEYCHAIN_OSX_TARGET=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET")
+        echo "Targeting macOS $MACOS_DEPLOYMENT_TARGET"
+    else
+        echo "WARNING: MACOS_DEPLOYMENT_TARGET is unset — qtkeychain will inherit this" >&2
+        echo "         host's macOS version. Fine locally; NOT fine for a release DMG." >&2
+    fi
+fi
+
 echo "Building qtkeychain $QTKEYCHAIN_VERSION from source..."
 cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    ${QTKEYCHAIN_OSX_TARGET[@]+"${QTKEYCHAIN_OSX_TARGET[@]}"} \
     -DBUILD_WITH_QT6=ON \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_TRANSLATIONS=OFF \
@@ -86,11 +134,18 @@ cmake -B "$BUILD_DIR" -S "$SRC_DIR" -G Ninja \
     -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
     -DCMAKE_INSTALL_PREFIX="$OUT_DIR_ABS" \
     -DCMAKE_INSTALL_LIBDIR=lib
-cmake --build "$BUILD_DIR" -j"$(nproc)"
+# nproc is GNU coreutils and absent on macOS, where this script now also runs
+# (the Apple Silicon DMG builds qtkeychain against its aqt Qt for the same ABI
+# reason as Linux). sysctl is the BSD equivalent. Fall back to 1 rather than
+# letting the substitution come out empty — a bare `-j` means "unlimited" and
+# would fork-bomb the runner.
+JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
+cmake --build "$BUILD_DIR" -j"$JOBS"
 cmake --install "$BUILD_DIR"
 
 # ── Cleanup ──────────────────────────────────────────────────────────────
 rm -rf "$SRC_DIR" "$BUILD_DIR"
+echo "$STAMP_CONTENT" > "$STAMP"
 
 echo "qtkeychain ready in $OUT_DIR_ABS"
 echo "  cmake config: $OUT_DIR_ABS/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake"

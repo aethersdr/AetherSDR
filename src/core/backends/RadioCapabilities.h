@@ -242,6 +242,65 @@ struct RadioCapabilities {
     // it is the only automatic floor the operator has.
     bool hasRadioSideWaterfallAutoBlack = false;
 
+    // NO hasTrackingNotchFilters HERE, deliberately. TNF looks like it belongs
+    // beside the three below — TnfModel's whole surface is `tnf create/remove/
+    // set` and `sub tnf all`, so it passes the "does the control only emit a
+    // verb the firmware executes" test the same way they do.
+    //
+    // It is left ungated because the CONTROL is about to stop being empty: a
+    // host-side notch is landing, and the status-bar TNF indicator and the
+    // overlay menu's +TNF button are the surfaces it will drive on a radio with
+    // no `tnf` command plane. Hiding them now would mean deleting them and
+    // putting them straight back — the exact round trip the hardware EQ already
+    // made (see hasRadioSideDsp above, and the map doc).
+    //
+    // If that host-side notch does not land, this is the first thing to
+    // reconsider — but reconsider it as "is the control still empty", not as
+    // "is this a Flex feature".
+
+    // The RADIO buffers CW text and sends it on its own keyer, driven by `cwx`
+    // verbs and reporting progress through `sub cwx all`. True for a Flex, whose
+    // firmware owns the character queue, the send index and the break-in timing;
+    // false for a backend where nothing on the far end has a text buffer.
+    //
+    // Gates the status-bar CWX indicator, the CWX panel and its F1-F12 macro
+    // shortcuts together — leaving the keys armed on a radio that refuses every
+    // `cwx send` is the "silently does nothing" shape the DVK entitlement gate
+    // already exists to prevent. The buttons are not the only surface: the
+    // FlexControl/Ulanzi macro action, the MQTT cw/transmit topic, TCI's
+    // cw_msg / cw_macros, rigctl's send_morse / stop_morse, SmartCAT's KY and
+    // the automation bridge's `cwx` verb all reach CwxModel without passing the
+    // status bar, so all of them ask RadioModel::hasRadioSideCwKeyer() — read
+    // through the accessor, never inline, so the permissive disconnected rule
+    // cannot be forgotten at a site. The three that owe a caller an answer
+    // (bridge, rigctl, SmartCAT) return an error rather than a cheerful ok.
+    //
+    // NOT about CW. A radio reporting false still transmits CW perfectly well
+    // from a key, a paddle or the host's own keying path; what it lacks is a
+    // place to put the text.
+    bool hasRadioSideCwKeyer = false;
+
+    // The RADIO records and plays back voice-keyer messages from its own store
+    // (`dvk` verbs). True for a Flex; false for a backend with no recorder.
+    //
+    // Distinct from, and evaluated BEFORE, the SmartSDR+ DVK entitlement in
+    // DvkAvailabilityGate. That gate answers "is this Flex licensed for the
+    // feature", which is a question only a radio that HAS the feature can be
+    // asked — its fail-open rule for an unknown entitlement (#4210) is correct
+    // for a Flex mid-handshake and would otherwise leave a live DVK button on
+    // every radio that never reports a license at all.
+    bool hasVoiceKeyer = false;
+
+    // The radio can receive and transmit simultaneously on demand, toggled with
+    // `radio set full_duplex_enabled=`. True for a Flex; false for a backend
+    // where the T/R changeover is exclusive and no such setting exists.
+    //
+    // Gates the status-bar FDX indicator. On a radio reporting false the button
+    // could only ever produce the "FDX not available" interlock notification it
+    // already raises on a non-zero response — an error message where a control
+    // should be.
+    bool hasFullDuplex = false;
+
     // The radio accepts installable waveform/mode plugins (SmartSDR waveforms),
     // so a client can offer to manage them.
     bool hasWaveforms = false;

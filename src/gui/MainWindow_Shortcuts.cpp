@@ -1020,48 +1020,6 @@ void MainWindow::registerShortcutActions()
             }
         });
 
-    static constexpr double kPanZoomFactor = 1.5;
-    auto zoomActivePanadapter = [this](double factor) {
-        if (!m_radioModel.isConnected()) {
-            return;
-        }
-
-        auto* s = activeSlice();
-        if (!s || s->panId().isEmpty()) {
-            return;
-        }
-
-        auto* sw = spectrumForSlice(s);
-        if (!sw) {
-            return;
-        }
-
-        const double currentBw = sw->bandwidthMhz();
-        // Clamp to limits so the final keypress snaps to exact min/max (#1458).
-        // Per-pan limits: the backend's reported range when it gave one, so a
-        // keyboard zoom stops where the receiver's data stops rather than at the
-        // FlexLib table's guess for an unrecognised model.
-        const double newBw = std::clamp(currentBw * factor,
-                                        m_radioModel.panMinBandwidthMhz(s->panId()),
-                                        m_radioModel.panMaxBandwidthMhz(s->panId()));
-        if (newBw == currentBw) return;  // already at the hard limit
-
-        double newCenter = sw->centerMhz();
-
-        // When zooming in, center on the active slice so repeated keypresses do
-        // not push it toward the panadapter edge (#1932).
-        if (factor < 1.0) {
-            newCenter = s->frequency();
-        }
-        newCenter = std::max(newCenter, newBw / 2.0);
-
-        sw->setFrequencyRange(newCenter, newBw);
-        // Keep keyboard zoom on the same combined pan-range path as trackpad /
-        // on-screen zoom so mode/frequency jumps do not reintroduce stale
-        // center-versus-bandwidth transitions.
-        applyPanRangeRequest(s->panId(), newCenter, newBw, "keyboard-pan-zoom");
-    };
-
     // ── DSP ─────────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("nb_toggle", "NB Toggle", "DSP",
         QKeySequence(), [this]() {
@@ -1259,10 +1217,11 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/false); });
     m_shortcutManager.registerAction("segment_zoom", "Segment Zoom", "Display",
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/true); });
+    static constexpr double kPanZoomFactor = 1.5;
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
-        QKeySequence(Qt::Key_Equal), [zoomActivePanadapter]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
+        QKeySequence(Qt::Key_Equal), [this]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
     m_shortcutManager.registerAction("pan_zoom_out", "Panadapter Zoom Out", "Display",
-        QKeySequence(Qt::Key_Minus), [zoomActivePanadapter]() { zoomActivePanadapter(kPanZoomFactor); });
+        QKeySequence(Qt::Key_Minus), [this]() { zoomActivePanadapter(kPanZoomFactor); });
     m_shortcutManager.registerAction("open_memories", "Open Memories Dialog", "Display",
         QKeySequence(Qt::Key_Slash), [this]() { showMemoryDialog(); });
 
@@ -1352,11 +1311,75 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
         .arg(on ? 1 : 0));
 }
 
+void MainWindow::zoomActivePanadapter(double factor)
+{
+    if (!m_radioModel.isConnected()) {
+        return;
+    }
+
+    auto* s = activeSlice();
+    if (!s || s->panId().isEmpty()) {
+        return;
+    }
+
+    auto* sw = spectrumForSlice(s);
+    if (!sw) {
+        return;
+    }
+
+    const double currentBw = sw->bandwidthMhz();
+    // Clamp to limits so the final keypress snaps to exact min/max (#1458).
+    const double newBw = std::clamp(currentBw * factor,
+                                    m_radioModel.panMinBandwidthMhz(s->panId()),
+                                    m_radioModel.panMaxBandwidthMhz(s->panId()));
+    if (newBw == currentBw) {
+        return;  // already at the hard limit
+    }
+
+    double newCenter = sw->centerMhz();
+
+    // When zooming in, center on the active slice so repeated keypresses do
+    // not push it toward the panadapter edge (#1932).
+    if (factor < 1.0) {
+        newCenter = s->frequency();
+    }
+    newCenter = std::max(newCenter, newBw / 2.0);
+
+    sw->setFrequencyRange(newCenter, newBw);
+    applyPanRangeRequest(s->panId(), newCenter, newBw, "pan-zoom");
+}
+
+void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
+{
+    if (!m_radioModel.isConnected()) {
+        return;
+    }
+    auto* s = activeSlice();
+    if (!s) {
+        return;
+    }
+    const QString panId = !s->panId().isEmpty()
+        ? s->panId()
+        : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+    if (panId.isEmpty()) {
+        return;
+    }
+    auto* pan = m_radioModel.panadapter(panId);
+    if (!pan) {
+        return;
+    }
+    const bool current = segmentZoom ? pan->segmentZoomOn() : pan->bandZoomOn();
+    if (current != enable) {
+        m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
+            .arg(panId,
+                 segmentZoom ? QStringLiteral("segment_zoom")
+                             : QStringLiteral("band_zoom"))
+            .arg(enable ? 1 : 0));
+    }
+}
+
 void MainWindow::togglePanZoomMode(bool segmentZoom)
 {
-    // Active-slice entry: shortcut/MIDI/FlexControl/RC28 paths resolve the pan
-    // from the active slice (falling back to the active pan) and share the
-    // per-pan toggle above.
     if (!m_radioModel.isConnected()) {
         return;
     }

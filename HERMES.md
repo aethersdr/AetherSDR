@@ -203,6 +203,70 @@ the modes.
 - Mode vocabulary: `off/slow/med/fast` → WDSP RXA 0/2/3/4. WDSP's "long" (1)
   has no representation in the four-way UI control.
 
+### AM/SAM hand back a DC pedestal, and nothing upstream removes it
+
+WDSP's AM/SAM detector is an **envelope** detector — `amd.c` emits
+`sqrt(I² + Q²)`, which is strictly non-negative — so the carrier arrives in the
+demodulated audio as DC. Three things that each look like they would remove it,
+and do not:
+
+- **`levelfade` is not a DC blocker.** On by default (`RXA.c`). It computes
+  `audio += dc_insert - dc` from an 8 Hz-corner average and a 0.11 Hz-corner
+  average. Those cancel *fading*; they deliberately **hold** the pedestal at the
+  long-term carrier level. That is the entire point of the stage.
+- **The AM/SAM passband cannot strip it.** `defaultPassbandForMode` gives AM and
+  SAM `{-4000, +4000}` — symmetric about the carrier, because both detectors
+  need it that way — which puts 0 Hz mid-band.
+- **AetherSDR had no DC blocker on the RX demodulated-audio path.** The only
+  `setDcBlockEnabled` in the tree is on the **TX** final limiter
+  (`ClientFinalLimiter`). `ClientPudu` has a one-pole DC block too, but it is
+  internal to the opt-in Aphex HF path and exists to remove the offset that
+  path's own one-sided clipping introduces — it is not in the chain unless the
+  operator switched that effect on, and it is downstream of the applet anyway.
+
+Measured on a 50%-modulated carrier, unfixed: settled audio mean **1.79** on a
+±1.0 float scale, AC RMS 0.70 — measured at the `WdspChannel` output, so that is
+*after* AGC. The pedestal alone is 79% past full scale, so AM audio clipped hard
+against the rails everywhere downstream.
+
+Every zero-referenced consumer downstream inherits the offset. The visible
+symptom was the **WAVE applet drawing two waveforms, the lower one inverted**:
+it renders `peak` and `rms` — both magnitudes — mirrored about a hard
+centreline, so a DC-shifted trace draws a phantom upside-down copy of itself in
+the bottom half. SSB looked fine throughout because it is already zero-mean, and
+that asymmetry is the tell.
+
+`Hl2RxDsp` now applies a 20 Hz one-pole DC blocker per channel to the
+`WdspChannel` output, **unconditionally for every mode** — SSB/CW are already
+zero-mean so it is a no-op there, FM wants it for the same reason AM does, and
+an unconditional filter has no mode-change state to get wrong. Guarded by
+`hl2_am_dcblock_test`, which measures the *settled tail* (`dc_insert` is a 1.4 s
+pole, so a short burst shows almost no DC even unfixed) and asserts a DC/AC
+**ratio** rather than a level, since AGC scales both equally.
+
+That test also pins the corner, which is the half of the property that is easy
+to satisfy by accident: a blocker whose corner has crept up into the audio band
+removes the pedestal just as thoroughly while eating the bass out of every mode,
+and every DC measurement stays green through it. So it checks a 60 Hz vs 400 Hz
+modulation ratio through the real chain, the closed-form `|H(f)|` at three audio
+rates, and the unconfigured bypass. It is one of the few HL2 tests in the
+per-PR CI gate; the rest of the suite runs weekly under the sanitizers job.
+
+**Why on `Hl2RxDsp` and not on `WdspChannel`.** The root cause is `amd`'s
+envelope detector, which belongs to WDSP, so a blocker on `WdspChannel`'s own RX
+output would fix it once for every future consumer rather than per caller.
+`Hl2RxDsp` is the only WDSP **receive** consumer in the tree today — `Hl2TxDsp`
+is the one other user and is transmit-only — so per-caller costs nothing yet.
+The next WDSP RX path added will not inherit it: push the blocker down into
+`WdspChannel` at that point rather than repeating it.
+
+**What this does not fix.** The blocker is downstream of the entire RXA chain,
+so `wcpAGC` — which sits after `amd` *inside* RXA — still rides the pedestal.
+Its gain decisions on AM/SAM remain biased by the carrier. Correcting that needs
+DC removal between `amd` and the AGC, and WDSP exposes no hook there;
+`SetRXAAMDFadeLevel(0)` is not one, since it only drops the fade correction and
+leaves `sqrt(I² + Q²)` just as non-negative. Left as a known residual.
+
 ---
 
 ## 6. Seam gaps found (the reusable checklist)
@@ -463,8 +527,10 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
 - Launch the app as the **foreground process of a backgrounded shell**;
   launching it with `&` inside a foreground command gets it killed with the
   shell's process group.
-- First WDSP channel open costs **~17 s** generating FFTW wisdom; subsequent
-  connects are **~110 ms**. Not a bug — don't "fix" it.
+- First WDSP channel open costs **~19 s** generating FFTW wisdom; every later
+  open — any receiver, any sample rate — is **40–175 ms**. The planning cost is
+  not a bug and cannot be optimised away, but it is now paid **off the GUI
+  thread** and reported in the connect animation; see §22.
 - The `prototypes/hl2/` Python spike defaults to broadcasting
   `255.255.255.255`, which fails on macOS with `OSError 65` when multiple
   interfaces are up. Use `--bcast <subnet>.255`. The in-app Qt sweep is fine.
@@ -532,10 +598,11 @@ cannot be starved by rendering — and `Hl2Backend.h` states plainly that Phase 
 runs the wire AND the DSP on the backend's own (GUI) thread.
 
 A GUI stall therefore stops EP2 and the radio stops streaming on its own. We
-already measured a 17-second main-thread stall on first connect (FFTW wisdom).
-That one lands before the stream starts, but it proves the class exists, and at
-384 kHz the DSP shares the same thread. Moving the DSP off the GUI thread was
-always "a later refinement"; the watchdog turns it into a correctness issue.
+measured a 21–82 second main-thread stall on first connect (FFTW wisdom) — see
+§22, which fixed that one. The wire and the DSP now live on their own I/O
+thread, so the class this warned about is narrower than it was. Two paths still
+block the GUI thread, both in §22.4: the **span change**, which rebuilds every
+receiver, and **backend teardown**, which waits out an in-flight DSP build.
 
 ### 11.4 Absent subsystems, in rough value order
 
@@ -602,10 +669,12 @@ defects that cost this session the most.
   `86a3d27b`, which we arrived at by reading RXA.c.
 - **`dsp_rate` is 48000, fixed** — §2 and the §10 reference table. Confirms
   `74f10f53`.
-- **First-run FFTW planning is slow BY DESIGN** (§9). Our measured 17-second
+- **First-run FFTW planning is slow BY DESIGN** (§9). Our measured ~19-second
   first connect is expected behaviour, not a performance bug. The oracle's
-  prescription is a progress indicator, not optimisation. That closes an open
-  question from earlier in the session.
+  prescription is a progress indicator, not optimisation — which is what §22
+  built. What the oracle does NOT excuse, and what was the actual defect, is
+  spending those 19 seconds with the GUI thread blocked and then discarding the
+  result at exit.
 
 ### 12.2 Licensing — resolved, we are fine
 
@@ -778,16 +847,18 @@ radio. See §18 for the full audit and the proposed seam.
 | Divergence | Reference does | We do | Why ours is defensible |
 |---|---|---|---|
 | `output_samplerate` | 48000 | 24000 | AudioEngine's native rate; avoids a resample. Legitimate, but it IS a divergence in the area that produced our worst bug — keep it labelled |
-| Rate change | `SetAllRates` | Rebuild the channel | Dodges the intermediate-inconsistent-state hazard entirely; heavier (re-plans FFTW). Switch if rate changes get frequent |
+| Rate change | `SetAllRates` | Rebuild the channel | Dodges the intermediate-inconsistent-state hazard entirely. Heavier, but NOT because of FFTW — a rebuild at a new rate re-plans almost nothing (§22.4). It is heavier because it is a close+open per receiver, and it still blocks the GUI thread |
 | Spectrum | WDSP analyzer (returns pixels) | Own `Hl2Spectrum` FFT | A3 §4 recommends exactly this for our architecture. **If it ever looks noisy, the lever is a detector/averaging mode, not a bigger FFT** |
-| FFTW wisdom | `WDSPwisdom(dir)` | Own `fftw_import_wisdom_from_filename` | `WDSPwisdom` is Windows-console-only. First-run slowness is expected — the fix is a progress indicator, not optimisation |
+| FFTW wisdom | `WDSPwisdom(dir)` | Own `fftw_import_wisdom_from_filename` + eager export | `WDSPwisdom` is Windows-console-only. First-run slowness is expected; the fix was a progress indicator plus getting the wisdom to actually persist (§22) |
 
 ### Settled — no action
 
 - **WDSP licensing.** GPL-2-**or-later** in 70 of 74 `.c` files, so it upgrades
   into our GPL-3. Linking is fine. (Spot-check the four before any
   redistribution question.)
-- **17-second first connect.** Expected FFTW planning, per A3 §9.
+- **~19-second first connect.** Expected FFTW planning, per A3 §9. The
+  planning itself stays; what was fixed is that it froze the whole UI and was
+  then thrown away on exit. §22.
 - **Alex manual mode** (`0x09[22]`). Not implemented in gateware — do not build
   UI for it.
 
@@ -2604,7 +2675,7 @@ second one is opened, which an operator reads as the radio going deaf.
 
 ### 20.8 Ordering: DSP chains are built BEFORE start()
 
-Opening a WDSP channel costs ~17 s on a first run (FFTW wisdom) and runs on the
+Opening a WDSP channel costs ~19 s on a first run (FFTW wisdom) and runs on the
 I/O thread — **the thread that paces EP2**. Configuring after `start()` stalls
 the pacer for all of it, and the gateware watchdog halts the stream when EP2
 stops arriving; it also stalls the EP6 reader, so the connect watchdog can time
@@ -3105,3 +3176,101 @@ disconnect edge, and the per-session reset the two scoring-session entry points
 share. Per §7 that is necessary and not sufficient — but the RTT and category
 predicates are decisions about what we *refuse* to claim, which is one of the few
 things a fixture can check honestly.
+
+---
+
+## 22. The first connect: 19 seconds of a dead application
+
+The symptom an operator reports is "the app hangs when I connect a Hermes-Lite
+for the first time." It is not a hang and it is not the radio. It is FFTW
+measuring plans, on the GUI thread, with nothing on screen to say so.
+
+### 22.1 What was actually measured
+
+Driven through the automation bridge against `hpsdrsim -hermeslite2 -P1`. The
+bridge's socket handler runs on the GUI thread, so pinging it every 100 ms from
+another thread turns "is the UI frozen" into a number: a gap between replies IS
+a frozen UI.
+
+| | Before | After |
+|---|---|---|
+| Cold-cache connect | 21–82 s (load-dependent) | 20.2 s |
+| Bridge pings answered during it | 0 of ~200 | 219 of 219 |
+| Longest unresponsive gap | 58–82 s | 0.50 s |
+| Wisdom on disk after SIGTERM | none | 9117 bytes |
+| Next launch, same profile | 21.6 s **again** | 0.57 s |
+
+### 22.2 Two defects, not one
+
+**The GUI thread waited.** `RadioModel` calls `Hl2Backend::connectRadio()`
+synchronously, and that method drove every `Hl2RxDsp::configure()` through
+`Qt::BlockingQueuedConnection`. The work was correctly on the I/O thread; the
+GUI thread simply stood there for all of it. Split into three phases now — see
+the comment above `beginDspSetup()`. The §20.8 ordering is untouched: chains
+still open before `start()`, serially, on the I/O thread.
+
+**The wisdom was never saved.** Export was a `std::atexit` handler, and
+`Hl2EmergencyStop` restores `SIG_DFL` and re-raises — so an unhandled signal,
+which is what SIGTERM, a crash and a Force Quit all become, never runs it.
+Measured: connect, kill, relaunch, connect — full cost a second time, cache file
+never created. **Anyone who had ever force-quit was paying first-run cost on
+every run**, which is why a one-time expense felt permanent. Export now happens
+at the end of `open()`, and it is write-then-rename: the direct write truncated
+a shared cache when two processes exported at once (a 48 KB cache came back as
+13 KB after a `ctest -j8` run, and FFTW rejects a short file wholesale).
+
+### 22.3 The planning cost is one-time per MACHINE, not per rate
+
+Measured cold, both orderings, with `WdspChannel` opened exactly as
+`Hl2RxDsp::configure` builds it:
+
+| Order | 1st open | 2nd | 3rd | 4th |
+|---|---|---|---|---|
+| 48 → 96 → 192 → 384 kHz | **18865 ms** | 100 ms | 71 ms | 39 ms |
+| 384 → 192 → 96 → 48 kHz | **18666 ms** | 64 ms | 99 ms | 175 ms |
+
+The first open costs ~19 s whichever rate it is; every other rate afterwards is
+40–175 ms. The plan sets overlap almost completely, so **do not reason about
+"cold wisdom for this sample rate"** — there is one cold open per machine, ever.
+
+### 22.4 Still open: two paths that still block the GUI thread
+
+#### Backend teardown waits out an in-flight build
+
+`~Hl2Backend()` stops the wire through a `Qt::BlockingQueuedConnection` before
+joining the I/O thread, and `beginDspSetup()`'s opens are a single event on that
+thread's loop. So a teardown during a cold connect — a **family switch**
+(`RadioModel::connectToRadio` → `teardownBackend()`) or an **app quit** — blocks
+the GUI thread for whatever is left of the planning.
+
+Splitting the connect is what made this reachable, and that is not an argument
+against the split: before it, the connect itself held the UI, so nobody could
+get to the radio picker mid-connect. Now the UI is live for those twenty
+seconds, and reaching for a different radio is the obvious thing to do while
+waiting. `OpenChannel` cannot be cancelled, so the honest options are a busy
+state over the teardown or a backend that can be abandoned rather than joined —
+and the second one also has to replace the `QPointer` guard in
+`beginDspSetup()`, which is sound today *because* teardown blocks.
+
+#### The span change rebuilds every receiver
+
+`applyPanBandwidth()` has the same shape the connect used to have. Crossing one
+of the four rate boundaries rebuilds **every** receiver (the rate register is
+radio-wide) through `Qt::BlockingQueuedConnection`, and each receiver costs an
+open (40–175 ms, per §22.3) plus a close, which flushes and is bounded by WDSP's
+own 100 ms timeout. Four panadapters open is roughly **0.6–1.1 s of frozen UI
+per boundary crossing** — the "chunky zoom" operators describe, layered on top
+of two things that are not bugs:
+
+- **The span IS the sample rate.** Four rates only, snapped log-nearest, so the
+  boundaries sit near 68 / 136 / 272 kHz. Zoom within a rate is free display
+  scaling; crossing one re-spans the radio, and `emitAllPanState()` deliberately
+  snaps the widget back to the span that was actually granted.
+- **A 150 ms coalescing throttle** (`kBandwidthThrottleMs`, #4470), because a
+  drag delivers ~30 span changes a second and each one is a full rebuild.
+
+The three-phase split from §22.2 is directly reusable here, but the rate change
+has ordering constraints the connect does not: the DSP must expect the new rate
+before EP6 starts delivering at it, and a partial failure has to roll every
+receiver back to a single rate. Left as a follow-up rather than bolted onto the
+connect fix.

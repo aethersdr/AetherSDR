@@ -17,6 +17,7 @@
 
 #include "core/backends/IRadioBackend.h"
 #include "TestSettingsProfile.h"
+#include "TestDspBuildWait.h"
 
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -121,8 +122,11 @@ int main(int argc, char** argv)
     req.port = radioPort;
     backend.connectRadio(req);
 
-    // Long enough for the connect handshake plus at least two publish ticks
-    // (the cadence is 1 s).
+    // Wait out the asynchronous DSP build, THEN time the publish cadence: the
+    // 2.6 s below is the assertion (>= two 1 s ticks) and must not be spent
+    // waiting for FFTW to finish planning.
+    AetherSDR::test::awaitDspBuild("hl2_link_stats_test",
+                                  [&] { return connectedSpy.count() >= 1; });
     spin(2600);
     check(connectedSpy.count() == 1, "backend connected on first EP6");
 

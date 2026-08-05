@@ -16,9 +16,23 @@ Q_LOGGING_CATEGORY(lcPropForecast, "aether.propforecast")
 
 namespace AetherSDR {
 
+namespace {
+// Stall timeout for every request this client issues (#4688 §6). Without one a
+// half-open connection to any of the four space-weather hosts leaves its reply
+// pending forever — the fetch neither completes nor errors.
+constexpr int kTransferTimeoutMs = 15000;
+} // namespace
+
 PropForecastClient::PropForecastClient(QObject* parent)
     : QObject(parent)
 {
+    // Set on the manager rather than per request. A timeout that must be
+    // remembered at every call site is one a later call site forgets — which is
+    // how all five requests here ended up without one — and manager-level
+    // covers any request added later for free. It is a stall timeout: the clock
+    // resets on every byte received, so it bounds a dead connection without
+    // capping a slow one.
+    m_nam.setTransferTimeout(kTransferTimeoutMs);
     m_timer.setSingleShot(false);
     m_timer.setInterval(kIntervalMs);
     connect(&m_timer, &QTimer::timeout, this, &PropForecastClient::onTimer);

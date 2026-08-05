@@ -1647,6 +1647,12 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
         m_pendingMorseLine = true;
         return {};
     }
+    // A radio with no radio-side CW text buffer would swallow every `cwx send`
+    // this produces, and RPRT 0 would tell Not1MM/N1MM the contest exchange
+    // went out. RIG_ENAVAIL is the file's established answer for a control this
+    // radio does not have. Direct read, on the CAT thread — the same posture as
+    // the isConnected() checks above; only the MUTATION needs the queued hop.
+    if (!m_model->hasRadioSideCwKeyer()) return rprt(-11);
     // Route through CwxModel so the local sidetone keyer (driven by
     // CwxModel::transmissionRequested) fires alongside the radio command.
     // Going through sendCmdPublic directly would silently bypass the
@@ -1660,6 +1666,10 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
 QString RigctlProtocol::cmdStopMorse()
 {
     if (!m_model) return rprt(-1);
+    // Nothing to stop on a radio that could never have been started — same
+    // RIG_ENAVAIL as send_morse, so a client that probes with stop_morse gets
+    // one consistent answer about this radio rather than two.
+    if (!m_model->hasRadioSideCwKeyer()) return rprt(-11);
     // CwxModel::clearBuffer emits transmissionCancelled, which cuts any
     // in-flight local sidetone in addition to sending "cwx clear". (#2909)
     QMetaObject::invokeMethod(m_model, [model = m_model]() {

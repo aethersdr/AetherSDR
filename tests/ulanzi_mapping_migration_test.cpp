@@ -139,6 +139,33 @@ int main(int argc, char** argv)
                      == QStringLiteral("shortcut:next_slice"),
                  "and the rebuilt document reads back");
 
+    // ── rotaryAction tests (Principle V) ──────────────────────────────────
+    ok &= expect(UlanziDialMappings::rotaryAction() == QStringLiteral("WheelFrequency"),
+                 "default rotaryAction is WheelFrequency");
+    ok &= expect(UlanziDialMappings::setRotaryAction(QStringLiteral("WheelVolume")),
+                 "setting rotaryAction persists to document");
+    ok &= expect(UlanziDialMappings::rotaryAction() == QStringLiteral("WheelVolume"),
+                 "rotaryAction reads back from document");
+
+    // Legacy UlanziDialRotaryAction flat key migration
+    s.setValue(QStringLiteral("UlanziDialRotaryAction"), QStringLiteral("WheelPower"));
+    s.save();
+
+    // Explicit empty rotary_action in document returns default WheelFrequency rather than adopting legacy key
+    UlanziDialMappings::setActionForPill(QStringLiteral("rotary_action"), QString());
+    ok &= expect(UlanziDialMappings::rotaryAction() == QStringLiteral("WheelFrequency"),
+                 "explicit empty rotary_action in document returns default WheelFrequency");
+
+    // When rotary_action key is missing from document, legacy flat key is adopted
+    s.remove(UlanziDialMappings::rootSettingsKey());
+    s.save();
+    s.setValue(QStringLiteral("UlanziDialRotaryAction"), QStringLiteral("WheelPower"));
+    s.save();
+    ok &= expect(UlanziDialMappings::rotaryAction() == QStringLiteral("WheelPower"),
+                 "legacy flat key UlanziDialRotaryAction is adopted when document key is missing");
+    ok &= expect(!s.contains(QStringLiteral("UlanziDialRotaryAction")),
+                 "legacy flat key UlanziDialRotaryAction is removed after adoption");
+
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;
 }

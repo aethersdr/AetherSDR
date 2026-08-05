@@ -8,6 +8,7 @@
 
 #include "core/backends/IRadioBackend.h"
 #include "TestSettingsProfile.h"
+#include "TestDspBuildWait.h"
 
 #include "core/backends/hl2/Hl2Backend.h"
 
@@ -212,8 +213,12 @@ int main(int argc, char** argv)
     // session leftovers, so anything emitted before connected() is discarded.
     check(!connectedSpy.count(), "connect leaves connected() pending until the first EP6");
 
-    // Stay inside kSilenceTimeoutMs (2 s): the fake radio stops after kCap
-    // frames, and the EP6 silence watchdog legitimately drops the link after it.
+    // The DSP has to finish opening before the wire starts; wait on that rather
+    // than on a clock. Once EP6 flows, stay inside kSilenceTimeoutMs (2 s): the
+    // fake radio stops after kCap frames and the silence watchdog legitimately
+    // drops the link after it.
+    AetherSDR::test::awaitDspBuild("hl2_backend_test",
+                                  [&] { return connectedSpy.count() >= 1; });
     spin(1200);   // capped ping-pong delivers EP6 + at least one spectrum frame
 
     check(connectedSpy.count() == 1, "connected() on the first EP6");

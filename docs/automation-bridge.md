@@ -723,8 +723,8 @@ handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 capacity during TCI suppression. An Active-to-Idle transition with suppressed
 callbacks and unread bytes remains a fallback for backends that do not expose a
 useful capacity. The same evidence is written to the Audio Summary support log
-only when Help → Support's **CAT/rigctld** logging toggle (the category used by
-TCI debug logging) is enabled; TX capture-health summaries are off by default.
+only when Help → Support's **TCI / CAT / rigctld** logging toggle is enabled;
+TX capture-health summaries are off by default.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies
@@ -2772,6 +2772,18 @@ Drive the CWX CW keyer — the easy repro for post-TX FFT-floor recovery (#3804)
 
 Stage the slice into a CW mode first (`invoke sliceModeCombo setCurrentText CW`)
 for the radio to actually emit.
+
+Every action here emits a `cwx` verb at the radio, so on a connected backend that
+declares `hasRadioSideCwKeyer=false` (an HL2, the demo) all three return an error
+rather than `ok:true` for work the radio would silently drop:
+
+```json
+→ {"cmd":"cwx","action":"send","value":"CQ"}
+← {"ok":false,"error":"cwx unavailable: this radio has no radio-side CW keyer (no `cwx` command plane)"}
+```
+
+Disconnected it still answers, like every other capability gate here — with
+nothing attached there is nothing to be honest about.
 
 ### `txtest`
 Two-tone TX test signal (for IMD / PA / meter measurements).

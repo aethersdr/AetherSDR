@@ -115,6 +115,23 @@ The selected model runs on the **GPU when one is available**, else CPU
 Without the toolchain the build is CPU-only, unchanged. A GPU-enabled binary
 still runs on GPU-less hosts.
 
+### Not shipped on the Intel macOS DMG
+
+The **Intel macOS release build has no ASR at all** (`ENABLE_ASR=OFF`, #4719).
+Building it from source on an Intel Mac still works; this is about the shipped
+artifact.
+
+The reason is reach, not the feature. The ASR stack pulls in an ONNX Runtime
+built at `minos 15.5`, and dyld enforces that floor on every Mach-O it loads —
+so a DMG carrying it requires macOS 15.5 no matter what it advertises, which
+excludes most of the older Intel hardware that artifact exists for (#4713,
+#4532). Dropping ASR is what lets the Intel DMG hold a 12.0 floor. Intel Macs
+also have no GPU worth running ASR on, so what was left there after the ONNX
+and sherpa backends came out was CPU-only whisper.
+
+Apple Silicon is unaffected: Metal 3.1 with bf16, plus the ONNX and sherpa
+backends, all required at configure time.
+
 ## sherpa-onnx models (non-whisper engines)
 
 The model picker's **"sherpa-onnx model…"** entry (shown when sherpa-onnx is

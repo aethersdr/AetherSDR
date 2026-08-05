@@ -47,6 +47,9 @@ namespace AetherSDR {
 namespace {
 constexpr const char* kTitleDragHandleProperty = "aetherTitleDragHandle";
 
+// Stall timeout for the GitHub latest-release version check (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+
 // Build a 16×18 dock-side indicator: hollow rectangle (the main window)
 // with a thin shaded strip flush against one inner wall, representing
 // the applet panel docked on that side.  Visual language matches the
@@ -863,6 +866,13 @@ void TitleBar::setLineoutMuted(bool muted)
     m_speakerBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x94\x8A");  // 🔇 / 🔊
 }
 
+void TitleBar::setHeadphoneMuted(bool muted)
+{
+    QSignalBlocker b(m_headphoneBtn);
+    m_headphoneBtn->setChecked(muted);
+    m_headphoneBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x8E\xA7");  // 🔇 / 🎧
+}
+
 void TitleBar::setMasterVolume(int pct)
 {
     QSignalBlocker b(m_masterSlider);
@@ -979,6 +989,10 @@ void TitleBar::showFeatureRequestDialog()
 {
     // Version check guard (#486) — warn if not on latest release
     auto* nam = new QNetworkAccessManager(this);
+    // Bound the version check (#4688 §6). Without it a half-open connection to
+    // api.github.com leaves the reply pending for the lifetime of the window,
+    // holding the manager and the lambda's captures with it.
+    nam->setTransferTimeout(kTransferTimeoutMs);
     auto* reply = nam->get(QNetworkRequest(
         QUrl("https://api.github.com/repos/aethersdr/AetherSDR/releases/latest")));
     connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {

@@ -1,6 +1,7 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciProtocol.h"
 #include "AppSettings.h"
+#include "LogManager.h"
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 #include "models/RadioModel.h"
@@ -994,6 +995,14 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
     if (text.isEmpty()) return {};
     QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
     QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        // Capability check runs HERE, on the model's thread, not in the caller:
+        // this method is driven by the TCI client socket and RadioModel state is
+        // not ours to read from it.
+        if (!model->hasRadioSideCwKeyer()) {
+            qCWarning(lcCat) << "TCI: cw_msg ignored \u2014 radio has no radio-side "
+                                "CW keyer";
+            return;
+        }
         model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return {};
@@ -1431,6 +1440,11 @@ QString TciProtocol::cmdCwMacros(const QStringList& args)
     if (text.isEmpty()) return {};
     QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
     QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        if (!model->hasRadioSideCwKeyer()) {
+            qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 radio has no "
+                                "radio-side CW keyer";
+            return;
+        }
         model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return {};
@@ -1440,6 +1454,7 @@ QString TciProtocol::cmdCwMacrosStop()
 {
     if (!m_model) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model]() {
+        if (!model->hasRadioSideCwKeyer()) return;
         model->sendCmdPublic("cwx clear", nullptr);
     }, Qt::QueuedConnection);
     return {};

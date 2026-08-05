@@ -91,6 +91,32 @@ int main(int argc, char** argv)
     report("audio.summary info always on", lcAudioSummary().isInfoEnabled());
     report("QtDebugMsg-declared info untouched", lcKiwiSdr().isInfoEnabled());
 
+    // #4750: the aether.cat checkbox must NAME the TCI server, which owns 53 of
+    // the category's 76 call sites. The old label said only "CAT/rigctld", so a
+    // user hunting TCI diagnostics scanned Help → Support, found no mention of
+    // TCI, and concluded there was none to enable. The label is the checkbox
+    // text and the description is its tooltip, so the label is what has to
+    // carry it — a user who has to open a tooltip to discover the category has
+    // already given up on it.
+    //
+    // Asserted on the metadata rather than by eyeballing the dialog because
+    // this is precisely the kind of drift that returns: the id is stable and
+    // the call sites moved to TCI over time while the human-readable name kept
+    // pointing at the original minority user.
+    {
+        QString catLabel, catDesc;
+        bool found = false;
+        for (const auto& c : lm.categories()) {
+            if (c.id == "aether.cat") { catLabel = c.label; catDesc = c.description; found = true; break; }
+        }
+        report("aether.cat is registered", found);
+        report("aether.cat label names TCI (#4750)", catLabel.contains("TCI", Qt::CaseInsensitive));
+        // The rename must not drop the surfaces that were already discoverable.
+        report("aether.cat label keeps CAT", catLabel.contains("CAT", Qt::CaseSensitive));
+        report("aether.cat label keeps rigctld", catLabel.contains("rigctld", Qt::CaseInsensitive));
+        report("aether.cat description mentions TCI", catDesc.contains("TCI", Qt::CaseInsensitive));
+    }
+
     // Toggling back off closes the gate again.
     lm.setEnabled("aether.cat", false);
     report("re-disabled: info off", !lcCat().isInfoEnabled());

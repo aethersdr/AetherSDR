@@ -43,6 +43,7 @@
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
+#include "core/N1MMSpotClient.h"
 #include "core/PropForecastClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
@@ -76,6 +77,7 @@
 #include <QSplitter>
 #include <QPointer>
 
+class QDialog;
 class QMessageBox;
 #include <QLabel>
 #include <QList>
@@ -1003,6 +1005,7 @@ private:
     WsjtxClient*       m_wsjtxClient{nullptr};
     SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
+    N1MMSpotClient*      m_n1mmSpotClient{nullptr};
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -1075,6 +1078,10 @@ private:
     QStringList m_spotCmdBatch;
     int m_nextPassiveSpotId{-2000000};
     QHash<int, qint64> m_passiveSpotExpiryMs;
+    // N1MM spot identity: N1MMSpotParser::spotKey(dxcall, freq) -> passive
+    // spot id, so an "add" for a callsign already on this band updates the
+    // existing spot instead of minting a duplicate (#2906).
+    QHash<QString, int> m_n1mmSpotIdByKey;
     // External controllers run on a dedicated worker thread (#502)
     QThread*             m_extCtrlThread{nullptr};
 #ifdef HAVE_SERIALPORT
@@ -1090,6 +1097,8 @@ private:
     // radio-authoritative model state — togglePanZoomModeForPan, #4057.)
     void togglePanZoomMode(bool segmentZoom);
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
+    void setPanZoomMode(bool segmentZoom, bool enable);
+    void zoomActivePanadapter(double factor);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -1157,8 +1166,6 @@ private:
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
-    QTimer                     m_dialCoalesceTimer;
-    int                        m_dialPendingSteps{0};
     QSet<QString>              m_dialActiveMidiGates;
     // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
     // dial release cannot un-key a PTT the keyboard is still holding.
@@ -1289,6 +1296,7 @@ private:
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<ContributeDialog> m_contributeDialog;
     QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
 #endif

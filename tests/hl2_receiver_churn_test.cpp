@@ -31,6 +31,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 #include "core/backends/IRadioBackend.h"
 #include "TestSettingsProfile.h"
+#include "TestDspBuildWait.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -132,7 +133,9 @@ int main(int argc, char** argv)
     req.host = QStringLiteral("127.0.0.1");
     req.port = radioPort;
     backend.connectRadio(req);
-    spin(1200);
+    AetherSDR::test::awaitDspBuild("hl2_receiver_churn_test",
+                                  [&] { return connectedSpy.count() >= 1; });
+    spin(1200);   // unchanged settle budget; only the connect wait moved out of it
     check(connectedSpy.count() == 1, "connected() on the first EP6");
     check(backend.isConnected(), "link up before the churn starts");
     check(pans.size() == 1, "one pan to begin with");

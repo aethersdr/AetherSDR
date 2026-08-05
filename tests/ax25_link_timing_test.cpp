@@ -6,6 +6,7 @@
 // The airtime half is pure arithmetic. The liveness half drives a bare
 // Ax25Connection over a simulated air channel, same style as tnc_terminal_test.
 
+#include "TestEventLoop.h"
 #include "core/tnc/Ax25.h"
 #include "core/tnc/Ax25Connection.h"
 #include "core/tnc/Ax25LinkTiming.h"
@@ -44,14 +45,12 @@ Address call(const char* text)
 }
 
 // Spin the event loop until `predicate` holds or the deadline passes. Needed
-// only by the T3 test, which is inherently about the passage of time.
+// only by the T3 test, which is inherently about the passage of time. The
+// waiting itself is tests/TestEventLoop.h. (#4693)
 template <typename Predicate>
 bool spinUntil(Predicate predicate, int timeoutMs)
 {
-    QDeadlineTimer deadline(timeoutMs);
-    while (!predicate() && !deadline.hasExpired())
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    return predicate();
+    return AetherTest::waitFor(predicate, timeoutMs);
 }
 
 LinkTimingProfile hf300()

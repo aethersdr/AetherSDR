@@ -15,9 +15,17 @@
 
 namespace AetherSDR {
 
+namespace {
+// Stall timeout for the software-page, MD5 and installer requests (#4688 §6).
+// 30 s rather than 15: the installer is a large download and this clock resets
+// on every byte, so it only fires on a genuinely dead transfer.
+constexpr int kTransferTimeoutMs = 30000;
+} // namespace
+
 FirmwareStager::FirmwareStager(QObject* parent)
     : QObject(parent)
 {
+    m_nam.setTransferTimeout(kTransferTimeoutMs);
 }
 
 QString FirmwareStager::stagingDir()
