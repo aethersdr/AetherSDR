@@ -473,9 +473,12 @@ void CopyAssistController::reconcileAfterGpuFallback()
         return;
     }
 
-    // The backend already retried on CPU and is running; this only brings the
-    // UI and the stored resolution in line with what actually happened, so the
-    // next load does not aim at the failed device again.
+    // Reached queued from either signal: after a load-time fallback (the
+    // backend already retried on CPU and is running) or after a decode-time
+    // failure (the engine is still aimed at the latched device). Relabel the
+    // device and move the resolution off it — applyGpuDevices() rebuilds the
+    // engine when that changes the resolved device, which is what actually
+    // retires a decode-poisoned engine — then say so in the panel.
     const int failedDevice = m_gpuDevice;
     for (AsrGpuDevice& d : m_gpuDevices) {
         if (d.index == failedDevice) {
@@ -673,7 +676,20 @@ void CopyAssistController::buildEngine()
                 m_panel->appendText(labeled, confidence);
                 appendToLogFile(labeled);
             });
-    connect(m_asr, &AsrEngine::error, this, [this](const QString& err) { m_panel->setStatus(err); });
+    connect(m_asr, &AsrEngine::error, this, [this](const QString& err) {
+        m_panel->setStatus(err);
+        // A decode-time GPU failure latches the device in
+        // WhisperAsrBackend::transcribe(); the engine itself is still aimed at
+        // it and would throw again on every utterance. Reconcile off the error
+        // signal exactly as the ready() path does — queued, because the
+        // reconcile rebuilds the engine this handler's sender belongs to. The
+        // entry guard in reconcileAfterGpuFallback() makes repeats harmless.
+        if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
+            && asrGpuDeviceFailed(m_gpuDevice)) {
+            QMetaObject::invokeMethod(
+                this, [this] { reconcileAfterGpuFallback(); }, Qt::QueuedConnection);
+        }
+    });
     connect(m_asr, &AsrEngine::backlogChanged, m_panel, &CopyAssistPanel::setBacklog);
 
     applyTuning();

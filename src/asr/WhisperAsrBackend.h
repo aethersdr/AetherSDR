@@ -33,6 +33,10 @@ private:
     QString m_language;
     int m_threads = 0;
     int m_gpuDevice = 0;
+    // Whether m_ctx was created on the GPU. False after the CPU retry in
+    // load(), so a decode-time throw never latches a device that was not
+    // involved.
+    bool m_ctxOnGpu = false;
 };
 
 // A selectable GPU: `index` is the value to pass as gpuDevice (its position among

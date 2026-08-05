@@ -180,6 +180,12 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         return false;
     }
 
+    // Remember where this context actually lives: after the CPU retry above,
+    // cparams.use_gpu is false even though m_gpuDevice still names the GPU.
+    // transcribe() consults this so a decode-time throw latches the device
+    // only when the GPU was really involved.
+    m_ctxOnGpu = cparams.use_gpu;
+
     qCInfo(lcAsrWhisper) << "Loaded model" << modelPath << "(" << m_threads << "threads )";
     return true;
 }
@@ -220,16 +226,28 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     wparams.detect_language = false;
 
     // Same guard as the load path: inference reaches the GPU backend too, and
-    // an exception escaping the worker thread would terminate the app.
+    // an exception escaping the worker thread would terminate the app. A GPU
+    // that loaded the model fine can still fail here — and the session contract
+    // is the same as for a failed load: never hand this device another attempt
+    // (a repeat touch of the now-poisoned backend state is the class of #4502).
+    // Latch only when the context actually lives on the GPU; a CPU-side throw
+    // (e.g. an allocation failure) says nothing about the GPU. The GUI rebuilds
+    // the engine off the failed device when the error signal arrives.
     int status = -1;
     try {
         status = whisper_full(m_ctx, wparams, pcm16k.data(), static_cast<int>(pcm16k.size()));
     } catch (const std::exception& e) {
+        if (m_ctxOnGpu) {
+            asrMarkGpuDeviceFailed(m_gpuDevice);
+        }
         if (error != nullptr) {
             *error = QStringLiteral("whisper_full() failed: %1").arg(QString::fromUtf8(e.what()));
         }
         return {};
     } catch (...) {
+        if (m_ctxOnGpu) {
+            asrMarkGpuDeviceFailed(m_gpuDevice);
+        }
         if (error != nullptr) {
             *error = QStringLiteral("whisper_full() failed: unknown exception");
         }
@@ -278,6 +296,7 @@ void WhisperAsrBackend::unload()
         whisper_free(m_ctx);
         m_ctx = nullptr;
     }
+    m_ctxOnGpu = false;
 }
 
 std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QString& language,
