@@ -178,6 +178,10 @@ if ($Installer) {
     Write-Host "== Staging MSVC runtime + building installer ==" -ForegroundColor Cyan
     & powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\stage-msvc-runtime.ps1 -OutputDir installer-runtime
     Copy-Item installer-runtime\*.dll $deploy\ -Force
+    # Same gate CI runs — catch a payload that leans on the machine's own VC++
+    # redistributable here rather than on a user's machine (#4781).
+    & powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-deploy-dependencies.ps1 -DeployDir $deploy
+    if ($LASTEXITCODE -ne 0) { throw "deploy\ payload is not self-contained — see the audit output above." }
     $version = (Get-Content CMakeLists.txt | Select-String -Pattern 'project\(AetherSDR VERSION (\d+\.\d+\.\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1)
     if (-not $version) { $version = "0.0.0-local" }
     $runtimeDir = (Resolve-Path "installer-runtime").Path

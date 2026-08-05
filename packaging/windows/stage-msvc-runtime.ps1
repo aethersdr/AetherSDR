@@ -7,6 +7,18 @@
     Studio/MSVC environment and copies its DLLs to a staging directory for
     Inno Setup. Prefer VCToolsRedistDir because GitHub Actions initializes it
     through ilammy/msvc-dev-cmd before packaging.
+
+    The OpenMP runtime (vcomp140.dll) ships in a SEPARATE redist directory,
+    Microsoft.VC<nnn>.OpenMP, sitting next to the CRT one — it is not in
+    Microsoft.VC*.CRT. ggml is compiled with /openmp (GGML_OPENMP defaults ON)
+    and its static libs carry /DEFAULTLIB:"VCOMP", so AetherSDR.exe imports
+    vcomp140.dll directly. Staging only the CRT left that one import to be
+    satisfied by whatever machine-wide redistributable happened to be present,
+    and any other installer repairing/downgrading/removing it produced
+    "VCOMP140.DLL was not found" on startup — unfixable by reinstalling
+    AetherSDR, because the file was never in our payload (#4781). Both
+    directories are staged here, version-matched, so the payload is
+    self-contained.
 #>
 
 [CmdletBinding()]
@@ -71,19 +83,47 @@ if (-not $runtimeDir) {
     throw "Could not find an x64 Microsoft.VC*.CRT runtime directory. Make sure the MSVC redist components are installed."
 }
 
+# Take the OpenMP redist as a SIBLING of the chosen CRT directory rather than
+# searching independently: siblings share the toolset version by construction,
+# so vcomp140.dll can never end up mismatched against the CRT it was built with.
+$redistArchRoot = Split-Path -Parent $runtimeDir.FullName
+$openMpDir = Get-ChildItem -LiteralPath $redistArchRoot -Directory -Filter "Microsoft.VC*.OpenMP" -ErrorAction SilentlyContinue |
+    Sort-Object FullName |
+    Select-Object -First 1
+
+if (-not $openMpDir) {
+    # Hard failure, not a warning. Silently omitting this DLL is precisely the
+    # bug in #4781, and a broken installer is far more expensive than a red CI
+    # run. The OpenMP redist installs with the "MSVC v143 - VS 2022 C++ x64/x86
+    # build tools" component that already provides the CRT redist next to it.
+    throw "Could not find a Microsoft.VC*.OpenMP runtime directory next to $($runtimeDir.FullName). " +
+          "AetherSDR.exe imports vcomp140.dll (ggml is built with /openmp), so it must ship app-local. " +
+          "Install the MSVC v143 C++ build tools redist component and retry."
+}
+
 $resolvedOutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
 New-Item -ItemType Directory -Force -Path $resolvedOutputDir | Out-Null
 
-$runtimeDlls = Get-ChildItem -LiteralPath $runtimeDir.FullName -File -Filter "*.dll"
-if (-not $runtimeDlls) {
-    throw "No runtime DLLs found in $($runtimeDir.FullName)."
+$sourceDirs = @($runtimeDir, $openMpDir)
+foreach ($sourceDir in $sourceDirs) {
+    $runtimeDlls = Get-ChildItem -LiteralPath $sourceDir.FullName -File -Filter "*.dll"
+    if (-not $runtimeDlls) {
+        throw "No runtime DLLs found in $($sourceDir.FullName)."
+    }
+
+    foreach ($dll in $runtimeDlls) {
+        Copy-Item -LiteralPath $dll.FullName -Destination $resolvedOutputDir -Force
+    }
+
+    Write-Host "Staged MSVC runtime from $($sourceDir.FullName)"
 }
 
-foreach ($dll in $runtimeDlls) {
-    Copy-Item -LiteralPath $dll.FullName -Destination $resolvedOutputDir -Force
+# Guard the one file this whole script exists to guarantee: a future refactor
+# that loses it again must fail here, not in a user's startup dialog.
+if (-not (Test-Path -LiteralPath (Join-Path $resolvedOutputDir "vcomp140.dll"))) {
+    throw "vcomp140.dll was not staged from $($openMpDir.FullName) — the payload would fail to start on machines without a system-wide VC++ redistributable."
 }
 
-Write-Host "Staged MSVC runtime from $($runtimeDir.FullName)"
 Get-ChildItem -LiteralPath $resolvedOutputDir -File -Filter "*.dll" |
     Sort-Object Name |
     ForEach-Object { Write-Host "  $($_.Name)" }
