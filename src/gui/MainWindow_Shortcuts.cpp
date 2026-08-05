@@ -1057,9 +1057,10 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("tnf_toggle", "TNF Global Toggle", "DSP",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
+            // Through the model rather than a raw command string, so the
+            // shortcut reaches a host-DSP notch as well as a Flex TNF.
             const bool wasOn = m_radioModel.tnfModel().globalEnabled();
-            m_radioModel.sendCommand(
-                QString("radio set tnf_enabled=%1").arg(wasOn ? 0 : 1));
+            m_radioModel.tnfModel().requestGlobalTnfEnabled(!wasOn);
         });
     m_shortcutManager.registerAction("nr_cycle", "NR Cycle (Off/NR/NR2/NR4/DFNR)", "DSP",
         QKeySequence(), [this]() {

@@ -313,6 +313,14 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasRadioSideWaterfallAutoBlack = false;
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
+    // No manual notch. The synthetic scene has an auto-notch in its mixer, but
+    // nothing implements a placed, tracking null — so the +TNF button and the
+    // panadapter's add-notch entries stay hidden here rather than appearing and
+    // doing nothing.
+    caps.maxNotchFilters = 0;
+    caps.notchHasDepth = false;
+    caps.notchMinWidthHz = 0.0;
+    caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
     // The demo radio regenerates its synthetic scene on every connect; there

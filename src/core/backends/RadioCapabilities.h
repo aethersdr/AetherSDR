@@ -53,6 +53,36 @@ struct RadioCapabilities {
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
 
+    // Manual notch filters (a Flex TNF) the radio can hold at once. ZERO is the
+    // load-bearing default: it means "this radio cannot notch", and the UI then
+    // omits the +TNF button and the panadapter's add/remove entries entirely.
+    //
+    // That default matters because the control shipped ungated. The +TNF button
+    // and the right-click menu were live on every backend while the commands
+    // behind them only meant anything to a Flex, so on an HL2 an operator could
+    // place notches all day and hear nothing change.
+    int maxNotchFilters = 0;
+
+    // Whether a notch has a DEPTH control as well as a width.
+    //
+    // A Flex TNF has three depths; a host-DSP notch built on WDSP's notched
+    // bandpass is a full null with no depth parameter at all. False hides the
+    // depth submenu rather than leaving three settings that all do the same
+    // thing. Meaningless when maxNotchFilters is 0.
+    bool notchHasDepth = false;
+
+    // The narrowest notch the radio can actually produce, in Hz, and the
+    // widest. Zero for either means "not reported" and the UI keeps its own
+    // defaults.
+    //
+    // The minimum is here because on a host-DSP backend it is a real, moving
+    // constraint rather than a UI preference: WDSP's floor is a function of
+    // filter length and it WIDENS a narrower request instead of refusing it, so
+    // a UI offering 50 Hz against a 200 Hz floor draws a notch four times
+    // narrower than the one the operator is hearing.
+    double notchMinWidthHz = 0.0;
+    double notchMaxWidthHz = 0.0;
+
     // Transmit — the load-bearing capability for TX safety (RFC §6). A backend
     // that cannot key sets canTransmit=false; the engine guard then denies any
     // keying intent regardless of client requests.

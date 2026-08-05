@@ -12,6 +12,7 @@
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
+#include "core/backends/NotchDelta.h"
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/RestoredRadioState.h"
@@ -256,6 +257,49 @@ public:
     {
         Q_UNUSED(panId);
         return false;
+    }
+
+    // ── Manual notch filters ──────────────────────────────────────────────
+    //
+    // A notch is a null parked on an interferer at an ABSOLUTE RF frequency,
+    // and it stays there while the operator tunes — a Flex calls this a TNF.
+    // Whether it is realized in the radio (Flex) or in host DSP (HL2, where
+    // the protocol carries no DSP at all) is exactly what this seam hides.
+    //
+    // IDS ARE ASSIGNED BY THE BACKEND, not chosen by the caller, which is why
+    // createNotch() takes no id and returns nothing. A Flex mints the id in the
+    // radio and reports it back in status; a host-DSP backend mints its own.
+    // Either way the caller learns the id from notchChanged() and uses it for
+    // every later edit. Requiring the caller to pick would force it to guess
+    // what the radio will do, and two clients on the same Flex would collide.
+    //
+    // Default no-ops. A backend with no notch engine declares
+    // capabilities().maxNotchFilters = 0 and the UI does not offer the control
+    // at all, so these are never reached rather than silently doing nothing.
+    virtual void createNotch(double centerHz, double widthHz)
+    {
+        Q_UNUSED(centerHz);
+        Q_UNUSED(widthHz);
+    }
+    // Move, resize, or otherwise change an existing notch. A delta rather than
+    // a fixed argument list for two reasons: a panadapter drag changes centre
+    // and width together and should rebuild the filter mask once, and the
+    // Flex-only fields (depth, permanent) can then ride along without a
+    // host-DSP backend having to pretend it understands them.
+    virtual void setNotch(int notchId, const AetherSDR::NotchDelta& delta)
+    {
+        Q_UNUSED(notchId);
+        Q_UNUSED(delta);
+    }
+    virtual void removeNotch(int notchId)
+    {
+        Q_UNUSED(notchId);
+    }
+    // Global bypass for every notch at once, the equivalent of a Flex
+    // tnf_enabled. Individual notches keep their own active flag underneath.
+    virtual void setNotchesEnabled(bool on)
+    {
+        Q_UNUSED(on);
     }
 
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
@@ -535,6 +579,17 @@ signals:
     // the thing behind it has stopped — never optimistically, which would leave
     // a receiver streaming into a pane nobody is listening to.
     void panRemoved(const QString& panId);
+
+    // A notch was created or changed, reported with the id the BACKEND assigned
+    // (see createNotch above). This is how the caller learns an id at all, so a
+    // backend that mints its own must emit it after every create — including
+    // when it rejects one, by simply not emitting.
+    //
+    // FlexBackend does NOT emit these: a Flex reports TNFs as `tnf <id> …`
+    // status on its command plane, which RadioModel already decodes. Only a
+    // backend whose notches exist nowhere but in this process needs to say so.
+    void notchChanged(int notchId, const AetherSDR::NotchDelta& delta);
+    void notchRemoved(int notchId);
 
     // ONE SLICE's demodulated RX audio, tagged with the slice it came from.
     //

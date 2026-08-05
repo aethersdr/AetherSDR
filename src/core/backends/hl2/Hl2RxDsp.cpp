@@ -90,6 +90,19 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     // current slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
         m_channel->setShift(m_shiftHz);
+    // Same for the notch set. The database belongs to the channel, so a rebuild
+    // destroys it — without this replay an operator's notches disappear on any
+    // sample-rate change, which reads as the notch feature randomly failing.
+    // Tune frequency FIRST: the centres are absolute, so a notch added before
+    // the channel knows where it is tuned is placed against a tune frequency of
+    // zero and rebuilt at a wildly wrong offset.
+    m_channel->setNotchTuneFrequency(m_notchTuneHz);
+    for (std::size_t index = 0; index < m_notches.size(); ++index) {
+        const Notch& notch = m_notches[index];
+        m_channel->addNotch(static_cast<int>(index), notch.centerHz,
+                            notch.widthHz, notch.active);
+    }
+    m_channel->setNotchesEnabled(m_notchesEnabled);
     return true;
 }
 
@@ -136,6 +149,52 @@ void Hl2RxDsp::setShift(double shiftHz)
     m_shiftHz = shiftHz;
     if (m_channel)
         m_channel->setShift(shiftHz);
+}
+
+void Hl2RxDsp::addNotch(int index, double centerHz, double widthHz, bool active)
+{
+    // Clamp to what this channel can actually produce. WDSP would accept a
+    // narrower request and quietly widen it, leaving the operator with a notch
+    // wider than the one drawn on the panadapter and no way to tell.
+    widthHz = std::max(widthHz, kMinNotchWidthHz);
+    if (index < 0 || index > static_cast<int>(m_notches.size()))
+        return;
+    m_notches.insert(m_notches.begin() + index, Notch {centerHz, widthHz, active});
+    if (m_channel)
+        m_channel->addNotch(index, centerHz, widthHz, active);
+}
+
+void Hl2RxDsp::editNotch(int index, double centerHz, double widthHz, bool active)
+{
+    widthHz = std::max(widthHz, kMinNotchWidthHz);
+    if (index < 0 || index >= static_cast<int>(m_notches.size()))
+        return;
+    m_notches[static_cast<std::size_t>(index)] = Notch {centerHz, widthHz, active};
+    if (m_channel)
+        m_channel->editNotch(index, centerHz, widthHz, active);
+}
+
+void Hl2RxDsp::removeNotch(int index)
+{
+    if (index < 0 || index >= static_cast<int>(m_notches.size()))
+        return;
+    m_notches.erase(m_notches.begin() + index);
+    if (m_channel)
+        m_channel->removeNotch(index);
+}
+
+void Hl2RxDsp::setNotchesEnabled(bool on)
+{
+    m_notchesEnabled = on;
+    if (m_channel)
+        m_channel->setNotchesEnabled(on);
+}
+
+void Hl2RxDsp::setNotchTuneFrequency(double tuneHz)
+{
+    m_notchTuneHz = tuneHz;
+    if (m_channel)
+        m_channel->setNotchTuneFrequency(tuneHz);
 }
 
 bool Hl2RxDsp::spectrumFrameDue()

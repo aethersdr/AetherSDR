@@ -80,6 +80,10 @@ public:
     void setPanFrameRate(const QString& panId, int fps) override;
     bool createPanadapter() override;
     bool removePanadapter(const QString& panId) override;
+    void createNotch(double centerHz, double widthHz) override;
+    void setNotch(int notchId, const AetherSDR::NotchDelta& delta) override;
+    void removeNotch(int notchId) override;
+    void setNotchesEnabled(bool on) override;
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
@@ -198,6 +202,41 @@ private:
     // GUI THREAD ONLY. Nothing below the seam may touch this — see m_ioDsps for
     // what the sample path reads instead, and publishIoDsps() for why.
     std::vector<Receiver> m_rx;
+
+    // ── Manual notches ────────────────────────────────────────────────────
+    //
+    // The authoritative notch set, and the thing that reconciles two different
+    // ways of naming a notch. Above the seam a notch has a STABLE id that never
+    // changes; inside WDSP it has a POSITIONAL index that shifts every time an
+    // earlier notch is deleted. Keeping the vector in the same order WDSP keeps
+    // its database means the index is simply the position here, so the mapping
+    // is a lookup rather than a second table that can fall out of step.
+    //
+    // Notches are RADIO-WIDE, not per-receiver: an interferer is a fact about
+    // the band, so every receiver gets the same set applied to it. That also
+    // means a receiver created later has to be seeded (seedNotches).
+    //
+    // GUI thread only, like m_rx.
+    struct NotchRecord {
+        int id = 0;
+        double centerHz = 0.0;
+        double widthHz = 0.0;
+        bool active = true;
+    };
+    std::vector<NotchRecord> m_notches;
+    // Never reused, even after a removal. A recycled id would let a stale
+    // reference from the UI address a different notch than it meant to.
+    int m_nextNotchId = 1;
+    bool m_notchesEnabled = true;
+
+    // Index of `notchId` in m_notches — which IS its WDSP handle — or -1.
+    [[nodiscard]] int notchIndexFor(int notchId) const;
+    // Push the whole notch set + tune frequency into one receiver's chain. Used
+    // when a receiver appears after the notches did.
+    void seedNotches(const Receiver& r);
+    // Re-point one receiver's notch axis at its current NCO. Called wherever
+    // ncoHz changes; without it the notches stay where the NCO used to be.
+    void pushNotchTune(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
     //

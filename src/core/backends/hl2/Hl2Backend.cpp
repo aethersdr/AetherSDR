@@ -830,6 +830,10 @@ bool Hl2Backend::createPanadapter()
     }
     QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
         Q_ARG(double, r.sliceFreqHz - r.ncoHz));
+    // Notches are radio-wide, so a receiver that appears after them has to be
+    // brought up to date. Otherwise adding a second panadapter gives you one
+    // receiver with the interferer notched out and one without.
+    seedNotches(r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -1306,6 +1310,25 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasRadioSideWaterfallAutoBlack = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
+    // Manual notches, and the one piece of DSP on this radio that is NOT absent
+    // just because hasRadioSideDsp is false. The notch runs in WDSP on this
+    // host, which is the whole point: the HL2 sends raw IQ, so a notch either
+    // happens here or nowhere (oracle addendum 3 §B4).
+    //
+    // The ceiling is WDSP's own notch database size (RXA.c creates it with room
+    // for 1024), not a guess. Each active notch inside the passband adds a
+    // sub-band to the multi-bandpass mask, so the practical limit is taste
+    // rather than capacity.
+    c.maxNotchFilters = 1024;
+    // A WDSP notched bandpass is a full null. There is no depth parameter to
+    // map three Flex depths onto, so the depth submenu is hidden rather than
+    // offering three settings that behave identically.
+    c.notchHasDepth = false;
+    // Set by the RX filter length and enforced silently — see Hl2RxDsp's
+    // kMinNotchWidthHz. Reported so the UI's width choices match what the
+    // operator will actually hear.
+    c.notchMinWidthHz = Hl2RxDsp::kMinNotchWidthHz;
+    c.notchMaxWidthHz = 6000.0;
     c.hasGpsLocation = false;           // no GNSS receiver on the board
     // The HL2 declares PATEMP but no "+13.8A": PA temperature is a real reading
     // from this radio, the supply rail is not reported at all. Only the volts
@@ -1741,6 +1764,11 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
             QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
                 Q_ARG(int, ddc),
                 Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz < 0 ? 0 : hz)));
+        // Notch centres are measured from the NCO, so moving it without saying
+        // so leaves every notch parked at its old RF frequency — the operator
+        // tunes across the band and the notches follow them, which is precisely
+        // the behaviour a TRACKING notch exists to avoid.
+        pushNotchTune(*r);
     }
 
     // Shift by the slice's offset from the NCO, with the SAME sign.
@@ -2015,6 +2043,155 @@ void Hl2Backend::setTxSlice(int sliceId)
     emitSliceState(ddc);
 }
 
+// ── Manual notch filters ────────────────────────────────────────────────────
+//
+// The HL2 has no DSP of its own, so these are WDSP notches running on this
+// host — but from above the seam they behave exactly like a Flex TNF: placed at
+// an absolute RF frequency, and they stay on the interferer while the operator
+// tunes. That equivalence is the whole point of doing it here rather than
+// inventing a second, HL2-shaped notch concept.
+//
+// Every mutation is applied to EVERY receiver. A notch is a fact about the
+// band, not about one slice, and a second receiver looking at the same carrier
+// should not still hear it.
+
+int Hl2Backend::notchIndexFor(int notchId) const
+{
+    for (std::size_t index = 0; index < m_notches.size(); ++index) {
+        if (m_notches[index].id == notchId)
+            return static_cast<int>(index);
+    }
+    return -1;
+}
+
+void Hl2Backend::pushNotchTune(const Receiver& r)
+{
+    if (r.dsp)
+        QMetaObject::invokeMethod(r.dsp, "setNotchTuneFrequency", Qt::QueuedConnection,
+            Q_ARG(double, r.ncoHz));
+}
+
+void Hl2Backend::seedNotches(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Tune frequency before the notches: the centres are absolute, so a notch
+    // placed against a tune frequency of zero lands ~7 MHz away from where it
+    // was asked for.
+    pushNotchTune(r);
+    for (std::size_t index = 0; index < m_notches.size(); ++index) {
+        const NotchRecord& notch = m_notches[index];
+        QMetaObject::invokeMethod(r.dsp, "addNotch", Qt::QueuedConnection,
+            Q_ARG(int, static_cast<int>(index)), Q_ARG(double, notch.centerHz),
+            Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
+    }
+    QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
+        Q_ARG(bool, m_notchesEnabled));
+}
+
+void Hl2Backend::createNotch(double centerHz, double widthHz)
+{
+    if (centerHz <= 0.0 || !std::isfinite(centerHz) || !std::isfinite(widthHz))
+        return;
+    if (static_cast<int>(m_notches.size()) >= capabilities().maxNotchFilters)
+        return;
+    // Clamped to what the RX chain can actually produce, and reported back at
+    // the clamped value — so the panadapter draws the notch the operator is
+    // hearing rather than the one they asked for. WDSP would widen it silently.
+    const double width = std::max(widthHz, Hl2RxDsp::kMinNotchWidthHz);
+
+    NotchRecord notch;
+    notch.id = m_nextNotchId++;
+    notch.centerHz = centerHz;
+    notch.widthHz = width;
+    notch.active = true;
+    // Append, so the new notch's WDSP index is the old size on every receiver.
+    const int index = static_cast<int>(m_notches.size());
+    m_notches.push_back(notch);
+
+    for (const Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "addNotch", Qt::QueuedConnection,
+                Q_ARG(int, index), Q_ARG(double, notch.centerHz),
+                Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
+    }
+
+    // The id is minted HERE, so nothing above knows about this notch until it
+    // is told. Same contract as a Flex, where the radio assigns the id and
+    // reports it back as status.
+    AetherSDR::NotchDelta delta;
+    delta.centerHz = notch.centerHz;
+    delta.widthHz = notch.widthHz;
+    delta.active = notch.active;
+    emit notchChanged(notch.id, delta);
+}
+
+void Hl2Backend::setNotch(int notchId, const AetherSDR::NotchDelta& delta)
+{
+    const int index = notchIndexFor(notchId);
+    if (index < 0)
+        return;
+    NotchRecord& notch = m_notches[static_cast<std::size_t>(index)];
+
+    // depth and permanent are deliberately ignored rather than approximated.
+    // A WDSP notch is a full null with no depth, and there is nowhere in an HL2
+    // for a "permanent" notch to persist — capabilities().notchHasDepth is
+    // false so the UI never offers the first, and the second is a Flex concept
+    // the seam simply carries past us.
+    if (delta.centerHz && std::isfinite(*delta.centerHz))
+        notch.centerHz = *delta.centerHz;
+    if (delta.widthHz && std::isfinite(*delta.widthHz))
+        notch.widthHz = std::max(*delta.widthHz, Hl2RxDsp::kMinNotchWidthHz);
+    if (delta.active)
+        notch.active = *delta.active;
+
+    // ONE edit for a centre+width change, not two. That matters here in a way
+    // it does not on a Flex: each edit rebuilds the whole multi-bandpass filter
+    // mask, and a panadapter drag delivers these ~30 times a second.
+    for (const Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "editNotch", Qt::QueuedConnection,
+                Q_ARG(int, index), Q_ARG(double, notch.centerHz),
+                Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
+    }
+
+    // Echo the APPLIED values, which may differ from what was asked (width
+    // clamping). Reporting the request instead would let the overlay drift away
+    // from the audio a little more with every drag.
+    AetherSDR::NotchDelta applied;
+    applied.centerHz = notch.centerHz;
+    applied.widthHz = notch.widthHz;
+    applied.active = notch.active;
+    emit notchChanged(notch.id, applied);
+}
+
+void Hl2Backend::removeNotch(int notchId)
+{
+    const int index = notchIndexFor(notchId);
+    if (index < 0)
+        return;
+    // Erase here and in WDSP by the SAME index, which is what keeps position
+    // and identity in step: both sides close the gap, so every surviving
+    // notch's index shifts down by one on both sides at once.
+    m_notches.erase(m_notches.begin() + index);
+    for (const Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "removeNotch", Qt::QueuedConnection,
+                Q_ARG(int, index));
+    }
+    emit notchRemoved(notchId);
+}
+
+void Hl2Backend::setNotchesEnabled(bool on)
+{
+    m_notchesEnabled = on;
+    for (const Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
+                Q_ARG(bool, on));
+    }
+}
+
 void Hl2Backend::setPanCenter(const QString& panId, double hz)
 {
     // Moving the window means moving the DDC. The slice does NOT move with it —
@@ -2039,6 +2216,9 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz)
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
             Q_ARG(double, r->sliceFreqHz - r->ncoHz));
+    // The NCO moved, so the notch axis has to move with it. See the note at the
+    // matching site in setSliceFrequency.
+    pushNotchTune(*r);
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");

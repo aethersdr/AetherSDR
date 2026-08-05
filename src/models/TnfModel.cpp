@@ -47,6 +47,26 @@ void TnfModel::applyTnfStatus(int id, const QMap<QString, QString>& kvs)
     emit tnfChanged(id);
 }
 
+void TnfModel::applyNotchDelta(int id, const NotchDelta& delta)
+{
+    auto& t = m_tnfs[id];
+    t.id = id;
+    // Hz on the seam, MHz in the entry — the UI works in MHz because the
+    // panadapter does.
+    if (delta.centerHz)
+        t.freqMhz = *delta.centerHz / 1.0e6;
+    if (delta.widthHz)
+        t.widthHz = static_cast<int>(*delta.widthHz + 0.5);
+    if (delta.depthDb)
+        t.depthDb = *delta.depthDb;
+    if (delta.permanent)
+        t.permanent = *delta.permanent;
+
+    qCDebug(lcProtocol) << "TnfModel: notch" << id << "freq=" << t.freqMhz
+             << "width=" << t.widthHz;
+    emit tnfChanged(id);
+}
+
 void TnfModel::removeTnf(int id)
 {
     if (m_tnfs.remove(id)) {
@@ -66,12 +86,19 @@ void TnfModel::applyGlobalEnabled(bool on)
 
 void TnfModel::createTnf(double freqMhz)
 {
-    emit commandReady(QString("tnf create freq=%1").arg(freqMhz, 0, 'f', 6));
+    // Width comes from the model's own default rather than being left to the
+    // backend, so a notch is the same size wherever it is created. A Flex
+    // ignores it (its wire has no width at create time) and re-reports whatever
+    // the radio chose; a host-DSP backend honours it.
+    emit notchCreateRequested(freqMhz * 1.0e6,
+                              static_cast<double>(TnfEntry {}.widthHz));
 }
 
 void TnfModel::setTnfFreq(int id, double freqMhz)
 {
-    emit commandReady(QString("tnf set %1 freq=%2").arg(id).arg(freqMhz, 0, 'f', 6));
+    NotchDelta delta;
+    delta.centerHz = freqMhz * 1.0e6;
+    emit notchChangeRequested(id, delta);
 
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end() && !qFuzzyCompare(it->freqMhz + 1.0, freqMhz + 1.0)) {
@@ -83,7 +110,9 @@ void TnfModel::setTnfFreq(int id, double freqMhz)
 void TnfModel::setTnfWidth(int id, int widthHz)
 {
     const int clampedWidthHz = std::max(10, widthHz);
-    emit commandReady(QString("tnf set %1 width=%2").arg(id).arg(clampedWidthHz / 1.0e6, 0, 'f', 6));
+    NotchDelta delta;
+    delta.widthHz = static_cast<double>(clampedWidthHz);
+    emit notchChangeRequested(id, delta);
 
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end() && it->widthHz != clampedWidthHz) {
@@ -95,7 +124,9 @@ void TnfModel::setTnfWidth(int id, int widthHz)
 void TnfModel::setTnfDepth(int id, int depthDb)
 {
     const int clampedDepthDb = std::clamp(depthDb, 1, 3);
-    emit commandReady(QString("tnf set %1 depth=%2").arg(id).arg(clampedDepthDb));
+    NotchDelta delta;
+    delta.depthDb = clampedDepthDb;
+    emit notchChangeRequested(id, delta);
 
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end() && it->depthDb != clampedDepthDb) {
@@ -106,7 +137,9 @@ void TnfModel::setTnfDepth(int id, int depthDb)
 
 void TnfModel::setTnfPermanent(int id, bool on)
 {
-    emit commandReady(QString("tnf set %1 permanent=%2").arg(id).arg(on ? 1 : 0));
+    NotchDelta delta;
+    delta.permanent = on;
+    emit notchChangeRequested(id, delta);
     // Radio doesn't send status update — update locally
     auto it = m_tnfs.find(id);
     if (it != m_tnfs.end()) {
@@ -117,14 +150,14 @@ void TnfModel::setTnfPermanent(int id, bool on)
 
 void TnfModel::requestRemoveTnf(int id)
 {
-    emit commandReady(QString("tnf remove %1").arg(id));
+    emit notchRemoveRequested(id);
     // Radio does not send a removal status — remove optimistically
     removeTnf(id);
 }
 
 void TnfModel::requestGlobalTnfEnabled(bool on)
 {
-    emit commandReady(QString("radio set tnf_enabled=%1").arg(on ? 1 : 0));
+    emit notchesEnabledRequested(on);
     // Optimistic update — radio echoes tnf_enabled in status, but update
     // immediately so the UI reflects the change without waiting for the echo.
     if (m_globalEnabled != on) {

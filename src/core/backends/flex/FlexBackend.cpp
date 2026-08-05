@@ -1,5 +1,6 @@
 #include "core/backends/flex/FlexBackend.h"
 
+#include <algorithm>
 #include <limits>
 
 #include <QThread>
@@ -163,6 +164,18 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasRadioSideWaterfallAutoBlack = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
+    // TNFs. Neither FlexLib nor the `tnf` status declares a ceiling — Radio.cs
+    // keeps an unbounded list — so this is a UI-side sanity limit rather than a
+    // radio-reported one, and it is set high enough never to be the thing that
+    // stops an operator. Do NOT read it as a measured hardware figure.
+    caps.maxNotchFilters = 1000;
+    // A Flex TNF has three depths (normal / deep / very deep), unlike a
+    // host-DSP null.
+    caps.notchHasDepth = true;
+    // TnfModel's own floor. The radio reports width in Hz and accepts small
+    // values; 10 Hz is where the model clamps.
+    caps.notchMinWidthHz = 10.0;
+    caps.notchMaxWidthHz = 6000.0;
     // GPSDO / on-board GNSS, reported through the `gps` status.
     //
     // TRUE for every Flex, and deliberately COARSER than
@@ -252,6 +265,58 @@ void FlexBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     if (!mode.trimmed().isEmpty())
         sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(mode));
     sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(thresholdDb));
+}
+
+// ── Manual notch filters (TNF) ──────────────────────────────────────────────
+//
+// These emit exactly the strings TnfModel used to build itself, quirks
+// included, because the radio is the one thing this refactor must not notice.
+// The odd one is width: the radio REPORTS it in Hz but is WRITTEN in MHz, and
+// TnfModel has always sent it that way. Normalizing it here would be a wire
+// change wearing a cleanup's clothing.
+//
+// No id is minted locally. `tnf create` makes the radio assign one and report
+// it back as `tnf <id> …` status, which RadioModel already decodes — so unlike
+// a host-DSP backend, this one never emits notchChanged().
+void FlexBackend::createNotch(double centerHz, double widthHz)
+{
+    // Width is not settable at create time on the Flex wire; the radio picks a
+    // default and a follow-up `tnf set` resizes it. Accepted here so the seam
+    // reads the same for every backend.
+    Q_UNUSED(widthHz);
+    send(QStringLiteral("tnf create freq=%1").arg(centerHz / 1.0e6, 0, 'f', 6));
+}
+
+void FlexBackend::setNotch(int notchId, const AetherSDR::NotchDelta& delta)
+{
+    // One command per changed field, which is what the Flex wire takes. A drag
+    // therefore still sends two — that is the radio's protocol, not a lost
+    // optimization; the delta exists so a HOST-DSP backend can coalesce.
+    if (delta.centerHz)
+        send(QStringLiteral("tnf set %1 freq=%2")
+                 .arg(notchId).arg(*delta.centerHz / 1.0e6, 0, 'f', 6));
+    if (delta.widthHz)
+        send(QStringLiteral("tnf set %1 width=%2")
+                 .arg(notchId).arg(std::max(10.0, *delta.widthHz) / 1.0e6, 0, 'f', 6));
+    if (delta.depthDb)
+        send(QStringLiteral("tnf set %1 depth=%2")
+                 .arg(notchId).arg(std::clamp(*delta.depthDb, 1, 3)));
+    if (delta.permanent)
+        send(QStringLiteral("tnf set %1 permanent=%2")
+                 .arg(notchId).arg(*delta.permanent ? 1 : 0));
+    // `active` has no Flex wire equivalent — a TNF is present or removed, and
+    // the only bypass is the global tnf_enabled. Ignored rather than emulated
+    // by removing and recreating, which would change the notch's id.
+}
+
+void FlexBackend::removeNotch(int notchId)
+{
+    send(QStringLiteral("tnf remove %1").arg(notchId));
+}
+
+void FlexBackend::setNotchesEnabled(bool on)
+{
+    send(QStringLiteral("radio set tnf_enabled=%1").arg(on ? 1 : 0));
 }
 
 void FlexBackend::setPanCenter(const QString& panId, double hz)

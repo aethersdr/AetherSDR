@@ -105,6 +105,25 @@ public:
     // holds across a sample-rate change without needing to be recomputed.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
 
+    // ── Manual notch filters ──────────────────────────────────────────────
+    //
+    // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
+    // notch ids onto it — this class just does as it is told, in the order it
+    // is told, so the two stay in step across every receiver.
+    //
+    // Centres are ABSOLUTE RF Hz. setNotchTuneFrequency() must follow the NCO,
+    // or the notches stay where the NCO used to be.
+    //
+    // The set is MIRRORED here as well as in WDSP, because reconfigure()
+    // destroys the notch database along with the channel. Without the copy, an
+    // operator's notches vanish on a sample-rate change — the same reason the
+    // shift is kept.
+    Q_INVOKABLE void addNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void editNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void removeNotch(int index);
+    Q_INVOKABLE void setNotchesEnabled(bool on);
+    Q_INVOKABLE void setNotchTuneFrequency(double tuneHz);
+
     // Mute the DEMODULATOR while transmitting.
     //
     // Suppressing audio further downstream is not enough: this pipeline keeps
@@ -149,6 +168,19 @@ private:
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
     Config m_config;
+
+    // Notch set, mirrored so reconfigure() can replay it — see the note on
+    // addNotch(). Index in this vector IS the WDSP notch index; keeping them
+    // identical is the entire trick, and it works because every mutation here
+    // performs the same insert/erase WDSP performs.
+    struct Notch {
+        double centerHz = 0.0;
+        double widthHz = 0.0;
+        bool active = true;
+    };
+    std::vector<Notch> m_notches;
+    bool m_notchesEnabled = true;
+    double m_notchTuneHz = 0.0;
 
     bool m_audioMuted = false;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on
