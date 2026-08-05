@@ -187,6 +187,21 @@ jobs:
       - name: Test band edges and band-plan voice labels
         run: ctest --test-dir build -R "band_edges_test|bandplan_voice_labels_test" --output-on-failure
 
+      # hl2_am_dcblock_test joins the gate on the same test as the two steps
+      # above — it pins a defect nothing else in the tree could see. The AM/SAM
+      # carrier arrived in the demodulated audio as a DC pedestal 79% past full
+      # scale, and every existing HL2 assertion stayed green through it, because
+      # they all measure things a constant offset does not move. It is an offline
+      # burst feed with blockForOutput, so no wall clock and no event loop, and
+      # it runs in well under a second against a target the Build step already
+      # linked.
+      #
+      # The rest of the HL2 suite is deliberately NOT here: hl2_backend_test and
+      # friends run tens of seconds apiece against timers and sockets, which is
+      # what the weekly full-suite sanitizers job is for.
+      - name: Test HL2 AM/SAM DC blocker
+        run: ctest --test-dir build -R "hl2_am_dcblock_test" --output-on-failure
+
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted

@@ -3079,12 +3079,16 @@ target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
 
-# The RX DSP must demodulate at every IQ rate the operator can select by zooming.
+# AM/SAM come back from WDSP's envelope detector with the carrier as a DC
+# pedestal; the blocker on the audio output must strip it without touching the
+# modes that were already zero-mean, and without its corner creeping up into
+# the audio band.
 add_executable(hl2_am_dcblock_test tests/hl2_am_dcblock_test.cpp)
 target_include_directories(hl2_am_dcblock_test PRIVATE src)
 target_link_libraries(hl2_am_dcblock_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_am_dcblock_test COMMAND hl2_am_dcblock_test)
 
+# The RX DSP must demodulate at every IQ rate the operator can select by zooming.
 add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
 target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)

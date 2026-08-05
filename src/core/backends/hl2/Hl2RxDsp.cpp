@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 
 namespace AetherSDR::hl2 {
 
@@ -83,9 +82,8 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     // DC blocker pole for the AUDIO rate — the blocker runs on WdspChannel's
     // output, not on its 48 kHz internal rate. Recomputed here so a rate change
     // keeps the same corner frequency instead of moving it.
-    const float pole = static_cast<float>(
-        std::exp(-2.0 * std::numbers::pi * kDcBlockerCornerHz /
-                 static_cast<double>(config.audioSampleRateHz)));
+    const float pole = dcBlockerPole(kDcBlockerCornerHz,
+                                     static_cast<double>(config.audioSampleRateHz));
     m_dcBlockL.r = pole;
     m_dcBlockR.r = pole;
     m_dcBlockL.reset();
