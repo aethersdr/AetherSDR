@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <exception>
+#include <mutex>
+#include <set>
 
 #include <ggml-backend.h>
 #include <whisper.h>
@@ -145,7 +147,11 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
     // gpu_device selects the GPU (index among GPU devices; see asrGpuDevices), or
     // -1 to force CPU. Otherwise use a GPU backend (Vulkan/Metal) when one is
     // compiled in and present; ggml falls back to CPU automatically when not.
-    const bool useGpu = m_gpuDevice >= 0 && asrGpuAvailable();
+    // A device that failed a load earlier this session is never re-entered:
+    // ggml's GPU instance state is sticky, and a second attempt against it can
+    // fault below the level any caller can guard (#4502).
+    const bool useGpu =
+        m_gpuDevice >= 0 && asrGpuAvailable() && !asrGpuDeviceFailed(m_gpuDevice);
     cparams.use_gpu = useGpu;
     cparams.gpu_device = useGpu ? m_gpuDevice : 0;
 
@@ -160,6 +166,7 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         qCWarning(lcAsrWhisper) << "GPU model load failed"
                                 << (failure.isEmpty() ? QStringLiteral("(null context)") : failure)
                                 << "- retrying on CPU";
+        asrMarkGpuDeviceFailed(m_gpuDevice);
         cparams.use_gpu = false;
         cparams.gpu_device = 0;
         m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
@@ -281,6 +288,96 @@ std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QSt
     };
 }
 
+namespace {
+
+// Devices whose model load failed this run. Whisper loads happen on the ASR
+// worker thread while enumeration runs on a QtConcurrent pool thread, so the
+// set is mutex-guarded. Never cleared: see asrMarkGpuDeviceFailed's contract.
+std::mutex& asrFailedGpuMutex()
+{
+    static std::mutex m;
+    return m;
+}
+
+std::set<int>& asrFailedGpuDevices()
+{
+    static std::set<int> failed;
+    return failed;
+}
+
+// Whether `dev` can run the kernels whisper's heavy path schedules on the GPU.
+// Probed through the public ggml_backend_dev_supports_op with synthetic ops — a
+// contiguous F32 soft-max, an F16 mat-mul, and a flash-attention op (whisper
+// enables flash attention unconditionally) — rather than by reading
+// backend-internal device properties, so one probe serves every GPU backend.
+// supports_op only consults device properties: nothing is compiled or allocated
+// (no_alloc context, freed before returning).
+//
+// On the Vulkan backends this is deliberately the FIRST touch of the device:
+// ggml_backend_vk_device_supports_op resolves ggml_vk_get_device, which creates
+// the logical device. A driver stack that cannot create one fails here — once,
+// early, and survivably — instead of at model-load time, where a repeat attempt
+// against ggml's already-initialised instance state is no longer recoverable.
+bool asrDeviceUsableForDecode(ggml_backend_dev_t dev)
+{
+    ggml_init_params params = {};
+    params.mem_size = 16 * 1024;
+    params.no_alloc = true;
+    ggml_context* ctx = ggml_init(params);
+    if (ctx == nullptr) {
+        return false;
+    }
+    ggml_tensor* act = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
+    ggml_tensor* softMax = ggml_soft_max(ctx, act);
+    ggml_tensor* weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 64, 64);
+    ggml_tensor* mulMat = ggml_mul_mat(ctx, weights, act);
+    // Head dim 64 + F16 K/V mirrors whisper's encoder.
+    ggml_tensor* q = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 64, 4, 8);
+    ggml_tensor* k = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 64, 4, 8);
+    ggml_tensor* v = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 64, 4, 8);
+    ggml_tensor* flashAttn =
+        ggml_flash_attn_ext(ctx, q, k, v, nullptr, 1.0f, 0.0f, 0.0f);
+    const bool usable = ggml_backend_dev_supports_op(dev, softMax)
+        && ggml_backend_dev_supports_op(dev, mulMat)
+        && ggml_backend_dev_supports_op(dev, flashAttn);
+    ggml_free(ctx);
+    return usable;
+}
+
+} // namespace
+
+void asrMarkGpuDeviceFailed(int index)
+{
+    if (index < 0) {
+        return; // CPU is the fallback; it is never latched out
+    }
+    const std::lock_guard<std::mutex> lock(asrFailedGpuMutex());
+    if (asrFailedGpuDevices().insert(index).second) {
+        qCWarning(lcAsrWhisper)
+            << "GPU device" << index
+            << "marked unusable for the rest of this session after a failed load";
+    }
+}
+
+bool asrGpuDeviceFailed(int index)
+{
+    if (index < 0) {
+        return false;
+    }
+    const std::lock_guard<std::mutex> lock(asrFailedGpuMutex());
+    return asrFailedGpuDevices().count(index) > 0;
+}
+
+int asrResolveDefaultGpuIndex(const std::vector<AsrGpuDevice>& devices)
+{
+    for (const AsrGpuDevice& d : devices) {
+        if (d.usable) {
+            return d.index;
+        }
+    }
+    return -1; // CPU
+}
+
 std::vector<AsrGpuDevice> asrGpuDevices()
 {
     if (!asrMetalUsableHost()) {
@@ -307,6 +404,50 @@ std::vector<AsrGpuDevice> asrGpuDevices()
                 AsrGpuDevice d;
                 d.index = index++;
                 d.name = QString::fromUtf8(ggml_backend_dev_description(dev));
+                // A device that already failed a load this session stays
+                // unusable no matter what the probe would now say — and is not
+                // re-probed, since probing is itself a device-creation attempt.
+                if (asrGpuDeviceFailed(d.index)) {
+                    d.usable = false;
+                } else {
+                    // Probe each device inside its own guard: on the Vulkan
+                    // backends this creates the logical device, so a broken
+                    // driver throws here. That verdict belongs to this device
+                    // alone — a second, healthy GPU in the same box must stay
+                    // usable. The device is kept in the list either way, so
+                    // the indices whisper's gpu_device refers to never shift.
+                    try {
+                        d.usable = asrDeviceUsableForDecode(dev);
+                        if (!d.usable) {
+                            qCInfo(lcAsrWhisper)
+                                << "GPU device" << d.index << d.name
+                                << "fails the decode capability probe - not offered as default";
+                        }
+                    } catch (const std::exception& e) {
+                        // A THROW here means device creation itself failed, so
+                        // ggml's instance state is now half-initialised for
+                        // this device. Latch it out: a later attempt — an
+                        // explicit pick, or a restored preference — would be
+                        // the second creation attempt, which can fault below
+                        // any guard (#4502). A probe that merely returns false
+                        // is not latched: that device was created fine, it
+                        // just cannot run the decode, and staying selectable
+                        // for diagnostics is harmless.
+                        d.usable = false;
+                        asrMarkGpuDeviceFailed(d.index);
+                        qCWarning(lcAsrWhisper)
+                            << "GPU device" << d.index << d.name
+                            << "failed the capability probe:" << e.what()
+                            << "- not offered, and not retried this session";
+                    } catch (...) {
+                        d.usable = false;
+                        asrMarkGpuDeviceFailed(d.index);
+                        qCWarning(lcAsrWhisper)
+                            << "GPU device" << d.index << d.name
+                            << "failed the capability probe (unknown exception)"
+                            << "- not offered, and not retried this session";
+                    }
+                }
                 devices.push_back(std::move(d));
             }
         }

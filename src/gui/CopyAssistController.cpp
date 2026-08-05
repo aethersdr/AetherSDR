@@ -155,7 +155,8 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     const QString savedGpu =
         CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QString()).toString();
     if (!savedGpu.isEmpty()) {
-        m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice always wins
+        m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice wins, unless it is known bad
+        m_gpuDeviceExplicit = true;
     }
     m_settings->setCurrentTier(m_tierId);
 
@@ -229,6 +230,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             return;
         }
         m_gpuDevice = index;
+        m_gpuDeviceExplicit = true;
         saveInt("AsrGpuDevice", index);
         if (m_backend != AsrBackendKind::Remote) {
             m_tap->setEnabled(false);
@@ -462,11 +464,42 @@ void CopyAssistController::startGpuDiscovery()
     });
 }
 
+void CopyAssistController::reconcileAfterGpuFallback()
+{
+    // The backend already retried on CPU and is running; this only brings the
+    // UI and the stored resolution in line with what actually happened, so the
+    // next load does not aim at the failed device again.
+    const int failedDevice = m_gpuDevice;
+    for (AsrGpuDevice& d : m_gpuDevices) {
+        if (d.index == failedDevice) {
+            d.usable = false;
+        }
+    }
+    const QString failedName = [&] {
+        for (const AsrGpuDevice& d : m_gpuDevices) {
+            if (d.index == failedDevice) {
+                return d.name;
+            }
+        }
+        return tr("The selected GPU");
+    }();
+
+    // A device known bad must be overridden even when explicitly chosen.
+    m_gpuDeviceExplicit = false;
+    applyGpuDevices(m_gpuDevices);
+
+    const bool onCpu = m_gpuDevice < 0;
+    m_panel->setStatus(onCpu
+        ? tr("%1 is unavailable — running on CPU. Transcription will be slower.")
+              .arg(failedName)
+        : tr("%1 is unavailable — switched to another GPU.").arg(failedName));
+}
+
 void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus)
 {
+    m_gpuDevices = gpus;
     const int previousDevice = m_gpuDevice;
     int resolvedDevice = previousDevice;
-    bool persistResolvedDevice = false;
 
     // Adding or clearing combo items changes its current index. Suppress the
     // dialog's outward gpuChanged/tierChanged signals while discovery state is
@@ -478,23 +511,52 @@ void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus
 
         if (!gpus.empty()) {
             for (const AsrGpuDevice& gpu : gpus) {
-                m_settings->addGpuDevice(gpu.index, gpu.name);
+                // An unusable device stays selectable for diagnostics, but the
+                // combo says why it is not the default — whether it failed the
+                // capability probe or a load attempt this session.
+                m_settings->addGpuDevice(gpu.index,
+                                         gpu.usable ? gpu.name
+                                                    : tr("%1 (unavailable)").arg(gpu.name));
             }
             m_settings->addGpuDevice(-1, tr("CPU")); // explicit force-CPU option
 
-            if (resolvedDevice != -1
-                && (resolvedDevice < 0
-                    || resolvedDevice >= static_cast<int>(gpus.size()))) {
-                resolvedDevice = 0;
-                persistResolvedDevice = true;
+            const bool outOfRange = resolvedDevice != -1
+                && (resolvedDevice < 0 || resolvedDevice >= static_cast<int>(gpus.size()));
+            const bool resolvedUnusable = [&] {
+                for (const AsrGpuDevice& g : gpus) {
+                    if (g.index == resolvedDevice) {
+                        return !g.usable;
+                    }
+                }
+                return false;
+            }();
+            // Fall back to the first usable device (else CPU) when the choice
+            // was never explicit, has gone out of range, or names a device that
+            // cannot run the decode. A device the operator picked explicitly is
+            // still overridden once it is known-bad — leaving it selected would
+            // re-enter the failure on the next load.
+            // Not persisted: an unusable device can become usable again after a
+            // driver fix or reboot, and writing a computed value over the saved
+            // preference would pin that computation permanently.
+            if (!m_gpuDeviceExplicit || outOfRange || resolvedUnusable) {
+                resolvedDevice = asrResolveDefaultGpuIndex(gpus);
             }
             m_settings->setCurrentGpu(resolvedDevice);
             m_settings->setGpuSelectorVisible(true);
             m_settings->setGpuSelectorEnabled(true);
 
-            // Preserve the existing GPU-host default, but only while the
-            // operator has not made an explicit model choice during the probe.
-            if (m_useGpuDefaultIfAvailable) {
+            // Preserve the GPU-host default tier, but only while the operator
+            // has not made an explicit model choice, and only when the decode
+            // will actually run on a usable GPU — a CPU resolution must not
+            // select the heaviest model, which cannot keep up off a GPU.
+            const AsrGpuDevice* resolved = nullptr;
+            for (const AsrGpuDevice& g : gpus) {
+                if (g.index == resolvedDevice) {
+                    resolved = &g;
+                    break;
+                }
+            }
+            if (m_useGpuDefaultIfAvailable && resolved != nullptr && resolved->usable) {
                 m_tierId = QStringLiteral("large-v3-turbo");
                 m_settings->setCurrentTier(m_tierId);
             }
@@ -510,9 +572,6 @@ void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus
     }
 
     m_gpuDevice = resolvedDevice;
-    if (persistResolvedDevice) {
-        saveInt("AsrGpuDevice", resolvedDevice);
-    }
     if (resolvedDevice != previousDevice && m_backend == AsrBackendKind::Whisper) {
         m_tap->setEnabled(false);
         buildEngine();
@@ -575,6 +634,15 @@ void CopyAssistController::buildEngine()
             m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
                                                                    : tr("Listening…"));
             writeFreqMarkerIfNeeded(); // "on start": head the log with the frequency
+        }
+        // The model loaded, but the backend may have got there by falling back
+        // to CPU after the chosen GPU failed. The latch is the only signal —
+        // a successful fallback still reports ready() — so ask it, then make
+        // the selectors tell the truth instead of naming a device that is not
+        // running the decode (#4502).
+        if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
+            && asrGpuDeviceFailed(m_gpuDevice)) {
+            reconcileAfterGpuFallback();
         }
     });
     connect(m_asr, &AsrEngine::loadFailed, this, [this](const QString& err) {

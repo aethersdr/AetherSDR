@@ -59,6 +59,10 @@ private slots:
 private:
     void startGpuDiscovery();
     void applyGpuDevices(const std::vector<AsrGpuDevice>& gpus);
+    // Reconcile the selectors after a GPU model load failed and the backend
+    // silently continued on CPU: relabel the device, move the selection off it,
+    // drop a GPU-only tier, and say so in the panel status.
+    void reconcileAfterGpuFallback();
     void buildEngine();  // (re)create the engine+tap for the current backend
     void applyTuning();  // push saved VAD tuning into the engine
     void requestEnable(); // defer local Whisper until async GPU discovery finishes
@@ -99,7 +103,11 @@ private:
     bool m_useGpuDefaultIfAvailable = false; // cleared by any explicit tier choice
     bool m_gpuDiscoveryPending = true;
     bool m_enableAfterGpuDiscovery = false;
+    bool m_gpuDeviceExplicit = false; // the operator picked this device themselves
     int m_gpuDevice = 0; // resolved default or explicit setting; -1 forces CPU
+    // Last device list from discovery, kept so a runtime GPU failure can be
+    // reconciled into the selectors without re-running (and re-probing) it.
+    std::vector<AsrGpuDevice> m_gpuDevices;
     QString m_tierId;
     QString m_customModelPath; // user-picked local model (for the "Custom model…" tier)
     QString m_sherpaModelDir;  // user-picked sherpa-onnx model directory

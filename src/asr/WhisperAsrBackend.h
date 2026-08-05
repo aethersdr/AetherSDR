@@ -37,9 +37,12 @@ private:
 
 // A selectable GPU: `index` is the value to pass as gpuDevice (its position among
 // GPU/IGPU devices in ggml's enumeration order); `name` is a human description.
+// `usable` is the session verdict: false when the device failed the decode
+// capability probe, or when a model load on it failed earlier this run.
 struct AsrGpuDevice {
     int index = 0;
     QString name;
+    bool usable = true;
 };
 
 // Factory for wiring AsrEngine to the production whisper backend. Kept here so
@@ -55,6 +58,17 @@ bool asrGpuAvailable();
 // All selectable GPU devices (discrete + integrated), in the order whisper's
 // gpu_device indexes them. Empty on CPU-only builds / GPU-less hosts.
 std::vector<AsrGpuDevice> asrGpuDevices();
+
+// The device index to default to: the first usable device, or -1 (CPU) when none
+// is. An unusable device stays selectable — it is simply never chosen for you.
+int asrResolveDefaultGpuIndex(const std::vector<AsrGpuDevice>& devices);
+
+// Session failure latch. A GPU whose model load failed once must never be tried
+// again in this process: ggml's Vulkan instance state is sticky, so the first
+// failure is survivable but a second attempt on the poisoned state can fault
+// somewhere no caller can catch. Marking is one-way and lives until restart.
+void asrMarkGpuDeviceFailed(int index);
+bool asrGpuDeviceFailed(int index);
 
 // A selectable transcription language: `code` is the ISO code passed to the
 // backend (e.g. "en", "es"); `name` is the English display name ("English").
