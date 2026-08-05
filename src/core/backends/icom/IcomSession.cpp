@@ -70,7 +70,25 @@ bool IcomSession::start(const Params& params)
     connect(m_audio, &IcomStream::ready, this, &IcomSession::onAudioReady);
     connect(m_audio, &IcomStream::payloadReady, this, &IcomSession::onAudioPayload);
     connect(m_audio, &IcomStream::failed, this, &IcomSession::fail);
-    connect(m_audio, &IcomStream::packetsLost, this, &IcomSession::audioLost);
+    // LOSS IS CONCEALED, not merely counted.
+    //
+    // This used to forward the count and stop there, and nothing downstream
+    // connected to audioLost — so when the reorder buffer gave up and skipped
+    // forward, the decoded stream simply got shorter by that many packets and
+    // the receive timeline WALKED. RxAssembler::concealLoss() existed for
+    // exactly this and was reachable only from its own unit test, which read
+    // as implemented while doing nothing.
+    //
+    // Emitting the fill through the same audioReady path keeps the timeline
+    // continuous; the signal still goes out so a consumer can count the gaps.
+    connect(m_audio, &IcomStream::packetsLost, this, [this](int packets) {
+        emit audioLost(packets);
+        if (packets <= 0)
+            return;
+        auto fill = m_rx.concealLoss(packets, m_params.sampleRateHz);
+        if (!fill.empty())
+            emit audioReady(fill);
+    });
 
     m_control = new IcomStream(this);
     connect(m_control, &IcomStream::ready, this, &IcomSession::onControlReady);

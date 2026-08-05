@@ -1199,7 +1199,13 @@ std::optional<std::vector<std::uint8_t>> parseHexBytes(const QString& in)
         else
             return std::nullopt;
     }
-    // Tolerate an 0x prefix per byte by stripping it only where it is a prefix.
+    // Strip any "0x" pairs. NOTE this removes EVERY occurrence, not only
+    // leading ones — "270x15" compacts the same way "0x27 0x15" does. Harmless,
+    // because anything it would mangle was not valid hex to begin with, but the
+    // filter is not the thing making that safe: isLetterOrNumber() above admits
+    // 'g'-'z' and non-ASCII digits, and it is toUInt(&ok, 16) below that
+    // rejects them. Correctness here is downstream, deliberately, rather than
+    // in the character filter.
     compact.remove(QLatin1String("0x"), Qt::CaseInsensitive);
     if (compact.isEmpty() || compact.size() % 2 != 0)
         return std::nullopt;

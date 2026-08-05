@@ -360,6 +360,19 @@ public:
     virtual void setXitEnabled(bool on) { Q_UNUSED(on); }
     virtual void setRitOffset(int hz) { Q_UNUSED(hz); }
 
+    // The TRANSMIT offset, separately from the receive one.
+    //
+    // Defaults to setRitOffset() because the radio this seam was first shaped
+    // against has ONE shared register: an IC-705 keeps the shift in 21 00 and
+    // uses 21 01 / 21 02 only to choose whether it applies to receive, transmit
+    // or both. A radio with two independent registers — a Flex has separate
+    // rit_freq and xit_freq — overrides this and stops the two aliasing.
+    //
+    // Split out because without it the seam had two enables and one offset, and
+    // an XIT intent silently wrote the RIT register on every backend rather
+    // than only on the one where that is the truth.
+    virtual void setXitOffset(int hz) { setRitOffset(hz); }
+
     // Transmit audio passband, in Hz above the carrier — the Phone applet's TX
     // low-cut and high-cut.
     //

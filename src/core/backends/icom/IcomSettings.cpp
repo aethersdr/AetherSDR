@@ -52,8 +52,16 @@ QJsonObject IcomSettings::readObj()
 
 void IcomSettings::writeObj(const QJsonObject& obj)
 {
-    AppSettings::instance().setValue(
-        kRootKey, QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    auto& s = AppSettings::instance();
+    s.setValue(kRootKey,
+               QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    // COMMIT. setValue() only inserts into the in-memory map and marks the row
+    // dirty; save() is what runs the transaction, and there is no autosave
+    // timer. Without this the host, user name and ports reach disk only when
+    // some unrelated caller happens to save() later in the session — which is
+    // why this looked like it worked. Hl2Settings::setSpanMhz, the sibling this
+    // is modelled on, calls both.
+    s.save();
 }
 
 QString IcomSettings::username()

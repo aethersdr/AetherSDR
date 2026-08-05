@@ -1032,7 +1032,10 @@ void RadioModel::setupBackend(const QString& family)
             connect(s, &SliceModel::xitCommandIssued, this, [this](bool on, int hz) {
                 if (!m_backend) return;
                 m_backend->setXitEnabled(on);
-                m_backend->setRitOffset(hz);
+                // The TRANSMIT offset verb, which defaults to the receive one
+                // for a radio with a single shared register (Icom) and is
+                // overridable by a radio with two (Flex).
+                m_backend->setXitOffset(hz);
             });
 
             wireSliceAudioIntentsToBackend(s);

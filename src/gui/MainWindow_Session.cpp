@@ -588,15 +588,11 @@ void MainWindow::wireRadioModel()
         // second. Gating it on the first meant an Icom captured nothing,
         // processed nothing and emitted nothing: the radio keyed and put no
         // modulation on the air.
-        const bool hostModulates = caps.hostModulates && caps.canTransmit;
         const bool seamTxAudio = caps.takesTxAudioOverSeam && caps.canTransmit;
         m_audio->setHostModulation(seamTxAudio && connected);
         // PC audio is not optional on a host-modulating backend: all audio, both
         // directions, lives on this computer. Turning it off would leave the
         // operator deaf and mute with nothing to explain it.
-        // PC audio is not optional when all the audio lives here, which is true
-        // of any backend that both owns RX audio and takes TX audio over the
-        // seam — not only of one that modulates locally.
         if (m_titleBar)
             m_titleBar->setPcAudioLocked(connected && seamTxAudio);
         if (connected && seamTxAudio) {

@@ -173,6 +173,20 @@ void LogManager::setEnabled(const QString& id, bool on)
     // exactly the one you need at 2am.
     if (!on)
         return;   // nothing to turn off, and no reason to accrue an entry
+
+    // VALIDATE BEFORE IT REACHES THE FILTER RULES (Principle VII).
+    // applyFilterRules() splices this id into a rule string and hands the whole
+    // thing to QLoggingCategory::setFilterRules(), so an id carrying '=' or a
+    // newline injects rules of its own — and the bridge's `log set <id> on` is a
+    // reachable caller. The cap stops a scripted caller growing the PERSISTED
+    // list without bound, since every distinct id appends an entry and
+    // saveSettings() writes it.
+    static const QRegularExpression kCategoryName(
+        QStringLiteral("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$"));
+    if (!kCategoryName.match(id).hasMatch() || m_categories.size() >= kMaxCategories) {
+        qWarning() << "LogManager: refusing to register category" << id;
+        return;
+    }
     m_categories.append({id, id, QStringLiteral("Registered on demand")});
     m_categories.last().enabled = true;
     applyFilterRules();
