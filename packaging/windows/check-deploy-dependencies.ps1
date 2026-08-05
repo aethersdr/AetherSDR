@@ -35,6 +35,11 @@
     Override the Windows system directory used to resolve OS DLLs.
 #>
 
+# Keep this file ASCII-only -- see the note at the top of stage-msvc-runtime.ps1.
+# Both scripts are invoked with `powershell` (5.1), where a UTF-8 em-dash inside
+# a double-quoted string terminates that string under CP1252 decoding and the
+# file fails to parse.
+
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
@@ -46,7 +51,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # msvcrt.dll (no digits after the prefix) is the OS-provided legacy CRT and is
-# intentionally NOT matched — only the redistributable, versioned runtimes are.
+# intentionally NOT matched -- only the redistributable, versioned runtimes are.
 #
 # An "mfc" hit means "add the Microsoft.VC<nnn>.MFC redist directory to
 # stage-msvc-runtime.ps1", not "the payload is broken": MFC ships in a third
@@ -96,7 +101,7 @@ function Get-PeDependencies {
     # Scope ErrorActionPreference around the native call. Windows PowerShell 5.1
     # (what the CI step invokes, not pwsh 7) turns each stderr line of a native
     # command redirected with 2>&1 into an ErrorRecord, and under "Stop" that is
-    # a terminating NativeCommandError raised before $LASTEXITCODE is read — so
+    # a terminating NativeCommandError raised before $LASTEXITCODE is read -- so
     # a benign dumpbin warning (LNK4048 on a file that is not a well-formed PE)
     # would kill the job with an opaque error instead of the message below.
     $output = & {
@@ -148,7 +153,7 @@ function Test-DependencySatisfied {
         return "shipped"
     }
 
-    # Checked before the System32 probe on purpose — see the header comment.
+    # Checked before the System32 probe on purpose -- see the header comment.
     if ($Name -match $RuntimeDllPattern) {
         return "missing-runtime"
     }
@@ -181,8 +186,8 @@ if (-not $images) {
 }
 
 # Index every shipped file by bare name, including the ones in subdirectories.
-# That is deliberately more permissive than the real loader — a DLL sitting only
-# in deploy\imageformats\ would not satisfy an import from deploy\platforms\ —
+# That is deliberately more permissive than the real loader -- a DLL sitting only
+# in deploy\imageformats\ would not satisfy an import from deploy\platforms\ --
 # and it errs toward passing on purpose: a false failure blocking a release is
 # worse than missing an exotic cross-plugin case.
 $shippedFiles = @{}
@@ -199,18 +204,18 @@ foreach ($image in $images) {
     foreach ($dep in $deps.Direct) {
         $verdict = Test-DependencySatisfied -Name $dep -ShippedFiles $shippedFiles -SystemDirectory $SystemDir
         if ($verdict -eq "missing-runtime") {
-            $failures += "$($image.Name) imports $dep — MSVC runtime not staged app-local"
+            $failures += "$($image.Name) imports $dep -- MSVC runtime not staged app-local"
         } elseif ($verdict -eq "missing") {
-            $failures += "$($image.Name) imports $dep — not in the payload and not a system DLL"
+            $failures += "$($image.Name) imports $dep -- not in the payload and not a system DLL"
         }
     }
 
     foreach ($dep in $deps.Delayed) {
         $verdict = Test-DependencySatisfied -Name $dep -ShippedFiles $shippedFiles -SystemDirectory $SystemDir
         if ($verdict -eq "missing-runtime") {
-            $failures += "$($image.Name) delay-loads $dep — MSVC runtime not staged app-local"
+            $failures += "$($image.Name) delay-loads $dep -- MSVC runtime not staged app-local"
         } elseif ($verdict -eq "missing") {
-            $warnings += "$($image.Name) delay-loads $dep — not in the payload and not a system DLL"
+            $warnings += "$($image.Name) delay-loads $dep -- not in the payload and not a system DLL"
         }
     }
 }

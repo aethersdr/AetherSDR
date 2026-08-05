@@ -9,17 +9,25 @@
     through ilammy/msvc-dev-cmd before packaging.
 
     The OpenMP runtime (vcomp140.dll) ships in a SEPARATE redist directory,
-    Microsoft.VC<nnn>.OpenMP, sitting next to the CRT one — it is not in
+    Microsoft.VC<nnn>.OpenMP, sitting next to the CRT one -- it is not in
     Microsoft.VC*.CRT. ggml is compiled with /openmp (GGML_OPENMP defaults ON)
     and its static libs carry /DEFAULTLIB:"VCOMP", so AetherSDR.exe imports
     vcomp140.dll directly. Staging only the CRT left that one import to be
     satisfied by whatever machine-wide redistributable happened to be present,
     and any other installer repairing/downgrading/removing it produced
-    "VCOMP140.DLL was not found" on startup — unfixable by reinstalling
+    "VCOMP140.DLL was not found" on startup -- unfixable by reinstalling
     AetherSDR, because the file was never in our payload (#4781). Both
     directories are staged here, version-matched, so the payload is
     self-contained.
 #>
+
+# Keep this file ASCII-only. CI runs it with `powershell` (Windows PowerShell
+# 5.1), which decodes a BOM-less .ps1 as the ANSI codepage: a UTF-8 em-dash
+# becomes the three characters `a"` in CP1252, and PowerShell honours that curly
+# quote as a string delimiter. Inside a double-quoted string that ends the string
+# early and the whole file fails to PARSE -- not a cosmetic mojibake, a script
+# that never runs. The sibling scripts under scripts/setup/ do contain non-ASCII
+# and are fine only because the workflow invokes those with `pwsh` (UTF-8).
 
 [CmdletBinding()]
 param(
@@ -88,7 +96,7 @@ if (-not $runtimeDir) {
 # above sorts descending to take the newest, so an independent search with its
 # own ordering could silently pick a different toolset the moment the redist
 # layout stops being version-scoped. Deriving the name makes the version match
-# an invariant rather than a coincidence — Microsoft.VC143.CRT pairs with
+# an invariant rather than a coincidence -- Microsoft.VC143.CRT pairs with
 # Microsoft.VC143.OpenMP, and nothing else.
 $redistArchRoot = Split-Path -Parent $runtimeDir.FullName
 $openMpDirName = $runtimeDir.Name -replace '\.CRT$', '.OpenMP'
@@ -126,7 +134,7 @@ foreach ($sourceDir in $sourceDirs) {
 # Guard the one file this whole script exists to guarantee: a future refactor
 # that loses it again must fail here, not in a user's startup dialog.
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedOutputDir "vcomp140.dll"))) {
-    throw "vcomp140.dll was not staged from $($openMpDir.FullName) — the payload would fail to start on machines without a system-wide VC++ redistributable."
+    throw "vcomp140.dll was not staged from $($openMpDir.FullName) -- the payload would fail to start on machines without a system-wide VC++ redistributable."
 }
 
 Get-ChildItem -LiteralPath $resolvedOutputDir -File -Filter "*.dll" |
