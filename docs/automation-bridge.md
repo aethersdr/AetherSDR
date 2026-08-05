@@ -1228,6 +1228,46 @@ re-poll `get slices`.
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
 
+### `notch`
+
+Manual notch filters — a Flex TNF, or the WDSP null that stands in for one on a
+radio with no DSP of its own (HL2). All actions are RX/config; none keys the
+transmitter.
+
+Driven through `TnfModel`'s operator setters, so the intent reaches
+`IRadioBackend`'s notch verbs and not just the model. Notch **ids are assigned
+by the backend** — a Flex mints them in the radio, a host-DSP backend in this
+process — so `add` cannot tell you the id it created. Re-poll `notch list`.
+
+```json
+→ {"cmd":"notch","action":"list"}
+← {"ok":true,"notch":"list","enabled":true,"maxNotchFilters":1024,
+   "minWidthHz":50,"hasDepth":false,"notches":[]}
+
+→ {"cmd":"notch","action":"add","value":"7.041"}
+← {"ok":true,"notch":"add","freqMhz":7.041,"notches":[{"id":1,"freqMhz":7.041,"widthHz":100,…}]}
+
+→ {"cmd":"notch","action":"set","value":"1 width=200"}
+← {"ok":true,"notch":"set","id":1,"notches":[{"id":1,"freqMhz":7.041,"widthHz":200,…}]}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `list` | — | every notch the model holds, plus the radio's declared `maxNotchFilters`, `minWidthHz` and `hasDepth`. **Report the capabilities alongside the list deliberately:** an empty list on a radio that cannot notch is indistinguishable from a notch that was placed and silently dropped, and only `maxNotchFilters` tells the two apart |
+| `add` | `<freqMhz>` | place a notch at an absolute RF frequency. The width comes from the model's create default; pass it and it is echoed but not honoured. Async on Flex (the radio assigns the id) — re-poll `list` |
+| `set` | `<id> [freq=<mhz>] [width=<hz>] [depth=<1-3>]` | move, resize, or re-depth an existing notch. Multiple keys in one call arrive at the backend as one delta, which is what a panadapter drag does. `depth` is Flex-only — a WDSP notch is a full null, and `hasDepth` in `list` says which you have |
+| `remove` | `<id>` | remove a notch. Removal is optimistic in the model, so `list` reflects it immediately |
+| `enable` | `0` / `1` | the global notch bypass (`tnf_enabled` on a Flex). Individual notches keep their own state underneath |
+
+**Proving a notch actually works, not just that it was accepted.** `list` shows
+model state, which is populated optimistically — it will happily report a notch
+that never reached the DSP. To prove the null exists, park a notch on a real
+carrier and measure through the audio path: `capture_audio` with the notch
+disabled, then enabled, and compare. On a host-DSP backend also check the
+**width** you read back against `minWidthHz`: WDSP widens a too-narrow notch
+without reporting it, so a notch can be real, audible, and four times wider than
+the one drawn on screen.
+
 ### `gps`
 
 Inject a disconnected-only GPS report through `RadioModel::applyGpsChanges`,

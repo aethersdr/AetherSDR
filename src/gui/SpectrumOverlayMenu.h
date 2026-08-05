@@ -90,6 +90,12 @@ public:
     // backend without DAX simply does not have, so on an HL2 they were live
     // controls wired to nothing.
     void setDaxStreamsAvailable(bool available);
+    // Whether the connected radio can hold manual notches at all
+    // (RadioCapabilities::maxNotchFilters). False HIDES the +TNF button rather
+    // than disabling it: the control shipped live on every backend while the
+    // commands behind it only meant anything to a Flex, so on any other radio
+    // it was a button that did nothing.
+    void setNotchesSupported(bool supported);
     // Whether the RADIO computes a per-tile waterfall black level
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack). False removes HW from
     // the Black Level button's cycle and moves off it if it was selected —
@@ -283,6 +289,9 @@ private:
     QVector<QPair<QPointer<QPushButton>, double>> m_bandBtnFreqs;
     double m_tuningMinMhz{0.0};
     double m_tuningMaxMhz{0.0};
+    // True until a connected backend says otherwise, so a disconnected session
+    // keeps the button rather than having it appear on connect.
+    bool m_notchesSupported{true};
     void applyTuningRangeToBandButtons();
 
     // Cached state for band-panel rebuilds — setXvtrBands() and

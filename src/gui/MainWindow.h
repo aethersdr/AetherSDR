@@ -361,6 +361,10 @@ private:
     // than tuning it somewhere it hears nothing. A backend that reports no
     // range leaves every band enabled (the Flex behaviour).
     void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    // Push RadioCapabilities' notch fields into one panadapter: the +TNF
+    // button's visibility, the right-click add/remove entries, the depth and
+    // permanence submenus, and the width clamps on drag-resize.
+    void applyNotchCapabilities(SpectrumWidget* sw) const;
 
     // The one place a declared RadioCapabilities flag turns into UI visibility.
     //

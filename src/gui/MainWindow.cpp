@@ -5656,6 +5656,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 menu->setDeclaredBands(declaredBands);
                 menu->setXvtrBands(xvtrBands);
                 applyTuningRangeToOverlayMenu(menu);
+                applyNotchCapabilities(applet->spectrumWidget());
                 applyRadioSideDspToPanDisplay(applet->spectrumWidget());
             }
         };
@@ -6501,6 +6502,30 @@ void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
     menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
 }
 
+void MainWindow::applyNotchCapabilities(SpectrumWidget* sw) const
+{
+    if (!sw)
+        return;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    // A DISCONNECTED session keeps the controls rather than having them appear
+    // on connect — same reasoning as applyTuningRangeToOverlayMenu, which reads
+    // an unreported range as unconstrained. maxNotchFilters defaults to 0, and
+    // 0 means "cannot notch", so without this a disconnected app would hide the
+    // +TNF button it has always shown.
+    const bool connected = m_radioModel.isConnected();
+    const int maxNotches = connected ? caps.maxNotchFilters : 1000;
+    const bool hasDepth = connected ? caps.notchHasDepth : true;
+    // Guard against a backend that declares a ceiling but no width bounds.
+    const int minWidth = (connected && caps.notchMinWidthHz > 0.0)
+                             ? static_cast<int>(caps.notchMinWidthHz + 0.5) : 10;
+    const int maxWidth = (connected && caps.notchMaxWidthHz > 0.0)
+                             ? static_cast<int>(caps.notchMaxWidthHz + 0.5) : 12000;
+
+    sw->setNotchCapabilities(maxNotches, hasDepth, minWidth, maxWidth);
+    if (auto* menu = sw->overlayMenu())
+        menu->setNotchesSupported(maxNotches > 0);
+}
+
 void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps)
 {
     // See the header for why every flag is `!connected || caps.x` and why each
@@ -6577,6 +6602,11 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             }
             // WNB lives in the pan's overlay menu, not the VFO.
             applyRadioSideDspToPanDisplay(sw);
+            // Notch controls follow the same rule: they belong to the pan, and
+            // whether the radio can back them is a capability. This is the
+            // connect-time push — the per-pan sites cover panadapters created
+            // afterwards.
+            applyNotchCapabilities(sw);
         }
     }
 

@@ -2928,6 +2928,18 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doSlice(a.action, a.value);
             });
 
+        add("notch", {},
+            "notch <list|add|set|remove|enable> [args] — manual notch filters "
+            "(add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; "
+            "remove <id>; enable <0|1>)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.action.isEmpty())
+                    return err(QStringLiteral(
+                        "notch requires an action (list|add|set|remove|enable)"));
+                return s.doNotch(a.action, a.value);
+            });
+
         add("gps", {},
             "gps <fixture|clearfixture> [6000|8000] — disconnected GPS test data",
             parseActionRest,
@@ -5811,6 +5823,141 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
 // `atu bypass` takes the tuner out of circuit (no TX), so meter readings see
 // the raw load instead of a recalled antenna match — essential before TX meter
 // measurements. `atu start` runs a tune cycle (keys TX → gated by ALLOW_TX).
+QJsonObject AutomationServer::doNotch(const QString& action, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    auto& tnf = m_radioModel->tnfModel();
+
+    const auto snapshot = [&tnf]() {
+        QJsonArray notches;
+        for (const auto& entry : tnf.tnfs()) {
+            notches.append(QJsonObject{
+                {QStringLiteral("id"), entry.id},
+                {QStringLiteral("freqMhz"), entry.freqMhz},
+                {QStringLiteral("widthHz"), entry.widthHz},
+                {QStringLiteral("depth"), entry.depthDb},
+                {QStringLiteral("permanent"), entry.permanent},
+            });
+        }
+        return notches;
+    };
+
+    if (action == QLatin1String("list")) {
+        const RadioCapabilities caps = m_radioModel->backendCapabilities();
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("notch"), QStringLiteral("list")},
+            {QStringLiteral("enabled"), tnf.globalEnabled()},
+            // Reported alongside the notches so a test can tell "the radio
+            // cannot notch" apart from "the notch was dropped" — the two look
+            // identical from an empty list.
+            {QStringLiteral("maxNotchFilters"), caps.maxNotchFilters},
+            {QStringLiteral("minWidthHz"), caps.notchMinWidthHz},
+            {QStringLiteral("hasDepth"), caps.notchHasDepth},
+            {QStringLiteral("notches"), snapshot()},
+        };
+    }
+
+    if (action == QLatin1String("add")) {
+        const QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral("notch add requires a frequency in MHz"));
+        bool ok = false;
+        const double freqMhz = parts.at(0).toDouble(&ok);
+        if (!ok || freqMhz <= 0.0)
+            return err(QStringLiteral("notch add: bad frequency: ") + parts.at(0));
+        // The width argument is accepted but the model owns the create width —
+        // see TnfModel::createTnf. Reported back so a caller can see it was not
+        // honoured rather than assuming it was.
+        tnf.createTnf(freqMhz);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("notch"), QStringLiteral("add")},
+                           {QStringLiteral("freqMhz"), freqMhz},
+                           {QStringLiteral("notches"), snapshot()}};
+    }
+
+    if (action == QLatin1String("set")) {
+        const QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral("notch set requires an id"));
+        bool ok = false;
+        const int id = parts.at(0).toInt(&ok);
+        if (!ok)
+            return err(QStringLiteral("notch set: bad id: ") + parts.at(0));
+        if (tnf.tnf(id) == nullptr)
+            return err(QStringLiteral("notch set: no notch with id ") + parts.at(0));
+        bool touched = false;
+        for (int i = 1; i < parts.size(); ++i) {
+            const QString& token = parts.at(i);
+            const int eq = token.indexOf(QLatin1Char('='));
+            if (eq <= 0)
+                return err(QStringLiteral("notch set: expected key=value, got ") + token);
+            const QString key = token.left(eq);
+            const QString value = token.mid(eq + 1);
+            bool valueOk = false;
+            if (key == QLatin1String("freq")) {
+                const double mhz = value.toDouble(&valueOk);
+                if (!valueOk)
+                    return err(QStringLiteral("notch set: bad freq: ") + value);
+                tnf.setTnfFreq(id, mhz);
+                touched = true;
+            } else if (key == QLatin1String("width")) {
+                const int hz = value.toInt(&valueOk);
+                if (!valueOk)
+                    return err(QStringLiteral("notch set: bad width: ") + value);
+                tnf.setTnfWidth(id, hz);
+                touched = true;
+            } else if (key == QLatin1String("depth")) {
+                const int depth = value.toInt(&valueOk);
+                if (!valueOk)
+                    return err(QStringLiteral("notch set: bad depth: ") + value);
+                tnf.setTnfDepth(id, depth);
+                touched = true;
+            } else {
+                return err(QStringLiteral("notch set: unknown key: ") + key
+                           + QStringLiteral(" (freq|width|depth)"));
+            }
+        }
+        if (!touched)
+            return err(QStringLiteral("notch set requires at least one of "
+                                      "freq=<mhz> width=<hz> depth=<1-3>"));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("notch"), QStringLiteral("set")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("notches"), snapshot()}};
+    }
+
+    if (action == QLatin1String("remove")) {
+        bool ok = false;
+        const int id = arg.trimmed().toInt(&ok);
+        if (!ok)
+            return err(QStringLiteral("notch remove requires an id"));
+        if (tnf.tnf(id) == nullptr)
+            return err(QStringLiteral("notch remove: no notch with id ") + arg.trimmed());
+        tnf.requestRemoveTnf(id);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("notch"), QStringLiteral("remove")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("notches"), snapshot()}};
+    }
+
+    if (action == QLatin1String("enable")) {
+        const QString value = arg.trimmed();
+        if (value.isEmpty())
+            return err(QStringLiteral("notch enable requires 0 or 1"));
+        const bool on = (value == QLatin1String("1") || value.compare(
+                             QLatin1String("true"), Qt::CaseInsensitive) == 0);
+        tnf.requestGlobalTnfEnabled(on);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("notch"), QStringLiteral("enable")},
+                           {QStringLiteral("enabled"), tnf.globalEnabled()}};
+    }
+
+    return err(QStringLiteral("unknown notch action: ") + action
+               + QStringLiteral(" (list|add|set|remove|enable)"));
+}
+
 QJsonObject AutomationServer::doAtu(const QString& action)
 {
     if (!m_radioModel)

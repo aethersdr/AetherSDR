@@ -1243,15 +1243,22 @@ void SpectrumOverlayMenu::updateLayout()
     m_toggleBtn->move(pad, pad);
 
     int y = pad + BTN_H + gap;
-    for (auto* btn : m_menuBtns) {
-        btn->setVisible(m_expanded);
-        if (m_expanded) {
+    int shownBtns = 0;
+    for (int idx = 0; idx < m_menuBtns.size(); ++idx) {
+        auto* btn = m_menuBtns[idx];
+        // A button the radio cannot back stays hidden even when expanded, and
+        // the ones below it close the gap — a blank slot would read as a
+        // rendering fault rather than an absent feature.
+        const bool available = (idx != kBtnAddTnf) || m_notchesSupported;
+        btn->setVisible(m_expanded && available);
+        if (m_expanded && available) {
             btn->move(pad, y);
             y += BTN_H + gap;
+            ++shownBtns;
         }
     }
 
-    int totalH = m_expanded ? (pad + BTN_H + gap + m_menuBtns.size() * (BTN_H + gap))
+    int totalH = m_expanded ? (pad + BTN_H + gap + shownBtns * (BTN_H + gap))
                             : (pad + BTN_H + pad);
     setFixedSize(pad + BTN_W + pad, totalH);
 }
@@ -2497,6 +2504,17 @@ void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
     if (m_wnbRow) {
         m_wnbRow->setVisible(available);
     }
+}
+
+void SpectrumOverlayMenu::setNotchesSupported(bool supported)
+{
+    if (m_notchesSupported == supported)
+        return;
+    m_notchesSupported = supported;
+    // Through the layout rather than a bare setVisible: the layout loop assigns
+    // every button's position and visibility, so a direct hide here would be
+    // undone by the next relayout and the button would flicker back.
+    updateLayout();
 }
 
 void SpectrumOverlayMenu::setDaxStreamsAvailable(bool available)

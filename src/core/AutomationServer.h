@@ -615,6 +615,11 @@ private:
     // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
     // RX/config only; none of these key the transmitter.
     QJsonObject doSlice(const QString& action, const QString& arg);
+    // Manual notch filters (a Flex TNF, or the WDSP null that stands in for one
+    // on a radio with no DSP). `list` reports what the radio actually holds,
+    // which is what makes the feature provable: a notch that was placed but not
+    // applied looks identical to one that worked until you read it back.
+    QJsonObject doNotch(const QString& action, const QString& arg);
     // Disconnected-only GPS status fixtures for the 6000-series
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
