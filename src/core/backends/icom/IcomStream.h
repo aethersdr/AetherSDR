@@ -4,6 +4,8 @@
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QMap>
+
+#include <deque>
 #include <QObject>
 
 #include <cstdint>
@@ -94,6 +96,8 @@ public:
     // a burst often enough that both reference implementations do this
     // unconditionally.
     void sendRawTwice(std::span<const std::uint8_t> packet);
+    // Push whatever sendRaw() left in the socket's write buffer onto the wire.
+    void flush();
 
     struct Counters {
         quint64 rxBytes = 0;
@@ -130,6 +134,25 @@ private:
     void queueForReorder(quint16 seq, const QByteArray& packet);
     void drainReorder();
     void retain(quint16 seq, const std::vector<std::uint8_t>& packet);
+
+public:
+    // The sequences currently held for retransmit, oldest first.
+    //
+    // Public for the eviction test, and worth having anyway: the failure this
+    // guards against — evicting the newest packets after a sequence wrap — is
+    // invisible from outside until a retransmit request quietly returns an Idle
+    // instead of a payload, roughly every 11 minutes of transmit.
+    [[nodiscard]] QList<quint16> retainedSequences() const
+    {
+        return QList<quint16>(m_replayOrder.begin(), m_replayOrder.end());
+    }
+    // Test seam for the same reason: retain() is where the wrap bug lived.
+    void retainForTest(quint16 seq, const std::vector<std::uint8_t>& packet)
+    {
+        retain(seq, packet);
+    }
+
+private:
     // isPayload false for keepalives: they are tracked (they consume a sequence
     // number and can be asked for) but must not reset the quiet clock, or the
     // idle cadence never relaxes.
@@ -154,6 +177,10 @@ private:
     // a couple of hundred packets a retransmit request is archaeology, and an
     // unbounded map on the audio stream is an unbounded memory leak.
     QMap<quint16, std::vector<std::uint8_t>> m_replay;
+    // Insertion order for m_replay, because the map is keyed by SEQUENCE and
+    // the sequence space wraps. Evicting the map's lowest key drops the newest
+    // packets once the counter rolls past 0xFFFF — see retain().
+    std::deque<quint16> m_replayOrder;
     static constexpr int kReplayDepth = 256;
 
     // Reorder buffer (Serial and Audio only).

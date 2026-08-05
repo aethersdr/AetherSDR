@@ -5709,6 +5709,11 @@ set_tests_properties(titlebar_headphone_mute_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
+add_executable(icom_replay_test tests/icom_replay_test.cpp)
+target_include_directories(icom_replay_test PRIVATE src)
+target_link_libraries(icom_replay_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME icom_replay_test COMMAND icom_replay_test)
+
 add_executable(rx_filter_step_test tests/rx_filter_step_test.cpp)
 target_include_directories(rx_filter_step_test PRIVATE src)
 target_link_libraries(rx_filter_step_test PRIVATE Qt6::Core)

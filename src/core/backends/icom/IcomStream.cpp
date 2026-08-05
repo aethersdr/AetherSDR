@@ -138,6 +138,15 @@ void IcomStream::sendRaw(std::span<const std::uint8_t> packet)
         m_counters.txBytes += static_cast<quint64>(n);
 }
 
+void IcomStream::flush()
+{
+    // sendRaw() only WRITES into QAbstractSocket's buffer. Without this the
+    // bytes sit there until the event loop next runs — which is exactly what a
+    // blocking wait prevents. See IcomSession::stop().
+    if (m_socket)
+        m_socket->flush();
+}
+
 void IcomStream::sendRawTwice(std::span<const std::uint8_t> packet)
 {
     sendRaw(packet);
@@ -146,9 +155,27 @@ void IcomStream::sendRawTwice(std::span<const std::uint8_t> packet)
 
 void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet)
 {
+    // FIFO BY INSERTION, not by key.
+    //
+    // m_replay is a QMap keyed by sequence, so erase(begin()) drops the
+    // numerically-lowest key — which is the oldest packet only while the
+    // sequence space has not wrapped. Once m_txSeq rolls past 0xFFFF the map
+    // holds keys near 0xFFFF and near 0x0000 together, and the lowest key is
+    // the FRESHEST packet: the buffer then evicts exactly the sequences most
+    // likely to be asked for. A retransmit request for one of them finds
+    // nothing and gets an Idle carrying that sequence instead of the payload —
+    // a silently dropped CI-V command or audio frame. On the audio stream at
+    // ~100 packets/s that comes round about every 11 minutes of transmit.
+    //
+    // This is the same wrap hazard onReorderTick() documents at length and
+    // deliberately avoids; it bit here in the other direction.
+    if (!m_replay.contains(seq))
+        m_replayOrder.push_back(seq);
     m_replay.insert(seq, packet);
-    while (m_replay.size() > kReplayDepth)
-        m_replay.erase(m_replay.begin());
+    while (m_replay.size() > kReplayDepth && !m_replayOrder.empty()) {
+        m_replay.remove(m_replayOrder.front());
+        m_replayOrder.pop_front();
+    }
 }
 
 void IcomStream::sendTracked(std::vector<std::uint8_t> packet)

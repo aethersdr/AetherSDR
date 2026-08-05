@@ -107,10 +107,20 @@ void IcomSession::stop()
                                    AuthKind::Deauth);
         m_control->sendRaw(bye);
         m_control->sendRaw(bye);
-        // Long enough for the datagram to leave and the radio to act on it,
-        // short enough not to stall a disconnect visibly. kappanhang waits
-        // 500 ms; it can afford to, being a daemon with no UI thread.
-        QThread::msleep(150);
+        // FLUSH, don't sleep.
+        //
+        // This was QThread::msleep(150), which was wrong twice over. It froze
+        // the GUI thread for 150 ms on every disconnect — and on every
+        // reconnect too, since connectRadio() calls disconnectRadio() first.
+        // Worse, it could not do what it was for: sendRaw() only writes into
+        // QAbstractSocket's buffer, and blocking the event loop is precisely
+        // what stops Qt draining it. The deauth sat queued locally for the
+        // whole wait and then left in the same flush as the disconnect packets
+        // it had been carefully ordered ahead of.
+        //
+        // Flushing puts it on the wire immediately, which is what the wait was
+        // trying to buy.
+        m_control->flush();
     }
 
     // Control FIRST now. It owns the session the other two hang off, so the
