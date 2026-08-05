@@ -17,15 +17,15 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
+#include "TestDspBuildWait.h"
+
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
 #include <QUdpSocket>
 
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <vector>
 
 using namespace AetherSDR;
@@ -42,24 +42,6 @@ static void spin(int ms)
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
-}
-
-// Wait for a CONDITION, with a wall-clock cap that is only a backstop.
-//
-// The connect's WDSP channel opens are asynchronous (Hl2Backend::beginDspSetup),
-// so the wire does not start until they finish — and this test runs on an
-// isolated HOME, which means an empty FFTW wisdom cache and a first open that
-// genuinely takes tens of seconds of plan measurement. That cost belongs to
-// neither the radio nor anything under test, so waiting a fixed number of
-// milliseconds for it would be measuring the host's CPU. The timing assertions
-// AFTER a connect still use spin(), because those are the assertion.
-static bool spinUntil(const std::function<bool()>& done, int timeoutMs)
-{
-    QElapsedTimer clock;
-    clock.start();
-    while (!done() && clock.elapsed() < timeoutMs)
-        spin(10);
-    return done();
 }
 
 // Is the simulator actually there? A plain Metis discovery probe.
@@ -122,7 +104,8 @@ int main(int argc, char** argv)
     // were. kIqRateHz is the ONE place the rate appears.
     req.params[QStringLiteral("sampleRateHz")] = kIqRateHz;
     backend.connectRadio(req);
-    spinUntil([&] { return backend.isConnected(); }, 120000);
+    AetherSDR::test::awaitDspBuild("hl2_tx_loopback_test",
+                                  [&] { return backend.isConnected(); });
     spin(2500);   // unchanged settle budget; only the connect wait moved out of it
     check(backend.isConnected(), "connected to the simulator");
     if (!backend.isConnected()) {

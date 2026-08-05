@@ -536,9 +536,9 @@ runs the wire AND the DSP on the backend's own (GUI) thread.
 A GUI stall therefore stops EP2 and the radio stops streaming on its own. We
 measured a 21–82 second main-thread stall on first connect (FFTW wisdom) — see
 §22, which fixed that one. The wire and the DSP now live on their own I/O
-thread, so the class this warned about is narrower than it was; what remains is
-the **span-change** path, which still blocks the GUI thread on a rebuild of
-every receiver. §22.4.
+thread, so the class this warned about is narrower than it was. Two paths still
+block the GUI thread, both in §22.4: the **span change**, which rebuilds every
+receiver, and **backend teardown**, which waits out an in-flight DSP build.
 
 ### 11.4 Absent subsystems, in rough value order
 
@@ -3169,7 +3169,26 @@ The first open costs ~19 s whichever rate it is; every other rate afterwards is
 40–175 ms. The plan sets overlap almost completely, so **do not reason about
 "cold wisdom for this sample rate"** — there is one cold open per machine, ever.
 
-### 22.4 Still open: the span change blocks the GUI thread
+### 22.4 Still open: two paths that still block the GUI thread
+
+#### Backend teardown waits out an in-flight build
+
+`~Hl2Backend()` stops the wire through a `Qt::BlockingQueuedConnection` before
+joining the I/O thread, and `beginDspSetup()`'s opens are a single event on that
+thread's loop. So a teardown during a cold connect — a **family switch**
+(`RadioModel::connectToRadio` → `teardownBackend()`) or an **app quit** — blocks
+the GUI thread for whatever is left of the planning.
+
+Splitting the connect is what made this reachable, and that is not an argument
+against the split: before it, the connect itself held the UI, so nobody could
+get to the radio picker mid-connect. Now the UI is live for those twenty
+seconds, and reaching for a different radio is the obvious thing to do while
+waiting. `OpenChannel` cannot be cancelled, so the honest options are a busy
+state over the teardown or a backend that can be abandoned rather than joined —
+and the second one also has to replace the `QPointer` guard in
+`beginDspSetup()`, which is sound today *because* teardown blocks.
+
+#### The span change rebuilds every receiver
 
 `applyPanBandwidth()` has the same shape the connect used to have. Crossing one
 of the four rate boundaries rebuilds **every** receiver (the rate register is

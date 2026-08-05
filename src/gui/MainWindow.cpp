@@ -6169,6 +6169,11 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // reads as a hung application. Say what is happening in the label that is
     // already on screen rather than adding a dialog for it.
     if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(backend)) {
+        // Disconnected first, like every other lambda connect in this function:
+        // the helper promises to be idempotent for the same live backend, and
+        // Qt::UniqueConnection cannot cover a lambda.
+        disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this, nullptr);
+        disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this, nullptr);
         connect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this,
                 [this](const QString& stage, int done, int total) {
             // Only while the connect animation is up. A DSP rebuild can happen

@@ -3095,6 +3095,13 @@ target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
 target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
 
+# HL2 connect re-entrancy — a connect or a disconnect landing while the WDSP
+# chains are still opening. Needs no radio; see the file header.
+add_executable(hl2_connect_reentrancy_test tests/hl2_connect_reentrancy_test.cpp)
+target_include_directories(hl2_connect_reentrancy_test PRIVATE src tests)
+target_link_libraries(hl2_connect_reentrancy_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp

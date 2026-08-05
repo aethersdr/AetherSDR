@@ -1255,6 +1255,16 @@ Hl2Backend::~Hl2Backend()
         // never run -- quit() below ends the event loop that would deliver it --
         // and tearing the socket down from this thread is the affinity bug this
         // whole change exists to avoid.
+        //
+        // THIS BLOCKS FOR AN IN-FLIGHT DSP BUILD. beginDspSetup()'s job is a
+        // single event on that thread's loop and OpenChannel cannot be cancelled,
+        // so a family switch or an app quit during a cold connect waits out the
+        // rest of the planning -- on the GUI thread. It is the one GUI stall the
+        // three-phase split does NOT remove, and splitting the connect is what
+        // made it reachable: the operator can now use the UI while the chains
+        // open, and reaching for a different radio is the obvious thing to do
+        // while waiting. HERMES.md §22.4. It is also what keeps the QPointer in
+        // beginDspSetup() sound, so a fix here has to deal with that too.
         if (m_metis)
             QMetaObject::invokeMethod(m_metis, "stop", Qt::BlockingQueuedConnection);
         m_ioThread->quit();
@@ -1560,8 +1570,9 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // ORDER IS LOAD-BEARING, and the reason is the same one that governs every
     // other ordering decision in this backend: EP2 must not stop.
     //
-    // Opening a WDSP channel is slow -- ~17 s on a first run, generating FFTW
-    // wisdom, and ~110 ms after that (HERMES.md §10) -- and it runs ON THE I/O
+    // Opening a WDSP channel is slow -- ~19 s on the FIRST open this machine
+    // ever does, generating FFTW wisdom, and 40-175 ms for every open after
+    // that, at any rate (HERMES.md §10 and §22.3) -- and it runs ON THE I/O
     // THREAD, which is the thread that paces EP2. Configuring after start()
     // therefore stalls the pacer for the whole of that, and the gateware
     // watchdog halts the stream when EP2 stops arriving. It also stalls the EP6
@@ -1650,8 +1661,13 @@ void Hl2Backend::beginDspSetup()
         return;
 
     const int actualNumRx = m_pendingConnect->actualNumRx;
-    // Receivers plus the one transmit chain — what the operator is waiting for.
-    const int total = actualNumRx + 1;
+    // The RECEIVERS, and only them. The transmit chain is not a step:
+    // Hl2TxDsp::configure() designs two FIR kernels and returns — it opens no
+    // WDSP channel and measures no FFTW plan (the class includes WdspChannel.h
+    // for the Mode enum alone). Counting it inflated the denominator with a step
+    // that completes in microseconds and put a "Preparing the transmit chain…"
+    // label on screen for work that was already over.
+    const int total = actualNumRx;
 
     // The chains to open, snapshotted on THIS thread. m_rx is GUI-thread-only
     // (see its declaration), so the I/O thread gets a plain vector of the
@@ -1677,6 +1693,15 @@ void Hl2Backend::beginDspSetup()
     // QPointer, not `this`: the build outlives the call, and a backend
     // destroyed mid-build (a family switch, app teardown) must not be resumed
     // through a dangling pointer.
+    //
+    // What makes the cross-thread reads of it SOUND is the destructor, not the
+    // QPointer: ~Hl2Backend() blocks on the I/O thread (a BlockingQueuedConnection
+    // stop, then quit()/wait()), so this lambda has always finished before the
+    // object can go away, and every `if (self)` below is a check on a pointer
+    // nothing is racing to clear. QPointer is reentrant, NOT thread-safe — the day
+    // teardown stops blocking, a check-then-use here becomes a real race and this
+    // needs a different mechanism. That blocking teardown has its own cost; see
+    // the note in ~Hl2Backend() and HERMES.md §22.4.
     QPointer<Hl2Backend> self(this);
 
     QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(txDsp)
@@ -1688,16 +1713,17 @@ void Hl2Backend::beginDspSetup()
         // FFTW's planner is not thread-safe, and Hl2Spectrum builds a plan in
         // its constructor. Two of these at once corrupt the planner's state.
         DspSetupResult result;
-        const int rxCount = static_cast<int>(chains.size());
         result.rxOk.resize(chains.size(), false);
         result.rxChannelId.resize(chains.size(), -1);
         result.rxErr.resize(chains.size());
         for (std::size_t i = 0; i < chains.size(); ++i) {
             if (self) {
                 const int done = static_cast<int>(i);
-                const QString stage = rxCount > 1
-                    ? tr("Preparing receiver %1 of %2…").arg(i + 1).arg(rxCount)
-                    : tr("Preparing the receive chain…");
+                // PURE STAGE TEXT — no counter. The label renders the fraction
+                // from done/total (MainWindow::wireBackendSeam), so numbering
+                // here too put two fractions over two denominators on screen:
+                // "Preparing receiver 1 of 2… (1 of 3)".
+                const QString stage = tr("Preparing the receive chain…");
                 QMetaObject::invokeMethod(self, [self, stage, done, total] {
                     if (self)
                         emit self->dspSetupProgress(stage, done, total);
@@ -1711,14 +1737,9 @@ void Hl2Backend::beginDspSetup()
             else
                 break;   // the GUI thread trims from here; opening past it is waste
         }
-        if (self) {
-            QMetaObject::invokeMethod(self, [self, rxCount, total] {
-                if (self) {
-                    emit self->dspSetupProgress(tr("Preparing the transmit chain…"),
-                                                rxCount, total);
-                }
-            }, Qt::QueuedConnection);
-        }
+        // No progress emit for the transmit chain: it designs two FIR kernels
+        // and returns. Announcing a step that is over before the label repaints
+        // is worse than saying nothing.
         if (txDsp)
             result.txOk = txDsp->configure(tc, &result.txErr);
 
@@ -1759,6 +1780,14 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
     const int actualNumRx = m_pendingConnect->actualNumRx;
     m_pendingConnect.reset();
 
+    // m_rx STILL HOLDS actualNumRx RECEIVERS. Worth stating, because the loop
+    // below indexes it with a count snapshotted in beginDspSetup() and the two
+    // phases no longer run back to back — event-loop turns pass between them.
+    // Nothing can resize it in that window: the only two paths that do are
+    // createPanadapter() and removePanadapter(), and both return early unless
+    // m_connected, which is set from linkUp — that is, only after the wire this
+    // function has not started yet. A connect or a disconnect landing here is
+    // the generation counter's job and is handled above.
     for (int i = 0; i < actualNumRx; ++i) {
         const bool dspOk = result.rxOk[static_cast<std::size_t>(i)];
         const std::string& err = result.rxErr[static_cast<std::size_t>(i)];
@@ -1845,6 +1874,10 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
         return;
     }
 
+    // Assert a known TX drive rather than inheriting whatever the board held.
+    // ZERO is deliberate: this backend has no drive-level control wired to the
+    // UI yet, so anything higher would be an un-commanded power level chosen by
+    // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
     emit dspSetupFinished();
 
@@ -1860,6 +1893,12 @@ void Hl2Backend::disconnectRadio()
     // cancelled — WDSP's OpenChannel does not return early — so it runs to
     // completion on the I/O thread and finishDspSetup() releases what it built.
     ++m_connectGeneration;
+    // And a connect PARKED BEHIND that build is stale for the same reason: the
+    // operator has since asked to be disconnected. Leaving it here made
+    // finishDspSetup()'s supersede branch re-drive it — a second full build
+    // ending in MetisClient::start(), for a session nobody is in. Measured:
+    // connect, connect, disconnect gave two dspSetupFinished and a running wire.
+    m_queuedConnect.reset();
 
     if (m_metis)
         // Queued: serialises behind whatever the I/O thread is doing.

@@ -106,8 +106,16 @@ void exportWisdomNow()
     const fs::path final = wisdomPath();
     const fs::path tmp = fs::path(final).concat(
         ".tmp." + std::to_string(currentProcessId()));
-    if (!fftw_export_wisdom_to_filename(tmp.string().c_str()))
+    if (!fftw_export_wisdom_to_filename(tmp.string().c_str())) {
+        // It opens with "w", so a failure part way through still leaves a SHORT
+        // file sitting next to the real cache. The name is per-process rather
+        // than per-call, so an unwritable cache directory keeps exactly one of
+        // them rather than accumulating — but a truncated wisdom file is a trap
+        // for whoever debugs this next, so do not leave one.
+        std::error_code rmEc;
+        fs::remove(tmp, rmEc);
         return;
+    }
     std::error_code ec;
     fs::rename(tmp, final, ec);
     if (ec)
@@ -411,6 +419,11 @@ uint64_t WdspChannel::allocationSequenceForTest() noexcept
 uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
 {
     return wdspPortOutstandingAllocations();
+}
+
+std::string WdspChannel::wisdomCachePathForTest()
+{
+    return wisdomPath();
 }
 
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept

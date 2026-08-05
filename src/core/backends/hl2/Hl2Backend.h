@@ -108,9 +108,11 @@ signals:
     // demodulates in firmware, an Icom does not use WDSP at all), so a neutral
     // signal would be one every other family had to ignore.
     //
-    // `stage` is already operator-facing text. `done`/`total` count opened
-    // channels, so a caller can render a fraction; total is receivers + 1 for
-    // the transmit chain.
+    // `stage` is already operator-facing text, and carries NO counter of its own
+    // — `done`/`total` are the counter, so the label owns how (or whether) a
+    // fraction is rendered. They count WDSP channel opens, which means receivers
+    // and only receivers: the transmit chain designs FIR kernels and opens
+    // nothing, so it is not a step and is not in `total`.
     //
     // Emitted from the GUI thread, including the terminal one, so a slot may
     // touch widgets directly.

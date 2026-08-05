@@ -6646,6 +6646,7 @@ void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label
     const QString nextLabel = label.trimmed().isEmpty()
         ? QStringLiteral("Connecting to radio…")
         : label.trimmed();
+    const bool becomingVisible = on && !m_connectionAnimationVisible;
     const bool changed = (m_connectionAnimationVisible != on)
         || (on && m_connectionAnimationLabel != nextLabel);
 
@@ -6656,7 +6657,12 @@ void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label
     m_connectionAnimationVisible = on;
     if (on) {
         m_connectionAnimationLabel = nextLabel;
-        m_connectionAnimationClock.restart();
+        // The clock is the ANIMATION's phase, not the label's. Restarting it on
+        // a label change snapped the spinner back to phase zero mid-spin, which
+        // an HL2 connect now does once per receiver as the DSP build reports
+        // progress. Restart only when the overlay is actually appearing.
+        if (becomingVisible || !m_connectionAnimationClock.isValid())
+            m_connectionAnimationClock.restart();
         m_connectionAnimationTimer->start();
     } else {
         m_connectionAnimationLabel.clear();
