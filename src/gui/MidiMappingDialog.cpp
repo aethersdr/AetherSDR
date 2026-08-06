@@ -43,7 +43,7 @@ static const QString kBtnStyle =
 // primary way to create bindings; manual entry is the bypass (#4760).
 // {{token}} template: apply via ThemeManager::applyStyleSheet, never setStyleSheet.
 static const QString kBtnSubtleStyle =
-    "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}}; "
+    "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
     "border: 1px solid {{color.border.strong}}; padding: 5px 14px; border-radius: 3px; }"
     "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
 
