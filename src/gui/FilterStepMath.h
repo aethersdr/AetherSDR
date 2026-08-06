@@ -41,9 +41,9 @@ namespace AetherSDR {
     return best;
 }
 
-// Step one preset up (direction > 0) or down, clamped to the list.
+// Step `steps` presets up (steps > 0) or down (steps < 0), clamped to the list.
 //
-// Returns -1 when there is nothing to do: an empty list, no direction, or
+// Returns -1 when there is nothing to do: an empty list, zero steps, or
 // already at the end while sitting exactly on a preset. A caller that treats
 // -1 as an index is the bug this function exists to prevent, so it is the only
 // sentinel and it is never a valid position.
