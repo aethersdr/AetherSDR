@@ -9,10 +9,36 @@
 // BYTES leave, but only the simulator can show the radio actually received them
 // and acted on them.
 //
-// SIM ONLY, deliberately. The address is hardcoded to the simulator and this
-// test keys the transmitter; pointing it at real hardware would radiate.
-// If nothing answers there, the test SKIPS rather than fails, so a machine
-// without the simulator running does not get a spurious red.
+// SIM ONLY, deliberately — and now ENFORCED rather than asserted. This test keys
+// the transmitter, so pointing it at real hardware would radiate. It used to
+// trust a hardcoded LAN address to BE the simulator; findSimulator() below
+// checks the responder's identity instead, and the default host is loopback.
+// If nothing answers, the test SKIPS rather than fails, so a machine without the
+// simulator running does not get a spurious red.
+//
+// WHICH SIDE OF CENTRE A TONE LANDS ON. The loop conjugates TWICE. Hl2TxDsp
+// conjugates the modulator output for the wire (the HPSDR wire has the opposite
+// handedness to the analytic convention); the simulator feeds that IQ back
+// verbatim; Hl2RxDsp conjugates the receive stream back before it reaches the
+// panadapter FFT. Two conjugations cancel, so the spectrum this test reads is in
+// the ANALYTIC convention: a tone transmitted 5 kHz above the carrier appears
+// 5 kHz ABOVE centre.
+//
+// It did not always. The receive-side conjugation arrived in #4471, to fix a
+// panadapter that drew every signal mirrored — on 40 m it put FT8 below a
+// correctly-drawn DIGU cursor. Before that the display carried the raw wire and
+// the fed-back tone read BELOW centre. This test was written against that older
+// display in #4466 and went on asserting the negative offset afterwards. That
+// staleness — not transmit — is the whole of the "fails on transmit-sideband
+// checks" that HERMES.md carried as pre-existing.
+//
+// BUT cancelling conjugations mean this loopback ALONE cannot prove absolute
+// sideband: a handedness error at BOTH ends still cancels. That is exactly how a
+// wrong-sideband transmitter once passed its own tests, and it took an operator
+// with a second receiver to catch it. So before believing anything the
+// transmitter puts in the spectrum, we pin the RECEIVE end against a signal that
+// never went through the transmitter — the simulator's own synthetic scene. See
+// the scene anchor below.
 
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -24,8 +50,11 @@
 #include <QTimer>
 #include <QUdpSocket>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <span>
 #include <vector>
 
 using namespace AetherSDR;
@@ -44,17 +73,49 @@ static void spin(int ms)
     loop.exec();
 }
 
-// Is the simulator actually there? A plain Metis discovery probe.
-static bool simPresent(const QString& host)
+enum class Probe { NoReply, NotSimulator, Simulator };
+
+// hpsdrsim builds its discovery reply with a synthetic MAC written byte by byte
+// in its source: AA BB CC DD <radio-type> FF. No HPSDR board ships an
+// AA:BB:CC:DD OUI, so this is a dependable "simulator, not a radio" fingerprint
+// — and it is the gate that keeps a test which KEYS A TRANSMITTER off real
+// hardware.
+//
+// It replaces a bare "did anything answer at 192.168.1.12". That address is not
+// the simulator's by construction; it is only where one happened to run once. On
+// another network it is somebody's actual radio. It was also, on the author's
+// LAN, silently reaching a simulator on a DIFFERENT machine — which is where the
+// "fails non-deterministically" reputation came from, since the answers depended
+// on what that other machine was doing at the time.
+static Probe findSimulator(const QString& host, AetherSDR::hl2::DiscoveryReply* out)
 {
     QUdpSocket s;
     if (!s.bind(QHostAddress(QHostAddress::AnyIPv4), 0))
-        return false;
+        return Probe::NoReply;
     const auto req = AetherSDR::hl2::discoveryRequest();
     s.writeDatagram(reinterpret_cast<const char*>(req.data()),
                     static_cast<qint64>(req.size()), QHostAddress(host),
                     AetherSDR::hl2::kMetisPort);
-    return s.waitForReadyRead(1500);
+    if (!s.waitForReadyRead(1500))
+        return Probe::NoReply;
+
+    QByteArray dg(2048, 0);
+    const qint64 got = s.readDatagram(dg.data(), dg.size());
+    if (got <= 0)
+        return Probe::NoReply;
+    const auto reply = AetherSDR::hl2::parseDiscoveryReply(
+        std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(dg.constData()),
+            static_cast<std::size_t>(got)));
+    if (!reply)
+        return Probe::NotSimulator;
+    if (out)
+        *out = *reply;
+
+    const auto& mac = reply->mac;
+    const bool synthetic = mac[0] == 0xAA && mac[1] == 0xBB && mac[2] == 0xCC
+                        && mac[3] == 0xDD && mac[5] == 0xFF;
+    return synthetic ? Probe::Simulator : Probe::NotSimulator;
 }
 
 // The IQ sample rate this test runs the receiver at, and therefore the span the
@@ -62,17 +123,76 @@ static bool simPresent(const QString& host)
 // derives from it.
 constexpr int kIqRateHz = 48000;
 
+// hpsdrsim's synthetic receive scene: two tones it generates itself into
+// toneItab/toneQtab, at offsets fixed relative to the ADC rather than the NCO,
+// present whether or not we are keyed.
+//
+// It builds them as I = sin(theta), Q = cos(theta) — so I + jQ = j*exp(-j*theta),
+// a NEGATIVE frequency on the wire, and a receive path that conjugates correctly
+// draws them ABOVE centre. That is the anchor: these tones reach the spectrum
+// without passing through the transmitter, so their side of centre pins the
+// RECEIVE end's handedness on its own. With it pinned, the transmit assertions
+// below can no longer be satisfied by a matched pair of errors.
+constexpr double kSceneToneLowHz = 800.0;
+constexpr double kSceneToneHighHz = 4000.0;
+
+// Bin of a baseband offset in the displayed spectrum, which is fftshifted (DC at
+// the centre bin) and in the analytic convention (above the carrier is above
+// centre). The ONE place that sign convention is written down.
+static int binForOffset(double offsetHz, int n)
+{
+    return n / 2 + static_cast<int>(
+        std::lround(offsetHz * n / static_cast<double>(kIqRateHz)));
+}
+
+// Strongest level within +/-halfWidth bins of centreBin. Offsets rarely land on
+// an exact bin — 800 Hz is 17.07 bins at this rate — so a bare lookup reads the
+// shoulder of the tone rather than its peak.
+static float peakNear(const std::vector<float>& spec, int centreBin, int halfWidth)
+{
+    const int n = static_cast<int>(spec.size());
+    const int lo = std::max(0, centreBin - halfWidth);
+    const int hi = std::min(n - 1, centreBin + halfWidth);
+    float best = -300.0f;
+    for (int i = lo; i <= hi; ++i)
+        best = std::max(best, spec[static_cast<std::size_t>(i)]);
+    return best;
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
 
-    const QString simHost = QStringLiteral("192.168.1.12");
-    if (!simPresent(simHost)) {
+    // Loopback by default: a simulator on this machine is the normal case, and
+    // 127.0.0.1 cannot be somebody's radio. Override to reach a simulator on
+    // another box — the fingerprint check still applies there.
+    const QString simHost = qEnvironmentVariableIsSet("AETHER_HL2_SIM_HOST")
+        ? qEnvironmentVariable("AETHER_HL2_SIM_HOST")
+        : QStringLiteral("127.0.0.1");
+
+    AetherSDR::hl2::DiscoveryReply reply;
+    switch (findSimulator(simHost, &reply)) {
+    case Probe::NoReply:
         std::fprintf(stderr,
-            "hl2_tx_loopback_test: SKIPPED — no simulator answering at %s\n",
+            "hl2_tx_loopback_test: SKIPPED — nothing answering discovery at %s. "
+            "Start hpsdrsim (-hermeslite2 -P1), or set AETHER_HL2_SIM_HOST.\n",
             qPrintable(simHost));
         return 0;
+    case Probe::NotSimulator:
+        // Deliberately a SKIP and not a failure: the responder is somebody's
+        // radio or another board, and the correct outcome is to leave it alone,
+        // not to key it and not to redden a suite over it.
+        std::fprintf(stderr,
+            "hl2_tx_loopback_test: SKIPPED — %s answered with MAC "
+            "%02X:%02X:%02X:%02X:%02X:%02X, which is not hpsdrsim's synthetic "
+            "AA:BB:CC:DD:xx:FF. This test keys the transmitter, so it refuses to "
+            "run against anything that might be a real radio.\n",
+            qPrintable(simHost), reply.mac[0], reply.mac[1], reply.mac[2],
+            reply.mac[3], reply.mac[4], reply.mac[5]);
+        return 0;
+    case Probe::Simulator:
+        break;
     }
 
     // Transmit must be permitted for this to mean anything. This process sets no
@@ -125,6 +245,30 @@ int main(int argc, char** argv)
     const std::vector<float> baseline = lastSpectrum;
     check(!baseline.empty(), "receiving spectrum before keying");
 
+    // ---- scene anchor: pin the RECEIVE end before trusting the transmit end ----
+    //
+    // Unkeyed, so nothing here has been through the modulator. If these fail, the
+    // receive/display handedness is wrong and EVERY transmit assertion below is
+    // measuring through a broken ruler — fix this first and do not read the
+    // transmit results as a sideband verdict.
+    if (!baseline.empty()) {
+        const int n = static_cast<int>(baseline.size());
+        const float lowUp = peakNear(baseline, binForOffset(kSceneToneLowHz, n), 2);
+        const float lowDown = peakNear(baseline, binForOffset(-kSceneToneLowHz, n), 2);
+        const float highUp = peakNear(baseline, binForOffset(kSceneToneHighHz, n), 2);
+        const float highDown = peakNear(baseline, binForOffset(-kSceneToneHighHz, n), 2);
+
+        std::fprintf(stderr,
+            "scene anchor: %.0f Hz above %.1f dB / below %.1f dB, "
+            "%.0f Hz above %.1f dB / below %.1f dB\n",
+            kSceneToneLowHz, lowUp, lowDown, kSceneToneHighHz, highUp, highDown);
+
+        check(lowUp - lowDown > 20.0f,
+              "receive handedness: the simulator's 800 Hz scene tone is ABOVE centre");
+        check(highUp - highDown > 20.0f,
+              "receive handedness: the simulator's 4 kHz scene tone is ABOVE centre");
+    }
+
     // ---- transmit a tone ----
     constexpr double kToneOffsetHz = 5000.0;
     backend.setTxTestTone(kToneOffsetHz, 0.5);
@@ -143,11 +287,13 @@ int main(int argc, char** argv)
         const int n = static_cast<int>(keyed.size());
         const int centre = n / 2;
         const double binHz = static_cast<double>(kIqRateHz) / n;
-        // NEGATIVE offset: hpsdrsim feeds the TX IQ back in WIRE order, and the
-        // wire is the conjugate of the standard analytic convention (see
-        // Hl2TxDsp). On the air this same IQ becomes +5 kHz; here we are looking
-        // at the wire, so it reads -5 kHz.
-        const int expected = centre - static_cast<int>(std::lround(kToneOffsetHz / binHz));
+        // POSITIVE offset, and the scene anchor above is what earns the right to
+        // say so. Hl2TxDsp conjugates for the wire and Hl2RxDsp conjugates back
+        // for the panadapter, so the spectrum reads in the analytic convention
+        // and a tone sent 5 kHz up comes back 5 kHz up. The old negative
+        // expectation was correct against the pre-#4471 display, which showed
+        // the raw wire; it has been stale since.
+        const int expected = binForOffset(kToneOffsetHz, n);
 
         // Find the strongest bin while keyed.
         int peak = 0;
@@ -213,13 +359,16 @@ int main(int argc, char** argv)
             const int n = static_cast<int>(voice.size());
             const int centre = n / 2;
             const double binHz = static_cast<double>(kIqRateHz) / n;
-            // Same wire-order reasoning as above: USB audio leaves the
-            // modulator BELOW centre in wire order and is transmitted above the
-            // carrier. Asserting the textbook sign here is precisely what let a
-            // wrong-sideband transmitter pass its own tests — it took an
-            // operator with a second receiver to catch it.
-            const int expected = centre - static_cast<int>(std::lround(kAudioHz / binHz));
-            const int mirrored = centre + static_cast<int>(std::lround(kAudioHz / binHz));
+            // USB: 1.5 kHz of audio is transmitted 1.5 kHz ABOVE the carrier and,
+            // through the twice-conjugating loop, reads 1.5 kHz above centre.
+            //
+            // Asserting the textbook sign is what let a wrong-sideband
+            // transmitter pass its own tests once — but the defence against that
+            // is the scene anchor, which fixes the receive end independently, not
+            // a sign flip here. Flipping the sign only made this fail always,
+            // which is not the same as having teeth.
+            const int expected = binForOffset(kAudioHz, n);
+            const int mirrored = binForOffset(-kAudioHz, n);
 
             int peak = 0;
             for (int i = 1; i < n; ++i)
