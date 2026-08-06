@@ -1465,7 +1465,15 @@ private:
     float m_flexDssFloorDepth{6.0f};
     float m_kiwiDssFloorDepth{6.0f};
     int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
-    int   m_dssRowSpanPct{100};  // 3DSS wedge close-in 0-100 (see setDssRowSpan)
+    // 3DSS wedge close-in 0-100 (see setDssRowSpan). Defaults to 100 -- fully
+    // ON -- by deliberate product decision, not by omission: three reviewers
+    // read 0 as the safer default since it is the reference rendering. The
+    // control is buried in the Display overlay's 3D VIEW section, so shipping
+    // it off would mean most operators never discover the feature exists.
+    // Anyone who wants the classic trapezoid has a labelled slider; anyone who
+    // does not know to look gets the intended view. Do not flip this to 0
+    // without also solving the discoverability side.
+    int   m_dssRowSpanPct{100};
     float m_dssFloorAnchorDbm{-1000.0f};
     bool  m_dssFloorAnchorValid{false};
     DssZoomFloorSyncGate m_dssZoomFloorSync;
