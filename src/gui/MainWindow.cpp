@@ -26,6 +26,8 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "WindowCaptionButtons.h"
+#include "mac/WindowChrome.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #ifdef AETHER_ASR_ENABLED
@@ -260,6 +262,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <psapi.h>
+#include <dwmapi.h>   // DwmSetWindowAttribute — rounded corners on Win11
 #else
 #include <sys/resource.h>
 #ifdef Q_OS_MAC
@@ -1153,6 +1156,17 @@ MainWindow::MainWindow(QWidget* parent)
         }
         if (s.value("FramelessWindow", "True").toString() == "True") {
 #ifndef Q_OS_WIN
+            // Every platform is frameless, macOS included: the unified 52 px bar
+            // is the window's only title bar and it is ours to draw.  Windows is
+            // the exception only because it keeps a real WS_THICKFRAME and
+            // removes the caption in WM_NCCALCSIZE instead.
+            //
+            // An earlier revision kept the real NSWindow title bar on macOS and
+            // painted the bar into the same strip.  AppKit's title-bar container
+            // sits above Qt's content view and owns the mouse there, so the top
+            // half of every control in the bar went dead and the brand and tabs
+            // rendered a row low — see gui/mac/WindowChrome.h for the full
+            // account of why that approach was abandoned.
             setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
 #endif
         }
@@ -1179,15 +1193,13 @@ MainWindow::MainWindow(QWidget* parent)
         // FramelessResizer header (#4827).  topMoveReserve = TitleBar::kHeight
         // reserves the whole title bar for its own drag-to-move handler and
         // the menu bar / min-max-close controls it hosts, rather than the
-        // resizer's 6 px top-edge margin (previously the default 0, which
-        // put that margin *inside* the 32 px title bar and shadowed the
-        // first few px of all of them — #4886).  MainWindow therefore has
-        // no top-edge resize at all in frameless mode, only left/right/
-        // bottom; that trade was already implicit before this PR, since the
-        // filter was dead on every edge here until now.  Stays installed
+        // resizer's edge margin. MainWindow's title bar owns move and control
+        // hit-testing while the filter keeps all native child edges covered.
+        // The 8 px band is shared by every platform's custom frame.
+        // Stays installed
         // across frameless toggles — when the system frame is back on, the
         // platform owns resize and our filter no-ops.
-        FramelessResizer::install(this, 6, TitleBar::kHeight);
+        FramelessResizer::install(this, 8, TitleBar::kHeight);
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
         // key into the nested AppSettings["CwDecoder"] blob (#2417).  The
@@ -3513,6 +3525,7 @@ void MainWindow::paintEvent(QPaintEvent* event)
     QPainter p(this);
     const QColor bg = ThemeManager::instance().color("color.background.app");
     p.setCompositionMode(QPainter::CompositionMode_Source);
+
     p.fillRect(rect(), bg.isValid() ? bg : QColor("#0f0f1a"));
     QMainWindow::paintEvent(event);
 }
@@ -3520,6 +3533,32 @@ void MainWindow::paintEvent(QPaintEvent* event)
 void MainWindow::showEvent(QShowEvent* event)
 {
     QMainWindow::showEvent(event);
+
+    // macOS frameless trim — rounded corners, shadow, native edge resize.
+    // Applied on every show rather than once: Qt re-creates the NSWindow
+    // whenever window flags change, and the replacement comes back square and
+    // non-resizable.  The call is idempotent, so re-running it is free.
+    if (mac::isSupported()
+        && (windowFlags() & Qt::FramelessWindowHint)) {
+        // 10 px matches the system's own window corner radius on Big Sur and
+        // later; the Windows path asks DWM for its 8 px equivalent.
+        constexpr int kMacWindowCornerRadius = 10;
+        mac::applyFramelessWindowStyle(this, kMacWindowCornerRadius);
+    }
+
+    // The caption controls are keyboard-reachable, which puts them first in the
+    // window's tab order — so Qt hands them the initial focus and the window
+    // opens with a focus ring drawn around a traffic light.  Drop it: a freshly
+    // opened window should show no focus ring until the operator tabs or
+    // clicks.  They stay fully reachable by Tab, which is what the a11y
+    // contract actually requires.
+    QTimer::singleShot(0, this, [this]() {
+        auto* caption = m_titleBar ? m_titleBar->captionButtons() : nullptr;
+        QWidget* focused = QApplication::focusWidget();
+        if (caption && focused && caption->isAncestorOf(focused)) {
+            focused->clearFocus();
+        }
+    });
 
     if (m_startupGeometryReapplied || m_startupGeometryForFirstShow.isEmpty()) {
         return;
@@ -3696,6 +3735,20 @@ void MainWindow::applyWindowsCustomFrame()
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
                  | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+
+    // Rounded corners + the system drop shadow, from DWM rather than from a
+    // hand-rolled mask: a masked window loses the shadow and antialiases its
+    // own corners against whatever is behind it.  DWMWA_WINDOW_CORNER_PREFERENCE
+    // is Windows 11 (build 22000+) only; on Windows 10 the call fails with
+    // E_INVALIDARG and the window keeps square corners, which is the correct
+    // look there anyway.  Resolved dynamically so a pre-22000 SDK still builds.
+    //
+    // 33 == DWMWA_WINDOW_CORNER_PREFERENCE, 2 == DWMWCP_ROUND (the 8 px radius).
+    constexpr DWORD kCornerPreferenceAttribute = 33;
+    constexpr DWORD kCornerRound = 2;
+    DWORD preference = kCornerRound;
+    DwmSetWindowAttribute(hwnd, kCornerPreferenceAttribute,
+                          &preference, sizeof(preference));
 }
 
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
@@ -3716,6 +3769,36 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
             clientArea->left += border;
             clientArea->right -= border;
         }
+        *result = 0;
+        return true;
+    }
+
+    // Snap Layouts.  Windows only offers the layout flyout when the window
+    // answers HTMAXBUTTON over its maximize control — but answering it also
+    // hands that rect to the non-client hit-test, so Qt stops seeing enter,
+    // leave and click there.  Hover paint and activation therefore have to be
+    // driven from these WM_NC* messages instead.
+    auto captionButtons = [this]() -> WindowCaptionButtons* {
+        return (m_titleBar && m_titleBar->isVisible()) ? m_titleBar->captionButtons()
+                                                       : nullptr;
+    };
+
+    if (msg->message == WM_NCMOUSEMOVE) {
+        if (auto* caption = captionButtons()) {
+            caption->setMaximizeForcedHover(msg->wParam == HTMAXBUTTON);
+        }
+    } else if (msg->message == WM_NCMOUSELEAVE) {
+        if (auto* caption = captionButtons()) {
+            caption->setMaximizeForcedHover(false);
+        }
+    } else if (msg->message == WM_NCLBUTTONDOWN && msg->wParam == HTMAXBUTTON) {
+        // Swallow the press so DefWindowProc doesn't start its own caption
+        // interaction; the release below is what actually toggles.
+        *result = 0;
+        return true;
+    } else if (msg->message == WM_NCLBUTTONUP && msg->wParam == HTMAXBUTTON) {
+        if (isMaximized()) showNormal();
+        else               showMaximized();
         *result = 0;
         return true;
     }
@@ -3779,8 +3862,21 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
             }
         }
 
+        // QCursor::pos() rather than the message's own lParam: the caption
+        // rects below are Qt logical coordinates and lParam is physical
+        // pixels, so on a scaled display the two disagree.
+        const QPoint cursor = QCursor::pos();
+
+        if (auto* caption = captionButtons()) {
+            const QRect maxRect = caption->maximizeButtonGlobalRect();
+            if (!maxRect.isNull() && maxRect.contains(cursor)) {
+                *result = HTMAXBUTTON;   // makes Snap Layouts appear on hover
+                return true;
+            }
+        }
+
         if (m_titleBar && m_titleBar->isVisible()
-            && m_titleBar->isSystemMoveAreaAt(QCursor::pos())) {
+            && m_titleBar->isSystemMoveAreaAt(cursor)) {
             *result = HTCAPTION;
             return true;
         }
@@ -4319,6 +4415,67 @@ QJsonObject MainWindow::automationTxTimerSnapshot() const
         return QJsonObject{{QStringLiteral("visible"), false},
                            {QStringLiteral("running"), false}};
     return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
+}
+
+QJsonObject MainWindow::automationTitleBarSnapshot() const
+{
+    if (!m_titleBar)
+        return QJsonObject{{QStringLiteral("present"), false}};
+    QJsonObject snapshot = QJsonObject::fromVariantMap(m_titleBar->barState());
+    snapshot.insert(QStringLiteral("present"), true);
+    return snapshot;
+}
+
+bool MainWindow::automationTitleBarAction(const QString& action,
+                                          const QString& target,
+                                          QString* error)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (!m_titleBar) {
+        return fail(QStringLiteral("no title bar"));
+    }
+    RadioTabBar* tabs = m_titleBar->radioTabBar();
+    if (!tabs) {
+        return fail(QStringLiteral("no radio tab bar"));
+    }
+
+    if (action == QLatin1String("selectRadio")) {
+        if (target.isEmpty()) {
+            return fail(QStringLiteral("selectRadio needs a radio id"));
+        }
+        // Drive the real tab widget rather than the model behind it: the point
+        // of the verb is to prove the control the operator clicks works, and a
+        // model-only path would pass even if the tab were unreachable.
+        const auto tabWidgets = tabs->findChildren<RadioTab*>();
+        for (RadioTab* tab : tabWidgets) {
+            if (tab->entry().id == target) {
+                tab->click();
+                return true;
+            }
+        }
+        return fail(QStringLiteral("no radio tab with id '") + target
+                    + QStringLiteral("'"));
+    }
+    if (action == QLatin1String("showDiscovery")) {
+        tabs->showDiscoveryPopover();
+        return true;
+    }
+    if (action == QLatin1String("minimize") || action == QLatin1String("maximize")
+        || action == QLatin1String("close")) {
+        WindowCaptionButtons* caption = m_titleBar->captionButtons();
+        if (!caption) {
+            return fail(QStringLiteral("no caption buttons in the title bar"));
+        }
+        if (action == QLatin1String("minimize")) emit caption->minimizeRequested();
+        else if (action == QLatin1String("maximize")) emit caption->maximizeRestoreRequested();
+        else emit caption->closeRequested();
+        return true;
+    }
+    return fail(QStringLiteral("unknown titlebar action '") + action
+                + QStringLiteral("'"));
 }
 
 // The agent automation-bridge lifecycle (startAutomationBridge / stop /
@@ -4926,6 +5083,7 @@ void MainWindow::buildUI()
     m_splitter->setHandleWidth(0);
 
     auto* central = new QWidget(this);
+    central->setObjectName(QStringLiteral("mainCentralWidget"));
     auto* vbox = new QVBoxLayout(central);
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);

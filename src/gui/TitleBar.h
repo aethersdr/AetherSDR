@@ -1,6 +1,10 @@
 #pragma once
 
+#include "RadioTabBar.h"
+
+#include <QColor>
 #include <QElapsedTimer>
+#include <QList>
 #include <QPointer>
 #include <QString>
 #include <QVariantMap>
@@ -18,8 +22,20 @@ class QPropertyAnimation;
 
 namespace AetherSDR {
 
+class BrandMark;
 class PersistentDialog;
+class WindowCaptionButtons;
 
+// The unified title bar.  One 52 px strip owns the window controls, the brand
+// mark, the radio tabs, and the audio cluster; there is no second in-app title
+// strip on any platform.
+//
+// Chrome differs by platform but the bar does not:
+//   * macOS  — a frameless NSWindow with Qt-drawn traffic-light controls and
+//              an AppKit visual-effect material behind this bar.
+//   * Windows — Qt::FramelessWindowHint plus a WM_NCCALCSIZE'd frame; the caption
+//              buttons at the right are ours (design 1e).
+//   * Linux  — same custom chrome, chip-style controls at the left (design 1b).
 class TitleBar : public QWidget {
     Q_OBJECT
 
@@ -29,7 +45,8 @@ public:
     // duplicating the literal — the two must stay in lockstep, or the edge-
     // resize margin either overlaps the title bar (#4886) or leaves a dead
     // strip below it.
-    static constexpr int kHeight = 32;
+    static constexpr int kHeight = 52;
+    static constexpr int kUnifiedBarHeight = kHeight;
 
     explicit TitleBar(QWidget* parent = nullptr);
 
@@ -90,6 +107,23 @@ public:
     // as caption drag zones while keeping controls interactive.
     bool isSystemMoveAreaAt(const QPoint& globalPos) const;
 
+    // ── Radio tabs ──────────────────────────────────────────────────────────
+    // The strip of per-radio tabs plus the "+" discovered-radios popover.
+    // MainWindow feeds these from discovery + the active connection.
+    void setRadioTabs(const QList<RadioTabEntry>& radios);
+    void setActiveRadio(const QString& id);
+    void setDiscoveredRadios(const QList<RadioTabEntry>& radios);
+    RadioTabBar* radioTabBar() const { return m_radioTabs; }
+
+    // The caption controls, in whichever style this platform uses.  Windows'
+    // WM_NCHITTEST handler needs the maximize button's rect to answer
+    // HTMAXBUTTON for Snap Layouts.
+    WindowCaptionButtons* captionButtons() const { return m_captionButtons; }
+
+    // Introspection for the automation bridge (`titlebar` model): the whole
+    // bar — geometry, brand, tabs, audio cluster, window controls.
+    QVariantMap barState() const;
+
 signals:
     void pcAudioToggled(bool on);
     void masterVolumeChanged(int pct);
@@ -107,6 +141,10 @@ signals:
     void dockAppletRightRequested();
     // Toggle applet panel between docked and floating-window mode.
     void popOutAppletRequested();
+    // A radio tab was activated, or the popover's "Connect manually…" row
+    // was chosen.  MainWindow owns what those mean.
+    void radioTabActivated(const QString& radioId);
+    void connectManuallyRequested();
 
 public:
     // Open the feature-request dialog.  Wired from Help → Submit your idea…
@@ -122,9 +160,11 @@ private:
     void handleTitleDoubleClick(QMouseEvent* ev);
     void showFeatureRequestDialogImpl();
     void updatePcAudioToolTip();
+    void applyBarStyle();
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
-    QLabel*      m_appNameLabel{nullptr};
+    BrandMark*   m_brand{nullptr};
+    RadioTabBar* m_radioTabs{nullptr};
     QLabel*      m_experimentalRadioLabel{nullptr};
     QLabel*      m_otherTxLabel{nullptr};
     QPushButton* m_mfBtn{nullptr};
@@ -136,11 +176,12 @@ private:
     QLabel*      m_masterLabel{nullptr};
     QLabel*      m_hpLabel{nullptr};
 
-    // Window-control trio (frameless mode): minimize, maximize/restore, close.
-    // QLabels (not buttons) for a flat look; click is wired via eventFilter.
-    QLabel*      m_minimizeLbl{nullptr};
-    QLabel*      m_maximizeLbl{nullptr};
-    QLabel*      m_closeLbl{nullptr};
+    // Caption controls.  Present on every platform — the window is frameless
+    // everywhere, so there is never a native control to defer to.
+    WindowCaptionButtons* m_captionButtons{nullptr};
+    // Index the menu bar is inserted at by setMenuBar() — after the brand mark
+    // rather than at 0, so the brand always leads the bar.
+    int          m_menuBarSlot{0};
     QLabel*      m_dockLeftLbl{nullptr};
     QLabel*      m_dockRightLbl{nullptr};
     QLabel*      m_popOutLbl{nullptr};
@@ -152,12 +193,17 @@ private:
     QPoint       m_windowMovePressGlobal;
     QPoint       m_windowMoveStartPos;
 
-    // Heartbeat indicator
-    QLabel*      m_heartbeat{nullptr};
-    QTimer*      m_heartbeatOffTimer{nullptr};   // 100ms green→grey
-    QTimer*      m_heartbeatAlarmTimer{nullptr}; // 500ms red/grey blink
+    // ── Radio-link (discovery heartbeat) state ──────────────────────────────
+    // Rendered by the active radio tab's status dot; there is no separate
+    // heartbeat lamp.  The animation lives in RadioTabBar, the state machine
+    // here.  linkOverrideColor() turns the state into the dot's colour and
+    // pushLinkIndicator() hands it over.
+    QColor       linkOverrideColor() const;
+    void         pushLinkIndicator();
+    // Three consecutive misses is the alarm threshold, unchanged from the
+    // standalone lamp: one missed discovery sweep is routine on a busy LAN.
+    static constexpr int kHeartbeatAlarmThreshold = 3;
     int          m_missedBeats{0};
-    bool         m_alarmRed{false};
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
     bool         m_discovering{false};  // solid amber while waiting for connection
     QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active

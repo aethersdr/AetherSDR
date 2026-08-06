@@ -4296,6 +4296,9 @@ set_tests_properties(mini_pan_widget_test PROPERTIES
 add_executable(hl2_pc_audio_lock_test
     tests/hl2_pc_audio_lock_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     # TitleBar's dialogs (PC-audio tooltip help, message boxes) are frameless,
     # so the resizer + frameless title bar come along; ThemeManager pulls its
     # logging deps, same as container_widget_test.
@@ -4324,6 +4327,9 @@ set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
 add_executable(titlebar_headphone_mute_test
     tests/titlebar_headphone_mute_test.cpp
     src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     # TitleBar's dialogs are frameless, so the resizer + frameless title bar
     # come along; ThemeManager pulls its logging deps.
     src/gui/FramelessMessageBox.cpp
@@ -4344,6 +4350,34 @@ target_link_libraries(titlebar_headphone_mute_test PRIVATE
 set_target_properties(titlebar_headphone_mute_test PROPERTIES AUTOMOC ON)
 add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
 set_tests_properties(titlebar_headphone_mute_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(unified_title_bar_test
+    tests/unified_title_bar_test.cpp
+    src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(unified_title_bar_test PRIVATE src)
+target_link_libraries(unified_title_bar_test PRIVATE
+    aether_sqlite3
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(unified_title_bar_test PROPERTIES AUTOMOC ON)
+add_test(NAME unified_title_bar_test COMMAND unified_title_bar_test)
+set_tests_properties(unified_title_bar_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
@@ -4617,6 +4651,7 @@ set(AETHER_SETTINGS_CONSUMERS
     container_widget_test
     hl2_pc_audio_lock_test
     titlebar_headphone_mute_test
+    unified_title_bar_test
     amp_applet_test
     container_manager_test
     container_nesting_test

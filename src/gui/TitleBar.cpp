@@ -1,13 +1,18 @@
 #include "TitleBar.h"
+#include "BrandMark.h"
 #include "FramelessMessageBox.h"
 #include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
 #include "PersistentDialog.h"
+#include "RadioTabBar.h"
+#include "WindowCaptionButtons.h"
 #include "core/AppSettings.h"
 
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QVBoxLayout>
 #include <QDialog>
@@ -105,6 +110,75 @@ QPixmap buildPopOutIcon(bool active)
     p.end();
     return pm;
 }
+
+// ── Audio-cluster icons ─────────────────────────────────────────────────────
+// Thin-line marks in the house style (1.8 px stroke, no fill), replacing the
+// 🔊 / 🎧 emoji the strip used to carry.  The design system forbids emoji as UI
+// outright: they render in the platform's own colour and weight, so they never
+// matched the bar around them and never followed the theme.
+enum class AudioIcon { Speaker, Headphone };
+
+QPixmap buildAudioIcon(AudioIcon kind, bool muted, const QColor& stroke, qreal dpr)
+{
+    constexpr int kBox = 20;
+    QPixmap pm(int(kBox * dpr), int(kBox * dpr));
+    pm.setDevicePixelRatio(dpr);
+    pm.fill(Qt::transparent);
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(stroke, 1.8);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+
+    if (kind == AudioIcon::Speaker) {
+        // Cone: a small rectangle at the pivot with a flared face.
+        QPainterPath cone;
+        cone.moveTo(3.0, 8.0);
+        cone.lineTo(6.5, 8.0);
+        cone.lineTo(10.5, 4.5);
+        cone.lineTo(10.5, 15.5);
+        cone.lineTo(6.5, 12.0);
+        cone.lineTo(3.0, 12.0);
+        cone.closeSubpath();
+        p.drawPath(cone);
+        if (!muted) {
+            // Two radiating arcs.  QPainter angles are sixteenths of a degree.
+            p.drawArc(QRectF(9.0, 5.5, 6.0, 9.0), -60 * 16, 120 * 16);
+            p.drawArc(QRectF(9.0, 2.5, 9.0, 15.0), -55 * 16, 110 * 16);
+        } else {
+            p.drawLine(QPointF(13.0, 7.0), QPointF(17.5, 13.0));
+            p.drawLine(QPointF(17.5, 7.0), QPointF(13.0, 13.0));
+        }
+    } else {
+        // Headband arc plus two ear cups.
+        p.drawArc(QRectF(3.5, 3.5, 13.0, 13.0), 0, 180 * 16);
+        p.drawRoundedRect(QRectF(3.0, 10.0, 3.6, 6.5), 1.6, 1.6);
+        p.drawRoundedRect(QRectF(13.4, 10.0, 3.6, 6.5), 1.6, 1.6);
+        if (muted) {
+            p.drawLine(QPointF(3.5, 16.5), QPointF(16.5, 3.5));
+        }
+    }
+    p.end();
+    return pm;
+}
+
+// Set (or re-set) an audio button's icon at the current DPR and theme colour.
+// Called on construction, on every mute toggle, and on theme change.
+void applyAudioIcon(QPushButton* button, AudioIcon kind, bool muted)
+{
+    if (!button) {
+        return;
+    }
+    const QColor stroke =
+        AetherSDR::ThemeManager::instance().color(button,
+                                                  QStringLiteral("color.text.secondary"));
+    button->setIcon(QIcon(buildAudioIcon(kind, muted, stroke,
+                                         button->devicePixelRatioF())));
+    button->setIconSize(QSize(20, 20));
+}
 }
 
 TitleBar::TitleBar(QWidget* parent)
@@ -112,11 +186,11 @@ TitleBar::TitleBar(QWidget* parent)
 {
     AetherSDR::theme::setContainer(this, QStringLiteral("titlebar"));
     setFixedHeight(kHeight);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "TitleBar { background: {{color.background.0}}; border-bottom: 1px solid {{color.background.1}}; }");
+    applyBarStyle();
 
     m_hbox = new QHBoxLayout(this);
-    m_hbox->setContentsMargins(4, 2, 8, 2);
-    m_hbox->setSpacing(6);
+    m_hbox->setContentsMargins(16, 0, 16, 0);
+    m_hbox->setSpacing(16);
 
     auto makeDragGutter = [this]() {
         auto* gutter = new QWidget(this);
@@ -129,45 +203,62 @@ TitleBar::TitleBar(QWidget* parent)
     // Keep the identity/status cluster anchored on the left, immediately after
     // the menu bar once it is inserted via setMenuBar().
 
-    // ── Heartbeat indicator ─────────────────────────────────────────────────
-    m_heartbeat = new QLabel;
-    m_heartbeat->setFixedSize(10, 10);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_heartbeat, "QLabel { background: {{color.background.2}}; border-radius: 5px; }");
-    m_heartbeat->setToolTip("Radio discovery heartbeat");
-    m_heartbeat->setAccessibleName("Radio heartbeat");
-    m_heartbeat->setAccessibleDescription("Flashes green when radio discovery packets are received");
-    markDragHandle(m_heartbeat);
-
-    // 100ms timer to return green flash back to grey
-    m_heartbeatOffTimer = new QTimer(this);
-    m_heartbeatOffTimer->setSingleShot(true);
-    m_heartbeatOffTimer->setInterval(100);
-    connect(m_heartbeatOffTimer, &QTimer::timeout, this, [this]() {
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_heartbeat, "QLabel { background: {{color.background.2}}; border-radius: 5px; }");
-    });
-
-    // 500ms alarm blink timer (red/grey alternating)
-    m_heartbeatAlarmTimer = new QTimer(this);
-    m_heartbeatAlarmTimer->setInterval(500);
-    connect(m_heartbeatAlarmTimer, &QTimer::timeout, this, [this]() {
-        m_alarmRed = !m_alarmRed;
-        m_heartbeat->setStyleSheet(m_alarmRed
-            ? "QLabel { background: #cc2020; border-radius: 5px; }"
-            : "QLabel { background: #404858; border-radius: 5px; }");
-    });
+    // ── Radio-link (discovery heartbeat) state ──────────────────────────────
+    // There is no separate heartbeat lamp any more: the active radio tab's own
+    // status dot carries it.  One dot answers both "which radio is this" and
+    // "is its link alive", which is where the operator is already looking — and
+    // it retires an indicator whose meaning had to be learned from a tooltip.
+    //
+    // The state machine below is unchanged; only its output moved.  That
+    // matters because two of its rules are safety-critical and easy to lose in
+    // a re-implementation: three missed beats is the alarm threshold, and the
+    // alarm holds SOLID red when blinking is disabled rather than going quiet.
 
     // Load persisted blink preference (default: enabled)
     m_blinkEnabled = AppSettings::instance()
         .value("HeartbeatBlinkEnabled", "True").toString() == "True";
 
-    // Right-click on the indicator to toggle blink on/off without opening a menu
-    m_heartbeat->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_heartbeat, &QWidget::customContextMenuRequested,
+    // ── 1. Window controls ──────────────────────────────────────────────────
+    // The window is frameless on every platform, so the controls are always
+    // ours.  macOS and Linux put them at the left of the bar (traffic lights
+    // and chips respectively); Windows puts its caption buttons at the far
+    // right instead, so nothing goes in this slot there.
+#if defined(Q_OS_MAC)
+    m_captionButtons = new WindowCaptionButtons(CaptionStyle::MacTrafficLights, this);
+    m_hbox->addWidget(m_captionButtons);
+    // The platform sets its lights ~20 px in from the window edge; the layout's
+    // own 16 px margin covers most of that, so add the remainder as spacing
+    // rather than special-casing the margin.
+    m_hbox->addSpacing(4);
+#elif !defined(Q_OS_WIN)
+    m_captionButtons = new WindowCaptionButtons(CaptionStyle::LinuxChips, this);
+    m_hbox->addWidget(m_captionButtons);
+#endif
+
+    // ── 2. Brand ────────────────────────────────────────────────────────────
+    m_brand = new BrandMark(this);
+    markDragHandle(m_brand);
+    m_hbox->addWidget(m_brand);
+
+    // The menu bar (Linux/Windows only — macOS puts it in the system bar) is
+    // inserted here by setMenuBar(), between the brand and the radio tabs.
+    m_menuBarSlot = m_hbox->count();
+
+    // ── 3. Radio tabs ───────────────────────────────────────────────────────
+    m_radioTabs = new RadioTabBar(this);
+    m_radioTabs->setPulseEnabled(m_blinkEnabled);
+    connect(m_radioTabs, &RadioTabBar::radioActivated,
+            this, &TitleBar::radioTabActivated);
+    connect(m_radioTabs, &RadioTabBar::connectManuallyRequested,
+            this, &TitleBar::connectManuallyRequested);
+    // Right-click a tab to toggle the blink, as the old heartbeat lamp did.
+    // The View menu keeps its checkbox; both route through setBlinkEnabled().
+    m_radioTabs->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_radioTabs, &QWidget::customContextMenuRequested,
             this, [this](const QPoint& pos) {
         // Heap-allocate with WA_DeleteOnClose so the menu outlives this lambda.
-        // Use popup() not exec() — exec() creates a nested event loop which can
-        // allow network/connection events to be processed out of order while the
-        // menu is open. popup() is non-blocking and safe during connection setup.
+        // popup() not exec(): exec() spins a nested event loop, which can let
+        // network/connection events run out of order while the menu is open.
         QMenu* menu = new QMenu(this);
         menu->setAttribute(Qt::WA_DeleteOnClose);
         QAction* blinkAction = menu->addAction("Blink status indicator");
@@ -176,25 +267,9 @@ TitleBar::TitleBar(QWidget* parent)
         connect(blinkAction, &QAction::triggered, this, [this](bool checked) {
             setBlinkEnabled(checked);
         });
-        menu->popup(m_heartbeat->mapToGlobal(pos));
+        menu->popup(m_radioTabs->mapToGlobal(pos));
     });
-
-    // On Linux/Windows the menu bar occupies the left side, so add a stretch
-    // to center the app name. On macOS the menu is at the OS level, so the
-    // app name stays flush left.
-#ifndef Q_OS_MAC
-    // Linux/Windows: center the identity cluster (menu bar is on the left)
-    m_hbox->addWidget(makeDragGutter(), 1);
-    m_hbox->addWidget(m_heartbeat);
-    m_hbox->addSpacing(4);
-#endif
-
-    m_appNameLabel = new QLabel(
-        QString("AetherSDR v%1").arg(QCoreApplication::applicationVersion()));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appNameLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; }");
-    m_appNameLabel->setAlignment(Qt::AlignCenter);
-    markDragHandle(m_appNameLabel);
-    m_hbox->addWidget(m_appNameLabel);
+    m_hbox->addWidget(m_radioTabs);
 
     m_experimentalRadioLabel = new QLabel(QStringLiteral("EXPERIMENTAL"));
     m_experimentalRadioLabel->setObjectName(QStringLiteral("experimentalRadioBadge"));
@@ -211,6 +286,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_experimentalRadioLabel->hide();
     m_hbox->addWidget(m_experimentalRadioLabel);
 
+    // multiFLEX rides alongside the tabs: it describes the same radio session
+    // the active tab names.
     m_mfBtn = new QPushButton("multiFLEX");
     m_mfBtn->setFlat(true);
     m_mfBtn->setStyleSheet(
@@ -224,22 +301,27 @@ TitleBar::TitleBar(QWidget* parent)
     connect(m_mfBtn, &QPushButton::clicked, this, &TitleBar::multiFlexClicked);
     m_hbox->addWidget(m_mfBtn);
 
-#ifdef Q_OS_MAC
-    // macOS: heartbeat after multiFLEX (left-aligned, no menu bar in title)
-    m_hbox->addSpacing(4);
-    m_hbox->addWidget(m_heartbeat);
-#endif
-
+    // ── 4. Spacer ───────────────────────────────────────────────────────────
     m_hbox->addWidget(makeDragGutter(), 1);
 
-    // ── Right: Other client TX indicator + PC Audio + Master Vol + HP Vol ──
+    // ── 5. Audio cluster ────────────────────────────────────────────────────
+    // Grouped into its own container so the bar's 16 px inter-group gap applies
+    // between the cluster and the spacer, while the controls *inside* it keep
+    // the tighter 8 px rhythm the instrument UI uses everywhere else.
+    auto* audioCluster = new QWidget(this);
+    audioCluster->setObjectName(QStringLiteral("titleBarAudioCluster"));
+    audioCluster->setAccessibleName(QStringLiteral("Audio controls"));
+    auto* audio = new QHBoxLayout(audioCluster);
+    audio->setContentsMargins(0, 0, 0, 0);
+    audio->setSpacing(8);
+
     m_otherTxLabel = new QLabel();
     m_otherTxLabel->setStyleSheet(
         "QLabel { background: white; color: #cc0000; font-size: 12px; "
         "font-weight: bold; border-radius: 3px; padding: 2px 8px; }");
     m_otherTxLabel->setVisible(false);
     markDragHandle(m_otherTxLabel);
-    m_hbox->addWidget(m_otherTxLabel);
+    audio->addWidget(m_otherTxLabel);
 
     // ── PC Audio + Master Vol + HP Vol ──────────────────────────────────────
     auto& s = AppSettings::instance();
@@ -270,8 +352,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_txTimerOpacity->setOpacity(1.0);
     m_txTimerLabel->setGraphicsEffect(m_txTimerOpacity);
     m_txTimerLabel->setVisible(false);   // idle: not displayed
-    m_hbox->addWidget(m_txTimerLabel);
-    m_hbox->addSpacing(6);
+    audio->addWidget(m_txTimerLabel);
 
     // 5 Hz tick that repaints the elapsed time while keyed.
     m_txTimerTick = new QTimer(this);
@@ -299,12 +380,13 @@ TitleBar::TitleBar(QWidget* parent)
             m_txTimerLabel->setVisible(false);
     });
 
-    // PC Audio toggle
+    // PC Audio pill
     m_pcBtn = new QPushButton("PC Audio");
     m_pcBtn->setObjectName(QStringLiteral("pcAudioBtn"));
     m_pcBtn->setCheckable(true);
-    m_pcBtn->setFixedHeight(22);
-    m_pcBtn->setFixedWidth(70);
+    m_pcBtn->setFixedHeight(24);
+    m_pcBtn->setFixedWidth(78);
+    m_pcBtn->setCursor(Qt::PointingHandCursor);
 
     bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
     m_pcBtn->setChecked(pcOn);
@@ -314,12 +396,16 @@ TitleBar::TitleBar(QWidget* parent)
     updatePcAudioToolTip();
 
     auto updatePcStyle = [this]() {
+        // 12 px radius on a 24 px control = a pill.  Colours stay literal here
+        // rather than tokenised: this is the one control on the bar whose green
+        // reads as "audio is live on this computer", the same green the status
+        // bar and the network indicator use.
         m_pcBtn->setStyleSheet(m_pcBtn->isChecked()
             ? "QPushButton { background: #1a6030; color: #40ff80; border: 1px solid #20a040; "
-              "border-radius: 3px; font-size: 10px; font-weight: bold; }"
+              "border-radius: 12px; font-size: 10px; font-weight: bold; }"
               "QPushButton:hover { background: #207040; }"
             : "QPushButton { background: #1a2a3a; color: #607080; border: 1px solid #304050; "
-              "border-radius: 3px; font-size: 10px; font-weight: bold; }"
+              "border-radius: 12px; font-size: 10px; font-weight: bold; }"
               "QPushButton:hover { background: #243848; }");
     };
     updatePcStyle();
@@ -331,115 +417,115 @@ TitleBar::TitleBar(QWidget* parent)
         ss.save();
         emit pcAudioToggled(on);
     });
-    m_hbox->addWidget(m_pcBtn);
+    audio->addWidget(m_pcBtn);
 
-    m_hbox->addSpacing(8);
+    // 64 px track, 3 px groove, 10 px knob — the bar's own slider metrics,
+    // narrower and thinner than the app-wide default so two of them fit next to
+    // the tabs without crowding.
+    const QString barSliderStyle = QStringLiteral(
+        "QSlider::groove:horizontal { background: {{color.slider.background}};"
+        " height: 3px; border-radius: 1px; }"
+        "QSlider::handle:horizontal { background: {{color.slider.handle}};"
+        " width: 10px; height: 10px; margin: -4px 0; border-radius: 5px; }"
+        "QSlider::sub-page:horizontal { background: {{color.accent}};"
+        " border-radius: 1px; }");
+    // JetBrains Mono for the numeric readouts — the house mono face for any
+    // value the operator reads rather than reads *about*.
+    const QString barValueStyle = QStringLiteral(
+        "QLabel { color: {{color.text.secondary}}; font-size: 11px;"
+        " font-family: \"{{font.family.mono}}\", \"JetBrains Mono\", monospace; }");
+    const QString iconBtnStyle = QStringLiteral(
+        "QPushButton { background: transparent; border: none; padding: 0;"
+        " border-radius: 4px; }"
+        "QPushButton:hover { background: {{color.titlebar.tab.hover}}; }"
+        "QPushButton:focus { border: 1px solid {{color.border.accent}}; }");
 
-    // Master volume (click icon to mute/unmute)
-    m_speakerBtn = new QPushButton("\xF0\x9F\x94\x8A");  // 🔊
-    m_speakerBtn->setFixedSize(20, 20);
+    // Line-out volume (click icon to mute/unmute)
+    m_speakerBtn = new QPushButton;
+    m_speakerBtn->setFixedSize(22, 22);
     m_speakerBtn->setCheckable(true);
-    m_speakerBtn->setStyleSheet(
-        "QPushButton { background: transparent; border: none; font-size: 14px; padding: 0; }"
-        "QPushButton:checked { opacity: 0.4; }");
+    m_speakerBtn->setCursor(Qt::PointingHandCursor);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_speakerBtn, iconBtnStyle);
     m_speakerBtn->setToolTip("Click to mute/unmute line out");
     m_speakerBtn->setAccessibleName("Line out mute");
     m_speakerBtn->setAccessibleDescription("Mute or unmute line out speaker audio");
+    applyAudioIcon(m_speakerBtn, AudioIcon::Speaker, false);
     connect(m_speakerBtn, &QPushButton::toggled, this, [this](bool muted) {
-        m_speakerBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x94\x8A");  // 🔇 / 🔊
+        applyAudioIcon(m_speakerBtn, AudioIcon::Speaker, muted);
         emit lineoutMuteChanged(muted);
     });
-    m_hbox->addWidget(m_speakerBtn);
+    audio->addWidget(m_speakerBtn);
 
     m_masterSlider = new GuardedSlider(Qt::Horizontal);
     m_masterSlider->setRange(0, 100);
     int savedVol = s.value("MasterVolume", "100").toInt();
     m_masterSlider->setValue(savedVol);
-    m_masterSlider->setFixedWidth(80);
+    m_masterSlider->setFixedWidth(64);
     m_masterSlider->setFixedHeight(16);
     m_masterSlider->setAccessibleName("Master volume");
     m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, "QSlider::groove:horizontal { background: {{color.slider.background}}; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: {{color.slider.handle}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
-        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; border-radius: 2px; }");
-    m_hbox->addWidget(m_masterSlider);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, barSliderStyle);
+    audio->addWidget(m_masterSlider);
 
     m_masterLabel = new QLabel(QString::number(savedVol));
-    m_masterLabel->setFixedWidth(22);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+    m_masterLabel->setFixedWidth(24);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterLabel, barValueStyle);
     m_masterLabel->setAlignment(Qt::AlignCenter);
     markDragHandle(m_masterLabel);
-    m_hbox->addWidget(m_masterLabel);
+    audio->addWidget(m_masterLabel);
 
     connect(m_masterSlider, &QSlider::valueChanged, this, [this](int v) {
         m_masterLabel->setText(QString::number(v));
         emit masterVolumeChanged(v);
     });
 
-    m_hbox->addSpacing(8);
-
     // Headphone volume (click icon to mute/unmute)
-    m_headphoneBtn = new QPushButton("\xF0\x9F\x8E\xA7");  // 🎧
-    m_headphoneBtn->setFixedSize(20, 20);
+    m_headphoneBtn = new QPushButton;
+    m_headphoneBtn->setFixedSize(22, 22);
     m_headphoneBtn->setCheckable(true);
-    m_headphoneBtn->setStyleSheet(
-        "QPushButton { background: transparent; border: none; font-size: 14px; padding: 0; }"
-        "QPushButton:checked { opacity: 0.4; }");
+    m_headphoneBtn->setCursor(Qt::PointingHandCursor);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_headphoneBtn, iconBtnStyle);
     m_headphoneBtn->setToolTip("Click to mute/unmute headphones");
     m_headphoneBtn->setAccessibleName("Headphone mute");
     m_headphoneBtn->setAccessibleDescription("Mute or unmute headphone audio");
+    applyAudioIcon(m_headphoneBtn, AudioIcon::Headphone, false);
     connect(m_headphoneBtn, &QPushButton::toggled, this, [this](bool muted) {
-        m_headphoneBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x8E\xA7");  // 🔇 / 🎧
+        applyAudioIcon(m_headphoneBtn, AudioIcon::Headphone, muted);
         emit headphoneMuteChanged(muted);
     });
-    m_hbox->addWidget(m_headphoneBtn);
+    audio->addWidget(m_headphoneBtn);
 
     m_hpSlider = new GuardedSlider(Qt::Horizontal);
     m_hpSlider->setRange(0, 100);
     m_hpSlider->setValue(50);
-    m_hpSlider->setFixedWidth(80);
+    m_hpSlider->setFixedWidth(64);
     m_hpSlider->setFixedHeight(16);
     m_hpSlider->setAccessibleName("Headphone volume");
     m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, "QSlider::groove:horizontal { background: {{color.slider.background}}; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: {{color.slider.handle}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
-        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; border-radius: 2px; }");
-    m_hbox->addWidget(m_hpSlider);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, barSliderStyle);
+    audio->addWidget(m_hpSlider);
 
     m_hpLabel = new QLabel("50");
-    m_hpLabel->setFixedWidth(22);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+    m_hpLabel->setFixedWidth(24);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpLabel, barValueStyle);
     m_hpLabel->setAlignment(Qt::AlignCenter);
     markDragHandle(m_hpLabel);
-    m_hbox->addWidget(m_hpLabel);
+    audio->addWidget(m_hpLabel);
 
     connect(m_hpSlider, &QSlider::valueChanged, this, [this](int v) {
         m_hpLabel->setText(QString::number(v));
         emit headphoneVolumeChanged(v);
     });
 
-    // ── Window-control trio (min / max / close) ───────────────────────────
-    // Discord-style: thin 1 px vertical separator before the trio, larger
-    // flat labels with a subtle hover background.  Click is wired via
-    // eventFilter().  Close uses a red hover for the destructive action cue.
-    m_hbox->addSpacing(8);
+    m_hbox->addWidget(audioCluster);
 
+    // ── Dock-side selectors + our own caption controls ──────────────────────
     auto* sep = new QFrame;
     sep->setFixedSize(1, 20);
     AetherSDR::ThemeManager::instance().applyStyleSheet(sep, "QFrame { background: {{color.background.2}}; border: none; }");
     markDragHandle(sep);
     m_hbox->addWidget(sep);
 
-    m_hbox->addSpacing(4);
-
-    const QString winLblStyle = QStringLiteral(
-        "QLabel { color: #8aa8c0; font-size: 18px; padding: 0 10px; "
-        "border-radius: 4px; }"
-        "QLabel:hover { color: #ffffff; background: #203040; }");
-    const QString winCloseLblStyle = QStringLiteral(
-        "QLabel { color: #8aa8c0; font-size: 18px; padding: 0 10px; "
-        "border-radius: 4px; }"
-        "QLabel:hover { color: #ffffff; background: #cc2030; }");
     const QString dockLblStyle = QStringLiteral(
         "QLabel { padding: 0 6px; border-radius: 4px; }"
         "QLabel:hover { background: #203040; }");
@@ -476,45 +562,63 @@ TitleBar::TitleBar(QWidget* parent)
     m_popOutLbl->installEventFilter(this);
     m_hbox->addWidget(m_popOutLbl);
 
-    m_hbox->addSpacing(4);
-
+#if defined(Q_OS_WIN)
+    // Trailing separator only where something follows it.  Windows keeps its
+    // caption buttons at the right, so the rule divides the pane controls from
+    // them; on macOS and Linux the controls are at the far left and this rule
+    // would just hang off the end of the row with nothing to separate.
     m_dockSep = new QFrame;
     m_dockSep->setFixedSize(1, 20);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_dockSep, "QFrame { background: {{color.background.2}}; border: none; }");
     markDragHandle(m_dockSep);
     m_hbox->addWidget(m_dockSep);
 
-    m_hbox->addSpacing(4);
 
-    m_minimizeLbl = new QLabel(QString::fromUtf8("\xe2\x80\x94"));  // — em dash
-    m_minimizeLbl->setFixedHeight(24);
-    m_minimizeLbl->setAlignment(Qt::AlignCenter);
-    m_minimizeLbl->setCursor(Qt::PointingHandCursor);
-    m_minimizeLbl->setToolTip("Minimize");
-    m_minimizeLbl->setAccessibleName("Minimize window");
-    m_minimizeLbl->setStyleSheet(winLblStyle);
-    m_minimizeLbl->installEventFilter(this);
-    m_hbox->addWidget(m_minimizeLbl);
+    // Design 1e: the caption cluster is flush to the right window edge and runs
+    // the full 52 px, so it cancels the layout's right margin and gap.
+    m_captionButtons = new WindowCaptionButtons(CaptionStyle::WindowsCaption, this);
+    m_hbox->addWidget(m_captionButtons);
+    m_hbox->setContentsMargins(16, 0, 0, 0);
+    m_hbox->setStretchFactor(m_captionButtons, 0);
+#endif
 
-    m_maximizeLbl = new QLabel(QString::fromUtf8("\xe2\x96\xa1"));  // □ U+25A1
-    m_maximizeLbl->setFixedHeight(24);
-    m_maximizeLbl->setAlignment(Qt::AlignCenter);
-    m_maximizeLbl->setCursor(Qt::PointingHandCursor);
-    m_maximizeLbl->setToolTip("Maximize");
-    m_maximizeLbl->setAccessibleName("Maximize window");
-    m_maximizeLbl->setStyleSheet(winLblStyle);
-    m_maximizeLbl->installEventFilter(this);
-    m_hbox->addWidget(m_maximizeLbl);
+    if (m_captionButtons) {
+        connect(m_captionButtons, &WindowCaptionButtons::minimizeRequested,
+                this, [this]() {
+                    if (auto* w = window()) w->showMinimized();
+                });
+        connect(m_captionButtons, &WindowCaptionButtons::maximizeRestoreRequested,
+                this, [this]() {
+                    if (m_minimalMode) {
+                        emit minimalModeWindowedExitRequested();
+                        return;
+                    }
+                    if (auto* w = window()) {
+                        if (w->isMaximized()) w->showNormal();
+                        else                  w->showMaximized();
+                    }
+                });
+        connect(m_captionButtons, &WindowCaptionButtons::closeRequested,
+                this, [this]() {
+                    if (auto* w = window()) w->close();
+                });
+    }
 
-    m_closeLbl = new QLabel(QString::fromUtf8("\xe2\x9c\x95"));  // ✕ U+2715
-    m_closeLbl->setFixedHeight(24);
-    m_closeLbl->setAlignment(Qt::AlignCenter);
-    m_closeLbl->setCursor(Qt::PointingHandCursor);
-    m_closeLbl->setToolTip("Close");
-    m_closeLbl->setAccessibleName("Close window");
-    m_closeLbl->setStyleSheet(winCloseLblStyle);
-    m_closeLbl->installEventFilter(this);
-    m_hbox->addWidget(m_closeLbl);
+    // Painter-drawn icons don't ride ThemeManager's stylesheet re-apply, so
+    // repaint them explicitly when the palette changes.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this]() {
+        applyBarStyle();
+        applyAudioIcon(m_speakerBtn, AudioIcon::Speaker, m_speakerBtn->isChecked());
+        applyAudioIcon(m_headphoneBtn, AudioIcon::Headphone, m_headphoneBtn->isChecked());
+    });
+}
+
+void TitleBar::applyBarStyle()
+{
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        this,
+        QStringLiteral("TitleBar { background: {{color.titlebar.background}};"
+                       " border-bottom: 1px solid {{color.titlebar.border}}; }"));
 }
 
 void TitleBar::showEvent(QShowEvent* ev)
@@ -526,6 +630,76 @@ void TitleBar::showEvent(QShowEvent* ev)
         w->installEventFilter(this);
         updateMaximizeIcon();
     }
+}
+
+void TitleBar::setRadioTabs(const QList<RadioTabEntry>& radios)
+{
+    if (m_radioTabs) {
+        m_radioTabs->setRadios(radios);
+    }
+}
+
+void TitleBar::setActiveRadio(const QString& id)
+{
+    if (m_radioTabs) {
+        m_radioTabs->setActiveRadio(id);
+    }
+}
+
+void TitleBar::setDiscoveredRadios(const QList<RadioTabEntry>& radios)
+{
+    if (m_radioTabs) {
+        m_radioTabs->setDiscoveredRadios(radios);
+    }
+}
+
+QVariantMap TitleBar::barState() const
+{
+    QVariantMap audio{
+        {QStringLiteral("pcAudioEnabled"), m_pcBtn && m_pcBtn->isChecked()},
+        {QStringLiteral("pcAudioLocked"), m_pcBtn && !m_pcBtn->isEnabled()},
+        {QStringLiteral("lineoutMuted"), m_speakerBtn && m_speakerBtn->isChecked()},
+        {QStringLiteral("headphoneMuted"), m_headphoneBtn && m_headphoneBtn->isChecked()},
+        {QStringLiteral("masterVolume"), m_masterSlider ? m_masterSlider->value() : 0},
+        {QStringLiteral("headphoneVolume"), m_hpSlider ? m_hpSlider->value() : 0},
+        {QStringLiteral("masterText"), m_masterLabel ? m_masterLabel->text() : QString()},
+        {QStringLiteral("headphoneText"), m_hpLabel ? m_hpLabel->text() : QString()},
+        {QStringLiteral("sliderWidth"), m_masterSlider ? m_masterSlider->width() : 0},
+    };
+
+    QVariantMap chrome{
+        {QStringLiteral("frameless"),
+         window() && window()->windowFlags().testFlag(Qt::FramelessWindowHint)},
+    };
+    if (m_captionButtons) {
+        chrome.insert(QStringLiteral("captionButtons"), m_captionButtons->state());
+    }
+
+    const QRect screen(mapToGlobal(QPoint(0, 0)), size());
+    return QVariantMap{
+        {QStringLiteral("height"), height()},
+        {QStringLiteral("expectedHeight"), kUnifiedBarHeight},
+        {QStringLiteral("screenRect"),
+         QVariantList{screen.x(), screen.y(), screen.width(), screen.height()}},
+        // Distance from the top of the window to the top of the bar.  Must be
+        // 0: anything else means something is reserving a strip above the
+        // unified bar, which is exactly the "wasted top row" this design exists
+        // to remove.
+        {QStringLiteral("offsetInWindow"),
+         window() ? mapTo(window(), QPoint(0, 0)).y() : -1},
+        {QStringLiteral("minimalMode"), m_minimalMode},
+        {QStringLiteral("brand"),
+         QVariantMap{
+             {QStringLiteral("wordmark"),
+              m_brand ? m_brand->wordmarkText() : QString()},
+             {QStringLiteral("logoLoaded"), m_brand && m_brand->hasLogo()},
+             {QStringLiteral("visible"), m_brand && m_brand->isVisible()},
+         }},
+        {QStringLiteral("radios"), m_radioTabs ? m_radioTabs->state() : QVariantMap{}},
+        {QStringLiteral("audio"), audio},
+        {QStringLiteral("chrome"), chrome},
+        {QStringLiteral("txTimer"), txTimerState()},
+    };
 }
 
 void TitleBar::markDragHandle(QWidget* widget)
@@ -588,7 +762,7 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
             ev->accept();
             return true;
         }
-#elif !defined(Q_OS_MAC)
+#else
         // startSystemMove() reports success on xcb but the WM-driven drag it
         // hands off to is unreliable there (QTBUG-69716) — under Mutter/
         // XWayland (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland
@@ -726,25 +900,6 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
     if (ev->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(ev);
         if (me->button() == Qt::LeftButton) {
-            if (obj == m_minimizeLbl) {
-                if (auto* w = window()) w->showMinimized();
-                return true;
-            }
-            if (obj == m_maximizeLbl) {
-                if (m_minimalMode) {
-                    emit minimalModeWindowedExitRequested();
-                    return true;
-                }
-                if (auto* w = window()) {
-                    if (w->isMaximized()) w->showNormal();
-                    else                  w->showMaximized();
-                }
-                return true;
-            }
-            if (obj == m_closeLbl) {
-                if (auto* w = window()) w->close();
-                return true;
-            }
             if (obj == m_dockLeftLbl) {
                 emit dockAppletLeftRequested();
                 return true;
@@ -778,20 +933,13 @@ void TitleBar::setAppletDockState(bool visible, bool left)
 
 void TitleBar::updateMaximizeIcon()
 {
-    if (!m_maximizeLbl) return;
-    auto* w = window();
-    const bool maxed = w && w->isMaximized();
-    if (m_minimalMode) {
-        m_maximizeLbl->setText(QString::fromUtf8("\xe2\x96\xa1"));
-        m_maximizeLbl->setToolTip("Exit Minimal Mode");
-        return;
+    if (!m_captionButtons) {
+        return;   // macOS — AppKit owns the traffic lights' own glyphs.
     }
-    // ❐ U+2750 (overlapped squares) when maximized → "restore down"
-    // □ U+25A1 (single square) when normal → "maximize"
-    m_maximizeLbl->setText(maxed
-        ? QString::fromUtf8("\xe2\x9d\x90")
-        : QString::fromUtf8("\xe2\x96\xa1"));
-    m_maximizeLbl->setToolTip(maxed ? "Restore" : "Maximize");
+    auto* w = window();
+    // In minimal mode the control leaves minimal mode rather than restoring, so
+    // it keeps the un-maximized square regardless of the real window state.
+    m_captionButtons->setMaximized(!m_minimalMode && w && w->isMaximized());
 }
 
 void TitleBar::mousePressEvent(QMouseEvent* ev)
@@ -839,8 +987,9 @@ void TitleBar::setMenuBar(QMenuBar* mb)
     mb->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     m_menuBar = mb;
     m_menuBar->installEventFilter(this);
-    // Insert at position 0 (before the first stretch)
-    m_hbox->insertWidget(0, mb);
+    // Between the brand mark and the radio tabs — the brand always leads the
+    // bar, so the menu can't be at index 0 any more.
+    m_hbox->insertWidget(m_menuBarSlot, mb);
 }
 
 void TitleBar::setPcAudioLocked(bool locked)
@@ -903,7 +1052,7 @@ void TitleBar::setLineoutMuted(bool muted)
 {
     QSignalBlocker b(m_speakerBtn);
     m_speakerBtn->setChecked(muted);
-    m_speakerBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x94\x8A");  // 🔇 / 🔊
+    applyAudioIcon(m_speakerBtn, AudioIcon::Speaker, muted);
 }
 
 void TitleBar::setHeadphoneMuted(bool muted)
@@ -1241,21 +1390,36 @@ void TitleBar::setChildDialogsFramelessMode(bool on)
     }
 }
 
+// Colour the active tab's dot should show for the current link state, or an
+// invalid colour to mean "leave the tab's own status colour alone".  Discovery
+// and loss both speak over the radio's status; a healthy link does not need to.
+QColor TitleBar::linkOverrideColor() const
+{
+    if (m_missedBeats >= kHeartbeatAlarmThreshold) {
+        return QColor(QStringLiteral("#cc2020"));   // link lost
+    }
+    if (m_discovering) {
+        return QColor(QStringLiteral("#e0a020"));   // searching, no link yet
+    }
+    return QColor();
+}
+
+void TitleBar::pushLinkIndicator()
+{
+    if (!m_radioTabs) {
+        return;
+    }
+    m_radioTabs->setLinkIndicator(linkOverrideColor(),
+                                  m_missedBeats >= kHeartbeatAlarmThreshold);
+}
+
 void TitleBar::setDiscovering(bool active)
 {
-    m_discovering = active;
-    if (active) {
-        // Solid amber — discovery in progress, no connection yet
-        m_heartbeatOffTimer->stop();
-        m_heartbeatAlarmTimer->stop();
-        m_heartbeat->setStyleSheet(
-            "QLabel { background: #e0a020; border-radius: 5px; }");
-        m_heartbeat->setToolTip("Searching for radio…");
-    } else {
-        m_heartbeat->setToolTip("Radio discovery heartbeat");
-        // Return to idle gray — onHeartbeat() will take over once pings arrive
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_heartbeat, "QLabel { background: {{color.background.2}}; border-radius: 5px; }");
+    if (m_discovering == active) {
+        return;
     }
+    m_discovering = active;
+    pushLinkIndicator();
 }
 
 QString TitleBar::currentBeatColor() const
@@ -1267,46 +1431,34 @@ void TitleBar::onHeartbeat()
 {
     m_discovering = false;
     m_missedBeats = 0;
-    m_heartbeatAlarmTimer->stop();
-    m_alarmRed = false;
-    m_heartbeat->setToolTip("Radio discovery heartbeat");
-    m_heartbeat->setStyleSheet(
-        QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
-    if (m_blinkEnabled) {
-        m_heartbeatOffTimer->start();  // flash → gray after 100ms
+    pushLinkIndicator();
+    // One swell of the active tab's glow per discovery packet.  The pulse is
+    // data now, not decoration: a link that stops answering simply stops
+    // breathing, which is the same signal the old 100 ms flash carried.
+    if (m_radioTabs) {
+        m_radioTabs->pulseLink(QColor(currentBeatColor()));
     }
-    // When blink is off: stays static — no timer, no animation
 }
 
 void TitleBar::setThrottleFlashColor(const QString& color)
 {
     if (m_throttleFlashColor == color) return;
     m_throttleFlashColor = color;
-    // Alarm timer owns the indicator — never fight it.
-    if (m_missedBeats >= 3 || m_heartbeatAlarmTimer->isActive()) return;
-    // Blink-disabled freeze path: repaint immediately to the new static color.
-    if (!m_blinkEnabled && !m_heartbeatOffTimer->isActive()) {
-        m_heartbeat->setStyleSheet(
-            QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
-    }
+    // The alarm owns the indicator while it is up — never fight it.  The new
+    // tint takes effect on the next beat, which is also when it becomes true.
+    if (m_missedBeats >= kHeartbeatAlarmThreshold) return;
+    pushLinkIndicator();
 }
 
 void TitleBar::onHeartbeatLost()
 {
     m_missedBeats++;
-    if (m_missedBeats >= 3 && !m_heartbeatAlarmTimer->isActive()) {
-        m_heartbeatOffTimer->stop();
-        if (m_blinkEnabled) {
-            m_heartbeatAlarmTimer->start();  // blinking red ↔ gray every 500ms
-        } else {
-            // Static red — alarm timer is NEVER started.
-            // Indicator stays red until the next successful ping restores connection.
-            // This is intentional and safety-critical: contest operators must see
-            // connection loss clearly, even with blink disabled.
-            m_alarmRed = true;
-            m_heartbeat->setStyleSheet(
-                "QLabel { background: #cc2020; border-radius: 5px; }");
-        }
+    if (m_missedBeats == kHeartbeatAlarmThreshold) {
+        // Crossing the threshold is the edge that raises the alarm.  Whether it
+        // blinks or holds solid red is RadioTabBar's call, driven by the same
+        // blink preference — and it holds solid when blinking is off, because
+        // an operator who silenced the animation still has to see a lost link.
+        pushLinkIndicator();
     }
 }
 
@@ -1317,30 +1469,11 @@ void TitleBar::setBlinkEnabled(bool enabled)
     AppSettings::instance().setValue("HeartbeatBlinkEnabled", enabled ? "True" : "False");
     AppSettings::instance().save();
     emit blinkEnabledChanged(enabled);
-
-    if (enabled) {
-        // Resume alarm blink immediately if currently in alarm state (m_missedBeats >= 3).
-        // Without this, re-enabling blink while connection is lost leaves the indicator
-        // static red until the next onHeartbeatLost() call increments the counter again.
-        if (m_missedBeats >= 3 && !m_heartbeatAlarmTimer->isActive()) {
-            m_heartbeatAlarmTimer->start();
-        }
-        return;
+    // One switch governs every animated status light in the bar.
+    if (m_radioTabs) {
+        m_radioTabs->setPulseEnabled(enabled);
     }
-
-    // Immediately reconcile mid-session: stop any active animation and freeze state
-    if (m_heartbeatAlarmTimer->isActive()) {
-        // Was blinking red — freeze to solid red (connection lost)
-        m_heartbeatAlarmTimer->stop();
-        m_alarmRed = true;
-        m_heartbeat->setStyleSheet(
-            "QLabel { background: #cc2020; border-radius: 5px; }");
-    } else if (m_heartbeatOffTimer->isActive()) {
-        // Was mid flash — freeze to solid connected color
-        m_heartbeatOffTimer->stop();
-        m_heartbeat->setStyleSheet(
-            QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
-    }
+    pushLinkIndicator();
 }
 
 void TitleBar::setMinimalMode(bool on)
@@ -1349,7 +1482,8 @@ void TitleBar::setMinimalMode(bool on)
 
     // Hide non-essential controls so status badges fit in the narrow strip.
     if (m_menuBar) m_menuBar->setVisible(!on);
-    if (m_appNameLabel) m_appNameLabel->setVisible(!on);
+    if (m_brand) m_brand->setVisible(!on);
+    if (m_radioTabs) m_radioTabs->setVisible(!on);
     m_pcBtn->setVisible(!on);
     m_speakerBtn->setVisible(!on);
     m_headphoneBtn->setVisible(!on);
