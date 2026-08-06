@@ -67,6 +67,29 @@ struct RadioCapabilities {
     // non-Flex backend must NOT open the mic on connect. (#4449 review)
     bool hostModulates = false;
 
+    // The RADIO owns its display dBm scale and will echo back a range sent to
+    // it. True for a Flex, whose `display pan set min_dbm=…` is a real command
+    // the radio adopts and reports; false for a backend that decodes its scope
+    // at a FIXED calibration it does not accept changes to (Icom CI-V, whose
+    // floor/span come from ScopeCalibration and shift only with the radio's own
+    // reference level).
+    //
+    // This gates the noise-floor auto-adjust, and it has to, because that loop
+    // is built on the echo: the widget moves its reference level, requests the
+    // new range, and waits for the radio to confirm before moving again. With
+    // no command plane the request is dropped, the confirmation never arrives,
+    // and the auto-floor reads the unchanged floor as "not there yet" and steps
+    // again — measured at a linear 24 dB/s, walking off the bottom of the scale
+    // (-202, -226, -250 … -1882 dBm) until dbmRangeLooksPlausible() starts
+    // rejecting it at -180. Those rejections are the SYMPTOM; the missing echo
+    // is the fault, which is why raising the reject floor would not have fixed
+    // it. On an IC-9700 this was the visible "waterfall resets ~1 s after the
+    // trace fills" and the reconnect churn behind it.
+    //
+    // A backend with a fixed scale needs no auto-adjust: its floor is already
+    // where the calibration puts it.
+    bool radioOwnsDbmScale = true;
+
     // The RADIO stores memory channels and re-dumps them on connect. True for a
     // Flex, whose memory slots live in the radio and are shared by every client
     // attached to it; false for a direct-sampling or receiver-only backend (HL2,

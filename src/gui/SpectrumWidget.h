@@ -316,6 +316,15 @@ public:
         return m_pendingDbmRangeEcho && m_pendingDbmRangeEchoFromAutoFloor;
     }
     bool noiseFloorAutoAdjustEnabled() const { return m_noiseFloorEnable; }
+    // False when the connected backend decodes its scope at a FIXED scale it
+    // does not accept range commands for (Icom CI-V). The auto-floor loop is
+    // built on the radio echoing a requested range back; with no echo it reads
+    // the unchanged floor as "not there yet" and steps the reference level
+    // again, forever. Kept separate from m_noiseFloorEnable, which is the
+    // OPERATOR's toggle — clobbering that would fight the overlay menu and
+    // persist to the next radio. See RadioCapabilities::radioOwnsDbmScale.
+    void setRadioOwnsDbmScale(bool on) { m_radioOwnsDbmScale = on; }
+    bool radioOwnsDbmScale() const { return m_radioOwnsDbmScale; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
@@ -1330,6 +1339,9 @@ private:
 
     // Noise floor auto-adjust
     bool  m_noiseFloorEnable{false};
+    // Defaults true so every existing backend is unaffected; only a backend
+    // that opts out (RadioCapabilities::radioOwnsDbmScale=false) disarms.
+    bool  m_radioOwnsDbmScale{true};
     int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
     int   m_flexNoiseFloorPosition{75};
     int   m_kiwiNoiseFloorPosition{75};

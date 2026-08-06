@@ -616,6 +616,15 @@ void MainWindow::wireRadioModel()
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    // Radio configuration advice: shown, but it does NOT touch the session.
+    // Deliberately not onConnectionError — see IRadioBackend::configurationWarning.
+    // 15 s rather than the usual 4: this one names a four-level menu path the
+    // operator has to walk on the radio's front panel while reading it.
+    connect(&m_radioModel, &RadioModel::configurationWarning,
+            this, [this](const QString& message) {
+        qCWarning(lcProtocol).noquote() << "radio configuration:" << message;
+        statusBar()->showMessage(message, 15000);
+    });
     connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
             this, [this](const QString& message) {
         // A rejected GUI registration is terminal for this attempt. Keep the

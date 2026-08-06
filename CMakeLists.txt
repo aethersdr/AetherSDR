@@ -5043,6 +5043,16 @@ target_include_directories(radiomodel_dax_null_test PRIVATE src)
 target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
 
+add_executable(dbm_range_plausibility_test tests/dbm_range_plausibility_test.cpp)
+target_include_directories(dbm_range_plausibility_test PRIVATE src)
+target_link_libraries(dbm_range_plausibility_test PRIVATE Qt6::Core)
+add_test(NAME dbm_range_plausibility_test COMMAND dbm_range_plausibility_test)
+
+add_executable(radiomodel_pan_range_null_test tests/radiomodel_pan_range_null_test.cpp)
+target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
+target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
+
 add_executable(radiomodel_pan_id_mapping_test tests/radiomodel_pan_id_mapping_test.cpp)
 target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
 target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)

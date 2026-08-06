@@ -717,7 +717,19 @@ void RadioModel::setupBackend(const QString& family)
         auto* pan = resolveBackendPan(panId);
         if (!pan) return;
         if (pan->setRange(minDbm, maxDbm)) {
-            m_panStream->setDbmRange(pan->panStreamId(), pan->minDbm(), pan->maxDbm());
+            // ⛔ m_panStream IS NULL on a backend that does not own one. It is
+            // assigned only on the Flex and Sim paths (see setupBackend), so an
+            // Icom — which decodes its scope inside the backend and never uses
+            // PanadapterStream — leaves it nullptr. Every other use in this file
+            // guards it; this one did not, and the deref crashed the GUI thread
+            // the instant the backend reported a dBm range. Four dumps, all
+            // identical: read of 0x30 in Qt6Core, reached from here.
+            //
+            // The range still reaches the model above, which is the part the
+            // display needs. The stream call is the FFT decoder's copy, and a
+            // backend with no PanadapterStream has no decoder to inform.
+            if (m_panStream)
+                m_panStream->setDbmRange(pan->panStreamId(), pan->minDbm(), pan->maxDbm());
         }
         emit panadapterLevelChanged(pan->minDbm(), pan->maxDbm());
     });
@@ -1213,6 +1225,10 @@ void RadioModel::setupBackend(const QString& family)
                 this, &RadioModel::onDisconnected);
         connect(m_backend.get(), &IRadioBackend::connectionError,
                 this, &RadioModel::onConnectionError);
+        // Advisory only — deliberately NOT routed through onConnectionError,
+        // which starts the reconnect timer. Re-emitted for the UI to surface.
+        connect(m_backend.get(), &IRadioBackend::configurationWarning,
+                this, &RadioModel::configurationWarning);
     }
 
     // Transport counters from a backend that owns its own socket. Wired

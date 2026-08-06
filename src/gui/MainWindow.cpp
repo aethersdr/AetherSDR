@@ -6556,6 +6556,20 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             !connected || m_radioModel.meterModel().hasMicPeakMeter());
     }
 
+    // ── Display dBm scale: who owns it ─────────────────────────────────────
+    // A backend that decodes its scope at a fixed calibration (Icom CI-V) has
+    // no range command and never echoes one back, so the noise-floor auto-
+    // adjust must not try to move a reference level the radio will not confirm.
+    // `!connected ||` restores the permissive default on disconnect so the
+    // setting cannot leak from an Icom into the next radio connected.
+    {
+        const bool radioOwnsScale = !connected || caps.radioOwnsDbmScale;
+        const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
+        for (SpectrumWidget* spectrum : spectra) {
+            spectrum->setRadioOwnsDbmScale(radioOwnsScale);
+        }
+    }
+
     // ── Profiles: the PROF applet, the Profiles menu, and both dialogs ──────
     const bool profiles = !connected || caps.hasProfiles;
     if (m_appletPanel) {

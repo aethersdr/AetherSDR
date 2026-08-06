@@ -3806,6 +3806,15 @@ bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
 {
+    // A FIXED-scale backend has no reference level to move: the floor is where
+    // its calibration puts it. Moving m_refLevel here would ratchet forever,
+    // because the loop only stops when the radio echoes the requested range
+    // back and there is nothing on the other end to echo. This is the gate that
+    // actually stops the runaway — the ones on the outbound command paths stop
+    // the traffic, but m_refLevel is local and would keep marching without this.
+    if (!m_radioOwnsDbmScale) {
+        return;
+    }
     if (noiseFloorAutoAdjustHeld(nowMs)) {
         return;
     }

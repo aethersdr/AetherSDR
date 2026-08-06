@@ -3094,6 +3094,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             });
     };
     auto sendDbmRangeCommand = [this, applet](float minDbm, float maxDbm) {
+        // BACKSTOP. The callers above gate this individually so each one can do
+        // the right local thing, but this is the one place every dBm range
+        // leaves for the radio — and a range sent to a backend with no command
+        // plane is silently dropped, which is precisely what starts the ratchet.
+        // A future fourth caller gets the protection without knowing to ask.
+        if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
+            return;
+        }
         if (!dbmRangeLooksPlausible(minDbm, maxDbm)) {
             qCWarning(lcProtocol).noquote()
                 << "MainWindow: rejecting implausible dBm range"
@@ -3372,6 +3380,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // correct radio-reported range via the pendingDbm guard. (#3034)
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
+        // Also set here, not only from applyCapabilitiesToUi: a pane added
+        // AFTER connect (Add Panadapter, a layout change) never sees that
+        // signal, and would arm its auto-floor against a radio that cannot
+        // echo a range — one runaway pane is enough to churn the session.
+        sw->setRadioOwnsDbmScale(!m_radioModel.isConnected()
+                                 || m_radioModel.backendCapabilities().radioOwnsDbmScale);
+
         wirePanDisplayStatus(applet, pan);
     }
     syncTxWaterfallSliceToSpectrums();
@@ -3489,6 +3504,27 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
         const bool profileLoadHeld = profileLoadRadioStateWritesHeld();
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
+
+        // A backend whose dBm scale is FIXED never echoes a range back, and the
+        // auto-floor loop is built on that echo: it moves the reference level,
+        // requests the range, and waits for confirmation before moving again.
+        // With nothing to confirm it reads the unchanged floor as "not there
+        // yet" and steps again — a measured 24 dB/s ratchet that walks off the
+        // bottom of the scale (-202 … -1882 dBm) and only becomes visible when
+        // dbmRangeLooksPlausible() starts rejecting it at -180. Re-seed the
+        // widget from the pan's real range instead, which is the same recovery
+        // the profile-load path above uses, and drop the request.
+        //
+        // Deliberately NOT setNoiseFloorEnable(false): that is the operator's
+        // own toggle, and forcing it would both fight the overlay menu and lose
+        // the setting for the next radio. The auto-floor stays enabled and
+        // simply has nothing to chase on a fixed scale.
+        if (autoFloorChange && !m_radioModel.backendCapabilities().radioOwnsDbmScale) {
+            if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+                sw->setDbmRange(pan->minDbm(), pan->maxDbm());
+            }
+            return;
+        }
         if (profileLoadPanDisplaySettling(applet->panId()) && autoFloorChange) {
             if (auto* pan = m_radioModel.panadapter(applet->panId())) {
                 if (pan->panStreamId() && m_radioModel.panStream()) {
@@ -3533,6 +3569,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             || profileLoadRadioStateWritesHeld()) {
             return;
         }
+        // Headroom recovery asks the RADIO to move its scale — the clue is in
+        // the name of the signal that gets us here. A backend whose scale is
+        // fixed has nothing to ask and nothing that will answer, so the request
+        // is dropped, the handshake never completes, and the auto-floor retries
+        // it forever: this is the second source of the 24 dB/s dBm ratchet, and
+        // it survives gating the dbmRangeChangeRequested path alone (measured
+        // on an IC-9700 — the sendCommand lines stop, the rejections do not).
+        if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
+            return;
+        }
         if (auto* pan = m_radioModel.panadapter(applet->panId());
             pan && !pan->ownedByClient(m_radioModel.ourClientHandle())) {
             return;
@@ -3565,6 +3611,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // #3977: same whole-operation refusal as dbmRangeChangeRequested.
         if (auto* pan = m_radioModel.panadapter(applet->panId());
             pan && !pan->ownedByClient(m_radioModel.ourClientHandle())) {
+            return;
+        }
+
+        // A hand drag is a deliberate operator action, so it still moves the
+        // LOCAL scale on a fixed-scale backend — but there is no radio-side
+        // range to command and no echo to wait for, so skip the handshake and
+        // the command. Arming the handshake here would leave m_pendingDbmRange
+        // set until it times out, which is what blocks the next legitimate
+        // range update (SpectrumWidget::setDbmRange's early return).
+        if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
+            sw->setDbmRange(minDbm, maxDbm);
+            setStreamDbmRange(minDbm, maxDbm, true);
             return;
         }
 

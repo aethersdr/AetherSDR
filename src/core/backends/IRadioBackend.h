@@ -525,6 +525,19 @@ signals:
     void connected();
     void disconnected();
     void connectionError(const QString& reason);
+
+    // A problem with the RADIO'S CONFIGURATION that the operator should fix,
+    // but which does not end the session. Distinct from connectionError, which
+    // every consumer treats as fatal: RadioModel starts its reconnect timer on
+    // it unconditionally, so using that channel for advice tears down a working
+    // link and then does it again on the next attempt — a permanent reconnect
+    // loop whose cause reads as a helpful message. That is exactly what an
+    // IC-9700 with MOD Input set to USB did: connect, warn, drop, repeat every
+    // 5 s, with the radio itself perfectly healthy.
+    //
+    // If it does not stop the radio working, it belongs here.
+    void configurationWarning(const QString& message);
+
     void capabilitiesChanged();
 
     // A fresh transport snapshot. Emitted on a FIXED cadence while connected,

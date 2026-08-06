@@ -855,6 +855,9 @@ signals:
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
+    // Radio CONFIGURATION advice that does not end the session. See
+    // IRadioBackend::configurationWarning for why this is a separate channel.
+    void configurationWarning(const QString& msg);
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forwarded from
     // WanConnection. UI is expected to prompt the operator and call
     // accept/rejectPresentedWanCert() in response.

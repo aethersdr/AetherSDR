@@ -12,6 +12,7 @@
 #include "models/RadioModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/icom/IcomCivBackend.h"
+#include "core/backends/icom/IcomModels.h"
 
 #include <QCoreApplication>
 
@@ -61,6 +62,22 @@ int main(int argc, char** argv)
           "no IQ on any networked Icom — a true here offers a DAX-IQ path that cannot exist");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "an Icom remembers its own state, so the client restores NOTHING");
+    // The MOD Input warning demands a WLAN modulation source. Only a radio with
+    // Wi-Fi has one -- and in kModels exactly ONE model does (the IC-705, whose
+    // 0xA4 is also the default CI-V address, which is almost certainly the radio
+    // the check was written against). On every other networked Icom the warning
+    // asked for a setting the radio cannot offer: an IC-9700 set correctly to
+    // LAN on the front panel reports 0x01 and was warned at it on every single
+    // session. Pin the discriminator so the gate cannot quietly come back.
+    check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
+          "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+    check(AetherSDR::icom::modelForCivAddress(0xA4)->hasWifi,
+          "the IC-705 does — the one model the WLAN check is legitimate for");
+
+    check(!caps.radioOwnsDbmScale,
+          "the scope scale is FIXED (ScopeCalibration), not the radio's to set — "
+          "true here re-arms the noise-floor auto-adjust against a radio that "
+          "never echoes a range back, and it ratchets 24 dB/s off the scale");
 
     // A pure seam backend owns no RadioConnection and no PanadapterStream, so
     // setupBackend()'s dynamic_cast chain must SKIP it — the same shape as HL2.
