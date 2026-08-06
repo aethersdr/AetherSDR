@@ -159,6 +159,42 @@ rather than an implicit consequence of which pan you happened to select. That is
 the same reasoning behind the explicit-arm TX pattern already used elsewhere in
 the shack.
 
+### 2.5 Cross-band routing, and hearing the radio say no
+
+The one step with on-air consequence, so it gets stated rather than implied.
+
+**Today the refusal is invisible.** `setSliceFrequency()` sends `25 00 <freq>`
+and returns; nothing correlates a reply. When the radio NAKs a cross-band tune,
+the model has already moved optimistically, so the display shows a frequency the
+radio is not on — which is precisely the failure observed, and the reason it
+took a night to attribute (§1).
+
+**The mechanism is already in the tree and simply unread.** `CivCodec.h` defines
+both `kCivOk` (`0xFB`) and `kCivNg` (`0xFA`), and `CivFrame` already exposes
+`isOk()` / `isNg()`. Nothing calls `isNg()`. So step 3 is smaller than it looks:
+the decode exists, the correlation does not.
+
+Proposed shape:
+
+1. **Read the NAK.** On `isNg()` for an outstanding tune, do NOT advance the
+   model — re-assert the radio's actual frequency instead, the same way
+   `setPanCenter()` already re-asserts when it refuses a drag. A refused tune
+   must leave the display where the radio is, never where the operator asked.
+2. **Decide the target receiver BEFORE sending.** With both receivers' bands
+   known from §2.1, "which receiver should hold this band" is answerable without
+   asking the radio: if a receiver already holds the band, select it (no swap, no
+   CI-V tune at all); if neither does, the **non-TX** receiver is re-pointed
+   (§2.2). The NAK then stops being the routing mechanism and becomes what it
+   should be — a backstop for a state that disagrees with our model.
+3. **Serialise the swap.** Whatever issues `07 B0` must be the only thing doing
+   so within a session, and must not run while keyed (§4 Q3). Under aetherd this
+   is a shared mutation, per §5.
+
+**Why not just NAK-and-retry-with-a-swap:** it makes every band change a global
+radio side effect discovered by trial, on a radio a second client may also be
+driving. Deciding from known state and treating the NAK as the exception inverts
+that — the common case sends nothing at all.
+
 ---
 
 ## 3. Work implied
@@ -166,10 +202,14 @@ the shack.
 Deliberately ordered so nothing on-air changes until the groundwork is proven.
 
 1. **Make the backend receiver-aware.** `sliceId()` / `panId()` become
-   per-receiver rather than constants. No behaviour change with one receiver;
-   this is the foundation everything else needs and is independently reviewable.
+   per-receiver rather than constants. Behaviour is unchanged with one receiver,
+   but the blast radius is not small: ~20 call sites in `IcomCivBackend.cpp`
+   currently call one or the other, and each has to answer "which receiver is
+   this?" — several from CI-V handlers where the answer depends on which receiver
+   was selected when the frame arrived. That is the real work of this step and
+   the reason it is first and independently reviewable.
 2. **Connect-time receiver probe** (§2.1) → open one pan or two.
-3. **Cross-band routing** (§2.2) — including *detecting the FA* rather than
+3. **Cross-band routing** (§2.5) — including *detecting the NAK* rather than
    firing and forgetting, which is a gap in `setSliceFrequency` today regardless
    of this RFC.
 4. **Per-pan band menu** (§2.3).
@@ -188,9 +228,23 @@ capabilities it already advertises.
    "don't run both", have AE detect the gate, or leave AE swap-free and let it
    only *select* among receivers the operator has already set up. The last is
    the most conservative and may be enough for most operating.
-2. **Does anything else share this shape?** The IC-905 is multi-band with
-   limited receivers; if so, this should be a capability rather than an IC-9700
-   special case — `receivers` already exists in `IcomModel` and may be sufficient.
+2. **Anything else sharing this shape is ANSWERED, and it is not one radio.**
+   Three models in `kModels` declare `receivers: 2` — the **IC-9700** (`0xA2`),
+   the **IC-7610** (`0x98`) and the **IC-785x** (`0x8E`). All three get one
+   materialised receiver today, so the mismatch in §1 is theirs too, not the
+   IC-9700's alone.
+
+   (An earlier draft of this RFC named the IC-905 here. That was wrong — it
+   declares `receivers: 1` and does not share the shape. Corrected rather than
+   quietly dropped, because it is the exact error the rest of this document
+   argues against: inferring a capability from what a radio is *known for*
+   rather than reading what the table declares.)
+
+   What differs between the three is only the *reason* for the second receiver
+   — bands on separate hardware for the IC-9700, diversity/dual-watch on the
+   HF radios — and that difference belongs in how bands are offered (§2.3), not
+   in whether both receivers exist. So this should be driven by `receivers`,
+   which `IcomModel` already carries, and not special-cased per model.
 3. **Is the swap safe during TX?** Not tested. Until it is, the answer should be
    "no swap while keyed", enforced rather than assumed.
 4. **What does the scope do across a swap?** Gate's notes say it yanks and
@@ -208,7 +262,7 @@ bench.
 Checked deliberately, because a proposal that assumes one radio would be the
 wrong shape against a design where several are normal.
 
-**It fits, and mostly for free.** `aetherd-headless-engine-design.md` §5 already
+**It fits, and mostly for free.** `docs/aetherd-headless-engine-design.md` §5 already
 establishes per-radio `RadioSession` with the protocol namespaced by session id,
 *"so one daemon can host several radios — of the same or different families —
 concurrently."* Everything in this RFC lives **inside** one session: two
