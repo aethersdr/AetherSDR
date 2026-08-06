@@ -128,6 +128,13 @@ bool waterfallFrameResizeFailureForced()
         && qEnvironmentVariableIntValue(
                "AETHER_AUTOMATION_FORCE_WF_FRAME_RESIZE_FAILURE") != 0;
 }
+
+bool rhiFailureForcedForAutomation()
+{
+    return qEnvironmentVariableIsSet("AETHER_AUTOMATION")
+        && qEnvironmentVariableIntValue(
+               "AETHER_AUTOMATION_FORCE_RHI_FAILURE") != 0;
+}
 #endif
 
 constexpr int dssFillVerticesPerRow()
@@ -890,6 +897,10 @@ static bool qrhiDeviceNameLooksSoftware(const QString& deviceName)
 QString SpectrumWidget::rendererDescription() const
 {
 #ifdef AETHER_GPU_SPECTRUM
+    if (m_rhiFailureReported) {
+        return QStringLiteral("QRhi failed: %1").arg(m_rhiFailureReason);
+    }
+
     QRhi* currentRhi = rhi();
     if (!currentRhi) {
         return QStringLiteral("QRhi initializing");
@@ -948,6 +959,8 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
 #ifdef AETHER_GPU_SPECTRUM
     m[QStringLiteral("gpu")] = true;
     m[QStringLiteral("renderer")] = rendererDescription();
+    m[QStringLiteral("rendererFailed")] = m_rhiFailureReported;
+    m[QStringLiteral("rendererFailureReason")] = m_rhiFailureReason;
     const QSize fixed = fixedColorBufferSize();
     // Unset fixedColorBufferSize() is the null QSize(-1,-1) — isEmpty()
     // covers it (and any degenerate size) → QRhiWidget auto-sizes.
@@ -1869,6 +1882,10 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAccessibleName(tr("Panadapter spectrum display"));
 #ifdef AETHER_GPU_SPECTRUM
+    connect(this, &QRhiWidget::renderFailed, this, [this]() {
+        reportRhiFailure(tr("Qt could not create or present the spectrum renderer."));
+    });
+
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MAC
     setApi(QRhiWidget::Api::Metal);
@@ -12231,6 +12248,49 @@ bool SpectrumWidget::initWaterfallPipeline()
     return true;
 }
 
+void SpectrumWidget::reportRhiFailure(const QString& reason)
+{
+    if (m_rhiFailureReported) {
+        return;
+    }
+
+    const QString detail = reason.trimmed().isEmpty()
+        ? tr("The spectrum renderer failed.")
+        : reason.trimmed();
+    m_rhiFailureReported = true;
+    m_rhiFailureReason = detail;
+
+    qCWarning(lcGui) << "SpectrumWidget: QRhi failure:" << detail;
+
+    PanadapterOverlayMessage message;
+    message.id = QStringLiteral("rhi.render-failed");
+    message.title = tr("Spectrum renderer unavailable");
+#ifdef Q_OS_MAC
+    message.detail = tr("%1 Rebuild with -DAETHER_GPU_SPECTRUM=OFF.")
+                         .arg(detail);
+#else
+    message.detail = tr("%1 Try launching with AETHER_NO_GPU=1, or rebuild with "
+                        "-DAETHER_GPU_SPECTRUM=OFF.")
+                         .arg(detail);
+#endif
+    message.timeoutMs = 0;
+    message.dismissible = false;
+    message.collapsible = true;
+    message.tone = PanadapterOverlayMessageTone::Warning;
+    upsertOverlayMessage(std::move(message));
+}
+
+void SpectrumWidget::clearRhiFailure()
+{
+    if (!m_rhiFailureReported) {
+        return;
+    }
+
+    m_rhiFailureReported = false;
+    m_rhiFailureReason.clear();
+    removeOverlayMessage(QStringLiteral("rhi.render-failed"));
+}
+
 void SpectrumWidget::initOverlayPipeline()
 {
     QRhi* r = rhi();
@@ -12810,13 +12870,14 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
 
     QRhi* r = rhi();
     if (!r) {
-        qWarning() << "SpectrumWidget: QRhi initialization failed — no GPU backend";
+        reportRhiFailure(tr("No QRhi graphics backend is available."));
         return;
     }
 
     qDebug() << "SpectrumWidget: QRhi initialized, backend:" << r->backendName();
 
     if (!initWaterfallPipeline()) {
+        reportRhiFailure(tr("The waterfall rendering pipeline could not be created."));
         return;
     }
     initOverlayPipeline();
@@ -12916,6 +12977,12 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     m_wfTexFullUpload = false;
     m_wfLastUploadedRow = m_wfWriteRow;
     m_rhiInitialized = true;
+    if (rhiFailureForcedForAutomation()) {
+        reportRhiFailure(
+            tr("A blank QRhi surface was forced for automation verification."));
+    } else {
+        clearRhiFailure();
+    }
 
     // Force full overlay repaint + upload — the new GPU texture is empty.
     // Without this, m_overlayStaticDirty and m_overlayNeedsUpload may be
@@ -14419,6 +14486,14 @@ void SpectrumWidget::render(QRhiCommandBuffer* cb)
         initialize(cb);
         if (!m_rhiInitialized) return;
     }
+    if (rhiFailureForcedForAutomation()) {
+        // Keep the widget on its production QRhi API. Mixing Null with Metal or
+        // D3D11 in one top-level window can crash Qt's backing-store compositor.
+        cb->beginPass(renderTarget(), Qt::black, {1.0f, 0});
+        cb->endPass();
+        raisePanadapterMessageOverlay();
+        return;
+    }
     if (m_resizeBufferSettleTimer && m_resizeBufferSettleTimer->isActive()) {
         // Keep presenting fresh FFT/waterfall data into the last settled render
         // target while QRhiWidget stretches it to the live geometry. This
@@ -14515,18 +14590,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 {
     if (width() <= 0 || height() <= freqScaleH() + DIVIDER_H + 2) return;
 
-#ifdef AETHER_GPU_SPECTRUM
-    // GPU mode: render() handles everything via QRhi. Skip the full
-    // QPainter path to avoid redundant rendering + compositing overhead.
-    // This is the single biggest CPU optimization on macOS (100% → 20%).
-    if (m_rhiInitialized) {
-        SPECTRUM_BASE_CLASS::paintEvent(ev);
-        return;
-    }
-#endif
-
-    // panstats: software-path paint cost (GPU builds only reach here before
-    // QRhi init or after GPU teardown).
+    // panstats: software-path paint cost.
     m_panStats.paintEvents++;
     struct PaintCost {
         quint64& acc;

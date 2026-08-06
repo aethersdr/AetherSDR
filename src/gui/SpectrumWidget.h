@@ -1878,6 +1878,8 @@ private:
 
 #ifdef AETHER_GPU_SPECTRUM
     bool m_rhiInitialized{false};
+    bool m_rhiFailureReported{false};
+    QString m_rhiFailureReason;
 
     // Waterfall GPU resources
     QRhiGraphicsPipeline* m_wfPipeline{nullptr};
@@ -2000,6 +2002,8 @@ private:
 
     bool initWaterfallPipeline();
     void releaseWaterfallFramePipelineResources();
+    void reportRhiFailure(const QString& reason);
+    void clearRhiFailure();
     void initOverlayPipeline();
     void initSpectrumPipeline();
     void renderGpuFrame(QRhiCommandBuffer* cb, const QSize& logicalSize,

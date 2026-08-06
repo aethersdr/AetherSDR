@@ -936,6 +936,7 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 ← {"ok":true,"model":"rhi","pans":[{
    "panIndex":0,"name":"","visible":true,"widthPx":1100,"heightPx":455,"dpr":0.85,
    "gpu":true,"renderer":"GPU QRhi (D3D11; Intel(R) HD Graphics 520)",
+   "rendererFailed":false,"rendererFailureReason":"",
    "colorBufferAutoSized":false,"colorBufferW":936,"colorBufferH":388,
    "expectedEvenW":936,"expectedEvenH":388,"evenAligned":true,
    "overlayTextureW":936,"overlayTextureH":388,
@@ -950,6 +951,7 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 | field | meaning |
 |---|---|
 | `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
+| `rendererFailed` / `rendererFailureReason` | whether this panadapter's QRhi renderer failed and its recorded reason; a failed renderer reports `QRhi failed: ...` in `renderer` too |
 | `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
 | `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
 | `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
@@ -966,6 +968,15 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
 each entry reports `gpu:false` and omits the buffer fields. The three native
 topology fields are emitted only on macOS; other platforms omit them.
+
+For an automation-only QRhi failure check, launch with both
+`AETHER_AUTOMATION=1` and `AETHER_AUTOMATION_FORCE_RHI_FAILURE=1`. The latter
+keeps the platform's production QRhi API, presents only a blank clear pass, and
+exercises AetherSDR's failure-reporting path; it has no effect unless automation
+is enabled. Assert the per-pan `rendererFailed` state and the
+`rhi.render-failed` panadapter message, then capture the composite pan surface
+to confirm the warning card remains visible over the blank renderer. Production
+QRhi failures enter the same reporting path through `QRhiWidget::renderFailed()`.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
