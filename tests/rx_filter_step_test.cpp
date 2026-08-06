@@ -68,6 +68,14 @@ int main()
     // Direction 0 is not a step.
     check(steppedFilterWidthIndex(radio, 2400, 0) < 0, "no direction is no step");
 
+    // Multi-step (|steps| > 1) including clamping at list ends.
+    check(steppedFilterWidthIndex(operatorList, 1800, +2) == 2, "multi-step +2 from 1800 reaches 2400");
+    check(steppedFilterWidthIndex(operatorList, 3300, -3) == 2, "multi-step -3 from 3300 reaches 2400");
+    check(steppedFilterWidthIndex(operatorList, 2400, +10) == 5, "multi-step +10 clamps to top preset 3300");
+    check(steppedFilterWidthIndex(operatorList, 2400, -10) == 0, "multi-step -10 clamps to bottom preset 1800");
+    check(steppedFilterWidthIndex(operatorList, 3300, +5) < 0, "multi-step past top preset while at top returns -1");
+    check(steppedFilterWidthIndex(operatorList, 1800, -5) < 0, "multi-step past bottom preset while at bottom returns -1");
+
     if (g_failures == 0)
         std::printf("rx_filter_step_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;
