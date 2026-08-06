@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <utility>
 #include <vector>
@@ -46,6 +47,23 @@ QByteArray makeOppositePhaseStereoBlock(int frames, float scale)
     return block;
 }
 
+QByteArray makePannedNoisyStereoBlock(int frames, float leftScale, float rightScale)
+{
+    QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(block.data());
+    std::uint32_t state = 0x4d595df4U;
+    for (int i = 0; i < frames; ++i) {
+        state = state * 1664525U + 1013904223U;
+        const float noise = static_cast<float>((state >> 8) & 0xffffU) / 32767.5f - 1.0f;
+        const float dry = 0.22f * std::sin(
+            2.0f * kPi * 733.0f * static_cast<float>(i) / kSampleRate)
+            + 0.12f * noise;
+        samples[i * 2] = leftScale * dry;
+        samples[i * 2 + 1] = rightScale * dry;
+    }
+    return block;
+}
+
 QByteArray makeConstantStereoBlock(int frames, float left, float right)
 {
     QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
@@ -66,6 +84,16 @@ std::vector<float> makeProcessedMono(const QByteArray& stereoBlock, float gain)
         mono[i] = gain * 0.5f * (samples[i * 2] + samples[i * 2 + 1]);
     }
     return mono;
+}
+
+std::vector<float> makeProcessedWaveform(int frames)
+{
+    std::vector<float> processed(frames);
+    for (int i = 0; i < frames; ++i) {
+        processed[i] = 0.28f * std::sin(
+            2.0f * kPi * 1379.0f * static_cast<float>(i) / kSampleRate);
+    }
+    return processed;
 }
 
 Rms measureRms(const QByteArray& stereoBlock, int discardFrames)
@@ -146,32 +174,28 @@ bool testBuffersDryUntilProcessedArrives()
     return true;
 }
 
-bool testOppositePhaseStereoDoesNotFadeOut()
+bool testOppositePhaseStereoUsesCenteredProcessedFallback()
 {
     MonoDspStereoAdapter adapter;
     const QByteArray dry = makeOppositePhaseStereoBlock(kSampleRate, 0.6f);
-    const std::vector<float> processedMono = makeProcessedMono(dry, 0.42f);
+    const std::vector<float> processedMono = makeProcessedWaveform(kSampleRate);
 
     adapter.pushDryStereo(dry);
     const QByteArray out = adapter.takeProcessedMono(
         processedMono.data(), static_cast<int>(processedMono.size()));
 
-    const Rms rms = measureRms(out, kSampleRate / 4);
-    const double ratio = rms.left / std::max(rms.right, 1.0e-12);
-    if (!nearlyEqual(ratio, 1.0, 0.05)) {
-        std::printf("opposite-phase ratio failed: got %.6f expected 1.0\n", ratio);
-        return false;
-    }
-    if (rms.left < 0.35 || rms.right < 0.35) {
-        std::printf("opposite-phase stereo faded out: L %.6f R %.6f\n",
-                    rms.left,
-                    rms.right);
-        return false;
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    for (int i = 0; i < kSampleRate; ++i) {
+        if (!nearlyEqual(samples[i * 2], processedMono[i], 1.0e-6)
+            || !nearlyEqual(samples[i * 2 + 1], processedMono[i], 1.0e-6)) {
+            std::printf("opposite-phase fallback lost processed waveform at frame %d\n", i);
+            return false;
+        }
     }
     return true;
 }
 
-bool testProcessedSilenceKeepsMinimumStereoFloor()
+bool testProcessedSilenceRemainsSilent()
 {
     MonoDspStereoAdapter adapter;
     const QByteArray dry = makeStereoBlock(kSampleRate * 2, 0.8f, 0.2f);
@@ -182,17 +206,12 @@ bool testProcessedSilenceKeepsMinimumStereoFloor()
     const QByteArray out = adapter.takeProcessedMono(
         processedMono.data(), static_cast<int>(processedMono.size()));
 
-    const Rms rms = measureRms(out, kSampleRate);
-    const double ratio = rms.left / std::max(rms.right, 1.0e-12);
-    if (!nearlyEqual(ratio, 4.0, 0.05)) {
-        std::printf("minimum-floor ratio failed: got %.6f expected 4.0\n", ratio);
-        return false;
-    }
-    if (rms.left < 0.012 || rms.right < 0.003) {
-        std::printf("minimum-floor output too quiet: L %.6f R %.6f\n",
-                    rms.left,
-                    rms.right);
-        return false;
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    for (int i = 0; i < frames * 2; ++i) {
+        if (samples[i] != 0.0f) {
+            std::printf("processed silence leaked dry audio at sample %d\n", i);
+            return false;
+        }
     }
     return true;
 }
@@ -251,6 +270,65 @@ bool testDuplicatedMonoUsesProcessedWaveform()
     return true;
 }
 
+bool testPannedDryDoesNotReplaceProcessedWaveform()
+{
+    MonoDspStereoAdapter adapter;
+    const int frames = kSampleRate;
+    const QByteArray dry = makePannedNoisyStereoBlock(frames, 0.8f, 0.2f);
+    const std::vector<float> processed = makeProcessedWaveform(frames);
+
+    adapter.pushDryStereo(dry);
+    const QByteArray out = adapter.takeProcessedMono(processed.data(), frames);
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    for (int i = frames / 4; i < frames; ++i) {
+        const float expectedLeft = processed[i] * 1.6f;
+        const float expectedRight = processed[i] * 0.4f;
+        if (!nearlyEqual(samples[i * 2], expectedLeft, 1.0e-5)
+            || !nearlyEqual(samples[i * 2 + 1], expectedRight, 1.0e-5)) {
+            std::printf("panned dry replaced or modulated processed waveform at frame %d\n", i);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testMonoCancellationHoldsLastBalance()
+{
+    MonoDspStereoAdapter adapter;
+    const QByteArray panned = makePannedNoisyStereoBlock(kSampleRate, 0.8f, 0.2f);
+    const QByteArray cancelled = makeOppositePhaseStereoBlock(kSampleRate, 0.6f);
+    const std::vector<float> processed = makeProcessedWaveform(kSampleRate);
+
+    adapter.pushDryStereo(panned);
+    adapter.takeProcessedMono(processed.data(), kSampleRate);
+    adapter.pushDryStereo(cancelled);
+    const QByteArray out = adapter.takeProcessedMono(processed.data(), kSampleRate);
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    for (int i = kSampleRate / 4; i < kSampleRate; ++i) {
+        const float expectedLeft = processed[i] * 1.6f;
+        const float expectedRight = processed[i] * 0.4f;
+        if (!nearlyEqual(samples[i * 2], expectedLeft, 2.0e-3)
+            || !nearlyEqual(samples[i * 2 + 1], expectedRight, 2.0e-3)) {
+            std::printf("mono-cancellation fallback changed the established balance at frame %d\n", i);
+            return false;
+        }
+    }
+
+    adapter.pushDryStereo(panned);
+    const QByteArray recovered = adapter.takeProcessedMono(processed.data(), kSampleRate);
+    const auto* recoveredSamples = reinterpret_cast<const float*>(recovered.constData());
+    for (int i = 0; i < kSampleRate / 4; ++i) {
+        const float expectedLeft = processed[i] * 1.6f;
+        const float expectedRight = processed[i] * 0.4f;
+        if (!nearlyEqual(recoveredSamples[i * 2], expectedLeft, 2.0e-3)
+            || !nearlyEqual(recoveredSamples[i * 2 + 1], expectedRight, 2.0e-3)) {
+            std::printf("mono-cancellation recovery changed the established balance at frame %d\n", i);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool testProcessingLatencyRetainsDryTimeline()
 {
     constexpr int latencyFrames = 4;
@@ -298,16 +376,22 @@ int main()
     if (!testBuffersDryUntilProcessedArrives()) {
         return 1;
     }
-    if (!testOppositePhaseStereoDoesNotFadeOut()) {
+    if (!testPannedDryDoesNotReplaceProcessedWaveform()) {
         return 1;
     }
-    if (!testProcessedSilenceKeepsMinimumStereoFloor()) {
+    if (!testOppositePhaseStereoUsesCenteredProcessedFallback()) {
+        return 1;
+    }
+    if (!testProcessedSilenceRemainsSilent()) {
         return 1;
     }
     if (!testIndependentAdaptersDoNotDrainOtherSource()) {
         return 1;
     }
     if (!testDuplicatedMonoUsesProcessedWaveform()) {
+        return 1;
+    }
+    if (!testMonoCancellationHoldsLastBalance()) {
         return 1;
     }
     if (!testProcessingLatencyRetainsDryTimeline()) {
