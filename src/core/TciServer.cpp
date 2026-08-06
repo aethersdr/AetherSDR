@@ -2476,7 +2476,12 @@ void TciServer::onDaxAudioReady(int channel, const QByteArray& pcm)
             continue;
         }
 
-        const float* audioSrc = reinterpret_cast<const float*>(accumBuf.constData());
+        // Transfer ownership before taking a data pointer.  The native 24 kHz
+        // path uses this storage directly; clearing/squeezing accumBuf first
+        // left audioSrc dangling while gain conversion or frame construction
+        // still read it (#4744).
+        QByteArray accumulated = std::move(accumBuf);
+        const float* audioSrc = reinterpret_cast<const float*>(accumulated.constData());
         int audioFrames = accumFrames;
         QByteArray resampledBuf;
 
@@ -2485,13 +2490,6 @@ void TciServer::onDaxAudioReady(int channel, const QByteArray& pcm)
             audioSrc = reinterpret_cast<const float*>(resampledBuf.constData());
             audioFrames = resampledBuf.size() / (2 * static_cast<int>(sizeof(float)));
         }
-
-        // squeeze() after clear() releases the buffer's heap allocation so
-        // idle channels that were reassigned away don't hold kAccumMinFrames
-        // worth of memory indefinitely. Cost is a re-alloc on next packet —
-        // trivial next to the resampling work that just finished.
-        accumBuf.clear();
-        accumBuf.squeeze();
 
         int srcSamples = audioFrames * 2;  // stereo
 
