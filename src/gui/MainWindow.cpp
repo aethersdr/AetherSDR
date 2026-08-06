@@ -3911,6 +3911,30 @@ void MainWindow::showConnectionDialog()
         return;
     }
 
+    // xcb/XWayland (#4725): once this window has been through a hide() —
+    // e.g. the auto-hide-on-successful-connect below — showing it again can
+    // leave it wedged in the ICCCM "Withdrawn" WM_STATE indefinitely, even
+    // though Qt's own show() succeeds and isVisible() reports true. Verified
+    // with `xprop` on the affected system (Ubuntu 26.04, Mutter/XWayland):
+    // WM_STATE stays Withdrawn and the window never reappears in
+    // _NET_CLIENT_LIST_STACKING — genuinely absent from the screen, not just
+    // unfocused or buried. Not reproduced under native Wayland, which has no
+    // ICCCM Withdrawn/Normal state machine to get stuck in — consistent with
+    // the dialog always working there. Forcing Qt to fully destroy and
+    // recreate the native window before every re-show sidesteps whatever
+    // stale state Mutter is keying off of. Explicitly scoped to xcb and to a
+    // genuine re-show (not already visible): destroying/recreating the native
+    // window costs a flicker and drops transient window-manager state, so it
+    // should not fire on platforms that never had this bug, or when the
+    // dialog is merely raised while already open (windowHandle() is also
+    // still null before the very first show, making this a no-op there too).
+    if (QGuiApplication::platformName() == QLatin1String("xcb")
+        && !m_connPanel->isVisible()) {
+        if (QWindow* win = m_connPanel->windowHandle()) {
+            win->destroy();
+        }
+    }
+
     // Position above the status bar, centered on the station label, while staying on-screen.
     QPoint statusBarTop = statusBar()->mapToGlobal(QPoint(0, 0));
     QPoint labelCenter = m_stationNickLabel->mapToGlobal(
@@ -3938,8 +3962,22 @@ void MainWindow::showConnectionDialog()
 
     m_connPanel->move(frameTopLeft);
     m_connPanel->show();
-    m_connPanel->raise();
-    m_connPanel->activateWindow();
+
+    // Deferred to a clean event-loop turn — not fired synchronously from
+    // whatever real input event got us here. Two call sites reach this
+    // function from inside a live X11 input/grab context: the station
+    // label's double-click (still inside the eventFilter's event dispatch)
+    // and the "Connect to Radio..." menu action (still inside the QMenu
+    // popup's own grab teardown). raise()/activateWindow() called
+    // synchronously there can race that context under the xcb platform.
+    // Mirrors the identical class of fix already applied to
+    // automation-driven button clicks in AutomationServer.cpp
+    // (menu/dialog-popup re-entrancy).
+    QTimer::singleShot(0, m_connPanel, [this]() {
+        if (!m_connPanel) return;
+        m_connPanel->raise();
+        m_connPanel->activateWindow();
+    });
 }
 
 void MainWindow::hideConnectionDialog()
