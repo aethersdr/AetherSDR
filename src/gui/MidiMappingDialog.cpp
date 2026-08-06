@@ -41,14 +41,11 @@ static const QString kBtnStyle =
 
 // Muted sibling of kBtnStyle for secondary actions — Learn stays the visually
 // primary way to create bindings; manual entry is the bypass (#4760).
+// {{token}} template: apply via ThemeManager::applyStyleSheet, never setStyleSheet.
 static const QString kBtnSubtleStyle =
-    "QPushButton { background: #1a2a3a; color: #8aa8c0; "
-    "border: 1px solid #304050; padding: 5px 14px; border-radius: 3px; }"
-    "QPushButton:hover { background: #24384c; color: #c8d8e8; }";
-
-static const QString kSpinStyle =
-    "QSpinBox { background: #1a2a3a; border: 1px solid #304050; "
-    "border-radius: 3px; color: #c8d8e8; font-size: 11px; padding: 2px 6px; }";
+    "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}}; "
+    "border: 1px solid {{color.border.strong}}; padding: 5px 14px; border-radius: 3px; }"
+    "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
 
 MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* parent)
     : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
@@ -206,7 +203,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                 [learnBtn] { learnBtn->setText("Learn"); });
 
         auto* manualBtn = new QPushButton("Manual…");
-        manualBtn->setStyleSheet(kBtnSubtleStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(manualBtn, kBtnSubtleStyle);
         manualBtn->setObjectName("midiManualAddButton");
         manualBtn->setAccessibleName("Add MIDI binding manually");
         manualBtn->setToolTip("Add binding by typing channel, message type and number — "
@@ -354,10 +351,7 @@ void MidiMappingDialog::refreshBindingTable()
         // Edit button — manual correction of this binding's source (#4760)
         auto* editBtn = new QPushButton("✎");
         editBtn->setFixedSize(24, 24);
-        editBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; color: #8aa8c0; "
-            "border: 1px solid #304050; border-radius: 3px; }"
-            "QPushButton:hover { background: #24384c; color: #c8d8e8; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(editBtn, kBtnSubtleStyle);
         editBtn->setToolTip("Edit this binding's channel, type and number manually");
         editBtn->setAccessibleName(QString("Edit binding for %1").arg(paramName));
         connect(editBtn, &QPushButton::clicked, this, [this, paramId = b.paramId] {
@@ -420,7 +414,10 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg,
         "QDialog { background: {{color.background.0}}; }"
         "QLabel { color: {{color.text.primary}}; }"
-        "QCheckBox { color: {{color.text.primary}}; }");
+        "QCheckBox { color: {{color.text.primary}}; }"
+        "QComboBox, QSpinBox { background: {{color.background.1}}; "
+        "border: 1px solid {{color.border.strong}}; border-radius: 3px; "
+        "color: {{color.text.primary}}; font-size: 11px; padding: 2px 6px; }");
 
     auto* form = new QFormLayout(&dlg);
     form->setLabelAlignment(Qt::AlignRight);
@@ -429,7 +426,6 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     form->addRow(new QLabel(QString("Binding for: %1").arg(paramLabel)));
 
     auto* channelCombo = new QComboBox(&dlg);
-    channelCombo->setStyleSheet(kComboStyle);
     channelCombo->setObjectName("manualChannelCombo");
     channelCombo->setAccessibleName("MIDI channel");
     channelCombo->addItem("Any", -1);
@@ -442,7 +438,6 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     form->addRow("Channel:", channelCombo);
 
     auto* typeCombo = new QComboBox(&dlg);
-    typeCombo->setStyleSheet(kComboStyle);
     typeCombo->setObjectName("manualTypeCombo");
     typeCombo->setAccessibleName("MIDI message type");
     typeCombo->addItem("Note On", int(MidiBinding::NoteOn));
@@ -458,7 +453,6 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
 
     auto* numberSpin = new QSpinBox(&dlg);
     numberSpin->setRange(0, 127);
-    numberSpin->setStyleSheet(kSpinStyle);
     numberSpin->setObjectName("manualNumberSpin");
     numberSpin->setAccessibleName("Note or CC number");
     form->addRow("Number:", numberSpin);
