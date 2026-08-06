@@ -162,6 +162,31 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
 void IcomCivBackend::publishCapabilities() { emit capabilitiesChanged(); }
 
+void IcomCivBackend::publishScopeDbmRange()
+{
+    // kUnknown has hasScope=false, so this is a quiet no-op on a backend whose
+    // radio has not identified itself yet — which is correct: there is no scope
+    // to draw an axis for, and the connect path publishes once the model is
+    // known. (m_model is never null; the constructor seeds it with
+    // unknownModel().)
+    if (!m_model->hasScope)
+        return;
+
+    // THE AXIS MUST MATCH THE DECODER, INCLUDING THE SIGN.
+    //
+    // toDbm() maps a sample to `floorDbm + (v/max)*spanDb - referenceDb`, so
+    // raising the radio's reference level moves the decoded trace DOWN in dBm.
+    // The axis has to move the same way. An earlier version of this added
+    // referenceDb here while toDbm subtracted it, which left the scale wrong by
+    // 2x the reference whenever it was non-zero — invisible at the default 0,
+    // and a growing error the further the operator moved it.
+    //
+    // Derived from the same ScopeCalibration toDbm() uses rather than repeating
+    // the arithmetic, so the two cannot drift apart again.
+    const double floorDbm = m_scopeCal.floorDbm - m_scopeCal.referenceDb;
+    emit panRangeChanged(panId(), floorDbm, floorDbm + m_scopeCal.spanDb);
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -397,6 +422,12 @@ void IcomCivBackend::checkModInput()
     // WRONG on this radio, not merely noisy. Re-enable per model once the
     // mapping is confirmed against that model's own guide (the same bar
     // IcomModel::verified sets for the rest of the table).
+    // Note this also silences the check on an UNIDENTIFIED radio, since
+    // kUnknown carries hasWifi=false. That is the right outcome, though for a
+    // second reason: kUnknown is also hasTransmit=false, and a radio this
+    // client will not let key has no modulation path to warn about. Warning
+    // there would be advice about a transmission that cannot happen, decoded
+    // through a value table not known to apply to that model.
     if (!m_model->hasWifi)
         return;
 
@@ -524,10 +555,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                 // is already the one toDbm() decodes with, so the display and
                 // the decoder agree. An uncalibrated-but-consistent axis beats
                 // a self-referential one.
-                if (m_model->hasScope) {
-                    const double floorDbm = m_scopeCal.floorDbm + m_scopeCal.referenceDb;
-                    emit panRangeChanged(panId(), floorDbm, floorDbm + m_scopeCal.spanDb);
-                }
+                publishScopeDbmRange();
 
                 publishMeterDefs();
                 publishCapabilities();
@@ -1304,6 +1332,12 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         sendUserCommand(cmdScopeReference(m_session ? m_session->civAddress() : 0xA4,
                                           arg.toDouble()));
         m_scopeCal.referenceDb = arg.toDouble();
+        // The reference level shifts the whole trace, so the AXIS has to move
+        // with it. Without this the range published at connect goes stale the
+        // moment the operator changes the reference — the trace slides and the
+        // scale it is drawn against does not, which reads as a calibration
+        // error rather than a missing update.
+        publishScopeDbmRange();
         emit extensionResult(requestId, true);
         return;
     }

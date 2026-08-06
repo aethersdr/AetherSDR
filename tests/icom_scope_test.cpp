@@ -286,6 +286,21 @@ static void testDbmMapping()
     auto shifted = toDbm(f, g, cal);
     check(shifted[0] < dbm[0], "a positive reference level shifts the trace down");
 
+    // THE AXIS MUST MOVE WITH THE TRACE, AND IN THE SAME DIRECTION.
+    //
+    // IcomCivBackend::publishScopeDbmRange() publishes the dBm range the display
+    // draws its scale from. It has to be derived the same way toDbm() derives
+    // the samples, or the trace and the scale disagree by twice the reference —
+    // invisible at the default 0, growing the further the operator moves it.
+    // An earlier version ADDED referenceDb where toDbm subtracts it, which is
+    // exactly that bug; this pins the relationship rather than the constant.
+    const double publishedFloor = cal.floorDbm - cal.referenceDb;
+    check(std::abs(publishedFloor - static_cast<double>(shifted[0])) < 0.05,
+          "the published floor equals what toDbm maps display 0 to");
+    const double publishedCeil = publishedFloor + cal.spanDb;
+    check(std::abs(publishedCeil - static_cast<double>(shifted[2])) < 0.05,
+          "and the published ceiling equals what it maps display max to");
+
     // A byte above the published 0..160 range must clamp, not project above the
     // top of the scale and drag the waterfall's auto-contrast with it.
     ScopeFrame over;

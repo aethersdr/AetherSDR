@@ -24,9 +24,6 @@ constexpr const char* kFieldSerialPort  = "serialPort";
 constexpr const char* kFieldAudioPort   = "audioPort";
 constexpr const char* kFieldCivAddress  = "civAddress";
 
-// The IC-705's factory CI-V address. A seed, not an assertion — the backend
-// replaces it with whatever 0x19 0x00 reports.
-
 // Validate a port on the way OUT, not just on the way in. A hand-edited or
 // truncated settings file must not be able to command a nonsense port
 // (Principle VII); 0 in particular would bind an ephemeral local port and then

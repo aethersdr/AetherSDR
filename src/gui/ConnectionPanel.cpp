@@ -2197,15 +2197,38 @@ void ConnectionPanel::probeRadio(const QString& ip)
         // exact symptom this field exists to cure.
         if (m_manualIcomCivEdit) {
             QString civ = m_manualIcomCivEdit->text().trimmed();
-            if (!civ.isEmpty()) {
+            if (civ.isEmpty()) {
+                // BLANK MEANS AUTO, and it has to mean that on the way OUT as
+                // well as in. Without this an override could be typed but never
+                // taken back: clearing the field left the stored value in place
+                // and the placeholder then said "auto" while the radio was
+                // still being addressed at the old override. Restores the
+                // default rather than writing 0, so civAddress() has a real
+                // address to fall back on.
+                IcomSettings::setCivAddress(IcomSettings::kDefaultCivAddress);
+            } else {
                 if (civ.startsWith(QLatin1String("0x"), Qt::CaseInsensitive))
                     civ = civ.mid(2);
                 if (civ.endsWith(QLatin1Char('h'), Qt::CaseInsensitive))
                     civ.chop(1);
                 bool ok = false;
                 const uint addr = civ.toUInt(&ok, 16);
-                if (ok && addr > 0 && addr <= 0xFF)
+                if (ok && addr > 0 && addr <= 0xFF) {
                     IcomSettings::setCivAddress(static_cast<std::uint8_t>(addr));
+                } else {
+                    // SAY SO rather than connecting with something else. This
+                    // field exists because a wrong CI-V address fails SILENTLY
+                    // — the radio just never answers — so silently ignoring bad
+                    // input reproduces the exact symptom the field is here to
+                    // cure, and the operator would be left reading a "no reply"
+                    // that their typo caused.
+                    setStatusText(tr("CI-V address \"%1\" is not a hex byte "
+                                     "(try A2, 0xA2 or A2h) — not connecting.")
+                                      .arg(m_manualIcomCivEdit->text().trimmed()));
+                    m_manualIcomCivEdit->setFocus();
+                    m_manualIcomCivEdit->selectAll();
+                    return;
+                }
             }
         }
         // Keychain for the password, never the settings file — and the save

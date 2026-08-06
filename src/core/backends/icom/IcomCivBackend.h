@@ -113,6 +113,10 @@ private slots:
 
 private:
     void publishCapabilities();
+    // Publish the scope's dBm axis, derived from the SAME ScopeCalibration that
+    // toDbm() decodes with. Call whenever anything it depends on changes — at
+    // connect, and on every reference-level change.
+    void publishScopeDbmRange();
     void publishMeterDefs();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void applyScopeStartup();

@@ -16,9 +16,21 @@
 // that a future change which reintroduces an unechoed request has something
 // that fails rather than a warning nobody is watching.
 //
-// dbmRangeLooksPlausible() is duplicated here rather than exported: it is a
-// file-static in MainWindow_Wiring.cpp, and linking that pulls in the whole GUI.
-// The duplication is asserted against the real constants below.
+// ⚠ dbmRangeLooksPlausible() is DUPLICATED here rather than exported: it is a
+// file-static in MainWindow_Wiring.cpp and linking that pulls in the whole GUI.
+//
+// Be honest about what that costs: this file cannot catch a change to the real
+// constants. If someone widens kMinAllowedDbm to -400, the copy below still
+// says -180 and every check here still passes while the ratchet this exists to
+// document sails past the guard unnoticed.
+//
+// What it DOES pin is the arithmetic and the shape of the runaway, which is the
+// part that was hard to characterise and easy to misread as "just a bad number".
+// The behavioural half — that a fixed-scale backend never arms the loop at all —
+// is pinned in icom_family_test via the capability, where it can be asserted
+// against the real code. Exporting the predicate (its own small header, or a
+// namespace in a linkable TU) would let this file close the gap; worth doing if
+// a third caller ever needs it.
 
 #include "core/backends/RadioCapabilities.h"
 
