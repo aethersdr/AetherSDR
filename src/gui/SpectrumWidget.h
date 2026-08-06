@@ -936,6 +936,7 @@ private:
     void setWaterfallLive(bool live);
     void startWaterfallScrollAnimation(float distanceRows = 1.0f);
     void stopWaterfallScrollAnimation();
+    void resetWfBlankerState();
     float waterfallScrollProgressRows() const;
     float waterfallPresentationMsPerRow() const;
     float waterfallTimeScaleMsPerRow() const;
@@ -1777,6 +1778,8 @@ private:
     int   m_wfBlankerRingIdx{0};
     int   m_wfBlankerRingCount{0};
     QVector<quint8> m_wfLastGoodLevels;
+    QVector<quint8> m_wfLastGoodSupplementalLevels;
+    WaterfallBlankerFrameBundle m_wfLastGoodFrames;
     int  m_bandPlanFontSize{6};  // 0 = off
     bool m_bandPlanShowSpots{true};
     BandPlanManager* m_bandPlanMgr{nullptr};

@@ -1598,9 +1598,7 @@ QVariantMap SpectrumWidget::automationDssReset(bool kiwiStream)
     m_nativeWaterfallFallbackHoldUntilMs = m_hasNativeWaterfall
         ? m_lastNativeTileMs + 60'000
         : 0;
-    m_wfBlankerRingCount = 0;
-    m_wfBlankerRingIdx = 0;
-    m_wfLastGoodLevels.clear();
+    resetWfBlankerState();
     resetDssUploadState();
     update();
 
@@ -4676,9 +4674,17 @@ void SpectrumWidget::setWfBlankerEnabled(bool on)
     s.setValue(settingsKey("WaterfallBlankingEnabled"), on ? "True" : "False");
     s.save();
     if (!on) {
-        m_wfBlankerRingCount = 0;
-        m_wfBlankerRingIdx = 0;
+        resetWfBlankerState();
     }
+}
+
+void SpectrumWidget::resetWfBlankerState()
+{
+    m_wfBlankerRingCount = 0;
+    m_wfBlankerRingIdx = 0;
+    m_wfLastGoodLevels.clear();
+    m_wfLastGoodSupplementalLevels.clear();
+    m_wfLastGoodFrames = {};
 }
 
 void SpectrumWidget::setWfBlankerThreshold(float t)
@@ -6367,6 +6373,7 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfLive = true;
     m_wfRowsSinceRateChange = 0;
     m_prevTileLevels.clear();
+    resetWfBlankerState();
     m_kiwiSdrFftTrace.clear();
     m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrLastWaterfallBins.clear();
@@ -7172,6 +7179,7 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         resetVisibleWaterfallFrequencyFrames(newCenterMhz, newBandwidthMhz);
     }
     m_prevTileLevels.clear();
+    resetWfBlankerState();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
@@ -7747,8 +7755,7 @@ void SpectrumWidget::setTransmitting(bool tx)
         m_wfPrevTimecode   = 0;
         m_wfPrevTimecodeMs = 0;
         m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
-        m_wfBlankerRingCount = 0;                        // reset stale blanker baseline
-        m_wfLastGoodLevels.clear();                       // forget any TX-era last-good row
+        resetWfBlankerState();                            // forget stale TX-era blanker rows
         // Drop the FFT trace's client-side EMA so the first clean RX frame is
         // taken raw instead of weighted against TX-contaminated history. During
         // the UNKEY_REQUESTED window the radio keeps streaming TX-contaminated
@@ -8423,6 +8430,18 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         }
     }
 
+    const double incomingSupplementalCenterMhz =
+        (lowFreqMhz + highFreqMhz) * 0.5;
+    const double incomingSupplementalBandwidthMhz =
+        highFreqMhz - lowFreqMhz;
+    const WaterfallBlankerFrameBundle incomingFrames{
+        FrequencyFrame{m_centerMhz, m_bandwidthMhz},
+        FrequencyFrame{incomingSupplementalCenterMhz,
+                       incomingSupplementalBandwidthMhz},
+    };
+    WaterfallBlankerFrameBundle outputFrames = incomingFrames;
+    bool blankerSubstitutedRow = false;
+
     // NB Waterfall Blanker (#277) — suppress impulse rows.
     // Skip entirely during TX: with show-tx-in-waterfall enabled, TX-era tiles
     // flow through and would otherwise poison the rolling baseline.  Post-TX,
@@ -8448,18 +8467,33 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         // Detect impulse (need ≥8 rows of history)
         if (m_wfBlankerRingCount >= 8 && baseline > 0.0f
                 && rowMean > baseline * m_wfBlankerThreshold) {
-            // Impulse detected — replace with last good row (interpolate)
-            if (m_wfLastGoodLevels.size() == destWidth) {
+            // Impulse detected — replace the complete last-good capture. The
+            // two pixel rows and their frequency frames are one value: mixing
+            // an old viewport row with the rejected tile's supplemental row
+            // produces a permanently misregistered line after pan/zoom.
+            const bool haveCachedBundle =
+                m_wfLastGoodLevels.size() == destWidth
+                && m_wfLastGoodSupplementalLevels.size() == destWidth
+                && m_wfLastGoodFrames.isValid();
+            if (haveCachedBundle) {
                 levels = m_wfLastGoodLevels;
+                supplementalLevels = m_wfLastGoodSupplementalLevels;
+                outputFrames = waterfallBlankerFrameBundleForOutput(
+                    true, m_wfLastGoodFrames, incomingFrames);
             } else {
                 // No previous good row yet — fill with noise floor color
                 const quint8 floorLevel = encodeWaterfallLevel(
                     intensityToWaterfallLevel(baseline));
                 std::fill(levels.begin(), levels.end(), floorLevel);
+                std::fill(supplementalLevels.begin(),
+                          supplementalLevels.end(), floorLevel);
             }
+            blankerSubstitutedRow = true;
             m_wfBlankerRing[m_wfBlankerRingIdx] = std::min(rowMean, baseline * 1.05f);
         } else {
             m_wfLastGoodLevels = levels;
+            m_wfLastGoodSupplementalLevels = supplementalLevels;
+            m_wfLastGoodFrames = incomingFrames;
             m_wfBlankerRing[m_wfBlankerRingIdx] = rowMean;
         }
         m_wfBlankerRingIdx = (m_wfBlankerRingIdx + 1) % WF_BLANKER_N;
@@ -8468,12 +8502,12 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     }
 
     // Write rows into history + visible viewport.
-    const bool canInterp = (m_prevTileLevels.size() == destWidth && rowsToPush > 1);
+    // A substituted row may come from a different frequency frame. Do not
+    // blend it with the current temporal endpoint or seed the next blend with
+    // it; interpolation across coordinate systems recreates the same defect.
+    const bool canInterp = !blankerSubstitutedRow
+        && m_prevTileLevels.size() == destWidth && rowsToPush > 1;
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
-    const double supplementalCenterMhz =
-        (lowFreqMhz + highFreqMhz) * 0.5;
-    const double supplementalBandwidthMhz =
-        highFreqMhz - lowFreqMhz;
     // Every row delivered by one native tile shares this calibration. Keep the
     // overlap scan, quantile sort, and whole-tile conversion out of the row
     // loop if a backend ever delivers more than one row per update.
@@ -8505,27 +8539,30 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
         appendHistoryRow(
             interpolatedLevels.constData(), nowMs,
-            -1.0, -1.0,
+            outputFrames.primaryFrame.centerMhz,
+            outputFrames.primaryFrame.bandwidthMhz,
             supplementalLevels.constData(),
-            supplementalCenterMhz,
-            supplementalBandwidthMhz);
+            outputFrames.supplementalFrame.centerMhz,
+            outputFrames.supplementalFrame.bandwidthMhz);
         appendDssWaterfallRow(
             displaySpectrumBins(),
             -1.0,
             -1.0,
             true,
             dssSupplemental,
-            supplementalCenterMhz,
-            supplementalBandwidthMhz);
+            incomingSupplementalCenterMhz,
+            incomingSupplementalBandwidthMhz);
         if (m_wfLive) {
             // The whole tile gets one start() after the loop; don't restart the
             // scroll clock once per appended row.
             appendVisibleRow(
-                interpolatedRow.constData(), -1.0, -1.0,
+                interpolatedRow.constData(),
+                outputFrames.primaryFrame.centerMhz,
+                outputFrames.primaryFrame.bandwidthMhz,
                 /*startScrollAnimation=*/false,
                 supplementalRow.constData(),
-                supplementalCenterMhz,
-                supplementalBandwidthMhz);
+                outputFrames.supplementalFrame.centerMhz,
+                outputFrames.supplementalFrame.bandwidthMhz);
         } else {
             rebuildWaterfallViewport();
         }
@@ -8535,7 +8572,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         // per-row starts the appendVisibleRow calls above used to issue.
         startWaterfallScrollAnimation(static_cast<float>(rowsToPush));
     }
-    m_prevTileLevels = levels;
+    if (blankerSubstitutedRow) {
+        m_prevTileLevels.clear();
+    } else {
+        m_prevTileLevels = levels;
+    }
     recordWaterfallFrame(rowsToPush);
     if (PerfTelemetry::instance().enabled())
         PerfTelemetry::instance().recordWaterfallNativeRows(rowsToPush);
@@ -8561,6 +8602,10 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
                                   m_dssFloorOffsetDb),
                               false);
     saveCurrentWaterfallStreamState();
+    // Blanker history is native-stream state and is not part of the cached
+    // per-source viewport. Never carry its baseline or last-good capture
+    // through a Flex/Kiwi source transition.
+    resetWfBlankerState();
     // Retained intensity/DSS scrollback follows the visible source. Keep the
     // small live viewport/DSS rings in every cached state for an immediate
     // toggle, but release all deep histories before choosing the new owner.
