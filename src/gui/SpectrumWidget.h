@@ -734,6 +734,9 @@ signals:
 
     // Emitted when user clicks on an inactive slice marker.
     void sliceClicked(int sliceId);
+    // Emitted when the user clicks an off-screen slice indicator. MainWindow
+    // owns the resulting activation and canonical pan recenter request.
+    void offScreenSliceCenterRequested(int sliceId);
     // Emitted when the user requests an absolute jump in the panadapter area.
     void frequencyClicked(double mhz);
     // Emitted when the user makes an incremental tuning gesture such as
@@ -1703,6 +1706,8 @@ private:
     // Off-screen slice indicator hit rects (parallel to m_sliceOverlays)
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};
+    bool m_offScreenSliceCenterPressPending{false};
+    QPoint m_offScreenSliceCenterPressPos;
 
     // On-screen indicators (WNB, RF Gain)
     bool m_wnbActive{false};

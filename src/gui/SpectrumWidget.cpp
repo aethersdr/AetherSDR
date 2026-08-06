@@ -9266,6 +9266,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
     (void)dragStatePublisher;
 
+    // A prior off-screen-pill press is relevant only to Qt's immediately
+    // following mouseDoubleClickEvent. Any new press starts a new gesture.
+    m_offScreenSliceCenterPressPending = false;
+
     const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
@@ -9402,13 +9406,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
     }
 
-    // Left-click on off-screen slice indicator → absorb or switch slice
+    // Left-click on an off-screen slice indicator → let MainWindow activate
+    // and center it through the canonical profile-load and Kiwi-safe path.
     if (ev->button() == Qt::LeftButton) {
         for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
             if (!m_offScreenRects[oi].isNull() &&
                 m_offScreenRects[oi].contains(QPoint(static_cast<int>(ev->position().x()), y))) {
                 const auto& so = m_sliceOverlays[oi];
-                if (!so.isActive) emit sliceClicked(so.sliceId);
+                m_offScreenSliceCenterPressPending = true;
+                m_offScreenSliceCenterPressPos = ev->position().toPoint();
+                emit offScreenSliceCenterRequested(so.sliceId);
                 m_spotClickConsumed = true;   // suppress release-to-tune (#1772)
                 ev->accept();
                 return;
@@ -11013,18 +11020,29 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
     const int mx = static_cast<int>(ev->position().x());
     const int rightStripW = (y >= wfY) ? waterfallStripWidth() : DBM_STRIP_W;
 
+    // The first press may have recentered the pan and removed its indicator
+    // before Qt delivers this double-click event. Consume the matching event
+    // so its trailing release cannot fall through to click-to-tune.
+    if (m_offScreenSliceCenterPressPending
+        && (ev->position().toPoint() - m_offScreenSliceCenterPressPos).manhattanLength()
+            <= QApplication::startDragDistance()) {
+        m_offScreenSliceCenterPressPending = false;
+        m_spotClickConsumed = true;
+        ev->accept();
+        return;
+    }
+
     // Consume double-clicks on the dBm and time strips
     if (mx >= width() - rightStripW) {
         ev->accept();
         return;
     }
 
-    // Double-click on off-screen slice indicator → recenter on that slice
+    // Preserve direct/synthetic double-click support through the same owner
+    // path as a normal off-screen indicator press.
     for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
         if (!m_offScreenRects[oi].isNull() && m_offScreenRects[oi].contains(QPoint(mx, y))) {
-            m_centerMhz = m_sliceOverlays[oi].freqMhz;
-            markOverlayDirty();
-            emit centerChangeRequested(m_centerMhz);
+            emit offScreenSliceCenterRequested(m_sliceOverlays[oi].sliceId);
             // Suppress the second mouseRelease's single-click-to-tune emit
             // (Qt fires Press → Release → DoubleClick → Release; without this
             // flag the trailing release would re-tune against the new
