@@ -468,6 +468,31 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                 if (!widths.empty() && m_model->hasScope)
                     emit panBandwidthLimitsChanged(panId(), widths.front() / 1e6,
                                                    widths.back() / 1e6);
+
+                // ⛔ Publish the Y axis too, or the display invents one and
+                // never stops. Without a range from the backend the pan
+                // auto-ranges from its own noise-floor estimate, and because
+                // MainWindow refuses anything below -180 dBm
+                // (dbmRangeLooksPlausible) the radio never adopts the value —
+                // so the estimate is never corrected and drifts further every
+                // cycle. Observed on a live IC-9700 2026-08-05: a linear
+                // runaway of -24 dB/s, 84 rejected `display pan set` commands
+                // in 90 s, min falling -202 -> -898 dBm and still going. The
+                // operator sees the waterfall reset each time the drift crosses
+                // the guard, and the radio menu stops responding behind the
+                // command flood.
+                //
+                // The numbers are m_scopeCal's own — ESTIMATES, as its header
+                // says at length, not a measurement. Publishing an estimate is
+                // right here: the axis is anchored and stable, and the estimate
+                // is already the one toDbm() decodes with, so the display and
+                // the decoder agree. An uncalibrated-but-consistent axis beats
+                // a self-referential one.
+                if (m_model->hasScope) {
+                    const double floorDbm = m_scopeCal.floorDbm + m_scopeCal.referenceDb;
+                    emit panRangeChanged(panId(), floorDbm, floorDbm + m_scopeCal.spanDb);
+                }
+
                 publishMeterDefs();
                 publishCapabilities();
             }

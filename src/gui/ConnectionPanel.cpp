@@ -720,6 +720,29 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     ThemeManager::instance().applyStyleSheet(m_manualIcomPassEdit, lineEditStyle);
     m_manualIcomPassRow = addManualRow(QStringLiteral("Icom password:"), m_manualIcomPassEdit);
 
+    // The CI-V address is the third thing the operator has to read off the
+    // radio, alongside the two above — theirs live in the Network menu, this
+    // one in Connectors > CI-V. Without it the address can only ever be the
+    // IC-705 default, and every other model in kModels is unreachable: CI-V is
+    // addressed, so an IC-9700 on 0xA2 silently ignores everything sent to
+    // 0xA4. No ID reply, no model, and the conservative unknown fallback means
+    // no scope and no transmit — which reads as "this backend has no
+    // panadapter yet" rather than "wrong address".
+    //
+    // Blank is the normal case: the placeholder shows what will be used, which
+    // is the model the RS-BA1 handshake already named. Typing here is the
+    // override for a radio whose address has been changed from default.
+    m_manualIcomCivEdit = new QLineEdit(manualGroup);
+    m_manualIcomCivEdit->setObjectName(QStringLiteral("connectionManualIcomCivAddress"));
+    m_manualIcomCivEdit->setAccessibleName(tr("Icom CI-V address"));
+    m_manualIcomCivEdit->setAccessibleDescription(
+        tr("The radio's CI-V address in hex, from MENU > SET > Connectors > CI-V. "
+           "Leave blank to use the address for the model the radio reports."));
+    m_manualIcomCivEdit->setClearButtonEnabled(true);
+    m_manualIcomCivEdit->setPlaceholderText(tr("auto (e.g. A2 for IC-9700)"));
+    ThemeManager::instance().applyStyleSheet(m_manualIcomCivEdit, lineEditStyle);
+    m_manualIcomCivRow = addManualRow(QStringLiteral("Icom CI-V:"), m_manualIcomCivEdit);
+
     manualGroupLayout->addLayout(manualForm);
 
     auto* manualActionRow = new QHBoxLayout;
@@ -1943,6 +1966,8 @@ void ConnectionPanel::updateManualFamilyHints()
         m_manualIcomUserRow->setVisible(icom);
     if (m_manualIcomPassRow)
         m_manualIcomPassRow->setVisible(icom);
+    if (m_manualIcomCivRow)
+        m_manualIcomCivRow->setVisible(icom);
 
     if (icom) {
         // Fill from settings, and read the password out of the keychain — which
@@ -1951,6 +1976,15 @@ void ConnectionPanel::updateManualFamilyHints()
         // between the request and the answer.
         if (m_manualIcomUserEdit && m_manualIcomUserEdit->text().isEmpty())
             m_manualIcomUserEdit->setText(IcomSettings::username());
+        // Show a stored override; leave blank when it is the default, so the
+        // placeholder can say "auto" rather than presenting A4 as a choice the
+        // operator made.
+        if (m_manualIcomCivEdit && m_manualIcomCivEdit->text().isEmpty()) {
+            const std::uint8_t civ = IcomSettings::civAddress();
+            if (civ != IcomSettings::kDefaultCivAddress)
+                m_manualIcomCivEdit->setText(
+                    QStringLiteral("%1").arg(civ, 2, 16, QLatin1Char('0')).toUpper());
+        }
         if (m_manualIpEdit && m_manualIpEdit->text().isEmpty())
             m_manualIpEdit->setText(IcomSettings::lastHost());
         if (m_manualIcomPassEdit && m_manualIcomPassEdit->text().isEmpty()) {
@@ -2154,6 +2188,26 @@ void ConnectionPanel::probeRadio(const QString& ip)
 
         IcomSettings::setUsername(user);
         IcomSettings::setLastHost(trimmedIp);
+
+        // Hex, with or without an 0x prefix or a trailing h — the radio's own
+        // menu writes it as "A2h", so accept what the operator is looking at.
+        // An unparseable or out-of-range entry is IGNORED rather than clamped:
+        // a wrong CI-V address is silent (the radio simply never answers), so
+        // guessing on the operator's behalf would hide their typo behind the
+        // exact symptom this field exists to cure.
+        if (m_manualIcomCivEdit) {
+            QString civ = m_manualIcomCivEdit->text().trimmed();
+            if (!civ.isEmpty()) {
+                if (civ.startsWith(QLatin1String("0x"), Qt::CaseInsensitive))
+                    civ = civ.mid(2);
+                if (civ.endsWith(QLatin1Char('h'), Qt::CaseInsensitive))
+                    civ.chop(1);
+                bool ok = false;
+                const uint addr = civ.toUInt(&ok, 16);
+                if (ok && addr > 0 && addr <= 0xFF)
+                    IcomSettings::setCivAddress(static_cast<std::uint8_t>(addr));
+            }
+        }
         // Keychain for the password, never the settings file — and the save
         // primes the session cache synchronously, so the connect below cannot
         // race the keyring write.

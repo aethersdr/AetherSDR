@@ -23,6 +23,12 @@ constexpr int kTxPumpMs = 10;
 // frame swallows every subsequent byte and the radio appears to stop answering
 // while the link is demonstrably fine.
 constexpr int kCivFrameTimeoutMs = 100;
+// Re-send the CI-V data-stream open at the reference's cadence until the radio
+// starts streaming. Matches kappanhang / SDR9700 startCivDataTimer(100).
+constexpr int kCivOpenRetryMs = 100;
+// ~5 s of asking. Long enough for a slow radio, short enough that a radio which
+// will never answer says so rather than retrying silently forever.
+constexpr int kCivOpenMaxAttempts = 50;
 
 std::span<const std::uint8_t> asSpan(const QByteArray& b)
 {
@@ -101,7 +107,7 @@ bool IcomSession::start(const Params& params)
 
 void IcomSession::stop()
 {
-    for (QTimer** t : {&m_tokenTimer, &m_txTimer, &m_civTimeout}) {
+    for (QTimer** t : {&m_tokenTimer, &m_txTimer, &m_civTimeout, &m_civOpenRetry}) {
         if (*t) {
             (*t)->stop();
             (*t)->deleteLater();
@@ -376,6 +382,47 @@ void IcomSession::onSerialReady()
     m_serial->sendTracked(buildSerialOpen(m_serial->localSessionId(),
                                           m_serial->remoteSessionId(), m_serialSendSeq++, true));
 
+    // ⛔ ONE OPEN IS NOT ENOUGH. Observed on a live IC-9700 2026-08-05: the
+    // radio accepts the open, reports the pipe ready, and then streams nothing
+    // — not one CI-V frame in 45 s. Every consequence is downstream and silent:
+    // no 0x19 0x00 reply, so the model never resolves; no model, so scope and
+    // transmit stay disabled and no dBm range is published; no range, so the pan
+    // auto-ranges into a runaway MainWindow rejects once a second. The operator
+    // sees a blank frequency and a waterfall that keeps resetting.
+    //
+    // kappanhang and the SDR9700 reference both re-send the open on a 100 ms
+    // timer until data flows (their startCivDataTimer), and Aether-gate does the
+    // same driving THIS radio — 1356 frames in 45 s, 30.1 fps. An IC-705 that
+    // happens to start on the first open would never expose this.
+    m_civDataSeen = false;
+    m_civOpenAttempts = 0;
+    if (!m_civOpenRetry) {
+        m_civOpenRetry = new QTimer(this);
+        connect(m_civOpenRetry, &QTimer::timeout, this, [this]() {
+            if (m_civDataSeen || !m_serial) {
+                m_civOpenRetry->stop();
+                return;
+            }
+            // Bounded. The reference retries indefinitely, but it is a headless
+            // bridge; here an unbounded 10 Hz stream of opens at a radio that is
+            // never going to answer is just noise that hides the real fault. Say
+            // so once and stop — a silent forever-retry is how "it just does not
+            // work" becomes unreportable.
+            if (++m_civOpenAttempts > kCivOpenMaxAttempts) {
+                m_civOpenRetry->stop();
+                qCWarning(lcIcom)
+                    << "CI-V stream never started after" << kCivOpenMaxAttempts
+                    << "open attempts — the radio accepted the open and sent no data."
+                    << "Check CI-V is enabled for the network port on the radio.";
+                return;
+            }
+            m_serial->sendTracked(buildSerialOpen(m_serial->localSessionId(),
+                                                  m_serial->remoteSessionId(),
+                                                  m_serialSendSeq++, true));
+        });
+    }
+    m_civOpenRetry->start(kCivOpenRetryMs);
+
     if (!m_civTimeout) {
         m_civTimeout = new QTimer(this);
         connect(m_civTimeout, &QTimer::timeout, this, &IcomSession::onCivFrameTimeout);
@@ -393,6 +440,16 @@ void IcomSession::onSerialPayload(const QByteArray& packet)
     const auto payload = serialPayload(asSpan(packet));
     if (payload.empty())
         return;   // a keepalive idle, or the serial open/close echo
+
+    // First real CI-V payload: the stream is live, so stop asking it to open.
+    // The reference stops its timer on exactly this condition rather than after
+    // a fixed count, because a slow radio must not be abandoned early.
+    if (!m_civDataSeen) {
+        m_civDataSeen = true;
+        if (m_civOpenRetry)
+            m_civOpenRetry->stop();
+        qCInfo(lcIcom) << "CI-V stream live — open-retry stopped";
+    }
 
     for (const auto& raw : m_civ.feed(payload)) {
         auto frame = parseFrame(raw);

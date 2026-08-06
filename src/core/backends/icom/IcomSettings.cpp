@@ -26,7 +26,6 @@ constexpr const char* kFieldCivAddress  = "civAddress";
 
 // The IC-705's factory CI-V address. A seed, not an assertion — the backend
 // replaces it with whatever 0x19 0x00 reports.
-constexpr int kDefaultCivAddress = 0xA4;
 
 // Validate a port on the way OUT, not just on the way in. A hand-edited or
 // truncated settings file must not be able to command a nonsense port
@@ -123,9 +122,9 @@ void IcomSettings::setPorts(quint16 control, quint16 serial, quint16 audio)
 
 std::uint8_t IcomSettings::civAddress()
 {
-    const int v = readObj().value(QLatin1String(kFieldCivAddress)).toInt(kDefaultCivAddress);
+    const int v = readObj().value(QLatin1String(kFieldCivAddress)).toInt(IcomSettings::kDefaultCivAddress);
     if (v <= 0 || v > 0xFF)
-        return kDefaultCivAddress;
+        return IcomSettings::kDefaultCivAddress;
     return static_cast<std::uint8_t>(v);
 }
 

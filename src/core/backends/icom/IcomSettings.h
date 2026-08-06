@@ -52,6 +52,11 @@ public:
     static std::uint8_t civAddress();
     static void setCivAddress(std::uint8_t address);
 
+    // Exposed so the connect UI can tell "the operator chose this" from "nobody
+    // has set one", and leave its field blank in the second case rather than
+    // presenting the IC-705's address as a deliberate choice.
+    static constexpr std::uint8_t kDefaultCivAddress = 0xA4;
+
     // Restore every field to its default.
     static void reset();
 

@@ -112,6 +112,11 @@ private:
     QTimer* m_tokenTimer = nullptr;
     QTimer* m_txTimer = nullptr;
     QTimer* m_civTimeout = nullptr;
+    // Re-sends the CI-V data-stream open until the radio actually starts
+    // streaming. One open is not reliably enough — see onSerialReady().
+    QTimer* m_civOpenRetry = nullptr;
+    bool    m_civDataSeen = false;
+    int     m_civOpenAttempts = 0;
 
     // Auth state. The auth id and session ids are re-read from the stream grant
     // rather than cached from the login — see parseStreamGrant's comment; the

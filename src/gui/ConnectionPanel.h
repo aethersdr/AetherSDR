@@ -243,8 +243,10 @@ private:
     // orphan labels behind.
     QWidget*     m_manualIcomUserRow{nullptr};
     QWidget*     m_manualIcomPassRow{nullptr};
+    QWidget*     m_manualIcomCivRow{nullptr};
     QLineEdit*   m_manualIcomUserEdit{nullptr};
     QLineEdit*   m_manualIcomPassEdit{nullptr};
+    QLineEdit*   m_manualIcomCivEdit{nullptr};
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
     QToolButton* m_manualAdvancedToggle{nullptr};
