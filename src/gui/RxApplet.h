@@ -80,9 +80,9 @@ public:
     // list by index offset: +steps moves forward, -steps backward, scaled by
     // magnitude and clamped at the ends. The shipped preset tables are all
     // ascending, so + widens and - narrows (what filter_widen/filter_narrow
-    // rely on); a hand-edited FilterPresets_<mode> row is not sorted, so the
-    // stepping is defined on index order, not on width. Routes through
-    // applyFilterPreset so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get
+    // rely on); a hand-edited FilterPresets_<mode> row is not guaranteed to be
+    // sorted, so the stepping is defined on index order, not on width. Routes
+    // through applyFilterPreset so all modes (LSB/CWL/DIGL/RTTY/AM/CW/USB) get
     // mode-correct edge geometry.
     void stepFilterWidth(int steps);
 
