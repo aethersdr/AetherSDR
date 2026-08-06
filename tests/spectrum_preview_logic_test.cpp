@@ -499,6 +499,38 @@ int testWaterfallVisibleRowForAge()
     return 0;
 }
 
+int testWaterfallCubicSourceAgeBoundary()
+{
+    using namespace AetherSDR;
+    constexpr int kHeight = 7;
+    constexpr int kOrigin = 5;
+
+    // The newest edge's leading cubic tap must duplicate age 0, not wrap to
+    // age kHeight - 1 at the opposite end of the retained history.
+    if (waterfallCubicPhysicalRowForSourceAge(kOrigin, -1, kHeight) != 5
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 0, kHeight) != 5
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 1, kHeight) != 6
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 2, kHeight) != 0) {
+        return fail("waterfall cubic newest-edge taps must clamp logically");
+    }
+
+    // Likewise, the oldest edge's trailing taps duplicate the oldest row
+    // instead of wrapping into the newest history.
+    if (waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight - 2, kHeight)
+            != 3
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight - 1, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(
+               kOrigin, kHeight + 1, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 0, 0) != -1) {
+        return fail("waterfall cubic oldest-edge taps must clamp logically");
+    }
+    return 0;
+}
+
 int testWaterfallScrollProgress()
 {
     using namespace AetherSDR;
@@ -1026,6 +1058,9 @@ int main()
         return result;
     }
     if (const int result = testWaterfallVisibleRowForAge(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallCubicSourceAgeBoundary(); result != 0) {
         return result;
     }
     if (const int result = testWaterfallScrollProgress(); result != 0) {

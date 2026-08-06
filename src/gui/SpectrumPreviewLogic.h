@@ -360,6 +360,19 @@ inline int waterfallVisibleRowForAge(int writeRowOrigin, int ageRows,
     return (origin + age) % height;
 }
 
+// The cubic waterfall shader must clamp source ages in logical history before
+// mapping them into the physical ring. Wrapping an out-of-range tap directly
+// would blend the newest and oldest rows across the visible history boundary.
+inline int waterfallCubicPhysicalRowForSourceAge(int writeRowOrigin,
+                                                 int sourceAge, int height)
+{
+    if (height <= 0) {
+        return -1;
+    }
+    return waterfallVisibleRowForAge(
+        writeRowOrigin, std::clamp(sourceAge, 0, height - 1), height);
+}
+
 struct WaterfallRowFrameReadiness {
     bool requested{false};
     bool formatSupported{false};
