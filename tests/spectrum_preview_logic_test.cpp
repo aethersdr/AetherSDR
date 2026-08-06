@@ -20,6 +20,30 @@ bool nearlyEqual(double a, double b, double epsilon = 1.0e-12)
     return std::abs(a - b) <= epsilon;
 }
 
+int testDssRowSpanSupported()
+{
+    using namespace AetherSDR;
+
+    // A build without AETHER_GPU_SPECTRUM has no mesh pipeline at all, so the
+    // control can never affect the display whatever the runtime reports. This
+    // is the case that shipped enabled: the only runtime correction lived
+    // inside the GPU-only block, so the software build never corrected it and
+    // the slider moved, labelled and persisted over a fallback that ignores it.
+    if (dssRowSpanSupported(false, false) || dssRowSpanSupported(false, true)) {
+        return fail("a CPU-only build must never offer the 3D span control");
+    }
+
+    // A GPU build still has to prove the mesh came up — RGBA16F support is a
+    // runtime property, and without it the CPU image fallback draws instead.
+    if (dssRowSpanSupported(true, false)) {
+        return fail("a GPU build without the mesh must not offer the control");
+    }
+    if (!dssRowSpanSupported(true, true)) {
+        return fail("the control must be offered once the mesh is ready");
+    }
+    return 0;
+}
+
 int testCursorAnchoredZoom()
 {
     using namespace AetherSDR;
@@ -971,6 +995,9 @@ int testDssSupplementalCoverageCalibration()
 
 int main()
 {
+    if (const int result = testDssRowSpanSupported(); result != 0) {
+        return result;
+    }
     if (const int result = testCursorAnchoredZoom(); result != 0) {
         return result;
     }

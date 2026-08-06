@@ -130,6 +130,12 @@ bool waterfallFrameResizeFailureForced()
 }
 #endif
 
+#ifdef AETHER_GPU_SPECTRUM
+constexpr bool kGpuSpectrumBuild = true;
+#else
+constexpr bool kGpuSpectrumBuild = false;
+#endif
+
 constexpr int dssFillVerticesPerRow()
 {
     // Two exact-row crossfade layers, each with two triangles per column.
@@ -1921,6 +1927,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
     // Floating overlay menu (child widget, stays on top)
     m_overlayMenu = new SpectrumOverlayMenu(this);
+    // Start the 3D Span row disabled and let the GPU path prove itself below.
+    // A build without AETHER_GPU_SPECTRUM never reaches that code at all, so
+    // defaulting to enabled would leave the control permanently inert there.
+    m_overlayMenu->setDssRowSpanSupported(
+        AetherSDR::dssRowSpanSupported(kGpuSpectrumBuild, false));
     m_overlayMenu->raise();
 
     m_tnfHoverPopup = new QLabel(this);
@@ -2658,12 +2669,20 @@ void SpectrumWidget::loadDisplay3DSettings(int legacyGain)
 
     const QString raw = AppSettings::instance()
         .value(display3DSettingsKey(), QString()).toString();
-    if (!raw.trimmed().isEmpty()) {
+    if (raw.trimmed().isEmpty()) {
+        // No object yet: this is the one-time migration off the grandfathered
+        // flat Display3DGain key. Persist it NOW, otherwise the flat key would
+        // be re-read on every launch and "the object owns the value" would only
+        // become true once the operator happened to touch a control.
+        saveDisplay3DSettings();
+    } else {
         QJsonParseError error;
         const QJsonDocument doc =
             QJsonDocument::fromJson(raw.toUtf8(), &error);
         if (error.error != QJsonParseError::NoError || !doc.isObject()) {
-            // Keep the defaults rather than half-applying a damaged object.
+            // Keep the defaults rather than half-applying a damaged object, and
+            // deliberately do NOT write: overwriting here would destroy the
+            // evidence and whatever a future version may have stored.
             qCWarning(lcGui).noquote()
                 << "SpectrumWidget: ignoring invalid Display3DSettings"
                 << display3DSettingsKey() << error.errorString();
@@ -2679,6 +2698,8 @@ void SpectrumWidget::loadDisplay3DSettings(int legacyGain)
                     obj.value(QStringLiteral("span")).toInt(m_dssRowSpanPct),
                     0, 100);
             }
+            // An existing object is left exactly as written, including one from
+            // a newer version carrying fields this build does not know about.
         }
     }
 
@@ -12951,7 +12972,8 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
         // m_dssMeshReady is only final once every pipeline, texture and sampler
         // in initDssMeshPipeline() has succeeded, so ask after it returns
         // rather than from inside it.
-        m_overlayMenu->setDssRowSpanSupported(m_dssMeshReady);
+        m_overlayMenu->setDssRowSpanSupported(
+            AetherSDR::dssRowSpanSupported(kGpuSpectrumBuild, m_dssMeshReady));
     }
     // initDssDepthPipeline() is deliberately NOT called here — its ~458 KB VBO
     // and pipeline are only used on the CPU-image fallback, which most GPU
