@@ -3334,6 +3334,18 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doWindow(a.action, a.target);
             });
 
+        add("titlebar", {},
+            "titlebar <selectRadio <id>|showDiscovery|minimize|maximize|close> "
+            "— drive the unified title bar's own controls",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.action = vtok(p, 1);
+                a.target = vtok(p, 2);   // radio id, for selectRadio
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTitleBar(a.action, a.target);
+            });
+
         add("shortcut", {}, "shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated)",
             parseTargetOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
@@ -5179,6 +5191,27 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             if (!data.contains(property))
                 return err(QStringLiteral("unknown property '") + property
                            + QStringLiteral("' for txtimer"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        data[QStringLiteral("ok")] = true;
+        data[QStringLiteral("model")] = model;
+        return data;
+    }
+
+    if (model == QLatin1String("titlebar")) {
+        // Unified title bar — geometry, brand, radio tabs, audio cluster,
+        // window-chrome variant. Served before the radio guard because the bar
+        // exists (and must be assertable) with no radio connected at all.
+        if (!m_titleBarSnapshotHandler)
+            return err(QStringLiteral("title bar snapshot unavailable"));
+        QJsonObject data = m_titleBarSnapshotHandler();
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for titlebar"));
             return QJsonObject{{QStringLiteral("ok"), true},
                                {QStringLiteral("model"), model},
                                {QStringLiteral("property"), property},
@@ -7711,6 +7744,32 @@ QWidget* AutomationServer::topLevelWindowForTarget(const QString& target)
 // explicit geometry, so an un-maximize (restore) was previously unverifiable.
 // State changes don't spin a nested event loop, so they're safe to run
 // synchronously here (unlike click/menu, which defer).
+QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& target)
+{
+    if (action.trimmed().isEmpty()) {
+        return err(QStringLiteral("titlebar needs an action "
+                                  "(selectRadio|showDiscovery|minimize|maximize|close)"));
+    }
+    if (!m_titleBarActionHandler) {
+        return err(QStringLiteral("title bar actions unavailable"));
+    }
+    QString why;
+    if (!m_titleBarActionHandler(action.trimmed(), target.trimmed(), &why)) {
+        return err(why.isEmpty() ? QStringLiteral("titlebar action failed") : why);
+    }
+    QJsonObject reply{{QStringLiteral("ok"), true},
+                      {QStringLiteral("action"), action.trimmed()}};
+    if (!target.trimmed().isEmpty()) {
+        reply.insert(QStringLiteral("target"), target.trimmed());
+    }
+    // Echo the resulting bar state so a caller never has to follow the action
+    // with a separate get_state to see what it did.
+    if (m_titleBarSnapshotHandler) {
+        reply.insert(QStringLiteral("titlebar"), m_titleBarSnapshotHandler());
+    }
+    return reply;
+}
+
 QJsonObject AutomationServer::doWindow(const QString& action, const QString& target) const
 {
     const QString a = action.trimmed().toLower();

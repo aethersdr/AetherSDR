@@ -41,6 +41,16 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.border.strong", QString("#2a3a4d"));
     m_tokens.insert("color.border.subtle", QString("#1a2330"));
     m_tokens.insert("color.border.tx", QString("#5a4a28"));
+    {
+        ThemeGradient g;
+        g.type = ThemeGradient::Linear;
+        g.angle = 100.0;
+        g.stops.append({0.0, QColor("#3aa7ff")});
+        g.stops.append({0.42, QColor("#5de3ff")});
+        g.stops.append({1.0, QColor("#8ef7e6")});
+        m_tokens.insert("color.brand.gradient", QVariant::fromValue(g));
+    }
+    m_tokens.insert("color.brand.wordmark", QString("#eaf2fb"));
     m_tokens.insert("color.button.background.disabled", QString("#203040"));
     m_tokens.insert("color.button.border.disabled", QString("#304050"));
     m_tokens.insert("color.button.danger.background.disabled", QString("#2a1818"));
@@ -110,6 +120,19 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.text.label", QString("#506070"));
     m_tokens.insert("color.text.primary", QString("#c8d8e8"));
     m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
+    m_tokens.insert("color.titlebar.background", QString("#eb0d1624"));
+    m_tokens.insert("color.titlebar.border", QString("#2978bee6"));
+    m_tokens.insert("color.titlebar.caption.close.glyph", QString("#ffffff"));
+    m_tokens.insert("color.titlebar.caption.close.hover", QString("#c42b1c"));
+    m_tokens.insert("color.titlebar.caption.glyph", QString("#8ea8c0"));
+    m_tokens.insert("color.titlebar.caption.glyph.hover", QString("#e6f0fa"));
+    m_tokens.insert("color.titlebar.caption.hover", QString("#14ffffff"));
+    m_tokens.insert("color.titlebar.status.available", QString("#506070"));
+    m_tokens.insert("color.titlebar.status.connected", QString("#4dd87a"));
+    m_tokens.insert("color.titlebar.status.inUse", QString("#ffb84d"));
+    m_tokens.insert("color.titlebar.tab.active.background", QString("#1a00b4d8"));
+    m_tokens.insert("color.titlebar.tab.active.border", QString("#7300b4d8"));
+    m_tokens.insert("color.titlebar.tab.hover", QString("#12ffffff"));
     m_tokens.insert("color.toggle.accent.background.checked", QString("#0070c0"));
     m_tokens.insert("color.toggle.accent.border.checked", QString("#00b4d8"));
     m_tokens.insert("color.toggle.accent.foreground.checked", QString("#00b4d8"));

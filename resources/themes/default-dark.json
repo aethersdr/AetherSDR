@@ -65,6 +65,39 @@
             "accent": "{color.blue.500}",
             "tx":     "#5a4a28"
           },
+          "titlebar": {
+            "background":             "#eb0d1624",
+            "border":                 "#2978bee6",
+            "tab": {
+              "hover":            "#12ffffff",
+              "active.background": "#1a00b4d8",
+              "active.border":     "#7300b4d8"
+            },
+            "status": {
+              "connected": "{color.green.500}",
+              "available": "{color.gray.500}",
+              "inUse":     "{color.amber.500}"
+            },
+            "caption": {
+              "glyph":       "{color.gray.400}",
+              "glyph.hover": "{color.gray.50}",
+              "hover":       "#14ffffff",
+              "close.hover": "#c42b1c",
+              "close.glyph": "#ffffff"
+            }
+          },
+          "brand": {
+            "wordmark": "#eaf2fb",
+            "gradient": {
+              "type": "linear-gradient",
+              "angle": 100,
+              "stops": [
+                { "at": 0.00, "color": "#3aa7ff" },
+                { "at": 0.42, "color": "#5de3ff" },
+                { "at": 1.00, "color": "#8ef7e6" }
+              ]
+            }
+          },
           "meter": {
             "crst":   "{color.red.500}",
             "rms":    "{color.blue.500}",

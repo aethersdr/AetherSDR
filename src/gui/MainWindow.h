@@ -259,6 +259,11 @@ public:
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
     QJsonObject automationTxTimerSnapshot() const;
+    // Unified-title-bar introspection + drive-the-real-control actions for the
+    // agent automation bridge (`titlebar` model / `titlebar` verb).
+    QJsonObject automationTitleBarSnapshot() const;
+    bool automationTitleBarAction(const QString& action, const QString& target,
+                                  QString* error);
 
     // Agent automation bridge (#3646) lifecycle. Construction + full
     // handler wiring lives in startAutomationBridge() so it can be driven
@@ -479,6 +484,12 @@ private:
     void wirePanLifecycle();
     void wireCatPorts();            // MainWindow_Session.cpp
     void wireDaxIq();               // MainWindow_Session.cpp
+    // Push the current radio picture (discovered LAN + SmartLink radios, which
+    // one this client owns) into the title bar's radio tabs.  Coalesced onto
+    // the event loop: discovery re-announces every radio every 5 s and each
+    // announcement would otherwise rebuild the strip.
+    void scheduleRadioTabRefresh();      // MainWindow_Session.cpp
+    void refreshRadioTabs();             // MainWindow_Session.cpp
     // Re-establish the connections bound to the backend's PanadapterStream after
     // RadioModel swapped backends for a different radio family.
     void rewirePanStreamAfterBackendSwap();   // MainWindow_Session.cpp
@@ -1486,6 +1497,13 @@ private:
     // forever.
     QString m_autoConnectSerial;                 // an auto-connect is in flight for this serial
     QHash<QString, int> m_autoConnectAttempts;   // consecutive failed auto-connects, per serial
+    // Title-bar radio tabs.  The refresh is coalesced through this flag rather
+    // than a timer object so the pending state is visible to the automation
+    // bridge's own state dump.
+    bool m_radioTabRefreshPending{false};
+    // Last SmartLink radio list, cached because the title bar has to redraw the
+    // tabs on LAN discovery events too and SmartLink only pushes on change.
+    QList<WanRadioInfo> m_smartLinkRadios;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect

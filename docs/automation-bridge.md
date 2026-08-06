@@ -320,6 +320,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
+| | [`titlebar <action> [id]`](#titlebar) | Drive the unified title bar: selectRadio / showDiscovery / minimize / maximize / close. |
 | | [`shortcut <id>`](#shortcut) | Fire a ShortcutManager/MIDI action by id (TX-guarded). |
 | | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
@@ -341,6 +342,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
+| | [`get titlebar`](#get-titlebar) | Unified 52 px title bar — brand, radio tabs, audio cluster, window chrome. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
@@ -2218,6 +2220,66 @@ dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
 `visible=false` throughout.
 
+### `get titlebar`
+Read the unified 52 px title bar — the single strip that owns the brand mark,
+the radio tabs, the audio cluster, and the window controls on every platform.
+
+```json
+→ {"cmd":"get","model":"titlebar"}
+← {"ok":true,"model":"titlebar","present":true,"height":52,"expectedHeight":52,
+   "offsetInWindow":0,"screenRect":[103,40,1402,52],"minimalMode":false,
+   "brand":{"wordmark":"AetherSDR","logoLoaded":true,"visible":true},
+   "radios":{"activeId":"DEMO-0001","popoverVisible":false,
+             "pulseEnabled":true,
+             "tabs":[{"id":"DEMO-0001","name":"Simulator (not on the air)",
+                      "status":"connected",
+                      "statusLine":"Simulator (not on the air) · connected · DEMO",
+                      "transport":"127.0.0.1","active":true,
+                      "screenRect":[233,43,257,40],
+                      "accessibleName":"Radio Simulator (not on the air), connected"}],
+             "discovered":[…]},
+   "audio":{"pcAudioEnabled":true,"pcAudioLocked":true,"lineoutMuted":false,
+            "headphoneMuted":false,"masterVolume":100,"headphoneVolume":50,
+            "masterText":"100","headphoneText":"50","sliderWidth":64},
+   "chrome":{"frameless":true,
+             "captionButtons":{"style":"macTrafficLights","close":{…},
+                               "minimize":{…},"maximize":{…}}},
+   "txTimer":{…}}
+```
+
+`offsetInWindow` is the distance from the top of the window to the top of the
+bar and **must be 0** — anything else means something is reserving a strip above
+the unified bar, which is the wasted top row this design exists to remove.
+`chrome.captionButtons.style` is `macTrafficLights`, `windows` or `linuxChips`;
+the window is frameless on all three platforms, so the controls are always the
+app's own. `radios.tabs[].status` is one of `connected` / `available` /
+`in use`, and `statusLine` is the text the tab actually renders — assert against
+that rather than the dot colour, since [status is never encoded by colour
+alone](a11y.md). `screenRect` (on the bar and on each tab) is `[x, y, w, h]` in
+screen coordinates, so a driver can aim a real click at a control instead of
+guessing from a screenshot. A trailing property narrows the reply:
+`get titlebar height` → `{"value":52}`.
+
+### `titlebar`
+Drive the title bar's own controls. Every action goes through the real widget,
+not the model behind it, so a passing call proves the control an operator
+clicks is reachable and wired.
+
+```json
+→ {"cmd":"titlebar","action":"selectRadio","target":"1234-5678-9012-3456"}
+← {"ok":true,"action":"selectRadio","target":"1234-5678-9012-3456",
+   "titlebar":{…}}
+```
+
+| Action | Effect |
+|---|---|
+| `selectRadio <id>` | Clicks the radio tab whose `id` matches; errors if there is no such tab. |
+| `showDiscovery` | Opens the "Discovered radios" popover the `+` button owns. |
+| `minimize` / `maximize` / `close` | Activates the matching caption control. |
+
+The reply echoes the post-action `get titlebar` snapshot, so a caller never
+needs a follow-up read.
+
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server
 over loopback and offers two profiles after draining the init burst through
@@ -3202,6 +3264,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
+| `titlebar` | — | titlebar <selectRadio <id>\|showDiscovery\|minimize\|maximize\|close> |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
 | `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |
 | `menu` | — | menu list \| open <name> — menu-bar menus |
