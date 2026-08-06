@@ -47,6 +47,14 @@ static const QString kBtnSubtleStyle =
     "border: 1px solid {{color.border.strong}}; padding: 5px 14px; border-radius: 3px; }"
     "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
 
+// Same palette for the fixed-size square glyph buttons in the table rows. The
+// 14 px side padding of kBtnSubtleStyle exceeds a 24 px button's width, which
+// leaves no room for the glyph and renders it blank.
+static const QString kBtnGlyphStyle =
+    "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
+    "border: 1px solid {{color.border.strong}}; padding: 0; border-radius: 3px; }"
+    "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
+
 MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* parent)
     : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
       m_manager(manager)
@@ -351,7 +359,7 @@ void MidiMappingDialog::refreshBindingTable()
         // Edit button — manual correction of this binding's source (#4760)
         auto* editBtn = new QPushButton("✎");
         editBtn->setFixedSize(24, 24);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(editBtn, kBtnSubtleStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(editBtn, kBtnGlyphStyle);
         editBtn->setToolTip("Edit this binding's channel, type and number manually");
         editBtn->setAccessibleName(QString("Edit binding for %1").arg(paramName));
         connect(editBtn, &QPushButton::clicked, this, [this, paramId = b.paramId] {
