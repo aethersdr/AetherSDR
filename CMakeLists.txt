@@ -1043,6 +1043,9 @@ set(GUI_SOURCES
     src/gui/AntennaGeniusApplet.cpp
     src/gui/ShackSwitchApplet.cpp
     src/gui/TitleBar.cpp
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
     src/gui/RadioHealthDialog.cpp
@@ -2094,11 +2097,20 @@ endif()
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
+    # DwmSetWindowAttribute — rounded window corners for the custom frame.
+    target_link_libraries(AetherSDR PRIVATE dwmapi)
 endif()
 
 # macOS app bundle
 if(APPLE)
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
+    # Unified-title-bar chrome: keeps the real NSWindow and restyles it, rather
+    # than going frameless and losing the traffic lights (and with them tiling,
+    # Stage Manager, the system shadow, and VoiceOver's window affordances).
+    target_sources(AetherSDR PRIVATE src/gui/mac/WindowChrome.mm)
+    # QuartzCore: the content view's CALayer carries the window's rounded
+    # corners (kCACornerCurveContinuous for the system's squircle curvature).
+    target_link_libraries(AetherSDR PRIVATE "-framework AppKit" "-framework QuartzCore")
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
@@ -5729,6 +5741,11 @@ set_tests_properties(mini_pan_widget_test PROPERTIES
 add_executable(hl2_pc_audio_lock_test
     tests/hl2_pc_audio_lock_test.cpp
     src/gui/TitleBar.cpp
+    # The unified bar's own widgets — the brand mark, the radio strip, and the
+    # caption controls are all constructed by TitleBar's constructor.
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     # TitleBar's dialogs (PC-audio tooltip help, message boxes) are frameless,
     # so the resizer + frameless title bar come along; ThemeManager pulls its
     # logging deps, same as container_widget_test.
@@ -5757,6 +5774,11 @@ set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
 add_executable(titlebar_headphone_mute_test
     tests/titlebar_headphone_mute_test.cpp
     src/gui/TitleBar.cpp
+    # TitleBar's constructor builds the brand mark, the radio strip and the
+    # caption controls, so every target that links it needs them too.
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
     # TitleBar's dialogs are frameless, so the resizer + frameless title bar
     # come along; ThemeManager pulls its logging deps.
     src/gui/FramelessMessageBox.cpp
@@ -5772,11 +5794,51 @@ add_executable(titlebar_headphone_mute_test
 )
 target_include_directories(titlebar_headphone_mute_test PRIVATE src tests)
 target_link_libraries(titlebar_headphone_mute_test PRIVATE
+    aether_sqlite3
     Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
 )
 set_target_properties(titlebar_headphone_mute_test PROPERTIES AUTOMOC ON)
 add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
 set_tests_properties(titlebar_headphone_mute_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Unified 52 px title bar — geometry, radio tabs, a11y contract.
+add_executable(unified_title_bar_test
+    tests/unified_title_bar_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's constructor builds the brand mark, the radio strip and the
+    # caption controls, so every target that links it needs them too.
+    src/gui/BrandMark.cpp
+    src/gui/RadioTabBar.cpp
+    src/gui/WindowCaptionButtons.cpp
+    # TitleBar's dialogs are frameless, so the resizer + frameless title bar
+    # come along; ThemeManager pulls its logging deps.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    # The brand mark loads its logo from the Qt resource bundle, so the test
+    # links the real .qrc rather than asserting against a null pixmap.  Uses the
+    # same pre-compiled resource object as theme_manager_test — AUTORCC does not
+    # pick up a .qrc listed in a target's sources here.
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(unified_title_bar_test PRIVATE src)
+target_link_libraries(unified_title_bar_test PRIVATE
+    # AppSettings (pulled in by TitleBar for the blink preference) is backed by
+    # the bundled SQLite.
+    aether_sqlite3
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(unified_title_bar_test PROPERTIES AUTOMOC ON)
+add_test(NAME unified_title_bar_test COMMAND unified_title_bar_test)
+set_tests_properties(unified_title_bar_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Pure index arithmetic lifted out of RxApplet — no GUI, no radio.

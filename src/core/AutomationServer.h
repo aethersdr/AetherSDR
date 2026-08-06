@@ -325,6 +325,21 @@ public:
     {
         m_txTimerSnapshotHandler = std::move(handler);
     }
+    // Unified-title-bar state provider (the `titlebar` model): bar height,
+    // brand, radio tabs, audio cluster, and which window-chrome variant is in
+    // use. Supplied by MainWindow, read off the TitleBar on the GUI thread.
+    void setTitleBarSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_titleBarSnapshotHandler = std::move(handler);
+    }
+    // Title-bar actions (the `titlebar` verb): selectRadio / showDiscovery /
+    // minimize / maximize / close. Drives the real widgets, not the models
+    // behind them, so a passing call proves the control itself is reachable.
+    void setTitleBarActionHandler(
+        std::function<bool(const QString&, const QString&, QString*)> handler)
+    {
+        m_titleBarActionHandler = std::move(handler);
+    }
     // Read-only TCI route-state provider. MainWindow supplies this from the
     // active session's TciServer so AutomationServer stays independent of the
     // external protocol implementation.
@@ -672,6 +687,7 @@ private:
     // window's state (resize only ever set explicit geometry, so an un-maximize
     // was unverifiable). dumpTree now also carries `windowState`. (#3918)
     QJsonObject doWindow(const QString& action, const QString& target) const;
+    QJsonObject doTitleBar(const QString& action, const QString& target);
     // Fire a ShortcutManager action by id — the MIDI-controller dispatch path —
     // for actions with no key sequence and no menu entry (Band Zoom, Segment
     // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
@@ -754,6 +770,9 @@ private:
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;
+    std::function<QJsonObject()> m_titleBarSnapshotHandler;
+    std::function<bool(const QString&, const QString&, QString*)>
+        m_titleBarActionHandler;
     std::function<QJsonObject()> m_tciRouteSnapshotHandler;
     QJsonObject m_lastWaveformCommand;
 
