@@ -2,6 +2,7 @@
 #ifdef HAVE_MIDI
 
 #include "MidiMappingDialog.h"
+#include "FramelessMessageBox.h"
 #include "core/MidiControlManager.h"
 #include "core/MidiSettings.h"
 
@@ -14,6 +15,9 @@
 #include <QLineEdit>
 #include <QInputDialog>
 #include <QMessageBox>
+#include <QSpinBox>
+#include <QFormLayout>
+#include <QDialogButtonBox>
 
 namespace AetherSDR {
 
@@ -34,6 +38,17 @@ static const QString kBtnStyle =
     "border: 1px solid #008ba8; padding: 5px 14px; border-radius: 3px; }"
     "QPushButton:hover { background: #00c8f0; }"
     "QPushButton:disabled { background: #404060; color: #808080; }";
+
+// Muted sibling of kBtnStyle for secondary actions — Learn stays the visually
+// primary way to create bindings; manual entry is the bypass (#4760).
+static const QString kBtnSubtleStyle =
+    "QPushButton { background: #1a2a3a; color: #8aa8c0; "
+    "border: 1px solid #304050; padding: 5px 14px; border-radius: 3px; }"
+    "QPushButton:hover { background: #24384c; color: #c8d8e8; }";
+
+static const QString kSpinStyle =
+    "QSpinBox { background: #1a2a3a; border: 1px solid #304050; "
+    "border-radius: 3px; color: #c8d8e8; font-size: 11px; padding: 2px 6px; }";
 
 MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* parent)
     : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
@@ -118,8 +133,8 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         auto* vbox = new QVBoxLayout(group);
 
         m_bindingTable = new QTableWidget;
-        m_bindingTable->setColumnCount(6);
-        m_bindingTable->setHorizontalHeaderLabels({"Parameter", "MIDI Source", "Channel", "Invert", "Relative", ""});
+        m_bindingTable->setColumnCount(7);
+        m_bindingTable->setHorizontalHeaderLabels({"Parameter", "MIDI Source", "Channel", "Invert", "Relative", "", ""});
         m_bindingTable->horizontalHeader()->setStretchLastSection(false);
         m_bindingTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         m_bindingTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -127,6 +142,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         m_bindingTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
         m_bindingTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
         m_bindingTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+        m_bindingTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
         m_bindingTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_bindingTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
         m_bindingTable->verticalHeader()->setVisible(false);
@@ -148,6 +164,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
         m_paramCombo = new QComboBox;
         m_paramCombo->setStyleSheet(kComboStyle);
+        m_paramCombo->setObjectName("midiParamCombo");
         m_paramCombo->setMinimumWidth(200);
         addRow->addWidget(m_paramCombo, 1);
 
@@ -187,6 +204,19 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         connect(m_manager, &MidiControlManager::learnCancelled, this,
                 [learnBtn] { learnBtn->setText("Learn"); });
+
+        auto* manualBtn = new QPushButton("Manual…");
+        manualBtn->setStyleSheet(kBtnSubtleStyle);
+        manualBtn->setObjectName("midiManualAddButton");
+        manualBtn->setAccessibleName("Add MIDI binding manually");
+        manualBtn->setToolTip("Add binding by typing channel, message type and number — "
+                              "for controllers whose messages Learn cannot capture cleanly");
+        connect(manualBtn, &QPushButton::clicked, this, [this] {
+            QString paramId = m_paramCombo->currentData().toString();
+            if (paramId.isEmpty()) return;
+            openManualEditor(paramId, nullptr);
+        });
+        addRow->addWidget(manualBtn);
 
         vbox->addLayout(addRow);
 
@@ -321,6 +351,29 @@ void MidiMappingDialog::refreshBindingTable()
         });
         m_bindingTable->setCellWidget(i, 4, relCheck);
 
+        // Edit button — manual correction of this binding's source (#4760)
+        auto* editBtn = new QPushButton("✎");
+        editBtn->setFixedSize(24, 24);
+        editBtn->setStyleSheet(
+            "QPushButton { background: #1a2a3a; color: #8aa8c0; "
+            "border: 1px solid #304050; border-radius: 3px; }"
+            "QPushButton:hover { background: #24384c; color: #c8d8e8; }");
+        editBtn->setToolTip("Edit this binding's channel, type and number manually");
+        editBtn->setAccessibleName(QString("Edit binding for %1").arg(paramName));
+        connect(editBtn, &QPushButton::clicked, this, [this, paramId = b.paramId] {
+            // Look the binding up fresh at click time — the captured row index
+            // could go stale after any table mutation. Copy before opening the
+            // editor: committing mutates the vector the reference points into.
+            for (const auto& cur : m_manager->bindings()) {
+                if (cur.paramId == paramId) {
+                    const MidiBinding copy = cur;
+                    openManualEditor(paramId, &copy);
+                    return;
+                }
+            }
+        });
+        m_bindingTable->setCellWidget(i, 5, editBtn);
+
         // Delete button
         auto* delBtn = new QPushButton("×");
         delBtn->setFixedSize(24, 24);
@@ -332,7 +385,7 @@ void MidiMappingDialog::refreshBindingTable()
             refreshBindingTable();
             MidiSettings::instance().saveBindings(m_manager->bindings());
         });
-        m_bindingTable->setCellWidget(i, 5, delBtn);
+        m_bindingTable->setCellWidget(i, 6, delBtn);
     }
 }
 
@@ -344,6 +397,153 @@ void MidiMappingDialog::refreshProfileList()
         m_profileCombo->addItem(name);
     if (!current.isEmpty())
         m_profileCombo->setCurrentText(current);
+}
+
+void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBinding* existing)
+{
+    // A stray controller touch must not complete a half-armed Learn while the
+    // operator is typing in this form.
+    if (m_manager->isLearning())
+        m_manager->cancelLearn();
+
+    const MidiParam* param = m_manager->findParam(paramId);
+    const QString paramLabel = param
+        ? QString("[%1] %2").arg(param->category, param->displayName) : paramId;
+    // Learn forces relative=true on VFO CC captures (onMidiMessage); the form
+    // mirrors that as a default so a typed VFO knob behaves like a learned one.
+    const bool isVfoKnob = (paramId == QLatin1String("rx.tuneKnob"));
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(existing ? "Edit MIDI Binding" : "Add MIDI Binding");
+    dlg.setModal(true);
+    dlg.setObjectName("midiManualBindingDialog");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg,
+        "QDialog { background: {{color.background.0}}; }"
+        "QLabel { color: {{color.text.primary}}; }"
+        "QCheckBox { color: {{color.text.primary}}; }");
+
+    auto* form = new QFormLayout(&dlg);
+    form->setLabelAlignment(Qt::AlignRight);
+    form->setSpacing(8);
+
+    form->addRow(new QLabel(QString("Binding for: %1").arg(paramLabel)));
+
+    auto* channelCombo = new QComboBox(&dlg);
+    channelCombo->setStyleSheet(kComboStyle);
+    channelCombo->setObjectName("manualChannelCombo");
+    channelCombo->setAccessibleName("MIDI channel");
+    channelCombo->addItem("Any", -1);
+    for (int ch = 1; ch <= 16; ++ch)
+        channelCombo->addItem(QString::number(ch), ch - 1);
+    // Default to channel 1, the overwhelmingly common case; "Any" stays one
+    // click away. (Learn can only ever produce channel-specific bindings, so
+    // this form is the first UI able to reach the supported -1 wildcard.)
+    channelCombo->setCurrentIndex(1);
+    form->addRow("Channel:", channelCombo);
+
+    auto* typeCombo = new QComboBox(&dlg);
+    typeCombo->setStyleSheet(kComboStyle);
+    typeCombo->setObjectName("manualTypeCombo");
+    typeCombo->setAccessibleName("MIDI message type");
+    typeCombo->addItem("Note On", int(MidiBinding::NoteOn));
+    typeCombo->addItem("Control Change (CC)", int(MidiBinding::CC));
+    typeCombo->addItem("Pitch Bend", int(MidiBinding::PitchBend));
+    // The menu omits Note Off: Learn never creates NoteOff bindings, and
+    // dispatch already routes NoteOff to the matching NoteOn binding for Gate
+    // params — offering it would invite dead bindings. An existing NoteOff row
+    // (possible in an old settings file) must still display truthfully, though.
+    if (existing && existing->msgType == MidiBinding::NoteOff)
+        typeCombo->addItem("Note Off", int(MidiBinding::NoteOff));
+    form->addRow("Type:", typeCombo);
+
+    auto* numberSpin = new QSpinBox(&dlg);
+    numberSpin->setRange(0, 127);
+    numberSpin->setStyleSheet(kSpinStyle);
+    numberSpin->setObjectName("manualNumberSpin");
+    numberSpin->setAccessibleName("Note or CC number");
+    form->addRow("Number:", numberSpin);
+
+    auto* invertCheck = new QCheckBox("Invert value range", &dlg);
+    invertCheck->setObjectName("manualInvertCheck");
+    form->addRow(QString(), invertCheck);
+
+    auto* relativeCheck = new QCheckBox("Relative (knob sends deltas)", &dlg);
+    relativeCheck->setObjectName("manualRelativeCheck");
+    form->addRow(QString(), relativeCheck);
+
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    form->addRow(box);
+
+    if (existing) {
+        const int chIdx = channelCombo->findData(existing->channel);
+        if (chIdx >= 0) channelCombo->setCurrentIndex(chIdx);
+        const int typeIdx = typeCombo->findData(int(existing->msgType));
+        if (typeIdx >= 0) typeCombo->setCurrentIndex(typeIdx);
+        numberSpin->setValue(qBound(0, existing->number, 127));
+        invertCheck->setChecked(existing->inverted);
+        relativeCheck->setChecked(existing->relative);
+    }
+
+    auto refreshFieldStates = [typeCombo, numberSpin, relativeCheck, isVfoKnob, existing] {
+        const auto t = MidiBinding::MsgType(typeCombo->currentData().toInt());
+        numberSpin->setEnabled(t != MidiBinding::PitchBend);   // PB carries no number
+        relativeCheck->setEnabled(t == MidiBinding::CC);       // dispatch honors it for CC only
+        if (t != MidiBinding::CC)
+            relativeCheck->setChecked(false);  // non-CC never saves relative — keep the
+                                               // display equal to what OK would commit
+        else if (isVfoKnob && !existing)
+            relativeCheck->setChecked(true);
+    };
+    connect(typeCombo, &QComboBox::currentIndexChanged, &dlg, refreshFieldStates);
+    refreshFieldStates();
+
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    MidiBinding b;
+    b.channel  = channelCombo->currentData().toInt();
+    b.msgType  = MidiBinding::MsgType(typeCombo->currentData().toInt());
+    // Learn stores -1 for Pitch Bend (the message carries no number); mirror it.
+    b.number   = (b.msgType == MidiBinding::PitchBend) ? -1 : numberSpin->value();
+    b.paramId  = paramId;
+    b.inverted = invertCheck->isChecked();
+    b.relative = relativeCheck->isChecked() && b.msgType == MidiBinding::CC;
+
+    // Duplicate-source guard. The dispatch index is keyed on (channel, type,
+    // number) without the param, so on a collision the last table row silently
+    // wins and the older binding stops responding with no indication. Learn
+    // rarely produces this; a typed form is one typo away. Never shadow
+    // silently — name the loser and ask.
+    QStringList shadowedNames;
+    QStringList shadowedIds;
+    for (const auto& cur : m_manager->bindings()) {
+        if (cur.paramId != b.paramId && cur.key() == b.key()) {
+            const MidiParam* cp = m_manager->findParam(cur.paramId);
+            shadowedNames << (cp ? QString("[%1] %2").arg(cp->category, cp->displayName)
+                                 : cur.paramId);
+            shadowedIds << cur.paramId;
+        }
+    }
+    if (!shadowedIds.isEmpty()) {
+        const auto answer = FramelessMessageBox::question(
+            this, "Source Already Bound",
+            QString("%1 is already bound to:\n  %2\n\n"
+                    "Two bindings on the same source cannot both respond — "
+                    "the older one would silently stop working.\n\n"
+                    "Replace the existing binding%3?")
+                .arg(b.sourceDisplayName(), shadowedNames.join("\n  "),
+                     shadowedIds.size() > 1 ? QStringLiteral("s") : QString()));
+        if (answer != FramelessMessageBox::Yes)
+            return;
+        for (const auto& id : shadowedIds)
+            m_manager->removeBinding(id);
+    }
+
+    m_manager->addBinding(b);
+    refreshBindingTable();
+    MidiSettings::instance().saveBindings(m_manager->bindings());
 }
 
 } // namespace AetherSDR
