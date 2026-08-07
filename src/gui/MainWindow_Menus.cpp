@@ -842,7 +842,11 @@ void MainWindow::buildMenuBar()
     // entries being removed.
     auto* popOutShortcut = new QShortcut(QKeySequence("Ctrl+Shift+S"), this);
     connect(popOutShortcut, &QShortcut::activated, this, [this]() {
-        toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
+        // Same routing as the title-bar pop-out icon so the keystroke and the
+        // click cannot drift into different states.
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        applyAppletPanelState(!floating, dockedLeft, true);
     });
 
     // Restore floating state at startup if the user had it floating last

@@ -340,6 +340,20 @@ public:
     {
         m_titleBarActionHandler = std::move(handler);
     }
+    // Applet-panel layout state (the `applet` verb): floating, dock side and
+    // visibility, read off the real widgets on the GUI thread.
+    void setAppletPanelSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_appletPanelSnapshotHandler = std::move(handler);
+    }
+    // Applet-panel layout actions (the `applet` verb): dock left/right, float
+    // on/off, show/hide. Drives the same entry point as the title-bar icons,
+    // so a passing call proves the real routing and not a parallel path.
+    void setAppletPanelActionHandler(
+        std::function<bool(const QString&, const QString&, QString*)> handler)
+    {
+        m_appletPanelActionHandler = std::move(handler);
+    }
     // Read-only TCI route-state provider. MainWindow supplies this from the
     // active session's TciServer so AutomationServer stays independent of the
     // external protocol implementation.
@@ -688,6 +702,7 @@ private:
     // was unverifiable). dumpTree now also carries `windowState`. (#3918)
     QJsonObject doWindow(const QString& action, const QString& target) const;
     QJsonObject doTitleBar(const QString& action, const QString& target);
+    QJsonObject doAppletPanel(const QString& action, const QString& value);
     // Fire a ShortcutManager action by id — the MIDI-controller dispatch path —
     // for actions with no key sequence and no menu entry (Band Zoom, Segment
     // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
@@ -773,6 +788,9 @@ private:
     std::function<QJsonObject()> m_titleBarSnapshotHandler;
     std::function<bool(const QString&, const QString&, QString*)>
         m_titleBarActionHandler;
+    std::function<QJsonObject()> m_appletPanelSnapshotHandler;
+    std::function<bool(const QString&, const QString&, QString*)>
+        m_appletPanelActionHandler;
     std::function<QJsonObject()> m_tciRouteSnapshotHandler;
     QJsonObject m_lastWaveformCommand;
 

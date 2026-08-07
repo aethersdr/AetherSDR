@@ -3346,6 +3346,18 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doTitleBar(a.action, a.target);
             });
 
+        add("applet", {},
+            "applet <dock <left|right>|float <on|off>|show|hide|state> "
+            "— drive the applet panel's dock side, floating and visibility",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.action = vtok(p, 1);
+                a.value  = vtok(p, 2);   // left|right for dock, on|off for float
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doAppletPanel(a.action, a.value);
+            });
+
         add("shortcut", {}, "shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated)",
             parseTargetOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
@@ -7767,6 +7779,41 @@ QJsonObject AutomationServer::doTitleBar(const QString& action, const QString& t
     if (m_titleBarSnapshotHandler) {
         reply.insert(QStringLiteral("titlebar"), m_titleBarSnapshotHandler());
     }
+    return reply;
+}
+
+QJsonObject AutomationServer::doAppletPanel(const QString& action,
+                                            const QString& value)
+{
+    const QString a = action.trimmed().toLower();
+    if (a.isEmpty()) {
+        return err(QStringLiteral("applet needs an action "
+                                  "(dock <left|right>|float <on|off>|show|hide|state)"));
+    }
+    if (!m_appletPanelSnapshotHandler) {
+        return err(QStringLiteral("applet panel unavailable"));
+    }
+
+    // `state` is read-only — no action handler needed, and it must stay
+    // side-effect free so a test can poll it between transitions.
+    if (a != QLatin1String("state")) {
+        if (!m_appletPanelActionHandler) {
+            return err(QStringLiteral("applet panel actions unavailable"));
+        }
+        QString why;
+        if (!m_appletPanelActionHandler(a, value.trimmed().toLower(), &why)) {
+            return err(why.isEmpty() ? QStringLiteral("applet action failed") : why);
+        }
+    }
+
+    QJsonObject reply{{QStringLiteral("ok"), true},
+                      {QStringLiteral("action"), a}};
+    if (!value.trimmed().isEmpty()) {
+        reply.insert(QStringLiteral("value"), value.trimmed().toLower());
+    }
+    // Always echo the resulting state so a caller never has to follow an
+    // action with a second call to see what it did.
+    reply.insert(QStringLiteral("applet"), m_appletPanelSnapshotHandler());
     return reply;
 }
 
