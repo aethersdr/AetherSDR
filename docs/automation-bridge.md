@@ -837,7 +837,9 @@ Use `get renderstats reset`, wait for a fixed observation interval, then read
 `get renderstats reset` again. This gives disjoint samples across pan, waterfall,
 3DSS, scheduler, and WAVE counters with one command. `measuredMainThreadMsPerSec`
 is instrumented GUI-thread work, not whole-process CPU percentage; use it for
-causal comparisons while keeping the radio/display configuration fixed.
+causal comparisons while keeping the radio/display configuration fixed. As of
+v26.8.1, the total includes Client EQ paint time; captures from older builds do
+not include that component and are not directly comparable.
 
 ### `get eqstats`
 
@@ -845,7 +847,9 @@ Per-Client-EQ-canvas paint and cache counters. The bridge finds widgets by
 `inherits("AetherSDR::ClientEqCurveWidget")`, so it includes both the base widget and the
 interactive `ClientEqEditorCanvas` subclass used by the strip/editor. The
 active strip canvas has a stable selector: `stripRxEqCanvas` or
-`stripTxEqCanvas`.
+`stripTxEqCanvas`. Those path-specific selectors name the same widget at
+different times: before a path is selected it is `stripEqCanvas`, and switching
+between RX and TX replaces its object name rather than creating another canvas.
 
 ```json
 → {"cmd":"get","model":"eqstats","selector":"stripTxEqCanvas","property":"reset"}
@@ -854,7 +858,8 @@ active strip canvas has a stable selector: `stripRxEqCanvas` or
    "dpr":2.0,"fftUpdatesPerSec":25.0,"paintsPerSec":25.0,
    "paintMsPerSec":1.1,"backgroundCacheRebuildCount":1,
    "responseCacheRebuildCount":1,"backgroundCacheHits":624,
-   "responseCacheHits":624,"cacheLayerByteLimit":33554432,
+   "responseCacheHits":624,"cacheEligible":true,
+   "cacheLayerByteLimit":33554432,
    "cacheTotalByteLimit":67108864,"cacheRetainedBytes":66355200}]}
 ```
 

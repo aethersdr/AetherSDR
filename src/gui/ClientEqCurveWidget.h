@@ -186,6 +186,8 @@ private:
         int filterFamily{0};
         double sampleRate{0.0};
         int activeBandCount{0};
+        // Keep in sync with ClientEq::kMaxBands. responseCacheKey() pins
+        // the relationship with a static_assert where ClientEq is complete.
         std::array<BandCacheState, 16> bands{};
 
         bool operator==(const ResponseCacheKey&) const = default;

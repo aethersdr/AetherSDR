@@ -286,6 +286,7 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     eqColumn->addWidget(m_iconRow);
 
     m_canvas = new ClientEqEditorCanvas;
+    m_canvas->setObjectName(QStringLiteral("stripEqCanvas"));
     m_canvas->setAudioEngine(m_audio);
     // Apply the saved smoothing fraction now that the canvas exists.
     // The combo box already shows the right value from the toolbar build,

@@ -260,6 +260,9 @@ ClientEqCurveWidget::BackgroundCacheKey ClientEqCurveWidget::backgroundCacheKey(
 
 ClientEqCurveWidget::ResponseCacheKey ClientEqCurveWidget::responseCacheKey() const
 {
+    static_assert(std::tuple_size_v<decltype(ResponseCacheKey::bands)>
+                      == ClientEq::kMaxBands,
+                  "ResponseCacheKey::bands must cover every ClientEq band slot");
     ResponseCacheKey key;
     key.size = size();
     key.devicePixelRatio = devicePixelRatioF();
@@ -708,11 +711,13 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
     if (cacheAllowed) {
         if (!m_backgroundCacheValid || m_backgroundCacheKey != backgroundKey) {
             m_backgroundCache = makeCachePixmap(r.size(), dpr);
-            QPainter cachePainter(&m_backgroundCache);
-            cachePainter.setRenderHint(QPainter::Antialiasing, true);
-            cachePainter.setRenderHint(QPainter::TextAntialiasing, true);
-            cachePainter.setFont(font());
-            drawBackground(cachePainter, r);
+            if (!m_backgroundCache.isNull()) {
+                QPainter cachePainter(&m_backgroundCache);
+                cachePainter.setRenderHint(QPainter::Antialiasing, true);
+                cachePainter.setRenderHint(QPainter::TextAntialiasing, true);
+                cachePainter.setFont(font());
+                drawBackground(cachePainter, r);
+            }
             m_backgroundCacheKey = backgroundKey;
             m_backgroundCacheValid = !m_backgroundCache.isNull();
             ++m_perfStats.backgroundCacheRebuilds;
@@ -808,11 +813,13 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
     if (cacheAllowed) {
         if (!m_responseCacheValid || m_responseCacheKey != responseKey) {
             m_responseCache = makeCachePixmap(r.size(), dpr);
-            QPainter cachePainter(&m_responseCache);
-            cachePainter.setRenderHint(QPainter::Antialiasing, true);
-            cachePainter.setRenderHint(QPainter::TextAntialiasing, true);
-            cachePainter.setFont(font());
-            drawResponse(cachePainter, r, responseKey);
+            if (!m_responseCache.isNull()) {
+                QPainter cachePainter(&m_responseCache);
+                cachePainter.setRenderHint(QPainter::Antialiasing, true);
+                cachePainter.setRenderHint(QPainter::TextAntialiasing, true);
+                cachePainter.setFont(font());
+                drawResponse(cachePainter, r, responseKey);
+            }
             m_responseCacheKey = responseKey;
             m_responseCacheValid = !m_responseCache.isNull();
             ++m_perfStats.responseCacheRebuilds;
