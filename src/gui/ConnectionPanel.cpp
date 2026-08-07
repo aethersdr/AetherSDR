@@ -1235,12 +1235,26 @@ QPoint ConnectionPanel::constrainedFrameTopLeft(
         qMax(availableGeometry.top(), qMin(preferredFrameTopLeft.y(), maxY)));
 }
 
+void ConnectionPanel::clearPendingIcomCredentials()
+{
+    m_pendingIcomPassword.clear();
+    m_pendingIcomHost.clear();
+}
+
 void ConnectionPanel::setConnected(bool connected)
 {
     // THE ONE MOMENT THE CREDENTIALS ARE PROVEN. Everything staged by
     // probeRadio() is written here and nowhere else, so a wrong password is
     // forgotten rather than persisted over a working one.
-    if (connected && !m_pendingIcomPassword.isEmpty()) {
+    // SCOPED TO THE FAMILY THAT WAS STAGED FOR. A bare "connected" is not
+    // proof that THIS password was proven: stage an Icom attempt, have it fail
+    // without driving a disconnected edge (the panel is already disconnected,
+    // so a state-change-only caller emits nothing), then connect to a Flex, and
+    // the unproven Icom password would be written over a working keychain entry
+    // — the exact failure the staging exists to prevent, one step removed. The
+    // clears at every other connect path are the belt to this brace.
+    if (connected && !m_pendingIcomPassword.isEmpty()
+        && currentManualFamily() == QLatin1String(kFamilyIcom)) {
         IcomCredentials::save(m_pendingIcomPassword);
         if (!m_pendingIcomHost.isEmpty())
             IcomSettings::setLastHost(m_pendingIcomHost);
@@ -1782,6 +1796,8 @@ void ConnectionPanel::onLocalConnectClicked()
         settings.save();
     }
 
+    // A staged Icom credential belongs to the attempt it was staged for.
+    clearPendingIcomCredentials();
     emit connectRequested(info);
 }
 
@@ -2578,6 +2594,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
             saveLowBandwidthPreference(m_lowBwCheck->isChecked());
             setManualMessage(
                 QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
+            // A staged Icom credential belongs to the attempt it was staged for.
+            clearPendingIcomCredentials();
             emit connectRequested(info);
             return Hl2ProbeResult::Answered;
         }
@@ -2723,6 +2741,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                 saveLowBandwidthPreference(m_lowBwCheck->isChecked());
                 setManualMessage(
                     QStringLiteral("Found a radio at %1. Connecting now…").arg(trimmedIp));
+                // A staged Icom credential belongs to the attempt it was staged for.
+                clearPendingIcomCredentials();
                 m_manualConnectPending = false;
                 emit connectRequested(info);
             } else {

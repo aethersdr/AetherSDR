@@ -376,6 +376,28 @@ void IcomSession::requestStreamsIfReady()
 
 void IcomSession::openMediaStreams()
 {
+    // THE RATE INVARIANT, CHECKED WHERE IT IS ACTUALLY DECIDED.
+    //
+    // IcomProtocol.h's static_assert reads kAudioRateHz, a compile-time
+    // constant, while the rate that reaches the wire is this runtime field. So
+    // that assert cannot catch the failure its own comment describes: setting
+    // sampleRateHz to 16000 still yields 1920-byte frames, still 60 ms of audio
+    // per frame, and still the silent zero-power transmit that cost a live
+    // session to find. The build stays green the whole way.
+    //
+    // Clamped rather than refused: a wrong rate here is a transmitter that
+    // keys and radiates nothing, which is far worse than ignoring a request
+    // the packetiser cannot honour. When the low-bandwidth work lands it must
+    // re-derive the 1364/556 split, and this is the guard that will make that
+    // requirement impossible to skip.
+    if (m_params.sampleRateHz != kAudioRateHz) {
+        qCWarning(lcIcom) << "audio sample rate" << m_params.sampleRateHz
+                          << "Hz cannot be honoured — the packet split is sized for"
+                          << kAudioRateHz << "Hz; clamping. Changing the rate "
+                             "requires re-deriving kAudioSplitLarge/Small.";
+        m_params.sampleRateHz = kAudioRateHz;
+    }
+
     m_serial->beginHandshake();
     m_audio->beginHandshake();
 }
@@ -427,8 +449,20 @@ void IcomSession::onTokenRenew()
             m_control->sendTracked(buildAuth(m_control->localSessionId(),
                                              m_control->remoteSessionId(),
                                              m_innerSeq++, m_authId, AuthKind::Renew));
+            return;
         }
-        return;
+        // RELEASE THE LATCH. Retries are exhausted for THIS renewal, but the
+        // token is alive until kTokenDeadMs — so falling through to the cadence
+        // below starts a fresh one with a fresh budget, which is effectively
+        // continuous retry up to the dead-session deadline.
+        //
+        // Leaving it latched meant nothing was ever sent again: the cadence
+        // branch could not run, and the session coasted into a guaranteed
+        // teardown. A 10 s outage at t=20 s would lose the four resends and
+        // then sit silent from t=30 s to the fail() at t=50 s — a full
+        // disconnect for an outage that had been over for twenty seconds.
+        m_renewUnacked = false;
+        m_renewRetries = 0;
     }
 
     // Otherwise renew on the normal cadence.

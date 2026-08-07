@@ -6840,6 +6840,22 @@ QJsonObject AutomationServer::doControls(const QString& action, const QString& a
         && a != QLatin1String("meters"))
         return err(QStringLiteral("controls requires an action (map|meters|scrub)"));
 
+    // NOT TX-GATED, and that is deliberate rather than an oversight — worth
+    // saying because `civ send` a few dozen lines down IS gated on m_txAllowed,
+    // and the next person to read the two side by side will otherwise assume
+    // one of them is wrong.
+    //
+    // `civ send` is gated because it is a raw frame: it can carry 1C 00 and key
+    // the transmitter, and nothing here can tell that from a tuning command.
+    // `scrub` cannot, by construction. It never sends a raw frame — it drives
+    // named seam verbs — and ptt, tuner and power are excluded from the walk
+    // outright (see controlScrub's kNeverScrub). Everything it does send is the
+    // control's CURRENT value, so the transmit-plane rows it does touch
+    // (tx.power, mic.gain, monitor, vox, comp) re-assert what the radio is
+    // already set to without keying anything.
+    //
+    // `map` and `meters` are read-only and would be fine under any rule.
+    //
     // Same synchronous-extension contract doCiv documents: a backend that does
     // not answer leaves `answered` false and is reported as unsupported rather
     // than as an empty success.

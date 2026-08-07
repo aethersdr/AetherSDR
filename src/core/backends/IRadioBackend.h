@@ -137,8 +137,16 @@ public:
         Drag,   // the operator dragged the spectrum or waterfall
         Range,  // the centre rode along with a bandwidth/zoom change
     };
+    // NO DEFAULT, deliberately. A default here is not merely redundant with the
+    // pure-virtual-plus-override pair that catches implementations: it is a
+    // hazard at CALL sites. A new caller that forgets the intent would silently
+    // get Range, which on a backend whose scope window is slaved to the VFO
+    // means the drag is refused and re-asserted — the precise bug this
+    // parameter was added to fix, arriving with nothing to notice it by.
+    // Making every caller state what it means is the whole value of the
+    // parameter, and there is exactly one caller.
     virtual void setPanCenter(const QString& panId, double hz,
-                              PanCenterIntent intent = PanCenterIntent::Range) = 0;
+                              PanCenterIntent intent) = 0;
 
     // Change the panadapter's SPAN — how much spectrum the window covers.
     //

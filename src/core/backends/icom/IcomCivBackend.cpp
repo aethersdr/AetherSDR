@@ -429,14 +429,30 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // Selecting P.AMP2 on 2 m is refused by the radio, which then reports what
     // it actually did; the alternative, republishing on every band change,
     // would rewrite the control under an operator mid-adjustment.
-    emit panPreampInfoChanged(panId(), {QStringLiteral("OFF"),
-                                        QStringLiteral("P.AMP1"),
-                                        QStringLiteral("P.AMP2")});
+    // PER MODEL, and silent when we do not know. These ladders used to be
+    // IC-705 literals emitted to every Icom, so an IC-7610 (multi-step
+    // attenuator) or an IC-9700 (different preamp ladder) got a control that
+    // misdescribed its own register — the defect class this backend's registry
+    // exists to surface, reintroduced by the fix for it. Same rule as
+    // powerCurveFor: no verified table means publish nothing, and the operator
+    // gets no button rather than a lying one.
+    const auto preampLabels = preampLabelsFor(*m_model);
+    if (!preampLabels.empty()) {
+        QStringList labels;
+        for (std::string_view l : preampLabels)
+            labels << QString::fromUtf8(l.data(), static_cast<int>(l.size()));
+        emit panPreampInfoChanged(panId(), labels);
+    }
     // ONE step, and naming it in dB is honest here where it was not for the
     // preamp: the guide gives this attenuator an actual figure. HF and 50 MHz
     // only — on higher bands the radio ignores the request and reports OFF.
-    emit panAttenuatorInfoChanged(panId(), {QStringLiteral("OFF"),
-                                            QStringLiteral("20 dB")});
+    const auto attenSteps = attenStepsFor(*m_model);
+    if (!attenSteps.empty()) {
+        QStringList labels;
+        for (const auto& a : attenSteps)
+            labels << QString::fromUtf8(a.label.data(), static_cast<int>(a.label.size()));
+        emit panAttenuatorInfoChanged(panId(), labels);
+    }
 
     // A small default set so the status bar is alive before any UI declares
     // what it is showing. setMeterVisible() narrows or widens this.
@@ -850,7 +866,19 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         if (frame.data.empty())
             return;
         const int db = decodeBcdByte(frame.data[0]);
-        emit panAttenuatorChanged(panId(), db > 0 ? 1 : 0);
+        // Map the reported dB back through the SAME table the setter sends
+        // from, so a model with more than one step lands on the right position
+        // instead of collapsing to "not off". Unrecognised dB falls back to
+        // that collapse, which is still better than reporting OFF.
+        const auto steps = attenStepsFor(*m_model);
+        int reported = db > 0 ? 1 : 0;
+        for (std::size_t i = 0; i < steps.size(); ++i) {
+            if (steps[i].db == db) {
+                reported = static_cast<int>(i);
+                break;
+            }
+        }
+        emit panAttenuatorChanged(panId(), reported);
         return;
     }
 
@@ -1403,10 +1431,17 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
     // Step 1 is the 20 dB position; step 0 is off. The dB figure lives here
     // rather than in the label because the label is what the operator reads and
     // this is what the radio takes.
-    const int wanted = step > 0 ? 1 : 0;
+    // THE dB COMES FROM THE MODEL'S TABLE, not from a literal. A hardcoded 20
+    // is the IC-705's single step; a radio with a different ladder would get
+    // that number sent to a register that means something else.
+    const auto steps = attenStepsFor(*m_model);
+    if (steps.empty())
+        return;   // no verified ladder — the control was never published either
+    const int wanted =
+        std::clamp(step, 0, static_cast<int>(steps.size()) - 1);
     m_attenStep = wanted;
     sendUserCommand(cmdSetAttenuator(m_session ? m_session->civAddress() : 0xA4,
-                                     wanted ? 20 : 0));
+                                     steps[static_cast<std::size_t>(wanted)].db));
     emit panAttenuatorChanged(panId(), wanted);
 }
 
@@ -1941,6 +1976,16 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     if (id == QLatin1String("rit.offset")) { setRitOffset(m_ritOffsetHz); return true; }
 
     if (id == QLatin1String("nr") || id == QLatin1String("nr.level")) {
+        // UNKNOWN IS NOT OFF, and this is the guard that says so.
+        //
+        // -1 means the connect-time read never came back — which on the lossy
+        // link this backend exists for is one lost datagram. Treating it as off
+        // makes the scrub SEND "off": an operator with NR running has it
+        // switched off by a check documented to leave the radio untouched, and
+        // the row is reported LINKED because the intent did reach the wire.
+        // NOT-TESTED is the honest answer, and the scrub already has that state.
+        if (m_nrEnableSent < 0)
+            return false;
         // The LEVEL is only sent while the function is on — the register
         // survives the function being switched off, so pushing it while
         // disabled would change what the operator gets back on re-enable.
@@ -1957,6 +2002,9 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         return true;
     }
     if (id == QLatin1String("nb") || id == QLatin1String("nb.level")) {
+        // Unknown is not off — see the nr branch above.
+        if (m_nbEnableSent < 0)
+            return false;
         if (id.endsWith(QLatin1String(".level")) && m_nbEnableSent != 1)
             return false;
         const bool on = m_nbEnableSent == 1;
@@ -1965,12 +2013,18 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         return true;
     }
     if (id == QLatin1String("anf")) {
+        // Unknown is not off — see the nr branch above.
+        if (m_anfEnableSent < 0)
+            return false;
         const bool on = m_anfEnableSent == 1;
         m_anfEnableSent = -1;
         setSliceAutoNotch(slice, on);
         return true;
     }
     if (id == QLatin1String("notch") || id == QLatin1String("notch.pos")) {
+        // Unknown is not off — see the nr branch above.
+        if (m_mnEnableSent < 0)
+            return false;
         const bool on = m_mnEnableSent == 1;
         m_mnEnableSent = -1;
         setSliceManualNotch(slice, on, m_notchPosPercent);

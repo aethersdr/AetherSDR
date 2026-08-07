@@ -3124,7 +3124,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `hitTest` | `hittest` | hitTest <target> [x y] — read-only widget-owner probe |
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
-| `get` | — | get <model> [selector] [property] — live model snapshot |
+| `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
 | `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |

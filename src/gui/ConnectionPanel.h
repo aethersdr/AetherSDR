@@ -260,6 +260,10 @@ private:
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.
+    // Drop a staged Icom credential that did not belong to the connect that
+    // actually happened. See setConnected().
+    void clearPendingIcomCredentials();
+
     QString      m_pendingIcomPassword;
     QString      m_pendingIcomHost;
     QLineEdit*   m_manualIpEdit{nullptr};
