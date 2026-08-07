@@ -2136,7 +2136,7 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     // PTT never keyed, 181 audio chunks never sent, and the 11 frames queued
     // behind it were dropped when the window closed. Same lesson the WSPR
     // beacon learned in RadioModel::prepareWsprTransmit().
-    if (!hostModulatesTx() && m_audio->txStreamId() == 0) {
+    if (!txAudioBypassesDax() && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
         refreshTransmitControls();
         appendSystemLine(QStringLiteral("Requesting DAX TX stream for AetherModem TX."));
@@ -2155,9 +2155,32 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     beginTransmitWhenReady();
 }
 
-bool Ax25HfPacketDecodeDialog::hostModulatesTx() const
+bool Ax25HfPacketDecodeDialog::txAudioBypassesDax() const
 {
-    return m_radio && m_radio->backendCapabilities().hostModulates;
+    if (!m_radio)
+        return false;
+    const RadioCapabilities caps = m_radio->backendCapabilities();
+
+    // THE QUESTION IS "DOES TX AUDIO NEED A DAX STREAM", NOT "WHO RUNS THE
+    // MODULATOR" — and those came apart when takesTxAudioOverSeam was added.
+    //
+    // hostModulates is FALSE on an Icom, correctly: the RADIO modulates. So
+    // this returned false, the caller asked for a DAX TX stream, and an Icom
+    // has none. ensureDaxTxStream() answers TRUE for a seam backend — "there
+    // IS a route, it just isn't DAX" — so the caller's failure path never fires
+    // either. m_txPendingStream is left set, waiting on a stream that cannot
+    // arrive, until the timeout: PTT never keys and every queued frame dies
+    // with it.
+    //
+    // That is the same outage the call site records for the HL2 on 2026-07-31
+    // ("PTT never keyed, 181 audio chunks never sent"), reached from the
+    // opposite direction — the HL2 was excluded because it host-modulates, and
+    // a seam backend needs excluding because its transmit audio does not go
+    // through DAX at all.
+    //
+    // Both take the direct path, so this is ORed here rather than at each call
+    // site: both callers are asking this same question.
+    return caps.hostModulates || caps.takesTxAudioOverSeam;
 }
 
 void Ax25HfPacketDecodeDialog::armTxStreamWaitTimeout()
@@ -2233,8 +2256,8 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         finishTransmit(true, QStringLiteral("audio engine or radio model disappeared before TX"));
         return;
     }
-    const bool hostModulated = hostModulatesTx();
-    if (!hostModulated && m_audio->txStreamId() == 0) {
+    const bool bypassesDax = txAudioBypassesDax();
+    if (!bypassesDax && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
         refreshTransmitControls();
         return;
@@ -2259,20 +2282,20 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
     // command plane anyway, and latching the restore flag for a setting we
     // never changed would hand back a stale value on unkey.
     m_audio->setDaxTxMode(true);
-    if (!hostModulated) {
+    if (!bypassesDax) {
         m_txPreviousTransmitDax = txModel.daxOn();
         m_txRestoreTransmitDax = true;
         txModel.setDax(true);
     }
 
-    const QString route = hostModulated
+    const QString route = bypassesDax
         ? QStringLiteral("host-modulated (no DAX stream)")
         : QStringLiteral("DAX TX stream 0x%1").arg(m_audio->txStreamId(), 0, 16);
     appendSystemLine(QStringLiteral("Keying transmitter for AX.25 TX on %1; %2.")
         .arg(transmitSliceSummary(), route));
     qCInfo(lcAx25).noquote()
         << QStringLiteral("AX.25 TX start route=%1 %2 chunks=%3 daxSettleMs=%4 leadMs=%5 tailMs=%6")
-            .arg(hostModulated ? QStringLiteral("hostModulated")
+            .arg(bypassesDax ? QStringLiteral("seam/host")
                                : QStringLiteral("dax:0x%1").arg(m_audio->txStreamId(), 0, 16))
             .arg(transmitSliceSummary())
             .arg(m_txChunkCount)
