@@ -4305,6 +4305,32 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!panId.isEmpty())
             m_radioModel.addSliceOnPan(panId, mhz);
     });
+    connect(sw, &SpectrumWidget::kiwiSpotClicked,
+            this, [this, resolveSpectrumTuneTarget, resolveClickedPanId](double mhz, const QString& mode, int loHz, int hiHz) {
+        SliceModel* target = resolveSpectrumTuneTarget();
+        if (!target) {
+            const QString panId = resolveClickedPanId();
+            if (!panId.isEmpty()) {
+                m_radioModel.addSliceOnPan(panId, mhz);
+                target = activeSlice();
+            }
+        }
+        if (target) {
+            queueActiveSliceForSpectrumTarget(target->sliceId());
+            applyTuneRequest(target, mhz, TuneIntent::AbsoluteJump, "kiwi-spot-click");
+
+            QString mappedMode = mode;
+            if (mode == "CWN") mappedMode = "CW";
+            else if (mode == "AMN") mappedMode = "AM";
+            if (!mappedMode.isEmpty()) {
+                target->setMode(mappedMode);
+            }
+
+            if (loHz != 0 || hiHz != 0) {
+                target->setFilterWidth(loHz, hiHz);
+            }
+        }
+    });
     connect(sw, &SpectrumWidget::incrementalTuneRequested,
             this, [this, resolveSpectrumTuneTarget](double mhz) {
         if (auto* target = resolveSpectrumTuneTarget()) {

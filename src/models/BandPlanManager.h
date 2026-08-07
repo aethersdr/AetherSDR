@@ -28,6 +28,19 @@ public:
         QString label;
     };
 
+    struct KiwiDxSpot {
+        double freqMhz{0.0};
+        QString mode;
+        QString name;
+        QString notes;
+        int loOffsetHz{0};
+        int hiOffsetHz{0};
+        int timeBegin{0};  // b0 (HHMM UTC)
+        int timeEnd{0};    // e0 (HHMM UTC)
+        int dowMask{0};    // d0
+        QString extParam;  // p
+    };
+
     // A contiguous, gap-free [low, high] band region produced by merging the
     // active plan's segments. Discrete-channel bands (e.g. US 60 m: 5
     // channels separated by tens of kHz of regulatory gap) collapse to one
@@ -84,8 +97,13 @@ public:
                                              double searchHighMhz,
                                              const QString& allowedClass) const;
 
+    // KiwiSDR Community DX database
+    void loadKiwiDxSpots();
+    const QVector<KiwiDxSpot>& kiwiDxSpots() const { return m_kiwiDxSpots; }
+
 signals:
     void planChanged();
+    void kiwiDxSpotsChanged();
 
 private:
     struct PlanData {
@@ -102,6 +120,8 @@ private:
     QVector<Segment> m_segments;  // active plan's segments
     QVector<Spot> m_spots;        // active plan's spots
     QMap<QString, QString> m_licenseClasses;  // active plan's class table (#2649)
+    QVector<KiwiDxSpot> m_kiwiDxSpots;        // loaded KiwiSDR DX Community spots
 };
 
 } // namespace AetherSDR
+

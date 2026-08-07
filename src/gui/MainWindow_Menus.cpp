@@ -858,6 +858,18 @@ void MainWindow::buildMenuBar()
         AppSettings::instance().save();
     });
 
+    const bool showKiwiDxSpots =
+        AppSettings::instance().value("ShowKiwiDxSpots", "False").toString() == "True";
+    auto* kiwiDxAct = bandPlanMenu->addAction("Show KiwiSDR DX Community Spots");
+    kiwiDxAct->setCheckable(true);
+    kiwiDxAct->setChecked(showKiwiDxSpots);
+    connect(kiwiDxAct, &QAction::toggled, this, [this](bool on) {
+        for (auto* a : m_panStack->allApplets())
+            a->spectrumWidget()->setKiwiDxSpotsEnabled(on);
+        AppSettings::instance().setValue("ShowKiwiDxSpots", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+
     // Band plan region selector (#425)
     bandPlanMenu->addSeparator();
     auto* planGroup = new QActionGroup(bandPlanMenu);

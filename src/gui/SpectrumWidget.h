@@ -426,6 +426,8 @@ public:
     void setBandPlanFontSize(int pt) { m_bandPlanFontSize = pt; update(); }
     void setBandPlanShowSpots(bool on) { m_bandPlanShowSpots = on; update(); }
     bool bandPlanShowSpots() const { return m_bandPlanShowSpots; }
+    void setKiwiDxSpotsEnabled(bool on) { m_showKiwiDxSpots = on; update(); }
+    bool showKiwiDxSpots() const { return m_showKiwiDxSpots; }
     void setBandPlanManager(class BandPlanManager* mgr);
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
     void setShowCursorFreq(bool on) { m_showCursorFreq = on; markOverlayDirty(); }
@@ -749,6 +751,8 @@ signals:
     void offScreenSliceCenterRequested(int sliceId);
     // Emitted when the user requests an absolute jump in the panadapter area.
     void frequencyClicked(double mhz);
+    // Emitted when user clicks on a KiwiSDR DX Community spot marker.
+    void kiwiSpotClicked(double freqMhz, const QString& mode, int loOffsetHz, int hiOffsetHz);
     // Emitted when the user makes an incremental tuning gesture such as
     // wheel tuning or VFO drag.
     void incrementalTuneRequested(double mhz);
@@ -1796,6 +1800,7 @@ private:
     QVector<quint8> m_wfLastGoodLevels;
     int  m_bandPlanFontSize{6};  // 0 = off
     bool m_bandPlanShowSpots{true};
+    bool m_showKiwiDxSpots{false};
     BandPlanManager* m_bandPlanMgr{nullptr};
     bool m_singleClickTune{false};
     QPoint m_clickPressPos;        // for single-click-to-tune drag threshold

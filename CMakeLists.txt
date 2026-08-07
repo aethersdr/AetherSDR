@@ -3815,6 +3815,17 @@ target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_test)
 
+qt_add_resources(KIWISDR_DX_SPOTS_TEST_RESOURCES resources/resources.qrc)
+add_executable(kiwisdr_dx_spots_test
+    tests/kiwisdr_dx_spots_test.cpp
+    src/models/BandPlanManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    ${KIWISDR_DX_SPOTS_TEST_RESOURCES}
+)
+target_include_directories(kiwisdr_dx_spots_test PRIVATE src)
+target_link_libraries(kiwisdr_dx_spots_test PRIVATE Qt6::Core Qt6::Gui aether_sqlite3)
+add_test(NAME kiwisdr_dx_spots_test COMMAND kiwisdr_dx_spots_test)
+
 add_executable(biquad_test
     tests/biquad_test.cpp
     src/core/Biquad.cpp
