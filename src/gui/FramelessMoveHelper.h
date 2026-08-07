@@ -1,11 +1,27 @@
 #pragma once
 
+#include <QGuiApplication>
 #include <QMouseEvent>
 #include <QPoint>
 #include <QWidget>
 #include <QWindow>
 
 namespace AetherSDR::FramelessMoveHelper {
+
+// QWindow::startSystemMove()/startSystemResize() report success on the xcb
+// platform, but the WM-driven interactive move/resize grab they hand off to
+// is unreliable there (upstream QTBUG-69716) — under at least Mutter/XWayland
+// (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland desktop — the
+// workaround for the native-Wayland panadapter stall, #4725) the request is
+// silently dropped: the press is consumed, but the window never
+// actually tracks the pointer (#4827). Qt's own QSizeGrip hits the same wall
+// and works around it in usePlatformSizeGrip() by refusing the platform path
+// on xcb and dragging the geometry manually instead — every frameless
+// move/resize path in AetherSDR follows that same rule.
+inline bool systemMoveResizeUnreliable()
+{
+    return QGuiApplication::platformName().contains(QLatin1String("xcb"));
+}
 
 namespace Detail {
 
@@ -41,10 +57,12 @@ inline bool start(QWidget* handle, QMouseEvent* ev)
     }
 
 #ifndef Q_OS_MAC
-    if (QWindow* windowHandle = window->windowHandle()) {
-        if (windowHandle->startSystemMove()) {
-            ev->accept();
-            return true;
+    if (!systemMoveResizeUnreliable()) {
+        if (QWindow* windowHandle = window->windowHandle()) {
+            if (windowHandle->startSystemMove()) {
+                ev->accept();
+                return true;
+            }
         }
     }
 #endif

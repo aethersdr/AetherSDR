@@ -1,5 +1,6 @@
 #include "TitleBar.h"
 #include "FramelessMessageBox.h"
+#include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
 #include "PersistentDialog.h"
 #include "core/AppSettings.h"
@@ -571,13 +572,21 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
             return true;
         }
 #elif !defined(Q_OS_MAC)
-        if (auto* h = w->windowHandle())
-            if (h->startSystemMove()) {
-                m_windowMoveActive = true;
-                m_windowMoveUsesSystem = true;
-                ev->accept();
-                return true;
-            }
+        // startSystemMove() reports success on xcb but the WM-driven drag it
+        // hands off to is unreliable there (QTBUG-69716) — under Mutter/
+        // XWayland (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland
+        // desktop) the press is swallowed and the window just never follows
+        // the pointer (#4827). Skip straight to the manual-move path below,
+        // same rule Qt's own QSizeGrip::usePlatformSizeGrip() applies.
+        if (!FramelessMoveHelper::systemMoveResizeUnreliable()) {
+            if (auto* h = w->windowHandle())
+                if (h->startSystemMove()) {
+                    m_windowMoveActive = true;
+                    m_windowMoveUsesSystem = true;
+                    ev->accept();
+                    return true;
+                }
+        }
 #endif
     }
 
