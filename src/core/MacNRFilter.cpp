@@ -81,8 +81,7 @@ void MacNRFilter::reset()
     std::fill(m_gainBuf.begin(), m_gainBuf.end(), 1.0f);
     std::memset(m_powerHistory, 0, sizeof(m_powerHistory));
 
-    m_histIdx    = 0;
-    m_frameCount = 0;
+    m_histIdx = 0;
     m_noiseInitialized = false;
 }
 
@@ -114,21 +113,26 @@ void MacNRFilter::updateGainFromFrame(const float* inBuf)
     // ── 3. Smoothed-periodogram minimum-statistics noise update ─────────────
     // A raw periodogram is exponentially distributed, so a 25-frame raw
     // minimum estimates roughly 1/25 of stationary Gaussian noise power.
-    // Smooth first, then calibrate the history minimum; the first valid frame
-    // seeds all slots so startup zeros can never become a false noise floor.
+    // Smooth first, then calibrate the history minimum. Ignore frames below a
+    // usable -80 dBFS RMS floor: latency prefill, mute/squelch, and TX silence
+    // must not initialize or collapse the learned noise estimate.
+    double framePowerSum = 0.0;
+    for (int i = 0; i < N; ++i) {
+        framePowerSum += static_cast<double>(inBuf[i]) * inBuf[i];
+    }
+    const float meanFramePower = static_cast<float>(framePowerSum / N);
+    if (meanFramePower < MIN_FRAME_POWER) {
+        return;
+    }
+
     if (!m_noiseInitialized) {
-        // The latency prefill deliberately produces one all-zero analysis
-        // frame before real audio arrives.  Do not let that synthetic frame
-        // seed the minimum history at the denominator floor.
-        const bool hasInputEnergy = std::any_of(
-            m_powerBuf.cbegin(), m_powerBuf.cend(),
-            [](float power) { return power > 0.0f; });
-        if (!hasInputEnergy) {
-            return;
-        }
         for (int k = 0; k < NBINS; ++k) {
             m_smoothedPower[k] = m_powerBuf[k];
-            m_noiseEst[k] = std::max(m_powerBuf[k], 1e-10f);
+            // Enabling during speech must not initially classify the entire
+            // wanted signal as noise. Start conservatively; NOISE_RISE then
+            // walks the estimate upward without an over-suppressive transient.
+            m_noiseEst[k] = std::max(INITIAL_NOISE_FRACTION * m_powerBuf[k],
+                                     1e-10f);
             for (int h = 0; h < HIST; ++h) {
                 m_powerHistory[h][k] = m_smoothedPower[k];
             }
@@ -271,8 +275,6 @@ QByteArray MacNRFilter::process(const QByteArray& pcm24kStereo)
         m_inAccum.erase(m_inAccum.begin(), m_inAccum.begin() + H);
         m_inAccumL.erase(m_inAccumL.begin(), m_inAccumL.begin() + H);
         m_inAccumR.erase(m_inAccumR.begin(), m_inAccumR.begin() + H);
-
-        ++m_frameCount;
     }
 
     // ── Drain exactly nFrames processed L/R samples → stereo float32 ────────

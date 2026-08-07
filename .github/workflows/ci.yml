@@ -698,6 +698,9 @@ jobs:
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)
 
+      - name: Run macOS MNR regression test
+        run: ctest --test-dir build -R '^mac_nr_filter_test$' --output-on-failure
+
       - name: Run ASR GPU probe test (#4535 regression)
         # arm64 runner = Apple Silicon: exercises the real Metal device init and
         # embedded precompiled-metallib load on every PR. On the pre-#4553 code
