@@ -6,6 +6,9 @@
 #include "core/MidiControlManager.h"
 #include "core/MidiSettings.h"
 
+#include <QTimer>
+#include <memory>
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -219,6 +222,17 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         connect(manualBtn, &QPushButton::clicked, this, [this] {
             QString paramId = m_paramCombo->currentData().toString();
             if (paramId.isEmpty()) return;
+            // If the parameter is already bound, open as an edit — addBinding()
+            // removes by paramId first, so a blank form + accidental OK would
+            // silently replace the existing binding with defaults.  Pre-filling
+            // makes Manual… and the row ✎ behave identically.
+            for (const auto& cur : m_manager->bindings()) {
+                if (cur.paramId == paramId) {
+                    const MidiBinding copy = cur;
+                    openManualEditor(paramId, &copy);
+                    return;
+                }
+            }
             openManualEditor(paramId, nullptr);
         });
         addRow->addWidget(manualBtn);
@@ -363,16 +377,23 @@ void MidiMappingDialog::refreshBindingTable()
         editBtn->setToolTip("Edit this binding's channel, type and number manually");
         editBtn->setAccessibleName(QString("Edit binding for %1").arg(paramName));
         connect(editBtn, &QPushButton::clicked, this, [this, paramId = b.paramId] {
-            // Look the binding up fresh at click time — the captured row index
-            // could go stale after any table mutation. Copy before opening the
-            // editor: committing mutates the vector the reference points into.
-            for (const auto& cur : m_manager->bindings()) {
-                if (cur.paramId == paramId) {
-                    const MidiBinding copy = cur;
-                    openManualEditor(paramId, &copy);
-                    return;
+            // Deferred: openManualEditor() ends in refreshBindingTable(),
+            // which destroys this very button while its clicked emission is
+            // still on the stack — get off it before opening the nested
+            // modal.  (Same pattern the × button relies on implicitly.)
+            QTimer::singleShot(0, this, [this, paramId] {
+                // Look the binding up fresh at open time — the captured row
+                // index could go stale after any table mutation.  Copy before
+                // opening: committing mutates the vector the reference points
+                // into.
+                for (const auto& cur : m_manager->bindings()) {
+                    if (cur.paramId == paramId) {
+                        const MidiBinding copy = cur;
+                        openManualEditor(paramId, &copy);
+                        return;
+                    }
                 }
-            }
+            });
         });
         m_bindingTable->setCellWidget(i, 5, editBtn);
 
@@ -413,19 +434,23 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
         ? QString("[%1] %2").arg(param->category, param->displayName) : paramId;
     // Learn forces relative=true on VFO CC captures (onMidiMessage); the form
     // mirrors that as a default so a typed VFO knob behaves like a learned one.
-    const bool isVfoKnob = (paramId == QLatin1String("rx.tuneKnob"));
+    const bool isVfoKnob = MidiControlManager::isVfoTuneKnob(paramId);
 
     QDialog dlg(this);
     dlg.setWindowTitle(existing ? "Edit MIDI Binding" : "Add MIDI Binding");
     dlg.setModal(true);
     dlg.setObjectName("midiManualBindingDialog");
+    // checkBoxIndicatorStyle() is the #4013 fix for invisible indicators in
+    // dark themes; it returns an unresolved template, so it must ride through
+    // applyStyleSheet (not setStyleSheet) like the dialogs it came from.
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg,
-        "QDialog { background: {{color.background.0}}; }"
+        QString("QDialog { background: {{color.background.0}}; }"
         "QLabel { color: {{color.text.primary}}; }"
         "QCheckBox { color: {{color.text.primary}}; }"
         "QComboBox, QSpinBox { background: {{color.background.1}}; "
         "border: 1px solid {{color.border.strong}}; border-radius: 3px; "
-        "color: {{color.text.primary}}; font-size: 11px; padding: 2px 6px; }");
+        "color: {{color.text.primary}}; font-size: 11px; padding: 2px 6px; }")
+        + ThemeManager::checkBoxIndicatorStyle());
 
     auto* form = new QFormLayout(&dlg);
     form->setLabelAlignment(Qt::AlignRight);
@@ -488,15 +513,27 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
         relativeCheck->setChecked(existing->relative);
     }
 
-    auto refreshFieldStates = [typeCombo, numberSpin, relativeCheck, isVfoKnob, existing] {
+    // Remember the Relative intent across type round-trips: without this, an
+    // existing binding's Relative flag (or a deliberate mid-dialog uncheck)
+    // was silently lost by flipping Type away from CC and back — the box
+    // would come back at the default instead of the user's state.
+    const auto lastCcRelative =
+        std::make_shared<bool>(existing ? existing->relative : isVfoKnob);
+    const auto prevWasCc = std::make_shared<bool>(false);
+    auto refreshFieldStates =
+        [typeCombo, numberSpin, relativeCheck, lastCcRelative, prevWasCc] {
         const auto t = MidiBinding::MsgType(typeCombo->currentData().toInt());
         numberSpin->setEnabled(t != MidiBinding::PitchBend);   // PB carries no number
-        relativeCheck->setEnabled(t == MidiBinding::CC);       // dispatch honors it for CC only
-        if (t != MidiBinding::CC)
-            relativeCheck->setChecked(false);  // non-CC never saves relative — keep the
-                                               // display equal to what OK would commit
-        else if (isVfoKnob && !existing)
-            relativeCheck->setChecked(true);
+        const bool isCc = (t == MidiBinding::CC);
+        if (*prevWasCc && !isCc)
+            *lastCcRelative = relativeCheck->isChecked();  // leaving CC — keep intent
+        relativeCheck->setEnabled(isCc);                   // dispatch honors it for CC only
+        // Non-CC never saves relative — keep the display equal to what OK
+        // would commit; back on CC, restore the remembered intent (the VFO
+        // Learn-mirror default for a fresh binding, the stored flag for an
+        // existing one, or whatever the user last set).
+        relativeCheck->setChecked(isCc ? *lastCcRelative : false);
+        *prevWasCc = isCc;
     };
     connect(typeCombo, &QComboBox::currentIndexChanged, &dlg, refreshFieldStates);
     refreshFieldStates();
@@ -521,7 +558,17 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     QStringList shadowedNames;
     QStringList shadowedIds;
     for (const auto& cur : m_manager->bindings()) {
-        if (cur.paramId != b.paramId && cur.key() == b.key()) {
+        // Overlap, not key() equality: key() folds the wildcard channel to
+        // 0xFF while dispatch probes the exact-channel key first and falls
+        // back to the wildcard — so an "Any" binding and a channel-specific
+        // one on the same type+number collide at runtime with different
+        // keys, and this form is the only UI able to create the wildcard.
+        // (A legacy NoteOff row shadowing the NoteOn pairing fallback for a
+        // Gate param is a separate, far rarer case — out of scope here.)
+        const bool sameSource = cur.msgType == b.msgType
+            && (b.msgType == MidiBinding::PitchBend || cur.number == b.number)
+            && (cur.channel < 0 || b.channel < 0 || cur.channel == b.channel);
+        if (cur.paramId != b.paramId && sameSource) {
             const MidiParam* cp = m_manager->findParam(cur.paramId);
             shadowedNames << (cp ? QString("[%1] %2").arg(cp->category, cp->displayName)
                                  : cur.paramId);
@@ -532,8 +579,9 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
         const auto answer = FramelessMessageBox::question(
             this, "Source Already Bound",
             QString("%1 is already bound to:\n  %2\n\n"
-                    "Two bindings on the same source cannot both respond — "
-                    "the older one would silently stop working.\n\n"
+                    "Two bindings on the same or overlapping source cannot "
+                    "both respond on the channel they share — the older one "
+                    "would silently stop working there.\n\n"
                     "Replace the existing binding%3?")
                 .arg(b.sourceDisplayName(), shadowedNames.join("\n  "),
                      shadowedIds.size() > 1 ? QStringLiteral("s") : QString()));

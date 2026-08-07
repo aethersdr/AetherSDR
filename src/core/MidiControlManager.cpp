@@ -36,7 +36,7 @@ bool isCwMomentaryParamId(const QString& paramId)
 
 bool isVfoTuneKnobParamId(const QString& paramId)
 {
-    return paramId == QLatin1String("rx.tuneKnob");
+    return AetherSDR::MidiControlManager::isVfoTuneKnob(paramId);
 }
 
 int relativeCcDelta(int value)
@@ -45,6 +45,11 @@ int relativeCcDelta(int value)
 }
 
 } // namespace
+
+bool MidiControlManager::isVfoTuneKnob(const QString& paramId)
+{
+    return paramId == QLatin1String("rx.tuneKnob");
+}
 
 // ── MidiBinding helpers ─────────────────────────────────────────────────────
 
