@@ -2746,6 +2746,39 @@ clicks is reachable and wired.
 The reply echoes the post-action `get titlebar` snapshot, so a caller never
 needs a follow-up read.
 
+### `applet`
+Drive the applet panel's layout. Floating, dock side and visibility are three
+fields of one state, and every action routes through the same entry point the
+title-bar icons use (`MainWindow::applyAppletPanelState`), so a passing call
+proves the operator's own path rather than a parallel one.
+
+```json
+→ {"cmd":"applet","action":"dock","value":"left"}
+← {"ok":true,"action":"dock","value":"left",
+   "applet":{"present":true,"floating":false,"side":"left","visible":true,
+             "geometry":{"x":0,"y":83,"w":260,"h":773},
+             "splitterIndex":0,"panIndex":1}}
+```
+
+| Action | Effect |
+|---|---|
+| `dock <left\|right>` | Docks the panel to that wall and shows it, un-floating first if needed. |
+| `float <on\|off>` | Floats the panel into its own window, or docks it back to its last wall. |
+| `show` / `hide` | Shows or hides the panel. `hide` always docks first — see below. |
+| `state` | Read-only; returns the snapshot with no side effects. |
+
+Two combinations are deliberately not representable, because both strand the
+panel where no title-bar click can recover it:
+
+- **Floating and hidden.** An empty float window has no affordance to bring the
+  contents back. `float on` always shows; `hide` always docks first.
+- **Docked, visible, but off-wall.** `dock` sets side and visibility together
+  rather than letting a caller set one and leave the other stale.
+
+`geometry` and `splitterIndex`/`panIndex` are what prove the panel actually
+landed where the flags claim — `splitterIndex < panIndex` is the left dock.
+Assert on those, not just on `side`, or a zero-width panel reads as a pass.
+
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server
 over loopback and offers two profiles after draining the init burst through
@@ -4085,6 +4118,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
 | `titlebar` | — | titlebar <selectRadio <id>\|showDiscovery\|minimize\|maximize\|close> |
+| `applet` | — | applet <dock <left\|right>\|float <on\|off>\|show\|hide\|state> |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
 | `keyevent` | — | keyevent <press\|release> <action-id\|key-seq> — inject a real key edge through the app event filter (momentary shortcuts only — PTT hold, and the CW keys once bound: their ids ship unbound, so KeyInjectUnbound until the operator binds them in Configure Shortcuts; press is TX-gated; a literal Tab/Backtab moves focus yet reports consumed) |
 | `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |

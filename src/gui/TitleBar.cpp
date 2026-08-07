@@ -445,6 +445,10 @@ TitleBar::TitleBar(QWidget* parent)
     m_speakerBtn->setFixedSize(22, 22);
     m_speakerBtn->setCheckable(true);
     m_speakerBtn->setCursor(Qt::PointingHandCursor);
+    // Tab-only focus: a click mutes, it does not leave the accent ring
+    // painted around the icon afterwards.  The ring is kept for keyboard
+    // navigation, where it is the only thing showing where focus sits.
+    m_speakerBtn->setFocusPolicy(Qt::TabFocus);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_speakerBtn, iconBtnStyle);
     m_speakerBtn->setToolTip("Click to mute/unmute line out");
     m_speakerBtn->setAccessibleName("Line out mute");
@@ -484,6 +488,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_headphoneBtn->setFixedSize(22, 22);
     m_headphoneBtn->setCheckable(true);
     m_headphoneBtn->setCursor(Qt::PointingHandCursor);
+    // Tab-only focus — see the line-out button above.
+    m_headphoneBtn->setFocusPolicy(Qt::TabFocus);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_headphoneBtn, iconBtnStyle);
     m_headphoneBtn->setToolTip("Click to mute/unmute headphones");
     m_headphoneBtn->setAccessibleName("Headphone mute");
@@ -533,30 +539,45 @@ TitleBar::TitleBar(QWidget* parent)
     // Dock-side selectors (applet panel left vs right of the panadapter).
     // Click is wired via eventFilter() like the min/max/close trio.
     m_dockLeftLbl = new QLabel;
+    m_dockLeftLbl->setObjectName(QStringLiteral("appletDockLeftBtn"));
     m_dockLeftLbl->setFixedHeight(24);
     m_dockLeftLbl->setAlignment(Qt::AlignCenter);
     m_dockLeftLbl->setCursor(Qt::PointingHandCursor);
     m_dockLeftLbl->setToolTip("Dock applet panel to the left of the panadapter");
+    m_dockLeftLbl->setAccessibleName(tr("Dock applet panel left"));
+    m_dockLeftLbl->setAccessibleDescription(
+        tr("Move the applet panel to the left of the panadapter, or hide it "
+           "if it is already docked there"));
     m_dockLeftLbl->setStyleSheet(dockLblStyle);
     m_dockLeftLbl->setPixmap(buildDockSideIcon(/*fillLeft=*/true, /*active=*/false));
     m_dockLeftLbl->installEventFilter(this);
     m_hbox->addWidget(m_dockLeftLbl);
 
     m_dockRightLbl = new QLabel;
+    m_dockRightLbl->setObjectName(QStringLiteral("appletDockRightBtn"));
     m_dockRightLbl->setFixedHeight(24);
     m_dockRightLbl->setAlignment(Qt::AlignCenter);
     m_dockRightLbl->setCursor(Qt::PointingHandCursor);
     m_dockRightLbl->setToolTip("Dock applet panel to the right of the panadapter");
+    m_dockRightLbl->setAccessibleName(tr("Dock applet panel right"));
+    m_dockRightLbl->setAccessibleDescription(
+        tr("Move the applet panel to the right of the panadapter, or hide it "
+           "if it is already docked there"));
     m_dockRightLbl->setStyleSheet(dockLblStyle);
     m_dockRightLbl->setPixmap(buildDockSideIcon(/*fillLeft=*/false, /*active=*/true));
     m_dockRightLbl->installEventFilter(this);
     m_hbox->addWidget(m_dockRightLbl);
 
     m_popOutLbl = new QLabel;
+    m_popOutLbl->setObjectName(QStringLiteral("appletPopOutBtn"));
     m_popOutLbl->setFixedHeight(24);
     m_popOutLbl->setAlignment(Qt::AlignCenter);
     m_popOutLbl->setCursor(Qt::PointingHandCursor);
     m_popOutLbl->setToolTip("Pop the applet panel out into its own window");
+    m_popOutLbl->setAccessibleName(tr("Pop out applet panel"));
+    m_popOutLbl->setAccessibleDescription(
+        tr("Float the applet panel in its own window, or dock it back into "
+           "the main window"));
     m_popOutLbl->setStyleSheet(dockLblStyle);
     m_popOutLbl->setPixmap(buildPopOutIcon(/*active=*/false));
     m_popOutLbl->installEventFilter(this);

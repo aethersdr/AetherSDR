@@ -873,7 +873,11 @@ void MainWindow::buildMenuBar()
         if (m_workspaceController && m_workspaceController->isEnabled()) {
             return;
         }
-        toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
+        // Same routing as the title-bar pop-out icon so the keystroke and the
+        // click cannot drift into different states.
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        applyAppletPanelState(!floating, dockedLeft, true);
     });
 
     // Restore floating state at startup if the user had it floating last
