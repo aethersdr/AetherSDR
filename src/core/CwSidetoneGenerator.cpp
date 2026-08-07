@@ -70,6 +70,18 @@ void CwSidetoneGenerator::setPan(float p) noexcept
 
 void CwSidetoneGenerator::setKeyDown(bool down) noexcept
 {
+    // Timestamp on entry — this is the keyer thread's edge time, taken
+    // before any queue mechanics, so it carries the keyer's precision.
+    const auto now = std::chrono::steady_clock::now();
+    const uint32_t head = m_edgeHead.load(std::memory_order_relaxed);
+    const uint32_t tail = m_edgeTail.load(std::memory_order_acquire);
+    if (head - tail < kEdgeQueueSize) {
+        m_edgeQueue[head % kEdgeQueueSize] = {now, down};
+        m_edgeHead.store(head + 1, std::memory_order_release);
+    }
+    // Always mirror the latest state: on queue overflow (pathological)
+    // process() falls back to applying this at the next block start —
+    // the pre-#4809 behavior — so the final key-up can never be lost.
     m_keyDown.store(down, std::memory_order_relaxed);
 }
 
@@ -78,6 +90,12 @@ void CwSidetoneGenerator::reset() noexcept
     m_state = State::Idle;
     m_rampSample = 0;
     m_phase = 0.0;
+    m_gateDown = false;
+    m_haveAnchor = false;
+    m_streamPos = 0;
+    // Drop queued edges (consumer-side drain: only the tail moves).
+    m_edgeTail.store(m_edgeHead.load(std::memory_order_acquire),
+                     std::memory_order_release);
 }
 
 void CwSidetoneGenerator::setSampleRateHz(int hz) noexcept
@@ -88,15 +106,58 @@ void CwSidetoneGenerator::setSampleRateHz(int hz) noexcept
     reset();
 }
 
+// The state-machine edge transitions, factored out of process() so they
+// can fire at an exact sample offset mid-block rather than only at the
+// block start (#4809).  The re-entrant ramp mirroring is unchanged.
+void CwSidetoneGenerator::applyKeyEdge(bool down) noexcept
+{
+    m_gateDown = down;
+    switch (m_state) {
+    case State::Idle:
+        if (down) {
+            m_state = State::RampUp;
+            m_rampSample = 0;
+        }
+        break;
+    case State::RampUp:
+        if (!down) {
+            m_state = State::RampDown;
+            // Continue from the current envelope position so a quick
+            // dot doesn't audibly click — start ramp-down from where
+            // ramp-up left off, scaled to the same envelope value.
+            m_rampSample = m_rampLength - m_rampSample;
+        }
+        break;
+    case State::Sustain:
+        if (!down) {
+            m_state = State::RampDown;
+            m_rampSample = 0;
+        }
+        break;
+    case State::RampDown:
+        if (down) {
+            // Mirror image of RampUp→RampDown: re-enter from current
+            // envelope position.
+            m_state = State::RampUp;
+            m_rampSample = m_rampLength - m_rampSample;
+        }
+        break;
+    }
+}
+
 bool CwSidetoneGenerator::process(float* out, int frames) noexcept
 {
     const bool tapSet = static_cast<bool>(m_sampleTap);
 
     if (!m_enabled.load(std::memory_order_relaxed)) {
         // Disabled — bring state back to idle on next block so a flip-on
-        // mid-keying starts cleanly from silence.
-        if (m_state != State::Idle)
+        // mid-keying starts cleanly from silence.  reset() also drops
+        // queued edges, so stale timestamps can't fire on re-enable.
+        if (m_state != State::Idle || m_haveAnchor)
             reset();
+        else
+            m_edgeTail.store(m_edgeHead.load(std::memory_order_acquire),
+                             std::memory_order_release);
         if (tapSet) {
             // Mirror silence to the TX-decode tap so the downstream
             // decoder's timeline doesn't jump forward across the gap.
@@ -107,7 +168,6 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
         return false;
     }
 
-    const bool keyDown = m_keyDown.load(std::memory_order_relaxed);
     const float pitch  = m_pitchHz.load(std::memory_order_relaxed);
     const float vol    = m_volume.load(std::memory_order_relaxed);
     const float shapingMs = m_shapingMs.load(std::memory_order_relaxed);
@@ -123,40 +183,49 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
         m_rampLength = newRampLen;
     }
 
-    // Edge transitions: drive the state machine off the current key state.
-    switch (m_state) {
-    case State::Idle:
-        if (keyDown) {
-            m_state = State::RampUp;
-            m_rampSample = 0;
+    // ── Collect this block's key edges at exact sample offsets ────────
+    // Map each queued edge's timestamp into the sample stream via the
+    // burst anchor.  Edges that fall beyond this block stay queued.
+    const int64_t blockStart = m_streamPos;
+    const int64_t blockEnd   = blockStart + frames;
+    QVarLengthArray<std::pair<int, bool>, 8> blockEdges;
+    for (;;) {
+        const uint32_t tail = m_edgeTail.load(std::memory_order_relaxed);
+        if (tail == m_edgeHead.load(std::memory_order_acquire))
+            break;
+        const KeyEdge e = m_edgeQueue[tail % kEdgeQueueSize];
+        if (!m_haveAnchor) {
+            // First edge of a burst plays at this block's start — the
+            // same onset latency as the old block-polling gate; every
+            // later edge lands relative to it, sample-exact.
+            m_anchorTime = e.t;
+            m_anchorPos  = blockStart;
+            m_haveAnchor = true;
         }
-        break;
-    case State::RampUp:
-        if (!keyDown) {
-            m_state = State::RampDown;
-            // Continue from the current envelope position so a quick
-            // dot doesn't audibly click — start ramp-down from where
-            // ramp-up left off, scaled to the same envelope value.
-            m_rampSample = m_rampLength - m_rampSample;
-        }
-        break;
-    case State::Sustain:
-        if (!keyDown) {
-            m_state = State::RampDown;
-            m_rampSample = 0;
-        }
-        break;
-    case State::RampDown:
-        if (keyDown) {
-            // Mirror image of RampUp→RampDown: re-enter from current
-            // envelope position.
-            m_state = State::RampUp;
-            m_rampSample = m_rampLength - m_rampSample;
-        }
-        break;
+        const int64_t target = m_anchorPos +
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                e.t - m_anchorTime).count() * m_sampleRateHz / 1'000'000'000LL;
+        if (target >= blockEnd)
+            break;  // future block — edges are time-ordered, stop here
+        const int off = static_cast<int>(
+            std::max<int64_t>(target, blockStart) - blockStart);
+        blockEdges.append({off, e.down});
+        m_edgeTail.store(tail + 1, std::memory_order_release);
+    }
+    // Overflow / missed-edge fallback: nothing queued but the last-known
+    // state disagrees with the gate — apply it at the block start (the
+    // pre-#4809 behavior), so the final key-up can never be lost.
+    if (blockEdges.isEmpty()
+        && m_edgeTail.load(std::memory_order_relaxed)
+               == m_edgeHead.load(std::memory_order_acquire)
+        && m_keyDown.load(std::memory_order_relaxed) != m_gateDown) {
+        blockEdges.append({0, m_keyDown.load(std::memory_order_relaxed)});
     }
 
-    if (m_state == State::Idle && !keyDown) {
+    if (m_state == State::Idle && blockEdges.isEmpty()) {
+        m_streamPos = blockEnd;
+        if (!m_gateDown)
+            m_haveAnchor = false;  // burst over — re-anchor next time
         if (tapSet) {
             QVarLengthArray<float, 1024> silence(frames);
             std::memset(silence.data(), 0, frames * sizeof(float));
@@ -177,7 +246,13 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
     QVarLengthArray<float, 1024> tapBuf;
     if (tapSet) tapBuf.resize(frames);
 
+    int edgeIdx = 0;
     for (int i = 0; i < frames; ++i) {
+        // Fire any edges scheduled for this exact sample.
+        while (edgeIdx < blockEdges.size() && blockEdges[edgeIdx].first == i) {
+            applyKeyEdge(blockEdges[edgeIdx].second);
+            ++edgeIdx;
+        }
         float env = 0.0f;
         switch (m_state) {
         case State::Idle:
@@ -215,6 +290,13 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
     }
 
     if (tapSet) m_sampleTap(tapBuf.data(), frames, m_sampleRateHz);
+
+    m_streamPos = blockEnd;
+    if (m_state == State::Idle && !m_gateDown
+        && m_edgeTail.load(std::memory_order_relaxed)
+               == m_edgeHead.load(std::memory_order_acquire)) {
+        m_haveAnchor = false;  // burst over — re-anchor on the next edge
+    }
 
     m_lastPitchHz = pitch;
     return wroteAny;

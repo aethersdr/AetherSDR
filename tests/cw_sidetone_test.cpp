@@ -171,5 +171,95 @@ int main()
         ok &= expect(maxAbs(silent) == 0.0f, "reset + key-up produces silence");
     }
 
+    // ── 8. Timestamped edges: a sub-block down/up pair is rendered at the
+    // exact sample spacing, not lost or snapped to a block boundary (#4809).
+    // On the pre-#4809 block-polling gate this exact sequence produced
+    // total silence: both transitions landed before the first process()
+    // call, so the single bool already read `false` again.
+    {
+        using clock = std::chrono::steady_clock;
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);  // 1-sample ramp — near-hard keying
+
+        const auto a0 = clock::now();
+        gen.setKeyDown(true);
+        const auto a1 = clock::now();
+        while (clock::now() - a1 < std::chrono::milliseconds(10)) { /* spin */ }
+        const auto b0 = clock::now();
+        gen.setKeyDown(false);
+        const auto b1 = clock::now();
+
+        auto mono = runFrames(gen, 1440);  // one 30 ms block covers both edges
+
+        // Envelope edge: last 8-sample window whose peak clears threshold
+        // (single samples of a sine pass through zero mid-tone).
+        int lastLoud = -1;
+        for (int i = 0; i + 8 <= 1440; i += 8) {
+            const float peak = maxAbs(std::vector<float>(
+                mono.begin() + i, mono.begin() + i + 8));
+            if (peak > 0.1f) lastLoud = i + 8;
+        }
+        const auto loNs = std::chrono::duration_cast<std::chrono::nanoseconds>(b0 - a1).count();
+        const auto hiNs = std::chrono::duration_cast<std::chrono::nanoseconds>(b1 - a0).count();
+        const int lo = static_cast<int>(loNs * 48000 / 1'000'000'000LL) - 16;
+        const int hi = static_cast<int>(hiNs * 48000 / 1'000'000'000LL) + 16;
+        ok &= expect(lastLoud > 0, "sub-block down/up pair produces a tone at all");
+        ok &= expect(lastLoud >= lo && lastLoud <= hi,
+                     "key-up lands at the timestamp-mapped sample, not a block edge");
+
+        // Same pair pumped through 128-frame blocks must place the edge
+        // mid-block (~480), not quantize it to a 128-sample boundary.
+        CwSidetoneGenerator gen2(48000);
+        gen2.setEnabled(true);
+        gen2.setVolume(1.0f);
+        gen2.setShapingMs(0.0f);
+        const auto c0 = clock::now();
+        gen2.setKeyDown(true);
+        const auto c1 = clock::now();
+        while (clock::now() - c1 < std::chrono::milliseconds(10)) { /* spin */ }
+        const auto d0 = clock::now();
+        gen2.setKeyDown(false);
+        const auto d1 = clock::now();
+        std::vector<float> cat;
+        for (int b = 0; b < 12; ++b) {
+            auto blk = runFrames(gen2, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+        int lastLoud2 = -1;
+        for (int i = 0; i + 8 <= static_cast<int>(cat.size()); i += 8) {
+            const float peak = maxAbs(std::vector<float>(
+                cat.begin() + i, cat.begin() + i + 8));
+            if (peak > 0.1f) lastLoud2 = i + 8;
+        }
+        const auto lo2Ns = std::chrono::duration_cast<std::chrono::nanoseconds>(d0 - c1).count();
+        const auto hi2Ns = std::chrono::duration_cast<std::chrono::nanoseconds>(d1 - c0).count();
+        const int lo2 = static_cast<int>(lo2Ns * 48000 / 1'000'000'000LL) - 16;
+        const int hi2 = static_cast<int>(hi2Ns * 48000 / 1'000'000'000LL) + 16;
+        ok &= expect(lastLoud2 >= lo2 && lastLoud2 <= hi2,
+                     "128-frame blocks: edge placed mid-block by timestamp");
+    }
+
+    // ── 9. Queue-overflow fallback: the true final state still lands ───────
+    // 201 toggles overflow the 64-slot ring; the last edge the ring caught
+    // is a key-DOWN, but the true final state is key-UP — only the
+    // m_keyDown fallback can deliver it.  The gate must not stick down.
+    {
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);
+        for (int i = 0; i <= 200; ++i)          // i=200 (even) ends key-UP
+            gen.setKeyDown((i % 2) == 1);
+        auto first = runFrames(gen, 480);        // replays the 64 queued edges
+        ok &= expect(maxAbs(first) > 0.0f,
+                     "overflow replay leaves the stale key-down sounding");
+        runFrames(gen, 480);                     // fallback fires at this block
+        auto third = runFrames(gen, 480);
+        ok &= expect(maxAbs(third) == 0.0f,
+                     "true final key-up survives queue overflow via fallback");
+    }
+
     return ok ? 0 : 1;
 }
