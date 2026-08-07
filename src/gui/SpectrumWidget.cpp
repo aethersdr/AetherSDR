@@ -897,8 +897,8 @@ static bool qrhiDeviceNameLooksSoftware(const QString& deviceName)
 QString SpectrumWidget::rendererDescription() const
 {
 #ifdef AETHER_GPU_SPECTRUM
-    if (m_rhiFailureReported) {
-        return QStringLiteral("QRhi failed: %1").arg(m_rhiFailureReason);
+    if (m_rhiFailure.failed()) {
+        return m_rhiFailure.rendererDescription();
     }
 
     QRhi* currentRhi = rhi();
@@ -959,8 +959,8 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
 #ifdef AETHER_GPU_SPECTRUM
     m[QStringLiteral("gpu")] = true;
     m[QStringLiteral("renderer")] = rendererDescription();
-    m[QStringLiteral("rendererFailed")] = m_rhiFailureReported;
-    m[QStringLiteral("rendererFailureReason")] = m_rhiFailureReason;
+    m[QStringLiteral("rendererFailed")] = m_rhiFailure.failed();
+    m[QStringLiteral("rendererFailureReason")] = m_rhiFailure.reason();
     const QSize fixed = fixedColorBufferSize();
     // Unset fixedColorBufferSize() is the null QSize(-1,-1) — isEmpty()
     // covers it (and any degenerate size) → QRhiWidget auto-sizes.
@@ -1882,6 +1882,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAccessibleName(tr("Panadapter spectrum display"));
 #ifdef AETHER_GPU_SPECTRUM
+    m_rhiFailureForcedForAutomation = rhiFailureForcedForAutomation();
     connect(this, &QRhiWidget::renderFailed, this, [this]() {
         reportRhiFailure(tr("Qt could not create or present the spectrum renderer."));
     });
@@ -12250,44 +12251,33 @@ bool SpectrumWidget::initWaterfallPipeline()
 
 void SpectrumWidget::reportRhiFailure(const QString& reason)
 {
-    if (m_rhiFailureReported) {
-        return;
-    }
-
     const QString detail = reason.trimmed().isEmpty()
         ? tr("The spectrum renderer failed.")
         : reason.trimmed();
-    m_rhiFailureReported = true;
-    m_rhiFailureReason = detail;
+    if (!m_rhiFailure.report(detail)) {
+        return;
+    }
 
     qCWarning(lcGui) << "SpectrumWidget: QRhi failure:" << detail;
 
-    PanadapterOverlayMessage message;
-    message.id = QStringLiteral("rhi.render-failed");
-    message.title = tr("Spectrum renderer unavailable");
 #ifdef Q_OS_MAC
-    message.detail = tr("%1 Rebuild with -DAETHER_GPU_SPECTRUM=OFF.")
-                         .arg(detail);
+    const QString messageDetail =
+        tr("%1 Rebuild with -DAETHER_GPU_SPECTRUM=OFF.").arg(detail);
 #else
-    message.detail = tr("%1 Try launching with AETHER_NO_GPU=1, or rebuild with "
-                        "-DAETHER_GPU_SPECTRUM=OFF.")
-                         .arg(detail);
+    const QString messageDetail =
+        tr("%1 Try launching with AETHER_NO_GPU=1, or rebuild with "
+           "-DAETHER_GPU_SPECTRUM=OFF.")
+            .arg(detail);
 #endif
-    message.timeoutMs = 0;
-    message.dismissible = false;
-    message.collapsible = true;
-    message.tone = PanadapterOverlayMessageTone::Warning;
-    upsertOverlayMessage(std::move(message));
+    upsertOverlayMessage(m_rhiFailure.warningMessage(
+        tr("Spectrum renderer unavailable"), messageDetail));
 }
 
 void SpectrumWidget::clearRhiFailure()
 {
-    if (!m_rhiFailureReported) {
+    if (!m_rhiFailure.clear()) {
         return;
     }
-
-    m_rhiFailureReported = false;
-    m_rhiFailureReason.clear();
     removeOverlayMessage(QStringLiteral("rhi.render-failed"));
 }
 
@@ -12977,7 +12967,7 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     m_wfTexFullUpload = false;
     m_wfLastUploadedRow = m_wfWriteRow;
     m_rhiInitialized = true;
-    if (rhiFailureForcedForAutomation()) {
+    if (m_rhiFailureForcedForAutomation) {
         reportRhiFailure(
             tr("A blank QRhi surface was forced for automation verification."));
     } else {
@@ -14486,12 +14476,11 @@ void SpectrumWidget::render(QRhiCommandBuffer* cb)
         initialize(cb);
         if (!m_rhiInitialized) return;
     }
-    if (rhiFailureForcedForAutomation()) {
+    if (m_rhiFailureForcedForAutomation) {
         // Keep the widget on its production QRhi API. Mixing Null with Metal or
         // D3D11 in one top-level window can crash Qt's backing-store compositor.
         cb->beginPass(renderTarget(), Qt::black, {1.0f, 0});
         cb->endPass();
-        raisePanadapterMessageOverlay();
         return;
     }
     if (m_resizeBufferSettleTimer && m_resizeBufferSettleTimer->isActive()) {
@@ -14590,7 +14579,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 {
     if (width() <= 0 || height() <= freqScaleH() + DIVIDER_H + 2) return;
 
-    // panstats: software-path paint cost.
+    // panstats: software-path paint cost. These counters are written only here,
+    // so they are meaningful only in an AETHER_GPU_SPECTRUM=OFF build — a GPU
+    // build never compiles this function and reports 0.
     m_panStats.paintEvents++;
     struct PaintCost {
         quint64& acc;

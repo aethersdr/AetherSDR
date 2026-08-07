@@ -951,7 +951,7 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 | field | meaning |
 |---|---|
 | `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
-| `rendererFailed` / `rendererFailureReason` | whether this panadapter's QRhi renderer failed and its recorded reason; a failed renderer reports `QRhi failed: ...` in `renderer` too |
+| `rendererFailed` / `rendererFailureReason` | whether this panadapter's QRhi renderer failed and its recorded reason; a failed renderer reports `QRhi failed: ...` in `renderer` too. GPU builds only — omitted alongside the buffer fields when `gpu` is `false` |
 | `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
 | `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
 | `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
