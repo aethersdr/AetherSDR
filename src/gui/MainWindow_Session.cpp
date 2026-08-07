@@ -562,6 +562,17 @@ void MainWindow::wireRadioModel()
             this, [this](bool connected) {
         dissolveAllSliceLinks(connected ? "radio connected" : "radio disconnected");
     });
+    // A momentary-keying release that arrives while disconnected is discarded
+    // by the per-path isConnected() gates before their flag bookkeeping runs,
+    // so a key held across a disconnect strands its flag and eats the first
+    // press after reconnect (#4638). Release the whole family here instead of
+    // weakening those gates: the fail-safe no-ops when nothing is keyed, and
+    // its un-key requests are harmless on a radio that is already gone.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (!connected)
+            failSafeMomentaryKeyingToRx("radio-disconnect");
+    });
     // Local microphone capture for a backend that MODULATES ON THE HOST.
     //
     // Capture is otherwise started only from the Flex DAX signals
