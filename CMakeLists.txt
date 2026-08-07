@@ -4216,6 +4216,14 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 
 if(APPLE)
+    add_executable(mac_nr_filter_test
+        tests/mac_nr_filter_test.cpp
+        src/core/MacNRFilter.cpp
+    )
+    target_include_directories(mac_nr_filter_test PRIVATE src)
+    target_link_libraries(mac_nr_filter_test PRIVATE Qt6::Core "-framework Accelerate")
+    add_test(NAME mac_nr_filter_test COMMAND mac_nr_filter_test)
+
     add_executable(mac_startup_abort_guard_test
         tests/mac_startup_abort_guard_test.cpp
         src/MacStartupAbortGuard.cpp

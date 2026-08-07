@@ -41,19 +41,12 @@ MacNRFilter::MacNRFilter()
     m_outAccumR.clear();
 
     // Noise estimator
-    m_noiseEst .assign(NBINS, 1e-6f);
-    m_prevGain .assign(NBINS, 1.0f);
-    m_prevPow  .assign(NBINS, 1e-6f);
-    m_powerBuf .assign(NBINS, 0.0f);
-    m_gainBuf  .assign(NBINS, 1.0f);
-    m_smoothGain.assign(NBINS, 1.0f);
-
-    // Warm up noise history so the estimator has a sensible floor from
-    // frame zero; this prevents the algorithm applying excessive gain in
-    // the first ~267 ms of operation.
-    for (int h = 0; h < HIST; ++h)
-        for (int k = 0; k < NBINS; ++k)
-            m_powerHistory[h][k] = 1e-6f;
+    m_noiseEst      .assign(NBINS, 0.0f);
+    m_smoothedPower .assign(NBINS, 0.0f);
+    m_prevPostSnr   .assign(NBINS, 1.0f);
+    m_filterGain    .assign(NBINS, 1.0f);
+    m_powerBuf      .assign(NBINS, 0.0f);
+    m_gainBuf       .assign(NBINS, 1.0f);
 }
 
 MacNRFilter::~MacNRFilter()
@@ -81,23 +74,21 @@ void MacNRFilter::reset()
     m_inAccumR.assign(N, 0.0f);
 
     // Reset noise estimator
-    std::fill(m_noiseEst  .begin(), m_noiseEst  .end(), 1e-6f);
-    std::fill(m_prevGain  .begin(), m_prevGain  .end(), 1.0f);
-    std::fill(m_prevPow   .begin(), m_prevPow   .end(), 1e-6f);
-    std::fill(m_gainBuf   .begin(), m_gainBuf   .end(), 1.0f);
-    std::fill(m_smoothGain.begin(), m_smoothGain.end(), 1.0f);
-
-    for (int h = 0; h < HIST; ++h)
-        for (int k = 0; k < NBINS; ++k)
-            m_powerHistory[h][k] = 1e-6f;
+    std::fill(m_noiseEst.begin(), m_noiseEst.end(), 0.0f);
+    std::fill(m_smoothedPower.begin(), m_smoothedPower.end(), 0.0f);
+    std::fill(m_prevPostSnr.begin(), m_prevPostSnr.end(), 1.0f);
+    std::fill(m_filterGain.begin(), m_filterGain.end(), 1.0f);
+    std::fill(m_gainBuf.begin(), m_gainBuf.end(), 1.0f);
+    std::memset(m_powerHistory, 0, sizeof(m_powerHistory));
 
     m_histIdx    = 0;
     m_frameCount = 0;
+    m_noiseInitialized = false;
 }
 
 // ── updateGainFromFrame ─────────────────────────────────────────────────────
 //
-// inBuf: N mono analysis samples. Updates m_prevGain, which is then reused for
+// inBuf: N mono analysis samples. Updates m_filterGain, which is then reused for
 // independent left/right synthesis so balance survives the MNR stage.
 
 void MacNRFilter::updateGainFromFrame(const float* inBuf)
@@ -120,19 +111,48 @@ void MacNRFilter::updateGainFromFrame(const float* inBuf)
     for (int k = 1; k < H; ++k)
         m_powerBuf[k] = m_splitRe[k] * m_splitRe[k] + m_splitIm[k] * m_splitIm[k];
 
-    // ── 3. Minimum-statistics noise floor update ─────────────────────────────
-    for (int k = 0; k < NBINS; ++k)
-        m_powerHistory[m_histIdx][k] = m_powerBuf[k];
+    // ── 3. Smoothed-periodogram minimum-statistics noise update ─────────────
+    // A raw periodogram is exponentially distributed, so a 25-frame raw
+    // minimum estimates roughly 1/25 of stationary Gaussian noise power.
+    // Smooth first, then calibrate the history minimum; the first valid frame
+    // seeds all slots so startup zeros can never become a false noise floor.
+    if (!m_noiseInitialized) {
+        // The latency prefill deliberately produces one all-zero analysis
+        // frame before real audio arrives.  Do not let that synthetic frame
+        // seed the minimum history at the denominator floor.
+        const bool hasInputEnergy = std::any_of(
+            m_powerBuf.cbegin(), m_powerBuf.cend(),
+            [](float power) { return power > 0.0f; });
+        if (!hasInputEnergy) {
+            return;
+        }
+        for (int k = 0; k < NBINS; ++k) {
+            m_smoothedPower[k] = m_powerBuf[k];
+            m_noiseEst[k] = std::max(m_powerBuf[k], 1e-10f);
+            for (int h = 0; h < HIST; ++h) {
+                m_powerHistory[h][k] = m_smoothedPower[k];
+            }
+        }
+        m_noiseInitialized = true;
+    } else {
+        for (int k = 0; k < NBINS; ++k) {
+            m_smoothedPower[k] = POWER_SMOOTH * m_smoothedPower[k]
+                              + (1.0f - POWER_SMOOTH) * m_powerBuf[k];
+            m_powerHistory[m_histIdx][k] = m_smoothedPower[k];
+        }
 
-    m_histIdx = (m_histIdx + 1) % HIST;
-
-    // Minimum over history window, then apply bias correction
-    for (int k = 0; k < NBINS; ++k) {
-        float minPow = m_powerHistory[0][k];
-        for (int h = 1; h < HIST; ++h)
-            minPow = std::min(minPow, m_powerHistory[h][k]);
-        m_noiseEst[k] = BIAS * minPow;
+        for (int k = 0; k < NBINS; ++k) {
+            float minPower = m_powerHistory[0][k];
+            for (int h = 1; h < HIST; ++h) {
+                minPower = std::min(minPower, m_powerHistory[h][k]);
+            }
+            const float candidate = std::max(MINSTAT_BIAS * minPower, 1e-10f);
+            m_noiseEst[k] = candidate < m_noiseEst[k]
+                ? candidate
+                : NOISE_RISE * m_noiseEst[k] + (1.0f - NOISE_RISE) * candidate;
+        }
     }
+    m_histIdx = (m_histIdx + 1) % HIST;
 
     // ── 4. Decision-directed MMSE-Wiener gain ────────────────────────────────
     for (int k = 0; k < NBINS; ++k) {
@@ -141,7 +161,7 @@ void MacNRFilter::updateGainFromFrame(const float* inBuf)
 
         // A-priori SNR (decision-directed: blend previous clean estimate
         // with new a-posteriori observation)
-        const float priorSnr = ALPHA * (m_prevGain[k] * m_prevGain[k]) * m_prevPow[k]
+        const float priorSnr = ALPHA * (m_filterGain[k] * m_filterGain[k]) * m_prevPostSnr[k]
                              + (1.0f - ALPHA) * std::max(postSnr - 1.0f, 0.0f);
 
         // Raw Wiener gain, clamped to [FLOOR, 1]
@@ -150,13 +170,9 @@ void MacNRFilter::updateGainFromFrame(const float* inBuf)
 
         // ── Temporal gain smoothing ──────────────────────────────────────
         // Suppresses "musical noise" (rapid frame-to-frame gain swings)
-        m_smoothGain[k] = GSMOOTH * m_smoothGain[k] + (1.0f - GSMOOTH) * m_gainBuf[k];
-
-        // Effective gain: strength=0 → bypass (1.0), strength=1 → full NR
-        const float appliedGain = 1.0f - m_strength.load() * (1.0f - m_smoothGain[k]);
-
-        m_prevGain[k] = appliedGain;
-        m_prevPow [k] = m_powerBuf[k];
+        m_filterGain[k] = GSMOOTH * m_filterGain[k]
+                        + (1.0f - GSMOOTH) * m_gainBuf[k];
+        m_prevPostSnr[k] = postSnr;
     }
 }
 
@@ -165,7 +181,8 @@ void MacNRFilter::updateGainFromFrame(const float* inBuf)
 // inBuf  : N channel samples
 // outBuf : N synthesis samples (added into OLA buffer by caller)
 
-void MacNRFilter::synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf)
+void MacNRFilter::synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf,
+                                                  float synthesisStrength)
 {
     vDSP_vmul(inBuf, 1, m_window.data(), 1, m_frameBuf.data(), 1, N);
 
@@ -174,11 +191,15 @@ void MacNRFilter::synthesizeFrameWithCurrentGain(const float* inBuf, float* outB
     vDSP_fft_zrip(m_fftSetup, &sc, 1, LOG2N, kFFTDirection_Forward);
 
     // ── Apply shared gain to spectrum ───────────────────────────────────────
-    m_splitRe[0] *= m_prevGain[0];   // DC
-    m_splitIm[0] *= m_prevGain[H];   // Nyquist (stored in im[0] by vDSP)
+    const auto synthesisGain = [synthesisStrength](float filterGain) {
+        return 1.0f - synthesisStrength * (1.0f - filterGain);
+    };
+    m_splitRe[0] *= synthesisGain(m_filterGain[0]);   // DC
+    m_splitIm[0] *= synthesisGain(m_filterGain[H]);   // Nyquist (stored in im[0] by vDSP)
     for (int k = 1; k < H; ++k) {
-        m_splitRe[k] *= m_prevGain[k];
-        m_splitIm[k] *= m_prevGain[k];
+        const float gain = synthesisGain(m_filterGain[k]);
+        m_splitRe[k] *= gain;
+        m_splitIm[k] *= gain;
     }
 
     // ── 6. Inverse real FFT ──────────────────────────────────────────────────
@@ -219,11 +240,14 @@ QByteArray MacNRFilter::process(const QByteArray& pcm24kStereo)
     // ── OLA processing — emit one hop per iteration ──────────────────────────
     while (static_cast<int>(m_inAccum.size()) >= N) {
         updateGainFromFrame(m_inAccum.data());
+        // Snapshot once per frame so both channels receive the same shared
+        // mask even if the UI changes strength while this block is processed.
+        const float synthesisStrength = m_strength.load();
 
         std::vector<float> outFrameL(N, 0.0f);
         std::vector<float> outFrameR(N, 0.0f);
-        synthesizeFrameWithCurrentGain(m_inAccumL.data(), outFrameL.data());
-        synthesizeFrameWithCurrentGain(m_inAccumR.data(), outFrameR.data());
+        synthesizeFrameWithCurrentGain(m_inAccumL.data(), outFrameL.data(), synthesisStrength);
+        synthesizeFrameWithCurrentGain(m_inAccumR.data(), outFrameR.data(), synthesisStrength);
 
         // Add into OLA buffer
         for (int i = 0; i < N; ++i) {
