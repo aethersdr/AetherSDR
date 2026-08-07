@@ -421,6 +421,12 @@ void StripEqPanel::showForPath(ClientEqApplet::Path path)
     m_path = path;
     if (!m_audio || !m_canvas) return;
 
+    // The single strip canvas changes between RX and TX paths. Give the
+    // active path a stable bridge selector so `get eqstats` can distinguish
+    // the 25 Hz live canvas from a detached editor canvas.
+    m_canvas->setObjectName(path == ClientEqApplet::Path::Rx
+        ? QStringLiteral("stripRxEqCanvas") : QStringLiteral("stripTxEqCanvas"));
+
     ClientEq* eq = (path == ClientEqApplet::Path::Rx)
         ? m_audio->clientEqRx() : m_audio->clientEqTx();
     m_canvas->setEq(eq);

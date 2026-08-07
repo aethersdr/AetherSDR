@@ -3255,6 +3255,9 @@ add_executable(client_eq_smoothing_test
 target_include_directories(client_eq_smoothing_test PRIVATE src)
 target_link_libraries(client_eq_smoothing_test PRIVATE Qt6::Widgets)
 set_target_properties(client_eq_smoothing_test PROPERTIES AUTOMOC ON)
+add_test(NAME client_eq_smoothing_test COMMAND client_eq_smoothing_test)
+set_tests_properties(client_eq_smoothing_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
 
 add_executable(client_comp_test
     tests/client_comp_test.cpp

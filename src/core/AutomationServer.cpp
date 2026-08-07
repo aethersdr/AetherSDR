@@ -780,6 +780,32 @@ QList<QWidget*> findWidgetsByClass(const QString& cls)
     return out;
 }
 
+// Keep findWidgetsByClass exact for existing callers. EQ canvases are
+// ClientEqEditorCanvas subclasses, so their bridge enumeration deliberately
+// uses QObject inheritance instead.
+void collectClientEqCurveWidgets(QWidget* widget, QList<QWidget*>& out)
+{
+    if (widget->inherits("AetherSDR::ClientEqCurveWidget")) {
+        out.append(widget);
+    }
+    const QObjectList children = widget->children();
+    for (QObject* child : children) {
+        if (auto* childWidget = qobject_cast<QWidget*>(child)) {
+            collectClientEqCurveWidgets(childWidget, out);
+        }
+    }
+}
+
+QList<QWidget*> findClientEqCurveWidgets()
+{
+    QList<QWidget*> out;
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* topLevel : tops) {
+        collectClientEqCurveWidgets(topLevel, out);
+    }
+    return out;
+}
+
 struct ObjectInventory {
     int count{0};
     QMap<QString, int> classes;
@@ -2569,7 +2595,8 @@ const QStringList& getModelNames()
         QStringLiteral("pans"),       QStringLiteral("panstats"),
         QStringLiteral("gps"),        QStringLiteral("clock"),
         QStringLiteral("renderstats"),
-        QStringLiteral("tracedebug"), QStringLiteral("waveforms"),
+        QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
+        QStringLiteral("waveforms"),
         QStringLiteral("kiwi"),
     };
     return kModels;
@@ -2875,7 +2902,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doInvoke(a.target, a.action, a.value);
             });
 
-        add("get", {}, "get <model> [selector] [property] — live model snapshot",
+        add("get", {}, "get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.model = vtok(p, 1);
                 a.selector = vtok(p, 2);
@@ -4659,6 +4686,36 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("waveforms"), data}};
     }
+    if (model == QLatin1String("eqstats")) {
+        // Per Client-EQ paint/cache counters. This keeps the bridge
+        // GUI-header-free: widgets are located by class name and expose the
+        // snapshot through Q_INVOKABLE. `reset` returns then clears an interval.
+        const bool reset = selector == QLatin1String("reset")
+            || property == QLatin1String("reset");
+        const QString effectiveSelector = selector == QLatin1String("reset")
+            ? QString() : selector;
+        QJsonArray curves;
+        QSet<QWidget*> seen;
+        for (QWidget* w : findClientEqCurveWidgets()) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            if (!effectiveSelector.isEmpty() && w->objectName() != effectiveSelector) {
+                continue;
+            }
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "eqstatsSnapshot", Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, reset))) {
+                continue;
+            }
+            curves.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("curves"), curves}};
+    }
     if (model == QLatin1String("renderstats")) {
         // One profiling snapshot for all panadapter, waterfall, 3DSS, shared
         // scheduler, and WAVE-scope work. This deliberately reuses the widget
@@ -4768,10 +4825,31 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             waveAppendsPerSec += snap.value(QStringLiteral("appendsPerSec")).toDouble();
         }
 
+        seen.clear();
+        double eqPaintMsPerSec = 0.0;
+        double eqPaintsPerSec = 0.0;
+        QJsonArray eqCurves;
+        for (QWidget* w : findClientEqCurveWidgets()) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "eqstatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, reset))) {
+                continue;
+            }
+            eqCurves.append(QJsonObject::fromVariantMap(snap));
+            eqPaintMsPerSec += snap.value(QStringLiteral("paintMsPerSec")).toDouble();
+            eqPaintsPerSec += snap.value(QStringLiteral("paintsPerSec")).toDouble();
+        }
+
         const double measuredMainThreadMsPerSec =
             fftIngestMsPerSec + nativeWaterfallUpdateMsPerSec
             + kiwiWaterfallUpdateMsPerSec + gpuFrameMsPerSec
-            + softwarePaintMsPerSec + wavePaintMsPerSec;
+            + softwarePaintMsPerSec + wavePaintMsPerSec + eqPaintMsPerSec;
         QJsonObject totals{
             {QStringLiteral("panCount"), pans.size()},
             {QStringLiteral("visiblePanCount"), visiblePanCount},
@@ -4795,6 +4873,9 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             {QStringLiteral("wavePaintsPerSec"), wavePaintsPerSec},
             {QStringLiteral("wavePaintMsPerSec"), wavePaintMsPerSec},
             {QStringLiteral("waveAppendsPerSec"), waveAppendsPerSec},
+            {QStringLiteral("eqCurveCount"), eqCurves.size()},
+            {QStringLiteral("eqPaintsPerSec"), eqPaintsPerSec},
+            {QStringLiteral("eqPaintMsPerSec"), eqPaintMsPerSec},
             {QStringLiteral("measuredMainThreadMsPerSec"), measuredMainThreadMsPerSec},
             {QStringLiteral("waterfallAllocatedBytes"), waterfallAllocatedBytes},
             {QStringLiteral("dssAllocatedBytes"), dssAllocatedBytes},
@@ -4803,6 +4884,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                         {QStringLiteral("model"), model},
                         {QStringLiteral("pans"), pans},
                         {QStringLiteral("scopes"), scopes},
+                        {QStringLiteral("eqCurves"), eqCurves},
                         {QStringLiteral("totals"), totals}};
         if (haveSchedulerStats) {
             out[QStringLiteral("renderScheduler")] =
@@ -5165,7 +5247,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|tracedebug|clients|kiwi|wavestats|clock)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|clients|kiwi|wavestats|clock)"));
     }
 
     if (!property.isEmpty()) {
