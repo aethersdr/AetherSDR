@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 #include <QVarLengthArray>
 
@@ -70,8 +71,16 @@ void CwSidetoneGenerator::setPan(float p) noexcept
 
 void CwSidetoneGenerator::setKeyDown(bool down) noexcept
 {
-    // Timestamp on entry — this is the keyer thread's edge time, taken
-    // before any queue mechanics, so it carries the keyer's precision.
+    // Several threads legitimately produce edges — the iambic and CWX
+    // workers call in directly, and the GUI thread echoes every
+    // radio-bound edge via RadioModel::cwKeyDownChanged — so slot write
+    // and head publish must be exclusive among producers.  A short spin
+    // is cheaper than any blocking primitive at tens of edges per
+    // second; process() only consumes the tail and never takes this
+    // lock, so the audio thread stays wait-free.  The timestamp is taken
+    // inside the lock so queue order equals timestamp order — process()
+    // relies on that for its edges-are-time-ordered early-out.
+    while (m_edgeLock.test_and_set(std::memory_order_acquire)) { /* spin */ }
     const auto now = std::chrono::steady_clock::now();
     const uint32_t head = m_edgeHead.load(std::memory_order_relaxed);
     const uint32_t tail = m_edgeTail.load(std::memory_order_acquire);
@@ -79,10 +88,13 @@ void CwSidetoneGenerator::setKeyDown(bool down) noexcept
         m_edgeQueue[head % kEdgeQueueSize] = {now, down};
         m_edgeHead.store(head + 1, std::memory_order_release);
     }
-    // Always mirror the latest state: on queue overflow (pathological)
-    // process() falls back to applying this at the next block start —
-    // the pre-#4809 behavior — so the final key-up can never be lost.
+    // Mirror the latest state inside the same critical section so it can
+    // never disagree with the last queued edge: on queue overflow
+    // (pathological) process() falls back to applying this at the next
+    // block start — the pre-#4809 behavior — so the final key-up can
+    // never be lost.
     m_keyDown.store(down, std::memory_order_relaxed);
+    m_edgeLock.clear(std::memory_order_release);
 }
 
 void CwSidetoneGenerator::reset() noexcept
@@ -93,6 +105,7 @@ void CwSidetoneGenerator::reset() noexcept
     m_gateDown = false;
     m_haveAnchor = false;
     m_streamPos = 0;
+    m_idleSamples = 0;
     // Drop queued edges (consumer-side drain: only the tail moves).
     m_edgeTail.store(m_edgeHead.load(std::memory_order_acquire),
                      std::memory_order_release);
@@ -188,7 +201,9 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
     // burst anchor.  Edges that fall beyond this block stay queued.
     const int64_t blockStart = m_streamPos;
     const int64_t blockEnd   = blockStart + frames;
-    QVarLengthArray<std::pair<int, bool>, 8> blockEdges;
+    // Prealloc covers a full ring drain after a scheduler stall, so the
+    // audio callback never heap-allocates here.
+    QVarLengthArray<std::pair<int, bool>, kEdgeQueueSize> blockEdges;
     for (;;) {
         const uint32_t tail = m_edgeTail.load(std::memory_order_relaxed);
         if (tail == m_edgeHead.load(std::memory_order_acquire))
@@ -221,11 +236,22 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
         && m_keyDown.load(std::memory_order_relaxed) != m_gateDown) {
         blockEdges.append({0, m_keyDown.load(std::memory_order_relaxed)});
     }
+    if (!blockEdges.isEmpty())
+        m_idleSamples = 0;
 
     if (m_state == State::Idle && blockEdges.isEmpty()) {
         m_streamPos = blockEnd;
-        if (!m_gateDown)
-            m_haveAnchor = false;  // burst over — re-anchor next time
+        if (m_haveAnchor && !m_gateDown) {
+            // Keep the anchor across ordinary inter-element and
+            // inter-character gaps — dropping it per-gap would snap the
+            // next element's onset back to a block boundary, leaving the
+            // rhythm block-quantized while only element lengths were
+            // exact.  Only a genuine pause releases the mapping.
+            m_idleSamples += frames;
+            if (m_idleSamples >=
+                static_cast<int64_t>(m_sampleRateHz) * kReanchorIdleMs / 1000)
+                m_haveAnchor = false;
+        }
         if (tapSet) {
             QVarLengthArray<float, 1024> silence(frames);
             std::memset(silence.data(), 0, frames * sizeof(float));
@@ -292,12 +318,6 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
     if (tapSet) m_sampleTap(tapBuf.data(), frames, m_sampleRateHz);
 
     m_streamPos = blockEnd;
-    if (m_state == State::Idle && !m_gateDown
-        && m_edgeTail.load(std::memory_order_relaxed)
-               == m_edgeHead.load(std::memory_order_acquire)) {
-        m_haveAnchor = false;  // burst over — re-anchor on the next edge
-    }
-
     m_lastPitchHz = pitch;
     return wroteAny;
 }

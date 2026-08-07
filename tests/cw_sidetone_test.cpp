@@ -241,6 +241,61 @@ int main()
                      "128-frame blocks: edge placed mid-block by timestamp");
     }
 
+    // ── 8b. The anchor survives an inter-element gap ───────────────────────
+    // A second element after a real gap must onset at its timestamp-mapped
+    // sample.  With a per-gap re-anchor the queued second key-down snaps to
+    // the next block's start instead — element lengths stay exact but the
+    // rhythm (onset-to-onset spacing) stays block-quantized, which is the
+    // irregularity #4809 is about.
+    {
+        using clock = std::chrono::steady_clock;
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);
+
+        const auto a0 = clock::now();
+        gen.setKeyDown(true);
+        const auto a1 = clock::now();
+        while (clock::now() - a1 < std::chrono::milliseconds(10)) { /* spin */ }
+        gen.setKeyDown(false);
+        const auto b1 = clock::now();
+        // Inter-element gap: long enough for the ramp to finish and many
+        // Idle blocks to elapse, far below the idle re-anchor timeout.
+        while (clock::now() - b1 < std::chrono::milliseconds(40)) { /* spin */ }
+        const auto c0 = clock::now();
+        gen.setKeyDown(true);
+        const auto c1 = clock::now();
+        while (clock::now() - c1 < std::chrono::milliseconds(10)) { /* spin */ }
+        gen.setKeyDown(false);
+
+        std::vector<float> cat;
+        for (int b = 0; b < 30; ++b) {
+            auto blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+        // Second element's onset: first loud window after the quiet gap
+        // that follows the first loud run.
+        int onset2 = -1;
+        bool sawLoud = false, sawGap = false;
+        for (int i = 0; i + 8 <= static_cast<int>(cat.size()); i += 8) {
+            const float peak = maxAbs(std::vector<float>(
+                cat.begin() + i, cat.begin() + i + 8));
+            const bool loud = peak > 0.1f;
+            if (loud && !sawLoud && sawGap) { onset2 = i; break; }
+            if (!loud && sawLoud) sawGap = true;
+            sawLoud = loud;
+        }
+        const auto loNs = std::chrono::duration_cast<std::chrono::nanoseconds>(c0 - a1).count();
+        const auto hiNs = std::chrono::duration_cast<std::chrono::nanoseconds>(c1 - a0).count();
+        const int lo = static_cast<int>(loNs * 48000 / 1'000'000'000LL) - 16;
+        const int hi = static_cast<int>(hiNs * 48000 / 1'000'000'000LL) + 16;
+        ok &= expect(onset2 > 0, "cross-element: second element sounds at all");
+        ok &= expect(onset2 >= lo && onset2 <= hi,
+                     "cross-element: onset lands at the timestamp-mapped sample,"
+                     " anchor survives the gap");
+    }
+
     // ── 9. Queue-overflow fallback: the true final state still lands ───────
     // 201 toggles overflow the 64-slot ring; the last edge the ring caught
     // is a key-DOWN, but the true final state is key-UP — only the
