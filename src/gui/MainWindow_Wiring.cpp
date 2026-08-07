@@ -4561,10 +4561,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!slice) {
             return;
         }
-        const bool noCenterLock = centerLockSliceForPan(slice->panId()) < 0;
+        const QString panId = slice->panId();
+        const int lockedSliceId = centerLockSliceForPan(panId);
+        const double targetMhz = slice->frequency();
         setActiveSliceInternal(sliceId, false);
-        if (noCenterLock) {
-            centerActiveSliceInPanadapter(true, slice->frequency());
+        if (lockedSliceId < 0) {
+            centerActiveSliceInPanadapter(true, targetMhz);
+        } else if (lockedSliceId == sliceId) {
+            recenterCenterLockForPan(panId);
         }
     });
     connect(sw, &SpectrumWidget::sliceTxRequested,

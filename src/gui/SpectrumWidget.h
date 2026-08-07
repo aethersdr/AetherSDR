@@ -1707,7 +1707,6 @@ private:
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};
     bool m_offScreenSliceCenterPressPending{false};
-    QPoint m_offScreenSliceCenterPressPos;
 
     // On-screen indicators (WNB, RF Gain)
     bool m_wnbActive{false};

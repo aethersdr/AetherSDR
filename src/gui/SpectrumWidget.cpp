@@ -9414,7 +9414,6 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 m_offScreenRects[oi].contains(QPoint(static_cast<int>(ev->position().x()), y))) {
                 const auto& so = m_sliceOverlays[oi];
                 m_offScreenSliceCenterPressPending = true;
-                m_offScreenSliceCenterPressPos = ev->position().toPoint();
                 emit offScreenSliceCenterRequested(so.sliceId);
                 m_spotClickConsumed = true;   // suppress release-to-tune (#1772)
                 ev->accept();
@@ -11023,9 +11022,8 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
     // The first press may have recentered the pan and removed its indicator
     // before Qt delivers this double-click event. Consume the matching event
     // so its trailing release cannot fall through to click-to-tune.
-    if (m_offScreenSliceCenterPressPending
-        && (ev->position().toPoint() - m_offScreenSliceCenterPressPos).manhattanLength()
-            <= QApplication::startDragDistance()) {
+    if (ev->button() == Qt::LeftButton
+        && m_offScreenSliceCenterPressPending) {
         m_offScreenSliceCenterPressPending = false;
         m_spotClickConsumed = true;
         ev->accept();
