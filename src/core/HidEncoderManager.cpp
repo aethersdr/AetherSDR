@@ -586,9 +586,25 @@ void HidEncoderManager::poll()
 {
     if (!m_device || !m_parser) return;
 
-    // Read all pending reports
+    // Read all pending reports.
+    //
+    // CLAMP THE LENGTH TO THE BUFFER, not to what the parser asks for.
+    // reportSize() is a virtual answering "how big is this device's report",
+    // which is a fact about the DEVICE; m_buf is a fixed 64 bytes, which is a
+    // fact about US. Passing the first as the bound on a write into the second
+    // makes every future parser a memory-safety decision, and nothing declares
+    // that it is one. TMate2 already returns exactly 64 — the margin is zero,
+    // so the next parser for a device with a larger interrupt report overflows
+    // m_buf on the first packet it receives.
+    //
+    // Not hypothetical hardware: the StreamDeck+ HID descriptor advertises 512
+    // and its parser returns 14 only because the trailing bytes carry nothing
+    // we read (see HidDeviceParser.h). A parser that chose to honour its
+    // device's real descriptor instead would be reasonable, correct by its own
+    // lights, and would smash the stack here.
+    const size_t readLen = std::min(m_parser->reportSize(), sizeof(m_buf));
     while (true) {
-        int res = hid_read(m_device, m_buf, m_parser->reportSize());
+        int res = hid_read(m_device, m_buf, readLen);
         if (res < 0) {
             // Device disconnected
             qCDebug(lcDevices) << "HidEncoderManager: device disconnected, starting hotplug";

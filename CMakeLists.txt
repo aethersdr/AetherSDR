@@ -5024,6 +5024,13 @@ add_executable(radio_certification_math_test tests/radio_certification_math_test
 target_include_directories(radio_certification_math_test PRIVATE src)
 add_test(NAME radio_certification_math_test COMMAND radio_certification_math_test)
 
+# The hid_read() length clamp in HidEncoderManager::poll(). Pure arithmetic on
+# the bound, so no Qt, no aethercore, and no hidapi — the test must build and run
+# on configurations where HID support itself is compiled out.
+add_executable(hid_report_size_clamp_test tests/hid_report_size_clamp_test.cpp)
+target_include_directories(hid_report_size_clamp_test PRIVATE src)
+add_test(NAME hid_report_size_clamp_test COMMAND hid_report_size_clamp_test)
+
 add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
 target_include_directories(hl2_tx_loopback_test PRIVATE src)
 target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
