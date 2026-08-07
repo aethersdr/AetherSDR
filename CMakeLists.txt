@@ -1168,7 +1168,7 @@ message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-
 if(USE_SYSTEM_SQLITE)
     find_package(PkgConfig REQUIRED)
     if(PkgConfig_FOUND)
-        pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET GLOBAL sqlite3>=3.24)
+        pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET GLOBAL sqlite3>=3.33)
 
         add_library(aether_sqlite3 ALIAS PkgConfig::sqlite3)
         message(STATUS "System SQLite ${sqlite3_VERSION} via pkg-config (settings store, RFC #4603)")
