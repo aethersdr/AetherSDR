@@ -5,8 +5,9 @@
 namespace AetherSDR {
 
 // Applies a delayed dry stereo balance to a mono DSP waveform. This keeps a
-// single mono noise analysis while preserving RX left/right balance without
-// feeding dry program material back into the processed output.
+// single mono noise analysis while preserving RX left/right levels without
+// feeding dry program material back into the processed output. Independent
+// stereo content cannot survive a mono DSP path; only its level balance does.
 class MonoDspStereoAdapter {
 public:
     explicit MonoDspStereoAdapter(int processingLatencyFrames = 0);

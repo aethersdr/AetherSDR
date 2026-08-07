@@ -64,6 +64,32 @@ QByteArray makePannedNoisyStereoBlock(int frames, float leftScale, float rightSc
     return block;
 }
 
+QByteArray makeDecorrelatedPannedStereoBlock(
+    int frames, float leftScale, float rightScale)
+{
+    QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(block.data());
+    std::uint32_t leftState = 0x4d595df4U;
+    std::uint32_t rightState = 0x8f7011eeU;
+    for (int i = 0; i < frames; ++i) {
+        leftState = leftState * 1664525U + 1013904223U;
+        rightState = rightState * 22695477U + 1U;
+        const float leftNoise =
+            static_cast<float>((leftState >> 8) & 0xffffU) / 32767.5f - 1.0f;
+        const float rightNoise =
+            static_cast<float>((rightState >> 8) & 0xffffU) / 32767.5f - 1.0f;
+        const float leftDry = 0.22f * std::sin(
+            2.0f * kPi * 733.0f * static_cast<float>(i) / kSampleRate)
+            + 0.12f * leftNoise;
+        const float rightDry = 0.22f * std::sin(
+            2.0f * kPi * 997.0f * static_cast<float>(i) / kSampleRate)
+            + 0.12f * rightNoise;
+        samples[i * 2] = leftScale * leftDry;
+        samples[i * 2 + 1] = rightScale * rightDry;
+    }
+    return block;
+}
+
 QByteArray makeConstantStereoBlock(int frames, float left, float right)
 {
     QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
@@ -292,6 +318,92 @@ bool testPannedDryDoesNotReplaceProcessedWaveform()
     return true;
 }
 
+bool testQuietChannelDoesNotLatchMuted()
+{
+    MonoDspStereoAdapter adapter;
+    const int frames = kSampleRate;
+    const QByteArray dry = makeStereoBlock(frames, 0.02f, 0.001f);
+    const std::vector<float> processed(frames, 0.1f);
+
+    adapter.pushDryStereo(dry);
+    const QByteArray out = adapter.takeProcessedMono(processed.data(), frames);
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    const float expectedLeft = 2.0f * 0.02f / 0.021f;
+    const float expectedRight = 2.0f * 0.001f / 0.021f;
+    for (int i = frames / 2; i < frames; ++i) {
+        if (!nearlyEqual(samples[i * 2], 0.1f * expectedLeft, 1.0e-4)
+            || !nearlyEqual(samples[i * 2 + 1], 0.1f * expectedRight, 1.0e-4)) {
+            std::printf("quiet balance latched a channel at frame %d: L %.6f R %.6f\n",
+                        i,
+                        samples[i * 2],
+                        samples[i * 2 + 1]);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testBalanceTransitionUsesSlowEnvelope()
+{
+    MonoDspStereoAdapter adapter;
+    const int settleFrames = kSampleRate * 3;
+    const int transitionFrames = kSampleRate * 2;
+    const QByteArray initial =
+        makeDecorrelatedPannedStereoBlock(settleFrames, 0.8f, 0.2f);
+    const QByteArray swapped =
+        makeDecorrelatedPannedStereoBlock(transitionFrames, 0.2f, 0.8f);
+    const std::vector<float> settleProcessed(settleFrames, 0.1f);
+    const std::vector<float> transitionProcessed(transitionFrames, 0.1f);
+
+    adapter.pushDryStereo(initial);
+    adapter.takeProcessedMono(settleProcessed.data(), settleFrames);
+    adapter.pushDryStereo(swapped);
+    const QByteArray out = adapter.takeProcessedMono(
+        transitionProcessed.data(), transitionFrames);
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+
+    constexpr int kEarlyFrame = 1000;
+    const float earlyLeftBalance = samples[kEarlyFrame * 2] / 0.1f;
+    const float earlyRightBalance = samples[kEarlyFrame * 2 + 1] / 0.1f;
+    if (earlyLeftBalance < 1.35f || earlyRightBalance > 0.65f) {
+        std::printf("balance transition tracked too quickly: L %.6f R %.6f\n",
+                    earlyLeftBalance,
+                    earlyRightBalance);
+        return false;
+    }
+
+    const int finalFrame = transitionFrames - 1;
+    const float finalLeftBalance = samples[finalFrame * 2] / 0.1f;
+    const float finalRightBalance = samples[finalFrame * 2 + 1] / 0.1f;
+    if (finalLeftBalance > 0.8f || finalRightBalance < 1.2f) {
+        std::printf("balance transition tracked too slowly: L %.6f R %.6f\n",
+                    finalLeftBalance,
+                    finalRightBalance);
+        return false;
+    }
+    return true;
+}
+
+bool testDryUnderrunHoldsLastBalance()
+{
+    MonoDspStereoAdapter adapter;
+    const QByteArray panned = makePannedNoisyStereoBlock(kSampleRate, 0.8f, 0.2f);
+    const std::vector<float> processed(kSampleRate, 0.1f);
+
+    adapter.pushDryStereo(panned);
+    adapter.takeProcessedMono(processed.data(), kSampleRate);
+    const QByteArray out = adapter.takeProcessedMono(processed.data(), kSampleRate);
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    for (int i = 0; i < kSampleRate; ++i) {
+        if (!nearlyEqual(samples[i * 2], 0.16f, 1.0e-5)
+            || !nearlyEqual(samples[i * 2 + 1], 0.04f, 1.0e-5)) {
+            std::printf("dry underrun centered the held balance at frame %d\n", i);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool testMonoCancellationHoldsLastBalance()
 {
     MonoDspStereoAdapter adapter;
@@ -377,6 +489,15 @@ int main()
         return 1;
     }
     if (!testPannedDryDoesNotReplaceProcessedWaveform()) {
+        return 1;
+    }
+    if (!testQuietChannelDoesNotLatchMuted()) {
+        return 1;
+    }
+    if (!testBalanceTransitionUsesSlowEnvelope()) {
+        return 1;
+    }
+    if (!testDryUnderrunHoldsLastBalance()) {
         return 1;
     }
     if (!testOppositePhaseStereoUsesCenteredProcessedFallback()) {

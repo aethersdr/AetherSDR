@@ -17,18 +17,21 @@ constexpr int kCompactThresholdBytes = kSampleRate * kFrameBytes;
 constexpr float kBalanceEnvelopeCoeff = 4.0e-5f;
 constexpr float kMonoObservabilityEnvelopeCoeff = 0.006f;
 constexpr float kPowerFloor = 1.0e-10f;
+// Keep the same effective input threshold when the envelope coefficient changes.
+constexpr float kBalancePowerFloor =
+    kPowerFloor * (kBalanceEnvelopeCoeff / kMonoObservabilityEnvelopeCoeff);
 constexpr float kMonoObservabilityRatio = 0.01f;
-constexpr float kMaxBalanceGain = 2.0f;
 
 float clampSample(float sample)
 {
     return std::clamp(sample, -1.0f, 1.0f);
 }
 
-float updatePowerEnvelope(float current, float samplePower, float coefficient)
+float updatePowerEnvelope(
+    float current, float samplePower, float coefficient, float floor)
 {
     current += coefficient * (samplePower - current);
-    return current < kPowerFloor ? 0.0f : current;
+    return current < floor ? 0.0f : current;
 }
 
 } // namespace
@@ -130,15 +133,15 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
         if (m_latencyFramesRemaining > 0) {
             // Preserve the engine's own startup output while retaining dry
             // samples until the processed stream reaches the same timeline.
-            dst[i * kChannels] = clampSample(processed);
-            dst[i * kChannels + 1] = clampSample(processed);
+            dst[i * kChannels] = clampSample(processed * m_leftBalance);
+            dst[i * kChannels + 1] = clampSample(processed * m_rightBalance);
             --m_latencyFramesRemaining;
             continue;
         }
 
         if (dryFrames >= availableFrames) {
-            dst[i * kChannels] = clampSample(processed);
-            dst[i * kChannels + 1] = clampSample(processed);
+            dst[i * kChannels] = clampSample(processed * m_leftBalance);
+            dst[i * kChannels + 1] = clampSample(processed * m_rightBalance);
             continue;
         }
 
@@ -148,9 +151,15 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
         const float dryStereoPower = 0.5f * (left * left + right * right);
 
         m_dryMonoPower = updatePowerEnvelope(
-            m_dryMonoPower, dryMono * dryMono, kMonoObservabilityEnvelopeCoeff);
+            m_dryMonoPower,
+            dryMono * dryMono,
+            kMonoObservabilityEnvelopeCoeff,
+            kPowerFloor);
         m_dryStereoPower = updatePowerEnvelope(
-            m_dryStereoPower, dryStereoPower, kMonoObservabilityEnvelopeCoeff);
+            m_dryStereoPower,
+            dryStereoPower,
+            kMonoObservabilityEnvelopeCoeff,
+            kPowerFloor);
 
         const float observableMonoFloor =
             std::max(kPowerFloor, m_dryStereoPower * kMonoObservabilityRatio);
@@ -163,17 +172,21 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
         if (dryMono * dryMono >= instantObservableMonoFloor
             && m_dryMonoPower >= observableMonoFloor) {
             m_leftPower = updatePowerEnvelope(
-                m_leftPower, left * left, kBalanceEnvelopeCoeff);
+                m_leftPower,
+                left * left,
+                kBalanceEnvelopeCoeff,
+                kBalancePowerFloor);
             m_rightPower = updatePowerEnvelope(
-                m_rightPower, right * right, kBalanceEnvelopeCoeff);
+                m_rightPower,
+                right * right,
+                kBalanceEnvelopeCoeff,
+                kBalancePowerFloor);
             const float leftLevel = std::sqrt(std::max(m_leftPower, 0.0f));
             const float rightLevel = std::sqrt(std::max(m_rightPower, 0.0f));
             const float totalLevel = leftLevel + rightLevel;
             if (totalLevel > 0.0f) {
-                m_leftBalance = std::clamp(
-                    2.0f * leftLevel / totalLevel, 0.0f, kMaxBalanceGain);
-                m_rightBalance = std::clamp(
-                    2.0f * rightLevel / totalLevel, 0.0f, kMaxBalanceGain);
+                m_leftBalance = 2.0f * leftLevel / totalLevel;
+                m_rightBalance = 2.0f * rightLevel / totalLevel;
             }
         }
         dst[i * kChannels] = clampSample(processed * m_leftBalance);
