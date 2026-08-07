@@ -849,6 +849,21 @@ void MainWindow::buildMenuBar()
         AppSettings::instance().save();
     });
 
+    const bool showEibi =
+        AppSettings::instance().value("EiBiSpotsEnabled", "False").toString() == "True";
+    m_eibiSpotsAct = bandPlanMenu->addAction("Show EiBi Spots");
+    m_eibiSpotsAct->setCheckable(true);
+    m_eibiSpotsAct->setChecked(showEibi);
+    connect(m_eibiSpotsAct, &QAction::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue("EiBiSpotsEnabled", on ? "True" : "False");
+        AppSettings::instance().save();
+        if (m_eibiClient) {
+            QMetaObject::invokeMethod(m_eibiClient, [this, on] {
+                m_eibiClient->setEnabled(on);
+            });
+        }
+    });
+
     // Band plan region selector (#425)
     bandPlanMenu->addSeparator();
     auto* planGroup = new QActionGroup(bandPlanMenu);

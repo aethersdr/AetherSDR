@@ -3667,6 +3667,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
             WsjtxClient* wsjtxClient = m_wsjtxClient;
             SpotCollectorClient* spotCollectorClient = m_spotCollectorClient;
             PotaClient* potaClient = m_potaClient;
+            EibiClient* eibiClient = m_eibiClient;
             N1MMSpotClient* n1mmSpotClient = m_n1mmSpotClient;
 #ifdef HAVE_WEBSOCKETS
             FreeDvClient* freedvClient = m_freedvClient;
@@ -3682,6 +3683,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
                                       Qt::BlockingQueuedConnection);
             QMetaObject::invokeMethod(potaClient, [potaClient] { potaClient->stopPolling(); },
                                       Qt::BlockingQueuedConnection);
+            QMetaObject::invokeMethod(eibiClient, [eibiClient] { eibiClient->setEnabled(false); },
+                                      Qt::BlockingQueuedConnection);
             QMetaObject::invokeMethod(n1mmSpotClient,
                                       [n1mmSpotClient] { n1mmSpotClient->stopListening(); },
                                       Qt::BlockingQueuedConnection);
@@ -3695,6 +3698,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
             wsjtxClient->deleteLater();
             spotCollectorClient->deleteLater();
             potaClient->deleteLater();
+            eibiClient->deleteLater();
             n1mmSpotClient->deleteLater();
 #ifdef HAVE_WEBSOCKETS
             freedvClient->deleteLater();
@@ -3707,6 +3711,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
             delete m_wsjtxClient;
             delete m_spotCollectorClient;
             delete m_potaClient;
+            delete m_eibiClient;
             delete m_n1mmSpotClient;
 #ifdef HAVE_WEBSOCKETS
             delete m_freedvClient;
@@ -3717,6 +3722,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_wsjtxClient = nullptr;
         m_spotCollectorClient = nullptr;
         m_potaClient = nullptr;
+        m_eibiClient = nullptr;
         m_n1mmSpotClient = nullptr;
 #ifdef HAVE_WEBSOCKETS
         m_freedvClient = nullptr;
