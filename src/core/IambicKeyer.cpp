@@ -165,6 +165,14 @@ void IambicKeyer::workerLoop()
         bool wantDit = dit, wantDah = dah;
         firstInSqueeze = true;
 
+        // Mode B memory latch — one definition for the three sites that
+        // must agree (element-start snapshot + the two in-wait live
+        // checks).  Caller holds m_mu.
+        const auto latchOppositeLocked = [this](Element cur) {
+            if (cur == Element::Dit && m_dahPressed) m_dahMemory = true;
+            if (cur == Element::Dah && m_ditPressed) m_ditMemory = true;
+        };
+
         while (!m_stopRequested.load(std::memory_order_acquire)
                && (wantDit || wantDah || m_ditMemory || m_dahMemory)) {
 
@@ -204,8 +212,7 @@ void IambicKeyer::workerLoop()
             // mid-element opposite-paddle tap that a start snapshot would miss.
             if (currentMode == Mode::IambicB) {
                 std::lock_guard<std::mutex> lk(m_mu);
-                if (next == Element::Dit && m_dahPressed) m_dahMemory = true;
-                if (next == Element::Dah && m_ditPressed) m_ditMemory = true;
+                latchOppositeLocked(next);
             }
 
             // ── Element on ─────────────────────────────────────────────
@@ -219,10 +226,8 @@ void IambicKeyer::workerLoop()
                     m_cv.wait_until(lk, onDeadline);
                     // Mode B: latch memory when opposite paddle is held
                     // mid-element.
-                    if (currentMode == Mode::IambicB) {
-                        if (next == Element::Dit && m_dahPressed) m_dahMemory = true;
-                        if (next == Element::Dah && m_ditPressed) m_ditMemory = true;
-                    }
+                    if (currentMode == Mode::IambicB)
+                        latchOppositeLocked(next);
                 }
             }
             emitKeyDown(false);
@@ -236,10 +241,8 @@ void IambicKeyer::workerLoop()
                 while (std::chrono::steady_clock::now() < offDeadline
                        && !m_stopRequested.load(std::memory_order_acquire)) {
                     m_cv.wait_until(lk, offDeadline);
-                    if (currentMode == Mode::IambicB) {
-                        if (next == Element::Dit && m_dahPressed) m_dahMemory = true;
-                        if (next == Element::Dah && m_ditPressed) m_ditMemory = true;
-                    }
+                    if (currentMode == Mode::IambicB)
+                        latchOppositeLocked(next);
                 }
             }
 
