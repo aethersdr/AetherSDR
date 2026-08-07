@@ -1587,6 +1587,9 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
             targetVfo->setSmartSdrPlus(sub.contains("SmartSDR+"));
             targetVfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
             targetVfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
+            targetVfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
+            targetVfo->setHasManualNotch(m_radioModel.hasManualNotch());
+            targetVfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
             wireVfoWidget(targetVfo, s);
             targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
             wireVfoTelemetry(targetVfo, s);
@@ -2128,6 +2131,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
         vfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
         vfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
+        vfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
+        vfo->setHasManualNotch(m_radioModel.hasManualNotch());
+        vfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
 
         wireVfoWidget(vfo, s);
 

@@ -67,7 +67,8 @@ public:
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setTxSlice(int sliceId) override;
     void setActiveSlice(int sliceId) override;
-    void setPanCenter(const QString& panId, double hz) override;
+    void setPanCenter(const QString& panId, double hz,
+                      PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanRfGain(const QString& panId, int gainDb) override;
 

@@ -504,6 +504,33 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     req.params.insert(QStringLiteral("icom.serialPort"), IcomSettings::serialPort());
     req.params.insert(QStringLiteral("icom.audioPort"), IcomSettings::audioPort());
     req.params.insert(QStringLiteral("icom.civAddress"), IcomSettings::civAddress());
+
+    // LOW BANDWIDTH MODE REACHES THIS FAMILY NOW.
+    //
+    // The connect dialog has offered the checkbox all along and it did nothing
+    // here — `LowBandwidthConnect` was read on the Flex path only, so the one
+    // control an operator reaches for on a weak link was inert on the family
+    // that needs it most. An Icom session is uncompressed LPCM in both
+    // directions: 768 kbps each way at 48 kHz, and a measured link starves at
+    // that rate — transmit audio stops reaching the modulator for seconds and
+    // the CI-V replies sharing the link stretch from 200 ms to 1.4 s.
+    //
+    // 16 kHz is a third of the traffic and costs nothing audible: SSB is a
+    // 3 kHz passband and FT8 is one tone.
+    // NOT WIRED YET, and deliberately: see below.
+    //
+    // Lowering the rate alone BREAKS TRANSMIT. kAudioFrameBytes is 1920, which
+    // is 20 ms at 48 kHz and 60 ms at 16 kHz — the frame SIZE is fixed while
+    // its DURATION scales with the rate, so the radio's jitter buffer sees
+    // frames at a third of the cadence it expects and discards them. Measured:
+    // zero forward power for a full 20 s key, nothing audible on a receiver
+    // beside the radio, and no trace on the radio's own panadapter, while the
+    // CI-V link stayed healthy at 255 ms meter ages.
+    //
+    // The framing has to scale with the rate before this can be offered, and
+    // the 1364/556 packet split is 48 kHz-shaped too. Until then a 48 kHz
+    // session that occasionally stutters beats a 16 kHz one that cannot
+    // transmit at all.
 }
 
 std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
@@ -760,10 +787,31 @@ void RadioModel::setupBackend(const QString& family)
         if (auto* pan = resolveBackendPan(panId)) pan->setRfGain(gain);
     });
     connect(m_backend.get(), &IRadioBackend::panRfGainInfoChanged, this,
-            [this](const QString& panId, int low, int high, int step) {
+            [this](const QString& panId, int low, int high, int step,
+                   const QString& unitSuffix) {
         if (step <= 0)
             return;                       // a zero step would freeze the slider
-        if (auto* pan = resolveBackendPan(panId)) pan->setRfGainInfo(low, high, step);
+        if (auto* pan = resolveBackendPan(panId))
+            pan->setRfGainInfo(low, high, step, unitSuffix);
+    });
+    // Discrete receive front-end stages. Labels describe the control; the step
+    // is where it currently sits. Both are pass-through — the backend owns the
+    // vocabulary, because only it knows what its radio's positions are called.
+    connect(m_backend.get(), &IRadioBackend::panPreampInfoChanged, this,
+            [this](const QString& panId, const QStringList& labels) {
+        if (auto* pan = resolveBackendPan(panId)) pan->setPreampLabels(labels);
+    });
+    connect(m_backend.get(), &IRadioBackend::panPreampChanged, this,
+            [this](const QString& panId, int step) {
+        if (auto* pan = resolveBackendPan(panId)) pan->setPreampStep(step);
+    });
+    connect(m_backend.get(), &IRadioBackend::panAttenuatorInfoChanged, this,
+            [this](const QString& panId, const QStringList& labels) {
+        if (auto* pan = resolveBackendPan(panId)) pan->setAttenuatorLabels(labels);
+    });
+    connect(m_backend.get(), &IRadioBackend::panAttenuatorChanged, this,
+            [this](const QString& panId, int step) {
+        if (auto* pan = resolveBackendPan(panId)) pan->setAttenuatorStep(step);
     });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
@@ -1029,6 +1077,10 @@ void RadioModel::setupBackend(const QString& family)
             });
             connect(s, &SliceModel::autoNotchCommandIssued, this, [this, s](bool on) {
                 if (m_backend) m_backend->setSliceAutoNotch(s->sliceId(), on);
+            });
+            connect(s, &SliceModel::manualNotchCommandIssued, this,
+                    [this, s](bool on, int position) {
+                if (m_backend) m_backend->setSliceManualNotch(s->sliceId(), on, position);
             });
             connect(s, &SliceModel::squelchCommandIssued, this,
                     [this, s](bool on, int level) {
@@ -1636,6 +1688,16 @@ RadioModel::RadioModel(QObject* parent)
     // state-mirroring signal would hand the radio's own echo back as a fresh
     // command. Flex takes this as text and ignores the seam; a host-modulating
     // backend runs the compressor in our DSP and also ignores it.
+    // VOX and the ATU: the wire text these also emit is a Flex command and
+    // reaches nothing on any other family, so the intent has to cross the seam.
+    connect(&m_transmitModel, &TransmitModel::voxCommandIssued, this,
+            [this](bool on, int level, int delayMs) {
+        if (m_backend) m_backend->setVox(on, level, delayMs);
+    });
+    connect(&m_transmitModel, &TransmitModel::atuCommandIssued, this,
+            [this](bool start) {
+        if (m_backend) m_backend->setAtu(start);
+    });
     connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
             [this](bool on, int level) {
         if (m_backend && !m_flexBackend)
@@ -3354,6 +3416,31 @@ bool RadioModel::hasRadioSideDsp() const
     return backendCapabilities().hasRadioSideDsp;
 }
 
+bool RadioModel::hasLmsNoiseFilters() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasLmsNoiseFilters;
+}
+
+bool RadioModel::hasManualNotch() const
+{
+    // NOT permissive — see the header. A button nothing has claimed stays off.
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    return backendCapabilities().hasManualNotch;
+}
+
+QList<int> RadioModel::radioFilterWidthsHz() const
+{
+    if (!m_backend || !isConnected()) {
+        return {};
+    }
+    return backendCapabilities().rxFilterWidthsHz;
+}
+
 bool RadioModel::hasRadioSideWaterfallAutoBlack() const
 {
     if (!m_backend || !isConnected()) {
@@ -4537,8 +4624,17 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     // instead; the backend reports the new centre back via
     // panCenterBandwidthChanged, which drives the model.
     if (!m_flexBackend && m_backend) {
-        if (hasCenter)
-            m_backend->setPanCenter(backendPanIdFor(panId), centerMhz * 1.0e6);
+        if (hasCenter) {
+            // A centre that arrives WITHOUT a bandwidth is a drag; one that
+            // arrives with a bandwidth rode along with a zoom. The distinction
+            // is load-bearing on a backend whose scope window is slaved to the
+            // VFO — see IRadioBackend::PanCenterIntent — and it is free here
+            // because the two callers already reach this function differently.
+            m_backend->setPanCenter(
+                backendPanIdFor(panId), centerMhz * 1.0e6,
+                hasBandwidth ? IRadioBackend::PanCenterIntent::Range
+                             : IRadioBackend::PanCenterIntent::Drag);
+        }
         // Bandwidth goes through the seam for the same reason center does. This
         // used to fall straight into the model write below, which is why zooming
         // an HL2 produced black bars: the span the operator asked for became the
@@ -4772,6 +4868,23 @@ void RadioModel::setPanRfGainFor(const QString& panId, int gain)
         return;
     }
     sendCmd(QString("display pan set %1 rfgain=%2").arg(panId).arg(gain));
+}
+
+// The discrete front-end stages. No Flex fallback: a Flex publishes no preamp
+// or attenuator labels, so its controls never appear and nothing can call
+// these. Routing them through the seam unconditionally keeps that true — a
+// `display pan set` fallback here would be wire text for a control that does
+// not exist.
+void RadioModel::setPanPreampFor(const QString& panId, int step)
+{
+    if (panId.isEmpty() || !m_backend) return;
+    m_backend->setPanPreamp(backendPanIdFor(panId), step);
+}
+
+void RadioModel::setPanAttenuatorFor(const QString& panId, int step)
+{
+    if (panId.isEmpty() || !m_backend) return;
+    m_backend->setPanAttenuator(backendPanIdFor(panId), step);
 }
 
 // ── Display controls — FFT ─────────────────────────────────────────────────

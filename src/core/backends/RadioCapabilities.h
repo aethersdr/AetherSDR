@@ -35,6 +35,20 @@ struct RadioCapabilities {
     QString family;   // backend id: "flex", "kiwi", … (stable, lowercase)
     QString model;    // radio model string as reported by the hardware
 
+    // Who MADE it, as an operator would say it — "Icom", "FlexRadio". Display
+    // only; nothing branches on it. Empty means "not reported", and a consumer
+    // then shows the model alone rather than inventing a brand.
+    //
+    // Separate from `family` because family is a wire-protocol id, not a name.
+    // They coincide today only by accident of having one backend per vendor.
+    //
+    // The status bar shows this ABOVE the model, and only when the model does
+    // not already carry it: "FLEX-8400M" says FlexRadio in the string itself,
+    // so a brand line above it would be a stutter, while "IC-705" says nothing
+    // to anyone who does not already know the radio. That rule lives at the
+    // display site — this field just reports the truth and lets the UI decide.
+    QString manufacturer;
+
     // Receive
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
@@ -133,6 +147,38 @@ struct RadioCapabilities {
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
+
+    // The WDSP LMS / FFT filter family — NRL (leaky LMS noise reduction), ANFL
+    // (LMS notch) and ANFT (FFT notch). A THIRD tier under hasRadioSideDsp,
+    // narrower than that flag and orthogonal to hasExtendedDsp.
+    //
+    // It exists because hasRadioSideDsp turned out to be two claims wearing one
+    // name: "the radio runs its own receive DSP" and "the radio runs FlexRadio's
+    // particular set of it". An Icom is emphatically the first and not the
+    // second — it has noise reduction, a noise blanker, an auto notch and a
+    // manual notch, and nothing resembling NRL/ANFL/ANFT. Declaring
+    // hasRadioSideDsp on it therefore lit up three buttons whose intents reach
+    // no register on that radio: the classic HERMES §17 shape, where the control
+    // moves, the setting persists and the audio never changes.
+    //
+    // Flex only, today. The name is the CONCEPT, not the vendor — a future
+    // radio with LMS filters says true and gets the same three buttons.
+    bool hasLmsNoiseFilters = false;
+
+    // The radio has ONE operator-placed notch in its own DSP: an enable and a
+    // position within the passband. The IC-705 spends 16 48 on the enable and
+    // 14 0D on the position (0000..0255 across the passband), with 16 57
+    // choosing one of three widths.
+    //
+    // NOT the tracking notch filters (TnfModel). A TNF is pinned to an absolute
+    // frequency, the radio keeps several, and they survive tuning; this is one
+    // notch at an offset inside the current passband, which is a different
+    // instrument with a different control. Conflating them would have meant a
+    // +TNF button that created a second notch by silently moving the first.
+    //
+    // Distinct from the AUTO notch (hasRadioSideDsp's ANF), which finds its own
+    // tone. A radio can have either, both or neither.
+    bool hasManualNotch = false;
 
     // The radio reports the PA supply-voltage rail as telemetry — the value the
     // status bar renders directly under the PA temperature. A radio that never

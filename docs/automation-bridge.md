@@ -2699,6 +2699,89 @@ non-`-120` `rmsDbfs` means audio is arriving, and `rejectBadFcs` climbing while
 `framesAccepted` does not means the decoder is finding structure and losing it
 to bit errors.
 
+### `controls`
+
+The CI-V control and meter registry, joined against what is actually wired.
+**Icom only** — other families answer "no control registry".
+
+This exists because a half-wired control is indistinguishable from a working one
+by inspection. The RF-gain slider drove the *preamp* for weeks; three filter
+buttons reached one filter in AM and one in CW; the ADC-overflow meter was
+polled, answered, and silently dropped every reply. Each was found by an operator
+noticing a wrong number, one control at a time. This verb answers for all of them
+at once.
+
+**`controls map`** — every CI-V message the backend names, with its wire address,
+raw and seam ranges, the seam verb it maps to, the UI control that drives it, and
+what it has actually done this session. Read-only; works with no radio attached.
+
+```json
+→ {"cmd":"controls","args":"map"}
+← {"ok":true,"controls":"map","result":[
+   {"id":"_diagnostics","framesObserved":591,"controlsSeen":26,"controlsSent":2},
+   {"id":"rf.gain","civ":"14 02","plane":"pan","encoding":"level255",
+    "wiring":"both","rawRange":"0..255","neutralRange":"0..100 %",
+    "seamVerb":"setPanRfGain","uiTarget":"panRfGainSlider","readAtConnect":true,
+    "sentThisSession":true,"seenThisSession":true,"gap":"",
+    "note":"PERCENT, not dB — the register has no published decibel mapping."},
+   {"id":"af.gain","civ":"14 01","wiring":"decode-only","seamVerb":"",
+    "uiTarget":"sliceAudioGainSlider",
+    "gap":"readable but not settable — no seam verb reaches this register"}]}
+```
+
+`wiring` is the declared state — `both`, `send-only`, `decode-only` or
+`declared-only` (a constant with no call sites at all). `gap` names the problem
+in words when there is one, so a caller can sort by it. `sentThisSession` and
+`seenThisSession` are *observed*, not declared: a row claiming `both` that has
+never been seen after a full connect is the interesting case. The
+`_diagnostics` row separates "the radio is silent" from "the registry matches
+nothing" — without it an all-false `seen` column is ambiguous.
+
+**`controls meters`** — the 0x15 meter registry with each meter's scale, poll
+interval, and **how long ago it last produced a reading**.
+
+```json
+→ {"cmd":"controls","args":"meters"}
+← {"ok":true,"result":[
+   {"id":"SLC:LEVEL","civ":"15 02","unit":"dBm","range":"-140..-10",
+    "pollMs":100,"when":"rx-only","visible":true,"ageMs":142,"status":"LIVE"},
+   {"id":"RAD:OVF","civ":"15 07","unit":"Percent","range":"0..1",
+    "pollMs":500,"when":"rx-only","visible":true,"ageMs":-1,
+    "status":"NEVER FED — defined and no reading has ever arrived"}]}
+```
+
+Age is the point. A meter that is defined and never fed renders as a real
+instrument reading a quiet band, which is worse than a missing one; a definition
+alone proves nothing. `IDLE` distinguishes a transmit-only meter that is
+correctly quiet while receiving from one that is broken.
+
+**`controls scrub [id|plane]`** — the linkage check. Drives every settable
+control through its seam verb **at its current value**, then looks for the frame
+on the wire. Nothing on the radio moves.
+
+```json
+→ {"cmd":"controls","args":"scrub"}
+← {"ok":true,"result":{"checked":25,"linked":17,"broken":0,"notTested":8,
+   "rows":[{"id":"rf.gain","civ":"14 02","seamVerb":"setPanRfGain",
+            "reachedWire":true,"status":"LINKED",
+            "verdict":"the seam verb put this command on the wire"},
+           {"id":"rit.offset","civ":"21 00","status":"NOT-TESTED",
+            "verdict":"no safe way to re-assert this without changing the
+                       operator's setting — not a fault, not a pass"}]}}
+```
+
+Three outcomes, not two. `NOT-TESTED` is a real state — a control the scrub
+could not drive without changing the operator's setting — and collapsing it into
+either pass or fail would misreport it.
+
+The scrub clears the enable-dedupe sentinels first: NR, NB and both notches
+suppress an enable that matches what was last sent, which is correct in normal
+use and would otherwise swallow exactly the frame being tested. It re-sends the
+same value, so the radio still does not move.
+
+**PTT, the antenna tuner and power-off are never scrubbed.** Two of them transmit
+and the third powers the radio off over a link that cannot power it back on.
+
 ### `link`
 
 Connected-mode AX.25: the terminal (calling side) and the Personal Mailbox
@@ -3018,7 +3101,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 61 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 62 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3070,6 +3153,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <send <hex>\|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated) |
+| `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

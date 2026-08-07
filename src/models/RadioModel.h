@@ -331,6 +331,24 @@ public:
     // Says nothing about the CLIENT-side modules (NR2/NR4/MNR/BNR/DFNR/RN2),
     // which run on this host and work on any family.
     bool hasRadioSideDsp() const;
+    // The two NARROWER claims under it — see the capability struct.
+    //
+    // hasLmsNoiseFilters() keeps hasRadioSideDsp()'s permissive rule: NRL,
+    // ANFL and ANFT existed before the flag did, and hiding them on a
+    // Flex the moment it disconnects would be a regression rather than an
+    // honesty gain.
+    //
+    // hasManualNotch() does NOT, and that asymmetry is the point. MN is a
+    // new button; a permissive default would show it on every radio in
+    // the window before a backend reports, including the Flexes that
+    // notch with TNFs instead and will never claim it.
+    bool hasLmsNoiseFilters() const;
+    bool hasManualNotch() const;
+    // The filter widths the radio declares, widest first, or an EMPTY list
+    // when it declares none. Empty is the permissive answer here — it means
+    // "use the operator's own presets", which is what every radio without a
+    // fixed IF ladder wants and what a disconnected app should show.
+    QList<int> radioFilterWidthsHz() const;
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.
@@ -807,6 +825,12 @@ public:
     // menu belongs to one panadapter and must drive that one, not whichever
     // happens to be active when the slider moves.
     void setPanRfGainFor(const QString& panId, int gain);
+    // Discrete receive front-end stages — `step` indexes the label list the
+    // backend published for that pan (PanadapterModel::preampLabels /
+    // attenuatorLabels). Seam-only; see the .cpp for why there is no Flex
+    // wire-text fallback.
+    void setPanPreampFor(const QString& panId, int step);
+    void setPanAttenuatorFor(const QString& panId, int step);
 
     // Display controls — FFT (display pan set)
     void setPanAverage(int frames);

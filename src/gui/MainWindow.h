@@ -1358,8 +1358,17 @@ private:
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
     QLabel* m_fdxIndicator{nullptr};
+    // Manufacturer row above the model. Hidden unless the connected radio
+    // reports a make its own model string does not already carry — see
+    // refreshRadioIdentityLabels().
+    QLabel* m_radioMakeLabel{nullptr};
     QLabel* m_radioInfoLabel{nullptr};
     QLabel* m_radioVersionLabel{nullptr};
+    // Last manufacturer the backend reported. Cached because it arrives on
+    // capabilitiesChanged while the model and version arrive on infoChanged,
+    // and every one of those edges has to repaint the same three labels.
+    QString m_radioManufacturer;
+    void refreshRadioIdentityLabels();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)

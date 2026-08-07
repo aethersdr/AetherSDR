@@ -341,6 +341,13 @@ signals:
     // transition and overwrite the settings the operator had just dialled in
     // there. applySpeechProcessorState() never emits this.
     void speechProcessorCommandIssued(bool on, int level);
+    // VOX and the ATU, for the same reason the speech processor has one: the
+    // wire text above IS the command on a Flex and reaches nothing anywhere
+    // else, so a non-Flex backend needs the intent as a signal. Emitted from
+    // the set* / atu* methods only, never from applyStatus() — echoing a status
+    // back at the radio as a command is how a control starts fighting itself.
+    void voxCommandIssued(bool on, int level, int delayMs);
+    void atuCommandIssued(bool start);
     // Fires only when cwPitch actually changes. Use this instead of
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).

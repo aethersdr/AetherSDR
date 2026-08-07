@@ -293,6 +293,7 @@ RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
     caps.family = familyName();
+    caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     caps.maxPanadapters = 1;
@@ -304,6 +305,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
+    caps.hasLmsNoiseFilters = false;
+    caps.hasManualNotch = false;
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
@@ -494,7 +497,7 @@ void SimBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emit sliceChanged(kSliceId, d);
 }
 
-void SimBackend::setPanCenter(const QString& panId, double hz)
+void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
 {
     // The demo's panadapter centre is driven by its owned PanadapterStream (Route
     // A), which paints a fixed synthetic window around the slice, so there is no
