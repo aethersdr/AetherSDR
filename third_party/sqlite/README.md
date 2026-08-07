@@ -10,6 +10,10 @@ Only `sqlite3.c` + `sqlite3.h` are vendored (no shell, no extension header —
 extension loading is compiled out). Compile options are set in the
 `aether_sqlite3` target in the top-level `CMakeLists.txt`, not here.
 
+With `-DUSE_SYSTEM_SQLITE=ON` passed to CMake during configuration,
+the build can use system SQLite library, however when doing so
+it cannot be ensured that the library is properly hardened.
+
 ## Updating
 
 1. Download the new amalgamation zip from https://www.sqlite.org/download.html

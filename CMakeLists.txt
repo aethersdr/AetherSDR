@@ -1171,7 +1171,9 @@ if(USE_SYSTEM_SQLITE)
         pkg_check_modules(sqlite3 REQUIRED IMPORTED_TARGET GLOBAL sqlite3>=3.33)
 
         add_library(aether_sqlite3 ALIAS PkgConfig::sqlite3)
-        message(STATUS "System SQLite ${sqlite3_VERSION} via pkg-config (settings store, RFC #4603)")
+        message(STATUS "System SQLite ${sqlite3_VERSION} via pkg-config (settings store, RFC #4603).
+            With system library, it cannot be guaranted that the SQLite is properly hardened.
+        ")
     endif()
 else()
     add_library(aether_sqlite3 STATIC
