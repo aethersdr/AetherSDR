@@ -13441,7 +13441,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         waterfallRowFrequencyFrames,
         scrollSampleOffsetUnit,
         m_wfGpuTexH > 0 ? 1.0f / static_cast<float>(m_wfGpuTexH) : 0.0f,
-        0.0f,
+        static_cast<float>(m_wfGpuTexH),
         0.0f,
     };
     static_assert(sizeof(uniforms) == kWaterfallUboFloats * sizeof(float),

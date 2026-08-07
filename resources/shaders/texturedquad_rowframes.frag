@@ -14,7 +14,7 @@ layout(std140, binding = 0) uniform Uniforms {
     float rowFrequencyFrames;
     float scrollSampleOffsetUnit;
     float texelHeightUnit;
-    float padding6;
+    float waterfallRows;
     float padding7;
 };
 
@@ -59,7 +59,7 @@ void main()
     // is remapped through its own frame while the vertical motion remains
     // phase-stable instead of alternating sharp/blurred.
     float unit = max(texelHeightUnit, 0.000001);
-    float rows = max(floor(1.0 / unit + 0.5), 1.0);
+    float rows = max(waterfallRows, 1.0);
     float logicalTexel =
         (v_uv.y + scrollSampleOffsetUnit) / unit - 0.5;
     float base = floor(logicalTexel);

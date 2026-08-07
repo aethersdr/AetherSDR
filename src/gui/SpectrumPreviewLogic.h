@@ -360,9 +360,10 @@ inline int waterfallVisibleRowForAge(int writeRowOrigin, int ageRows,
     return (origin + age) % height;
 }
 
-// The cubic waterfall shader must clamp source ages in logical history before
-// mapping them into the physical ring. Wrapping an out-of-range tap directly
-// would blend the newest and oldest rows across the visible history boundary.
+// Mirror of texturedquad.frag and texturedquad_rowframes.frag: both cubic
+// shaders clamp source ages in logical history before mapping them into the
+// physical ring. Wrapping an out-of-range tap directly would blend the newest
+// and oldest rows across the visible history boundary.
 inline int waterfallCubicPhysicalRowForSourceAge(int writeRowOrigin,
                                                  int sourceAge, int height)
 {
