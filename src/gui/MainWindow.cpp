@@ -4065,6 +4065,79 @@ QJsonObject MainWindow::automationTxTimerSnapshot() const
     return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
 }
 
+QJsonObject MainWindow::automationAppletPanelSnapshot() const
+{
+    if (!m_appletPanel)
+        return QJsonObject{{QStringLiteral("present"), false}};
+
+    bool floating = false, dockedLeft = false, visible = false;
+    appletPanelState(&floating, &dockedLeft, &visible);
+
+    QJsonObject snapshot{
+        {QStringLiteral("present"),  true},
+        {QStringLiteral("floating"), floating},
+        {QStringLiteral("side"),     dockedLeft ? QStringLiteral("left")
+                                                : QStringLiteral("right")},
+        {QStringLiteral("visible"),  visible},
+    };
+    // Geometry is what proves the panel actually landed where the state says
+    // it did — a caller asserting only on the flags would miss a panel that
+    // is "docked left" but zero-width.
+    const QRect g = m_appletPanel->geometry();
+    snapshot.insert(QStringLiteral("geometry"),
+                    QJsonObject{{QStringLiteral("x"), g.x()},
+                                {QStringLiteral("y"), g.y()},
+                                {QStringLiteral("w"), g.width()},
+                                {QStringLiteral("h"), g.height()}});
+    if (m_splitter && !floating) {
+        snapshot.insert(QStringLiteral("splitterIndex"),
+                        m_splitter->indexOf(m_appletPanel));
+        snapshot.insert(QStringLiteral("panIndex"),
+                        m_splitter->indexOf(m_panStack));
+    }
+    return snapshot;
+}
+
+bool MainWindow::automationAppletPanelAction(const QString& action,
+                                             const QString& value,
+                                             QString* error)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (!m_appletPanel)
+        return fail(QStringLiteral("applet panel not built"));
+
+    bool floating = false, dockedLeft = false, visible = false;
+    appletPanelState(&floating, &dockedLeft, &visible);
+
+    if (action == QLatin1String("dock")) {
+        if (value == QLatin1String("left"))
+            applyAppletPanelState(false, true, true);
+        else if (value == QLatin1String("right"))
+            applyAppletPanelState(false, false, true);
+        else
+            return fail(QStringLiteral("dock needs left|right"));
+    } else if (action == QLatin1String("float")) {
+        if (value == QLatin1String("on"))
+            applyAppletPanelState(true, dockedLeft, true);
+        else if (value == QLatin1String("off"))
+            applyAppletPanelState(false, dockedLeft, true);
+        else
+            return fail(QStringLiteral("float needs on|off"));
+    } else if (action == QLatin1String("show")) {
+        applyAppletPanelState(floating, dockedLeft, true);
+    } else if (action == QLatin1String("hide")) {
+        // Hiding is only meaningful docked — a hidden float window is the
+        // unreachable state applyAppletPanelState() refuses to represent.
+        applyAppletPanelState(false, dockedLeft, false);
+    } else {
+        return fail(QStringLiteral("unknown applet action: ") + action);
+    }
+    return true;
+}
+
 QJsonObject MainWindow::automationTitleBarSnapshot() const
 {
     if (!m_titleBar)
@@ -4670,29 +4743,25 @@ void MainWindow::buildUI()
     // applet panel; clicking the inactive-side icon moves it there (and
     // shows it if hidden).
     auto handleDockClick = [this](bool wantLeft) {
-        // If currently floating, dock back first so the float window is
-        // torn down via the canonical path; otherwise reparenting the
-        // contents into the splitter leaves an empty float window alive
-        // and visible (the "black box" in #2584).
-        if (m_appletPanelFloatWindow) {
-            toggleAppletPanelFloating(false);
-        }
-        const bool dockedLeft = AppSettings::instance()
-            .value("AppletPanelDockedLeft", "False").toString() == "True";
-        const bool visible = m_appletPanel && m_appletPanel->isVisible();
-        if (visible && dockedLeft == wantLeft) {
-            setAppletPanelVisible(false);
-        } else {
-            if (!visible) setAppletPanelVisible(true);
-            if (dockedLeft != wantLeft) setAppletPanelDockedLeft(wantLeft);
-        }
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        // Clicking the wall the panel already occupies is the "hide" gesture.
+        // That only reads as "hide" when the panel is genuinely docked there
+        // and on screen — while floating, or while hidden, the same click
+        // means "bring it back to this wall", which is why the floating case
+        // must not fall through to the hide branch.
+        const bool alreadyThere = !floating && visible && dockedLeft == wantLeft;
+        applyAppletPanelState(/*floating=*/false, wantLeft, !alreadyThere);
     };
     connect(m_titleBar, &TitleBar::dockAppletLeftRequested,  this, [handleDockClick]() { handleDockClick(true);  });
     connect(m_titleBar, &TitleBar::dockAppletRightRequested, this, [handleDockClick]() { handleDockClick(false); });
-    // Pop-out icon: toggle floating via the shared helper so the icon, the
-    // Ctrl+Shift+S shortcut, and the float-window close-X stay in sync.
+    // Pop-out icon: flip only the floating field, leaving the wall alone, so
+    // the icon, the Ctrl+Shift+S shortcut and the float-window close-X all
+    // agree on what one activation does.
     connect(m_titleBar, &TitleBar::popOutAppletRequested, this, [this]() {
-        toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        applyAppletPanelState(!floating, dockedLeft, true);
     });
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
@@ -8757,12 +8826,22 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // Move m_appletPanel either before m_panStack (left dock) or to the end
     // (right dock).  insertWidget()/addWidget() on an already-attached child
     // reparents it to the new index without destroy/recreate.
-    if (left) {
-        const int panIdx = m_splitter->indexOf(m_panStack);
-        if (panIdx < 0) return;
-        m_splitter->insertWidget(panIdx, m_appletPanel);
-    } else {
-        m_splitter->addWidget(m_appletPanel);
+    //
+    // Both calls must be skipped when the panel is ALREADY on the requested
+    // wall, because neither is idempotent: insertWidget() detaches the panel
+    // first, which shifts m_panStack down one index, so re-inserting at the
+    // now-stale panIdx drops the panel on the far side and silently flips the
+    // dock.  Re-asserting the current side is a legitimate call (it happens
+    // on un-float and on restore), so the guard lives here rather than in the
+    // callers.
+    const int panIdx    = m_splitter->indexOf(m_panStack);
+    const int appletIdx = m_splitter->indexOf(m_appletPanel);
+    if (panIdx < 0) return;
+    const bool alreadyOnWall =
+        appletIdx >= 0 && (left ? appletIdx < panIdx : appletIdx > panIdx);
+    if (!alreadyOnWall) {
+        if (left) m_splitter->insertWidget(panIdx, m_appletPanel);
+        else      m_splitter->addWidget(m_appletPanel);
     }
 
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
@@ -8845,6 +8924,68 @@ void MainWindow::toggleAppletPanelFloating(bool floating)
                 .value("AppletPanelDockedLeft", "False").toString() == "True";
             m_titleBar->setAppletDockState(false, dockedLeft);
         }
+    }
+}
+
+void MainWindow::appletPanelState(bool* floating, bool* dockedLeft,
+                                  bool* visible) const
+{
+    // Floating and visibility come off the widgets — the settings store lags
+    // by a save and cannot be trusted mid-transition.  The dock side has no
+    // widget to read while the panel is floating (it is out of the splitter),
+    // so that one field falls back to the persisted wall it will return to.
+    if (floating)
+        *floating = m_appletPanelFloatWindow != nullptr;
+    if (visible)
+        *visible = m_appletPanel && m_appletPanel->isVisible();
+    if (dockedLeft) {
+        *dockedLeft = AppSettings::instance()
+            .value("AppletPanelDockedLeft", "False").toString() == "True";
+        if (!m_appletPanelFloatWindow && m_splitter && m_appletPanel && m_panStack) {
+            const int appletIdx = m_splitter->indexOf(m_appletPanel);
+            const int panIdx    = m_splitter->indexOf(m_panStack);
+            if (appletIdx >= 0 && panIdx >= 0)
+                *dockedLeft = appletIdx < panIdx;
+        }
+    }
+}
+
+void MainWindow::applyAppletPanelState(bool floating, bool dockedLeft, bool visible)
+{
+    if (!m_appletPanel)
+        return;
+
+    // A floating panel is always shown.  Hiding one leaves an empty float
+    // window with no affordance to bring the contents back, which is the
+    // "white space" state — so this combination is not representable.
+    if (floating)
+        visible = true;
+
+    if (floating) {
+        // Record the wall to return to without moving the panel while it
+        // lives in its own window; dockAppletPanel() reads this back.
+        AppSettings::instance().setValue("AppletPanelDockedLeft",
+                                         dockedLeft ? "True" : "False");
+        AppSettings::instance().save();
+        setAppletPanelVisible(true);
+        if (!m_appletPanelFloatWindow)
+            toggleAppletPanelFloating(true);
+    } else {
+        // Tear the float window down first so the panel is back in the
+        // splitter before the side and visibility are applied to it.
+        if (m_appletPanelFloatWindow)
+            toggleAppletPanelFloating(false);
+        // QSplitter will not re-slot a HIDDEN child: calling
+        // setAppletPanelDockedLeft() while the panel is hidden persists the
+        // new side but leaves the widget in its old slot, so it reappears on
+        // the wrong wall when shown.  Show it first whenever the wall has to
+        // change, then apply the caller's final visibility.
+        bool currentLeft = false;
+        appletPanelState(nullptr, &currentLeft, nullptr);
+        if (currentLeft != dockedLeft && !m_appletPanel->isVisible())
+            setAppletPanelVisible(true);
+        setAppletPanelDockedLeft(dockedLeft);
+        setAppletPanelVisible(visible);
     }
 }
 

@@ -254,6 +254,9 @@ public:
     QJsonObject automationTxTimerSnapshot() const;
     // Unified-title-bar introspection + drive-the-real-control actions for the
     // agent automation bridge (`titlebar` model / `titlebar` verb).
+    QJsonObject automationAppletPanelSnapshot() const;
+    bool automationAppletPanelAction(const QString& action, const QString& value,
+                                     QString* error);
     QJsonObject automationTitleBarSnapshot() const;
     bool automationTitleBarAction(const QString& action, const QString& target,
                                   QString* error);
@@ -798,6 +801,19 @@ private:
     // its own Qt::Window.  Persists "AppletPanelFloating" and updates the
     // title-bar pop-out icon highlight.
     void toggleAppletPanelFloating(bool floating);
+
+    // The one entry point for applet-panel layout changes.  Floating, dock
+    // side and visibility are three fields of ONE state; the three title-bar
+    // controls, Ctrl+Shift+S and the bridge all express a complete desired
+    // state here rather than each toggling a field of their own.  Routing
+    // them separately is what let the fields disagree — a dock-side click
+    // while floating used to dock the panel and then immediately hide it,
+    // stranding an invisible panel that took two more clicks to recover.
+    void applyAppletPanelState(bool floating, bool dockedLeft, bool visible);
+
+    // Current applet-panel state, read off the real widgets rather than the
+    // settings store so a caller sees what is actually on screen.
+    void appletPanelState(bool* floating, bool* dockedLeft, bool* visible) const;
 
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});

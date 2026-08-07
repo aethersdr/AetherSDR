@@ -2455,6 +2455,12 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this](const QString& action, const QString& target, QString* error) {
             return automationTitleBarAction(action, target, error);
         });
+    m_automation->setAppletPanelSnapshotHandler(
+        [this]() { return automationAppletPanelSnapshot(); });
+    m_automation->setAppletPanelActionHandler(
+        [this](const QString& action, const QString& value, QString* error) {
+            return automationAppletPanelAction(action, value, error);
+        });
     m_automation->setTciRouteSnapshotHandler([this]() {
         if (!tciServer()) {
             return QJsonObject{
