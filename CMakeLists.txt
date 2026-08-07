@@ -4049,6 +4049,7 @@ target_include_directories(iambic_keyer_test PRIVATE src)
 if(UNIX)
     target_link_libraries(iambic_keyer_test PRIVATE pthread)
 endif()
+add_test(NAME iambic_keyer_test COMMAND iambic_keyer_test)
 
 add_executable(passive_spots_policy_test
     tests/passive_spots_policy_test.cpp

@@ -53,9 +53,12 @@ private:
     int  m_paddleEventCount{0};
 };
 
+int g_failures = 0;
+
 bool report(const char* label, bool ok)
 {
     std::cout << (ok ? "[ OK ] " : "[FAIL] ") << label << '\n';
+    if (!ok) ++g_failures;
     return ok;
 }
 
@@ -259,6 +262,101 @@ void testSwapPaddlesInvertsDitDah()
     report("swapPaddles=true makes physical dit-side produce dah timing", ok);
 }
 
+// #4032: a clean simultaneous release of both paddles — one combined
+// setPaddleState(false, false), exactly what SerialPortController emits when
+// both contacts open inside one ~10 ms poll tick — must still produce the
+// Mode B extra opposite element.  Before the fix the memory latch could only
+// observe paddle state on a condition-variable wake, and the release wake
+// arrives with the held state already overwritten, so Mode B silently
+// degraded to Mode A.
+void testModeBSimultaneousReleaseDuringDitAddsDah()
+{
+    Recorder rec;
+    IambicKeyer k;
+    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
+    k.setWpm(kTestWpm);
+    k.setMode(IambicKeyer::Mode::IambicB);
+    k.start();
+
+    // Squeeze both — the first element is a dit (60 ms).  Release both in a
+    // single combined event 20 ms in, well inside the dit's on-period.
+    k.setPaddleState(true, true);
+    std::this_thread::sleep_for(20ms);
+    k.setPaddleState(false, false);
+    std::this_thread::sleep_for(500ms);
+    k.stop();
+
+    const auto evs = rec.events();
+    int onCount = 0;
+    for (const auto& e : evs) if (e.down) ++onCount;
+    // Canonical Mode B: the dit in progress, then one extra dah from memory.
+    bool ok = (onCount == 2 && evs.size() >= 4);
+    if (ok) {
+        ok &= nearMs(evs[1].at - evs[0].at, kTestUnitMs);       // dit
+        ok &= nearMs(evs[3].at - evs[2].at, kTestUnitMs * 3);   // trailing dah
+    }
+    report("mode B: simultaneous release during dit still sends the extra dah", ok);
+}
+
+// Mirror of the above with the dah in progress, so the dit-memory branch of
+// the start-of-element latch is exercised too (a fix that only latched the
+// dah side would pass the first test and fail this one).
+void testModeBSimultaneousReleaseDuringDahAddsDit()
+{
+    Recorder rec;
+    IambicKeyer k;
+    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
+    k.setWpm(kTestWpm);
+    k.setMode(IambicKeyer::Mode::IambicB);
+    k.start();
+
+    // Squeeze: dit (60) + gap (60) then the dah (180) begins.  Release both
+    // in one combined event ~30 ms into the dah's on-period (t = 150 ms).
+    k.setPaddleState(true, true);
+    std::this_thread::sleep_for(150ms);
+    k.setPaddleState(false, false);
+    std::this_thread::sleep_for(600ms);
+    k.stop();
+
+    const auto evs = rec.events();
+    int onCount = 0;
+    for (const auto& e : evs) if (e.down) ++onCount;
+    // dit, dah in progress, then one extra dit from memory.
+    bool ok = (onCount == 3 && evs.size() >= 6);
+    if (ok) {
+        ok &= nearMs(evs[3].at - evs[2].at, kTestUnitMs * 3);   // the dah
+        ok &= nearMs(evs[5].at - evs[4].at, kTestUnitMs);       // trailing dit
+    }
+    report("mode B: simultaneous release during dah still sends the extra dit", ok);
+}
+
+// Mode A control: the identical simultaneous release must NOT gain an extra
+// element — the start-of-element latch is Mode B only.
+void testModeASimultaneousReleaseAddsNothing()
+{
+    Recorder rec;
+    IambicKeyer k;
+    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
+    k.setWpm(kTestWpm);
+    k.setMode(IambicKeyer::Mode::IambicA);
+    k.start();
+
+    k.setPaddleState(true, true);
+    std::this_thread::sleep_for(20ms);
+    k.setPaddleState(false, false);
+    std::this_thread::sleep_for(500ms);
+    k.stop();
+
+    const auto evs = rec.events();
+    int onCount = 0;
+    for (const auto& e : evs) if (e.down) ++onCount;
+    bool ok = (onCount == 1);
+    report("mode A: simultaneous release adds no extra element", ok);
+}
+
 void testIdleProducesNoElements()
 {
     Recorder rec;
@@ -299,7 +397,10 @@ int main()
     testReleaseStopsAfterCurrentElement();
     testWpmChangesElementDuration();
     testSwapPaddlesInvertsDitDah();
+    testModeBSimultaneousReleaseDuringDitAddsDah();
+    testModeBSimultaneousReleaseDuringDahAddsDit();
+    testModeASimultaneousReleaseAddsNothing();
     testStartIsIdempotent();
-    std::cout << "iambic_keyer_test: done\n";
-    return 0;
+    std::cout << "iambic_keyer_test: done, failures=" << g_failures << '\n';
+    return g_failures == 0 ? 0 : 1;
 }
