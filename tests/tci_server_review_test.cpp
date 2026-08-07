@@ -1132,9 +1132,9 @@ public:
         return sent.contains(QStringLiteral("vfo:0,0,%1;").arg(parked));
     }
 
-    // #4744: native-rate TCI RX uses the accumulation buffer as its frame
-    // source.  Releasing that buffer before sendBinaryMessage() left the
-    // payload pointer dangling; an allocator reuse could corrupt audio or AV.
+    // #4744: switching from resampled TCI RX to native rate carries staged
+    // samples into the native frame source. Releasing that buffer before
+    // gain conversion or sendBinaryMessage() left the payload pointer dangling.
     static bool native24kAudioRetainsAccumulatedPayload()
     {
         RadioModel model;
@@ -1169,13 +1169,13 @@ public:
         }
 
         client.sendTextMessage(QStringLiteral(
-            "audio_samplerate:24000;audio_stream_sample_type:float32;"
+            "audio_samplerate:48000;audio_stream_sample_type:float32;"
             "audio_stream_channels:2;audio_start:0;"));
         for (int i = 0; i < 100 && !server.m_clients.first().audioEnabled; ++i) {
             spin(10);
         }
         if (!server.m_clients.first().audioEnabled
-            || server.m_clients.first().audioSampleRate != 24000) {
+            || server.m_clients.first().audioSampleRate != 48000) {
             std::printf("      audioEnabled=%d sampleRate=%d\n",
                         server.m_clients.first().audioEnabled,
                         server.m_clients.first().audioSampleRate);
@@ -1189,21 +1189,56 @@ public:
         for (int i = 0; i < kFrames * 2; ++i) {
             samples[i] = static_cast<float>(i + 1) / 1024.0f;
         }
-        server.m_rxChannelGain[0] = 1.0f;
+        constexpr float kGain = 0.5f;
+        server.m_rxChannelGain[0] = kGain;
+
+        // Seed a sub-threshold 48 kHz resampler accumulation, then switch to
+        // native 24 kHz.  The old implementation retained this staging buffer
+        // across the rate change and released it before the native-rate gain
+        // loop read it.
         server.onDaxAudioReady(1, pcm);
+        spin(20);
+        if (!receivedFrame.isEmpty()) {
+            std::printf("      48 kHz staging unexpectedly emitted a frame\n");
+            return false;
+        }
+
+        client.sendTextMessage(QStringLiteral("audio_samplerate:24000;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().audioSampleRate != 24000; ++i) {
+            spin(10);
+        }
+        if (server.m_clients.first().audioSampleRate != 24000) {
+            std::printf("      sampleRate=%d after native-rate switch\n",
+                        server.m_clients.first().audioSampleRate);
+            return false;
+        }
+
+        QByteArray nextPcm = pcm;
+        float* nextSamples = reinterpret_cast<float*>(nextPcm.data());
+        for (int i = 0; i < kFrames * 2; ++i) {
+            nextSamples[i] = -samples[i];
+        }
+        QByteArray expectedPcm = pcm + nextPcm;
+        float* expectedSamples = reinterpret_cast<float*>(expectedPcm.data());
+        for (int i = 0; i < kFrames * 4; ++i) {
+            expectedSamples[i] *= kGain;
+        }
+        server.onDaxAudioReady(1, nextPcm);
 
         for (int i = 0; i < 100 && receivedFrame.isEmpty(); ++i) {
             spin(10);
         }
         constexpr int kHeaderBytes = 64;
-        if (receivedFrame.size() != kHeaderBytes + pcm.size()) {
+        if (receivedFrame.size() != kHeaderBytes + expectedPcm.size()) {
             std::printf("      received=%lld expected=%lld\n",
                         static_cast<long long>(receivedFrame.size()),
-                        static_cast<long long>(kHeaderBytes + pcm.size()));
+                        static_cast<long long>(kHeaderBytes + expectedPcm.size()));
         }
-        return receivedFrame.size() == kHeaderBytes + pcm.size()
+        return receivedFrame.size() == kHeaderBytes + expectedPcm.size()
             && std::memcmp(receivedFrame.constData() + kHeaderBytes,
-                           pcm.constData(), static_cast<size_t>(pcm.size())) == 0;
+                           expectedPcm.constData(),
+                           static_cast<size_t>(expectedPcm.size())) == 0;
     }
 };
 

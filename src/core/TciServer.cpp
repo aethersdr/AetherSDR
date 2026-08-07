@@ -2477,10 +2477,14 @@ void TciServer::onDaxAudioReady(int channel, const QByteArray& pcm)
         }
 
         // Transfer ownership before taking a data pointer.  The native 24 kHz
-        // path uses this storage directly; clearing/squeezing accumBuf first
-        // left audioSrc dangling while gain conversion or frame construction
-        // still read it (#4744).
+        // path uses this storage directly, including when it inherits staged
+        // samples across a rate change; clearing/squeezing accumBuf first left
+        // audioSrc dangling while gain conversion or frame construction still
+        // read it (#4744).
         QByteArray accumulated = std::move(accumBuf);
+        // Pin the moved-from state for the next packet's append.  The local
+        // owner releases the old allocation at the end of this iteration.
+        accumBuf.clear();
         const float* audioSrc = reinterpret_cast<const float*>(accumulated.constData());
         int audioFrames = accumFrames;
         QByteArray resampledBuf;
