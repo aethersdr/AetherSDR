@@ -168,4 +168,31 @@ bool UlanziDialMappings::setRotaryAction(const QString& actionId)
     return setActionForPill(QStringLiteral("rotary_action"), actionId);
 }
 
+bool UlanziDialMappings::isKnownWheelAction(const QString& actionId)
+{
+    // Mirrors the else-if chain in MainWindow::applyFlexControlWheelAction
+    // (MainWindow_Controllers.cpp) — a new wheel action must be added to BOTH.
+    static const QStringList kKnownWheelActions = {
+        QStringLiteral("WheelFrequency"),
+        QStringLiteral("WheelRit"),
+        QStringLiteral("WheelXit"),
+        QStringLiteral("WheelVolume"),
+        QStringLiteral("WheelMasterAf"),
+        QStringLiteral("WheelSliceAudio"),
+        QStringLiteral("WheelHeadphoneVolume"),
+        QStringLiteral("WheelAgcT"),
+        QStringLiteral("WheelApf"),
+        QStringLiteral("NextSlice"),
+        QStringLiteral("PrevSlice"),
+        QStringLiteral("WheelPower"),
+        QStringLiteral("WheelCwSpeed"),
+        QStringLiteral("BandZoom"),
+        QStringLiteral("SegmentZoom"),
+        QStringLiteral("FilterWidth"),
+        QStringLiteral("PanadapterZoom"),
+        QStringLiteral("WheelRfGain")
+    };
+    return kKnownWheelActions.contains(actionId);
+}
+
 }  // namespace AetherSDR

@@ -123,6 +123,14 @@ inline constexpr int kSwrSweepMaxPoints = 260;
 inline constexpr qint64 kPanLayoutRestoreWaitingForFirstPan = -1;
 inline constexpr int kPanLayoutRestoreWindowMs = 30000;
 
+// ─── Panadapter zoom step factors ──────────────────────────────────────────
+//
+// Keyboard step uses kPanZoomFactor per press; rotary dials use a finer
+// per-detent factor (kRotaryPanZoomFactor) for smooth spins.
+
+inline constexpr double kPanZoomFactor = 1.5;
+inline constexpr double kRotaryPanZoomFactor = 1.25;
+
 // ─── Pan layout ──────────────────────────────────────────────────────────────
 
 // Pan count for a saved layout id (e.g. "2x2" → 4); 1 for unknown ids.

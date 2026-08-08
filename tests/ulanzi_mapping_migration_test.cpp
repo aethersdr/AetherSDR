@@ -178,6 +178,16 @@ int main(int argc, char** argv)
     ok &= expect(UlanziDialMappings::rotaryAction() == QStringLiteral("WheelCorruptAction4756"),
                  "unrecognized rotary action id survives reload and round-trips as-is");
 
+    // ── dispatch seam: unrecognized action id is not a known wheel action ─
+    ok &= expect(!UlanziDialMappings::isKnownWheelAction(UlanziDialMappings::rotaryAction()),
+                 "stored unrecognized rotary action is not a known wheel action");
+    ok &= expect(!UlanziDialMappings::isKnownWheelAction(QStringLiteral("NotAnAction")),
+                 "'NotAnAction' is not a known wheel action");
+    ok &= expect(UlanziDialMappings::isKnownWheelAction(QStringLiteral("WheelFrequency")),
+                 "'WheelFrequency' is a known wheel action");
+    ok &= expect(UlanziDialMappings::isKnownWheelAction(QStringLiteral("WheelVolume")),
+                 "'WheelVolume' is a known wheel action");
+
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;
 }
