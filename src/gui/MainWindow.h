@@ -1007,7 +1007,6 @@ private:
     SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
     EibiClient*          m_eibiClient{nullptr};
-    QAction*             m_eibiSpotsAct{nullptr};
     QHash<QString, int>  m_eibiSpotKeyToId;
     N1MMSpotClient*      m_n1mmSpotClient{nullptr};
     PropForecastClient*  m_propForecast{nullptr};

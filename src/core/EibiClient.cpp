@@ -257,9 +257,10 @@ void EibiClient::initialize()
     connect(m_updateTimer, &QTimer::timeout,
             this, &EibiClient::updateActiveSpots);
 
-    // If enabled in settings at startup, activate
+    // If auto-start enabled in settings at startup, activate
     const bool savedEnabled =
-        AppSettings::instance().value("EiBiSpotsEnabled", "False").toString() == "True";
+        AppSettings::instance().value("EiBiAutoStart",
+        AppSettings::instance().value("EiBiSpotsEnabled", "False")).toString() == "True";
     if (savedEnabled) {
         setEnabled(true);
     }
@@ -302,7 +303,38 @@ void EibiClient::setEnabled(bool enabled)
     }
 }
 
-void EibiClient::checkForUpdates()
+QDateTime EibiClient::cacheLastModified() const
+{
+    const QFileInfo info(cacheFilePath());
+    if (info.exists()) {
+        return info.lastModified().toUTC();
+    }
+    return {};
+}
+
+QDateTime EibiClient::nextFetchTime() const
+{
+    const QDateTime lastMod = cacheLastModified();
+    if (lastMod.isValid()) {
+        return lastMod.addSecs(kMaxCacheAgeSec);
+    }
+    return {};
+}
+
+void EibiClient::forceUpdate()
+{
+    m_enabled = true;
+    if (!m_nam) {
+        return;
+    }
+    if (m_updateTimer && !m_updateTimer->isActive()) {
+        m_updateTimer->start();
+    }
+    qCInfo(lcDxCluster) << "EiBi force update requested by user.";
+    checkForUpdates(true);
+}
+
+void EibiClient::checkForUpdates(bool forceRefresh)
 {
     if (m_isDownloading || !m_enabled || !m_nam) return;
 
@@ -311,16 +343,17 @@ void EibiClient::checkForUpdates()
     QNetworkRequest req((QUrl(QString::fromLatin1(kSourceUrl))));
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("AetherSDR/26.8 (EiBi Schedule Downloader)"));
 
-    // Include If-Modified-Since header if local cache file exists
+    // Include If-Modified-Since header if local cache file exists and not a force refresh
     const QString cachePath = cacheFilePath();
     const QFileInfo cacheInfo(cachePath);
-    if (cacheInfo.exists()) {
+    if (!forceRefresh && cacheInfo.exists()) {
         const QDateTime lastMod = cacheInfo.lastModified().toUTC();
         qCInfo(lcDxCluster) << "Checking EiBi schedule updates at" << kSourceUrl
                             << "with If-Modified-Since:" << lastMod.toString(Qt::ISODateWithMs);
         req.setHeader(QNetworkRequest::IfModifiedSinceHeader, lastMod);
     } else {
-        qCInfo(lcDxCluster) << "Downloading EiBi schedule from" << kSourceUrl << "(no local cache file found)";
+        qCInfo(lcDxCluster) << "Downloading EiBi schedule from" << kSourceUrl
+                            << (forceRefresh ? "(force refresh)" : "(no local cache file found)");
     }
 
     QNetworkReply* reply = m_nam->get(req);
@@ -572,7 +605,6 @@ void EibiClient::updateActiveSpots()
         spot.dxCall      = entry.station;
         spot.freqMhz     = entry.freqMhz;
         spot.source      = QStringLiteral("EiBi");
-        spot.color       = QStringLiteral("#8aa8c0"); // Dimmed secondary label color
         spot.spotterCall = QStringLiteral("EiBi");
         spot.utcTime     = time;
         spot.lifetimeSec = 3600;

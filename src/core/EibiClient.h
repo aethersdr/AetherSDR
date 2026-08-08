@@ -41,11 +41,14 @@ public:
     static QString formatTime(int startMins, int endMins);
 
     bool isEnabled() const { return m_enabled; }
+    QDateTime cacheLastModified() const;
+    QDateTime nextFetchTime() const;
 
 public slots:
     void initialize();
     void setEnabled(bool enabled);
-    void checkForUpdates();
+    void checkForUpdates(bool forceRefresh = false);
+    void forceUpdate();
     void updateActiveSpots();
 
     bool parseContent(const QString& content);

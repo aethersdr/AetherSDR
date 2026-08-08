@@ -272,8 +272,8 @@ void MainWindow::wireSpotSubsystem()
             kvs["timestamp"] = QString::number(QDateTime::currentSecsSinceEpoch());
             if (!spot.comment.isEmpty())
                 kvs["comment"] = QString(spot.comment).replace(' ', QChar(0x7f));
-            if (!spot.color.isEmpty())
-                kvs["color"] = spot.color;
+            const QString eibiColor = AppSettings::instance().value("EiBiSpotColor", "#8aa8c0").toString();
+            kvs["color"] = eibiColor;
 
             m_radioModel.spotModel().applySpotStatus(spotId, kvs);
         }
@@ -292,9 +292,6 @@ void MainWindow::wireSpotSubsystem()
 
     connect(m_eibiClient, &EibiClient::fetchFailed,
             this, [this](const QString& err) {
-        if (m_eibiSpotsAct) {
-            m_eibiSpotsAct->setChecked(false);
-        }
         statusBar()->showMessage(QStringLiteral("EiBi schedule download failed: %1").arg(err), 5000);
     });
 
