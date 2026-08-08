@@ -9,10 +9,14 @@
 // BYTES leave, but only the simulator can show the radio actually received them
 // and acted on them.
 //
-// SIM ONLY, deliberately. The address is hardcoded to the simulator and this
-// test keys the transmitter; pointing it at real hardware would radiate.
-// If nothing answers there, the test SKIPS rather than fails, so a machine
-// without the simulator running does not get a spurious red.
+// SIM ONLY, deliberately. This test keys the transmitter; pointing it at real
+// hardware would radiate. The target defaults to the documented simulator host
+// and can be moved with AETHER_HL2_SIM_HOST (or set empty to disable). Before
+// the TX gate opens, the probe requires a VERIFIED HL2 discovery reply from
+// exactly the host asked — an unrelated device answering must not be mistaken
+// for the simulator (#4815).
+// If no simulator is verified, the test SKIPS with exit 77 — which ctest
+// reports as Skipped, not Passed, so "did not run" can never shadow a result.
 
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -20,11 +24,14 @@
 #include "TestDspBuildWait.h"
 
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QEventLoop>
 #include <QTimer>
 #include <QUdpSocket>
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <vector>
 
@@ -44,7 +51,11 @@ static void spin(int ms)
     loop.exec();
 }
 
-// Is the simulator actually there? A plain Metis discovery probe.
+// Is the simulator actually there? A VERIFIED Metis discovery probe: the reply
+// must come from the host we asked and must parse as an HL2-family discovery
+// response. "Some datagram arrived" is not presence — this gate opens a
+// transmit path, and an unrelated responder at that address must read as
+// absent, not as the simulator (#4815).
 static bool simPresent(const QString& host)
 {
     QUdpSocket s;
@@ -54,7 +65,28 @@ static bool simPresent(const QString& host)
     s.writeDatagram(reinterpret_cast<const char*>(req.data()),
                     static_cast<qint64>(req.size()), QHostAddress(host),
                     AetherSDR::hl2::kMetisPort);
-    return s.waitForReadyRead(1500);
+    // Drain replies until the deadline rather than trusting the first packet,
+    // so one stray datagram cannot consume the whole window.
+    QDeadlineTimer deadline(1500);
+    while (s.waitForReadyRead(static_cast<int>(deadline.remainingTime()))) {
+        while (s.hasPendingDatagrams()) {
+            QByteArray buf(static_cast<int>(s.pendingDatagramSize()), '\0');
+            QHostAddress sender;
+            if (s.readDatagram(buf.data(), buf.size(), &sender, nullptr) <= 0)
+                continue;
+            if (!sender.isEqual(QHostAddress(host),
+                                QHostAddress::TolerantConversion))
+                continue;   // answered, but not by the host we asked
+            const auto reply = AetherSDR::hl2::parseDiscoveryReply(
+                {reinterpret_cast<const std::uint8_t*>(buf.constData()),
+                 static_cast<std::size_t>(buf.size())});
+            if (reply && reply->isHermesLite2())
+                return true;
+        }
+        if (deadline.hasExpired())
+            break;
+    }
+    return false;
 }
 
 // The IQ sample rate this test runs the receiver at, and therefore the span the
@@ -67,12 +99,28 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
 
-    const QString simHost = QStringLiteral("192.168.1.12");
+    // ctest maps this exit to Skipped (SKIP_RETURN_CODE 77 in CMakeLists.txt),
+    // the same convention crdv_quarantined_test uses — a skip must never be
+    // indistinguishable from a pass (#4815).
+    constexpr int kSkipExit = 77;
+
+    // Overridable target: unset -> the documented simulator host; explicitly
+    // empty -> deliberately disabled. The default is one developer's bench, so
+    // on any other network the honest outcome is a visible skip.
+    const QString simHost = qEnvironmentVariable("AETHER_HL2_SIM_HOST",
+                                                 QStringLiteral("192.168.1.12"));
+    if (simHost.trimmed().isEmpty()) {
+        std::fprintf(stderr,
+            "hl2_tx_loopback_test: SKIPPED — AETHER_HL2_SIM_HOST is set empty "
+            "(deliberately disabled)\n");
+        return kSkipExit;
+    }
     if (!simPresent(simHost)) {
         std::fprintf(stderr,
-            "hl2_tx_loopback_test: SKIPPED — no simulator answering at %s\n",
+            "hl2_tx_loopback_test: SKIPPED — no HL2 simulator verified at %s "
+            "(set AETHER_HL2_SIM_HOST to relocate it, or empty to disable)\n",
             qPrintable(simHost));
-        return 0;
+        return kSkipExit;
     }
 
     // Transmit must be permitted for this to mean anything. This process sets no

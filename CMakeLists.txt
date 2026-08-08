@@ -5049,6 +5049,9 @@ add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
 target_include_directories(hl2_tx_loopback_test PRIVATE src)
 target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+# Exit 77 = no simulator verified at the target host: report as Skipped, never
+# Passed (#4815). Same convention as crdv_quarantined_test above.
+set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
