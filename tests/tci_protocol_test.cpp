@@ -371,6 +371,92 @@ bool testDriveWireContract()
     return true;
 }
 
+// #4523: "volume:" (colon, nothing after it) splits to a single empty-string
+// argument, not an empty arg list, so it used to reach the SET branch and
+// parse via toDouble() — an empty string silently becomes 0.0, and 0 dB is
+// the loudest value in range, so malformed input landed on max volume. Fixed
+// to check toDouble()'s ok-flag and drop the command instead, matching the
+// "ignore silently" posture already used for unrecognised commands.
+bool testVolumeMalformedInputIsDropped()
+{
+    TciProtocol protocol(nullptr);
+
+    // Sanity: a real SET still works, so the fix isn't just refusing everything.
+    protocol.handleCommand(QStringLiteral("volume:-12"));
+    if (!check(protocol.pendingMasterVolume() >= 0
+                   && !protocol.pendingNotification().isEmpty(),
+            "a well-formed volume SET must still take effect")) {
+        return false;
+    }
+
+    // The bug's exact repro: colon, nothing after it.
+    protocol.handleCommand(QStringLiteral("volume:"));
+    if (!check(protocol.pendingMasterVolume() == -1,
+            "\"volume:\" must not be recorded as a master-volume SET")) {
+        return false;
+    }
+    if (!check(protocol.pendingNotification().isEmpty(),
+            "\"volume:\" must not notify other clients of a volume change")) {
+        return false;
+    }
+
+    // Same shape via the legacy trx-prefixed 2-arg form: "volume:0," is
+    // trx=0, empty value — the value arg is what toDouble() silently ate.
+    protocol.handleCommand(QStringLiteral("volume:0,"));
+    if (!check(protocol.pendingMasterVolume() == -1,
+            "\"volume:0,\" must not be recorded as a master-volume SET")) {
+        return false;
+    }
+
+    // Bare "volume" (no colon at all) is the documented GET form and must be
+    // unaffected — this is what distinguishes "no argument" from "malformed
+    // argument", which is the whole point of the fix.
+    const QString getResponse = protocol.handleCommand(QStringLiteral("volume"));
+    if (!check(getResponse.startsWith(QStringLiteral("volume:")),
+            "bare \"volume\" GET must still reply with the current level")) {
+        return false;
+    }
+    return true;
+}
+
+// #4523: an unrecognised modulation name used to silently fall through to
+// USB (tciToSmartSDR's QMap::value default) and get applied as if the client
+// had asked for it. tciToSmartSDR now reports success via an out-parameter so
+// a SET-path caller (cmdModulation) can reject the name instead of guessing.
+bool testTciToSmartSdrReportsUnrecognisedNames()
+{
+    bool ok = false;
+
+    const QString usb = TciProtocol::tciToSmartSDR(QStringLiteral("usb"), &ok);
+    if (!check(ok && usb == QStringLiteral("USB"),
+            "a recognised modulation name must report ok and its mapped mode")) {
+        return false;
+    }
+
+    ok = true;  // start true so a no-op bug in the fix can't hide as a false negative
+    const QString unknown = TciProtocol::tciToSmartSDR(QStringLiteral("ft8"), &ok);
+    if (!check(!ok,
+            "an unrecognised modulation name must report !ok rather than silently mapping to USB")) {
+        return false;
+    }
+    // The fallback return value is still "USB" for callers (like the GET/echo
+    // path) that need *some* valid SmartSDR mode unconditionally — only a
+    // SET-path caller is expected to check ok and reject.
+    if (!check(unknown == QStringLiteral("USB"),
+            "the fallback return value contract is unchanged for callers that don't check ok")) {
+        return false;
+    }
+
+    // Case-insensitivity must not accidentally launder an unknown name into
+    // a match.
+    ok = true;
+    TciProtocol::tciToSmartSDR(QStringLiteral("FT8"), &ok);
+    if (!check(!ok, "rejection must be case-insensitive, not just lowercase-literal")) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -420,7 +506,9 @@ int main(int argc, char** argv)
     if (!testRoutingPolicy() || !testStaleRouteFailsSafe()
         || !testBarePttKeysTheRequestedSlice()
         || !testWsjtxRoutingContracts()
-        || !testDeferredCommands() || !testDriveWireContract()) {
+        || !testDeferredCommands() || !testDriveWireContract()
+        || !testVolumeMalformedInputIsDropped()
+        || !testTciToSmartSdrReportsUnrecognisedNames()) {
         return 1;
     }
 

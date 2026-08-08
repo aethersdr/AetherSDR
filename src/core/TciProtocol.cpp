@@ -86,7 +86,7 @@ QString TciProtocol::smartsdrToTci(const QString& mode)
     return map.value(mode.toUpper(), "usb");
 }
 
-QString TciProtocol::tciToSmartSDR(const QString& mode)
+QString TciProtocol::tciToSmartSDR(const QString& mode, bool* ok)
 {
     static const QMap<QString, QString> map = {
         {"usb",  "USB"},   {"lsb",  "LSB"},
@@ -96,7 +96,9 @@ QString TciProtocol::tciToSmartSDR(const QString& mode)
         {"digu", "DIGU"},  {"digl", "DIGL"},
         {"rtty", "RTTY"},
     };
-    return map.value(mode.toLower(), "USB");
+    const auto it = map.find(mode.toLower());
+    if (ok) *ok = (it != map.end());
+    return it != map.end() ? it.value() : QStringLiteral("USB");
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -620,7 +622,20 @@ QString TciProtocol::cmdModulation(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    QString sdrMode = tciToSmartSDR(args[1]);
+    bool modOk = false;
+    QString sdrMode = tciToSmartSDR(args[1], &modOk);
+    if (!modOk) {
+        // Unrecognised modulation name. The server already advertises the
+        // accepted set in modulations_list at connect time, so anything
+        // outside it is a client error, not something to guess a mode for.
+        // Previously this silently fell through to USB and echoed the
+        // client's own (wrong) name in one notification while a second
+        // notification carried the real "usb" the slice actually became —
+        // two conflicting lines a client can't reconcile (#4523). Dropped
+        // instead, matching the "ignore silently" posture the parser
+        // already takes for unrecognised commands.
+        return {};
+    }
     QMetaObject::invokeMethod(s, [s, sdrMode]() {
         s->setMode(sdrMode);
     }, Qt::QueuedConnection);
@@ -1144,7 +1159,21 @@ QString TciProtocol::cmdVolume(const QStringList& args, bool /*isSet*/)
     }
 
     // SET — accept either spec form (1 arg) or legacy trx-prefixed (2+ args).
-    const double val = args[args.size() == 1 ? 0 : 1].toDouble();
+    // "volume:" (colon, nothing after it) splits to a single empty string,
+    // not an empty arg list, so it reaches here rather than the GET branch
+    // above — but neither spec form (VOLUME; / VOLUME:arg1;) is "colon with
+    // nothing after it", so it's malformed input. It used to parse via
+    // toDouble() (empty string → 0.0, silently) and apply that as 100% (0 dB
+    // is the top of the range) — the malformed input landing on the loudest
+    // value the command can express (#4523). Checked and dropped instead,
+    // matching the "ignore silently" posture already used for unrecognised
+    // commands; this also catches the same shape for the legacy 2-arg form
+    // (e.g. "volume:0,").
+    bool volOk = false;
+    const double val = args[args.size() == 1 ? 0 : 1].toDouble(&volOk);
+    if (!volOk) {
+        return {};
+    }
     const int pct = (val >= 1.0)
         ? std::min(static_cast<int>(std::lround(val)), 100)  // legacy percent
         : volumePercentFromDb(val);                          // spec dB
