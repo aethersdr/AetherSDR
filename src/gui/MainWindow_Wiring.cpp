@@ -4319,11 +4319,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             queueActiveSliceForSpectrumTarget(target->sliceId());
             applyTuneRequest(target, mhz, TuneIntent::AbsoluteJump, "kiwi-spot-click");
 
-            QString mappedMode = mode;
-            if (mode == "CWN") mappedMode = "CW";
-            else if (mode == "AMN") mappedMode = "AM";
-            if (!mappedMode.isEmpty()) {
-                target->setMode(mappedMode);
+            const bool autoSwitchMode =
+                AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True";
+            if (autoSwitchMode) {
+                QString mappedMode = mode;
+                if (mode == "CWN") mappedMode = "CW";
+                else if (mode == "AMN") mappedMode = "AM";
+                if (!mappedMode.isEmpty()) {
+                    target->setMode(mappedMode);
+                }
             }
 
             if (loHz != 0 || hiHz != 0) {

@@ -2388,6 +2388,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     bool passiveSpots     = SpotCommandPolicy::passiveModeFromSetting(
                                 s.value(SpotCommandPolicy::kPassiveSpotsModeKey, "False"));
     bool memoriesEnabled  = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
+    bool kiwiDxSpots      = s.value("ShowKiwiDxSpots", "True").toString() == "True";
     bool autoMode         = s.value("SpotAutoSwitchMode", "True").toString() == "True";
     bool sHistorySignals  = s.value("SHistoryMarkersEnabled", "False").toString() == "True";
     bool sHistoryQrm      = s.value("SHistoryQrmEnabled", "False").toString() == "True";
@@ -2464,6 +2465,13 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             save("IsMemorySpotsEnabled", on ? "True" : "False");
         });
         toggleRow->addWidget(memoriesToggle);
+
+        auto* kiwiDxToggle = makeToggle("Kiwi DX", kiwiDxSpots,
+            "Overlay KiwiSDR Community DX database spots (beacons, utilities, time signals) on the band plan strip.");
+        connect(kiwiDxToggle, &QPushButton::toggled, this, [save](bool on) {
+            save("ShowKiwiDxSpots", on ? "True" : "False");
+        });
+        toggleRow->addWidget(kiwiDxToggle);
 
         auto* autoModeToggle = makeToggle("Auto", autoMode,
             "Automatically switch slice mode when clicking a spot\n"

@@ -405,6 +405,7 @@ void MainWindow::buildMenuBar()
                 sw->setSpotBgColor(bgColor);
                 sw->setSpotBgOpacity(bgOpacity);
                 sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
+                sw->setKiwiDxSpotsEnabled(s.value("ShowKiwiDxSpots", "True").toString() == "True");
                 sw->setSHistorySnapToStep(
                     s.value("SHistorySnapToStep", "False").toString() == "True");
             }
@@ -855,18 +856,6 @@ void MainWindow::buildMenuBar()
         for (auto* a : m_panStack->allApplets())
             a->spectrumWidget()->setBandPlanShowSpots(on);
         AppSettings::instance().setValue("BandPlanShowSpots", on ? "True" : "False");
-        AppSettings::instance().save();
-    });
-
-    const bool showKiwiDxSpots =
-        AppSettings::instance().value("ShowKiwiDxSpots", "False").toString() == "True";
-    auto* kiwiDxAct = bandPlanMenu->addAction("Show KiwiSDR DX Community Spots");
-    kiwiDxAct->setCheckable(true);
-    kiwiDxAct->setChecked(showKiwiDxSpots);
-    connect(kiwiDxAct, &QAction::toggled, this, [this](bool on) {
-        for (auto* a : m_panStack->allApplets())
-            a->spectrumWidget()->setKiwiDxSpotsEnabled(on);
-        AppSettings::instance().setValue("ShowKiwiDxSpots", on ? "True" : "False");
         AppSettings::instance().save();
     });
 
