@@ -32,9 +32,11 @@ public:
         // worker (not the segmenter) consumes this to build the detector; carried
         // here because Config is the worker's construction bundle.
         std::string vadModelPath;
-        // Optional speaker-embedding model (.onnx) for per-utterance speaker
-        // labeling (A/B/C…). Empty = no labeling. Also worker-consumed.
-        std::string speakerModelPath;
+        // The speaker-embedding model (.onnx) is deliberately NOT carried here:
+        // it is loaded at runtime via AsrEngine::setSpeakerModelPath() so a
+        // labeling change never has to rebuild the engine (#4737). Only the
+        // clustering threshold, which the worker's clusterer needs at
+        // construction, stays in this bundle.
         float speakerThreshold = 0.50f; // cosine threshold for the same speaker
     };
 

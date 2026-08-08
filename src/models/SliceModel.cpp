@@ -363,6 +363,7 @@ void SliceModel::setNb(bool on)
 {
     m_nb = on;
     sendCommand(QString("slice set %1 nb=%2").arg(m_id).arg(on ? 1 : 0));
+    emit noiseBlankerCommandIssued(on, m_nbLevel);
     emit nbChanged(on);
 }
 
@@ -370,6 +371,7 @@ void SliceModel::setNr(bool on)
 {
     m_nr = on;
     sendCommand(QString("slice set %1 nr=%2").arg(m_id).arg(on ? 1 : 0));
+    emit noiseReductionCommandIssued(on, m_nrLevel);
     emit nrChanged(on);
 }
 
@@ -377,6 +379,7 @@ void SliceModel::setAnf(bool on)
 {
     m_anf = on;
     sendCommand(QString("slice set %1 anf=%2").arg(m_id).arg(on ? 1 : 0));
+    emit autoNotchCommandIssued(on);
     emit anfChanged(on);
 }
 
@@ -445,6 +448,7 @@ void SliceModel::setNbLevel(int v)
     if (m_nbLevel == v) return;
     m_nbLevel = v;
     sendCommand(QString("slice set %1 nb_level=%2").arg(m_id).arg(v));
+    emit noiseBlankerCommandIssued(m_nb, v);
     emit nbLevelChanged(v);
 }
 
@@ -454,6 +458,7 @@ void SliceModel::setNrLevel(int v)
     if (m_nrLevel == v) return;
     m_nrLevel = v;
     sendCommand(QString("slice set %1 nr_level=%2").arg(m_id).arg(v));
+    emit noiseReductionCommandIssued(m_nr, v);
     emit nrLevelChanged(v);
 }
 
@@ -598,6 +603,7 @@ void SliceModel::setSquelch(bool on, int level)
     if (levelChanged)
         sendCommand(QString("slice set %1 squelch_level=%2").arg(m_id).arg(level));
 
+    emit squelchCommandIssued(on, level);
     emit squelchChanged(on, level);
 }
 
@@ -626,6 +632,7 @@ void SliceModel::setRit(bool on, int hz)
     m_ritFreq = hz;
     sendCommand(QString("slice set %1 rit_on=%2 rit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    emit ritCommandIssued(on, hz);
     emit ritChanged(on, hz);
 }
 
@@ -635,6 +642,7 @@ void SliceModel::setXit(bool on, int hz)
     m_xitFreq = hz;
     sendCommand(QString("slice set %1 xit_on=%2 xit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    emit xitCommandIssued(on, hz);
     emit xitChanged(on, hz);
 }
 

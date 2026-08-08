@@ -508,6 +508,16 @@ bool TransmitModel::applySpeechProcessorState(bool on, int level)
     return true;
 }
 
+bool TransmitModel::applyMicSelectionState(const QString& input)
+{
+    if (input.isEmpty() || m_micSelection == input) {
+        return false;
+    }
+    m_micSelection = input;
+    emit micStateChanged();
+    return true;
+}
+
 void TransmitModel::setDax(bool on)
 {
     // Optimistic local update mirroring the sibling mic setters; the radio's

@@ -20,6 +20,30 @@ bool nearlyEqual(double a, double b, double epsilon = 1.0e-12)
     return std::abs(a - b) <= epsilon;
 }
 
+int testDssRowSpanSupported()
+{
+    using namespace AetherSDR;
+
+    // A build without AETHER_GPU_SPECTRUM has no mesh pipeline at all, so the
+    // control can never affect the display whatever the runtime reports. This
+    // is the case that shipped enabled: the only runtime correction lived
+    // inside the GPU-only block, so the software build never corrected it and
+    // the slider moved, labelled and persisted over a fallback that ignores it.
+    if (dssRowSpanSupported(false, false) || dssRowSpanSupported(false, true)) {
+        return fail("a CPU-only build must never offer the 3D span control");
+    }
+
+    // A GPU build still has to prove the mesh came up — RGBA16F support is a
+    // runtime property, and without it the CPU image fallback draws instead.
+    if (dssRowSpanSupported(true, false)) {
+        return fail("a GPU build without the mesh must not offer the control");
+    }
+    if (!dssRowSpanSupported(true, true)) {
+        return fail("the control must be offered once the mesh is ready");
+    }
+    return 0;
+}
+
 int testCursorAnchoredZoom()
 {
     using namespace AetherSDR;
@@ -471,6 +495,38 @@ int testWaterfallVisibleRowForAge()
     if (waterfallVisibleRowForAge(0, 0, 0) != -1
         || waterfallVisibleRowForAge(0, 0, -4) != -1) {
         return fail("an empty image must report no destination row");
+    }
+    return 0;
+}
+
+int testWaterfallCubicSourceAgeBoundary()
+{
+    using namespace AetherSDR;
+    constexpr int kHeight = 7;
+    constexpr int kOrigin = 5;
+
+    // The newest edge's leading cubic tap must duplicate age 0, not wrap to
+    // age kHeight - 1 at the opposite end of the retained history.
+    if (waterfallCubicPhysicalRowForSourceAge(kOrigin, -1, kHeight) != 5
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 0, kHeight) != 5
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 1, kHeight) != 6
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 2, kHeight) != 0) {
+        return fail("waterfall cubic newest-edge taps must clamp logically");
+    }
+
+    // Likewise, the oldest edge's trailing taps duplicate the oldest row
+    // instead of wrapping into the newest history.
+    if (waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight - 2, kHeight)
+            != 3
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight - 1, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(
+               kOrigin, kHeight + 1, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 0, 0) != -1) {
+        return fail("waterfall cubic oldest-edge taps must clamp logically");
     }
     return 0;
 }
@@ -971,6 +1027,9 @@ int testDssSupplementalCoverageCalibration()
 
 int main()
 {
+    if (const int result = testDssRowSpanSupported(); result != 0) {
+        return result;
+    }
     if (const int result = testCursorAnchoredZoom(); result != 0) {
         return result;
     }
@@ -999,6 +1058,9 @@ int main()
         return result;
     }
     if (const int result = testWaterfallVisibleRowForAge(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallCubicSourceAgeBoundary(); result != 0) {
         return result;
     }
     if (const int result = testWaterfallScrollProgress(); result != 0) {

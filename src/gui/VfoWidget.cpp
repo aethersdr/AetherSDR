@@ -1893,6 +1893,15 @@ void VfoWidget::buildTabContent()
             b->setCheckable(true);
             b->setFixedHeight(26);
             b->setStyleSheet(kDspToggle);
+            // A STABLE id, not just an accessible name. These already carry
+            // accessible names, which is what a screen reader needs — but the
+            // automation bridge addresses controls by objectName first, and a
+            // name written as prose ("Auto notch filter") is not a contract:
+            // rewording it for clarity would silently break every script that
+            // drove it. A control that cannot be addressed cannot be certified
+            // (CERTIFICATION.md 1.29), and these are exactly the toggles that
+            // sent `slice dsp` around the problem instead of closing it.
+            b->setObjectName(QStringLiteral("dsp%1Btn").arg(text));
             return b;
         };
 

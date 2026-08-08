@@ -13,7 +13,23 @@
 #include <string>
 #include <thread>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+// Only ever used to make the wisdom cache's temp filename unique per process.
+long long currentProcessId()
+{
+#ifdef _WIN32
+    return static_cast<long long>(_getpid());
+#else
+    return static_cast<long long>(::getpid());
+#endif
+}
 
 constexpr int kWdspChannelCount = 32;
 constexpr int kRxChannelType = 0;
@@ -56,15 +72,65 @@ void loadWisdomOnce()
     std::call_once(flag, [] { fftw_import_wisdom_from_filename(wisdomPath().c_str()); });
 }
 
-// Persist wisdom at process exit so EVERY plan measured during the run — not
-// just OpenChannel's, but also the ones SetRXAMode/SetRXABandpassFreqs build when
-// the mode or filter changes — is cached for the next run to import.
+// Write the wisdom cache NOW. Called at the end of open(), under g_setupMutex,
+// where the expensive PATIENT plans have just been measured.
+//
+// EAGER, not only at exit, because at-exit persistence turned out to persist
+// almost nothing. The process dies through Hl2EmergencyStop's handler, which
+// restores SIG_DFL and re-raises so the kill looks exactly like an unhandled
+// one — and an unhandled signal does not run std::atexit. Neither does a crash
+// or a Force Quit. Measured: connect (21 s of FFTW planning), SIGTERM the app,
+// relaunch, connect again — 21 s a SECOND time, with the cache file never
+// created. Every operator who has ever force-quit was paying first-run cost on
+// every run, which is what made a genuinely one-time expense feel permanent.
+//
+// A channel open is rare (connect, add panadapter, rate change) and this writes
+// ~10-50 KB, so paying it per open is not a cost worth optimizing. It runs on
+// the I/O thread, never the GUI thread.
+//
+// WRITE-THEN-RENAME, not a direct write, because this file is shared across
+// PROCESSES and g_setupMutex only serialises threads within one of them. An
+// app instance, a second app instance and the test suite (which ctest runs
+// -j8) all export to the same path, and fftw_export_wisdom_to_filename opens
+// with "w" — it truncates first, so two concurrent exporters leave a short
+// file, and a reader importing mid-write gets a partial one that FFTW rejects
+// WHOLESALE. Observed exactly that: a 48 KB cache came back as 13 KB after a
+// parallel test run, which is a cache that silently stopped working.
+//
+// rename(2) is atomic within a filesystem, so a reader sees either the old
+// complete file or the new complete file, and concurrent writers merely race
+// to be last. The temp name carries the pid so two exporters never share it.
+void exportWisdomNow()
+{
+    namespace fs = std::filesystem;
+    const fs::path final = wisdomPath();
+    const fs::path tmp = fs::path(final).concat(
+        ".tmp." + std::to_string(currentProcessId()));
+    if (!fftw_export_wisdom_to_filename(tmp.string().c_str())) {
+        // It opens with "w", so a failure part way through still leaves a SHORT
+        // file sitting next to the real cache. The name is per-process rather
+        // than per-call, so an unwritable cache directory keeps exactly one of
+        // them rather than accumulating — but a truncated wisdom file is a trap
+        // for whoever debugs this next, so do not leave one.
+        std::error_code rmEc;
+        fs::remove(tmp, rmEc);
+        return;
+    }
+    std::error_code ec;
+    fs::rename(tmp, final, ec);
+    if (ec)
+        fs::remove(tmp, ec);   // leave no debris behind a failed publish
+}
+
+// Persist at process exit as well, so plans measured OUTSIDE an open() —
+// SetRXAMode and SetRXABandpassFreqs build their own when the operator changes
+// mode or drags a filter edge — are cached too. Those are not worth a file
+// write each (a filter drag delivers them at ~30 Hz), so exit is the right
+// moment for them, on the runs where exit is reached at all.
 void armWisdomExportOnce()
 {
     static std::once_flag flag;
-    std::call_once(flag, [] {
-        std::atexit([] { fftw_export_wisdom_to_filename(wisdomPath().c_str()); });
-    });
+    std::call_once(flag, [] { std::atexit([] { exportWisdomNow(); }); });
 }
 
 int acquireChannelId()
@@ -355,6 +421,11 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
     return wdspPortOutstandingAllocations();
 }
 
+std::string WdspChannel::wisdomCachePathForTest()
+{
+    return wisdomPath();
+}
+
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept
 {
     if (config.inputBlockSize == 0 || config.dspBlockSize == 0 ||
@@ -429,7 +500,10 @@ void WdspChannel::open() noexcept
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
     }
-    armWisdomExportOnce();   // cache all measured wisdom (incl. later setMode) at exit
+    // Cache what this open measured, right now, while we still hold the setup
+    // lock -- a kill or a crash before exit must not throw the measurement away.
+    exportWisdomNow();
+    armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
     // Fully configured -- now run. dmode 0: nothing to flush on the way up.
     SetChannelState(m_channelId, 1, 0);
     m_open = true;

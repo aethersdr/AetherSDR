@@ -14,6 +14,7 @@
 
 #include <deque>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -89,6 +90,7 @@ public:
     // so repeating the base's is how the two quietly diverge later. The sole
     // call site passes it explicitly.
     void setTune(bool on, int tunePowerPercent) override;
+    void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
@@ -100,6 +102,23 @@ public:
 
     HealthSnapshot healthSnapshot() const override;
     LinkStats linkStats() const override;
+
+signals:
+    // Connect-time progress for the CLIENT-SIDE DSP build, and deliberately not
+    // on the IRadioBackend seam: WDSP is this backend's alone (a Flex
+    // demodulates in firmware, an Icom does not use WDSP at all), so a neutral
+    // signal would be one every other family had to ignore.
+    //
+    // `stage` is already operator-facing text, and carries NO counter of its own
+    // — `done`/`total` are the counter, so the label owns how (or whether) a
+    // fraction is rendered. They count WDSP channel opens, which means receivers
+    // and only receivers: the transmit chain designs FIR kernels and opens
+    // nothing, so it is not a step and is not in `total`.
+    //
+    // Emitted from the GUI thread, including the terminal one, so a slot may
+    // touch widgets directly.
+    void dspSetupProgress(const QString& stage, int done, int total);
+    void dspSetupFinished();
 
 private:
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
@@ -118,6 +137,45 @@ private:
     void applyLnaGainDb(int gainDb);   // the one true LNA application
     void rememberCurrentBandState();
     void notifyOperatingStateChanged();
+
+    // ---- the connect's three phases ----
+    //
+    // connectRadio() used to be one straight-line function that waited on the
+    // I/O thread through Qt::BlockingQueuedConnection for every WDSP open. The
+    // work was correctly OFF the GUI thread; the GUI thread simply stood there
+    // holding its breath for all of it. On a machine with no FFTW wisdom yet
+    // that is tens of seconds of an application that answers nothing at all —
+    // measured at 21-82 s here, load-dependent, with the automation bridge (a
+    // GUI-thread server) going completely silent for the whole window.
+    //
+    // So it is split. connectRadio() itself still does every member seeding
+    // SYNCHRONOUSLY — hl2_state_restore_test reads currentOperatingState()
+    // immediately after it returns, and that contract is worth keeping — and
+    // then hands the channel opens to beginDspSetup() and returns to the event
+    // loop. finishDspSetup() resumes on the GUI thread when the opens are done
+    // and starts the wire.
+    //
+    // What did NOT change is the ORDER: every DSP chain is still open and
+    // configured before MetisClient::start(), because EP2 must not stop (see
+    // the note above buildReceivers() and HERMES.md §20.8). The sequence stays
+    // serial on the I/O thread; only the GUI thread stopped waiting for it.
+    void beginDspSetup();
+
+    // Everything the async build needs to carry across event-loop turns (the
+    // wire params, the RX and TX configs, and which connect it belongs to). A
+    // local could not: connectRadio() has returned long before the I/O thread
+    // answers. Defined in the .cpp so this header keeps its forward
+    // declarations of MetisClient/Hl2RxDsp/Hl2TxDsp instead of including all
+    // three for three member types.
+    struct PendingConnect;
+    struct DspSetupResult;
+    void finishDspSetup(const DspSetupResult& result);
+
+    std::unique_ptr<PendingConnect> m_pendingConnect;
+    // A connect that arrived while m_pendingConnect was still building. Held
+    // rather than served inline — see the guard at the top of connectRadio().
+    std::unique_ptr<RadioConnectRequest> m_queuedConnect;
+    quint64 m_connectGeneration = 0;
 
     void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
@@ -470,6 +528,7 @@ private:
     bool m_adcOverload = false;
     bool m_keyed = false;
     bool m_tuning = false;
+    bool m_txMonitor = false;
     bool m_toneFromTune = false;
     // Last drive the operator asked for through setTxPower(), so TUNE can drop to
     // tune power and put it back on release. Seeded to the same value

@@ -330,6 +330,27 @@ signals:
     // setAgcThreshold(), and always carries BOTH values because a backend
     // configuring a DSP AGC needs the pair to act on either.
     void agcCommandIssued(const QString& mode, int thresholdDb);
+
+    // RECEIVE DSP THE RADIO RUNS. Same contract as the signals above: emitted
+    // only by the operator-facing setters, never by status application, so a
+    // radio's own echo can never come back as a fresh command (Principle II).
+    //
+    // These exist because every one of these controls used to emit FlexRadio
+    // wire text and nothing else. On a Flex that string IS the command; on any
+    // other backend it was discarded, and there was no seam verb for a backend
+    // to implement instead — so declaring hasRadioSideDsp bought nothing and
+    // the control moved while the radio never heard about it.
+    //
+    // Enable and level travel TOGETHER because a radio that has a level
+    // register generally needs both to make either meaningful, and because the
+    // two arriving separately is how a toggle lands before the level it implies.
+    void noiseReductionCommandIssued(bool on, int level);
+    void noiseBlankerCommandIssued(bool on, int level);
+    void autoNotchCommandIssued(bool on);
+    void squelchCommandIssued(bool on, int level);
+    // Receive and transmit incremental tuning.
+    void ritCommandIssued(bool on, int hz);
+    void xitCommandIssued(bool on, int hz);
     // Operator-issued per-slice AUDIO changes, same discipline as the three
     // above: audioMuteChanged/audioGainChanged/audioPanChanged also fire when
     // radio status is applied, so driving a command off those would echo the

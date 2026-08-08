@@ -578,14 +578,24 @@ void MainWindow::wireRadioModel()
         // it says so AND is actually allowed to transmit. An RX-only (or
         // transmit-blocked) backend must not open the mic / lock PC audio. (#4449)
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
-        const bool hostModulates = caps.hostModulates && caps.canTransmit;
-        m_audio->setHostModulation(hostModulates && connected);
+        // TWO DIFFERENT QUESTIONS, and they were one flag until an Icom proved
+        // they are not. `hostModulates` is "does the HOST run the modulator";
+        // takesTxAudioOverSeam is "does transmit audio leave through the seam".
+        // An Icom answers no to the first and YES to the second — its own
+        // firmware modulates, from PCM this computer captures and ships.
+        //
+        // Everything below is about the AUDIO, so all of it keys off the
+        // second. Gating it on the first meant an Icom captured nothing,
+        // processed nothing and emitted nothing: the radio keyed and put no
+        // modulation on the air.
+        const bool seamTxAudio = caps.takesTxAudioOverSeam && caps.canTransmit;
+        m_audio->setHostModulation(seamTxAudio && connected);
         // PC audio is not optional on a host-modulating backend: all audio, both
         // directions, lives on this computer. Turning it off would leave the
         // operator deaf and mute with nothing to explain it.
         if (m_titleBar)
-            m_titleBar->setPcAudioLocked(connected && hostModulates);
-        if (connected && hostModulates) {
+            m_titleBar->setPcAudioLocked(connected && seamTxAudio);
+        if (connected && seamTxAudio) {
             if (!m_audio->isTxStreaming())
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             // RX must be started imperatively, exactly like TX. Locking the
@@ -599,13 +609,22 @@ void MainWindow::wireRadioModel()
             AppSettings::instance().setValue("PcAudioEnabled", "True");
             AppSettings::instance().save();
             audioStartRx();
-        } else if (!connected && hostModulates) {
+        } else if (!connected && seamTxAudio) {
             audioStopTx();
         }
     });
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    // Radio configuration advice: shown, but it does NOT touch the session.
+    // Deliberately not onConnectionError — see IRadioBackend::configurationWarning.
+    // 15 s rather than the usual 4: this one names a four-level menu path the
+    // operator has to walk on the radio's front panel while reading it.
+    connect(&m_radioModel, &RadioModel::configurationWarning,
+            this, [this](const QString& message) {
+        qCWarning(lcProtocol).noquote() << "radio configuration:" << message;
+        statusBar()->showMessage(message, 15000);
+    });
     connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
             this, [this](const QString& message) {
         // A rejected GUI registration is terminal for this attempt. Keep the
@@ -1424,7 +1443,9 @@ void MainWindow::wirePanLifecycle()
             // DisplaySourceTraceSettings; do not reapply legacy flat keys here.
             sw->setSpectrumRenderMode(
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
-            sw->setDssGain(
+            // Principle V: one owned object, re-applied as a unit. The legacy
+            // flat gain key only seeds it when nothing has been written yet.
+            sw->loadDisplay3DSettings(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
         }
     });

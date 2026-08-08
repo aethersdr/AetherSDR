@@ -505,10 +505,20 @@ void MainWindow::handleFlexControlButton(int button, int action)
             disableSplit();
         }
     } else if (actionName.startsWith("CwxF")) {
-        bool ok = false;
-        const int idx = actionName.mid(4).toInt(&ok);
-        if (ok && idx >= 1 && idx <= 12)
-            m_radioModel.cwxModel().sendMacro(idx);
+        // Same gate the panel's own F1-F12 shortcuts carry: a radio with no CWX
+        // text buffer never gains one, and a mapped hardware button that emits
+        // `cwx send` into a backend with no such verb is the "silently does
+        // nothing" report, not a working control. The action stays assignable —
+        // the binding is operator-scoped and outlives any one radio.
+        if (!m_radioModel.hasRadioSideCwKeyer()) {
+            qCDebug(lcCw) << "CWX macro action" << actionName
+                          << "ignored: radio has no radio-side CW keyer";
+        } else {
+            bool ok = false;
+            const int idx = actionName.mid(4).toInt(&ok);
+            if (ok && idx >= 1 && idx <= 12)
+                m_radioModel.cwxModel().sendMacro(idx);
+        }
     }
 
     syncFlexControlDialog();
@@ -1466,7 +1476,10 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             rx->stepFilterWidth(steps);
         }
     } else if (actionId == "PanadapterZoom") {
-        const double baseFactor = steps > 0 ? 0.8 : 1.25;
+        // Rotary dial uses a finer per-detent factor (kRotaryPanZoomFactor vs
+        // keyboard kPanZoomFactor in MainWindow_Shortcuts.cpp) for smooth spins.
+        static constexpr double kRotaryPanZoomFactor = 1.25;
+        const double baseFactor = steps > 0 ? (1.0 / kRotaryPanZoomFactor) : kRotaryPanZoomFactor;
         const double factor = std::pow(baseFactor, std::abs(steps));
         zoomActivePanadapter(factor);
     } else if (actionId == "WheelRfGain") {

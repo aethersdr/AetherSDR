@@ -7,6 +7,11 @@
 #include <QPen>
 #include <QFont>
 #include <QColor>
+#include <QElapsedTimer>
+#include <QLinearGradient>
+#include <QVariantMap>
+#include <QVector>
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -18,6 +23,9 @@ namespace {
 constexpr float kMinHz   = 20.0f;
 constexpr float kMaxHz   = 20000.0f;
 constexpr float kDbRange = 18.0f;   // ±18 dB vertical extent
+// A physical 3840×2160 layer is 33,177,600 bytes, so ordinary physical 4K
+// canvases remain cached while each of our two retained layers stays bounded.
+constexpr qint64 kMaxCacheLayerBytes = 32LL * 1024LL * 1024LL;
 // Bottom strip showing band-plan-style audio modulation regions
 // (E-SSB / SSB / AM-FM).  Reserved at the bottom of the drawing
 // rect; freq labels move above it; analyzer + curves clip to
@@ -69,6 +77,7 @@ ClientEqCurveWidget::ClientEqCurveWidget(QWidget* parent) : QWidget(parent)
 {
     setMinimumHeight(80);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
+    m_perfSince.start();
 }
 
 void ClientEqCurveWidget::setEq(ClientEq* eq)
@@ -95,6 +104,7 @@ void ClientEqCurveWidget::setShowFilledRegions(bool on)
 void ClientEqCurveWidget::setFftBinsDb(const std::vector<float>& binsDb,
                                        double sampleRate)
 {
+    ++m_perfStats.fftUpdates;
     m_fftBinsDb = binsDb;
     m_fftSampleRate = sampleRate > 0.0 ? sampleRate : 24000.0;
 
@@ -243,6 +253,65 @@ void ClientEqCurveWidget::setReferenceCurvePreset(const QString& id)
     update();
 }
 
+ClientEqCurveWidget::BackgroundCacheKey ClientEqCurveWidget::backgroundCacheKey() const
+{
+    return {size(), devicePixelRatioF(), font(), m_filterLowCutHz, m_filterHighCutHz};
+}
+
+ClientEqCurveWidget::ResponseCacheKey ClientEqCurveWidget::responseCacheKey() const
+{
+    static_assert(std::tuple_size_v<decltype(ResponseCacheKey::bands)>
+                      == ClientEq::kMaxBands,
+                  "ResponseCacheKey::bands must cover every ClientEq band slot");
+    ResponseCacheKey key;
+    key.size = size();
+    key.devicePixelRatio = devicePixelRatioF();
+    key.font = font();
+    key.eq = m_eq;
+    key.selectedBand = m_selectedBand;
+    key.showFilled = m_showFilled;
+    key.referencePreset = m_referencePreset;
+    if (!m_eq) {
+        return key;
+    }
+
+    key.eqEnabled = m_eq->isEnabled();
+    key.filterFamily = static_cast<int>(m_eq->filterFamily());
+    key.sampleRate = m_eq->sampleRate();
+    key.activeBandCount = std::clamp(m_eq->activeBandCount(), 0,
+                                     static_cast<int>(key.bands.size()));
+    for (int i = 0; i < key.activeBandCount; ++i) {
+        const ClientEq::BandParams band = m_eq->band(i);
+        key.bands[static_cast<size_t>(i)] = {
+            band.freqHz, band.gainDb, band.q, static_cast<int>(band.type),
+            band.enabled, band.slopeDbPerOct,
+        };
+    }
+    return key;
+}
+
+bool ClientEqCurveWidget::cacheEligible(const QSize& cacheSize,
+                                        qreal devicePixelRatio) const
+{
+    // The two current-size layers are bounded rather than accumulating on
+    // resize.  Avoid retaining very large DPR pixmaps on unusually large
+    // canvases; drawing directly preserves fidelity in that rare case.
+    const qint64 pixelWidth = std::max<qint64>(0, qRound(cacheSize.width() * devicePixelRatio));
+    const qint64 pixelHeight = std::max<qint64>(0, qRound(cacheSize.height() * devicePixelRatio));
+    return pixelWidth > 0 && pixelHeight > 0
+        && pixelWidth <= kMaxCacheLayerBytes / 4 / pixelHeight;
+}
+
+QPixmap ClientEqCurveWidget::makeCachePixmap(const QSize& cacheSize,
+                                              qreal devicePixelRatio) const
+{
+    QPixmap cache(qRound(cacheSize.width() * devicePixelRatio),
+                  qRound(cacheSize.height() * devicePixelRatio));
+    cache.setDevicePixelRatio(devicePixelRatio);
+    cache.fill(Qt::transparent);
+    return cache;
+}
+
 std::vector<float> ClientEqCurveWidget::applyFractionalOctaveSmoothing(
     const std::vector<float>& binsDb, double sampleRate, int octaveFraction)
 {
@@ -332,15 +401,9 @@ float ClientEqCurveWidget::yToDb(float y) const
     return kDbRange - norm * (2.0f * kDbRange);
 }
 
-void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
+void ClientEqCurveWidget::drawBackground(QPainter& p, const QRect& r) const
 {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setRenderHint(QPainter::TextAntialiasing, true);
-
-    const QRect r = rect();
-
-    // Background — deep navy matching our dark theme.
+    // Background/grid/filter guides/labels stay behind the live analyzer.
     p.fillRect(r, QColor("#0a0a18"));
 
     // Minor grid — dB lines at ±6, ±12 dB.
@@ -411,93 +474,15 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
         }
     }
 
-    // Live FFT analyzer — filled gradient showing what's actually flowing
-    // through the audio path post-EQ.  Drawn early so every EQ-visual
-    // layer sits on top.  Scale: -70 dB → bottom, 0 dB → top.
-    // Filled region uses fractional-octave-smoothed bins (m_fftBinsDbSmoothed)
-    // so the visual matches the user's smoothing selection.  Peak-hold trace
-    // below stays on raw bins so transient peaks aren't masked.
-    if (!m_fftBinsDb.empty()) {
-        const int bins = static_cast<int>(m_fftBinsDb.size());
-        const std::vector<float>& drawBins = (m_fftBinsDbSmoothed.size() == m_fftBinsDb.size())
-            ? m_fftBinsDbSmoothed : m_fftBinsDb;
-        const float minDb = -70.0f;
-        const float maxDb =   0.0f;
-        // Clip the analyzer to above the audio band-plan strip.
-        const float h = static_cast<float>(r.height() - kAudioBandStripH);
-        auto dbfsToY = [&](float db) {
-            const float n = (db - minDb) / (maxDb - minDb);
-            return (1.0f - std::clamp(n, 0.0f, 1.0f)) * h;
-        };
+}
 
-        QPainterPath fftPath;
-        fftPath.moveTo(0, h);
-        bool  started = false;
-        float lastX   = 0.0f;
-        for (int i = 1; i < bins; ++i) {
-            // bins.size() == fftSize/2 + 1; bin i maps to i * fs / fftSize.
-            const float f = static_cast<float>(i) *
-                            static_cast<float>(m_fftSampleRate) /
-                            static_cast<float>((bins - 1) * 2);
-            const float x = freqToX(f);
-            if (x < 0 || x > r.width()) continue;
-            const float y = dbfsToY(drawBins[i]);
-            if (!started) { fftPath.lineTo(x, h); started = true; }
-            fftPath.lineTo(x, y);
-            lastX = x;
-        }
-        // Close the filled region at the last valid bin's x, not at the
-        // canvas right edge.  Above Nyquist the FFT has no bins; drawing
-        // out to r.width() produced a misleading near-horizontal "shelf"
-        // connecting the last bin's level to the bottom-right corner.
-        if (started) {
-            fftPath.lineTo(lastX, h);
-        }
-        fftPath.closeSubpath();
-
-        QLinearGradient grad(0, 0, 0, h);
-        grad.setColorAt(0.0, QColor(88, 200, 232, 140));   // cyan top
-        grad.setColorAt(0.6, QColor(30, 110, 170,  70));
-        grad.setColorAt(1.0, QColor(12,  40,  70,   0));   // fades to clear
-        p.setPen(Qt::NoPen);
-        p.setBrush(grad);
-        p.drawPath(fftPath);
-
-        // Peak-hold line — same dBFS scale as the live spectrum.  Drawn
-        // on top so resonances and harsh peaks stand out as the user
-        // tunes.  Soft off-white reads cleanly against the cool-cyan
-        // analyzer.  Reads the smoothed peak-hold buffer so changing
-        // the Smoothing combo visibly affects the dominant trace.
-        const std::vector<float>& peakBins =
-            (m_peakHoldDbSmoothed.size() == m_peakHoldDb.size())
-                ? m_peakHoldDbSmoothed : m_peakHoldDb;
-        if (!peakBins.empty() && peakBins.size() == m_fftBinsDb.size()) {
-            QPainterPath peakPath;
-            bool peakStarted = false;
-            for (int i = 1; i < bins; ++i) {
-                const float f = static_cast<float>(i) *
-                                static_cast<float>(m_fftSampleRate) /
-                                static_cast<float>((bins - 1) * 2);
-                const float x = freqToX(f);
-                if (x < 0 || x > r.width()) continue;
-                const float y = dbfsToY(peakBins[i]);
-                if (!peakStarted) { peakPath.moveTo(x, y); peakStarted = true; }
-                else              peakPath.lineTo(x, y);
-            }
-            QPen peakPen(QColor(220, 222, 230, 210), 1.4);
-            peakPen.setJoinStyle(Qt::RoundJoin);
-            peakPen.setCapStyle(Qt::RoundCap);
-            p.setPen(peakPen);
-            p.setBrush(Qt::NoBrush);
-            p.drawPath(peakPath);
-        }
-    }
-
-    // Reference curve overlay — selected preset.  Drawn after the
-    // analyzer but before the EQ band curves so the user's adjustments
-    // sit on top of the target they're shaping toward.  Amber,
-    // semi-transparent.
-    if (const RefPreset* preset = findPreset(m_referencePreset)) {
+void ClientEqCurveWidget::drawResponse(QPainter& p, const QRect& r,
+                                       const ResponseCacheKey& key) const
+{
+    // This layer stays above the live analyzer. Its key intentionally covers
+    // every visible ClientEq value because ClientEq is not a QObject and a
+    // caller may mutate it then call update() without a signal.
+    if (const RefPreset* preset = findPreset(key.referencePreset)) {
         QPainterPath refPath;
         for (int i = 0; i < preset->count; ++i) {
             const float x = freqToX(preset->pts[i].hz);
@@ -514,21 +499,21 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
         p.drawPath(refPath);
     }
 
-    if (!m_eq || m_eq->activeBandCount() == 0) {
+    if (!key.eq || key.activeBandCount == 0) {
         p.setPen(QColor("#405060"));
         QFont f = p.font();
         f.setPointSizeF(8.0);
         p.setFont(f);
         p.drawText(r, Qt::AlignCenter,
-                   m_eq ? QString("(no bands — add one in the editor)")
+                   key.eq ? QString("(no bands — add one in the editor)")
                         : QString("(no EQ connected)"));
         return;
     }
 
-    const int   bandCount = m_eq->activeBandCount();
-    const double fs       = m_eq->sampleRate();
+    const int   bandCount = key.activeBandCount;
+    const double fs       = key.sampleRate;
     const int   W         = r.width();
-    const bool  eqOn      = m_eq->isEnabled();
+    const bool  eqOn      = key.eqEnabled;
 
     // bandMagnitudeDb evaluates analog-prototype transfer functions in
     // double precision, so the drawn response is ideal across the full
@@ -537,14 +522,20 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
     // biquads; this is the analog reference the biquad approximates.
     // HP/LP bands cascade internally based on slopeDbPerOct and the
     // globally-selected FilterFamily on the bound ClientEq.
-    const ClientEq::FilterFamily family = m_eq->filterFamily();
+    const ClientEq::FilterFamily family =
+        static_cast<ClientEq::FilterFamily>(key.filterFamily);
     QVector<float> summed(W, 0.0f);
     QVector<QVector<float>> perBand(bandCount, QVector<float>(W, 0.0f));
     for (int x = 0; x < W; ++x) {
         const float probe = xToFreq(static_cast<float>(x));
         float acc = 0.0f;
         for (int i = 0; i < bandCount; ++i) {
-            const auto bp = m_eq->band(i);
+            const BandCacheState& state = key.bands[static_cast<size_t>(i)];
+            const ClientEq::BandParams bp{
+                state.freqHz, state.gainDb, state.q,
+                static_cast<ClientEq::FilterType>(state.type), state.enabled,
+                state.slopeDbPerOct,
+            };
             const float dB = ClientEq::bandMagnitudeDb(bp, probe, fs, family);
             perBand[i][x] = dB;
             acc += dB;
@@ -555,11 +546,11 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
     // Selected-band highlight bar — vertical translucent stripe that ties
     // the icon row, canvas, and param-row column together.  Drawn before
     // the filled regions so the filled region colour still shows through.
-    if (m_selectedBand >= 0 && m_selectedBand < bandCount) {
-        const auto bp = m_eq->band(m_selectedBand);
+    if (key.selectedBand >= 0 && key.selectedBand < bandCount) {
+        const BandCacheState& bp = key.bands[static_cast<size_t>(key.selectedBand)];
         const float cx = freqToX(bp.freqHz);
         const float stripeWidth = 18.0f;
-        QColor stripe = bandColor(m_selectedBand);
+        QColor stripe = bandColor(key.selectedBand);
         stripe.setAlphaF(0.16f);
         p.fillRect(QRectF(cx - stripeWidth * 0.5f, 0.0f,
                           stripeWidth, static_cast<float>(r.height())),
@@ -570,11 +561,13 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
     // line and each band's response.  Renders the Logic-Pro-style "see
     // what each band is doing" look.  Drawn first so the per-band strokes
     // and summed curve on top stay readable.
-    if (m_showFilled) {
+    if (key.showFilled) {
         const float yZero = dbToY(0.0f);
         for (int i = 0; i < bandCount; ++i) {
-            const auto bp = m_eq->band(i);
-            if (!bp.enabled) continue;
+            const BandCacheState& bp = key.bands[static_cast<size_t>(i)];
+            if (!bp.enabled) {
+                continue;
+            }
             QColor fill = bandColor(i);
             fill.setAlphaF(eqOn ? 0.22f : 0.07f);
             p.setPen(Qt::NoPen);
@@ -631,15 +624,17 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
     // Selected band renders a halo ring to match the icon-row highlight.
     p.setRenderHint(QPainter::Antialiasing, true);
     for (int i = 0; i < bandCount; ++i) {
-        const auto bp = m_eq->band(i);
-        const bool isSlope = (bp.type == ClientEq::FilterType::LowPass
-                           || bp.type == ClientEq::FilterType::HighPass);
+        const BandCacheState& bp = key.bands[static_cast<size_t>(i)];
+        const bool isSlope = (bp.type == static_cast<int>(ClientEq::FilterType::LowPass)
+                           || bp.type == static_cast<int>(ClientEq::FilterType::HighPass));
         const float handleDb = isSlope ? 0.0f : bp.gainDb;
         const QPointF center(freqToX(bp.freqHz), dbToY(handleDb));
         QColor c = bandColor(i);
-        if (!bp.enabled || !eqOn) c.setAlphaF(0.35f);
+        if (!bp.enabled || !eqOn) {
+            c.setAlphaF(0.35f);
+        }
 
-        if (i == m_selectedBand) {
+        if (i == key.selectedBand) {
             QColor halo = c; halo.setAlphaF(0.35f);
             p.setBrush(halo);
             p.setPen(Qt::NoPen);
@@ -679,7 +674,9 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
         for (const auto& seg : segs) {
             const int x1 = static_cast<int>(freqToX(seg.lowHz));
             const int x2 = static_cast<int>(freqToX(seg.highHz));
-            if (x2 <= x1) continue;
+            if (x2 <= x1) {
+                continue;
+            }
             QColor fill(
                 static_cast<int>(seg.color.red()   * seg.blend + bg.red()   * (1.0f - seg.blend)),
                 static_cast<int>(seg.color.green() * seg.blend + bg.green() * (1.0f - seg.blend)),
@@ -695,6 +692,219 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
             }
         }
     }
+}
+
+void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
+{
+    QElapsedTimer paintTimer;
+    paintTimer.start();
+    ++m_perfStats.paints;
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+    const QRect r = rect();
+    const qreal dpr = devicePixelRatioF();
+    const bool cacheAllowed = cacheEligible(r.size(), dpr);
+
+    const BackgroundCacheKey backgroundKey = backgroundCacheKey();
+    if (cacheAllowed) {
+        if (!m_backgroundCacheValid || m_backgroundCacheKey != backgroundKey) {
+            m_backgroundCache = makeCachePixmap(r.size(), dpr);
+            if (!m_backgroundCache.isNull()) {
+                QPainter cachePainter(&m_backgroundCache);
+                cachePainter.setRenderHint(QPainter::Antialiasing, true);
+                cachePainter.setRenderHint(QPainter::TextAntialiasing, true);
+                cachePainter.setFont(font());
+                drawBackground(cachePainter, r);
+            }
+            m_backgroundCacheKey = backgroundKey;
+            m_backgroundCacheValid = !m_backgroundCache.isNull();
+            ++m_perfStats.backgroundCacheRebuilds;
+        } else {
+            ++m_perfStats.backgroundCacheHits;
+        }
+        if (m_backgroundCacheValid) {
+            p.drawPixmap(0, 0, m_backgroundCache);
+        } else {
+            drawBackground(p, r);
+        }
+    } else {
+        if (!m_backgroundCache.isNull()) {
+            m_backgroundCache = QPixmap();
+        }
+        m_backgroundCacheValid = false;
+        drawBackground(p, r);
+    }
+
+    // The analyzer is deliberately dynamic: FFT, peak-hold and smoothing
+    // changes repaint only this section between the two cached layers.
+    if (!m_fftBinsDb.empty()) {
+        const int bins = static_cast<int>(m_fftBinsDb.size());
+        const std::vector<float>& drawBins = (m_fftBinsDbSmoothed.size() == m_fftBinsDb.size())
+            ? m_fftBinsDbSmoothed : m_fftBinsDb;
+        const float h = static_cast<float>(r.height() - kAudioBandStripH);
+        auto dbfsToY = [h](float db) {
+            const float n = (db + 70.0f) / 70.0f;
+            return (1.0f - std::clamp(n, 0.0f, 1.0f)) * h;
+        };
+        QPainterPath fftPath;
+        fftPath.moveTo(0, h);
+        bool started = false;
+        float lastX = 0.0f;
+        for (int i = 1; i < bins; ++i) {
+            const float f = static_cast<float>(i) * static_cast<float>(m_fftSampleRate)
+                / static_cast<float>((bins - 1) * 2);
+            const float x = freqToX(f);
+            if (x < 0 || x > r.width()) {
+                continue;
+            }
+            const float y = dbfsToY(drawBins[i]);
+            if (!started) {
+                fftPath.lineTo(x, h);
+                started = true;
+            }
+            fftPath.lineTo(x, y);
+            lastX = x;
+        }
+        if (started) {
+            fftPath.lineTo(lastX, h);
+        }
+        fftPath.closeSubpath();
+        QLinearGradient grad(0, 0, 0, h);
+        grad.setColorAt(0.0, QColor(88, 200, 232, 140));
+        grad.setColorAt(0.6, QColor(30, 110, 170, 70));
+        grad.setColorAt(1.0, QColor(12, 40, 70, 0));
+        p.setPen(Qt::NoPen);
+        p.setBrush(grad);
+        p.drawPath(fftPath);
+
+        const std::vector<float>& peakBins =
+            (m_peakHoldDbSmoothed.size() == m_peakHoldDb.size())
+                ? m_peakHoldDbSmoothed : m_peakHoldDb;
+        if (!peakBins.empty() && peakBins.size() == m_fftBinsDb.size()) {
+            QPainterPath peakPath;
+            bool peakStarted = false;
+            for (int i = 1; i < bins; ++i) {
+                const float f = static_cast<float>(i) * static_cast<float>(m_fftSampleRate)
+                    / static_cast<float>((bins - 1) * 2);
+                const float x = freqToX(f);
+                if (x < 0 || x > r.width()) {
+                    continue;
+                }
+                const float y = dbfsToY(peakBins[i]);
+                if (!peakStarted) {
+                    peakPath.moveTo(x, y);
+                    peakStarted = true;
+                } else {
+                    peakPath.lineTo(x, y);
+                }
+            }
+            QPen peakPen(QColor(220, 222, 230, 210), 1.4);
+            peakPen.setJoinStyle(Qt::RoundJoin);
+            peakPen.setCapStyle(Qt::RoundCap);
+            p.setPen(peakPen);
+            p.setBrush(Qt::NoBrush);
+            p.drawPath(peakPath);
+        }
+    }
+
+    const ResponseCacheKey responseKey = responseCacheKey();
+    if (cacheAllowed) {
+        if (!m_responseCacheValid || m_responseCacheKey != responseKey) {
+            m_responseCache = makeCachePixmap(r.size(), dpr);
+            if (!m_responseCache.isNull()) {
+                QPainter cachePainter(&m_responseCache);
+                cachePainter.setRenderHint(QPainter::Antialiasing, true);
+                cachePainter.setRenderHint(QPainter::TextAntialiasing, true);
+                cachePainter.setFont(font());
+                drawResponse(cachePainter, r, responseKey);
+            }
+            m_responseCacheKey = responseKey;
+            m_responseCacheValid = !m_responseCache.isNull();
+            ++m_perfStats.responseCacheRebuilds;
+        } else {
+            ++m_perfStats.responseCacheHits;
+        }
+        if (m_responseCacheValid) {
+            p.drawPixmap(0, 0, m_responseCache);
+        } else {
+            drawResponse(p, r, responseKey);
+        }
+    } else {
+        if (!m_responseCache.isNull()) {
+            m_responseCache = QPixmap();
+        }
+        m_responseCacheValid = false;
+        drawResponse(p, r, responseKey);
+    }
+
+    const quint64 elapsedUs = static_cast<quint64>(paintTimer.nsecsElapsed() / 1000);
+    m_perfStats.paintUsTotal += elapsedUs;
+    m_perfStats.paintUsMax = std::max(m_perfStats.paintUsMax, elapsedUs);
+}
+
+void ClientEqCurveWidget::resetPerfStats()
+{
+    m_perfStats = {};
+    m_perfSince.restart();
+}
+
+QVariantMap ClientEqCurveWidget::eqstatsSnapshot(bool reset)
+{
+    const double secs = std::max(0.001, m_perfSince.elapsed() / 1000.0);
+    QVariantMap stats;
+    stats[QStringLiteral("name")] = objectName();
+    stats[QStringLiteral("className")] = QString::fromLatin1(metaObject()->className());
+    stats[QStringLiteral("windowTitle")] = window() ? window()->windowTitle() : QString();
+    stats[QStringLiteral("windowName")] = window() ? window()->objectName() : QString();
+    stats[QStringLiteral("windowClass")] = window()
+        ? QString::fromLatin1(window()->metaObject()->className()) : QString();
+    stats[QStringLiteral("visible")] = isVisible();
+    stats[QStringLiteral("x")] = x();
+    stats[QStringLiteral("y")] = y();
+    stats[QStringLiteral("widthPx")] = width();
+    stats[QStringLiteral("heightPx")] = height();
+    stats[QStringLiteral("dpr")] = devicePixelRatioF();
+    stats[QStringLiteral("sinceMs")] = static_cast<qlonglong>(m_perfSince.elapsed());
+    stats[QStringLiteral("fftUpdateCount")] = static_cast<qulonglong>(m_perfStats.fftUpdates);
+    stats[QStringLiteral("fftUpdatesPerSec")] = m_perfStats.fftUpdates / secs;
+    stats[QStringLiteral("paintCount")] = static_cast<qulonglong>(m_perfStats.paints);
+    stats[QStringLiteral("paintsPerSec")] = m_perfStats.paints / secs;
+    stats[QStringLiteral("avgPaintUs")] = m_perfStats.paints
+        ? static_cast<double>(m_perfStats.paintUsTotal) / m_perfStats.paints : 0.0;
+    stats[QStringLiteral("maxPaintUs")] = static_cast<qulonglong>(m_perfStats.paintUsMax);
+    stats[QStringLiteral("paintMsPerSec")] = (m_perfStats.paintUsTotal / 1000.0) / secs;
+    stats[QStringLiteral("backgroundCacheRebuildCount")] =
+        static_cast<qulonglong>(m_perfStats.backgroundCacheRebuilds);
+    stats[QStringLiteral("backgroundCacheRebuildsPerSec")] =
+        m_perfStats.backgroundCacheRebuilds / secs;
+    stats[QStringLiteral("responseCacheRebuildCount")] =
+        static_cast<qulonglong>(m_perfStats.responseCacheRebuilds);
+    stats[QStringLiteral("responseCacheRebuildsPerSec")] =
+        m_perfStats.responseCacheRebuilds / secs;
+    stats[QStringLiteral("backgroundCacheHits")] =
+        static_cast<qulonglong>(m_perfStats.backgroundCacheHits);
+    stats[QStringLiteral("responseCacheHits")] =
+        static_cast<qulonglong>(m_perfStats.responseCacheHits);
+    stats[QStringLiteral("cacheEligible")] = cacheEligible(size(), devicePixelRatioF());
+    stats[QStringLiteral("cacheLayerByteLimit")] =
+        static_cast<qulonglong>(kMaxCacheLayerBytes);
+    stats[QStringLiteral("cacheTotalByteLimit")] =
+        static_cast<qulonglong>(kMaxCacheLayerBytes * 2);
+    const auto cacheBytes = [](const QPixmap& cache) {
+        return static_cast<qulonglong>(cache.width())
+            * static_cast<qulonglong>(cache.height()) * 4ULL;
+    };
+    stats[QStringLiteral("backgroundCacheBytes")] = cacheBytes(m_backgroundCache);
+    stats[QStringLiteral("responseCacheBytes")] = cacheBytes(m_responseCache);
+    stats[QStringLiteral("cacheRetainedBytes")] =
+        stats.value(QStringLiteral("backgroundCacheBytes")).toULongLong()
+        + stats.value(QStringLiteral("responseCacheBytes")).toULongLong();
+    if (reset) {
+        resetPerfStats();
+    }
+    return stats;
 }
 
 } // namespace AetherSDR

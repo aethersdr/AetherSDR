@@ -19,7 +19,18 @@ inline constexpr BandDef kBands[] = {
     {"630m",   0.472,    0.479,    0.475,   "CW"},
     {"160m",   1.800,    2.000,    1.900,   "LSB"},
     {"80m",    3.500,    4.000,    3.800,   "LSB"},
-    {"60m",    5.330,    5.405,    5.357,   "USB"},
+    // 60m spans the FCC's encompassing range (47 CFR §97.303), not the outermost
+    // channel dials: from 5330.5 kHz, where the 5332 kHz channel's 2.8 kHz
+    // slot starts, up to 5406.4 kHz, where the 5405 kHz channel's slot ends.
+    // A USB emission from the 5403.5 dial ends at 5406.3, so the last 100 Hz
+    // is headroom rather than extra allocation — do not round it up past
+    // 5.4064: this constant is not only band-grouping metadata,
+    // RadioModel::txFilterFrequencyLimitMessage() gates the PTT preflight on
+    // highMhz, so an edge above the rule lets an out-of-band passband key.
+    // The old 5.405 clipped the top 1.3 kHz of the 5405 channel, so every
+    // frequency->band lookup missed it entirely (#4723). Edges are pinned by
+    // tests/band_edges_test.cpp — keep them in sync.
+    {"60m",    5.3305,   5.4064,   5.357,   "USB"},
     {"40m",    7.000,    7.300,    7.200,   "LSB"},
     {"30m",   10.100,   10.150,   10.125,   "DIGU"},
     {"20m",   14.000,   14.350,   14.225,   "USB"},

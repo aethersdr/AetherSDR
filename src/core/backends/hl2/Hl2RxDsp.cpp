@@ -79,6 +79,15 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     m_left.assign(outN, 0.0f);
     m_right.assign(outN, 0.0f);
     m_stereo.assign(outN * 2, 0.0f);
+    // DC blocker pole for the AUDIO rate — the blocker runs on WdspChannel's
+    // output, not on its 48 kHz internal rate. Recomputed here so a rate change
+    // keeps the same corner frequency instead of moving it.
+    const float pole = dcBlockerPole(kDcBlockerCornerHz,
+                                     static_cast<double>(config.audioSampleRateHz));
+    m_dcBlockL.r = pole;
+    m_dcBlockR.r = pole;
+    m_dcBlockL.reset();
+    m_dcBlockR.reset();
     // A rebuild (rate change) creates a fresh channel; restore the operator's
     // current slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
@@ -246,8 +255,12 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
 
         const std::size_t outN = m_left.size();
         for (std::size_t k = 0; k < outN; ++k) {
-            m_stereo[2 * k] = m_left[k];
-            m_stereo[2 * k + 1] = m_right[k];
+            // DC-block on the way out. AM/SAM arrive with the carrier as a DC
+            // pedestal that nothing upstream removes — see DcBlocker in the
+            // header for why WDSP's levelfade and the symmetric AM passband
+            // both leave it in place.
+            m_stereo[2 * k] = m_dcBlockL.process(m_left[k]);
+            m_stereo[2 * k + 1] = m_dcBlockR.process(m_right[k]);
         }
         emit audioReady(m_stereo);
         // S-meter from WDSP's own signal-strength meter, NOT from the RMS of

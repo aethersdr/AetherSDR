@@ -10,6 +10,7 @@
 #include "core/SettingsSanitizer.h"
 #include "models/Nr2SettingsModel.h"
 #include "core/AutomationBridgeSettings.h"
+#include "core/DisplayPresence.h"
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
@@ -225,6 +226,25 @@ static int runConfigCli(int argc, char* argv[])
     return usage();
 }
 
+// The Qt platform-selection decision made on a Wayland session, recorded before
+// the log handler exists and re-emitted next to the GpuSelector summary once
+// logging is up — so a Support bundle shows why we chose xcb vs wayland (the
+// first "why am I on XWayland / why did fractional scaling change" question).
+// nullptr choice = no override applied (not a Wayland session, or the user set
+// QT_QPA_PLATFORM already). The presence itself lives in DisplayPresence.h's
+// accessor (setDetectedDisplayPresence) so SpectrumWidget can read it too.
+static const char* g_qpaPlatformChoice = nullptr;
+
+static const char* displayPresenceName(AetherSDR::DisplayPresence p)
+{
+    switch (p) {
+        case AetherSDR::DisplayPresence::Connected: return "connected";
+        case AetherSDR::DisplayPresence::Headless:  return "headless";
+        case AetherSDR::DisplayPresence::Unknown:   return "unknown";
+    }
+    return "unknown";
+}
+
 int main(int argc, char* argv[])
 {
     if (argc >= 2 && qstrcmp(argv[1], "--config") == 0) {
@@ -240,10 +260,14 @@ int main(int argc, char* argv[])
         qputenv("QT_OPENGL", "software");
     }
 
-    // Render-adapter selection on multi-GPU systems.  Must run before the GL/D3D
-    // context is created (i.e. before QApplication): sets PRIME offload (Linux)
-    // or QT_D3D_ADAPTER_INDEX (Windows) from the persisted Display-menu choice.
-    AetherSDR::GpuSelector::applyAtStartup();
+    // NOTE ON ORDER: the QT_QPA_PLATFORM block runs BEFORE
+    // GpuSelector::applyAtStartup() below. GpuSelector::willUseWayland() reads
+    // QT_QPA_PLATFORM to decide whether to apply the X11/GLX NVIDIA vendor hint
+    // (__GLX_VENDOR_LIBRARY_NAME), so our platform choice must be in the
+    // environment before it runs — otherwise a headless box that we route to
+    // XWayland/GLX would be mistaken for EGL/Wayland and lose PRIME offload.
+    // applyAtStartup() is otherwise independent (pure sysfs reads + PRIME-var
+    // qputenv, no Qt/GL dependency), so nothing here needs it to go first.
 
     // Prefer native Wayland when running under a Wayland session (#1233).
     // Without this, Qt may fall back to XWayland (xcb platform) where GLX
@@ -279,9 +303,42 @@ int main(int argc, char* argv[])
     if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
         const QByteArray session = qgetenv("XDG_SESSION_TYPE");
         if (session == "wayland" && qEnvironmentVariableIsSet("WAYLAND_DISPLAY")) {
-            qputenv("QT_QPA_PLATFORM", "wayland;xcb");
+            // Only override to xcb when we AFFIRMATIVELY detect a headless
+            // session — DRM connectors present, at least one "disconnected",
+            // none connected (e.g. a Pi 5 reached over wayvnc). Native-Wayland
+            // hardware GL cannot allocate a window surface with no DRM scanout,
+            // so the panadapter renders black under an EGL_BAD_MATCH storm
+            // (QT_OPENGL=software does NOT help — the failure is the wayland-egl
+            // surface, not the renderer). XWayland renders fine; "xcb;wayland"
+            // still falls back to wayland if the xcb plugin is absent. If we
+            // cannot tell (no DRM connectors, or every connector reports
+            // "unknown"), keep the native-Wayland default rather than assume
+            // headless. A physical display restores it too.
+            //
+            // Detect on Linux only; a bool with an #else arm keeps the branch
+            // below preprocessor-safe (an added branch can't silently rebind
+            // the non-Linux case).
+#ifdef __linux__
+            const AetherSDR::DisplayPresence presence =
+                AetherSDR::detectDisplayPresence();
+            const bool headless =
+                presence == AetherSDR::DisplayPresence::Headless;
+            AetherSDR::setDetectedDisplayPresence(presence);
+#else
+            constexpr bool headless = false;
+#endif
+            const char* platform = headless ? "xcb;wayland" : "wayland;xcb";
+            qputenv("QT_QPA_PLATFORM", platform);
+            g_qpaPlatformChoice = platform;  // re-emitted once logging is up
         }
     }
+
+    // Render-adapter selection on multi-GPU systems.  Must run before the GL/D3D
+    // context is created (i.e. before QApplication): sets PRIME offload (Linux)
+    // or QT_D3D_ADAPTER_INDEX (Windows) from the persisted Display-menu choice.
+    // Runs AFTER the QT_QPA_PLATFORM block above so GpuSelector::willUseWayland()
+    // reads the platform we actually chose (see the ORDER note above).
+    AetherSDR::GpuSelector::applyAtStartup();
 
 #ifdef __linux__
     // Install a tolerant X11 error handler before QApplication and before any
@@ -589,6 +646,14 @@ int main(int argc, char* argv[])
         // (GpuSelector::applyAtStartup() ran before logging was available).
         qInfo().noquote() << "GpuSelector: render GPU ->"
                           << AetherSDR::GpuSelector::appliedSummary();
+
+        // Likewise the Wayland platform choice (decided before logging existed).
+        if (g_qpaPlatformChoice) {
+            qInfo().noquote()
+                << "Platform: Wayland session, display presence"
+                << displayPresenceName(AetherSDR::detectedDisplayPresence())
+                << "-> QT_QPA_PLATFORM" << g_qpaPlatformChoice;
+        }
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)
         const QString symlink = logDir + "/aethersdr.log";

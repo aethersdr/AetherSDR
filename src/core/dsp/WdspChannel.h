@@ -137,6 +137,13 @@ public:
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;
 
+    // Where open() writes the FFTW wisdom cache. Exposed so a test can assert
+    // the file is on disk once open() has RETURNED — the defect it pins is
+    // wisdom that only ever reached disk through an atexit handler, which every
+    // signal-terminated run skipped. Reading the path instead of hardcoding it
+    // keeps the test honest about the env vars wisdomPath() actually consults.
+    static std::string wisdomCachePathForTest();
+
 private:
     explicit WdspChannel(int channelId, const Config& config) noexcept;
 

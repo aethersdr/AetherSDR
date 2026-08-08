@@ -253,6 +253,116 @@ void testRemovingAdjacentMetersDoesNotClearCompPeak()
            model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 11.0f));
 }
 
+// THE UNIT CONTRACT. This model used to interpret a meter purely by NAME and
+// apply a unit it assumed, so a backend publishing its radio's honest unit was
+// silently mis-rendered. Both cases below reproduce a live IC-705 defect.
+// hasMicPeakMeter() is what MainWindow's mic-gauge visibility follows, and it
+// flips LATE — the meter list arrives after the connect edge. RadioModel
+// re-publishes capabilities on that transition, so the predicate has to be
+// honest in both directions or the gauge sticks.
+void testMicPeakAvailabilityTracksTheMeterList()
+{
+    MeterModel model;
+    report("no mic-peak meter before the radio declares one", !model.hasMicPeakMeter());
+
+    model.defineMeter(slcMeter(10, 0));
+    report("an unrelated meter does not make one appear", !model.hasMicPeakMeter());
+
+    model.defineMeter(txMeter(31, "MICPEAK", "dBFS"));
+    report("MICPEAK makes it available", model.hasMicPeakMeter());
+
+    model.removeMeter(31);
+    report("and removing it makes it unavailable again", !model.hasMicPeakMeter());
+}
+
+void testForwardPowerHonoursItsDeclaredUnit()
+{
+    // Watts, declared. 5 W must stay 5 W.
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "Watts"));
+        // NOT rawDb(): only the dB-family units are scaled by 128 on the way
+        // in, so a Watts meter's raw value IS its value.
+        model.updateValues({8}, {5});
+        report("a FWDPWR meter declared in Watts is NOT converted from dBm",
+               nearlyEqual(model.fwdPowerInstant(), 5.0f));
+        // The old behaviour, pinned so the fix cannot silently regress: read as
+        // dBm, 5 becomes 10^(5/10)/1000 = 0.00316 W and the gauge never moves.
+        report("and the pre-fix dBm reading really was ~0.003 W",
+               std::pow(10.0f, 5.0f / 10.0f) / 1000.0f < 0.01f);
+    }
+    // dBm stays the default for every backend that predates the field.
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+        model.updateValues({8}, {rawDb(50.0f)});
+        report("a FWDPWR meter declared in dBm still converts to watts",
+               nearlyEqual(model.fwdPowerInstant(), 100.0f));
+    }
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", QString{}));
+        model.updateValues({8}, {50});
+        report("an undeclared unit is treated as dBm, as it always was",
+               nearlyEqual(model.fwdPowerInstant(), 100.0f));
+    }
+}
+
+// REFPWR was missed when FWDPWR and ALC were fixed, and MeterSurfaces.h already
+// advertised this consumer as accepting Watts — so the join reported a
+// watts-declaring backend as unit-agreeing while the value was still converted
+// from dBm. The diagnostic vouching for the bug is worse than the bug.
+void testReflectedPowerHonoursItsDeclaredUnit()
+{
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "Watts"));
+        model.defineMeter(txMeter(9, "REFPWR", "Watts"));
+        model.updateValues({8, 9}, {10, 1});
+        report("a REFPWR meter declared in Watts is NOT converted from dBm",
+               nearlyEqual(model.reflectedPower(), 1.0f));
+    }
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+        model.defineMeter(txMeter(9, "REFPWR", "dBm"));
+        model.updateValues({8, 9}, {rawDb(50.0f), rawDb(36.0206f)});
+        report("and a dBm one still converts, as every existing backend expects",
+               nearlyEqual(model.reflectedPower(), 4.0f));
+    }
+}
+
+void testAlcPercentIsMappedOntoTheGaugeRange()
+{
+    // The ALC consumers are a -20..0 dBFS gauge. A radio running its own ALC
+    // reports a percentage of ITS full scale; handed over raw it pins the gauge
+    // and stays there, which is what "ALC is completely pegged" looked like.
+    MeterModel model;
+    model.defineMeter(txMeter(11, "ALC", "Percent"));
+
+    float alc = 999.0f;
+    QObject::connect(&model, &MeterModel::swAlcChanged, [&alc](float v) { alc = v; });
+
+    model.updateValues({11}, {0});
+    report("0 % ALC lands at the gauge floor", nearlyEqual(alc, -20.0f));
+
+    model.updateValues({11}, {50});
+    report("50 % ALC lands mid-scale", nearlyEqual(alc, -10.0f));
+
+    model.updateValues({11}, {100});
+    report("100 % ALC lands at the gauge ceiling", nearlyEqual(alc, 0.0f));
+
+    // A dBFS backend must be untouched — this is a mapping for radios that
+    // cannot speak dBFS, not a reinterpretation of the ones that can.
+    MeterModel dbfs;
+    dbfs.defineMeter(txMeter(11, "ALC", "dBFS"));
+    float passthrough = 999.0f;
+    QObject::connect(&dbfs, &MeterModel::swAlcChanged,
+                     [&passthrough](float v) { passthrough = v; });
+    dbfs.updateValues({11}, {rawDb(-6.0f)});
+    report("a dBFS ALC meter passes through unchanged", nearlyEqual(passthrough, -6.0f));
+}
+
 void testDirectionalPowerUsesDirectReflectedMeter()
 {
     MeterModel model;
@@ -779,6 +889,10 @@ int main(int argc, char** argv)
     testAfterEqAndScMicDoNotAffectCompression();
     testRemovingCompPeakMarksCompressionUnavailable();
     testRemovingAdjacentMetersDoesNotClearCompPeak();
+    testMicPeakAvailabilityTracksTheMeterList();
+    testForwardPowerHonoursItsDeclaredUnit();
+    testReflectedPowerHonoursItsDeclaredUnit();
+    testAlcPercentIsMappedOntoTheGaugeRange();
     testDirectionalPowerUsesDirectReflectedMeter();
     testNativeSwrRemainsRadioProvidedAtLowPower();
     testForwardPowerSnapsToZeroWhenTheCarrierStops();

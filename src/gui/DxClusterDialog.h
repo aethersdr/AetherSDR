@@ -97,6 +97,14 @@ public:
 
     void updateStatus();
     void setTotalSpots(int count);
+#ifdef HAVE_WEBSOCKETS
+    // Re-reads FreeDvMyMessage from AppSettings. Called on each SpotHub open
+    // so an edit made in the FreeDV Reporter panel (same setting) is
+    // reflected here — this dialog is a persistent singleton
+    // (showOrRaisePersistent), so without this the field would only ever
+    // show whatever it was at first construction (#4231 review).
+    void reloadFreedvMessage();
+#endif
 
 signals:
     void connectRequested(const QString& host, quint16 port, const QString& callsign);

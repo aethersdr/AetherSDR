@@ -1,6 +1,9 @@
 #include "DxClusterDialog.h"
 #include "DxClusterStartupCommandsDialog.h"
 #include "FlowLayout.h"
+// For MessageMaxLength — the two surfaces share FreeDvMyMessage, so they
+// must share its cap too. Header self-guards on HAVE_WEBSOCKETS.
+#include "FreeDvReporterDialog.h"
 #include "GuardedSlider.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
@@ -2088,9 +2091,22 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     reportLayout->addWidget(new QLabel("Station Msg:"), frow, 0);
     m_fdvMessageEdit = new QLineEdit;
     m_fdvMessageEdit->setPlaceholderText("Optional message shown on reporter map");
+    // Same cap as the FreeDV Reporter panel's field, so the bound is real at
+    // both entry points — otherwise a long message set here would sail past
+    // it, and the panel's reloadMessage() would then silently truncate what
+    // it displays relative to what is actually being broadcast (#4231 review).
+    m_fdvMessageEdit->setMaxLength(FreeDvReporterDialog::MessageMaxLength);
     m_fdvMessageEdit->setText(s.value("FreeDvMyMessage", "").toString());
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_fdvMessageEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_fdvMessageEdit, &QLineEdit::editingFinished, this, [this] {
+        // Focus-out without an edit must not write: this dialog is a
+        // persistent singleton whose copy of FreeDvMyMessage can be stale
+        // (the FreeDV Reporter panel writes the same setting), and
+        // re-emitting it would silently revert a message sent there.
+        // setText() clears the flag, so reloadFreedvMessage() composes with
+        // this (#4231 review).
+        if (!m_fdvMessageEdit->isModified()) return;
+        m_fdvMessageEdit->setModified(false);
         auto& as = AppSettings::instance();
         QString msg = m_fdvMessageEdit->text().trimmed();
         as.setValue("FreeDvMyMessage", msg);
@@ -3069,6 +3085,22 @@ void DxClusterDialog::setTotalSpots(int count)
     if (m_totalSpotsLabel)
         m_totalSpotsLabel->setText(QString::number(count));
 }
+
+#ifdef HAVE_WEBSOCKETS
+void DxClusterDialog::reloadFreedvMessage()
+{
+    if (!m_fdvMessageEdit) return;
+
+    const QString stored = AppSettings::instance()
+                               .value("FreeDvMyMessage", "").toString();
+    // isModified(), not hasFocus() — same reasoning as the reporter panel's
+    // reloadMessage(): focus has already left by the time the menu action
+    // fires. setText() clears the flag, which is also what keeps this from
+    // arming the editingFinished guard above (#4231 review).
+    if (!m_fdvMessageEdit->isModified() && m_fdvMessageEdit->text() != stored)
+        m_fdvMessageEdit->setText(stored);
+}
+#endif
 
 void DxClusterDialog::flushSpotBatch()
 {

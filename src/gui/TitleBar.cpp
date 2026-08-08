@@ -866,6 +866,13 @@ void TitleBar::setLineoutMuted(bool muted)
     m_speakerBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x94\x8A");  // 🔇 / 🔊
 }
 
+void TitleBar::setHeadphoneMuted(bool muted)
+{
+    QSignalBlocker b(m_headphoneBtn);
+    m_headphoneBtn->setChecked(muted);
+    m_headphoneBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x8E\xA7");  // 🔇 / 🎧
+}
+
 void TitleBar::setMasterVolume(int pct)
 {
     QSignalBlocker b(m_masterSlider);

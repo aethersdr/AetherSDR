@@ -39,7 +39,6 @@ signals:
     void nr2AeFilterChanged(bool on);
     void nr2UseOriginalGeometryChanged(bool useOriginal);
     // MNR parameter changes
-    void mnrEnabledChanged(bool on);
     void mnrStrengthChanged(float value);
     // DFNR parameter changes
     void rn2DryMixChanged(float mix);

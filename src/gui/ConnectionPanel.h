@@ -60,6 +60,11 @@ public:
     // we probe exactly that one. Values match RadioInfo::family.
     static constexpr const char* kFamilyFlex = "flex";
     static constexpr const char* kFamilyHl2  = "hl2";
+    // Icom networked radios (IC-705 over WiFi, IC-7300MK2 over Ethernet, …).
+    // Unlike the other two this family cannot be probed anonymously: the RS-BA1
+    // handshake needs a username and password before the radio will answer with
+    // anything useful, which is why the manual page grows credential fields.
+    static constexpr const char* kFamilyIcom = "icom";
 
     // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
     QList<RadioInfo> automationLocalRadios() const override;
@@ -233,6 +238,15 @@ private:
     QComboBox*   m_manualRadioTypeCombo{nullptr};
     QLabel*      m_manualHintLabel{nullptr};
     QComboBox*   m_manualIpCombo{nullptr};
+    // Icom credentials. The row CONTAINERS are held so the pair can be hidden
+    // as a unit for every other family — hiding only the field would leave two
+    // orphan labels behind.
+    QWidget*     m_manualIcomUserRow{nullptr};
+    QWidget*     m_manualIcomPassRow{nullptr};
+    QWidget*     m_manualIcomCivRow{nullptr};
+    QLineEdit*   m_manualIcomUserEdit{nullptr};
+    QLineEdit*   m_manualIcomPassEdit{nullptr};
+    QLineEdit*   m_manualIcomCivEdit{nullptr};
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
     QToolButton* m_manualAdvancedToggle{nullptr};

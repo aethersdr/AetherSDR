@@ -453,7 +453,6 @@ void AetherDspWidget::resetCurrentTab()
         if (m_nr4MaskingSlider)    m_nr4MaskingSlider->setValue(50);
         if (m_nr4SuppressionSlider)m_nr4SuppressionSlider->setValue(50);
     } else if (name == "MNR") {
-        if (m_mnrEnableCheck)    m_mnrEnableCheck->setChecked(false);
         if (m_mnrStrengthSlider) m_mnrStrengthSlider->setValue(100);
     } else if (name == "DFNR") {
         if (m_dfnrAttenSlider) m_dfnrAttenSlider->setValue(100);
@@ -1107,13 +1106,9 @@ QWidget* AetherDspWidget::buildMnrPage()
     auto labelStyle = QStringLiteral("QLabel { color: #8090a0; font-size: 11px; }");
     auto valStyle   = QStringLiteral("QLabel { color: #c8d8e8; font-size: 11px; min-width: 40px; }");
 
-    m_mnrEnableCheck = new QCheckBox("Enable MNR (macOS only)");
-    m_mnrEnableCheck->setToolTip("MMSE-Wiener spectral noise reduction with asymmetric gain smoothing.\n"
-                                 "Removes consistent background noise while preserving speech quality.");
     {
         auto* hdrRow = new QHBoxLayout;
         hdrRow->setContentsMargins(0, 0, 0, 0);
-        hdrRow->addWidget(m_mnrEnableCheck);
         hdrRow->addStretch(1);
         auto* resetBtn = makeResetIconButton();
         connect(resetBtn, &QPushButton::clicked,
@@ -1121,13 +1116,6 @@ QWidget* AetherDspWidget::buildMnrPage()
         hdrRow->addWidget(resetBtn);
         vbox->addLayout(hdrRow);
     }
-    connect(m_mnrEnableCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        auto& s = AppSettings::instance();
-        s.setValue("MnrEnabled", checked ? "True" : "False");
-        s.save();
-        emit mnrEnabledChanged(checked);
-    });
-
     {
         auto* row = new QHBoxLayout;
         auto* lbl = new QLabel("Strength");
@@ -1135,10 +1123,14 @@ QWidget* AetherDspWidget::buildMnrPage()
         row->addWidget(lbl);
 
         m_mnrStrengthSlider = new GuardedSlider(Qt::Horizontal);
+        m_mnrStrengthSlider->setObjectName(QStringLiteral("mnrStrengthSlider"));
+        m_mnrStrengthSlider->setAccessibleName(QStringLiteral("MNR Strength"));
+        m_mnrStrengthSlider->setAccessibleDescription(
+            QStringLiteral("Noise-reduction synthesis strength from 0 to 100 percent"));
         m_mnrStrengthSlider->setRange(0, 100);
         m_mnrStrengthSlider->setValue(100);
         applyPrimarySliderStyle(m_mnrStrengthSlider);
-        m_mnrStrengthSlider->setToolTip("Adjust noise reduction aggressiveness (0 = mild, 100 = maximum)");
+        m_mnrStrengthSlider->setToolTip("Adjust noise reduction aggressiveness (0 = bypass, 100 = maximum)");
         row->addWidget(m_mnrStrengthSlider, 1);
 
         m_mnrStrengthLabel = new QLabel("100%");
@@ -1156,8 +1148,8 @@ QWidget* AetherDspWidget::buildMnrPage()
         });
     }
 
-    auto* info = new QLabel("Asymmetric temporal smoothing: fast release (~15ms) for quick noise suppression,\n"
-                            "gentle attack (~64ms) to preserve speech transients without artifacts.");
+    auto* info = new QLabel("Smoothed minimum-statistics tracking learns steady background noise,\n"
+                            "then applies a shared Wiener mask that preserves stereo balance.");
     info->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     vbox->addSpacing(8);
@@ -1818,9 +1810,7 @@ void AetherDspWidget::syncFromEngine()
 
     auto& s = AppSettings::instance();
 
-    if (m_mnrEnableCheck) {
-        { QSignalBlocker sb(m_mnrEnableCheck);
-          m_mnrEnableCheck->setChecked(m_audio->mnrEnabled()); }
+    if (m_mnrStrengthSlider) {
         { QSignalBlocker sb(m_mnrStrengthSlider);
           int strength = static_cast<int>(m_audio->mnrStrength() * 100.0f);
           m_mnrStrengthSlider->setValue(strength);

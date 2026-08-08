@@ -1217,6 +1217,8 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/false); });
     m_shortcutManager.registerAction("segment_zoom", "Segment Zoom", "Display",
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/true); });
+    // Keyboard step uses kPanZoomFactor per press; rotary dials use a finer
+    // per-detent factor (kRotaryPanZoomFactor in MainWindow_Controllers.cpp).
     static constexpr double kPanZoomFactor = 1.5;
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
         QKeySequence(Qt::Key_Equal), [this]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
