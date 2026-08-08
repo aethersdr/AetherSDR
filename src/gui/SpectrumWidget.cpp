@@ -14,6 +14,7 @@
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "core/EibiClient.h"
 #include <QVariant>
 #include <QVariantAnimation>
 
@@ -10984,11 +10985,11 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     QDialog dlg(this);
     dlg.setWindowTitle("Add Spot");
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
-                      "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
-                      "QDoubleSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
-                      "QDoubleSpinBox::up-button { background: #304060; width: 16px; }"
-                      "QDoubleSpinBox::down-button { background: #304060; width: 16px; }"
-                      "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
+                      "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
+                      "QDoubleSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
+                      "QDoubleSpinBox::up-button { background: {{color.background.2}}; width: 16px; }"
+                      "QDoubleSpinBox::down-button { background: {{color.background.2}}; width: 16px; }"
+                      "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
                       "QLabel { color: {{color.text.primary}}; }"
                       "QCheckBox { color: {{color.text.primary}}; }");
 
@@ -15703,6 +15704,27 @@ int SpectrumWidget::tnfAtPixel(int x, int preferredId) const
 
 static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm)
 {
+    if (sm.source == QStringLiteral("EiBi")) {
+        QString tip = QStringLiteral("<b>%1</b> &nbsp;<b>%2 MHz</b>")
+            .arg(sm.callsign.toHtmlEscaped())
+            .arg(sm.freqMhz, 0, 'f', 4);
+
+        if (!sm.comment.isEmpty()) {
+            const QStringList parts = sm.comment.split(QStringLiteral(" | "));
+            QStringList lines;
+            lines.reserve(parts.size());
+            for (const QString& part : parts) {
+                lines << part.toHtmlEscaped();
+            }
+            if (!lines.isEmpty()) {
+                tip += QStringLiteral("<br>") + lines.join(QStringLiteral("<br>"));
+            }
+        }
+        tip += QStringLiteral("<br><small style='color:%1;'>Source: EiBi Shortwave Schedules (eibispace.de)</small>")
+                   .arg(AetherSDR::ThemeManager::instance().color(QStringLiteral("color.text.label")).name());
+        return tip;
+    }
+
     QString tip = QString("<b>%1</b>  %2 MHz").arg(sm.callsign).arg(sm.freqMhz, 0, 'f', 4);
     if (!sm.source.isEmpty())
         tip += QString("<br>Source: %1").arg(sm.source);

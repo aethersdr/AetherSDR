@@ -702,6 +702,8 @@ set(CORE_SOURCES
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
+    src/core/EibiClient.cpp
+    src/core/EibiCodeMaps.cpp
     src/core/N1MMSpotClient.cpp
     src/core/N1MMSpotParser.cpp
     src/core/PropForecastClient.cpp
@@ -4081,6 +4083,13 @@ add_executable(n1mm_spot_client_test
 target_include_directories(n1mm_spot_client_test PRIVATE src)
 target_link_libraries(n1mm_spot_client_test PRIVATE Qt6::Core)
 add_test(NAME n1mm_spot_client_test COMMAND n1mm_spot_client_test)
+
+add_executable(eibi_client_test
+    tests/eibi_client_test.cpp
+)
+target_include_directories(eibi_client_test PRIVATE src)
+target_link_libraries(eibi_client_test PRIVATE Qt6::Core Qt6::Network Qt6::Test aethercore)
+add_test(NAME eibi_client_test COMMAND eibi_client_test)
 
 add_executable(navtex_model_test
     tests/navtex_model_test.cpp

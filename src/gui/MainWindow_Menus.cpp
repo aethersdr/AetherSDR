@@ -365,7 +365,7 @@ void MainWindow::buildMenuBar()
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = !m_spotHubDialog;
         showOrRaisePersistent(m_spotHubDialog, m_dxCluster, m_rbnClient, m_wsjtxClient,
-                              m_spotCollectorClient, m_potaClient, m_n1mmSpotClient,
+                              m_spotCollectorClient, m_potaClient, m_eibiClient, m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                               m_freedvClient,
 #endif
@@ -412,7 +412,12 @@ void MainWindow::buildMenuBar()
             // Memories feed toggle, apply immediately without mutating the cache.
             m_radioModel.spotModel().refresh();
         };
-        connect(dlg, &DxClusterDialog::settingsChanged, this, refreshSpots);
+        connect(dlg, &DxClusterDialog::settingsChanged, this, [this, refreshSpots] {
+            refreshSpots();
+            if (m_eibiClient) {
+                QMetaObject::invokeMethod(m_eibiClient, &EibiClient::updateActiveSpots, Qt::QueuedConnection);
+            }
+        });
         // Signal/QRM History Markers live exclusively on the SpotHub
         // Display tab (no View-menu duplicate, by design — a single UI
         // surface with no risk of state drift).
@@ -465,6 +470,18 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::potaStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); }); });
+        connect(dlg, &DxClusterDialog::eibiStartRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(true); });
+        });
+        connect(dlg, &DxClusterDialog::eibiStopRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(false); });
+        });
+        connect(dlg, &DxClusterDialog::eibiUpdateNowRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, &EibiClient::forceUpdate, Qt::QueuedConnection);
+        });
         connect(dlg, &DxClusterDialog::n1mmStartRequested,
                 this, [this](quint16 port) {
             QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->startListening(port); });

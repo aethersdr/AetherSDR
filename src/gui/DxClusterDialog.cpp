@@ -309,7 +309,7 @@ bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceP
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
                                    WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
-                                   PotaClient* potaClient,
+                                   PotaClient* potaClient, EibiClient* eibiClient,
                                    N1MMSpotClient* n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                                    FreeDvClient* freedvClient,
@@ -320,7 +320,8 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     : PersistentDialog("SpotHub", "DxClusterDialogGeometry", parent),
       m_client(clusterClient), m_rbnClient(rbnClient),
       m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
-      m_potaClient(potaClient), m_n1mmSpotClient(n1mmSpotClient),
+      m_potaClient(potaClient), m_eibiClient(eibiClient),
+      m_n1mmSpotClient(n1mmSpotClient),
 #ifdef HAVE_WEBSOCKETS
       m_freedvClient(freedvClient),
 #endif
@@ -361,6 +362,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildWsjtxTab(tabs);
     buildSpotCollectorTab(tabs);
     buildPotaTab(tabs);
+    buildEiBiTab(tabs);
     buildN1mmTab(tabs);
 #ifdef HAVE_WEBSOCKETS
     buildFreeDvTab(tabs);
@@ -1694,6 +1696,213 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     layout->addLayout(potaBtnRow);
 
     tabs->addTab(page, "POTA");
+}
+
+void DxClusterDialog::updateEibiTimestamps()
+{
+    if (!m_eibiClient || !m_eibiCacheTimeLabel || !m_eibiNextFetchLabel) return;
+
+    const QDateTime lastMod = m_eibiClient->cacheLastModified();
+    const QDateTime nextFetch = m_eibiClient->nextFetchTime();
+
+    if (lastMod.isValid()) {
+        m_eibiCacheTimeLabel->setText(lastMod.toString("yyyy-MM-dd HH:mm") + " UTC");
+    } else {
+        m_eibiCacheTimeLabel->setText("Not cached");
+    }
+
+    if (nextFetch.isValid()) {
+        const qint64 secsLeft = QDateTime::currentDateTimeUtc().secsTo(nextFetch);
+        if (secsLeft <= 0) {
+            m_eibiNextFetchLabel->setText("Due now");
+        } else {
+            const qint64 days = secsLeft / 86400;
+            const qint64 hours = (secsLeft % 86400) / 3600;
+            m_eibiNextFetchLabel->setText(QString("%1 (%2d %3h)").arg(nextFetch.toString("yyyy-MM-dd HH:mm UTC")).arg(days).arg(hours));
+        }
+    } else {
+        m_eibiNextFetchLabel->setText("On start");
+    }
+}
+
+void DxClusterDialog::buildEiBiTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(8);
+
+    auto& s = AppSettings::instance();
+
+    // ── Settings ────────────────────────────────────────────────────────
+    auto* connGroup = new QGroupBox("EiBi Shortwave Broadcast Feed");
+    auto* connLayout = new QVBoxLayout(connGroup);
+    connLayout->setSpacing(4);
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+    int row = 0;
+
+    grid->addWidget(new QLabel("Server:"), row, 0);
+    auto* serverLabel = new QLabel("www.eibispace.de/dx/eibi.txt (HTTP 7-day cache)");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(serverLabel, "QLabel { color: {{color.text.label}}; }");
+    grid->addWidget(serverLabel, row, 1);
+    row++;
+
+    grid->addWidget(new QLabel("Cache File:"), row, 0);
+    m_eibiCacheTimeLabel = new QLabel("Checking...");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiCacheTimeLabel, "QLabel { color: {{color.text.label}}; }");
+    grid->addWidget(m_eibiCacheTimeLabel, row, 1);
+    row++;
+
+    grid->addWidget(new QLabel("Next Auto-Fetch:"), row, 0);
+    m_eibiNextFetchLabel = new QLabel("Checking...");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiNextFetchLabel, "QLabel { color: {{color.text.label}}; }");
+    grid->addWidget(m_eibiNextFetchLabel, row, 1);
+    row++;
+
+    connLayout->addLayout(grid);
+
+    // Button row
+    auto* btnRow = new QHBoxLayout;
+    const bool autoStartOn = s.value("EiBiAutoStart", s.value("EiBiSpotsEnabled", "False")).toString() == "True";
+    m_eibiAutoStartBtn = new QPushButton(autoStartOn ? "Auto-Start: ON" : "Auto-Start: OFF");
+    m_eibiAutoStartBtn->setCheckable(true);
+    m_eibiAutoStartBtn->setChecked(autoStartOn);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiAutoStartBtn, kSpotHubToggle);
+    connect(m_eibiAutoStartBtn, &QPushButton::toggled, this, [](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("EiBiAutoStart", on ? "True" : "False");
+        s.setValue("EiBiSpotsEnabled", on ? "True" : "False");
+        s.save();
+    });
+    btnRow->addWidget(m_eibiAutoStartBtn);
+    btnRow->addStretch();
+
+    const bool isEnabled = m_eibiClient && m_eibiClient->isEnabled();
+    m_eibiStatusLabel = new QLabel(isEnabled ? "Active" : "Stopped");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+    btnRow->addWidget(m_eibiStatusLabel);
+    btnRow->addStretch();
+
+    m_eibiUpdateBtn = new QPushButton("Update Now");
+    m_eibiUpdateBtn->setFixedWidth(100);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiUpdateBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
+        "border: 1px solid {{color.background.2}}; padding: 4px; border-radius: 3px; }"
+        "QPushButton:hover { background: {{color.background.2}}; }");
+    connect(m_eibiUpdateBtn, &QPushButton::clicked, this, [this] {
+        m_eibiStatusLabel->setText("Downloading schedule...");
+        m_eibiStartBtn->setText("Stop");
+        emit eibiUpdateNowRequested();
+    });
+    btnRow->addWidget(m_eibiUpdateBtn);
+
+    m_eibiStartBtn = new QPushButton(isEnabled ? "Stop" : "Start");
+    m_eibiStartBtn->setFixedWidth(100);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
+        "QPushButton:hover { background: {{color.accent.bright}}; }"
+        "QPushButton:disabled { background: {{color.background.2}}; color: {{color.text.label}}; }");
+    connect(m_eibiStartBtn, &QPushButton::clicked, this, [this] {
+        const bool active = m_eibiClient && m_eibiClient->isEnabled();
+        if (active) {
+            m_eibiStartBtn->setText("Start");
+            m_eibiStatusLabel->setText("Stopped");
+            emit eibiStopRequested();
+        } else {
+            m_eibiStartBtn->setText("Stop");
+            m_eibiStatusLabel->setText("Loading schedule...");
+            emit eibiStartRequested();
+        }
+    });
+    btnRow->addWidget(m_eibiStartBtn);
+    connLayout->addLayout(btnRow);
+
+    layout->addWidget(connGroup);
+
+    // ── Console output ──────────────────────────────────────────────────
+    auto* consoleRow = new QHBoxLayout;
+    auto* consoleLabel = new QLabel("EiBi Schedules & Broadcasts");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
+    consoleRow->addWidget(consoleLabel);
+    consoleRow->addStretch();
+
+    auto* spotColorLabel = new QLabel("Spot Color:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(spotColorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+    consoleRow->addWidget(spotColorLabel);
+
+    QColor eibiColor(s.value("EiBiSpotColor", "#8aa8c0").toString());
+    auto* eibiColorBtn = new QPushButton;
+    eibiColorBtn->setFixedSize(18, 18);
+    auto updateColorBtnStyle = [eibiColorBtn](const QString& hex) {
+        AetherSDR::ThemeManager::instance().applyStyleSheet(eibiColorBtn, QString(
+            "QPushButton { background: %1; border: 2px solid {{color.background.2}}; border-radius: 3px; }"
+            "QPushButton:hover { border-color: {{color.text.secondary}}; }").arg(hex));
+    };
+    updateColorBtnStyle(eibiColor.name());
+    connect(eibiColorBtn, &QPushButton::clicked, this, [this, updateColorBtnStyle] {
+        QColor c = QColorDialog::getColor(
+            QColor(AppSettings::instance().value("EiBiSpotColor", "#8aa8c0").toString()),
+            this, "EiBi Spot Color");
+        if (c.isValid()) {
+            updateColorBtnStyle(c.name());
+            AppSettings::instance().setValue("EiBiSpotColor", c.name());
+            AppSettings::instance().save();
+            emit settingsChanged();
+        }
+    });
+    consoleRow->addWidget(eibiColorBtn);
+    layout->addLayout(consoleRow);
+
+    m_eibiConsole = new QPlainTextEdit;
+    m_eibiConsole->setReadOnly(true);
+    m_eibiConsole->setMaximumBlockCount(2000);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiConsole, "QPlainTextEdit {"
+        "  background: {{color.background.0}};"
+        "  color: {{color.text.secondary}};"
+        "  font-family: monospace;"
+        "  font-size: 11px;"
+        "  border: 1px solid {{color.background.1}};"
+        "  padding: 4px;"
+        "}");
+    layout->addWidget(m_eibiConsole, 1);
+
+    if (m_eibiClient) {
+        connect(m_eibiClient, &EibiClient::spotsUpdated, this, [this](const QVector<DxSpot>& spots) {
+            const bool active = m_eibiClient && m_eibiClient->isEnabled();
+            if (active && !spots.isEmpty()) {
+                m_eibiStatusLabel->setText(QString("Active (%1 spots)").arg(spots.size()));
+                m_eibiStartBtn->setText("Stop");
+            } else if (active && spots.isEmpty()) {
+                m_eibiStatusLabel->setText("Active (0 spots)");
+                m_eibiStartBtn->setText("Stop");
+            } else {
+                m_eibiStatusLabel->setText("Stopped");
+                m_eibiStartBtn->setText("Start");
+            }
+            updateEibiTimestamps();
+            const QString timeStr = QDateTime::currentDateTimeUtc().toString("hh:mm:ss") + " UTC";
+            if (active) {
+                m_eibiConsole->appendPlainText(QString("[%1] EiBi schedule updated: %2 active broadcast spots").arg(timeStr).arg(spots.size()));
+            } else {
+                m_eibiConsole->appendPlainText(QString("[%1] EiBi schedule feed stopped").arg(timeStr));
+            }
+        });
+        connect(m_eibiClient, &EibiClient::fetchFailed, this, [this](const QString& err) {
+            m_eibiStatusLabel->setText("Fetch failed");
+            m_eibiStartBtn->setText("Start");
+            m_eibiConsole->appendPlainText(QString("[ERROR] EiBi schedule download failed: %1").arg(err));
+            updateEibiTimestamps();
+        });
+    }
+
+    updateEibiTimestamps();
+
+    auto* eibiBtnRow = new QHBoxLayout;
+    eibiBtnRow->addStretch();
+    eibiBtnRow->addWidget(makeConsoleClearButton(m_eibiConsole, &m_eibiLogPath, "eibiClearBtn"));
+    layout->addLayout(eibiBtnRow);
+
+    tabs->addTab(page, "EiBi");
 }
 
 void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
