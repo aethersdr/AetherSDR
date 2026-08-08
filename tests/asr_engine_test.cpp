@@ -69,6 +69,40 @@ AsrBackendFactory factory(bool loadOk)
     return [loadOk] { return std::unique_ptr<IAsrBackend>(new FakeBackend(loadOk)); };
 }
 
+// Returns a scripted phrase per successive transcribe() call (the last phrase
+// repeats once the script runs out). Lets the segment-overlap de-dup test drive
+// deterministic boundary words across consecutive segments (RFC #4821).
+class ScriptedBackend : public IAsrBackend {
+public:
+    explicit ScriptedBackend(std::vector<QString> lines) : m_lines(std::move(lines)) {}
+    bool load(const QString&, QString*) override
+    {
+        m_loaded = true;
+        return true;
+    }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    {
+        if (pcm.empty() || m_lines.empty()) {
+            return {};
+        }
+        const QString text = m_next < m_lines.size() ? m_lines[m_next] : m_lines.back();
+        ++m_next;
+        return AsrTranscript{text, 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+
+private:
+    std::vector<QString> m_lines;
+    std::size_t m_next = 0;
+    bool m_loaded = false;
+};
+
+AsrBackendFactory scriptedFactory(std::vector<QString> lines)
+{
+    return [lines] { return std::unique_ptr<IAsrBackend>(new ScriptedBackend(lines)); };
+}
+
 // Backend whose transcribe() blocks for a fixed delay — stands in for a real
 // whisper decode or remote HTTP round-trip, so tests can build an actual
 // backlog of queued (not-yet-dequeued) processAudio() calls and verify
@@ -210,6 +244,45 @@ int main(int argc, char** argv)
         QSignalSpy idle(&engine, &AsrEngine::finalText);
         idle.wait(400); // give the worker a chance; expect nothing
         expect(textSpy.count() == before, "disabled engine emits no finalText");
+    }
+
+    // ---- Segment overlap: boundary-word de-dup (RFC #4821) -----------------
+    // A small decode-buffer cap force-closes continuous speech into consecutive
+    // segments; with overlap on, each continuation re-transcribes the previous
+    // segment's tail word, which the worker must strip. The scripted backend
+    // makes that duplicated boundary word deterministic (…charlie | charlie…).
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            QStringLiteral("charlie delta echo"),
+            QStringLiteral("echo foxtrot golf"),
+            QStringLiteral("golf hotel india"),
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap dedup: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300); // small cap → continuous speech force-closes
+        engine.setOverlapMs(100);      // carry 100 ms across the cut
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);   // continuous → repeated cap closes
+        engine.pushAudio(silence(400), kSrcRate);  // hangover closes the tail
+        expect(textSpy.wait(5000), "overlap dedup: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain the remaining queued segment transcriptions
+        }
+        expect(textSpy.count() >= 2, "overlap dedup: continuous speech split into >=2 segments");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap dedup: first segment is emitted whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("delta echo"),
+                   "overlap dedup: continuation drops the duplicated boundary word");
+        }
     }
 
     // ---- Destructor returns promptly with a queued backlog ----------------

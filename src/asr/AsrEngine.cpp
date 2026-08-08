@@ -5,6 +5,8 @@
 #include "core/Resampler.h"
 
 #include <QLoggingCategory>
+#include <QRegularExpression>
+#include <QStringList>
 #include <QThread>
 
 #include <algorithm>
@@ -23,6 +25,57 @@ constexpr int kResampleBlock = 4096; // max samples per r8brain process() call
 // resampler's group delay small (important for live copy and for prompt segment
 // close-out).
 constexpr double kResampleTransBand = 10.0;
+
+// Segment-overlap de-dup (RFC #4821, Approach A). A cap-forced segment carries a
+// little trailing audio into the next one, so the next decode re-transcribes the
+// tail of the previous segment as its own leading words. We strip that repeated
+// prefix at the text level — backend-agnostic, no whisper-param change, and it
+// keeps the byte-safe segment text (no per-token UTF-8 reconstruction).
+
+// Normalize a word for boundary comparison: drop leading/trailing non-alnum
+// (punctuation whisper may add on one side of the cut but not the other) and
+// lowercase, so "fox." and "Fox" match across the boundary.
+QString normWord(const QString& w)
+{
+    int a = 0;
+    int b = static_cast<int>(w.size());
+    while (a < b && !w.at(a).isLetterOrNumber()) ++a;
+    while (b > a && !w.at(b - 1).isLetterOrNumber()) --b;
+    return w.mid(a, b - a).toLower();
+}
+
+// An overlap is at most a second or two of speech — a handful of words. Cap the
+// compared window so a coincidental long repeat can't swallow genuine new text.
+constexpr int kMaxOverlapWords = 12;
+
+// Strip from `next` the longest run of leading words that duplicates the tail of
+// `prev` (word-level, normalized); return the remaining text. No match → `next`
+// unchanged.
+QString stripOverlapWords(const QString& prev, const QString& next)
+{
+    static const QRegularExpression ws(QStringLiteral("\\s+"));
+    const QStringList prevWords = prev.split(ws, Qt::SkipEmptyParts);
+    const QStringList nextWords = next.split(ws, Qt::SkipEmptyParts);
+    const int cap = std::min({kMaxOverlapWords, static_cast<int>(prevWords.size()),
+                              static_cast<int>(nextWords.size())});
+    int best = 0;
+    for (int k = 1; k <= cap; ++k) {
+        bool match = true;
+        for (int j = 0; j < k; ++j) {
+            if (normWord(prevWords.at(prevWords.size() - k + j)) != normWord(nextWords.at(j))) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            best = k; // keep the longest k that fully matches
+        }
+    }
+    if (best == 0) {
+        return next;
+    }
+    return nextWords.mid(best).join(QLatin1Char(' '));
+}
 } // namespace
 
 // ---- AsrWorker -------------------------------------------------------------
@@ -92,6 +145,7 @@ void AsrWorker::loadModel(const QString& modelPath)
         m_warnedNoModel = false;
         m_segmenter.reset();
         m_clusterer.reset();
+        m_prevSegmentText.clear();
         emit loaded();
     } else {
         emit loadFailed(error);
@@ -204,7 +258,7 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    std::vector<std::vector<float>> segments =
+    std::vector<AsrSegmenter::ClosedSegment> segments =
         m_segmenter.feed(pcm16k.data(), static_cast<int>(pcm16k.size()));
     if (segments.empty()) {
         return;
@@ -218,23 +272,36 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    for (std::vector<float>& seg : segments) {
+    for (AsrSegmenter::ClosedSegment& seg : segments) {
         QString error;
-        const AsrTranscript result = m_backend->transcribe(seg, &error);
+        const AsrTranscript result = m_backend->transcribe(seg.samples, &error);
         if (!error.isEmpty()) {
             emit errorOccurred(error);
             continue;
         }
         if (result.text.isEmpty()) {
+            // Nothing decoded — leave m_prevSegmentText as the last real tail so a
+            // following continuation still de-dups against actual spoken words.
             continue;
+        }
+        // Segment overlap (RFC #4821): when this segment was seeded with audio
+        // carried across the previous cap-forced close, its leading words repeat
+        // that segment's tail — strip them so nothing is emitted twice.
+        QString emitText = result.text;
+        if (seg.continuesPrevious && !m_prevSegmentText.isEmpty()) {
+            emitText = stripOverlapWords(m_prevSegmentText, result.text);
+        }
+        m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
+        if (emitText.isEmpty()) {
+            continue; // the whole segment was overlap (rare) — nothing new to emit
         }
         // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
         int speaker = -1;
         if (m_speakerLabelingEnabled && m_embedder) {
             speaker = m_clusterer.assign(
-                m_embedder->embed(seg.data(), static_cast<int>(seg.size())));
+                m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
         }
-        emit segmentText(result.text, result.confidence, speaker);
+        emit segmentText(emitText, result.confidence, speaker);
     }
     }();
 
@@ -256,6 +323,11 @@ void AsrWorker::setHangoverMs(int ms)
     m_segmenter.setHangoverMs(ms);
 }
 
+void AsrWorker::setOverlapMs(int ms)
+{
+    m_segmenter.setOverlapMs(ms);
+}
+
 void AsrWorker::setSpeakerThreshold(float t)
 {
     m_clusterer.setThreshold(t);
@@ -265,6 +337,7 @@ void AsrWorker::reset()
 {
     m_segmenter.reset();
     m_clusterer.reset(); // new session/frequency → relabel speakers from A
+    m_prevSegmentText.clear(); // a Clear/retune must not de-dup against stale text
     m_resampler.reset();
     m_resamplerSrcRate = 0;
 }
@@ -306,6 +379,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(this, &AsrEngine::requestSetMaxSegmentMs, m_worker, &AsrWorker::setMaxSegmentMs);
     connect(this, &AsrEngine::requestSetSpeechRms, m_worker, &AsrWorker::setSpeechRms);
     connect(this, &AsrEngine::requestSetHangoverMs, m_worker, &AsrWorker::setHangoverMs);
+    connect(this, &AsrEngine::requestSetOverlapMs, m_worker, &AsrWorker::setOverlapMs);
     connect(this, &AsrEngine::requestSetSpeakerThreshold, m_worker, &AsrWorker::setSpeakerThreshold);
     connect(this, &AsrEngine::requestReset, m_worker, &AsrWorker::reset);
 
@@ -442,6 +516,11 @@ void AsrEngine::setSpeechRms(float rms)
 void AsrEngine::setSilenceDurationMs(int ms)
 {
     emit requestSetHangoverMs(ms);
+}
+
+void AsrEngine::setOverlapMs(int ms)
+{
+    emit requestSetOverlapMs(ms);
 }
 
 void AsrEngine::setSpeakerThreshold(float threshold)

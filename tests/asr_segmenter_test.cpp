@@ -45,11 +45,11 @@ void appendTone(std::vector<float>& buf, int ms, float amp = 0.3f, float freq = 
     }
 }
 
-int totalSamples(const std::vector<std::vector<float>>& segs)
+int totalSamples(const std::vector<AsrSegmenter::ClosedSegment>& segs)
 {
     int n = 0;
     for (const auto& s : segs) {
-        n += static_cast<int>(s.size());
+        n += static_cast<int>(s.samples.size());
     }
     return n;
 }
@@ -79,7 +79,7 @@ int main()
         auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
         expect(out.size() == 1, "one tone burst -> one segment");
         if (out.size() == 1) {
-            const int len = static_cast<int>(out[0].size());
+            const int len = static_cast<int>(out[0].samples.size());
             const int lo = 700 * kRate / 1000; // >= tone + most of hangover
             const int hi = 900 * kRate / 1000; // <= tone + hangover + slop
             expect(len >= lo && len <= hi, "segment length is tone + hangover");
@@ -155,6 +155,58 @@ int main()
         appendSilence(audio, 150); // 150 ms > 100 ms hangover -> closes
         auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
         expect(out.size() == 1, "shorter hangover closes the utterance sooner");
+    }
+
+    // Segment overlap (RFC #4821): a cap-forced close carries trailing audio into
+    // the next segment and flags it as a continuation; consecutive segments then
+    // share that audio, so the emitted total exceeds a no-overlap run of the same
+    // input. Overlap fires only on the cap path, never on a hangover close.
+    {
+        std::vector<float> audio;
+        appendTone(audio, 1600); // continuous speech — forces repeated cap closes
+
+        AsrSegmenter plain;
+        plain.setMaxSegmentMs(500);
+        auto plainOut = plain.feed(audio.data(), static_cast<int>(audio.size()));
+
+        AsrSegmenter ov;
+        ov.setMaxSegmentMs(500);
+        ov.setOverlapMs(200);
+        auto ovOut = ov.feed(audio.data(), static_cast<int>(audio.size()));
+
+        expect(ovOut.size() >= 2, "overlap: long over still splits into segments");
+        expect(!ovOut.empty() && !ovOut.front().continuesPrevious,
+               "overlap: first segment is not a continuation");
+        bool laterAllContinue = ovOut.size() >= 2;
+        for (std::size_t i = 1; i < ovOut.size(); ++i) {
+            if (!ovOut[i].continuesPrevious) {
+                laterAllContinue = false;
+            }
+        }
+        expect(laterAllContinue, "overlap: later segments are flagged as continuations");
+        // No segment in the plain run is ever flagged a continuation.
+        bool plainNoneContinue = true;
+        for (const auto& s : plainOut) {
+            if (s.continuesPrevious) {
+                plainNoneContinue = false;
+            }
+        }
+        expect(plainNoneContinue, "no-overlap: no segment is flagged as a continuation");
+        expect(totalSamples(ovOut) > totalSamples(plainOut),
+               "overlap: carried audio duplicates across the cut (more total samples)");
+    }
+
+    // Overlap must NOT trigger on a hangover-based close (speech already stopped).
+    {
+        AsrSegmenter seg;
+        seg.setOverlapMs(200); // default 20 s cap won't fire on this short over
+        std::vector<float> audio;
+        appendSilence(audio, 100);
+        appendTone(audio, 500);
+        appendSilence(audio, 400); // closes by hangover
+        auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        expect(out.size() == 1 && !out[0].continuesPrevious,
+               "overlap: a hangover close is not a continuation");
     }
 
     std::printf(g_failures == 0 ? "\nASR segmenter: ALL PASS\n"

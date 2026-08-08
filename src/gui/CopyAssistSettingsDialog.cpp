@@ -162,6 +162,31 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     thrRow->addWidget(m_spkThresholdValue);
     form->addRow(tr("Match threshold:"), thrRow);
 
+    // Boundary-word recovery / segment overlap (RFC #4821): carry a little
+    // trailing audio across a forced segment cut so a word split at the boundary
+    // isn't lost. 0 = off (default); opt-in. Applied live, no engine rebuild.
+    auto* ovRow = new QHBoxLayout;
+    m_overlap = new QSlider(Qt::Horizontal, this);
+    m_overlap->setObjectName(QStringLiteral("CopyAssistOverlapSlider"));
+    m_overlap->setRange(0, 2000);      // ms of trailing audio carried forward
+    m_overlap->setSingleStep(250);
+    m_overlap->setPageStep(250);
+    m_overlap->setTickInterval(250);
+    m_overlap->setTickPosition(QSlider::TicksBelow);
+    m_overlap->setValue(0);
+    m_overlap->setToolTip(tr("Carry this much trailing audio across a forced segment "
+                             "cut to recover a word split at the boundary (0 = off)"));
+    m_overlapValue = new QLabel(tr("Off"), this);
+    m_overlapValue->setMinimumWidth(48);
+    m_overlapValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    connect(m_overlap, &QSlider::valueChanged, this, [this](int v) {
+        m_overlapValue->setText(v > 0 ? tr("%1 ms").arg(v) : tr("Off"));
+        emit boundaryOverlapChanged(v);
+    });
+    ovRow->addWidget(m_overlap, 1);
+    ovRow->addWidget(m_overlapValue);
+    form->addRow(tr("Boundary overlap:"), ovRow);
+
     root->addLayout(form);
     root->addStretch(1); // headroom for further options added here later
 }
@@ -324,6 +349,16 @@ void CopyAssistSettingsDialog::setSpeakerThreshold(int percent)
 int CopyAssistSettingsDialog::speakerThreshold() const
 {
     return m_spkThreshold->value();
+}
+
+void CopyAssistSettingsDialog::setBoundaryOverlapMs(int ms)
+{
+    m_overlap->setValue(ms); // fires valueChanged → updates label + emits
+}
+
+int CopyAssistSettingsDialog::boundaryOverlapMs() const
+{
+    return m_overlap->value();
 }
 
 } // namespace AetherSDR
