@@ -426,7 +426,7 @@ public:
     void setBandPlanFontSize(int pt) { m_bandPlanFontSize = pt; update(); }
     void setBandPlanShowSpots(bool on) { m_bandPlanShowSpots = on; update(); }
     bool bandPlanShowSpots() const { return m_bandPlanShowSpots; }
-    void setKiwiDxSpotsEnabled(bool on) { m_showKiwiDxSpots = on; update(); }
+    void setKiwiDxSpotsEnabled(bool on) { m_showKiwiDxSpots = on; markOverlayDirty(); update(); }
     bool showKiwiDxSpots() const { return m_showKiwiDxSpots; }
     void setBandPlanManager(class BandPlanManager* mgr);
     void setSingleClickTune(bool on) { m_singleClickTune = on; }

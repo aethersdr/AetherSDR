@@ -522,6 +522,6 @@ overlay layer. Contains community-curated utility, beacon, broadcast, and DX spo
 (frequency, mode, station name, notes).
 
   Copyright (c) John Seamons and KiwiSDR community contributors
-  License: GPL-2.1-or-later / GPL-3.0-or-later / MIT (per KiwiSDR repository root _LICENSE)
+  License: GPL-2.0 / GPL-3.0 / LGPL-2.1 / MIT (per KiwiSDR repository root _LICENSE)
   Source:  https://github.com/jks-prv/KiwiSDR/blob/master/unix_env/kiwi.config/dist.dx_community.json
 

@@ -4309,15 +4309,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, resolveSpectrumTuneTarget, resolveClickedPanId](double mhz, const QString& mode, int loHz, int hiHz) {
         SliceModel* target = resolveSpectrumTuneTarget();
         if (!target) {
+            // Empty pan → spawn a slice on it at the spot frequency, matching
+            // the frequencyClicked path. Do NOT fall back to activeSlice():
+            // that slice lives on a different pan (#3086). slice create is
+            // async, so the mode/filter below cannot target the new slice.
             const QString panId = resolveClickedPanId();
-            if (!panId.isEmpty()) {
+            if (!panId.isEmpty())
                 m_radioModel.addSliceOnPan(panId, mhz);
-                target = activeSlice();
-            }
+            return;
         }
-        if (target) {
-            queueActiveSliceForSpectrumTarget(target->sliceId());
-            applyTuneRequest(target, mhz, TuneIntent::AbsoluteJump, "kiwi-spot-click");
+        queueActiveSliceForSpectrumTarget(target->sliceId());
+        applyTuneRequest(target, mhz, TuneIntent::AbsoluteJump, "kiwi-spot-click");
 
             const bool autoSwitchMode =
                 AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True";
@@ -4333,7 +4335,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             if (loHz != 0 || hiHz != 0) {
                 target->setFilterWidth(loHz, hiHz);
             }
-        }
     });
     connect(sw, &SpectrumWidget::incrementalTuneRequested,
             this, [this, resolveSpectrumTuneTarget](double mhz) {
