@@ -28,6 +28,50 @@ enum class AsrBackendKind {
     SherpaOnnx, // sherpa-onnx offline model (a user-picked model directory)
 };
 
+// Per-engine state for a queued speaker-embedder load. Download/verification
+// intent belongs to the controller; this state is discarded when its AsrEngine
+// is replaced so a late completion can never leave the next engine muted.
+class SpeakerLoadLifecycle {
+public:
+    void resetForEngineReplacement()
+    {
+        m_loadingPath.clear();
+        m_loadedPath.clear();
+        m_pending = false;
+    }
+
+    void begin(const QString& path)
+    {
+        m_loadingPath = path;
+        m_pending = true;
+    }
+
+    bool complete(const QString& path, bool loaded)
+    {
+        if (!m_pending || path != m_loadingPath) {
+            return false;
+        }
+        m_pending = false;
+        if (loaded) {
+            m_loadedPath = path;
+        } else {
+            // The worker clears its previous embedder on failure, so this
+            // cache must not claim that an older path is still reusable.
+            m_loadedPath.clear();
+        }
+        return true;
+    }
+
+    bool isPending() const { return m_pending; }
+    bool isPending(const QString& path) const { return m_pending && m_loadingPath == path; }
+    bool isLoaded(const QString& path) const { return m_loadedPath == path; }
+
+private:
+    QString m_loadingPath;
+    QString m_loadedPath;
+    bool m_pending = false;
+};
+
 // Wires the Copy Assist panel to the ASR subsystem (RFC #4333, Phase 5). Owns
 // the AsrEngine, the model download manager, and the audio tap, and translates
 // panel intent into the enable → (download model) → load → tap-on flow, routing
@@ -74,8 +118,15 @@ private:
     void onVadModelReady(const QString& path); // cached/downloaded → persist + rebuild
     void promptSpeakerModel();   // pick + persist a custom speaker-embedding .onnx
     void ensureSpeakerModel();   // use the cached model, else auto-download it
-    void onSpeakerModelReady(const QString& path); // cached/downloaded → persist + rebuild
-    void rebuildEngine();  // rebuild the engine so the worker picks up a model change
+    void onSpeakerModelReady(const QString& path); // cached/downloaded → queue worker load
+    void queueSpeakerModelLoad(const QString& path);
+    void onSpeakerModelLoaded(const QString& path, bool loaded);
+    void replaySpeakerConfiguration();
+    // Put the panel back on its steady-state text after a speaker-model step
+    // left a transient "Preparing…"/"Downloading…" message on screen, replaying
+    // the frequency marker the skipped ready() body owed the log.
+    void restoreListeningStatus();
+    void rebuildEngine();  // rebuild only for backend/VAD/GPU changes
     static AsrModelTier sileroVadTier();       // default downloadable Silero VAD model
     static AsrModelTier speakerEmbedderTier(); // default downloadable speaker model
     void writeFreqMarkerIfNeeded(); // log a "=== <freq> MHz ===" line on start/retune/day-roll
@@ -106,6 +157,9 @@ private:
     double m_currentFreqMhz = 0.0;  // active-slice frequency, for the log marker
     QString m_lastFreqMarkerKey;    // (dated-file|freq) last marked — dedups markers
     bool m_enabled = false;
+    bool m_defaultSpeakerRequestPending = false;
+    QString m_desiredSpeakerModelPath;
+    SpeakerLoadLifecycle m_speakerLoad;
     AsrBackendKind m_backend = AsrBackendKind::Whisper; // active inference backend
 };
 

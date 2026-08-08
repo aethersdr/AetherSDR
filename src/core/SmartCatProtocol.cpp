@@ -995,6 +995,12 @@ QString SmartCatProtocol::cmdPT(const QString& arg)
 
 QString SmartCatProtocol::cmdKY(const QString& arg)
 {
+    // A radio with no radio-side CW text buffer has no KY to answer. Both forms
+    // report the Kenwood error token rather than an honest-looking "KY0;" and a
+    // silent accept — the query would otherwise say "buffer empty" forever
+    // while every set went nowhere. Direct read on the CAT thread, the same
+    // posture as the cwxActive() read this replaces.
+    if (!m_model->hasRadioSideCwKeyer()) return "?;";
     if (arg.isEmpty())
         return QString("KY%1;").arg(m_model->cwxActive() ? 1 : 0);
     if (arg.size() < 2) return "?;";

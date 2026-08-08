@@ -250,6 +250,13 @@ public:
     // through them would echo our own state as a fresh command and, with the
     // strip on the other end, oscillate. Returns true when something changed.
     bool applySpeechProcessorState(bool on, int level);
+    // Adopt a mic selection the OPERATOR did not choose — a radio whose input
+    // this client cannot select forces the source, and the model must agree
+    // with what the UI is showing. Like applySpeechProcessorState this updates
+    // state WITHOUT emitting commandReady, because pushing a forced value back
+    // out as operator intent is how a capability turns into a command nobody
+    // issued. Returns true when something changed.
+    bool applyMicSelectionState(const QString& input);
     void setDax(bool on);
     void setSbMonitor(bool on);
     void setMonGainSb(int gain);

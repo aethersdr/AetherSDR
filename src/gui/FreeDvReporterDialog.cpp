@@ -13,6 +13,8 @@
 #include <QTableView>
 #include <QHeaderView>
 #include <QCheckBox>
+#include <QLabel>
+#include <QLineEdit>
 #include <QRadioButton>
 #include <QPushButton>
 #include <QButtonGroup>
@@ -145,6 +147,79 @@ void FreeDvReporterDialog::buildBody()
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(6, 6, 6, 6);
     root->setSpacing(4);
+
+    // ── Status message ─────────────────────────────────────────────────────
+    // Shares the FreeDvMyMessage setting with SpotHub's FreeDV tab, so the
+    // two surfaces stay in sync (#4231). Starts disabled; setReportingActive()
+    // from MainWindow opens it once full-participant reporting is on.
+    // Qt does not deliver tooltips to disabled widgets, so the "why is this
+    // off?" tooltip lives on an always-enabled container instead of on the
+    // field/button themselves — otherwise it would be unreachable in exactly
+    // the state that needs explaining.
+    m_msgRowWidget = new QWidget;
+    auto* msgRow = new QHBoxLayout(m_msgRowWidget);
+    msgRow->setContentsMargins(0, 0, 0, 0);
+    msgRow->setSpacing(6);
+
+    m_msgLabel = new QLabel("Message");
+    ThemeManager::instance().applyStyleSheet(m_msgLabel,
+        "QLabel { color: {{color.text.primary}}; }");
+    msgRow->addWidget(m_msgLabel);
+    // Set after m_msgEdit exists — see below.
+
+    m_msgEdit = new QLineEdit;
+    m_msgEdit->setObjectName(QStringLiteral("fdvReporterMessageEdit"));
+    m_msgEdit->setMaxLength(MessageMaxLength);
+    m_msgEdit->setAccessibleName("FreeDV Reporter status message");
+    m_msgEdit->setText(AppSettings::instance()
+                           .value("FreeDvMyMessage", "").toString());
+    ThemeManager::instance().applyStyleSheet(m_msgEdit,
+        "QLineEdit {"
+        "  background-color: {{color.background.0}};"
+        "  color: {{color.text.primary}};"
+        "  border: 1px solid {{color.background.2}};"
+        "  padding: 2px 4px;"
+        "}"
+        "QLineEdit:disabled { color: {{color.text.secondary}}; }"
+    );
+    m_msgLabel->setBuddy(m_msgEdit);
+    msgRow->addWidget(m_msgEdit, 1);
+
+    m_msgSendBtn = new QPushButton("Send");
+    m_msgSendBtn->setObjectName(QStringLiteral("fdvReporterMessageSendButton"));
+    m_msgSendBtn->setAutoDefault(false);
+    m_msgSendBtn->setAccessibleName("Send FreeDV Reporter status message");
+    ThemeManager::instance().applyStyleSheet(m_msgSendBtn,
+        "QPushButton {"
+        "  background-color: {{color.background.2}};"
+        "  color: {{color.text.primary}};"
+        "  border: 1px solid {{color.background.2}};"
+        "  padding: 2px 10px;"
+        "}"
+        // background.1, not background.2 again — the existing Close button
+        // below has this same-as-base no-op already (pre-existing, out of
+        // scope here); this button shouldn't repeat it (#4231 review).
+        "QPushButton:hover { background-color: {{color.background.1}}; }"
+        // Widget×state tokens rather than generic chrome (docs/a11y.md):
+        // dimming the text alone left the disabled button reading as absent
+        // rather than greyed-out, which undercuts the row's own gating
+        // (#4231 review).
+        "QPushButton:disabled {"
+        "  background-color: {{color.button.background.disabled}};"
+        "  color: {{color.button.foreground.disabled}};"
+        "  border: 1px solid {{color.button.border.disabled}};"
+        "}"
+    );
+    msgRow->addWidget(m_msgSendBtn);
+
+    root->addWidget(m_msgRowWidget);
+
+    connect(m_msgSendBtn, &QPushButton::clicked,
+            this, &FreeDvReporterDialog::commitMessage);
+    connect(m_msgEdit, &QLineEdit::returnPressed,
+            this, &FreeDvReporterDialog::commitMessage);
+
+    setReportingActive(false);
 
     // ── Table ──────────────────────────────────────────────────────────────
     m_table = new QTableView;
@@ -327,6 +402,66 @@ void FreeDvReporterDialog::onStationRemoved(const QString& sid)
 void FreeDvReporterDialog::setMyGrid(const QString& grid)
 {
     m_model->setMyGrid(grid);
+}
+
+void FreeDvReporterDialog::reloadMessage()
+{
+    const QString stored = AppSettings::instance()
+                               .value("FreeDvMyMessage", "").toString();
+    // isModified(), not hasFocus(): the point is to protect an unsent draft,
+    // and focus has already moved away by the time the operator clicks the
+    // menu to re-show this dialog — so a focus test would let the draft be
+    // silently replaced in exactly the case it exists to cover. setText()
+    // clears the flag, so this composes with commitMessage() (#4231 review).
+    if (!m_msgEdit->isModified() && m_msgEdit->text() != stored)
+        m_msgEdit->setText(stored);
+}
+
+void FreeDvReporterDialog::setReportingActive(bool active)
+{
+    m_msgEdit->setEnabled(active);
+    m_msgSendBtn->setEnabled(active);
+
+    // Say why it's off rather than leaving a dead field the operator has to
+    // guess about — updateMessage() would silently no-op here (#4231).
+    const QString tip = active
+        ? QStringLiteral("Status message broadcast to the FreeDV Reporter map "
+                         "alongside your callsign (max %1 characters).")
+              .arg(MessageMaxLength)
+        : QStringLiteral("Available when FreeDV reporting is active — enable it "
+                         "in SpotHub → FreeDV, or start RADE on a slice.");
+    // On the container, not the children: disabled widgets get no tooltip.
+    m_msgRowWidget->setToolTip(tip);
+    // The label carries the state, not just the placeholder: Qt only paints a
+    // placeholder on an *empty* field, and this one is seeded from
+    // FreeDvMyMessage — so for anyone who has ever set a message (i.e. the
+    // people this feature is for) the placeholder never shows and the tooltip
+    // would be the only remedy (#4231 review).
+    m_msgLabel->setText(active ? QStringLiteral("Message")
+                               : QStringLiteral("Message (reporting off)"));
+    m_msgEdit->setPlaceholderText(
+        active ? QStringLiteral("Optional status shown on the reporter map")
+               : QStringLiteral("Enable FreeDV reporting to send a status message"));
+    // Same explanation for screen readers, not just hover.
+    m_msgEdit->setAccessibleDescription(tip);
+    m_msgSendBtn->setAccessibleDescription(tip);
+}
+
+void FreeDvReporterDialog::commitMessage()
+{
+    const QString msg = m_msgEdit->text().trimmed();
+    // Write back the trimmed form so what's stored is what was sent.
+    if (m_msgEdit->text() != msg)
+        m_msgEdit->setText(msg);
+    // Sent, so no longer an unsent draft — lets reloadMessage() track the
+    // setting again.
+    m_msgEdit->setModified(false);
+
+    auto& s = AppSettings::instance();
+    s.setValue("FreeDvMyMessage", msg);
+    s.save();
+
+    emit messageChanged(msg);
 }
 
 // ── Slot implementations ───────────────────────────────────────────────────

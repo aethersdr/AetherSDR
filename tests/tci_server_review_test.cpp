@@ -11,14 +11,18 @@
 #include "models/TransmitModel.h"
 
 #include <QCoreApplication>
+#include <QAbstractSocket>
 #include <QEventLoop>
+#include <QHostAddress>
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QSet>
 #include <QStringList>
 #include <QTimer>
+#include <QUrl>
 #include <QWebSocket>
 
+#include <cstring>
 #include <cstdio>
 
 namespace AetherSDR
@@ -1127,6 +1131,115 @@ public:
         server.tuneSliceAndConfirm(&client, 0, 0, 0, parked);
         return sent.contains(QStringLiteral("vfo:0,0,%1;").arg(parked));
     }
+
+    // #4744: switching from resampled TCI RX to native rate carries staged
+    // samples into the native frame source. Releasing that buffer before
+    // gain conversion or sendBinaryMessage() left the payload pointer dangling.
+    static bool native24kAudioRetainsAccumulatedPayload()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        if (!server.start(0) || !server.m_server) {
+            std::printf("      TCI server failed to bind an ephemeral port\n");
+            return false;
+        }
+        const quint16 port = server.port();
+
+        QByteArray receivedFrame;
+        QWebSocket client;
+        QObject::connect(&client, &QWebSocket::binaryMessageReceived,
+                         [&receivedFrame](const QByteArray& frame) {
+            receivedFrame = frame;
+        });
+        client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1")
+                             .arg(port)));
+
+        for (int i = 0; i < 100
+             && (client.state() != QAbstractSocket::ConnectedState
+                 || server.m_clients.isEmpty()); ++i) {
+            spin(10);
+        }
+        if (client.state() != QAbstractSocket::ConnectedState
+            || server.m_clients.isEmpty()) {
+            std::printf("      clientState=%d clients=%lld error=%s\n",
+                        static_cast<int>(client.state()),
+                        static_cast<long long>(server.m_clients.size()),
+                        client.errorString().toUtf8().constData());
+            return false;
+        }
+
+        client.sendTextMessage(QStringLiteral(
+            "audio_samplerate:48000;audio_stream_sample_type:float32;"
+            "audio_stream_channels:2;audio_start:0;"));
+        for (int i = 0; i < 100 && !server.m_clients.first().audioEnabled; ++i) {
+            spin(10);
+        }
+        if (!server.m_clients.first().audioEnabled
+            || server.m_clients.first().audioSampleRate != 48000) {
+            std::printf("      audioEnabled=%d sampleRate=%d\n",
+                        server.m_clients.first().audioEnabled,
+                        server.m_clients.first().audioSampleRate);
+            return false;
+        }
+
+        constexpr int kFrames = 128;
+        QByteArray pcm(kFrames * 2 * static_cast<int>(sizeof(float)),
+                       Qt::Uninitialized);
+        float* samples = reinterpret_cast<float*>(pcm.data());
+        for (int i = 0; i < kFrames * 2; ++i) {
+            samples[i] = static_cast<float>(i + 1) / 1024.0f;
+        }
+        constexpr float kGain = 0.5f;
+        server.m_rxChannelGain[0] = kGain;
+
+        // Seed a sub-threshold 48 kHz resampler accumulation, then switch to
+        // native 24 kHz.  The old implementation retained this staging buffer
+        // across the rate change and released it before the native-rate gain
+        // loop read it.
+        server.onDaxAudioReady(1, pcm);
+        spin(20);
+        if (!receivedFrame.isEmpty()) {
+            std::printf("      48 kHz staging unexpectedly emitted a frame\n");
+            return false;
+        }
+
+        client.sendTextMessage(QStringLiteral("audio_samplerate:24000;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().audioSampleRate != 24000; ++i) {
+            spin(10);
+        }
+        if (server.m_clients.first().audioSampleRate != 24000) {
+            std::printf("      sampleRate=%d after native-rate switch\n",
+                        server.m_clients.first().audioSampleRate);
+            return false;
+        }
+
+        QByteArray nextPcm = pcm;
+        float* nextSamples = reinterpret_cast<float*>(nextPcm.data());
+        for (int i = 0; i < kFrames * 2; ++i) {
+            nextSamples[i] = -samples[i];
+        }
+        QByteArray expectedPcm = pcm + nextPcm;
+        float* expectedSamples = reinterpret_cast<float*>(expectedPcm.data());
+        for (int i = 0; i < kFrames * 4; ++i) {
+            expectedSamples[i] *= kGain;
+        }
+        server.onDaxAudioReady(1, nextPcm);
+
+        for (int i = 0; i < 100 && receivedFrame.isEmpty(); ++i) {
+            spin(10);
+        }
+        constexpr int kHeaderBytes = 64;
+        if (receivedFrame.size() != kHeaderBytes + expectedPcm.size()) {
+            std::printf("      received=%lld expected=%lld\n",
+                        static_cast<long long>(receivedFrame.size()),
+                        static_cast<long long>(kHeaderBytes + expectedPcm.size()));
+        }
+        return receivedFrame.size() == kHeaderBytes + expectedPcm.size()
+            && std::memcmp(receivedFrame.constData() + kHeaderBytes,
+                           expectedPcm.constData(),
+                           static_cast<size_t>(expectedPcm.size())) == 0;
+    }
 };
 
 } // namespace AetherSDR
@@ -1181,6 +1294,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::pttRouteLogSamplesCacheBeforeResolve();
     const bool routeLogSanitizes
         = AetherSDR::TciServerReviewTest::pttRouteLogSanitizesClientSource();
+    const bool native24kPayload
+        = AetherSDR::TciServerReviewTest::native24kAudioRetainsAccumulatedPayload();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -1230,6 +1345,8 @@ int main(int argc, char** argv)
     std::printf("%s  PTT route log neutralises a client-supplied source "
                 "(#4547)\n",
                 routeLogSanitizes ? "PASS" : "FAIL");
+    std::printf("%s  native 24 kHz TCI RX retains accumulated payload (#4744)\n",
+                native24kPayload ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure && pttBindsReceiver
         && pttUsesStableMap
@@ -1239,5 +1356,6 @@ int main(int argc, char** argv)
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
+        && native24kPayload
         ? 0 : 1;
 }

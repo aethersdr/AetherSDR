@@ -16,6 +16,20 @@ enum class DssOutlinePipelineMode {
 // QRhi's OpenGLES2 backend, which covers desktop GL as well as GLES, reuses the
 // fill program for ribbon outlines: live probes showed flat/stale outlines
 // with a separate, identically configured program.
+// Whether the "3D Span" control can actually affect the display.
+//
+// rowSpanFactor is a dss_mesh.vert uniform, so ONLY the GPU height-map mesh
+// honours it: DssRenderer::rebuild(), the CPU image fallback, ignores it and
+// always draws the narrowing trapezoid. Two independent ways to end up there --
+// a build configured with AETHER_GPU_SPECTRUM=OFF, and a runtime without
+// RGBA16F support leaving m_dssMeshReady false -- and BOTH must disable the
+// control, or it moves, labels and persists while nothing on screen changes,
+// which an operator cannot tell apart from "this source ships no overhang".
+constexpr bool dssRowSpanSupported(bool gpuSpectrumBuild, bool meshReady)
+{
+    return gpuSpectrumBuild && meshReady;
+}
+
 constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
     bool openGlEs2Backend)
 {
@@ -344,6 +358,20 @@ inline int waterfallVisibleRowForAge(int writeRowOrigin, int ageRows,
     const int origin = ((writeRowOrigin % height) + height) % height;
     const int age = ((ageRows % height) + height) % height;
     return (origin + age) % height;
+}
+
+// Mirror of texturedquad.frag and texturedquad_rowframes.frag: both cubic
+// shaders clamp source ages in logical history before mapping them into the
+// physical ring. Wrapping an out-of-range tap directly would blend the newest
+// and oldest rows across the visible history boundary.
+inline int waterfallCubicPhysicalRowForSourceAge(int writeRowOrigin,
+                                                 int sourceAge, int height)
+{
+    if (height <= 0) {
+        return -1;
+    }
+    return waterfallVisibleRowForAge(
+        writeRowOrigin, std::clamp(sourceAge, 0, height - 1), height);
 }
 
 struct WaterfallRowFrameReadiness {

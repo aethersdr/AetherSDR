@@ -126,6 +126,15 @@ void MainWindow::wireSpotSubsystem()
             QJsonDocument::fromJson(payload).object();
         const QString text = obj.value(QStringLiteral("text")).toString().trimmed();
         if (text.isEmpty()) return;
+        // The CWX capability gate, same as the panel's F1-F12 shortcuts and the
+        // FlexControl macro action: this ends in `cwx send`, and a radio with no
+        // text buffer swallows it. Say so in the log rather than accepting a
+        // published message that goes nowhere.
+        if (!m_radioModel.hasRadioSideCwKeyer()) {
+            qCWarning(lcMqtt) << "cw/transmit ignored:"
+                              << "radio has no radio-side CW keyer";
+            return;
+        }
         auto& tx = m_radioModel.transmitModel();
         const int wpm = obj.value(QStringLiteral("speed_wpm")).toInt(0);
         const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);

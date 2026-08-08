@@ -19,6 +19,7 @@
 #include <QByteArray>
 #include <QHostAddress>
 #include <QLoggingCategory>
+#include <QPointer>
 
 #include <cstdint>
 #include <utility>
@@ -34,6 +35,31 @@ static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcHoldBelowDbfs == -45.0,
 Q_LOGGING_CATEGORY(lcHl2Tx, "aether.hl2.tx")
 
 namespace AetherSDR::hl2 {
+
+// Declared incomplete in the header so it keeps its forward declarations of
+// MetisClient/Hl2RxDsp/Hl2TxDsp; the async connect is the only thing that needs
+// their Config types by value. See beginDspSetup().
+struct Hl2Backend::PendingConnect {
+    MetisClient::Params mp;
+    Hl2RxDsp::Config dc;
+    Hl2TxDsp::Config tc;
+    int actualNumRx = 0;
+    // Which connect this is. A disconnect, or a second connect, bumps
+    // m_connectGeneration; a build whose generation is stale on completion
+    // tears itself down instead of starting a wire nobody asked for.
+    quint64 generation = 0;
+};
+
+// What the I/O thread carries back. Parallel arrays indexed by DDC rather than
+// a vector of structs so a partial build — the trim-on-failure case — reads the
+// same way as a complete one.
+struct Hl2Backend::DspSetupResult {
+    std::vector<bool> rxOk;
+    std::vector<int> rxChannelId;
+    std::vector<std::string> rxErr;
+    bool txOk = false;
+    std::string txErr;
+};
 
 namespace {
 
@@ -1024,7 +1050,15 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
     // already in flight when the key went down; Hl2RxDsp::setAudioMuted stops
     // the pipeline FILLING with our own transmission, which is what stopped the
     // tail draining out afterwards.
-    if (m_keyed)
+    //
+    // THE MONITOR EXCEPTION HAS TO BE HERE, not only at the demodulator mute.
+    // audioFrameReady() is emitted from this function and nowhere else, and it is
+    // what feeds the engine's "output" capture — so an early return here silences
+    // the capture no matter what the DSP is doing. Porting setTxAudioMonitor as a
+    // demodulator-mute change alone would leave it a no-op on this backend, and a
+    // diagnostic that reads silence draws a confident wrong conclusion from it
+    // (#4487 review, finding 1). Off by default; only a measurement turns it on.
+    if (m_keyed && !m_txMonitor)
         return;
     const Receiver* r = rx(ddc);
     if (!r || r->audioMuted)
@@ -1233,6 +1267,16 @@ Hl2Backend::~Hl2Backend()
         // never run -- quit() below ends the event loop that would deliver it --
         // and tearing the socket down from this thread is the affinity bug this
         // whole change exists to avoid.
+        //
+        // THIS BLOCKS FOR AN IN-FLIGHT DSP BUILD. beginDspSetup()'s job is a
+        // single event on that thread's loop and OpenChannel cannot be cancelled,
+        // so a family switch or an app quit during a cold connect waits out the
+        // rest of the planning -- on the GUI thread. It is the one GUI stall the
+        // three-phase split does NOT remove, and splitting the connect is what
+        // made it reachable: the operator can now use the UI while the chains
+        // open, and reaching for a different radio is the obvious thing to do
+        // while waiting. HERMES.md §22.4. It is also what keeps the QPointer in
+        // beginDspSetup() sound, so a fix here has to deal with that too.
         if (m_metis)
             QMetaObject::invokeMethod(m_metis, "stop", Qt::BlockingQueuedConnection);
         m_ioThread->quit();
@@ -1287,7 +1331,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
-    c.hostModulates = true;             // PC runs the modulator; no on-radio mic jacks
+    c.hostModulates = true;
+    // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
+    c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
     c.hasTuner = false;
     c.hasAmplifier = false;
@@ -1296,6 +1342,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     // connection beyond its registers — everything the operator can change
     // lives in this application, so there is nothing for a profile to name.
     c.hasProfiles = false;
+    c.hasSelectableMicInputs = false;
+
+    // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
+    c.rxFilterWidthsHz = {};
     // No per-slice audio or per-pan IQ stream plane: the HL2 sends one raw IQ
     // feed and this host demodulates it.
     c.hasDaxStreams = false;
@@ -1308,6 +1358,15 @@ RadioCapabilities Hl2Backend::capabilities() const
     // waterfall black level, so the Black Level button's HW position would be
     // a mode that never produces one. Off <-> SW only. (#4606)
     c.hasRadioSideWaterfallAutoBlack = false;
+    // No command plane to carry any of these. The HL2 has no text buffer for a
+    // CW keyer, no voice recorder and no full-duplex setting — so the three
+    // status-bar toggles that drive them go away rather than sitting greyed
+    // out. The host-side equivalents are untouched: this radio still transmits
+    // CW, and this client's own noise modules are the only DSP it has. TNF is
+    // deliberately NOT gated — see the note in RadioCapabilities.h.
+    c.hasRadioSideCwKeyer = false;
+    c.hasVoiceKeyer = false;
+    c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
     // Manual notches, and the one piece of DSP on this radio that is NOT absent
@@ -1361,6 +1420,24 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     const QHostAddress host(request.host);
     if (host.isNull()) {
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));
+        return;
+    }
+
+    // A connect arriving while the previous one's chains are still opening.
+    // Reachable now that the build spans event-loop turns: the reconnect timer
+    // or an operator picking a different radio both land here.
+    //
+    // It cannot be served inline. buildReceivers() would destroy the very
+    // chains the I/O thread is opening, and its publishIoDsps() is a BLOCKING
+    // hop into an I/O thread busy for the rest of that open -- which is exactly
+    // the GUI stall this change removes, reintroduced through the back door.
+    // So: supersede the build, hold the request, and re-drive it from
+    // finishDspSetup() once the I/O thread is free.
+    if (m_pendingConnect) {
+        qCInfo(lcHl2) << "HL2: connect requested while the DSP was still opening"
+                      << "— queued behind it";
+        ++m_connectGeneration;
+        m_queuedConnect = std::make_unique<RadioConnectRequest>(request);
         return;
     }
 
@@ -1548,8 +1625,9 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // ORDER IS LOAD-BEARING, and the reason is the same one that governs every
     // other ordering decision in this backend: EP2 must not stop.
     //
-    // Opening a WDSP channel is slow -- ~17 s on a first run, generating FFTW
-    // wisdom, and ~110 ms after that (HERMES.md §10) -- and it runs ON THE I/O
+    // Opening a WDSP channel is slow -- ~19 s on the FIRST open this machine
+    // ever does, generating FFTW wisdom, and 40-175 ms for every open after
+    // that, at any rate (HERMES.md §10 and §22.3) -- and it runs ON THE I/O
     // THREAD, which is the thread that paces EP2. Configuring after start()
     // therefore stalls the pacer for the whole of that, and the gateware
     // watchdog halts the stream when EP2 stops arriving. It also stalls the EP6
@@ -1574,20 +1652,200 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     Hl2RxDsp::Config dc;
     dc.inputSampleRateHz = m_sampleRateHz;
     dc.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
-    std::string err;
+
+    // The transmit chain follows the TX RECEIVER's mode, not "the mode": with
+    // several receivers there is no single one. Built here, on the GUI thread,
+    // where m_rx may be read; the open itself happens with the others.
+    const Receiver* txRx = rx(m_txDdc);
+    const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
+    Hl2TxDsp::Config tc;
+    tc.inputSampleRateHz = 24000;    // AudioEngine's rate; submitTxAudio re-checks
+    tc.outputSampleRateHz = 48000;   // EP2 is fixed at 48 kHz
+    tc.mode = modeFromString(txMode);
+    // Sideband-correct from the first key, not from the first mode change. The
+    // struct default is a positive 300..2700, so connecting straight into LSB
+    // or DIGL would otherwise transmit on the upper sideband until the operator
+    // happened to change mode.
+    {
+        const auto [txLo, txHi] = effectiveTxPassband(txMode);
+        tc.filterLowHz  = txLo;
+        tc.filterHighHz = txHi;
+    }
+    // Remember the threshold the modulator is being handed, so the health
+    // snapshot and the unkey diagnostic both report what it is RUNNING rather
+    // than what a default-constructed Config would have said. Assigned from
+    // `tc` and not from the default so it stays correct the day this Config
+    // sets the field.
+    m_alcHoldBelowDbfs = tc.alcHoldBelowDbfs;
+
+    // Announce the passband the modulator is being configured with. The Config
+    // is how the modulator learns it, so this is the echo half only — but it is
+    // the half the operator sees. A restored eSSB 100..4000 reached the
+    // modulator and nothing else: the Phone applet went on showing
+    // TransmitModel's own construction default until the operator happened to
+    // press a cut button, which is a passband readout that disagrees with the
+    // transmitter.
+    //
+    // Emitted HERE rather than after the open, and that is deliberate now that
+    // the open is asynchronous. The value is already decided — waiting for the
+    // channel to finish opening would tell the operator nothing more, and would
+    // make an echo that connectRadio() used to deliver synchronously arrive tens
+    // of seconds later on a cold cache. What still holds is the ordering that
+    // matters: this precedes linkUp either way.
+    {
+        TransmitDelta delta;
+        delta.txFilterLow = tc.filterLowHz;
+        delta.txFilterHigh = tc.filterHighHz;
+        emit transmitChanged(delta);
+    }
+
+    // Hand the opens to the I/O thread and RETURN. finishDspSetup() picks the
+    // connect back up from here, on this thread, once they are done.
+    m_pendingConnect = std::make_unique<PendingConnect>();
+    m_pendingConnect->mp = mp;
+    m_pendingConnect->dc = dc;
+    m_pendingConnect->tc = tc;
+    m_pendingConnect->actualNumRx = actualNumRx;
+    m_pendingConnect->generation = ++m_connectGeneration;
+    beginDspSetup();
+}
+
+void Hl2Backend::beginDspSetup()
+{
+    if (!m_pendingConnect)
+        return;
+
+    const int actualNumRx = m_pendingConnect->actualNumRx;
+    // The RECEIVERS, and only them. The transmit chain is not a step:
+    // Hl2TxDsp::configure() designs two FIR kernels and returns — it opens no
+    // WDSP channel and measures no FFTW plan (the class includes WdspChannel.h
+    // for the Mode enum alone). Counting it inflated the denominator with a step
+    // that completes in microseconds and put a "Preparing the transmit chain…"
+    // label on screen for work that was already over.
+    const int total = actualNumRx;
+
+    // The chains to open, snapshotted on THIS thread. m_rx is GUI-thread-only
+    // (see its declaration), so the I/O thread gets a plain vector of the
+    // pointers it may touch and never the container they came out of.
+    std::vector<Hl2RxDsp*> chains;
+    chains.reserve(static_cast<std::size_t>(actualNumRx));
+    std::vector<Hl2RxDsp::Config> configs;
+    configs.reserve(static_cast<std::size_t>(actualNumRx));
     for (int i = 0; i < actualNumRx; ++i) {
         Receiver& r = m_rx[static_cast<std::size_t>(i)];
+        Hl2RxDsp::Config dc = m_pendingConnect->dc;
         dc.mode = modeFromString(r.mode);
         dc.filterLowHz = r.filterLowHz;
         dc.filterHighHz = r.filterHighHz;
-        bool dspOk = false;
-        // Blocking: the DSP must be configured before the wire delivers samples
-        // into it. Serial rather than parallel on purpose — FFTW's planner is
-        // not thread-safe and Hl2Spectrum builds a plan in its constructor.
-        Hl2RxDsp* dsp = r.dsp;
-        QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &dspOk] {
-            dspOk = dsp->configure(dc, &err);
-        }, Qt::BlockingQueuedConnection);
+        chains.push_back(r.dsp);
+        configs.push_back(dc);
+    }
+
+    emit dspSetupProgress(tr("Preparing the receive chain…"), 0, total);
+
+    const Hl2TxDsp::Config tc = m_pendingConnect->tc;
+    Hl2TxDsp* txDsp = m_txDsp;
+    // QPointer, not `this`: the build outlives the call, and a backend
+    // destroyed mid-build (a family switch, app teardown) must not be resumed
+    // through a dangling pointer.
+    //
+    // What makes the cross-thread reads of it SOUND is the destructor, not the
+    // QPointer: ~Hl2Backend() blocks on the I/O thread (a BlockingQueuedConnection
+    // stop, then quit()/wait()), so this lambda has always finished before the
+    // object can go away, and every `if (self)` below is a check on a pointer
+    // nothing is racing to clear. QPointer is reentrant, NOT thread-safe — the day
+    // teardown stops blocking, a check-then-use here becomes a real race and this
+    // needs a different mechanism. That blocking teardown has its own cost; see
+    // the note in ~Hl2Backend() and HERMES.md §22.4.
+    QPointer<Hl2Backend> self(this);
+
+    QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(txDsp)
+                                             : static_cast<QObject*>(chains.front()),
+        [self, chains, configs, tc, txDsp, total] {
+        // ---- I/O THREAD ----
+        //
+        // Serial rather than parallel on purpose, and it is not about ordering:
+        // FFTW's planner is not thread-safe, and Hl2Spectrum builds a plan in
+        // its constructor. Two of these at once corrupt the planner's state.
+        DspSetupResult result;
+        result.rxOk.resize(chains.size(), false);
+        result.rxChannelId.resize(chains.size(), -1);
+        result.rxErr.resize(chains.size());
+        for (std::size_t i = 0; i < chains.size(); ++i) {
+            if (self) {
+                const int done = static_cast<int>(i);
+                // PURE STAGE TEXT — no counter. The label renders the fraction
+                // from done/total (MainWindow::wireBackendSeam), so numbering
+                // here too put two fractions over two denominators on screen:
+                // "Preparing receiver 1 of 2… (1 of 3)".
+                const QString stage = tr("Preparing the receive chain…");
+                QMetaObject::invokeMethod(self, [self, stage, done, total] {
+                    if (self)
+                        emit self->dspSetupProgress(stage, done, total);
+                }, Qt::QueuedConnection);
+            }
+            std::string err;
+            result.rxOk[i] = chains[i]->configure(configs[i], &err);
+            result.rxErr[i] = err;
+            if (result.rxOk[i])
+                result.rxChannelId[i] = chains[i]->wdspChannelId();
+            else
+                break;   // the GUI thread trims from here; opening past it is waste
+        }
+        // No progress emit for the transmit chain: it designs two FIR kernels
+        // and returns. Announcing a step that is over before the label repaints
+        // is worse than saying nothing.
+        if (txDsp)
+            result.txOk = txDsp->configure(tc, &result.txErr);
+
+        // ---- back to the GUI thread ----
+        QMetaObject::invokeMethod(self, [self, result] {
+            if (self)
+                self->finishDspSetup(result);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+void Hl2Backend::finishDspSetup(const DspSetupResult& result)
+{
+    if (!m_pendingConnect)
+        return;
+    // A disconnect, or a second connect, arrived while the chains were opening.
+    // The wire was never started, so there is nothing to stop — but the chains
+    // ARE open, and leaving them open would leak WDSP channels out of the
+    // 32-slot pool on every abandoned connect.
+    if (m_pendingConnect->generation != m_connectGeneration) {
+        qCInfo(lcHl2) << "HL2: connect superseded while the DSP was opening —"
+                      << "releasing the chains it built";
+        m_pendingConnect.reset();
+        // Safe to block inside here: the build has finished, so the I/O thread
+        // is back at its event loop and publishIoDsps() returns promptly.
+        tearDownReceivers();
+        emit dspSetupFinished();
+        // A connect that arrived mid-build has been waiting for exactly this.
+        if (m_queuedConnect) {
+            const RadioConnectRequest queued = *m_queuedConnect;
+            m_queuedConnect.reset();
+            connectRadio(queued);
+        }
+        return;
+    }
+
+    MetisClient::Params mp = m_pendingConnect->mp;
+    const int actualNumRx = m_pendingConnect->actualNumRx;
+    m_pendingConnect.reset();
+
+    // m_rx STILL HOLDS actualNumRx RECEIVERS. Worth stating, because the loop
+    // below indexes it with a count snapshotted in beginDspSetup() and the two
+    // phases no longer run back to back — event-loop turns pass between them.
+    // Nothing can resize it in that window: the only two paths that do are
+    // createPanadapter() and removePanadapter(), and both return early unless
+    // m_connected, which is set from linkUp — that is, only after the wire this
+    // function has not started yet. A connect or a disconnect landing here is
+    // the generation counter's job and is handled above.
+    for (int i = 0; i < actualNumRx; ++i) {
+        const bool dspOk = result.rxOk[static_cast<std::size_t>(i)];
+        const std::string& err = result.rxErr[static_cast<std::size_t>(i)];
         if (!dspOk) {
             // Receiver 0 failing is a failed connect. A LATER receiver failing
             // is not: the radio works, there is simply one fewer panadapter, and
@@ -1596,6 +1854,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
             if (i == 0) {
                 emit connectionError(
                     QStringLiteral("HL2 DSP: %1").arg(QString::fromStdString(err)));
+                emit dspSetupFinished();
                 return;
             }
             qCWarning(lcHl2) << "HL2: receiver" << i << "DSP failed —"
@@ -1637,65 +1896,18 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
             m_ids.truncate(i);
             break;
         }
-        // The WDSP channel id is knowable only NOW, and it is whatever the
-        // shared 32-slot pool had free. Recording it here rather than deriving
-        // it from i is the entire point of the index-space map.
-        int channelId = -1;
-        QMetaObject::invokeMethod(dsp, [dsp, &channelId] {
-            channelId = dsp->wdspChannelId();
-        }, Qt::BlockingQueuedConnection);
+        // The WDSP channel id is knowable only after the open, and it is
+        // whatever the shared 32-slot pool had free. Carrying it back from the
+        // I/O thread rather than deriving it from i is the entire point of the
+        // index-space map.
         if (auto* ids = m_ids.mutableByDdc(i)) {
-            ids->dspChannel = channelId;
+            ids->dspChannel = result.rxChannelId[static_cast<std::size_t>(i)];
             ids->analyzerId = i;   // Hl2Spectrum is per-receiver and owned by it
         }
     }
-    // Assert a known TX drive rather than inheriting whatever the board held.
-    // ZERO is deliberate: this backend has no drive-level control wired to the
-    // UI yet, so anything higher would be an un-commanded power level chosen by
-    // a default. An operator raising it explicitly is the only way it should go up.
-    // The transmit chain follows the TX RECEIVER's mode, not "the mode": with
-    // several receivers there is no single one.
-    const Receiver* txRx = rx(m_txDdc);
-    const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
-    Hl2TxDsp::Config tc;
-    tc.inputSampleRateHz = 24000;    // AudioEngine's rate; submitTxAudio re-checks
-    tc.outputSampleRateHz = 48000;   // EP2 is fixed at 48 kHz
-    tc.mode = modeFromString(txMode);
-    // Sideband-correct from the first key, not from the first mode change. The
-    // struct default is a positive 300..2700, so connecting straight into LSB
-    // or DIGL would otherwise transmit on the upper sideband until the operator
-    // happened to change mode.
-    {
-        const auto [txLo, txHi] = effectiveTxPassband(txMode);
-        tc.filterLowHz  = txLo;
-        tc.filterHighHz = txHi;
-    }
-    // Remember the threshold the modulator was handed, so the health snapshot
-    // and the unkey diagnostic both report what it is RUNNING rather than what
-    // a default-constructed Config would have said. Assigned from `tc` and not
-    // from the default so it stays correct the day this Config sets the field.
-    m_alcHoldBelowDbfs = tc.alcHoldBelowDbfs;
-    std::string txErr;
-    bool txOk = false;
-    QMetaObject::invokeMethod(m_txDsp, [this, &tc, &txErr, &txOk] {
-        txOk = m_txDsp->configure(tc, &txErr);
-    }, Qt::BlockingQueuedConnection);
-    if (!txOk)
+    if (!result.txOk)
         qWarning() << "Hl2Backend: TX DSP unavailable —"
-                   << QString::fromStdString(txErr) << "(receive is unaffected)";
-
-    // Announce the passband the modulator was just configured with. The Config
-    // above is how the modulator learns it, so this is the echo half only — but
-    // it is the half the operator sees. A restored eSSB 100..4000 reached the
-    // modulator and nothing else: the Phone applet went on showing TransmitModel's
-    // own construction default until the operator happened to press a cut button,
-    // which is a passband readout that disagrees with the transmitter.
-    {
-        TransmitDelta delta;
-        delta.txFilterLow = tc.filterLowHz;
-        delta.txFilterHigh = tc.filterHighHz;
-        emit transmitChanged(delta);
-    }
+                   << QString::fromStdString(result.txErr) << "(receive is unaffected)";
 
     // ---- and only now, the wire ----
     //
@@ -1713,10 +1925,16 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     if (!started) {
         tearDownReceivers();   // do not leave WDSP channels open on a failed connect
         emit connectionError(QStringLiteral("HL2: could not open the UDP socket"));
+        emit dspSetupFinished();
         return;
     }
 
+    // Assert a known TX drive rather than inheriting whatever the board held.
+    // ZERO is deliberate: this backend has no drive-level control wired to the
+    // UI yet, so anything higher would be an un-commanded power level chosen by
+    // a default. An operator raising it explicitly is the only way it should go up.
     setTxDriveLevel(0);
+    emit dspSetupFinished();
 
     // Initial slice/pan state is published from the linkUp handler above, once
     // connected() has fired and RadioModel has finished staging the old session.
@@ -1724,6 +1942,19 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
 
 void Hl2Backend::disconnectRadio()
 {
+    // Invalidate any DSP build still in flight. Without this, a disconnect
+    // during the opens would be followed by finishDspSetup() starting a wire
+    // for a session the operator has already left. The build itself cannot be
+    // cancelled — WDSP's OpenChannel does not return early — so it runs to
+    // completion on the I/O thread and finishDspSetup() releases what it built.
+    ++m_connectGeneration;
+    // And a connect PARKED BEHIND that build is stale for the same reason: the
+    // operator has since asked to be disconnected. Leaving it here made
+    // finishDspSetup()'s supersede branch re-drive it — a second full build
+    // ending in MetisClient::start(), for a session nobody is in. Measured:
+    // connect, connect, disconnect gave two dspSetupFinished and a running wire.
+    m_queuedConnect.reset();
+
     if (m_metis)
         // Queued: serialises behind whatever the I/O thread is doing.
         QMetaObject::invokeMethod(m_metis, "stop");   // linkDown -> disconnected()
@@ -2366,6 +2597,21 @@ void Hl2Backend::applyPanBandwidth(double hz)
         QMetaObject::invokeMethod(m_metis, "setSampleRate", Qt::QueuedConnection,
             Q_ARG(AetherSDR::hl2::SampleRate, sampleRateEnum(rate)));
 
+    // FOLLOW-UP: this loop still BLOCKS THE GUI THREAD, which is the same defect
+    // connectRadio() had before it was split into beginDspSetup()/
+    // finishDspSetup(). Each receiver costs an open (40-175 ms) plus a close
+    // that flushes under WDSP's 100 ms timeout, and it runs for every receiver
+    // because the rate register is radio-wide — roughly 0.6-1.1 s of frozen UI
+    // per rate-boundary crossing with four panadapters open. That is the
+    // "chunky zoom" operators report. HERMES.md §22.4 has the measurements.
+    //
+    // Not fixed here on purpose: unlike the connect, this has ordering
+    // constraints that survive a partial failure — the DSP must expect the new
+    // rate BEFORE EP6 delivers at it, and a receiver that fails to reconfigure
+    // has to put the ones already rebuilt back, or the set is split across two
+    // rates with nothing reporting it. The phase split is reusable; the
+    // roll-back is what needs designing.
+    //
     // Rebuild the receive chain at the new input rate. WDSP's channel is opened
     // with a fixed input rate, so a rate change is a reconfigure, not a setter —
     // Hl2RxDsp::Config carries the operator's live mode/filter/AGC/shift so the
@@ -2547,10 +2793,19 @@ void Hl2Backend::setKeying(bool key)
     // EVERY receiver, not just the transmitting one. All four are behind the same
     // antenna and hear the transmission equally, so muting only the TX receiver
     // would leave three others playing our own carrier back.
+    //
+    // ...unless the TX audio monitor is on, which is the one case that wants the
+    // opposite. radiocert's sideband stage demodulates our OWN transmission —
+    // that is the only self-contained way to check the sideband convention,
+    // because the panadapter reads raw wire order and therefore agrees with the
+    // transmitter by construction. The monitor is off by default and only a
+    // measurement turns it on. Applied to every receiver for the same reason the
+    // mute is: whichever one the capture is taken from must not be silenced.
+    const bool muteWhileKeyed = key && !m_txMonitor;
     for (Receiver& r : m_rx) {
         if (r.dsp)
             QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
-                Q_ARG(bool, key));
+                Q_ARG(bool, muteWhileKeyed));
     }
     // Drop whatever was already queued for the mix. On unkey these would be the
     // stalest blocks in the buffer and would play out ahead of live audio.
@@ -2682,6 +2937,23 @@ void Hl2Backend::setTxTestTone(double offsetHz, double amplitude)
     }
     QMetaObject::invokeMethod(m_metis, "setTxTestTone", Qt::QueuedConnection,
         Q_ARG(double, offsetHz), Q_ARG(double, amplitude));
+}
+
+void Hl2Backend::setTxAudioMonitor(bool on)
+{
+    m_txMonitor = on;
+    // Apply immediately if we are already keyed, so a diagnostic can enable the
+    // monitor mid-transmission rather than having to unkey and start again.
+    //
+    // EVERY receiver, matching setKeying(): the capture is taken from the mixed
+    // output, so whichever receiver contributes to it must not be silenced. The
+    // mixer's own keyed-drop honours m_txMonitor as well — see mixReceiverAudio(),
+    // which is the site that actually gates audioFrameReady().
+    for (Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
+                Q_ARG(bool, m_keyed && !on));
+    }
 }
 
 void Hl2Backend::setTune(bool on, int tunePowerPercent)

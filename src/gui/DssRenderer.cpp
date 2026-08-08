@@ -320,6 +320,22 @@ DssRenderer::rowAt(int age) const
     return m_rows[idx];
 }
 
+double DssRenderer::newestSupplementalBandwidthMhz(
+    double targetBandwidthMhz) const
+{
+    if (!std::isfinite(targetBandwidthMhz) || targetBandwidthMhz <= 0.0) {
+        return 0.0;
+    }
+    const int rows = visibleRowCount();
+    for (int age = 0; age < rows; ++age) {
+        const double candidate = rowSupplementalBandwidthMhzAtAge(age);
+        if (std::isfinite(candidate) && candidate > targetBandwidthMhz) {
+            return candidate;
+        }
+    }
+    return 0.0;
+}
+
 DssRenderer::RowStats DssRenderer::rowStats(int age, float epsilonDb) const
 {
     RowStats stats;

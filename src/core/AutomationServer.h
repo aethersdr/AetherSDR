@@ -629,11 +629,17 @@ private:
     // Demo fault injection (RFC #4288 #4): route a fault to backend->
     // invokeExtension("sim", …). No-op error on non-Sim backends.
     QJsonObject doSimFault(const QString& fault, const QString& arg);
+    // Raw CI-V inject + frame trace. Icom-only; other backends report it as
+    // unimplemented rather than silently succeeding.
+    QJsonObject doCiv(const QString& action, const QString& arg);
+    // Data-arrival ages plus the meter producer->consumer join.
+    QJsonObject doLiveness();
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
     // route to RadioModel::setTransmit — the exact calls the space-bar PTT filter
     // and the mox_toggle shortcut make, but reachable headlessly. Keying is gated
     // by AETHER_AUTOMATION_ALLOW_TX (the same rail as txtest/atu); unkey is not.
     QJsonObject doKey(const QString& name, const QString& arg);
+    QJsonObject doRadioCert(const QString& phaseArg, const QString& freqArg);
     // Drive the CWX keyer (send a CW string / set WPM / abort). `send` keys the
     // transmitter so it sits on the AETHER_AUTOMATION_ALLOW_TX rail and arms the
     // force-unkey watchdog; speed/stop do not key. CW's rapid TX→RX edges are the
@@ -782,6 +788,9 @@ private:
     // so it enforces only when this is set — otherwise it force-unkeys a human
     // holding MOX mid-sentence.
     bool    m_txBridgeInitiated{false};
+    // radiocert spins nested event loops for minutes; commands arriving
+    // during a run dispatch inside it, so a second one is refused.
+    bool    m_certRunning{false};
     // Transmitter state sampled at the top of handleLine(), before any verb
     // handler runs. markTxBridgeInitiated() needs it: it is called after its
     // action has been issued, and the key verbs update TransmitModel
@@ -790,6 +799,9 @@ private:
     bool    m_txKeyedAtRequestStart{false};
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
+    // Correlates an extension reply with the request that caused it. Starts at
+    // 1 because the sim-fault path deliberately uses 0 for fire-and-forget.
+    quint64 m_extensionRequestId{0};
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)
     QString m_authToken;           // shared-secret gate; empty = open (#3646)
     // Log/event channel (#3646 observability suite). The tap fills m_logRing

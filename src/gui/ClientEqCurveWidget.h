@@ -1,9 +1,16 @@
 #pragma once
 
+#include <QElapsedTimer>
+#include <QFont>
+#include <QPixmap>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 #include <QWidget>
+#include <array>
 #include <vector>
+
+class QPainter;
 
 namespace AetherSDR {
 
@@ -101,6 +108,11 @@ public:
     // first entry is always "Off".
     static const QStringList& referenceCurveIds();
 
+    // Bridge-facing, production-light paint/cache counters. AutomationServer
+    // invokes this by class name so core code does not depend on GUI headers.
+    // `reset` returns the completed interval before beginning a fresh one.
+    Q_INVOKABLE QVariantMap eqstatsSnapshot(bool reset);
+
 signals:
     void selectedBandChanged(int idx);
     // Fired whenever band params mutate on the audio side from user
@@ -141,7 +153,75 @@ protected:
     QString            m_referencePreset;  // empty = off
 
 private:
+    struct BackgroundCacheKey {
+        QSize size;
+        qreal devicePixelRatio{1.0};
+        QFont font;
+        int filterLowCutHz{0};
+        int filterHighCutHz{0};
+
+        bool operator==(const BackgroundCacheKey&) const = default;
+    };
+
+    struct BandCacheState {
+        float freqHz{0.0f};
+        float gainDb{0.0f};
+        float q{0.0f};
+        int type{0};
+        bool enabled{false};
+        int slopeDbPerOct{0};
+
+        bool operator==(const BandCacheState&) const = default;
+    };
+
+    struct ResponseCacheKey {
+        QSize size;
+        qreal devicePixelRatio{1.0};
+        QFont font;
+        ClientEq* eq{nullptr};
+        int selectedBand{-1};
+        bool showFilled{true};
+        QString referencePreset;
+        bool eqEnabled{false};
+        int filterFamily{0};
+        double sampleRate{0.0};
+        int activeBandCount{0};
+        // Keep in sync with ClientEq::kMaxBands. responseCacheKey() pins
+        // the relationship with a static_assert where ClientEq is complete.
+        std::array<BandCacheState, 16> bands{};
+
+        bool operator==(const ResponseCacheKey&) const = default;
+    };
+
+    struct PerfStats {
+        quint64 fftUpdates{0};
+        quint64 paints{0};
+        quint64 paintUsTotal{0};
+        quint64 paintUsMax{0};
+        quint64 backgroundCacheRebuilds{0};
+        quint64 responseCacheRebuilds{0};
+        quint64 backgroundCacheHits{0};
+        quint64 responseCacheHits{0};
+    };
+
     void applySmoothing();
+    BackgroundCacheKey backgroundCacheKey() const;
+    ResponseCacheKey responseCacheKey() const;
+    bool cacheEligible(const QSize& size, qreal devicePixelRatio) const;
+    QPixmap makeCachePixmap(const QSize& size, qreal devicePixelRatio) const;
+    void drawBackground(QPainter& painter, const QRect& rect) const;
+    void drawResponse(QPainter& painter, const QRect& rect,
+                      const ResponseCacheKey& key) const;
+    void resetPerfStats();
+
+    QPixmap m_backgroundCache;
+    QPixmap m_responseCache;
+    BackgroundCacheKey m_backgroundCacheKey;
+    ResponseCacheKey m_responseCacheKey;
+    bool m_backgroundCacheValid{false};
+    bool m_responseCacheValid{false};
+    QElapsedTimer m_perfSince;
+    PerfStats m_perfStats;
 };
 
 } // namespace AetherSDR

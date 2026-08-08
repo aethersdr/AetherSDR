@@ -332,6 +332,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
 | | [`get renderstats`](#get-renderstats) | Combined 2D/3D pan, waterfall, DSS, scheduler, and WAVE profiling snapshot. |
+| | [`get eqstats`](#get-eqstats) | Client EQ analyzer paint/cache counters. |
 | | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
 | | [`get clients`](#get-clients) | Radio client roster, GUI IDs + foreign-pan-write forensics (#3977/#4166). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
@@ -693,6 +694,7 @@ connects).
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
 | `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
+| `eqstats` | Client EQ canvas objectName (default: all) | analyzer paint/cache counters — see [`get eqstats`](#get-eqstats) |
 | `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
@@ -723,8 +725,8 @@ handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 capacity during TCI suppression. An Active-to-Idle transition with suppressed
 callbacks and unread bytes remains a fallback for backends that do not expose a
 useful capacity. The same evidence is written to the Audio Summary support log
-only when Help → Support's **CAT/rigctld** logging toggle (the category used by
-TCI debug logging) is enabled; TX capture-health summaries are off by default.
+only when Help → Support's **TCI / CAT / rigctld** logging toggle is enabled;
+TX capture-health summaries are off by default.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies
@@ -810,10 +812,10 @@ generic; the bridge does not embed or preserve an old registration name.
 ### `get renderstats`
 
 Combined rendering-analysis snapshot for before/after automation. It returns
-every `panstats` entry, every WAVE/strip `wavestats` entry, the shared pan
-scheduler, and non-overlapping headline totals. The totals cover measured
+every `panstats` entry, every WAVE/strip `wavestats` entry, every Client EQ
+`eqstats` entry, the shared pan scheduler, and non-overlapping headline totals. The totals cover measured
 GUI-thread FFT ingest, native/Kiwi waterfall ingest, GPU frame preparation,
-software fallback painting, and WAVE painting. DSS timings are reported
+software fallback painting, WAVE painting, and Client EQ painting. DSS timings are reported
 separately because they are a subset of FFT/waterfall ingest.
 
 ```json
@@ -822,20 +824,52 @@ separately because they are a subset of FFT/waterfall ingest.
    "totals":{"panCount":1,"visiblePanCount":1,"waveScopeCount":1,
      "fftFramesPerSec":24.9,"gpuFramesPerSec":25.1,
      "fftIngestMsPerSec":4.2,"nativeWaterfallUpdateMsPerSec":3.8,
-     "gpuFrameMsPerSec":2.7,"wavePaintMsPerSec":0.0,
+     "gpuFrameMsPerSec":2.7,"wavePaintMsPerSec":0.0,"eqPaintMsPerSec":1.1,
      "measuredMainThreadMsPerSec":10.7,
      "hiddenWaterfallUpdatesPerSec":0.0,
      "hiddenDssHistoryRowsPerSec":0.0,
      "waterfallAllocatedBytes":583680,
      "dssAllocatedBytes":37847040},
-   "pans":[...],"scopes":[...],"renderScheduler":{...}}
+   "pans":[...],"scopes":[...],"eqCurves":[...],"renderScheduler":{...}}
 ```
 
 Use `get renderstats reset`, wait for a fixed observation interval, then read
 `get renderstats reset` again. This gives disjoint samples across pan, waterfall,
 3DSS, scheduler, and WAVE counters with one command. `measuredMainThreadMsPerSec`
 is instrumented GUI-thread work, not whole-process CPU percentage; use it for
-causal comparisons while keeping the radio/display configuration fixed.
+causal comparisons while keeping the radio/display configuration fixed. As of
+v26.8.1, the total includes Client EQ paint time; captures from older builds do
+not include that component and are not directly comparable.
+
+### `get eqstats`
+
+Per-Client-EQ-canvas paint and cache counters. The bridge finds widgets by
+`inherits("AetherSDR::ClientEqCurveWidget")`, so it includes both the base widget and the
+interactive `ClientEqEditorCanvas` subclass used by the strip/editor. The
+active strip canvas has a stable selector: `stripRxEqCanvas` or
+`stripTxEqCanvas`. Those path-specific selectors name the same widget at
+different times: before a path is selected it is `stripEqCanvas`, and switching
+between RX and TX replaces its object name rather than creating another canvas.
+
+```json
+→ {"cmd":"get","model":"eqstats","selector":"stripTxEqCanvas","property":"reset"}
+← {"ok":true,"model":"eqstats","curves":[{
+   "name":"stripTxEqCanvas","visible":true,"widthPx":1920,"heightPx":1080,
+   "dpr":2.0,"fftUpdatesPerSec":25.0,"paintsPerSec":25.0,
+   "paintMsPerSec":1.1,"backgroundCacheRebuildCount":1,
+   "responseCacheRebuildCount":1,"backgroundCacheHits":624,
+   "responseCacheHits":624,"cacheEligible":true,
+   "cacheLayerByteLimit":33554432,
+   "cacheTotalByteLimit":67108864,"cacheRetainedBytes":66355200}]}
+```
+
+`get eqstats [selector] [reset]` returns then clears the selected interval
+when `reset` is supplied. FFT-only paints should increase the hit counters
+without increasing either rebuild count. Each retained layer is capped at
+33,554,432 bytes (67,108,864 bytes across both layers); ordinary physical 4K
+(3840×2160) layers remain eligible.
+Above that size, the widget paints directly and releases any prior layer once,
+instead of reallocating cache storage every paint.
 
 ### `get panstats`
 Per-panadapter (SpectrumWidget) frame-cost counters — how much GUI-thread time
@@ -936,6 +970,7 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 ← {"ok":true,"model":"rhi","pans":[{
    "panIndex":0,"name":"","visible":true,"widthPx":1100,"heightPx":455,"dpr":0.85,
    "gpu":true,"renderer":"GPU QRhi (D3D11; Intel(R) HD Graphics 520)",
+   "rendererFailed":false,"rendererFailureReason":"",
    "colorBufferAutoSized":false,"colorBufferW":936,"colorBufferH":388,
    "expectedEvenW":936,"expectedEvenH":388,"evenAligned":true,
    "overlayTextureW":936,"overlayTextureH":388,
@@ -950,6 +985,7 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 | field | meaning |
 |---|---|
 | `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
+| `rendererFailed` / `rendererFailureReason` | whether this panadapter's QRhi renderer failed and its recorded reason; a failed renderer reports `QRhi failed: ...` in `renderer` too. GPU builds only — omitted alongside the buffer fields when `gpu` is `false` |
 | `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
 | `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
 | `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
@@ -966,6 +1002,15 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
 each entry reports `gpu:false` and omits the buffer fields. The three native
 topology fields are emitted only on macOS; other platforms omit them.
+
+For an automation-only QRhi failure check, launch with both
+`AETHER_AUTOMATION=1` and `AETHER_AUTOMATION_FORCE_RHI_FAILURE=1`. The latter
+keeps the platform's production QRhi API, presents only a blank clear pass, and
+exercises AetherSDR's failure-reporting path; it has no effect unless automation
+is enabled. Assert the per-pan `rendererFailed` state and the
+`rhi.render-failed` panadapter message, then capture the composite pan surface
+to confirm the warning card remains visible over the blank renderer. Production
+QRhi failures enter the same reporting path through `QRhiWidget::renderFailed()`.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
@@ -2813,6 +2858,18 @@ Drive the CWX CW keyer — the easy repro for post-TX FFT-floor recovery (#3804)
 Stage the slice into a CW mode first (`invoke sliceModeCombo setCurrentText CW`)
 for the radio to actually emit.
 
+Every action here emits a `cwx` verb at the radio, so on a connected backend that
+declares `hasRadioSideCwKeyer=false` (an HL2, the demo) all three return an error
+rather than `ok:true` for work the radio would silently drop:
+
+```json
+→ {"cmd":"cwx","action":"send","value":"CQ"}
+← {"ok":false,"error":"cwx unavailable: this radio has no radio-side CW keyer (no `cwx` command plane)"}
+```
+
+Disconnected it still answers, like every other capability gate here — with
+nothing attached there is nothing to be honest about.
+
 ### `txtest`
 Two-tone TX test signal (for IMD / PA / meter measurements).
 
@@ -3001,7 +3058,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 59 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 62 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3024,7 +3081,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `hitTest` | `hittest` | hitTest <target> [x y] — read-only widget-owner probe |
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
-| `get` | — | get <model> [selector] [property] — live model snapshot |
+| `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
 | `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
@@ -3052,6 +3109,9 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
+| `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
+| `civ` | — | civ <send <hex>\|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated) |
+| `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |
 | `resize` | — | resize <w> <h> [target] — resize a window |

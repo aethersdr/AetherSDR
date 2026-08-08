@@ -619,6 +619,17 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
+    src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
+    src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
+    src/core/backends/icom/IcomStream.cpp    # IcomCIV Phase 0 (one UDP stream + ARQ)
+    src/core/backends/icom/IcomSession.cpp   # IcomCIV Phase 0 (handshake orchestration)
+    src/core/backends/icom/IcomScope.cpp     # IcomCIV Phase 2 (0x27 waveform -> panadapter)
+    src/core/backends/icom/IcomAudio.cpp     # IcomCIV Phase 3 (codecs + the 1364/556 split)
+    src/core/backends/icom/IcomMeters.cpp    # IcomCIV Phase 4 (calibration + poll scheduler)
+    src/core/backends/icom/IcomModels.cpp    # IcomCIV Phase 5 (per-model capability table)
+    src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
+    src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
+    src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
@@ -704,6 +715,7 @@ set(CORE_SOURCES
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
+    src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
@@ -2373,6 +2385,11 @@ if(AETHER_GPU_SPECTRUM)
         endforeach()
     endif()
 
+    # Shaders in this list get qsb's default GLSL set (100es/120/150). Anything
+    # using GLSL 130+ syntax (e.g. the `flat` qualifier) must NOT go here — the
+    # 120 slice would bake illegal code that only the driver rejects, on-device,
+    # where CI can't see it. Put such shaders in the GLSL-130+ block below;
+    # tools/check_shader_dialects.py fails the build-gate if they land here.
     qt_add_shaders(AetherSDR "aether_shaders"
         PREFIX "/shaders"
         FILES
@@ -2385,9 +2402,42 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
             resources/shaders/panscope.frag
+            resources/shaders/wavescope.frag
+    )
+
+    # Shaders needing GLSL 130+. dss_mesh (3D-FFT stacked-trace) is the only one
+    # today: it uses the `flat` interpolation qualifier — added for ridge
+    # stability in #4539 — which is legal only in GLSL 130 / ES 300 and later.
+    # SPIRV-Cross cannot lower an interpolation qualifier the way it lowers
+    # explicit locations and UBO blocks, so `flat` reaches every baked slice
+    # verbatim; the qsb default (100es, 120, 150) therefore bakes a 120 slice
+    # containing `flat varying float …`, which is a syntax error, and a 100es
+    # slice where `flat` is a reserved word. Both still BAKE — qsb exits 0 — so
+    # the only symptom is a driver rejecting the shader at runtime.
+    #
+    # Bake instead the flat-capable slices our GL backends actually report:
+    # 130 (OpenGL 3.0, e.g. Mesa compat-profile caps), 140 (desktop OpenGL 3.1 —
+    # the Raspberry Pi's v3d driver, which is what #4746 hit: no 140 slice baked,
+    # so QRhi fell back to 120 and the 3D FFT was silently disabled), 150
+    # (OpenGL 3.2+, what desktop GPUs already selected — byte-identical to
+    # before), and 300es (OpenGL ES 3, which previously matched only the illegal
+    # 100es slice). HLSL 50 / MSL 12 / SPIR-V are untouched: only GLSL is
+    # overridden, so the D3D11, Metal and Vulkan paths bake exactly as before.
+    #
+    # On an older GL<3.0 / GLES2 context no slice matches. QShader stays valid,
+    # so this is NOT caught by the vs.isValid() guard — QRhi finds no GLSL code
+    # and the m_dssMeshFillPipeline->create() call in
+    # SpectrumWidget::initDssMeshPipeline fails, m_dssMeshReady stays false, and
+    # the CPU image fallback still renders the 3D FFT. That is no worse than
+    # before: those contexts previously selected 120/100es, which never
+    # compiled. No shader-source change — #4539's `flat` is preserved.
+    # Complementary to #4730 (OpenGL outline rendering).
+    qt_add_shaders(AetherSDR "aether_shaders_glsl130"
+        PREFIX "/shaders"
+        GLSL "130,140,150,300es"
+        FILES
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
-            resources/shaders/wavescope.frag
     )
 endif()
 
@@ -2982,6 +3032,84 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# IcomCIV wire layers — pure encode/decode, standalone (no Qt / aethercore).
+# An Icom networked radio is two protocols stacked: CI-V is the command plane
+# and RS-BA1 is the UDP transport it travels inside. Both halves unit-test
+# without a socket, and CivCodec is deliberately transport-free so a future
+# USB / local-serial mode reuses it unchanged.
+add_executable(icom_protocol_test
+    tests/icom_protocol_test.cpp
+    src/core/backends/icom/IcomProtocol.cpp)
+target_include_directories(icom_protocol_test PRIVATE src)
+add_test(NAME icom_protocol_test COMMAND icom_protocol_test)
+
+add_executable(icom_civ_test
+    tests/icom_civ_test.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_civ_test PRIVATE src)
+add_test(NAME icom_civ_test COMMAND icom_civ_test)
+
+add_executable(icom_scope_test
+    tests/icom_scope_test.cpp
+    src/core/backends/icom/IcomScope.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_scope_test PRIVATE src)
+add_test(NAME icom_scope_test COMMAND icom_scope_test)
+
+add_executable(icom_audio_test
+    tests/icom_audio_test.cpp
+    src/core/backends/icom/IcomAudio.cpp
+    src/core/backends/icom/IcomProtocol.cpp)
+target_include_directories(icom_audio_test PRIVATE src)
+add_test(NAME icom_audio_test COMMAND icom_audio_test)
+
+# IcomCIV phases 4-5 — meter calibration curves, the poll scheduler (driven by
+# a synthetic clock), and the per-model capability table.
+add_executable(icom_meters_test
+    tests/icom_meters_test.cpp
+    src/core/backends/icom/IcomMeters.cpp
+    src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_meters_test PRIVATE src)
+add_test(NAME icom_meters_test COMMAND icom_meters_test)
+
+# IcomCIV phases 0-3 end to end — the session against a fake IC-705 on
+# localhost. This is what proves the ORDER of the RS-BA1 handshake, which is the
+# part of the protocol Icom documents nowhere.
+add_executable(icom_session_test
+    tests/icom_session_test.cpp
+    src/core/backends/icom/IcomSession.cpp
+    src/core/backends/icom/IcomStream.cpp
+    src/core/backends/icom/IcomProtocol.cpp
+    src/core/backends/icom/CivCodec.cpp
+    src/core/backends/icom/IcomScope.cpp
+    src/core/backends/icom/IcomAudio.cpp)
+target_include_directories(icom_session_test PRIVATE src tests)
+target_link_libraries(icom_session_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME icom_session_test COMMAND icom_session_test)
+
+# IcomCIV backend seam test — the IRadioBackend implementor against the fake
+# IC-705, with the TCI/WSJT-X audio contract as the load-bearing assertion.
+add_executable(icom_backend_test tests/icom_backend_test.cpp)
+target_include_directories(icom_backend_test PRIVATE src tests)
+target_link_libraries(icom_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME icom_backend_test COMMAND icom_backend_test)
+
+# IcomCIV live probe — REQUIRES A REAL RADIO, so deliberately NOT registered
+# with add_test(). Receive-only: it never sends a PTT command.
+#   cmake --build build --target icom_live_probe
+#   ./build/icom_live_probe ic-705.local <user> <password>
+add_executable(icom_live_probe EXCLUDE_FROM_ALL
+    tests/icom_live_probe.cpp
+    src/core/backends/icom/IcomSession.cpp
+    src/core/backends/icom/IcomStream.cpp
+    src/core/backends/icom/IcomProtocol.cpp
+    src/core/backends/icom/CivCodec.cpp
+    src/core/backends/icom/IcomScope.cpp
+    src/core/backends/icom/IcomAudio.cpp)
+target_include_directories(icom_live_probe PRIVATE src)
+target_link_libraries(icom_live_probe PRIVATE Qt6::Core Qt6::Network)
+
 # HL2 live band-filter probe — REQUIRES REAL HARDWARE, so deliberately NOT
 # registered with add_test(). Build it and run it by hand against a radio:
 #   cmake --build build --target hl2_live_band_filter_probe
@@ -3040,6 +3168,15 @@ add_executable(hl2_rxdsp_test tests/hl2_rxdsp_test.cpp)
 target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
+
+# AM/SAM come back from WDSP's envelope detector with the carrier as a DC
+# pedestal; the blocker on the audio output must strip it without touching the
+# modes that were already zero-mean, and without its corner creeping up into
+# the audio band.
+add_executable(hl2_am_dcblock_test tests/hl2_am_dcblock_test.cpp)
+target_include_directories(hl2_am_dcblock_test PRIVATE src)
+target_link_libraries(hl2_am_dcblock_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_am_dcblock_test COMMAND hl2_am_dcblock_test)
 
 # The RX DSP must demodulate at every IQ rate the operator can select by zooming.
 add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
@@ -3100,6 +3237,13 @@ target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
 target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
 
+# HL2 connect re-entrancy — a connect or a disconnect landing while the WDSP
+# chains are still opening. Needs no radio; see the file header.
+add_executable(hl2_connect_reentrancy_test tests/hl2_connect_reentrancy_test.cpp)
+target_include_directories(hl2_connect_reentrancy_test PRIVATE src tests)
+target_link_libraries(hl2_connect_reentrancy_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -3116,6 +3260,9 @@ add_executable(client_eq_smoothing_test
 target_include_directories(client_eq_smoothing_test PRIVATE src)
 target_link_libraries(client_eq_smoothing_test PRIVATE Qt6::Widgets)
 set_target_properties(client_eq_smoothing_test PROPERTIES AUTOMOC ON)
+add_test(NAME client_eq_smoothing_test COMMAND client_eq_smoothing_test)
+set_tests_properties(client_eq_smoothing_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
 
 add_executable(client_comp_test
     tests/client_comp_test.cpp
@@ -3405,6 +3552,35 @@ add_executable(declared_bands_test
 target_include_directories(declared_bands_test PRIVATE src)
 target_link_libraries(declared_bands_test PRIVATE Qt6::Core)
 add_test(NAME declared_bands_test COMMAND declared_bands_test)
+
+# Pins the BandDefs.h band edges through BandSettings::bandForFrequency() —
+# the lookup every frequency->band consumer shares, including the TX-filter
+# PTT preflight. #4723 shipped a 60m upper edge 1.3 kHz below the top of a
+# legal channel and nothing in the tree noticed.
+add_executable(band_edges_test
+    tests/band_edges_test.cpp
+    src/models/BandSettings.cpp
+)
+target_include_directories(band_edges_test PRIVATE src)
+target_link_libraries(band_edges_test PRIVATE Qt6::Core)
+add_test(NAME band_edges_test COMMAND band_edges_test)
+
+# Band-plan segment labels feed isVoiceSegmentLabel(), which gates S-History /
+# QRM voice detection — a label carrying no recognised emission token silently
+# switches voice markers off for that spectrum. Reads the shipped resource, so
+# the assertion is about the file that actually ships (#4723).
+qt_add_resources(BANDPLAN_VOICE_LABELS_TEST_RESOURCES resources/resources.qrc)
+add_executable(bandplan_voice_labels_test
+    tests/bandplan_voice_labels_test.cpp
+    src/core/VoiceSignalDetector.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    ${BANDPLAN_VOICE_LABELS_TEST_RESOURCES}
+)
+target_include_directories(bandplan_voice_labels_test PRIVATE src)
+target_link_libraries(bandplan_voice_labels_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME bandplan_voice_labels_test COMMAND bandplan_voice_labels_test)
 
 add_executable(radio_discovery_test
     tests/radio_discovery_test.cpp
@@ -3881,6 +4057,7 @@ target_include_directories(iambic_keyer_test PRIVATE src)
 if(UNIX)
     target_link_libraries(iambic_keyer_test PRIVATE pthread)
 endif()
+add_test(NAME iambic_keyer_test COMMAND iambic_keyer_test)
 
 add_executable(passive_spots_policy_test
     tests/passive_spots_policy_test.cpp
@@ -4048,6 +4225,14 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 
 if(APPLE)
+    add_executable(mac_nr_filter_test
+        tests/mac_nr_filter_test.cpp
+        src/core/MacNRFilter.cpp
+    )
+    target_include_directories(mac_nr_filter_test PRIVATE src)
+    target_link_libraries(mac_nr_filter_test PRIVATE Qt6::Core "-framework Accelerate")
+    add_test(NAME mac_nr_filter_test COMMAND mac_nr_filter_test)
+
     add_executable(mac_startup_abort_guard_test
         tests/mac_startup_abort_guard_test.cpp
         src/MacStartupAbortGuard.cpp
@@ -4849,6 +5034,13 @@ target_include_directories(hl2_txdsp_test PRIVATE src)
 target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
 
+# radiocert's measurement primitives. Header-only by design so this needs no
+# Qt and no link against aethercore — see the test's header comment for why it
+# exists at all (both shipped bugs in the diagnostic were in this arithmetic).
+add_executable(radio_certification_math_test tests/radio_certification_math_test.cpp)
+target_include_directories(radio_certification_math_test PRIVATE src)
+add_test(NAME radio_certification_math_test COMMAND radio_certification_math_test)
+
 add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
 target_include_directories(hl2_tx_loopback_test PRIVATE src)
 target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -4868,10 +5060,26 @@ target_include_directories(radiomodel_dax_null_test PRIVATE src)
 target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
 
+add_executable(dbm_range_plausibility_test tests/dbm_range_plausibility_test.cpp)
+target_include_directories(dbm_range_plausibility_test PRIVATE src)
+target_link_libraries(dbm_range_plausibility_test PRIVATE Qt6::Core)
+add_test(NAME dbm_range_plausibility_test COMMAND dbm_range_plausibility_test)
+
+add_executable(radiomodel_pan_range_null_test tests/radiomodel_pan_range_null_test.cpp)
+target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
+target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
+
 add_executable(radiomodel_pan_id_mapping_test tests/radiomodel_pan_id_mapping_test.cpp)
 target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
 target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
+
+# RadioModel audio-mute model-state contract (#4771).
+add_executable(radiomodel_audio_mute_test tests/radiomodel_audio_mute_test.cpp)
+target_include_directories(radiomodel_audio_mute_test PRIVATE src)
+target_link_libraries(radiomodel_audio_mute_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_audio_mute_test COMMAND radiomodel_audio_mute_test)
 
 add_executable(demo_backend_swap_test tests/demo_backend_swap_test.cpp)
 target_include_directories(demo_backend_swap_test PRIVATE src)
@@ -4887,6 +5095,22 @@ target_link_libraries(demo_applet_tooltip_test PRIVATE aethercore Qt6::Core Qt6:
 add_test(NAME demo_applet_tooltip_test COMMAND demo_applet_tooltip_test)
 set_tests_properties(demo_applet_tooltip_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# IcomCIV backend selection — proves family="icom" reaches IcomCivBackend
+# through RadioModel's real swap path. Without this, every layer below can be
+# green while nothing in the application can construct it.
+# IcomCIV settings + credentials. The load-bearing check is the SECURITY one:
+# the Icom network password must never reach the settings database. Own process
+# because AppSettings is a process-wide singleton.
+add_executable(icom_settings_test tests/icom_settings_test.cpp)
+target_include_directories(icom_settings_test PRIVATE src tests)
+target_link_libraries(icom_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_settings_test COMMAND icom_settings_test)
+
+add_executable(icom_family_test tests/icom_family_test.cpp)
+target_include_directories(icom_family_test PRIVATE src)
+target_link_libraries(icom_family_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_family_test COMMAND icom_family_test)
 
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
@@ -4986,6 +5210,11 @@ target_link_libraries(location_address_resolver_test PRIVATE
 )
 set_target_properties(location_address_resolver_test PROPERTIES AUTOMOC ON)
 add_test(NAME location_address_resolver_test COMMAND location_address_resolver_test)
+
+add_executable(display_presence_test tests/display_presence_test.cpp)
+target_include_directories(display_presence_test PRIVATE src)
+target_link_libraries(display_presence_test PRIVATE Qt6::Core)
+add_test(NAME display_presence_test COMMAND display_presence_test)
 
 add_executable(amp_model_test tests/amp_model_test.cpp)
 target_include_directories(amp_model_test PRIVATE src)
@@ -5245,6 +5474,32 @@ target_link_libraries(help_dialog_test PRIVATE
 )
 set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
 
+# FreeDV Reporter status-message row (#4231). Guarded like the dialog
+# itself — FreeDvReporterDialog only exists when WebSockets are available.
+# Dialog-side only: the test never reaches qso.freedv.org.
+if(Qt6WebSockets_FOUND)
+    # src/gui/ sources belong to the AetherSDR executable rather than
+    # aethercore, so the dialog's GUI dependencies are listed explicitly;
+    # SliceModel/ThemeManager/settings come in via aethercore.
+    add_executable(freedv_reporter_message_test
+        tests/freedv_reporter_message_test.cpp
+        src/gui/FreeDvReporterDialog.cpp
+        src/gui/FreeDvReporterModel.cpp
+        src/gui/PersistentDialog.cpp
+        src/gui/FramelessResizer.cpp
+        src/gui/FramelessWindowTitleBar.cpp
+    )
+    target_include_directories(freedv_reporter_message_test PRIVATE src)
+    target_link_libraries(freedv_reporter_message_test PRIVATE
+        aethercore Qt6::Core Qt6::Widgets Qt6::Test
+    )
+    set_target_properties(freedv_reporter_message_test PROPERTIES AUTOMOC ON)
+    add_test(NAME freedv_reporter_message_test
+             COMMAND freedv_reporter_message_test)
+    set_tests_properties(freedv_reporter_message_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 # Regression guard for #3662: the AetherControl window must never demand a
 # minimum height taller than the screen (auto-engages compact when it would).
 add_executable(flex_control_dialog_size_test
@@ -5490,6 +5745,44 @@ add_test(NAME hl2_pc_audio_lock_test COMMAND hl2_pc_audio_lock_test)
 set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Title-bar headphone mute reconcile contract (#4722) — needs QApplication +
+# Widgets, same dependency set as hl2_pc_audio_lock_test above.
+add_executable(titlebar_headphone_mute_test
+    tests/titlebar_headphone_mute_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's dialogs are frameless, so the resizer + frameless title bar
+    # come along; ThemeManager pulls its logging deps.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(titlebar_headphone_mute_test PRIVATE src tests)
+target_link_libraries(titlebar_headphone_mute_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(titlebar_headphone_mute_test PROPERTIES AUTOMOC ON)
+add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
+set_tests_properties(titlebar_headphone_mute_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
+add_executable(icom_replay_test tests/icom_replay_test.cpp)
+target_include_directories(icom_replay_test PRIVATE src)
+target_link_libraries(icom_replay_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME icom_replay_test COMMAND icom_replay_test)
+
+add_executable(rx_filter_step_test tests/rx_filter_step_test.cpp)
+target_include_directories(rx_filter_step_test PRIVATE src)
+target_link_libraries(rx_filter_step_test PRIVATE Qt6::Core)
+add_test(NAME rx_filter_step_test COMMAND rx_filter_step_test)
+
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
@@ -5697,10 +5990,12 @@ set(AETHER_SETTINGS_CONSUMERS
     transmit_model_test
     container_widget_test
     hl2_pc_audio_lock_test
+    titlebar_headphone_mute_test
     amp_applet_test
     container_manager_test
     container_nesting_test
     log_manager_filter_rules_test
+    bandplan_voice_labels_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

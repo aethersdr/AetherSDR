@@ -1,0 +1,965 @@
+[
+ {
+  "cmd": "15 00",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 01",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 02",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 03",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 04",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 05",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 06",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 07",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 08",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 09",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 0a",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 0b",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "15 0c",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 0d",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 0e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 0f",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 10",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 11",
+  "result": "supported",
+  "data": "00 00",
+  "note": ""
+ },
+ {
+  "cmd": "15 12",
+  "result": "supported",
+  "data": "00 00",
+  "note": ""
+ },
+ {
+  "cmd": "15 13",
+  "result": "supported",
+  "data": "00 00",
+  "note": ""
+ },
+ {
+  "cmd": "15 14",
+  "result": "supported",
+  "data": "00 00",
+  "note": ""
+ },
+ {
+  "cmd": "15 15",
+  "result": "supported",
+  "data": "01 13",
+  "note": ""
+ },
+ {
+  "cmd": "15 16",
+  "result": "supported",
+  "data": "00 00",
+  "note": ""
+ },
+ {
+  "cmd": "15 17",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 18",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 19",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 1a",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 1b",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 1c",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 1d",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 1e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "15 1f",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 00",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 01",
+  "result": "supported",
+  "data": "00 26",
+  "note": ""
+ },
+ {
+  "cmd": "14 02",
+  "result": "supported",
+  "data": "01 28",
+  "note": ""
+ },
+ {
+  "cmd": "14 03",
+  "result": "supported",
+  "data": "00 00",
+  "note": ""
+ },
+ {
+  "cmd": "14 04",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 05",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 06",
+  "result": "supported",
+  "data": "01 20",
+  "note": ""
+ },
+ {
+  "cmd": "14 07",
+  "result": "supported",
+  "data": "01 28",
+  "note": ""
+ },
+ {
+  "cmd": "14 08",
+  "result": "supported",
+  "data": "01 28",
+  "note": ""
+ },
+ {
+  "cmd": "14 09",
+  "result": "supported",
+  "data": "01 28",
+  "note": ""
+ },
+ {
+  "cmd": "14 0a",
+  "result": "supported",
+  "data": "02 55",
+  "note": ""
+ },
+ {
+  "cmd": "14 0b",
+  "result": "supported",
+  "data": "02 55",
+  "note": ""
+ },
+ {
+  "cmd": "14 0c",
+  "result": "supported",
+  "note": " [recovered on attempt 2]",
+  "data": "00 85"
+ },
+ {
+  "cmd": "14 0d",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 0e",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 0f",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 10",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 11",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 12",
+  "result": "supported",
+  "note": " [recovered on attempt 1]",
+  "data": "01 27"
+ },
+ {
+  "cmd": "14 13",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 14",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 15",
+  "result": "supported",
+  "note": " [recovered on attempt 1]",
+  "data": "00 00"
+ },
+ {
+  "cmd": "14 16",
+  "result": "supported",
+  "note": " [recovered on attempt 2]",
+  "data": "01 28"
+ },
+ {
+  "cmd": "14 17",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 18",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 19",
+  "result": "supported",
+  "note": " [recovered on attempt 1]",
+  "data": "01 28"
+ },
+ {
+  "cmd": "14 1a",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 1b",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 1c",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "14 1d",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 1e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "14 1f",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 00",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 01",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 02",
+  "result": "supported",
+  "data": "01",
+  "note": ""
+ },
+ {
+  "cmd": "16 03",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 04",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 05",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 06",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 07",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 08",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 09",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 0a",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 0b",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 0c",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 0d",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 0e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 0f",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 10",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 11",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 12",
+  "result": "supported",
+  "note": " [recovered on attempt 1]",
+  "data": "02"
+ },
+ {
+  "cmd": "16 13",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 14",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 15",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 16",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 17",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 18",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 19",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 1a",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 1b",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 1c",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 1d",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 1e",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 1f",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 20",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 21",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 22",
+  "result": "supported",
+  "note": " [recovered on attempt 1]",
+  "data": "00"
+ },
+ {
+  "cmd": "16 23",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 24",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 25",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 26",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 27",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 28",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 29",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 2a",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 2b",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 2c",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 2d",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "16 2e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 2f",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 30",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 31",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 32",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 33",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 34",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 35",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 36",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 37",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 38",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 39",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 3a",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 3b",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 3c",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 3d",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 3e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 3f",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 40",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 41",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 42",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 43",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 44",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 45",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 46",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 47",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 48",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 49",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 4a",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 4b",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 4c",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 4d",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 4e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 4f",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 50",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 51",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 52",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 53",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 54",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 55",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 56",
+  "result": "supported",
+  "data": "01",
+  "note": ""
+ },
+ {
+  "cmd": "16 57",
+  "result": "supported",
+  "data": "01",
+  "note": ""
+ },
+ {
+  "cmd": "16 58",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 59",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 5a",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 5b",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 5c",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 5d",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "16 5e",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 5f",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 60",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "16 61",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "21 00",
+  "result": "supported",
+  "data": "00 00 00",
+  "note": ""
+ },
+ {
+  "cmd": "21 01",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "21 02",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "21 03",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 10",
+  "result": "supported",
+  "data": "01",
+  "note": ""
+ },
+ {
+  "cmd": "27 11",
+  "result": "supported",
+  "data": "01",
+  "note": ""
+ },
+ {
+  "cmd": "27 12",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "27 13",
+  "result": "supported",
+  "data": "00",
+  "note": ""
+ },
+ {
+  "cmd": "27 14",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "27 15",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 16",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 17",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "27 18",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "27 19",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "27 1a",
+  "result": "rejected",
+  "note": ""
+ },
+ {
+  "cmd": "27 1b",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 1c",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 1d",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 1e",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 1f",
+  "result": "silent",
+  "note": ""
+ },
+ {
+  "cmd": "27 20",
+  "result": "silent",
+  "note": ""
+ }
+]

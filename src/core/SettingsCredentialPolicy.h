@@ -38,6 +38,12 @@ struct DocFieldCredential {
 };
 inline constexpr DocFieldCredential kDocFieldCredentials[] = {
     {"CopyAssist", "AsrRemoteApiKey", "asr_remote_api_key"},
+    // Icom network password. IcomSettings deliberately has no password field
+    // and IcomCredentials owns the keychain, so nothing should ever write this
+    // — the entry is defence in depth, and it is worth having because the Icom
+    // protocol obfuscates rather than encrypts the password (icom-oracle §2.5),
+    // so a copy leaking into an exported settings file is a real exposure.
+    {"Icom", "Password", "icom_password"},
 };
 
 // Exact-name check: is `key` one of the known flat credential keys?

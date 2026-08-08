@@ -1,0 +1,269 @@
+// IcomCIV Phase 1 — CI-V command-plane test. Pins the framing, the two BCD
+// endiannesses, the reassembler's resynchronisation rules, the mode vocabulary
+// mapping, and the scope command encodings.
+//
+// Pure protocol: no sockets, no Qt, no hardware.
+
+#include "core/backends/icom/CivCodec.h"
+
+#include <cstdio>
+#include <vector>
+
+using namespace AetherSDR::icom;
+
+static int g_failures = 0;
+static void check(bool cond, const char* what)
+{
+    if (!cond) {
+        std::fprintf(stderr, "FAIL: %s\n", what);
+        ++g_failures;
+    }
+}
+
+static constexpr std::uint8_t kIc705 = 0xA4;
+
+static bool bytesAre(const std::vector<std::uint8_t>& got,
+                     std::initializer_list<std::uint8_t> want)
+{
+    if (got.size() != want.size())
+        return false;
+    std::size_t i = 0;
+    for (std::uint8_t b : want)
+        if (got[i++] != b)
+            return false;
+    return true;
+}
+
+static void testFraming()
+{
+    auto f = buildFrame(kIc705, cmd::kReadFreq);
+    check(bytesAre(f, {0xFE, 0xFE, 0xA4, 0xE0, 0x03, 0xFD}), "bare read-frequency frame");
+
+    auto s = buildFrameSub(kIc705, cmd::kScope, scope::kOnOff, std::array<std::uint8_t, 1>{0x01});
+    check(bytesAre(s, {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x10, 0x01, 0xFD}), "scope on frame");
+
+    auto parsed = parseFrame(s);
+    check(parsed.has_value(), "parses a sub-addressed frame");
+    check(parsed->to == 0xA4 && parsed->from == 0xE0, "addresses");
+    check(parsed->cmd == 0x27 && parsed->hasSub && parsed->sub == 0x10, "command and subcommand");
+    check(parsed->data.size() == 1 && parsed->data[0] == 0x01, "payload");
+
+    // Command 0x05 has NO subcommand: its first data byte is a frequency digit.
+    // Treating every second byte as a subcommand would eat it.
+    auto freqFrame = cmdSetFrequency(kIc705, 14195000);
+    auto pf = parseFrame(freqFrame);
+    check(pf.has_value() && !pf->hasSub, "set-frequency has no subcommand");
+    check(pf->data.size() == 5, "all five frequency bytes survive as data");
+
+    // FB / FA acknowledgements.
+    auto ok = parseFrame(std::vector<std::uint8_t>{0xFE, 0xFE, 0xE0, 0xA4, 0xFB, 0xFD});
+    check(ok.has_value() && ok->isOk(), "FB is an acknowledgement");
+    auto ng = parseFrame(std::vector<std::uint8_t>{0xFE, 0xFE, 0xE0, 0xA4, 0xFA, 0xFD});
+    check(ng.has_value() && ng->isNg(), "FA is a rejection");
+
+    check(!parseFrame(std::vector<std::uint8_t>{0xFE, 0xA4, 0xE0, 0x03, 0xFD}).has_value(),
+          "a single preamble byte is not a frame");
+}
+
+static void testBcd()
+{
+    // FREQUENCY runs LITTLE-endian — least significant digit pair first. This
+    // is Icom's own manual example.
+    check(bytesAre(encodeFreq(14195000), {0x00, 0x50, 0x19, 0x14, 0x00}),
+          "14.195000 MHz encodes little-endian BCD");
+    check(bytesAre(encodeFreq(7074000), {0x00, 0x40, 0x07, 0x07, 0x00}),
+          "7.074000 MHz encodes little-endian BCD");
+    check(bytesAre(encodeFreq(430000000), {0x00, 0x00, 0x00, 0x30, 0x04}),
+          "430 MHz reaches the top digit pair");
+
+    for (std::uint64_t hz : {30000ULL, 7074000ULL, 14195000ULL, 144200000ULL, 470000000ULL}) {
+        auto rt = decodeFreq(encodeFreq(hz));
+        check(rt.has_value() && *rt == hz, "frequency round-trips");
+    }
+
+    // A nibble above 9 is not BCD. REJECT rather than clamp: a corrupt
+    // frequency that decodes to something still retunes the radio, and on
+    // transmit that is an out-of-band emission.
+    const std::vector<std::uint8_t> corrupt{0x00, 0x5A, 0x19, 0x14, 0x00};
+    check(!decodeFreq(corrupt).has_value(), "a non-BCD nibble is rejected, not clamped");
+
+    // SCOPE EDGES can be negative. The IC-7300MK2's guide documents 0xF in the
+    // 1 GHz digit — the high nibble of the last byte — as a sign flag, for when
+    // a wide span sits near the bottom of the tuning range and the window
+    // extends below 0 Hz.
+    auto lower = encodeFreq(500'000);
+    lower.back() |= 0xF0;                       // flag it negative
+    check(!decodeFreq(lower).has_value(),
+          "the STRICT decoder still rejects it — an operating frequency is never negative");
+    auto signedLower = decodeFreqSigned(lower);
+    check(signedLower.has_value() && *signedLower == -500'000,
+          "but the signed decoder reads it as -500 kHz");
+    // Positive values must survive the signed path unchanged.
+    check(decodeFreqSigned(encodeFreq(14'195'000)).value_or(0) == 14'195'000,
+          "and a positive edge decodes identically through the signed path");
+    // Corruption must still be refused, sign flag or not.
+    check(!decodeFreqSigned(corrupt).has_value(), "the signed decoder is not a corruption bypass");
+
+    // EVERYTHING ELSE runs BIG-endian.
+    auto lvl = encodeLevel(255);
+    check(lvl[0] == 0x02 && lvl[1] == 0x55, "level 0255 is big-endian BCD");
+    check(decodeLevel(lvl).value_or(-1) == 255, "level round-trips");
+    check(decodeLevel(std::array<std::uint8_t, 2>{0x01, 0x20}).value_or(-1) == 120,
+          "S9 raw value 120 decodes");
+
+    check(encodeBcdByte(11) == 0x11, "division 11 is BCD 0x11, not 0x0b");
+    check(decodeBcdByte(0x11) == 11, "and decodes back");
+}
+
+static void testReassembler()
+{
+    CivReassembler r;
+
+    // Rule 1: a lone 0xFE is not a frame start. Feed one inside noise and check
+    // the decoder does not latch onto it.
+    auto none = r.feed(std::vector<std::uint8_t>{0x00, 0xFE, 0x12, 0x34});
+    check(none.empty(), "a lone preamble byte does not start a frame");
+    check(!r.framePending(), "and leaves nothing pending");
+
+    // A frame split across three chunks.
+    r.reset();
+    auto a = r.feed(std::vector<std::uint8_t>{0xFE, 0xFE});
+    check(a.empty() && r.framePending(), "double preamble starts a frame");
+    auto b = r.feed(std::vector<std::uint8_t>{0xA4, 0xE0, 0x03});
+    check(b.empty(), "still assembling");
+    auto c = r.feed(std::vector<std::uint8_t>{0x00, 0x50, 0x19, 0x14, 0x00, 0xFD});
+    check(c.size() == 1, "the terminator completes it");
+    check(c[0].size() == 11, "and the whole frame is delivered");
+
+    // Two frames in one datagram.
+    r.reset();
+    std::vector<std::uint8_t> two{0xFE, 0xFE, 0xA4, 0xE0, 0xFB, 0xFD,
+                                  0xFE, 0xFE, 0xA4, 0xE0, 0xFB, 0xFD};
+    check(r.feed(two).size() == 2, "batched frames are split");
+
+    // 0xFC also terminates.
+    r.reset();
+    auto fc = r.feed(std::vector<std::uint8_t>{0xFE, 0xFE, 0xA4, 0xE0, 0x03, 0xFC});
+    check(fc.size() == 1, "0xFC terminates a frame too");
+
+    // Rule 3: a truncated frame must be abandoned, or it swallows every
+    // subsequent byte forever and the radio appears to stop answering.
+    r.reset();
+    (void)r.feed(std::vector<std::uint8_t>{0xFE, 0xFE, 0xA4, 0xE0, 0x03});
+    check(r.framePending(), "partial frame is pending");
+    r.timeout();
+    check(!r.framePending(), "timeout abandons it");
+    auto after = r.feed(std::vector<std::uint8_t>{0xFE, 0xFE, 0xA4, 0xE0, 0xFB, 0xFD});
+    check(after.size() == 1, "and the next frame decodes cleanly");
+
+    // A full 475-point scope sweep must survive. The cap is NOT 80 — that is
+    // the longest COMMAND frame, and an 80-byte cap silently discards every
+    // panadapter frame while commands keep working perfectly.
+    r.reset();
+    std::vector<std::uint8_t> sweep{0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x00};
+    sweep.insert(sweep.end(), 490, 0x40);
+    sweep.push_back(0xFD);
+    auto sweepOut = r.feed(sweep);
+    check(sweepOut.size() == 1, "a ~496-byte scope sweep is NOT dropped by the frame cap");
+    check(sweepOut[0].size() == sweep.size(), "and arrives whole");
+
+    // A runaway frame is still capped rather than growing without bound.
+    r.reset();
+    std::vector<std::uint8_t> runaway{0xFE, 0xFE};
+    runaway.insert(runaway.end(), kMaxFrameBytes + 50, 0x11);
+    auto capped = r.feed(runaway);
+    check(capped.empty(), "a frame past the cap is dropped, not emitted");
+    check(!r.framePending(), "and the decoder resynchronises");
+}
+
+static void testModes()
+{
+    bool data = false;
+    check(modeFromNeutral("USB", data) == CivMode::Usb && !data, "USB");
+    check(modeFromNeutral("LSB", data) == CivMode::Lsb && !data, "LSB");
+    // The data modes are the same sideband with the DATA flag — that flag is
+    // what routes audio to the WLAN modulator instead of the microphone.
+    check(modeFromNeutral("DIGU", data) == CivMode::Usb && data, "DIGU is USB + data");
+    check(modeFromNeutral("DIGL", data) == CivMode::Lsb && data, "DIGL is LSB + data");
+    check(modeFromNeutral("CW", data) == CivMode::Cw, "bare CW maps, not just CWU");
+    check(modeFromNeutral("CWL", data) == CivMode::CwR, "CWL is CW-reverse");
+    // No IC-705 equivalent: refuse rather than silently substituting USB.
+    check(!modeFromNeutral("SAM", data).has_value(), "SAM has no equivalent and is refused");
+    check(!modeFromNeutral("DRM", data).has_value(), "DRM has no equivalent and is refused");
+
+    check(modeToNeutral(CivMode::Usb, false) == "USB", "reverse USB");
+    check(modeToNeutral(CivMode::Usb, true) == "DIGU", "reverse DIGU");
+    check(modeToNeutral(CivMode::Dv, false).empty(), "D-STAR has no neutral mode");
+
+    check(filterForWidthHz(3000) == 1, "3.0 kHz selects FIL1");
+    check(filterForWidthHz(2400) == 2, "2.4 kHz selects FIL2");
+    check(filterForWidthHz(500) == 3, "500 Hz selects FIL3");
+}
+
+static void testCommands()
+{
+    check(bytesAre(cmdSetPtt(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0x01, 0xFD}),
+          "PTT on is 1C 00 01");
+    check(bytesAre(cmdReadMeter(kIc705, meter::kSMeter),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x15, 0x02, 0xFD}),
+          "S-meter read is 15 02");
+    check(bytesAre(cmdReadId(kIc705), {0xFE, 0xFE, 0xA4, 0xE0, 0x19, 0x00, 0xFD}),
+          "model discovery is 19 00");
+    check(bytesAre(cmdSetMode(kIc705, CivMode::Usb, 1),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x06, 0x01, 0x01, 0xFD}),
+          "set mode USB FIL1");
+    check(bytesAre(cmdSetLevel(kIc705, level::kRfPower, 255),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0x02, 0x55, 0xFD}),
+          "RF power 100% is 14 0A 0255");
+
+    // BOTH scope switches exist and both are needed — enabling only the first
+    // turns the scope on the radio's screen and sends us nothing.
+    check(bytesAre(cmdScopeOnOff(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x10, 0x01, 0xFD}),
+          "scope on is 27 10 01");
+    check(bytesAre(cmdScopeDataOutput(kIc705, true),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x11, 0x01, 0xFD}),
+          "scope DATA OUTPUT is a separate command, 27 11 01");
+
+    check(bytesAre(cmdScopeMode(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x14, 0x00, 0x01, 0xFD}),
+          "fixed mode is 27 14 0001 — two BCD bytes, not one");
+
+    // The span snaps to the eight the radio has.
+    check(nearestScopeSpanHz(37000) == 25000, "37 kHz snaps down to 25 kHz");
+    check(nearestScopeSpanHz(1) == 2500, "below the floor snaps to the narrowest");
+    check(nearestScopeSpanHz(9'999'999) == 500000, "above the ceiling snaps to the widest");
+    // SIX data bytes. The leading 0x00 is not padding — omit it and the radio
+    // ignores the frame silently, which is exactly how "zoom does nothing"
+    // presented on a live IC-705.
+    check(bytesAre(cmdScopeSpan(kIc705, 100000),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x15,
+                    0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0xFD}),
+          "span is a LEADING 0x00 then a 5-byte little-endian BCD frequency");
+
+    // The sign is a SEPARATE byte. Folding it into the magnitude puts the
+    // reference level 20 dB out.
+    auto refPlus = cmdScopeReference(kIc705, 10.5);
+    check(bytesAre(refPlus,
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x19, 0x00, 0x10, 0x50, 0x00, 0xFD}),
+          "+10.5 dB reference, behind the same leading 0x00");
+    auto refMinus = cmdScopeReference(kIc705, -20.0);
+    check(bytesAre(refMinus,
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x19, 0x00, 0x20, 0x00, 0x01, 0xFD}),
+          "-20.0 dB reference, sign in its own byte");
+    auto refClamped = cmdScopeReference(kIc705, 99.0);
+    // Indices shifted by one when the leading fixed 0x00 was added.
+    check(refClamped[9] == 0x00 && refClamped[7] == 0x20,
+          "out-of-range reference clamps to +20.0 rather than wrapping");
+}
+
+int main()
+{
+    testFraming();
+    testBcd();
+    testReassembler();
+    testModes();
+    testCommands();
+
+    if (g_failures == 0)
+        std::printf("icom_civ_test: all checks passed\n");
+    return g_failures == 0 ? 0 : 1;
+}
