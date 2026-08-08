@@ -58,15 +58,20 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
         emit settingsChanged();
     };
 
+    static const QString kToggleStyle = QStringLiteral(
+        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
+        "QPushButton:!checked { background: #603020; }");
+    auto applyToggleStyle = [](QPushButton* btn) {
+        btn->setStyleSheet(kToggleStyle);
+    };
+
     // ── Spots: Enabled/Disabled ─────────────────────────────────────────
     grid->addWidget(new QLabel("Spots:"), row, 0);
     m_spotsToggle = new QPushButton(m_spotsEnabled ? "Enabled" : "Disabled");
     m_spotsToggle->setCheckable(true);
     m_spotsToggle->setChecked(m_spotsEnabled);
     m_spotsToggle->setFixedWidth(80);
-    m_spotsToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
+    applyToggleStyle(m_spotsToggle);
     connect(m_spotsToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_spotsToggle->setText(on ? "Enabled" : "Disabled");
         m_spotsEnabled = on;
@@ -82,9 +87,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     m_memoriesToggle->setFixedWidth(80);
     m_memoriesToggle->setToolTip(
         "Show radio memory channels as a spot-like feed on the panadapter.");
-    m_memoriesToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
+    applyToggleStyle(m_memoriesToggle);
     connect(m_memoriesToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_memoriesToggle->setText(on ? "Enabled" : "Disabled");
         m_memoriesEnabled = on;
@@ -100,9 +103,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     m_kiwiDxToggle->setFixedWidth(80);
     m_kiwiDxToggle->setToolTip(
         "Overlay KiwiSDR Community DX database spots (beacons, utilities, time signals) on the band plan strip.");
-    m_kiwiDxToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
+    applyToggleStyle(m_kiwiDxToggle);
     connect(m_kiwiDxToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_kiwiDxToggle->setText(on ? "Enabled" : "Disabled");
         m_kiwiDxEnabled = on;
@@ -206,9 +207,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     m_overrideColorsToggle->setCheckable(true);
     m_overrideColorsToggle->setChecked(m_overrideColors);
     m_overrideColorsToggle->setFixedWidth(80);
-    m_overrideColorsToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
+    applyToggleStyle(m_overrideColorsToggle);
     connect(m_overrideColorsToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_overrideColorsToggle->setText(on ? "Enabled" : "Disabled");
         m_overrideColors = on;
@@ -242,11 +241,8 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     m_overrideBgAuto->setCheckable(true);
     m_overrideBgAuto->setChecked(m_overrideBgAutoMode);
     m_overrideBgAuto->setFixedWidth(50);
-    QString bgStyle =
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }";
-    m_overrideBgEnabled->setStyleSheet(bgStyle);
-    m_overrideBgAuto->setStyleSheet(bgStyle);
+    applyToggleStyle(m_overrideBgEnabled);
+    applyToggleStyle(m_overrideBgAuto);
     connect(m_overrideBgEnabled, &QPushButton::toggled, this, [this, save](bool on) {
         m_overrideBgEnabled->setText(on ? "Enabled" : "Disabled");
         m_overrideBg = on;
@@ -299,9 +295,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     m_spotLinesToggle->setChecked(m_spotShowLines);
     m_spotLinesToggle->setFixedWidth(80);
     m_spotLinesToggle->setToolTip("Show vertical lines from the spectrum up to each spot label.\nDisable during contests to reduce clutter.");
-    m_spotLinesToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
+    applyToggleStyle(m_spotLinesToggle);
     connect(m_spotLinesToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_spotLinesToggle->setText(on ? "Enabled" : "Disabled");
         m_spotShowLines = on;
