@@ -538,7 +538,7 @@ void MainWindow::activateRADE(int sliceId)
     {
         SliceModel* radeSlice = m_radioModel.slice(sliceId);
         int daxCh = radeSlice ? radeSlice->daxChannel() : 0;
-        if (daxCh >= 1 && daxCh <= 4) {
+        if (daxCh >= 1 && daxCh <= 8) {
             m_radeDaxChannel = daxCh;
             m_radioModel.acquireDaxChannel(
                 daxCh, PanadapterStream::DaxConsumer::Rade);
@@ -560,11 +560,11 @@ void MainWindow::activateRADE(int sliceId)
                 auto* ps = m_radioModel.panStream();
                 if (!ps) return;
                 const int oldCh = m_radeDaxChannel;
-                m_radeDaxChannel = (newCh >= 1 && newCh <= 4) ? newCh : 0;
+                m_radeDaxChannel = (newCh >= 1 && newCh <= 8) ? newCh : 0;
                 if (m_radeDaxChannel)
                     ps->acquireDaxChannel(m_radeDaxChannel,
                                           PanadapterStream::DaxConsumer::Rade);
-                if (oldCh >= 1 && oldCh <= 4 && oldCh != m_radeDaxChannel)
+                if (oldCh >= 1 && oldCh <= 8 && oldCh != m_radeDaxChannel)
                     ps->releaseDaxChannel(oldCh,
                                           PanadapterStream::DaxConsumer::Rade);
                 qCInfo(lcRade) << "MainWindow: RADE dax hold moved"
@@ -704,7 +704,7 @@ void MainWindow::deactivateRADE()
         disconnect(m_radeEngine, &RADEEngine::eooCallsignReceived,
                    this, nullptr);
         disconnect(m_radeDaxReconcileConn);
-        if (m_radeDaxChannel >= 1 && m_radeDaxChannel <= 4) {
+        if (m_radeDaxChannel >= 1 && m_radeDaxChannel <= 8) {
             // Release RADE's hold; the centralized manager removes the
             // radio-side stream only when the LAST holder (TCI / DAX bridge /
             // RADE) releases — the ref-counting the old TODO here asked for
@@ -1060,7 +1060,7 @@ bool MainWindow::startDax()
     for (auto* s : m_radioModel.slices()) {
         int ch = s->daxChannel();
         m_daxSliceLastCh[s->sliceId()] = ch;
-        if (ch >= 1 && ch <= 4) {
+        if (ch >= 1 && ch <= 8) {
             m_radioModel.acquireDaxChannel(
                 ch, PanadapterStream::DaxConsumer::Bridge);
         }
@@ -1087,7 +1087,7 @@ bool MainWindow::startDax()
         wireDaxSlice(s);
         // A slice can arrive already carrying a DAX channel (radio profile
         // restore); make sure its stream exists too.
-        if (s->daxChannel() >= 1 && s->daxChannel() <= 4) {
+        if (s->daxChannel() >= 1 && s->daxChannel() <= 8) {
             onDaxChannelChanged(s, s->daxChannel());
         }
     }));
@@ -1132,7 +1132,7 @@ bool MainWindow::startDax()
 
     // Apply saved gains to the bridge
     auto& ss = AppSettings::instance();
-    for (int i = 1; i <= 4; ++i)
+    for (int i = 1; i <= 8; ++i)
         m_daxBridge->setChannelGain(i, ss.value(QStringLiteral("DaxRxGain%1").arg(i), "0.5").toString().toFloat());
     m_daxBridge->setTxGain(ss.value("DaxTxGain", "0.5").toString().toFloat());
 
@@ -1242,9 +1242,9 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
     // channel so a genuine off→on retoggle is seen as 0→N and re-acquires.
     m_daxSliceLastCh[sliceId] = newCh;
 
-    if (newCh >= 1 && newCh <= 4)
+    if (newCh >= 1 && newCh <= 8)
         ps->acquireDaxChannel(newCh, PanadapterStream::DaxConsumer::Bridge);
-    if (oldCh >= 1 && oldCh <= 4) {
+    if (oldCh >= 1 && oldCh <= 8) {
         // The Bridge's hold is per-channel, not per-slice: only release when
         // no slice references the old channel anymore (a channel can hop
         // between slices, and the moves can arrive in either order).

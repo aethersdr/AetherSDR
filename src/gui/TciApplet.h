@@ -13,7 +13,7 @@ class TciServer;
 class MeterSlider;
 
 // TCI Applet — TCI WebSocket server control panel.
-// Mirrors DaxApplet framework: per-channel meters + gain sliders for 4 RX
+// Mirrors DaxApplet framework: per-channel meters + gain sliders for 8 RX
 // channels plus 1 TX channel, a port QLineEdit, and an Enable toggle.
 //
 // Entire implementation is gated by HAVE_WEBSOCKETS. When the build does not
@@ -22,7 +22,7 @@ class TciApplet : public QWidget {
     Q_OBJECT
 
 public:
-    static constexpr int kChannels = 4;
+    static constexpr int kChannels = 8;
 
     explicit TciApplet(QWidget* parent = nullptr);
 

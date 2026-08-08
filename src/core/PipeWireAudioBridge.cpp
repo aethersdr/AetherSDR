@@ -155,7 +155,7 @@ bool PipeWireAudioBridge::open()
     m_txReadTimer->start();
 
     m_open.store(true, std::memory_order_release);
-    qCInfo(lcDax) << "PipeWireAudioBridge: opened — 4 RX sources + 1 TX sink";
+    qCInfo(lcDax) << "PipeWireAudioBridge: opened —" << NUM_CHANNELS << "RX sources + 1 TX sink";
     return true;
 }
 

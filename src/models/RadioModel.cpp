@@ -8204,7 +8204,7 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         return;
     }
     const int ch = kvs.value(QStringLiteral("dax_channel")).toInt();
-    if (ch >= 1 && ch <= 4) {
+    if (ch >= 1 && ch <= 8) {
         m_panStream->registerDaxStream(stream.streamId, ch);
         // #1439 client-registration re-assert — LEGACY FALLBACK ONLY, decided
         // here (not in the create reply) because this status is the moment the

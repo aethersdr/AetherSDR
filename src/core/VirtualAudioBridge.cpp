@@ -146,7 +146,7 @@ bool VirtualAudioBridge::open()
     m_txPollTimer->start();
 
     m_open.store(true, std::memory_order_release);
-    qCInfo(lcDax) << "VirtualAudioBridge: opened 4 RX + 1 TX shared memory segments";
+    qCInfo(lcDax) << "VirtualAudioBridge: opened" << NUM_CHANNELS << "RX + 1 TX shared memory segments";
     return true;
 }
 

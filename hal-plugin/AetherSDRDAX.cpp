@@ -1,6 +1,6 @@
 // AetherSDR DAX — Core Audio HAL Audio Server Plug-In
 //
-// Creates 4 virtual audio output devices ("AetherSDR DAX 1" through "AetherSDR DAX 4")
+// Creates 8 virtual audio output devices ("AetherSDR DAX 1" through "AetherSDR DAX 8")
 // for receiving DAX audio from the radio, plus 1 virtual input device ("AetherSDR TX")
 // for sending TX audio to the radio.
 //
@@ -230,8 +230,8 @@ public:
         // Called by HAL after driver is fully initialized and host is available.
         // Safe to add devices here — PropertiesChanged notifications will work.
 
-        // 4 DAX RX input devices (radio → apps receive audio)
-        for (int ch = 1; ch <= 4; ++ch) {
+        // 8 DAX RX input devices (radio → apps receive audio)
+        for (int ch = 1; ch <= 8; ++ch) {
             char name[64];
             snprintf(name, sizeof(name), "AetherSDR DAX %d", ch);
 

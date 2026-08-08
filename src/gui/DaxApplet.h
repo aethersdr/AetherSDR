@@ -12,12 +12,12 @@ class SliceModel;
 class MeterSlider;
 
 // DAX Applet — DAX Audio channel meters + gain sliders.
-// Displays RX meters for DAX channels 1-4 plus a single TX meter.
+// Displays RX meters for DAX channels 1-8 plus a single TX meter.
 class DaxApplet : public QWidget {
     Q_OBJECT
 
 public:
-    static constexpr int kChannels = 4;
+    static constexpr int kChannels = 8;
 
     explicit DaxApplet(QWidget* parent = nullptr);
 
@@ -25,12 +25,12 @@ public:
 
     // Sync Enable button state (called by MainWindow on autostart)
     void setDaxEnabled(bool on);
-    void setDaxRxLevel(int channel, float rms);  // channel 1-4
+    void setDaxRxLevel(int channel, float rms);  // channel 1-8
     void setDaxTxLevel(float rms);
 
 signals:
     void daxToggled(bool on);
-    void daxRxGainChanged(int channel, float gain);  // 1-4, 0.0–1.0
+    void daxRxGainChanged(int channel, float gain);  // 1-8, 0.0–1.0
     void daxTxGainChanged(float gain);
 
 private:
