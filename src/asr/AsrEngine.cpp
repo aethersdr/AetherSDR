@@ -44,25 +44,49 @@ QString normWord(const QString& w)
     return w.mid(a, b - a).toLower();
 }
 
-// An overlap is at most a second or two of speech — a handful of words. Cap the
-// compared window so a coincidental long repeat can't swallow genuine new text.
+// Hard ceiling on the compared window regardless of overlapMs — a coincidental
+// long repeat must never swallow genuine new text.
 constexpr int kMaxOverlapWords = 12;
+// Rough shortest-plausible word length; overlapMs / this + a margin bounds how
+// many leading words the carried window could actually duplicate. Keeping the
+// strip near the real overlap (rather than the unconstrained longest match)
+// limits over-stripping genuine repeated speech at the boundary (Approach A is
+// deliberately lossy only at the margins — see RFC #4821).
+constexpr int kMinWordMs = 200;
 
 // Strip from `next` the longest run of leading words that duplicates the tail of
-// `prev` (word-level, normalized); return the remaining text. No match → `next`
-// unchanged.
-QString stripOverlapWords(const QString& prev, const QString& next)
+// `prev` (word-level, normalized); return the remaining text. `overlapMs` is the
+// configured carry window — the comparison is bounded to about that many words.
+// No match → `next` unchanged.
+QString stripOverlapWords(const QString& prev, const QString& next, int overlapMs)
 {
     static const QRegularExpression ws(QStringLiteral("\\s+"));
     const QStringList prevWords = prev.split(ws, Qt::SkipEmptyParts);
     const QStringList nextWords = next.split(ws, Qt::SkipEmptyParts);
-    const int cap = std::min({kMaxOverlapWords, static_cast<int>(prevWords.size()),
+    // Bound the window by the carry duration (words the overlap could hold),
+    // then by the hard ceiling and the two token counts.
+    const int overlapWordBudget = overlapMs > 0 ? overlapMs / kMinWordMs + 1 : 0;
+    const int cap = std::min({overlapWordBudget, kMaxOverlapWords,
+                              static_cast<int>(prevWords.size()),
                               static_cast<int>(nextWords.size())});
+    // Pre-normalize only the tokens in range: prev's last `cap`, next's first `cap`.
+    std::vector<QString> prevTail;
+    std::vector<QString> nextHead;
+    prevTail.reserve(cap);
+    nextHead.reserve(cap);
+    for (int i = 0; i < cap; ++i) {
+        prevTail.push_back(normWord(prevWords.at(prevWords.size() - cap + i)));
+        nextHead.push_back(normWord(nextWords.at(i)));
+    }
     int best = 0;
     for (int k = 1; k <= cap; ++k) {
         bool match = true;
         for (int j = 0; j < k; ++j) {
-            if (normWord(prevWords.at(prevWords.size() - k + j)) != normWord(nextWords.at(j))) {
+            const QString& p = prevTail.at(cap - k + j);
+            const QString& n = nextHead.at(j);
+            // A punctuation-only token normalizes to "" — never let "" == ""
+            // count as a boundary-word match (it isn't a real repeated word).
+            if (p.isEmpty() || n.isEmpty() || p != n) {
                 match = false;
                 break;
             }
@@ -280,8 +304,11 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
             continue;
         }
         if (result.text.isEmpty()) {
-            // Nothing decoded — leave m_prevSegmentText as the last real tail so a
-            // following continuation still de-dups against actual spoken words.
+            // Nothing decoded. Clear the tail so the NEXT continuation (whose
+            // carried audio overlaps THIS segment, not the one before it) doesn't
+            // de-dup against a two-segments-old tail — m_prevSegmentText must
+            // always mirror the immediately-preceding segment.
+            m_prevSegmentText.clear();
             continue;
         }
         // Segment overlap (RFC #4821): when this segment was seeded with audio
@@ -289,13 +316,19 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         // that segment's tail — strip them so nothing is emitted twice.
         QString emitText = result.text;
         if (seg.continuesPrevious && !m_prevSegmentText.isEmpty()) {
-            emitText = stripOverlapWords(m_prevSegmentText, result.text);
+            emitText = stripOverlapWords(m_prevSegmentText, result.text, m_segmenter.overlapMs());
         }
         m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
         if (emitText.isEmpty()) {
             continue; // the whole segment was overlap (rare) — nothing new to emit
         }
         // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
+        // Known limitation (RFC #4821): for a continuation segment this embeds the
+        // whole buffer, including the carried overlap prefix that also fed the
+        // previous segment's embedding — a small same-speaker weighting bias
+        // (never a different voice), only material when speaker labeling AND
+        // overlap are both on with a small decode buffer. Not corrected here; a
+        // fix would thread the carried-sample count through to skip the prefix.
         int speaker = -1;
         if (m_speakerLabelingEnabled && m_embedder) {
             speaker = m_clusterer.assign(

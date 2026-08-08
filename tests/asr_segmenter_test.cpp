@@ -209,6 +209,30 @@ int main()
                "overlap: a hangover close is not a continuation");
     }
 
+    // Overlap must NOT carry when the cap fires DURING the hangover silence (the
+    // trailing window is silence — no split word to recover). Here the cap (400
+    // ms) fires ~150 ms into the hangover, so the close must not spawn a spurious
+    // silence-only continuation segment.
+    {
+        AsrSegmenter seg;
+        seg.setMaxSegmentMs(400);
+        seg.setOverlapMs(200);
+        std::vector<float> audio;
+        appendTone(audio, 250);    // speech, then...
+        appendSilence(audio, 400); // ...silence; cap fires mid-hangover at 400 ms total
+        auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        auto tail = seg.flush();
+        out.insert(out.end(), tail.begin(), tail.end());
+        expect(out.size() == 1, "overlap: cap during hangover does not spawn a silence continuation");
+        bool anyContinue = false;
+        for (const auto& s : out) {
+            if (s.continuesPrevious) {
+                anyContinue = true;
+            }
+        }
+        expect(!anyContinue, "overlap: a silence-tail cap close is not flagged a continuation");
+    }
+
     std::printf(g_failures == 0 ? "\nASR segmenter: ALL PASS\n"
                                 : "\nASR segmenter: %d FAILURE(S)\n",
                 g_failures);

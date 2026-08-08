@@ -66,9 +66,13 @@ void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
 
     // Continue the same utterance across this close only when it's the
     // maxSegmentMs cap firing (speech still ongoing, not real silence), overlap
-    // is configured, and the segment closing now actually qualifies (an
-    // unqualified segment's audio is discarded, not emitted — nothing to carry).
-    const bool continueUtterance = forceCap && m_config.overlapMs > 0 && qualifies;
+    // is configured, the segment closing now actually qualifies (an unqualified
+    // segment's audio is discarded, not emitted — nothing to carry), AND the cut
+    // lands mid-speech (m_trailingSilence == 0). If the cap fires during the
+    // hangover, the trailing window is silence: there is no split word to
+    // recover, and carrying it would wrongly count that silence as speech.
+    const bool continueUtterance =
+        forceCap && m_config.overlapMs > 0 && qualifies && m_trailingSilence == 0;
 
     // Snapshot the trailing window BEFORE m_segment is moved out below.
     std::vector<float> carry;

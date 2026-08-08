@@ -285,6 +285,46 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- Segment overlap: an empty continuation clears the de-dup tail --------
+    // If a continuation decodes empty (marginal SNR), the tail it would have been
+    // compared against is gone; the NEXT continuation must de-dup against *that*
+    // (now empty) reference, not the segment before it — otherwise a leading word
+    // that coincidentally matches the older tail is wrongly stripped. Here the
+    // 2nd decode is empty and the 3rd begins with "charlie", which also ends the
+    // 1st: it must survive, not be de-dup'd away.
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            QString(),                              // empty decode (skipped, clears tail)
+            QStringLiteral("charlie hotel india"),  // leading "charlie" must NOT be stripped
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap empty-continuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap empty-continuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap empty-continuation: >=2 non-empty emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap empty-continuation: first segment whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("charlie hotel india"),
+                   "overlap empty-continuation: word after an empty decode is not stripped");
+        }
+    }
+
     // ---- Destructor returns promptly with a queued backlog ----------------
     // Note: Qt's own QThread::quit() already stops the worker from starting
     // any FURTHER queued processAudio() calls once the current one returns —
