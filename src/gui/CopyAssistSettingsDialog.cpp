@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QVBoxLayout>
 
@@ -168,6 +169,7 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     auto* ovRow = new QHBoxLayout;
     m_overlap = new QSlider(Qt::Horizontal, this);
     m_overlap->setObjectName(QStringLiteral("CopyAssistOverlapSlider"));
+    m_overlap->setAccessibleName(tr("Copy Assist boundary overlap"));
     m_overlap->setRange(0, 2000);      // ms of trailing audio carried forward
     m_overlap->setSingleStep(250);
     m_overlap->setPageStep(250);
@@ -177,6 +179,7 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     m_overlap->setToolTip(tr("Carry this much trailing audio across a forced segment "
                              "cut to recover a word split at the boundary (0 = off)"));
     m_overlapValue = new QLabel(tr("Off"), this);
+    m_overlapValue->setAccessibleName(tr("Boundary overlap value"));
     m_overlapValue->setMinimumWidth(48);
     m_overlapValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     connect(m_overlap, &QSlider::valueChanged, this, [this](int v) {
@@ -353,7 +356,14 @@ int CopyAssistSettingsDialog::speakerThreshold() const
 
 void CopyAssistSettingsDialog::setBoundaryOverlapMs(int ms)
 {
-    m_overlap->setValue(ms); // fires valueChanged → updates label + emits
+    // Programmatic set: don't echo back out as an operator edit. Without this,
+    // any post-construction call (settings reload, reset-to-defaults, a future
+    // profile switch) would round-trip straight into saveInt("AsrBoundaryOverlapMs")
+    // and re-write what it just read. The label — normally driven by valueChanged
+    // — is updated explicitly here since that signal is suppressed.
+    const QSignalBlocker block(m_overlap);
+    m_overlap->setValue(ms);
+    m_overlapValue->setText(ms > 0 ? tr("%1 ms").arg(ms) : tr("Off"));
 }
 
 int CopyAssistSettingsDialog::boundaryOverlapMs() const

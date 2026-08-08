@@ -98,7 +98,24 @@ QString stripOverlapWords(const QString& prev, const QString& next, int overlapM
     if (best == 0) {
         return next;
     }
-    return nextWords.mid(best).join(QLatin1Char(' '));
+    // Return the ORIGINAL text sliced at the best-th word, not a rejoin of the
+    // split tokens. split("\\s+")+join(' ') would collapse internal whitespace
+    // runs, flatten tabs/non-breaking spaces, and drop whisper's leading space —
+    // but only on segments that happened to match, so de-dup'd continuations
+    // would be formatted differently from untouched ones (return next; above).
+    // Find where the best-th word starts and slice there (robust to a leading
+    // space; best == nextWords.size() slices to "" — a fully-overlapped segment).
+    static const QRegularExpression word(QStringLiteral("\\S+"));
+    QRegularExpressionMatchIterator it = word.globalMatch(next);
+    qsizetype offset = next.size();
+    for (int i = 0; it.hasNext(); ++i) {
+        const QRegularExpressionMatch m = it.next();
+        if (i == best) {
+            offset = m.capturedStart();
+            break;
+        }
+    }
+    return next.mid(offset);
 }
 } // namespace
 
