@@ -50,6 +50,14 @@ enum class FrameType {
     RNR,  // Receive Not Ready (supervisory)
     REJ,  // Reject (supervisory)
     SABM, // Set Async Balanced Mode (connect request, mod-8)
+    // Set Async Balanced Mode Extended (connect request, mod-128 / AX.25 v2.2).
+    // We are a mod-8 implementation and never send this, but we must DECODE it:
+    // peers that prefer v2.2 (Direwolf among them) open with SABME and only fall
+    // back to SABM after their retry budget runs out. Leaving it as Unknown made
+    // us answer with silence, so a v2.2 caller waited out N2 before it could even
+    // start. Decoding it lets the data link answer DM and trigger that fallback
+    // immediately. See docs/HFMODEM.md §2.
+    SABME,
     DISC, // Disconnect
     DM,   // Disconnected Mode (response: "I won't connect")
     UA,   // Unnumbered Acknowledge

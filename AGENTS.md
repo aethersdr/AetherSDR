@@ -181,7 +181,7 @@ setup.
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
-Current version: **26.7.4.1**.
+Current version: **26.8.1**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -205,11 +205,37 @@ Leave every *historical* mention alone. "shipped v26.7.4" and "(v26.7.4)" are
 statements about when something landed and stay true forever, so a blanket
 find-and-replace across a version bump silently corrupts them.
 
+### `CHANGELOG.md` is a release-prep file. Do not touch it in a feature PR.
+
+The table above is the **only** reason to edit `CHANGELOG.md`: a new version
+section, at release prep. An ordinary PR — a fix, a feature, a refactor —
+**must not add an entry**, however user-visible the change is. Describe it in
+the PR body and the commit message instead; those are where the reasoning
+belongs and neither one conflicts with anything. At release prep, the section
+is written *from* those PR bodies — `gh pr list --state merged --search
+'merged:>=<last-tag-date>'` is the source of truth for what shipped.
+
+This is a mechanical rule, not a stylistic preference. Every entry is prepended
+to the top of the same `## [Unreleased]` list, so **any two PRs that both add
+one conflict with each other**, and every PR still open when one of them merges
+goes stale and needs a manual resolution. With a queue of concurrent agent PRs
+that is not an occasional annoyance — it is a conflict on essentially every
+pair. The file is append-mostly by nature and merges terribly by construction,
+so the fix is to stop writing to it outside the one moment that needs it.
+
+Reviewers: do not ask for a `CHANGELOG.md` entry, and flag one as a change to
+remove if a PR adds it. There has never been a written rule requiring per-PR
+entries — `CONTRIBUTING.md` has never mentioned the file at all — but the habit
+propagated anyway, by agents reading `git log` and copying what they saw. When
+this rule landed it sat at 45% of recent merges (18 of the last 40, measured
+2026-08-02), which is the worst of both worlds: not a convention anyone can
+rely on, and enough churn to conflict constantly.
+
 ---
 
 ## CI/CD Workflow
 
-CI runs in Docker image `ghcr.io/ten9876/aethersdr-ci:latest` (~3.5 min builds).
+CI runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest` (~5 min builds).
 **If you add a new `find_package(...)` to CMakeLists.txt, also add the
 corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
 `docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait
@@ -476,9 +502,11 @@ granularity, then **stop**: if tempted to subdivide one subsystem into several
 thin TUs, extract a real class instead (the #3557 direction) — that's the only
 move that actually decouples.
 
-Sibling TUs must **carry their includes explicitly** — the Linux CI floor is
-Qt 6.4.2; don't rely on transitive includes (this broke #3532). When you move
-the last user of a header out of `MainWindow.cpp`, drop that `#include` too.
+Sibling TUs must **carry their includes explicitly** — the Linux CI image is on
+Qt 6.8.3 while macOS runs 6.11.x, so a header that resolves transitively on the
+newer Qt need not on 6.8.3; don't rely on transitive includes (this broke
+#3532). When you move the last user of a header out of `MainWindow.cpp`, drop
+that `#include` too.
 
 Full map + decision guide:
 **[`docs/architecture/mainwindow-decomposition.md`](docs/architecture/mainwindow-decomposition.md)**.

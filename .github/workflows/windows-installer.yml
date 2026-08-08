@@ -21,7 +21,14 @@ jobs:
       - name: Install Qt6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
         with:
-          version: '6.8.*'
+          # Exact, not '6.8.*'. The wildcard resolved to 6.8.3 only because Qt
+          # stopped publishing open-source 6.8.x binaries after it — 6.8.4 is
+          # source-only and 6.8.5+ are absent from the open-source repo. That is
+          # a licensing accident holding the release build to the tested Qt, not
+          # a pin. ci.yml's check-windows leg already spells 6.8.3 exactly; with
+          # both exact, the per-PR build and the release build agree by
+          # construction rather than by coincidence.
+          version: '6.8.3'
           host: 'windows'
           target: 'desktop'
           # Qt 6.8 LTS dropped MSVC 2019 builds — arch must be msvc2022.
@@ -140,7 +147,44 @@ jobs:
           # only job is compiling ggml-vulkan's own shaders, which are already
           # baked into the shipped .lib). The runtime vulkan-1.dll is bundled
           # in the Deploy step.
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DASR_USE_PREBUILT_WHISPER_GPU=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
+          #
+          # AETHER_GPU_SPECTRUM=ON is stated explicitly even though it is the
+          # CMake default, so the request is legible next to the assertion that
+          # follows — same shape as appimage.yml.
+          #
+          # Tee without `2>&1`, unlike the bash legs: GitHub runs pwsh with
+          # $ErrorActionPreference='Stop', where merging a native command's
+          # stderr into the pipeline can turn any CMake warning into a
+          # terminating error and fail configure on a non-problem. Nothing is
+          # lost — every line the assertion reads is message(STATUS), which
+          # CMake writes to stdout, and Tee-Object still passes the console
+          # output through for a human reading a failed run.
+          #
+          # $LASTEXITCODE survives the pipe (Tee-Object is a cmdlet, not a
+          # native command), so a configure failure still fails this step —
+          # the reason the bash legs need `set -o pipefail` and this one does
+          # not.
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DASR_USE_PREBUILT_WHISPER_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
+
+      # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
+      # back OFF without failing when Qt6GuiPrivate can't be located, and
+      # CMakeLists.txt names aqtinstall specifically as a layout that ships the
+      # private QtGui headers on disk while omitting the Qt6GuiPrivate CMake
+      # package — which is exactly what install-qt-action lays down here. So the
+      # Windows installer could quietly ship the CPU QPainter fallback with this
+      # workflow green, the same failure mode #4000 shipped on aarch64.
+      #
+      # Assert on the configure output, not CMakeCache.txt: CMakeLists.txt
+      # disables the feature with a plain set(), which shadows the cache entry
+      # without rewriting it, so the cache still reads ON when it is off.
+      - name: Assert GPU spectrum rendering actually enabled
+        run: |
+          if (-not (Select-String -Path configure.log -Pattern 'GPU spectrum rendering enabled' -Quiet)) {
+            Write-Host "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            Select-String -Path configure.log -Pattern 'GPU spectrum|Qt6GuiPrivate|private headers'
+            exit 1
+          }
+          Select-String -Path configure.log -Pattern 'GPU spectrum rendering enabled'
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,

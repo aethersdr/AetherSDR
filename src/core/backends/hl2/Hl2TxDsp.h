@@ -109,6 +109,16 @@ signals:
     // moves opposite to alcGain (the harder the ALC works on a quiet mic, the
     // closer to full scale this sits).
     void alcPeak(float dbfs);
+    // Echoed back from setMicGain, so a readout can report the gain THIS OBJECT
+    // holds rather than the caller's copy of what it asked for.
+    //
+    // That distinction is the whole reason this signal exists. Mic gain was
+    // dead on this backend for a release because the slider's Flex verb was
+    // dropped and nothing bridged it here — and every readback available at the
+    // time reported the requesting side, so all of them agreed the control
+    // worked. A confirmation sourced from the requester cannot detect a request
+    // that never arrived.
+    void micGainChanged(double linear);
 
 private:
     void designFilters();

@@ -15,6 +15,11 @@
 
 namespace AetherSDR {
 
+namespace {
+// Stall timeout for SmartLink auth/API requests (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+} // namespace
+
 // Cap the line-assembly buffer.  A buggy or hostile SmartLink discovery/auth
 // peer that dribbles bytes without ever sending '\n' would otherwise grow
 // m_readBuffer unbounded until QByteArray refuses to allocate (process OOM).
@@ -27,6 +32,7 @@ static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
 SmartLinkClient::SmartLinkClient(QObject* parent)
     : QObject(parent)
 {
+    m_nam.setTransferTimeout(kTransferTimeoutMs);
     // Report credential-persistence availability up front so a build that
     // shipped without QtKeychain is diagnosable from the SmartLink support
     // log instead of failing silently (#3639). The disabled case is a

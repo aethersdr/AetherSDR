@@ -130,6 +130,61 @@ PhoneCwApplet::PhoneCwApplet(QWidget* parent)
 
 // ── Phone sub-panel (existing P/CW controls) ────────────────────────────────
 
+void PhoneCwApplet::setSelectableMicInputs(bool selectable)
+{
+    if (!m_micSourceCombo)
+        return;
+    // Rebuild rather than disable: a greyed-out MIC entry still reads as "this
+    // radio has a mic input we could use", which is exactly the wrong thing to
+    // tell someone whose transmission is silent because the radio is listening
+    // to its network port. PC is the only source we can actually feed.
+    const QString wanted = selectable ? m_micSourceCombo->currentText()
+                                      : QStringLiteral("PC");
+    const QStringList items = selectable
+        ? QStringList{"MIC", "BAL", "LINE", "ACC", "PC"}
+        : QStringList{"PC"};
+    QStringList existing;
+    for (int i = 0; i < m_micSourceCombo->count(); ++i)
+        existing << m_micSourceCombo->itemText(i);
+    if (existing == items) {
+        return;   // idempotent: capabilitiesChanged fires on every edge
+    }
+    const bool wasUpdating = m_updatingFromModel;
+    m_updatingFromModel = true;   // rebuilding must not look like an operator choice
+    m_micSourceCombo->clear();
+    m_micSourceCombo->addItems(items);
+    const int idx = m_micSourceCombo->findText(wanted);
+    m_micSourceCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    m_updatingFromModel = wasUpdating;
+
+    // On a radio with one possible source, SAY so rather than presenting a
+    // one-entry dropdown that looks broken.
+    // TELL THE MODEL. Rebuilding the combo deliberately suppresses the
+    // operator-intent path, which left TransmitModel still reporting "MIC"
+    // while the screen showed PC — and radiocert reads the model, so it warned
+    // that transmit audio capture was not running on a radio where that is
+    // simply not how audio gets there.
+    if (!selectable && m_model) {
+        m_model->applyMicSelectionState(QStringLiteral("PC"));
+    }
+
+    m_micSourceCombo->setEnabled(selectable);
+    m_micSourceCombo->setToolTip(
+        selectable ? QString()
+                   : QStringLiteral(
+                         "This radio takes transmit audio from this computer. "
+                         "Its own input selection is made on the radio."));
+}
+
+void PhoneCwApplet::setMicLevelMeterAvailable(bool available)
+{
+    if (m_micLevelMeterAvailable == available)
+        return;   // idempotent: this rides capabilitiesChanged, which repeats
+    m_micLevelMeterAvailable = available;
+    if (m_levelGauge)
+        m_levelGauge->setVisible(available);
+}
+
 void PhoneCwApplet::buildPhonePanel()
 {
     m_phonePanel = new QWidget;
@@ -207,6 +262,8 @@ void PhoneCwApplet::buildPhonePanel()
         m_micSourceCombo->setAccessibleDescription("Select microphone input source");
         AetherSDR::applyComboStyle(m_micSourceCombo);
         m_micSourceCombo->addItems({"MIC", "BAL", "LINE", "ACC", "PC"});
+        // The full list is FlexRadio's connectors; setSelectableMicInputs()
+        // narrows it to PC on a radio whose input this client cannot choose.
         connect(m_micSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int) {
             if (!m_updatingFromModel && m_model) {

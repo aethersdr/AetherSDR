@@ -23,7 +23,7 @@ AetherSDR currently supports these control paths:
 - **Built-in keyboard shortcuts** for tuning, audio, transmit, and other common actions.
 - **Custom keyboard bindings** through the shortcut editor.
 - **FlexControl USB tuning knob** through the serial-control path.
-- **MIDI controllers** with learn mode, profiles, and relative-encoder support.
+- **MIDI controllers** with learn mode, manual mapping entry, profiles, and relative-encoder support.
 - **USB HID encoder devices** including:
   - Icom RC-28
   - Griffin PowerMate
@@ -392,6 +392,8 @@ The MIDI dialog lets you:
 - Refresh the port list
 - Turn on **Auto-connect on startup**
 - Use **Learn** mode to bind a control by moving it
+- Use **Manual…** to type in a binding yourself
+- Edit any existing binding with the **✎** button on its row
 - Save named profiles
 - Load saved profiles
 - Clear all bindings if you want to start over
@@ -437,6 +439,38 @@ For slider and knob targets, Learn ignores touch-only NoteOn messages and waits 
 For sliders, leave **Relative** off and use normal absolute mode.
 
 Use **Invert** if the control moves the opposite way from what feels natural.
+
+### Entering a binding manually
+
+Learn is the easiest path, but sometimes typing the binding in directly is better:
+
+- Some controllers send **more than one MIDI message for a single press**. Learn
+  captures whichever message arrives first, which may not be the one you want.
+- You may want to set up bindings from the controller's manual **before the
+  device is connected**.
+- A binding Learn captured may simply need a small correction.
+
+To add a binding by hand, select the parameter as usual and click **Manual…**
+instead of Learn. Enter the channel, the message type (**Note On**,
+**Control Change**, or **Pitch Bend**), and the note or CC number from your
+controller's documentation, then click **OK**. The binding behaves exactly like
+a learned one and is saved immediately.
+
+To correct an existing binding, click the **✎** button on its row. The same form
+opens with the current values filled in — change what you need and click **OK**.
+
+A few details worth knowing:
+
+- **Channel "Any"** matches the message on every MIDI channel. Learn always binds
+  the specific channel it heard, so "Any" is available only through manual entry.
+- If the source you enter is **already bound to another parameter**, AetherSDR
+  asks before replacing it. Two bindings on the same source cannot both respond,
+  so the dialog never lets one silently disable the other.
+- For key and button targets there is no separate Note Off entry: a **Note On**
+  binding automatically follows the release too.
+- **Pitch Bend** messages carry no number, so that field is disabled.
+- The **Relative** checkbox is only meaningful for Control Change bindings, and
+  it is pre-checked for you when you bind the `VFO Tune Knob` to a CC.
 
 ### CW and PTT from MIDI
 

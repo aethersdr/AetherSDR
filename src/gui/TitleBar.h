@@ -37,6 +37,7 @@ public:
     void setPcAudioLocked(bool locked);
     void setPcAudioDevices(const QString& inputDevice, const QString& outputDevice);
     void setLineoutMuted(bool muted);
+    void setHeadphoneMuted(bool muted);
     void setMasterVolume(int pct);
     void setHeadphoneVolume(int pct);
     void setOtherClientTx(bool transmitting, const QString& station);

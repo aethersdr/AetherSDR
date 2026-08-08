@@ -20,6 +20,7 @@
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
+#include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceFeature.h"
@@ -27,6 +28,7 @@
 #include "core/LogManager.h"
 #include "core/MidiSettings.h"
 #include "core/UlanziDialBackend.h"
+#include "core/UlanziDialMappings.h"
 #include "AppletPanel.h"
 #include "core/IambicKeyer.h"
 #include "PanadapterStack.h"
@@ -503,10 +505,20 @@ void MainWindow::handleFlexControlButton(int button, int action)
             disableSplit();
         }
     } else if (actionName.startsWith("CwxF")) {
-        bool ok = false;
-        const int idx = actionName.mid(4).toInt(&ok);
-        if (ok && idx >= 1 && idx <= 12)
-            m_radioModel.cwxModel().sendMacro(idx);
+        // Same gate the panel's own F1-F12 shortcuts carry: a radio with no CWX
+        // text buffer never gains one, and a mapped hardware button that emits
+        // `cwx send` into a backend with no such verb is the "silently does
+        // nothing" report, not a working control. The action stays assignable —
+        // the binding is operator-scoped and outlives any one radio.
+        if (!m_radioModel.hasRadioSideCwKeyer()) {
+            qCDebug(lcCw) << "CWX macro action" << actionName
+                          << "ignored: radio has no radio-side CW keyer";
+        } else {
+            bool ok = false;
+            const int idx = actionName.mid(4).toInt(&ok);
+            if (ok && idx >= 1 && idx <= 12)
+                m_radioModel.cwxModel().sendMacro(idx);
+        }
     }
 
     syncFlexControlDialog();
@@ -1455,6 +1467,42 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #ifdef HAVE_HIDAPI
         triggerTMate2Overlay(TMate2Overlay::Wpm, next);
 #endif
+    } else if (actionId == "BandZoom") {
+        setPanZoomMode(/*segmentZoom=*/false, steps > 0);
+    } else if (actionId == "SegmentZoom") {
+        setPanZoomMode(/*segmentZoom=*/true, steps > 0);
+    } else if (actionId == "FilterWidth") {
+        if (auto* rx = m_appletPanel->rxApplet()) {
+            rx->stepFilterWidth(steps);
+        }
+    } else if (actionId == "PanadapterZoom") {
+        // Rotary dial uses a finer per-detent factor (kRotaryPanZoomFactor vs
+        // keyboard kPanZoomFactor in MainWindow_Shortcuts.cpp) for smooth spins.
+        static constexpr double kRotaryPanZoomFactor = 1.25;
+        const double baseFactor = steps > 0 ? (1.0 / kRotaryPanZoomFactor) : kRotaryPanZoomFactor;
+        const double factor = std::pow(baseFactor, std::abs(steps));
+        zoomActivePanadapter(factor);
+    } else if (actionId == "WheelRfGain") {
+        if (auto* s = activeSlice()) {
+            if (!s->panId().isEmpty()) {
+                auto* pan = m_radioModel.panadapter(s->panId());
+                const int low = pan ? pan->rfGainLow() : -8;
+                const int high = pan ? pan->rfGainHigh() : 32;
+                const int step = (pan && pan->rfGainStep() > 0) ? pan->rfGainStep() : 8;
+                const int current = pan ? pan->rfGain() : static_cast<int>(s->rfGain());
+                const int next = std::clamp(current + steps * step, low, high);
+                m_radioModel.setPanRfGainFor(s->panId(), next);
+                if (auto* sw = spectrumForSlice(s)) {
+                    sw->setRfGain(next);
+                    if (auto* menu = sw->overlayMenu()) {
+                        menu->setRfGain(next);
+                    }
+                    auto& settings = AppSettings::instance();
+                    settings.setValue(rfGainSettingsKey(sw), QString::number(next));
+                    settings.save();
+                }
+            }
+        }
     }
 }
 
@@ -2698,28 +2746,10 @@ void MainWindow::wireExternalControllers()
 #endif
 
 
-    m_dialCoalesceTimer.setSingleShot(true);
-    m_dialCoalesceTimer.setInterval(20);
-    connect(&m_dialCoalesceTimer, &QTimer::timeout, this, [this]() {
-        if (m_dialPendingSteps == 0) return;
-        auto* s = activeSlice();
-        if (!s) { m_dialPendingSteps = 0; return; }
-        if (s->isLocked()) {
-            s->notifyTuneBlockedByLock();
-            m_dialPendingSteps = 0;
-            return;
-        }
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + m_dialPendingSteps * stepHz / 1e6;
-        m_dialPendingSteps = 0;
-        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "ulanzi-dial");
-    });
-
     connect(m_dialBackend, &UlanziDialBackend::tuneSteps,
             this, [this](int steps) {
-        m_dialPendingSteps += steps;
-        if (!m_dialCoalesceTimer.isActive())
-            m_dialCoalesceTimer.start();
+        const QString actionId = UlanziDialMappings::rotaryAction();
+        applyFlexControlWheelAction(actionId, steps);
     });
 
     // One-shot claim of the pre-#4611 flat mapping keys, before the first

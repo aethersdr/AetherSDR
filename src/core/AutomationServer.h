@@ -273,6 +273,16 @@ public:
     {
         m_sliceReceiveSourceHandler = std::move(handler);
     }
+    // AetherModem hook for the `modem` and `link` verbs — demod profile /
+    // RX tap, and the connected-mode AX.25 terminal + mailbox. The engine stays
+    // gui-free (EB1 boundary): MainWindow registers a lambda that constructs the
+    // AetherModem window headlessly if needed and forwards to it, exactly as the
+    // KISS-TNC-on-startup path does. Arguments are (verb, action, value).
+    void setModemAutomationHandler(
+        std::function<QJsonObject(const QString&, const QString&, const QString&)> handler)
+    {
+        m_modemAutomationHandler = std::move(handler);
+    }
     void setSliceCenterLockHandler(std::function<QJsonObject(int, bool)> handler)
     {
         m_sliceCenterLockHandler = std::move(handler);
@@ -531,8 +541,32 @@ private:
     QJsonObject recordMemorySample();
     QJsonObject doTci(const QString& action, const QString& value);
 #ifdef HAVE_WEBSOCKETS
-    void appendTciTrace(const QString& direction, const QString& text);
-    void sendTciSimText(const QString& text);
+    // One simulated client. Multiple can run at once so an agent can stand up
+    // the two-WSJT-X shape (#4547): each instance declares its own receiver in
+    // audio_start, which is the only per-client signal the TCI wire carries and
+    // therefore what decides which slice its PTT keys.
+    struct TciSimClient {
+        QWebSocket* socket{nullptr};
+        QString id;
+        QString profile{QStringLiteral("wsjtx")};
+        int     receiver{0};        // audio_start:<receiver> / iq_start:<receiver>
+        bool    ready{false};
+        bool    audioStarted{false};
+        bool    iqStarted{false};
+        qint64  binaryFrames{0};
+        qint64  iqFrames{0};
+        qint64  binaryBytes{0};
+        qint64  textMsgs{0};
+        qint64  lastFrameMs{-1};
+        QString closeReason;
+        QElapsedTimer timer;
+    };
+    void appendTciTrace(const QString& direction, const QString& client,
+                        const QString& text);
+    void sendTciSimText(TciSimClient* sim, const QString& text);
+    TciSimClient* tciSimById(const QString& id) const;
+    void tciSimTeardown(TciSimClient* sim, bool abrupt);
+    QJsonObject tciSimStatus(const TciSimClient* sim) const;
     QJsonObject tciTraceSnapshot(int limit = 100) const;
 #endif
     QJsonObject doAudioCapture(const QString& action,
@@ -562,6 +596,9 @@ private:
     // TX test-signal control (two-tone) and ATU control. Both gated by
     // AETHER_AUTOMATION_ALLOW_TX where they key the transmitter.
     QJsonObject doTxTest(const QString& action);
+    // Backend-sourced radio health. Read-only; see the definition for why it is
+    // deliberately not assembled from the models.
+    QJsonObject doHealth();
     QJsonObject doAtu(const QString& action);
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
@@ -587,11 +624,17 @@ private:
     // Demo fault injection (RFC #4288 #4): route a fault to backend->
     // invokeExtension("sim", …). No-op error on non-Sim backends.
     QJsonObject doSimFault(const QString& fault, const QString& arg);
+    // Raw CI-V inject + frame trace. Icom-only; other backends report it as
+    // unimplemented rather than silently succeeding.
+    QJsonObject doCiv(const QString& action, const QString& arg);
+    // Data-arrival ages plus the meter producer->consumer join.
+    QJsonObject doLiveness();
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
     // route to RadioModel::setTransmit — the exact calls the space-bar PTT filter
     // and the mox_toggle shortcut make, but reachable headlessly. Keying is gated
     // by AETHER_AUTOMATION_ALLOW_TX (the same rail as txtest/atu); unkey is not.
     QJsonObject doKey(const QString& name, const QString& arg);
+    QJsonObject doRadioCert(const QString& phaseArg, const QString& freqArg);
     // Drive the CWX keyer (send a CW string / set WPM / abort). `send` keys the
     // transmitter so it sits on the AETHER_AUTOMATION_ALLOW_TX rail and arms the
     // force-unkey watchdog; speed/stop do not key. CW's rapid TX→RX edges are the
@@ -681,6 +724,11 @@ private:
     }
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
+    std::function<QJsonObject(const QString&, const QString&, const QString&)>
+        m_modemAutomationHandler;
+    // Shared body of the `modem` and `link` verbs.
+    QJsonObject doModemAutomation(const QString& verb, const QString& action,
+                                  const QString& value);
     std::function<QJsonObject(int, bool)> m_sliceCenterLockHandler;
     std::function<QJsonObject(int, int, bool)> m_sliceLinkHandler;
     std::function<int(int)> m_sliceLinkPeerQuery;
@@ -708,22 +756,14 @@ private:
     // audio profile or an SDC IQ-skimmer profile so agents can exercise both
     // TCI/DAX lifecycles — including abrupt-disconnect reaping — without an
     // external WebSocket client.
-    QWebSocket* m_tciSim{nullptr};
-    bool    m_tciSimReady{false};
-    bool    m_tciSimAudioStarted{false};
-    bool    m_tciSimIqStarted{false};
-    qint64  m_tciSimBinaryFrames{0};
-    qint64  m_tciSimIqFrames{0};
-    qint64  m_tciSimBinaryBytes{0};
-    qint64  m_tciSimTextMsgs{0};
-    qint64  m_tciSimLastFrameMs{-1};
-    QString m_tciSimProfile{QStringLiteral("wsjtx")};
-    QString m_tciSimCloseReason;
-    QElapsedTimer m_tciSimTimer;
+    // Insertion-ordered so `tci status` lists clients the way they were started.
+    QList<TciSimClient*> m_tciSims;
+    static constexpr const char* kTciSimDefaultId = "a";
     struct TciTraceEntry {
         quint64 seq{0};
         qint64 elapsedMs{0};
         QString direction;
+        QString client;     // which simulated client, so a 2-client transcript reads
         QString text;
     };
     std::deque<TciTraceEntry> m_tciTrace;
@@ -743,6 +783,9 @@ private:
     // so it enforces only when this is set — otherwise it force-unkeys a human
     // holding MOX mid-sentence.
     bool    m_txBridgeInitiated{false};
+    // radiocert spins nested event loops for minutes; commands arriving
+    // during a run dispatch inside it, so a second one is refused.
+    bool    m_certRunning{false};
     // Transmitter state sampled at the top of handleLine(), before any verb
     // handler runs. markTxBridgeInitiated() needs it: it is called after its
     // action has been issued, and the key verbs update TransmitModel
@@ -751,6 +794,9 @@ private:
     bool    m_txKeyedAtRequestStart{false};
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
+    // Correlates an extension reply with the request that caused it. Starts at
+    // 1 because the sim-fault path deliberately uses 0 for fire-and-forget.
+    quint64 m_extensionRequestId{0};
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)
     QString m_authToken;           // shared-secret gate; empty = open (#3646)
     // Log/event channel (#3646 observability suite). The tap fills m_logRing

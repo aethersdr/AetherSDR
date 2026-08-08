@@ -3,11 +3,15 @@
 #include "AppSettings.h"
 #include "LogManager.h"
 
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
 #include <QMetaType>
+#include <QSaveFile>
+#include <QStringConverter>
 #include <QThread>
 #include <QTimer>
 #include <QUuid>
@@ -31,6 +35,310 @@ constexpr int kKiwiSdrDefaultWaterfallMaxDbm = -10;
 QString normalizedProfileEndpoint(const QString& endpoint)
 {
     return KiwiSdrClient::normalizeEndpoint(endpoint);
+}
+
+// ── Receiver-list CSV (#4586) ────────────────────────────────────────────
+// A deliberately small, self-contained CSV reader/writer rather than reusing
+// MemoryCsvCompat (multi-dialect memory channels) or ShortcutManager's parser
+// (keybinding collision semantics) — neither is a good fit for a flat list
+// of receiver profiles, and this repo's existing CSV consumers each own a
+// parser tailored to their own schema rather than sharing one.
+
+constexpr qsizetype kMaxKiwiCsvBytes = 256 * 1024;
+constexpr int kMaxKiwiCsvRows = 2000;
+constexpr int kMaxKiwiCsvFieldLength = 512;
+constexpr int kKiwiSdrCsvSchemaVersion = 1;
+
+// Only FORMAT_VERSION/NAME/ENDPOINT are required. The remaining columns
+// (AUTO_CONNECT, KEEP_AUDIO_DURING_TX, RESUME_AUDIO_AFTER_TX_DELAY,
+// WATERFALL_AUTO_SCALE, WATERFALL_MIN_DBM, WATERFALL_MAX_DBM,
+// WATERFALL_RATE) are optional on the way in: an absent one falls back to
+// the struct's own default, so an older export or a hand-trimmed CSV still
+// imports cleanly.
+const QStringList kKiwiSdrCsvHeader{
+    QStringLiteral("FORMAT_VERSION"),
+    QStringLiteral("NAME"),
+    QStringLiteral("ENDPOINT"),
+};
+
+struct KiwiCsvRow {
+    int lineNumber{0};
+    QStringList fields;
+};
+
+struct ParsedKiwiCsvRow {
+    int lineNumber{0};
+    QString name;
+    QString endpoint;
+    bool autoConnect{false};
+    bool keepAudioDuringTx{false};
+    bool resumeAudioAfterTxDelay{false};
+    bool waterfallAutoScale{true};
+    int waterfallMinDbm{kKiwiSdrDefaultWaterfallMinDbm};
+    int waterfallMaxDbm{kKiwiSdrDefaultWaterfallMaxDbm};
+    int waterfallRate{0};
+};
+
+QString kiwiCsvEscape(QString value)
+{
+    if (value.contains(QLatin1Char(',')) || value.contains(QLatin1Char('"'))
+        || value.contains(QLatin1Char('\n')) || value.contains(QLatin1Char('\r'))) {
+        value.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        return QLatin1Char('"') + value + QLatin1Char('"');
+    }
+    return value;
+}
+
+QString kiwiCsvBool(bool value)
+{
+    return value ? QStringLiteral("True") : QStringLiteral("False");
+}
+
+bool appendKiwiCsvField(KiwiCsvRow& row, QString& field, QStringList& errors)
+{
+    if (field.size() > kMaxKiwiCsvFieldLength) {
+        errors << QStringLiteral("Line %1: a field exceeds %2 characters.")
+                      .arg(row.lineNumber)
+                      .arg(kMaxKiwiCsvFieldLength);
+        return false;
+    }
+    row.fields << field;
+    field.clear();
+    return true;
+}
+
+// RFC4180-style tokenizer (quotes, embedded commas/newlines) — the same
+// mechanics as ShortcutManager's parseCsvRows, sized down for a much smaller
+// file (receiver lists run to dozens of rows, not thousands).
+QList<KiwiCsvRow> parseKiwiCsvRows(const QByteArray& bytes, QStringList& errors)
+{
+    QList<KiwiCsvRow> rows;
+    if (bytes.size() > kMaxKiwiCsvBytes) {
+        errors << QStringLiteral("KiwiSDR receiver CSV exceeds the 256 KiB size limit.");
+        return rows;
+    }
+
+    QStringDecoder decoder(QStringDecoder::Utf8);
+    QString text = decoder.decode(bytes);
+    if (decoder.hasError()) {
+        errors << QStringLiteral("KiwiSDR receiver CSV is not valid UTF-8.");
+        return rows;
+    }
+    if (!text.isEmpty() && text.front() == QChar(0xfeff)) {
+        text.remove(0, 1);
+    }
+
+    KiwiCsvRow row;
+    row.lineNumber = 1;
+    QString field;
+    bool inQuotes = false;
+    bool afterQuote = false;
+    int lineNumber = 1;
+    int quoteOpenedLine = 0;
+
+    auto finishRow = [&]() -> bool {
+        if (!appendKiwiCsvField(row, field, errors)) {
+            return false;
+        }
+        const bool blank = row.fields.size() == 1 && row.fields.constFirst().isEmpty();
+        if (!blank) {
+            rows << row;
+            if (rows.size() > kMaxKiwiCsvRows + 1) {
+                errors << QStringLiteral("KiwiSDR receiver CSV exceeds the %1-row limit.")
+                              .arg(kMaxKiwiCsvRows);
+                return false;
+            }
+        }
+        row = KiwiCsvRow{};
+        afterQuote = false;
+        return true;
+    };
+
+    for (int i = 0; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (inQuotes) {
+            if (ch == QLatin1Char('"')) {
+                if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('"')) {
+                    field += QLatin1Char('"');
+                    ++i;
+                } else {
+                    inQuotes = false;
+                    afterQuote = true;
+                }
+            } else {
+                field += ch;
+                if (ch == QLatin1Char('\n')) {
+                    ++lineNumber;
+                } else if (ch == QLatin1Char('\r')
+                           && (i + 1 >= text.size()
+                               || text.at(i + 1) != QLatin1Char('\n'))) {
+                    ++lineNumber;
+                }
+            }
+            continue;
+        }
+
+        if (afterQuote && ch != QLatin1Char(',') && ch != QLatin1Char('\r')
+            && ch != QLatin1Char('\n')) {
+            errors << QStringLiteral("Line %1: unexpected character after a quoted field.")
+                          .arg(lineNumber);
+            return {};
+        }
+        if (ch == QLatin1Char('"')) {
+            if (!field.isEmpty() || afterQuote) {
+                errors << QStringLiteral("Line %1: unexpected quote in an unquoted field.")
+                              .arg(lineNumber);
+                return {};
+            }
+            inQuotes = true;
+            quoteOpenedLine = lineNumber;
+            continue;
+        }
+        if (ch == QLatin1Char(',')) {
+            if (!appendKiwiCsvField(row, field, errors)) {
+                return {};
+            }
+            afterQuote = false;
+            continue;
+        }
+        if (ch == QLatin1Char('\r') || ch == QLatin1Char('\n')) {
+            if (!finishRow()) {
+                return {};
+            }
+            if (ch == QLatin1Char('\r') && i + 1 < text.size()
+                && text.at(i + 1) == QLatin1Char('\n')) {
+                ++i;
+            }
+            ++lineNumber;
+            row.lineNumber = lineNumber;
+            continue;
+        }
+        field += ch;
+    }
+
+    if (inQuotes) {
+        errors << QStringLiteral("Line %1: unterminated quoted field.").arg(quoteOpenedLine);
+        return {};
+    }
+    if (!field.isEmpty() || !row.fields.isEmpty()) {
+        if (!finishRow()) {
+            return {};
+        }
+    }
+    return rows;
+}
+
+// Accepts True/False/1/0/Yes/No case-insensitively; anything else is invalid.
+bool parseKiwiCsvBool(const QString& text, bool defaultValue, bool& valid)
+{
+    const QString lower = text.trimmed().toLower();
+    if (lower.isEmpty()) {
+        valid = true;
+        return defaultValue;
+    }
+    if (lower == QLatin1String("true") || lower == QLatin1String("1")
+        || lower == QLatin1String("yes")) {
+        valid = true;
+        return true;
+    }
+    if (lower == QLatin1String("false") || lower == QLatin1String("0")
+        || lower == QLatin1String("no")) {
+        valid = true;
+        return false;
+    }
+    valid = false;
+    return defaultValue;
+}
+
+QList<ParsedKiwiCsvRow> parseKiwiSdrCsv(const QByteArray& bytes, QStringList& errors)
+{
+    const QList<KiwiCsvRow> rows = parseKiwiCsvRows(bytes, errors);
+    if (!errors.isEmpty()) {
+        return {};
+    }
+    if (rows.isEmpty()) {
+        errors << QStringLiteral("KiwiSDR receiver CSV is empty.");
+        return {};
+    }
+
+    QHash<QString, int> columns;
+    for (int i = 0; i < rows.constFirst().fields.size(); ++i) {
+        const QString name = rows.constFirst().fields.at(i).trimmed().toUpper();
+        if (name.isEmpty() || columns.contains(name)) {
+            errors << QStringLiteral("Line 1: empty or duplicate column name '%1'.").arg(name);
+            return {};
+        }
+        columns.insert(name, i);
+    }
+    for (const QString& required : kKiwiSdrCsvHeader) {
+        if (!columns.contains(required)) {
+            errors << QStringLiteral("Line 1: missing required column %1.").arg(required);
+        }
+    }
+    if (!errors.isEmpty()) {
+        return {};
+    }
+
+    QList<ParsedKiwiCsvRow> parsed;
+    for (int i = 1; i < rows.size(); ++i) {
+        const KiwiCsvRow& row = rows.at(i);
+        const auto value = [&row, &columns](const QString& name) {
+            const int index = columns.value(name, -1);
+            return index >= 0 && index < row.fields.size() ? row.fields.at(index).trimmed()
+                                                           : QString();
+        };
+
+        ParsedKiwiCsvRow parsedRow;
+        parsedRow.lineNumber = row.lineNumber;
+        parsedRow.name = value(QStringLiteral("NAME"));
+        parsedRow.endpoint = value(QStringLiteral("ENDPOINT"));
+        if (parsedRow.name.isEmpty()) {
+            errors << QStringLiteral("Line %1: NAME is required.").arg(row.lineNumber);
+        }
+        if (parsedRow.endpoint.isEmpty()) {
+            errors << QStringLiteral("Line %1: ENDPOINT is required.").arg(row.lineNumber);
+        }
+
+        auto boolField = [&](const QString& column, bool defaultValue) {
+            bool fieldOk = true;
+            const bool result = parseKiwiCsvBool(value(column), defaultValue, fieldOk);
+            if (!fieldOk) {
+                errors << QStringLiteral("Line %1: %2 must be True or False.")
+                              .arg(row.lineNumber).arg(column);
+            }
+            return result;
+        };
+        parsedRow.autoConnect = boolField(QStringLiteral("AUTO_CONNECT"), false);
+        parsedRow.keepAudioDuringTx = boolField(QStringLiteral("KEEP_AUDIO_DURING_TX"), false);
+        parsedRow.resumeAudioAfterTxDelay =
+            boolField(QStringLiteral("RESUME_AUDIO_AFTER_TX_DELAY"), false);
+        parsedRow.waterfallAutoScale = boolField(QStringLiteral("WATERFALL_AUTO_SCALE"), true);
+
+        // Out-of-range values are not an error here — updateProfile() clamps
+        // them once the row is applied, same as a value typed into the UI
+        // dialog would be. Only a non-numeric field fails the import.
+        auto intField = [&](const QString& column, int defaultValue) {
+            const QString text = value(column);
+            if (text.isEmpty()) {
+                return defaultValue;
+            }
+            bool fieldOk = false;
+            const int result = text.toInt(&fieldOk);
+            if (!fieldOk) {
+                errors << QStringLiteral("Line %1: %2 must be an integer.")
+                              .arg(row.lineNumber).arg(column);
+            }
+            return result;
+        };
+        parsedRow.waterfallMinDbm =
+            intField(QStringLiteral("WATERFALL_MIN_DBM"), kKiwiSdrDefaultWaterfallMinDbm);
+        parsedRow.waterfallMaxDbm =
+            intField(QStringLiteral("WATERFALL_MAX_DBM"), kKiwiSdrDefaultWaterfallMaxDbm);
+        parsedRow.waterfallRate = intField(QStringLiteral("WATERFALL_RATE"), 0);
+
+        parsed << parsedRow;
+    }
+    return parsed;
 }
 
 } // namespace
@@ -319,6 +627,147 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     }
 
     emit profilesChanged();
+}
+
+QByteArray KiwiSdrManager::exportProfilesCsv() const
+{
+    QStringList lines;
+    lines << QStringLiteral(
+        "FORMAT_VERSION,NAME,ENDPOINT,AUTO_CONNECT,KEEP_AUDIO_DURING_TX,"
+        "RESUME_AUDIO_AFTER_TX_DELAY,WATERFALL_AUTO_SCALE,WATERFALL_MIN_DBM,"
+        "WATERFALL_MAX_DBM,WATERFALL_RATE");
+    for (const KiwiSdrAntennaProfile& p : m_profiles) {
+        const QStringList fields{
+            QString::number(kKiwiSdrCsvSchemaVersion),
+            kiwiCsvEscape(p.name),
+            kiwiCsvEscape(p.endpoint),
+            kiwiCsvBool(p.autoConnect),
+            kiwiCsvBool(p.keepAudioDuringTx),
+            kiwiCsvBool(p.resumeAudioAfterTxDelay),
+            kiwiCsvBool(p.waterfallAutoScale),
+            QString::number(p.waterfallMinDbm),
+            QString::number(p.waterfallMaxDbm),
+            QString::number(p.waterfallRate),
+        };
+        lines << fields.join(QLatin1Char(','));
+    }
+    return lines.join(QStringLiteral("\r\n")).toUtf8() + QByteArray("\r\n");
+}
+
+KiwiSdrCsvImportResult KiwiSdrManager::importProfilesCsv(const QByteArray& bytes)
+{
+    KiwiSdrCsvImportResult result;
+    const QList<ParsedKiwiCsvRow> rows = parseKiwiSdrCsv(bytes, result.errors);
+    if (!result.ok()) {
+        return result;
+    }
+
+    for (const ParsedKiwiCsvRow& row : rows) {
+        const QString normalizedEndpoint = normalizedProfileEndpoint(row.endpoint);
+        if (normalizedEndpoint.isEmpty() || row.name.trimmed().isEmpty()) {
+            result.errors << QStringLiteral(
+                "Line %1: NAME and ENDPOINT are required.").arg(row.lineNumber);
+            continue;
+        }
+
+        int existingIdx = -1;
+        for (int i = 0; i < m_profiles.size(); ++i) {
+            if (m_profiles.at(i).endpoint == normalizedEndpoint) {
+                existingIdx = i;
+                break;
+            }
+        }
+
+        // Merge on a matching endpoint (#4586): update the existing profile
+        // in place (keeping its id and password) instead of creating a
+        // duplicate, so re-importing the same file — e.g. after syncing
+        // between machines — is idempotent. A brand-new id is always minted
+        // for a new row via the same addProfile() path the UI's "Add
+        // receiver" button uses, so validation/truncation/logging match.
+        QString id;
+        if (existingIdx >= 0) {
+            id = m_profiles.at(existingIdx).id;
+        } else {
+            id = addProfile(row.name, row.endpoint);
+            if (id.isEmpty()) {
+                result.errors << QStringLiteral(
+                    "Line %1: '%2' has no usable name/endpoint.")
+                    .arg(row.lineNumber).arg(row.name);
+                continue;
+            }
+        }
+
+        KiwiSdrAntennaProfile updated = profile(id);
+        updated.name = row.name;
+        updated.endpoint = row.endpoint;
+        updated.autoConnect = row.autoConnect;
+        updated.keepAudioDuringTx = row.keepAudioDuringTx;
+        updated.resumeAudioAfterTxDelay = row.resumeAudioAfterTxDelay;
+        updated.waterfallAutoScale = row.waterfallAutoScale;
+        updated.waterfallMinDbm = row.waterfallMinDbm;
+        updated.waterfallMaxDbm = row.waterfallMaxDbm;
+        updated.waterfallRate = row.waterfallRate;
+        updateProfile(updated); // clamps waterfall fields, persists, emits
+
+        if (existingIdx >= 0) {
+            ++result.mergedCount;
+        } else {
+            ++result.addedCount;
+        }
+    }
+    return result;
+}
+
+KiwiSdrCsvExportResult KiwiSdrManager::exportToFile(const QString& path) const
+{
+    KiwiSdrCsvExportResult result;
+    if (path.trimmed().isEmpty()) {
+        result.error = QStringLiteral("No export path was provided.");
+        return result;
+    }
+
+    const QByteArray csv = exportProfilesCsv();
+    QSaveFile file(path);
+    // Some network mounts (SMB, WSL DrvFs) can't create the sidecar temp file
+    // QSaveFile normally uses — fall back to a direct write so export
+    // succeeds where a plain write would (matches ShortcutManager).
+    file.setDirectWriteFallback(true);
+    if (!file.open(QIODevice::WriteOnly)) {
+        result.error = QStringLiteral("Couldn't open %1 for writing (%2).")
+                           .arg(QDir::toNativeSeparators(path), file.errorString());
+        return result;
+    }
+    if (file.write(csv) != csv.size()) {
+        const QString reason = file.errorString();
+        file.cancelWriting();
+        result.error = QStringLiteral("Couldn't write the receiver list to %1 (%2).")
+                           .arg(QDir::toNativeSeparators(path), reason);
+        return result;
+    }
+    if (!file.commit()) {
+        result.error = QStringLiteral("Couldn't save %1 (%2).")
+                           .arg(QDir::toNativeSeparators(path), file.errorString());
+        return result;
+    }
+    result.exportedCount = m_profiles.size();
+    return result;
+}
+
+KiwiSdrCsvImportResult KiwiSdrManager::importFromFile(const QString& path)
+{
+    KiwiSdrCsvImportResult result;
+    if (path.trimmed().isEmpty()) {
+        result.errors << QStringLiteral("No import path was provided.");
+        return result;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        result.errors << QStringLiteral("Couldn't open %1 for reading (%2).")
+                             .arg(QDir::toNativeSeparators(path), file.errorString());
+        return result;
+    }
+    return importProfilesCsv(file.readAll());
 }
 
 void KiwiSdrManager::setProfilePassword(const QString& id,

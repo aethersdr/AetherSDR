@@ -15,18 +15,35 @@ namespace {
 // and we start from empty rather than propagating garbage.
 QJsonObject readDocument(const char* context)
 {
-    const QByteArray raw = AppSettings::instance()
+    const QString rawStr = AppSettings::instance()
                                .value(UlanziDialMappings::rootSettingsKey())
-                               .toString().toUtf8();
-    if (raw.isEmpty())
+                               .toString();
+    static QString s_cachedRawStr;
+    static QJsonObject s_cachedObj;
+
+    if (!s_cachedRawStr.isNull() && rawStr == s_cachedRawStr) {
+        return s_cachedObj;
+    }
+
+    if (rawStr.isEmpty()) {
+        s_cachedRawStr = rawStr;
+        s_cachedObj = {};
         return {};
+    }
+
     QJsonParseError err{};
-    const QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
-    if (err.error == QJsonParseError::NoError && doc.isObject())
-        return doc.object();
+    const QJsonDocument doc = QJsonDocument::fromJson(rawStr.toUtf8(), &err);
+    if (err.error == QJsonParseError::NoError && doc.isObject()) {
+        s_cachedRawStr = rawStr;
+        s_cachedObj = doc.object();
+        return s_cachedObj;
+    }
+
     qCWarning(lcDevices) << "Ulanzi Dial: unparseable mappings document under"
                          << UlanziDialMappings::rootSettingsKey() << "—"
                          << err.errorString() << "— starting from empty (" << context << ")";
+    s_cachedRawStr = rawStr;
+    s_cachedObj = {};
     return {};
 }
 
@@ -123,6 +140,32 @@ int UlanziDialMappings::migrateLegacyKeys(const QStringList& pillIds)
                           << "legacy pill binding(s) into" << rootSettingsKey();
     }
     return adopted;
+}
+
+QString UlanziDialMappings::rotaryAction()
+{
+    const QJsonObject obj = readDocument("read");
+    if (obj.contains(QStringLiteral("rotary_action"))) {
+        const QString action = obj.value(QStringLiteral("rotary_action")).toString();
+        return action.isEmpty() ? QStringLiteral("WheelFrequency") : action;
+    }
+
+    auto& s = AppSettings::instance();
+    if (s.contains(QStringLiteral("UlanziDialRotaryAction"))) {
+        const QString legacy = s.value(QStringLiteral("UlanziDialRotaryAction")).toString();
+        s.remove(QStringLiteral("UlanziDialRotaryAction"));
+        if (!legacy.isEmpty()) {
+            setRotaryAction(legacy);
+            return legacy;
+        }
+        s.save();
+    }
+    return QStringLiteral("WheelFrequency");
+}
+
+bool UlanziDialMappings::setRotaryAction(const QString& actionId)
+{
+    return setActionForPill(QStringLiteral("rotary_action"), actionId);
 }
 
 }  // namespace AetherSDR

@@ -19,6 +19,7 @@
 
 #include "models/RadioModel.h"
 #include "TestSettingsProfile.h"
+#include "TestDspBuildWait.h"
 
 #include "core/backends/hl2/MetisProtocol.h"
 
@@ -106,7 +107,10 @@ int main(int argc, char** argv)
     model.connectToRadio(info);
     check(model.panStream() == nullptr, "HL2 owns no PanadapterStream");
 
-    // Long enough for the connect handshake plus several 1 s publish ticks.
+    // Wait out the asynchronous DSP build first; the 3.6 s after it is the
+    // assertion (several 1 s publish ticks), not connect latency.
+    AetherSDR::test::awaitDspBuild("hl2_link_stats_model_test",
+                                  [&] { return model.isConnected(); });
     spin(3600);
 
     // ---- the reported symptom: the readouts are no longer structurally zero ----

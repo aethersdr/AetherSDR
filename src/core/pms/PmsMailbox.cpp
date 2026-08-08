@@ -35,9 +35,20 @@ PmsMailbox::PmsMailbox(QObject* parent)
     : QObject(parent)
 {
     m_link = new Ax25Connection(this);
-    m_link->setRetryTimeoutMs(6000);
     m_link->setMaxRetries(8);
-    m_link->setPaclen(128);
+    // Derived, not hardcoded — see TncTerminal's constructor and
+    // docs/HFMODEM.md §1. The mailbox is the more important of the two to get
+    // right, because until now the GUI never called any of these setters at all:
+    // the PMS was permanently pinned to a VHF-sized T1 with no way for an
+    // operator to change it, which made it unusable on HF by construction.
+    //
+    // Set the fields directly rather than through setLinkProfile(): that setter
+    // announces itself on activity(), and nothing is connected to us yet during
+    // construction, so the line would only ever be dropped on the floor. The
+    // announcing path is for later calls, where somebody is listening.
+    m_link->setLinkProfile(ax25::LinkTimingProfile::forBaud(1200));
+    m_link->setPaclen(ax25::recommendedPaclen(1200));
+    m_link->applyRecommendedTimers();
 
     connect(m_link, &Ax25Connection::sendFrame, this, &PmsMailbox::transmitFrame);
     connect(m_link, &Ax25Connection::activity, this, &PmsMailbox::activity);
@@ -47,6 +58,16 @@ PmsMailbox::PmsMailbox(QObject* parent)
 
     m_beaconTimer = new QTimer(this);
     connect(m_beaconTimer, &QTimer::timeout, this, &PmsMailbox::sendBeaconNow);
+
+    // Session inactivity. T3 in the data link catches a caller whose radio has
+    // gone away; this catches the other case, a caller whose link is perfectly
+    // healthy but who has wandered off mid-session. Either way the mailbox
+    // serves ONE caller at a time and answers every other SABM with DM, so a
+    // session that is never closed locks the mailbox out for everybody until
+    // someone clicks Kick. See docs/HFMODEM.md §2.
+    m_sessionIdleTimer = new QTimer(this);
+    m_sessionIdleTimer->setSingleShot(true);
+    connect(m_sessionIdleTimer, &QTimer::timeout, this, &PmsMailbox::onSessionIdleTimeout);
 }
 
 PmsMailbox::~PmsMailbox()
@@ -136,6 +157,64 @@ void PmsMailbox::setBeaconIntervalMinutes(int minutes)
 void PmsMailbox::setRetryTimeoutMs(int t1) { m_link->setRetryTimeoutMs(t1); }
 void PmsMailbox::setMaxRetries(int n2) { m_link->setMaxRetries(n2); }
 void PmsMailbox::setPaclen(int bytes) { m_link->setPaclen(bytes); }
+
+void PmsMailbox::setLinkProfile(const ax25::LinkTimingProfile& profile)
+{
+    m_link->setLinkProfile(profile);
+    m_link->setPaclen(ax25::recommendedPaclen(profile.baud));
+    m_link->applyRecommendedTimers();
+    emit activity(QStringLiteral("PMS link timing for %1 baud: T1 %2 ms, T3 %3 s, "
+                                 "paclen %4 (modelled round trip %5 ms).")
+        .arg(profile.baud)
+        .arg(m_link->retryTimeoutMs())
+        .arg(m_link->idlePollMs() / 1000)
+        .arg(m_link->paclen())
+        .arg(m_link->expectedRoundTripMs()));
+    emit stateChanged();
+}
+
+void PmsMailbox::setSessionIdleTimeoutMs(int ms)
+{
+    // The 1 s floor is far below any operator setting; it exists so the hangup
+    // can be tested without a minute-long test.
+    m_sessionIdleMs = qBound(1000, ms, 24 * 60 * 60 * 1000);
+    if (m_connected)
+        touchSession();
+}
+
+bool PmsMailbox::sessionIdleTimerActive() const
+{
+    return m_sessionIdleTimer && m_sessionIdleTimer->isActive();
+}
+
+void PmsMailbox::touchSession()
+{
+    if (m_connected && m_sessionIdleTimer)
+        m_sessionIdleTimer->start(m_sessionIdleMs);
+}
+
+void PmsMailbox::onSessionIdleTimeout()
+{
+    if (!m_connected)
+        return;
+    const int seconds = m_sessionIdleMs / 1000;
+    emit activity(QStringLiteral("PMS session with %1 idle for %2 s; disconnecting to free "
+                                 "the mailbox for other callers.")
+        .arg(m_caller.toString()).arg(seconds));
+    reply(QStringLiteral("*** Idle for %1 minute(s) - disconnecting. 73!")
+        .arg(std::max(1, seconds / 60)));
+    flushReplies();
+    m_link->disconnect();
+}
+
+QString PmsMailbox::linkSummary() const
+{
+    return QStringLiteral("T1 %1 ms, T3 %2 s, paclen %3, idle timeout %4 min")
+        .arg(m_link->retryTimeoutMs())
+        .arg(m_link->idlePollMs() / 1000)
+        .arg(m_link->paclen())
+        .arg(sessionIdleTimeoutMinutes());
+}
 
 // ---------------------------------------------------------------------------
 // Stats
@@ -240,6 +319,15 @@ void PmsMailbox::disconnectCaller()
         m_link->disconnect();
 }
 
+void PmsMailbox::dropLink()
+{
+    if (m_link->state() == Ax25Connection::State::Disconnected)
+        return;
+    emit activity(QStringLiteral("PMS session with %1 dropped — the modem is no longer "
+                                 "listening.").arg(m_caller.toString()));
+    m_link->reset(); // silent: enterDisconnected() transmits nothing
+}
+
 void PmsMailbox::recordHeard(const Frame& frame)
 {
     if (!m_loaded)
@@ -312,6 +400,7 @@ void PmsMailbox::onLinkConnected(const Address& peer)
     m_pendingOut.clear();
     sendGreeting(peer);
     flushReplies();
+    touchSession();
     emit stateChanged();
 }
 
@@ -325,13 +414,33 @@ void PmsMailbox::onLinkDisconnected(const Address& peer, bool byPeer)
     m_pendingOut.clear();
     m_compose = Compose::None;
     m_draftLines.clear();
+    if (m_sessionIdleTimer)
+        m_sessionIdleTimer->stop();
     saveHeard();
     emit stateChanged();
 }
 
 void PmsMailbox::onLinkData(const QByteArray& data)
 {
+    touchSession(); // the caller is alive; restart the inactivity clock
     m_lineBuffer += QString::fromLatin1(data);
+
+    // A caller that never sends CR would otherwise grow this without bound.
+    // Nothing legitimate approaches the cap: paclen is at most 256 bytes and a
+    // mailbox command line is a few dozen characters, so anything this large is
+    // a stuck peer or garbage decoded off a noisy channel. Drop the buffer
+    // rather than the session — the link is fine, only the line is nonsense.
+    if (m_lineBuffer.size() > kMaxLineBufferChars) {
+        emit activity(QStringLiteral("PMS discarded %1 characters from %2 with no line "
+                                     "terminator (cap %3).")
+            .arg(m_lineBuffer.size())
+            .arg(m_caller.toString())
+            .arg(kMaxLineBufferChars));
+        m_lineBuffer.clear();
+        reply(QStringLiteral("*** Input too long - discarded. Send shorter lines."));
+        flushReplies();
+        return;
+    }
     // Treat CR and LF as line separators; collapse a CRLF pair.
     m_lineBuffer.replace(QLatin1Char('\n'), QLatin1Char('\r'));
     int idx;

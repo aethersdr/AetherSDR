@@ -460,6 +460,12 @@ void TransmitModel::setMicLevel(int level)
         m_micLevel = level;
         emit micStateChanged();  // PhoneCwApplet's mic slider binds to this
     }
+    // Unconditional, like commandReady below and deliberately NOT inside the
+    // changed test: a host-modulating backend is the authority on its own gain
+    // and may have been reset (reconnect, radio swap) while m_micLevel stood
+    // still. Re-asserting a value the seam already holds is free; failing to
+    // re-assert one it has lost leaves the operator's slider lying.
+    emit micLevelCommandIssued(level);
     emit commandReady(QString("transmit set miclevel=%1").arg(level));
 }
 
@@ -498,6 +504,16 @@ bool TransmitModel::applySpeechProcessorState(bool on, int level)
     }
     m_speechProcEnable = on;
     m_speechProcLevel = level;
+    emit micStateChanged();
+    return true;
+}
+
+bool TransmitModel::applyMicSelectionState(const QString& input)
+{
+    if (input.isEmpty() || m_micSelection == input) {
+        return false;
+    }
+    m_micSelection = input;
     emit micStateChanged();
     return true;
 }

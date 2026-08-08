@@ -7,19 +7,48 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege: publishing the image is all this workflow does. It used to
+# also open a PR pinning the consumers to the new digest, which needed
+# contents: WRITE and pull-requests: write — see the note below for why that
+# was removed. contents drops to read rather than disappearing: naming any
+# permission sets every unnamed one to `none`, and actions/checkout needs to
+# read the repo.
 permissions:
-  contents: write       # peter-evans/create-pull-request: push the bump branch
+  contents: read        # actions/checkout
   packages: write       # docker/build-push-action: push the image
-  pull-requests: write  # peter-evans/create-pull-request: open the bump PR
 
-# Serialize concurrent runs so a Dockerfile push that lands during a
-# manual workflow_dispatch doesn't race on the auto-PR branch.
-# cancel-in-progress: false — never kill a run that may already be
-# mid-publish to the registry; let the second run queue and overwrite
-# the auto-PR with its newer digest.
+# Serialize concurrent runs so a Dockerfile push landing during a manual
+# workflow_dispatch doesn't race another run to publish the tag.
+# cancel-in-progress: false — never kill a run that may already be mid-publish
+# to the registry; let the second run queue and republish over it.
 concurrency:
   group: docker-ci-image
   cancel-in-progress: false
+
+# CONSUMERS TRACK `:latest` DELIBERATELY.
+#
+# This workflow used to rewrite ci.yml / codeql.yml / sanitizers.yml to
+# reference the image by immutable digest and open a "digest bump" PR. That
+# never worked once: pushing a branch whose diff touches .github/workflows/*
+# is forbidden to GITHUB_TOKEN outright —
+#
+#   refusing to allow a GitHub App to create or update workflow
+#   `.github/workflows/ci.yml` without `workflows` permission
+#
+# — and it is not a `permissions:` setting that can be granted, so every run
+# reported failure even when the image published cleanly. A workflow that is
+# always red is a signal nobody reads, which is worse than the pinning was
+# ever worth.
+#
+# Tracking `:latest` also happens to be the behaviour we want: a republished
+# image reaches every open PR immediately, instead of waiting on a bump PR to
+# be reviewed. The cost is that `:latest` is mutable, so a run is not bound to
+# one exact image — the resolved digest is still recorded in each run's log if
+# you need to know what a given build used.
+#
+# If immutable pinning is wanted back, it needs a PAT with repo+workflow scope
+# (or a GitHub App token) wired to create-pull-request's `token:` input. Do
+# that deliberately; don't reinstate a step that cannot succeed.
 
 jobs:
   build:
@@ -41,57 +70,18 @@ jobs:
         with:
           context: .github/docker
           push: true
-          tags: ghcr.io/ten9876/aethersdr-ci:latest
+          # Consumers track :latest (see the note above), but every build also
+          # gets an immutable sha- tag. That restores the part of digest
+          # pinning that was actually worth having — a way to name and go back
+          # to one exact image — without the auto-PR machinery that could never
+          # work. To bisect a toolchain regression, point a job at
+          # :sha-<commit> temporarily.
+          tags: |
+            ghcr.io/aethersdr/aethersdr-ci:latest
+            ghcr.io/aethersdr/aethersdr-ci:sha-${{ github.sha }}
 
-      - name: Update workflow consumers to new digest
-        id: pin
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+      - name: Report published digest
         run: |
-          if [ -z "$DIGEST" ]; then
-            echo "::error::docker/build-push-action did not return a digest"
-            exit 1
-          fi
-          # Rewrite any existing reference (digest form OR tag form) to the
-          # newly published digest. Idempotent both ways: re-runs producing
-          # the same digest leave the files unchanged, and the bootstrap
-          # run swaps the legacy ":latest" reference cleanly.
-          # The `[ -f ]` guard lets the loop run cleanly even if a consumer
-          # file isn't on main yet (e.g. sanitizers.yml until PR #2866 lands).
-          for f in .github/workflows/ci.yml \
-                   .github/workflows/codeql.yml \
-                   .github/workflows/sanitizers.yml; do
-            [ -f "$f" ] || continue
-            sed -i -E \
-              "s#(ghcr\.io/ten9876/aethersdr-ci)(@sha256:[a-f0-9]+|:[A-Za-z0-9._-]+)#\1@${DIGEST}#g" \
-              "$f"
-          done
-          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "Pinned workflow consumers to ${DIGEST}"
-          git diff --stat .github/workflows/
-
-      - name: Open PR to bump pinned digest
-        if: steps.pin.outputs.digest != ''
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
-        with:
-          branch: ci-image/digest-bump
-          delete-branch: true
-          commit-message: "ci: pin aethersdr-ci to ${{ steps.pin.outputs.digest }}"
-          title: "ci: pin aethersdr-ci image to latest build"
-          body: |
-            Automated update from `docker-ci-image.yml` after building and
-            publishing a new CI image from the current
-            `.github/docker/Dockerfile`.
-
-            Updates the `ghcr.io/ten9876/aethersdr-ci` reference in
-            `ci.yml`, `codeql.yml`, and `sanitizers.yml` (where present) to:
-
-                ${{ steps.pin.outputs.digest }}
-
-            The image is still tagged `:latest` at the registry; pinning the
-            workflow consumers by digest gives each CI run a reproducible,
-            immutable reference even if the `:latest` tag is republished later.
-
-            Review the linked Dockerfile change(s) and the resulting digest
-            before merging.
-          labels: ci
+          echo "Published ghcr.io/aethersdr/aethersdr-ci"
+          echo "  tags:   latest, sha-${{ github.sha }}"
+          echo "  digest: ${{ steps.build.outputs.digest }}"

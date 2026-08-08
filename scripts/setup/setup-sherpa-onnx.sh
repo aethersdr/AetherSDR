@@ -69,6 +69,40 @@ fi
 cp -a "${src}/lib/." "${OUT_DIR}/lib/"   # all shared libs (c-api, cxx-api, onnxruntime)
 rm -rf "${tmp}"
 
+# macOS: drop sherpa's bundled ONNX Runtime and use the upstream one instead.
+#
+# k2-fsa build theirs on whatever macOS their runner happens to be, so it lands
+# at LC_BUILD_VERSION minos 15.5 on BOTH slices of the universal2 archive.
+# macdeployqt stages it into Contents/Frameworks and the app links it at load
+# time, so that stamp becomes the DMG's real minimum macOS regardless of
+# CMAKE_OSX_DEPLOYMENT_TARGET — the app simply will not start below it
+# (#4532). Microsoft's own 1.27.0 build is 14.0, which is the floor the Apple
+# Silicon DMG already declares.
+#
+# The two are interchangeable here: the setup scripts pin the SAME ORT version
+# on purpose, so sherpa's libsherpa-onnx-c-api.dylib resolves its
+# @rpath/libonnxruntime.1.27.0.dylib against the upstream copy with the same
+# install name and the same C API. Removing sherpa's copy is what makes the
+# bundle carry exactly one runtime rather than silently preferring the higher
+# one — see the APPLE branch of the sherpa/ORT sharing block in CMakeLists.txt.
+#
+# Upstream publishes no x86_64 macOS build at all, so there is nothing to fall
+# back to on Intel; macos-dmg.yml does not stage sherpa on that leg for exactly
+# this reason, and this guard makes a mistake there loud instead of shipping a
+# DMG that needs macOS 15.5.
+if [ "${os}" = "Darwin" ]; then
+    if [ ! -f "${REPO_ROOT}/third_party/onnxruntime/lib/libonnxruntime.dylib" ]; then
+        echo "ERROR: sherpa-onnx on macOS requires the upstream ONNX Runtime to be" >&2
+        echo "       staged first (scripts/setup/setup-onnxruntime.sh). sherpa's own" >&2
+        echo "       bundled runtime is built at minos 15.5 and would become the" >&2
+        echo "       bundle's minimum macOS. Upstream has no x86_64 macOS build, so" >&2
+        echo "       Intel Macs cannot use the sherpa backend at all." >&2
+        exit 1
+    fi
+    echo "Dropping sherpa's bundled ONNX Runtime (minos 15.5); using the upstream 14.0 build."
+    rm -f "${OUT_DIR}"/lib/libonnxruntime*.dylib
+fi
+
 # On macOS the k2-fsa prebuilt ships ad-hoc signed dylibs whose signature is
 # invalid on arrival (upstream strip/repack breaks the seal). dyld then
 # SIGKILLs the app at load time with "Code Signature Invalid". Re-sign ad-hoc

@@ -88,6 +88,39 @@ private:
     static void write(const QJsonObject& o);
 };
 
+// The connected-mode terminal's configuration, owned as ONE object under the
+// nested key "AetherModemTerminal" (Constitution Principle V — each feature owns
+// its configuration as a single object; and Principle XIV — persist atomically).
+//
+// These lived as seven separate flat AppSettings keys. Principle V grandfathers
+// the existing ones but forbids adding to them, and this group needed an eighth
+// (TXDELAY), so the group moved rather than growing. Loading and saving the
+// whole struct also means a settings write is one atomic replacement instead of
+// seven independent ones that can interleave halfway through.
+struct TerminalSettings {
+    // 0 means "derive it from the air interface" for the three timing fields —
+    // see Ax25LinkTiming.h. A non-zero value is an explicit operator override.
+    static constexpr int kAuto = 0;
+    static constexpr int kDefaultMaxTries = 8;
+    static constexpr int kDefaultTxTailMs = 150;
+
+    QString myCall;
+    QString lastCall;              // last station dialled, restored into the UI
+    int retrySecs{kAuto};          // T1; 0 = derived
+    int maxTries{kDefaultMaxTries};// N2
+    int paclen{kAuto};             // 0 = derived (64 on HF 300, 128 on VHF 1200)
+    int txTailMs{kDefaultTxTailMs};
+    int txPreambleFlags{kAuto};    // TXDELAY; 0 = profile default
+    bool logEnabled{false};
+
+    static TerminalSettings load();
+    void save() const;             // one write, one AppSettings::save()
+
+    // One-shot hop from the seven legacy flat keys (AetherModemTerminal*).
+    // Safe to call repeatedly; returns immediately once the nested blob exists.
+    static void migrateLegacy();
+};
+
 class Ax25HfPacketDecodeDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -103,6 +136,14 @@ public:
     void setMqttClient(MqttClient* mqtt);
 #endif
 
+    // Agent automation bridge (`modem` and `link` verbs). Drives the same
+    // widgets a human would — the profile radio buttons, the modem enable
+    // checkbox, the terminal's own command parser — so a bridge test exercises
+    // the shipping path rather than a parallel one. `verb` is "modem" or "link";
+    // `action` is already lowercased and trimmed by the server.
+    QJsonObject automationCommand(const QString& verb, const QString& action,
+                                  const QString& value);
+
 protected:
     // Command history (Up/Down) on the terminal input line.
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -110,6 +151,18 @@ protected:
 private:
     void setModemProfile(Ax25ModemProfile profile, bool persist);
     void setDecodeEnabled(bool enabled);
+    // True when the backend runs the modulator on this host (HL2) rather than
+    // taking modulator input from a Flex DAX stream. Such a radio has no DAX
+    // TX stream to wait for and no `transmit dax` setting to change.
+    // True when transmit audio reaches the radio WITHOUT a DAX stream —
+    // either the host modulates (HL2) or the audio leaves over the seam
+    // (Icom). Both skip the DAX-stream wait; see the definition.
+    bool txAudioBypassesDax() const;
+    // Fail a TX that is waiting on a DAX stream which never arrives. The
+    // `stream create` reply is asynchronous and its failure path only logs, so
+    // without this a backend that drops the command leaves the TX — and every
+    // frame queued behind it — hung until the window closes.
+    void armTxStreamWaitTimeout();
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
     void startAudioCapture();
     void finishAudioCapture(bool save);
@@ -149,6 +202,15 @@ private:
     void submitTerminalInput();
     void refreshTerminalStatus();
     void applyTerminalConfigFromUi(bool persist);
+    // Push the active modem profile's air-interface timing into the terminal and
+    // the mailbox, so T1/T2/T3 and paclen track the baud rate instead of being
+    // hardcoded for VHF. See Ax25LinkTiming.h and docs/HFMODEM.md §1.
+    void applyLinkTimingProfile();
+    // Reset a persisted T1 that cannot work on the active profile back to Auto,
+    // explaining why in the system log. Only touches values that are physically
+    // impossible (shorter than the modelled round trip) — a deliberate override
+    // that is merely aggressive is left alone.
+    void overrideImpossibleT1ForProfile();
     void refreshTerminalHeardCombo();
     // Hide the shared log panel and grow the tab stack on the Terminal tab so the
     // transcript gets the full viewport; restore the chrome on the other tabs.
@@ -248,6 +310,9 @@ private:
     bool m_txPreviousAudioDaxMode{false};
     bool m_txPreviousTransmitDax{false};
     bool m_txFromKiss{false};
+    // Identifies the current transmission so deferred work armed on its behalf
+    // (the DAX stream-wait timeout) cannot act on a later one.
+    quint64 m_txGeneration{0};
 
     // KISS TNC server (TCP) and its controls.
     KissTncServer* m_kissServer{nullptr};
@@ -294,6 +359,7 @@ private:
     // TNC Terminal service (connected-mode AX.25 client) and its controls.
     TncTerminal* m_terminal{nullptr};
     QAbstractButton* m_terminalTab{nullptr};
+    QSpinBox* m_terminalTxPreamble{nullptr}; // TXDELAY flags; 0 = profile default
     QLineEdit* m_terminalMyCall{nullptr};
     QLineEdit* m_terminalTarget{nullptr};
     QComboBox* m_terminalHeardCombo{nullptr};
@@ -319,6 +385,9 @@ private:
 
     // Personal Mailbox System (PMS) service and its controls.
     PmsMailbox* m_pms{nullptr};
+    // Last link-timing line written to the system log, so repeated config
+    // applies (every spinbox edit) don't repeat an unchanged message.
+    QString m_lastLinkTimingSummary;
     QAbstractButton* m_mailboxTab{nullptr};
     QCheckBox* m_pmsEnable{nullptr};
     QLineEdit* m_pmsListenCall{nullptr};

@@ -76,6 +76,11 @@
 
 namespace AetherSDR {
 
+namespace {
+// Stall timeout for the About dialog's GitHub contributor fetch (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+} // namespace
+
 void MainWindow::buildMenuBar()
 {
     auto* fileMenu = menuBar()->addMenu("&File");
@@ -360,11 +365,20 @@ void MainWindow::buildMenuBar()
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = !m_spotHubDialog;
         showOrRaisePersistent(m_spotHubDialog, m_dxCluster, m_rbnClient, m_wsjtxClient,
-                              m_spotCollectorClient, m_potaClient,
+                              m_spotCollectorClient, m_potaClient, m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                               m_freedvClient,
 #endif
                               &m_radioModel, &m_dxccProvider);
+#ifdef HAVE_WEBSOCKETS
+        // Every open, not just the first: this dialog is a persistent
+        // singleton, so without this the field would only ever show
+        // whatever FreeDvMyMessage was at first construction, silently
+        // reverting anything sent from the FreeDV Reporter panel since
+        // (#4231 review).
+        if (m_spotHubDialog)
+            m_spotHubDialog->reloadFreedvMessage();
+#endif
         if (!wasFresh || !m_spotHubDialog) return;
         auto* dlg = m_spotHubDialog.data();
         dlg->setTotalSpots(m_radioModel.spotModel().spots().size());
@@ -451,6 +465,12 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::potaStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); }); });
+        connect(dlg, &DxClusterDialog::n1mmStartRequested,
+                this, [this](quint16 port) {
+            QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->startListening(port); });
+        });
+        connect(dlg, &DxClusterDialog::n1mmStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->stopListening(); }); });
 #ifdef HAVE_WEBSOCKETS
         connect(dlg, &DxClusterDialog::freedvStartRequested,
                 this, [this] { QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->startConnection(); }); });
@@ -1381,6 +1401,9 @@ void MainWindow::buildMenuBar()
 
         // Fetch live contributor list from GitHub API
         auto* nam = new QNetworkAccessManager(dlg);
+        // Bound the contributor fetch (#4688 §6) — without it a half-open
+        // connection leaves the About dialog's list pending with no error.
+        nam->setTransferTimeout(kTransferTimeoutMs);
         auto* reply = nam->get(QNetworkRequest(
             QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
         connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {

@@ -175,9 +175,10 @@ public:
     // The STATIC form answers from a Params alone, without a running client.
     // That exists because the caller must know the receiver count BEFORE
     // start(): the DSP chains have to be built and configured first, and WDSP
-    // channel setup is slow enough (~17 s on a first run, generating FFTW
-    // wisdom) that doing it after start() stalls the I/O thread's EP2 pacer --
-    // and the gateware watchdog halts the stream when EP2 stops arriving.
+    // channel setup is slow enough (~19 s on the first open a machine ever does,
+    // generating FFTW wisdom -- HERMES.md §22.3) that doing it after start()
+    // stalls the I/O thread's EP2 pacer -- and the gateware watchdog halts the
+    // stream when EP2 stops arriving.
     static int effectiveNumRx(const Params& p);
     int effectiveNumRx() const { return effectiveNumRx(m_params); }
 

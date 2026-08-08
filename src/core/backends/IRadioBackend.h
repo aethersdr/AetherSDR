@@ -265,6 +265,23 @@ public:
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
 
+    // Let receive audio through WHILE TRANSMITTING.
+    //
+    // Receive audio is normally muted on transmit — the radio hears its own
+    // signal at enormous strength, and unmuted it is fuzz on a carrier and an
+    // acoustic feedback loop on voice. That mute is for the operator's comfort,
+    // not for correctness.
+    //
+    // A diagnostic needs the opposite: demodulating our OWN transmission is the
+    // only self-contained way to check the sideband convention, because the
+    // panadapter reads raw wire order and therefore agrees with the transmitter
+    // by construction, while the demodulator applies the receive conjugation and
+    // WDSP's sideband selection independently. That distinction is what a whole
+    // bring-up turned on — see HERMES.md 14.6 and 15.5.
+    //
+    // Default OFF. Turning it on outside a measurement will be unpleasant.
+    virtual void setTxAudioMonitor(bool on) { Q_UNUSED(on); }
+
     // Tune carrier on/off, at the operator's TUNE power (percent, 0..100).
     //
     // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
@@ -289,6 +306,73 @@ public:
     // implements it.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
+    // The speech processor, as the operator sees it: an enable plus one of
+    // three presets (0 = NOR, 1 = DX, 2 = DX+).
+    //
+    // That shape is FlexRadio's, and it is not universal. On a radio with its
+    // own compressor the two halves are SEPARATE registers — the IC-705 wants
+    // 16 44 for the enable and 14 0E for how hard — so a backend receives both
+    // together and decides how to spend them. Default no-op: Flex takes this as
+    // text from TransmitModel, and a host-modulating backend runs its own
+    // compressor in our DSP instead.
+    virtual void setSpeechProcessor(bool on, int level)
+    {
+        Q_UNUSED(on);
+        Q_UNUSED(level);
+    }
+
+    // Receive and transmit incremental tuning. Hz relative to the VFO.
+    //
+    // Two enables and one offset, because that is the shape every radio that
+    // has them uses — including the IC-705, where they are 21 01, 21 02 and
+    // 21 00. A radio without RIT simply does not implement these.
+    // RECEIVE DSP THE RADIO'S OWN FIRMWARE RUNS — the set gated by
+    // capabilities().hasRadioSideDsp.
+    //
+    // These arrived late, and their absence was a silent hole rather than a
+    // missing feature. SliceModel drove every one of them by emitting FlexRadio
+    // wire text ("slice set 0 nr=1"), which IS the command on a Flex and is
+    // discarded everywhere else — and with no verb here, no other backend could
+    // implement them however much it wanted to. So hasRadioSideDsp was a
+    // capability that promised something the seam had no way to deliver.
+    //
+    // Enable and level travel together: a radio with a level register generally
+    // needs both to make either meaningful, and splitting them is how a toggle
+    // lands before the level it implies. A backend without a level ignores it.
+    virtual void setSliceNoiseReduction(int sliceId, bool on, int level)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+    }
+    virtual void setSliceNoiseBlanker(int sliceId, bool on, int level)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+    }
+    virtual void setSliceAutoNotch(int sliceId, bool on)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on);
+    }
+    virtual void setSliceSquelch(int sliceId, bool on, int level)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+    }
+
+    virtual void setRitEnabled(bool on) { Q_UNUSED(on); }
+    virtual void setXitEnabled(bool on) { Q_UNUSED(on); }
+    virtual void setRitOffset(int hz) { Q_UNUSED(hz); }
+
+    // The TRANSMIT offset, separately from the receive one.
+    //
+    // Defaults to setRitOffset() because the radio this seam was first shaped
+    // against has ONE shared register: an IC-705 keeps the shift in 21 00 and
+    // uses 21 01 / 21 02 only to choose whether it applies to receive, transmit
+    // or both. A radio with two independent registers — a Flex has separate
+    // rit_freq and xit_freq — overrides this and stops the two aliasing.
+    //
+    // Split out because without it the seam had two enables and one offset, and
+    // an XIT intent silently wrote the RIT register on every backend rather
+    // than only on the one where that is the truth.
+    virtual void setXitOffset(int hz) { setRitOffset(hz); }
+
     // Transmit audio passband, in Hz above the carrier — the Phone applet's TX
     // low-cut and high-cut.
     //
@@ -308,6 +392,22 @@ public:
     {
         Q_UNUSED(lowHz);
         Q_UNUSED(highHz);
+    }
+
+    // Microphone gain, 0..100, as the Phone applet's MIC slider means it.
+    //
+    // Same seam and same reason as setTxFilter() above: on a Flex the slider's
+    // `transmit set miclevel=` reaches the radio's own preamp, but a backend
+    // that modulates on this host has no command plane to receive it and the
+    // verb is dropped. Without this the slider was inert on the HL2 — moving it
+    // end to end changed nothing on the air, which reads as a dead control
+    // rather than as a control aimed at hardware that is not there.
+    //
+    // A backend that takes this owns the gain: nothing else scales the mic on
+    // its behalf, so ignoring the call means the operator has no mic gain at all.
+    virtual void setMicGain(int level)
+    {
+        Q_UNUSED(level);
     }
 
     // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
@@ -425,6 +525,19 @@ signals:
     void connected();
     void disconnected();
     void connectionError(const QString& reason);
+
+    // A problem with the RADIO'S CONFIGURATION that the operator should fix,
+    // but which does not end the session. Distinct from connectionError, which
+    // every consumer treats as fatal: RadioModel starts its reconnect timer on
+    // it unconditionally, so using that channel for advice tears down a working
+    // link and then does it again on the next attempt — a permanent reconnect
+    // loop whose cause reads as a helpful message. That is exactly what an
+    // IC-9700 with MOD Input set to USB did: connect, warn, drop, repeat every
+    // 5 s, with the radio itself perfectly healthy.
+    //
+    // If it does not stop the radio working, it belongs here.
+    void configurationWarning(const QString& message);
+
     void capabilitiesChanged();
 
     // A fresh transport snapshot. Emitted on a FIXED cadence while connected,

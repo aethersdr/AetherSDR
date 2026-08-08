@@ -5,8 +5,10 @@
 
 #include <QAccessible>
 #include <QAccessibleWidget>
+#include <QCursor>
 #include <QEnterEvent>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -48,18 +50,38 @@ public:
         setFixedHeight(24);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-        const float initial = qBound(
-            0.0f, (0.0f - m_min) / (m_max - m_min), 1.0f);
-        m_smooth.setTarget(initial);
+        m_smooth.setTarget(fractionFor(m_value));
         m_smooth.snapToTarget();
         m_animTimer.setTimerType(Qt::PreciseTimer);
         m_animTimer.setInterval(kMeterSmootherIntervalMs);
         connect(&m_animTimer, &QTimer::timeout, this, [this]() {
             if (!m_smooth.tick(m_animElapsed.restart()))
                 m_animTimer.stop();
+            // Republish so gaugeFraction tracks the bar through the sweep, not
+            // just at the setValue/setRange call that started it — otherwise
+            // the one property that reports DRAWN state would itself go stale
+            // mid-animation, which is the defect class it exists to expose.
+            // No-op unless AETHER_AUTOMATION is set.
+            publishAutomationState();
             update();
         });
+
+        // Recovery watchdog for a dropped leaveEvent — see syncHoverWatchdog().
+        // Runs only while the pointer is physically over the bar, so it costs
+        // nothing except during a real hover, and never fires for an injected
+        // one.
+        m_hoverWatchdog.setInterval(kHoverWatchdogMs);
+        connect(&m_hoverWatchdog, &QTimer::timeout,
+                this, [this]() { onHoverWatchdogTick(); });
+
         publishAutomationState();
+    }
+
+    ~HGauge() override {
+        // Drop the app-wide "badge on screen" claim so it can't dangle at a
+        // destroyed gauge (see activeHoverGauge()).
+        if (activeHoverGauge() == this)
+            activeHoverGauge() = nullptr;
     }
 
     void setLabel(const QString& label) {
@@ -69,11 +91,22 @@ public:
         update();
     }
 
+    // The normalised [0,1] fill fraction, after ballistics. Distinct from
+    // value()/min()/max(): those are the INPUTS, this is the derived state that
+    // gets drawn, and the two can disagree (see setRange). Exposed so that
+    // divergence is assertable without pixel-reading.
+    //
+    // This is what paintEvent multiplies by the bar width for a normal gauge
+    // and for setFillFromRight(). On a setReversed() gauge (PhoneCwApplet's
+    // compression bar) the mapping is inverted at paint time — min means FULL —
+    // so the painted width there is 1.0f - filledFraction(). Assert
+    // accordingly; the fraction itself is always value-normalised.
+    float filledFraction() const { return m_smooth.value(); }
+
     void setValue(float v) {
         if (qFuzzyCompare(m_value, v)) return;
         m_value = v;
-        m_smooth.setTarget(
-            qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f));
+        m_smooth.setTarget(fractionFor(v));
         if (!m_smooth.needsAnimation()) {
             if (m_animTimer.isActive()) m_animTimer.stop();
             update();
@@ -82,20 +115,17 @@ public:
             m_animTimer.start();
         }
         publishAutomationState();
-        if (m_hovered)
-            showHoverPopup(m_lastHoverGlobal);
+        refreshHoverPopup();
     }
 
     void setValueImmediate(float v) {
         if (m_animTimer.isActive()) m_animTimer.stop();
         m_value = v;
-        m_smooth.setTarget(
-            qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f));
+        m_smooth.setTarget(fractionFor(v));
         m_smooth.snapToTarget();
         publishAutomationState();
         update();
-        if (m_hovered)
-            showHoverPopup(m_lastHoverGlobal);
+        refreshHoverPopup();
     }
 
     void setPeakValue(float v) {
@@ -141,17 +171,27 @@ public:
         m_min = min; m_max = max; m_redStart = redStart;
         m_yellowStart = std::isnan(yellowStart) ? redStart : yellowStart;
         m_ticks = ticks;
-        // Re-map the current reading onto the new axis.  The smoother holds a
-        // *fraction*, not a value, so without this it keeps the fraction it
-        // computed under the old range — and setValue() early-returns on an
-        // unchanged reading, so nothing would ever correct it while the signal
-        // sits still.  A steady 1000 W carrier rescaled from an SPE MID axis
-        // to HIGH painted 91% of a 0–1600 track, i.e. ~1456 W (PR #4531).
-        // Snap rather than animate: a range change is a discontinuity, and
-        // sweeping the bar across a scale it was never on reads as a real
-        // level change to the operator.
-        m_smooth.setTarget(qBound(0.0f, (m_value - m_min) / (m_max - m_min), 1.0f));
+        // Re-map the CURRENT value onto the new axis. Without this the fill
+        // keeps the fraction computed under the old bounds, and setValue()'s
+        // unchanged-value early-return means a steady reading never corrects
+        // it — an amplifier holding a constant carrier across a range change
+        // (ACOM auto-range, SPE LOW/MID/HIGH) shows the old fraction against
+        // the new scale indefinitely, misreporting RF output by hundreds of
+        // watts. Snapped, not animated: the axis moved, the signal did not,
+        // so sweeping the needle would show a change that never happened.
+        //
+        // Precondition: m_value is already in the NEW axis's units. A caller
+        // that changes units as well as bounds (MeterApplet's °C/°F toggle)
+        // must still follow with setValueImmediate to convert it — this
+        // re-map fixes the axis, it cannot know the value moved too. That
+        // pairing is now belt-and-braces rather than load-bearing: both
+        // update() calls coalesce into one repaint, so the intermediate
+        // fraction never reaches the screen.
+        m_smooth.setTarget(fractionFor(m_value));
         m_smooth.snapToTarget();
+        // Belt-and-braces: the smoother is at target, so the animation
+        // callback would stop the timer on its own next tick. Stopping here
+        // just saves that tick and its repaint — no case depends on it.
         if (m_animTimer.isActive()) m_animTimer.stop();
         publishAutomationState();
         update();
@@ -164,7 +204,21 @@ public:
     // meters (SWR / forward power / ALC) where the bar scale alone doesn't
     // give an exact reading.  The badge lingers briefly after the pointer
     // leaves so a quick glance-and-move still registers. (#3936)
+    //
+    // Only ONE badge is ever on screen app-wide: showHoverPopup() closes the
+    // previously-showing gauge's badge before raising its own. Each gauge owns
+    // its own DragValuePopup (a lifetime choice — a shared static QWidget would
+    // outlive QApplication), so without that hand-off nothing would ever hide
+    // gauge A's badge on entering gauge B, and the linger below would leave two
+    // stacked on screen at once. The stacked meters in TxApplet/PhoneCwApplet
+    // sit two pixels apart, so the two badges land nearly on top of each other.
     using HoverValueFormatter = std::function<QString(float)>;
+
+    // How long a badge can outlive a dropped physical leaveEvent before the
+    // watchdog notices the pointer is gone (see syncHoverWatchdog). Worst case
+    // on screen is this plus kHoverLingerMs. Public because the regression test
+    // has to wait it out, and a second copy of the number would drift.
+    static constexpr int kHoverWatchdogMs = 250;
 
     void setHoverValueFormatter(HoverValueFormatter formatter) {
         m_hoverFormatter = std::move(formatter);
@@ -173,8 +227,11 @@ public:
     void setHoverValuePopupEnabled(bool enabled) {
         m_hoverPopupEnabled = enabled;
         setMouseTracking(enabled);
-        if (!enabled && m_hoverPopup)
-            m_hoverPopup->hideNow();
+        if (!enabled) {
+            m_hovered = false;
+            m_hoverWatchdog.stop();
+            hideHoverPopupNow();
+        }
     }
 
 protected:
@@ -182,12 +239,22 @@ protected:
         QWidget::enterEvent(ev);
         m_hovered = true;
         m_lastHoverGlobal = ev->globalPosition().toPoint();
+        syncHoverWatchdog();
         showHoverPopup(m_lastHoverGlobal);
     }
 
     void mouseMoveEvent(QMouseEvent* ev) override {
         QWidget::mouseMoveEvent(ev);
         m_lastHoverGlobal = ev->globalPosition().toPoint();
+        // A no-button move that lands inside the bar means the pointer is over
+        // it, whether or not the enterEvent arrived — so a dropped enter can't
+        // suppress the readout for as long as the pointer sits there. The rect
+        // test keeps this true even if a future subclass grabs the mouse (a
+        // grab delivers moves from outside the widget too).
+        if (ev->buttons() == Qt::NoButton
+            && rect().contains(ev->position().toPoint()))
+            m_hovered = true;
+        syncHoverWatchdog();
         if (m_hovered)
             showHoverPopup(m_lastHoverGlobal);
     }
@@ -195,9 +262,8 @@ protected:
     void leaveEvent(QEvent* ev) override {
         QWidget::leaveEvent(ev);
         m_hovered = false;
-        // Fade the readout one second after the pointer leaves the bar.
-        if (m_hoverPopup)
-            m_hoverPopup->linger(kHoverLingerMs);
+        m_hoverWatchdog.stop();
+        beginHoverLinger();
     }
 
     void hideEvent(QHideEvent* ev) override {
@@ -209,8 +275,8 @@ protected:
         // it immediately and clear the hover state so it can't reappear stale
         // when the gauge is shown again.
         m_hovered = false;
-        if (m_hoverPopup)
-            m_hoverPopup->hideNow();
+        m_hoverWatchdog.stop();
+        hideHoverPopupNow();
     }
 
     void paintEvent(QPaintEvent*) override {
@@ -322,6 +388,15 @@ protected:
     }
 
 private:
+    // Map a physical value onto the normalised [0,1] axis fraction the
+    // smoother and paintEvent work in. Every site that moves the fill must
+    // agree on this — the constructor, setValue, setValueImmediate and
+    // setRange. setRange's re-map exists because for a long time it was the
+    // one site that didn't, so keep the arithmetic in exactly one place.
+    float fractionFor(float v) const {
+        return qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f);
+    }
+
     // ── Automation-bridge introspection ───────────────────────────────────
     // HGauge is custom-painted and has no Q_OBJECT, so its label/value/scale
     // are invisible to the automation bridge's dumpTree. Mirror the state into
@@ -335,6 +410,11 @@ private:
         if (!kAutomation) return;
         setProperty("gaugeLabel", m_label);
         setProperty("gaugeValue", m_value);
+        // The DERIVED state — see filledFraction(). Every property above and
+        // below reads correct while the bar paints something else, so without
+        // this a bridge assertion reports a healthy gauge at the exact moment
+        // it is misreading by hundreds of watts. (#3845)
+        setProperty("gaugeFraction", m_smooth.value());
         setProperty("gaugeMin", m_min);
         setProperty("gaugeMax", m_max);
         setProperty("gaugeRedStart", m_redStart);
@@ -355,9 +435,109 @@ private:
         return text;
     }
 
+    // The one gauge whose badge is currently claimed to be on screen, app-wide.
+    // A raw non-owning pointer rather than a shared popup widget: DragValuePopup
+    // is a top-level QWidget, and a function-local static one would be destroyed
+    // after QApplication. Cleared by hideHoverPopupNow() and by ~HGauge.
+    static HGauge*& activeHoverGauge() {
+        static HGauge* gauge = nullptr;
+        return gauge;
+    }
+
+    // Close this gauge's badge immediately and release the app-wide claim.
+    // Reached cross-instance from another gauge's showHoverPopup() (same class,
+    // so the private access holds) as well as from this gauge's own teardown
+    // paths.
+    void hideHoverPopupNow() {
+        if (m_hoverPopup)
+            m_hoverPopup->hideNow();
+        if (activeHoverGauge() == this)
+            activeHoverGauge() = nullptr;
+    }
+
+    void beginHoverLinger() {
+        if (m_hoverPopup)
+            m_hoverPopup->linger(kHoverLingerMs);
+        // The claim is deliberately NOT released here. The badge is still on
+        // screen for kHoverLingerMs, so it must stay findable — that is exactly
+        // the window in which the next gauge needs to close it.
+    }
+
+    // Re-drive the badge from a value change: while hovered, the readout has to
+    // track the meter. Recovery from a dropped leaveEvent is NOT done here —
+    // see syncHoverWatchdog().
+    void refreshHoverPopup() {
+        if (m_hovered)
+            showHoverPopup(m_lastHoverGlobal);
+    }
+
+    // Is the physical pointer over this bar right now? Independent of the
+    // enter/leave stream, which is exactly what makes it useful as a recovery
+    // check — and exactly what makes it wrong as a gate on the hover itself
+    // (see syncHoverWatchdog).
+    bool pointerPhysicallyInside() const {
+        return isVisible() && rect().contains(mapFromGlobal(QCursor::pos()));
+    }
+
+    // Arm the recovery watchdog only while the pointer is REALLY over the bar.
+    //
+    // Qt does not guarantee a leaveEvent (the hideEvent override above exists
+    // for the same reason), and a stuck m_hovered is self-sustaining: every
+    // showValue() cancels the pending hide timer. So a dropped leave used to
+    // pin the badge on screen indefinitely, frozen at the anchor the pointer
+    // left it at.
+    //
+    // The recovery is on a timer rather than on setValue(), because setValue()
+    // early-returns on an unchanged reading — a meter that settles (or stops
+    // reporting entirely, as the TX gauges do on unkey) would never reach it,
+    // and a quiescent meter is the more likely way to end up here than a busy
+    // one.
+    //
+    // Gating on the physical cursor is what keeps the automation bridge's
+    // synthetic hover working. `hover <target>` injects a QEnterEvent and a
+    // no-button QMouseMove at the widget centre WITHOUT moving the real cursor
+    // (AutomationServer::doHover), so an injected hover never arms the
+    // watchdog and holds the badge until the driver sends an explicit
+    // `hover <target> leave`. A validation run on every frame instead would
+    // have torn the badge down under the driver on the first changing value.
+    // The cost is that recovery covers physical hovers only — which is the
+    // only case that can drop a leave, since the injected ones are delivered
+    // by hand.
+    void syncHoverWatchdog() {
+        // Already armed and still hovered: the next tick re-validates within
+        // kHoverWatchdogMs, so asking again in between learns nothing. Worth
+        // short-circuiting because pointerPhysicallyInside() goes through
+        // QCursor::pos(), which on XCB is a synchronous round-trip to the
+        // display server — and mouseMoveEvent lands here on every single move
+        // while the pointer is over the bar.
+        if (m_hovered && m_hoverWatchdog.isActive())
+            return;
+        if (m_hovered && pointerPhysicallyInside()) {
+            m_hoverWatchdog.start();
+        } else if (!m_hovered) {
+            m_hoverWatchdog.stop();
+        }
+        // m_hovered && !inside: an injected hover — deliberately left alone.
+    }
+
+    void onHoverWatchdogTick() {
+        if (pointerPhysicallyInside())
+            return;   // still there; keep watching
+        m_hoverWatchdog.stop();
+        m_hovered = false;
+        beginHoverLinger();
+    }
+
     void showHoverPopup(const QPoint& globalAnchor) {
         if (!m_hoverPopupEnabled)
             return;
+        // Hand the badge over: close whichever gauge is currently showing one
+        // before raising ours, so a traverse across adjacent meters can never
+        // leave the previous gauge's badge lingering alongside this one.
+        HGauge*& active = activeHoverGauge();
+        if (active && active != this)
+            active->hideHoverPopupNow();
+        active = this;
         if (!m_hoverPopup)
             m_hoverPopup = new AetherSDR::DragValuePopup(this);
         // setValue() fires at ballistics-animation rate while hovered, but the
@@ -386,11 +566,19 @@ private:
     QVector<Tick> m_ticks;
 
     // Hover value readout state (see setHoverValuePopupEnabled).
-    static constexpr int kHoverLingerMs = 1000;
+    //
+    // The badge fades on the same schedule as every other DragValuePopup in the
+    // app. #3936 shipped a bespoke 1000 ms here, but PR #2944 had already tested
+    // that dimension and settled on 450 ms — 250 ms read as too fleeting, 750 ms
+    // as sluggish. At 1000 ms a leave-and-move-on left the readout sitting over
+    // the next control long after the pointer had gone.
+    static constexpr int kHoverLingerMs = AetherSDR::DragValuePopup::kDefaultLingerMs;
+
     HoverValueFormatter m_hoverFormatter;
     AetherSDR::DragValuePopup* m_hoverPopup{nullptr};
     bool m_hoverPopupEnabled{false};
     bool m_hovered{false};
+    QTimer m_hoverWatchdog;
     QPoint m_lastHoverGlobal;
     QString m_lastPopupText;    // last badge text/anchor pushed to the popup —
     QPoint m_lastPopupAnchor;   // used to skip redundant per-frame re-layouts
@@ -415,15 +603,29 @@ public:
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setFocusPolicy(Qt::TabFocus);
         setToolTip(tr("Scroll or use Up/Down keys to adjust relay position"));
+
+        // Direct hardware state pushes (e.g. TGXL relay updates during an
+        // ATU sweep) arrive unthrottled from the device — debounce the
+        // accessibility announcement so a rapid sweep doesn't turn into an
+        // updateAccessibility() storm. Same pattern as SMeterWidget/VfoWidget
+        // (see docs/a11y.md "Throttle high-rate updaters").
+        m_accessibilityTimer.setSingleShot(true);
+        m_accessibilityTimer.setInterval(kAccessibilityAnnouncementIntervalMs);
+        connect(&m_accessibilityTimer, &QTimer::timeout, this, [this]() {
+            if (!hasFocus() || !QAccessible::isActive()) return;
+            if (m_value == m_lastAccessibleValue) return;
+            m_lastAccessibleValue = m_value;
+            QAccessibleValueChangeEvent event(this, QVariant(m_value));
+            QAccessible::updateAccessibility(&event);
+        });
     }
 
     void setValue(int v) {
         if (m_value == v) return;
         m_value = v;
         update();
-        if (hasFocus()) {
-            QAccessibleValueChangeEvent event(this, QVariant(v));
-            QAccessible::updateAccessibility(&event);
+        if (hasFocus() && QAccessible::isActive() && !m_accessibilityTimer.isActive()) {
+            m_accessibilityTimer.start();
         }
     }
 
@@ -436,6 +638,17 @@ signals:
     void relayAdjusted(int direction);  // +1 scroll up, -1 scroll down
 
 protected:
+    void focusOutEvent(QFocusEvent* e) override {
+        // setValue() is driven by hardware state pushes regardless of focus,
+        // and both the schedule and publish gates require focus — so relay
+        // positions can move unannounced while the bar is not focused. Forget
+        // the last published value so a position that wandered away and back
+        // is not mistaken for "unchanged" and swallowed by the dedup.
+        m_accessibilityTimer.stop();
+        m_lastAccessibleValue = std::numeric_limits<int>::min();
+        QWidget::focusOutEvent(e);
+    }
+
     void keyPressEvent(QKeyEvent* e) override {
         if (!m_scrollEnabled) { QWidget::keyPressEvent(e); return; }
         if (e->key() == Qt::Key_Up || e->key() == Qt::Key_Plus || e->key() == Qt::Key_Right) {
@@ -504,10 +717,14 @@ protected:
     }
 
 private:
+    static constexpr int kAccessibilityAnnouncementIntervalMs = 100;
+
     QString m_label;
     int m_value{0};
     bool m_scrollEnabled{false};
     int m_angleAccum{0};
+    QTimer m_accessibilityTimer;
+    int m_lastAccessibleValue{std::numeric_limits<int>::min()};
 };
 
 } // namespace AetherSDR

@@ -51,6 +51,17 @@ public:
     int trxForSlice(RadioModel* model, const SliceModel* slice) const;
     SliceModel* sliceForTrx(RadioModel* model, int trx) const;
 
+    // sliceForTrx() for paths that key the radio (#4547): identical, except an
+    // UNBOUND trx that resolves to nothing returns nullptr instead of falling
+    // back to the first slice. The bound path is already fail-closed, so this
+    // differs only in that last step — but it has to exist, because the PTT
+    // path must not be the one caller still resolving positionally. If it went
+    // through TciProtocol's statics it would ignore these bindings entirely,
+    // and a band-stack recreate would key the slice that happens to sit at the
+    // requested index — #4567 on the transmit path, where being wrong puts RF
+    // on the wrong band and antenna.
+    SliceModel* sliceForTrxStrict(RadioModel* model, int trx) const;
+
     // TRX index of the current TX slice, or -1 when none is marked.
     int txSliceTrxOrNone(RadioModel* model) const;
 
@@ -64,6 +75,12 @@ public:
     int trxCount(RadioModel* model) const;
 
 private:
+    // The shared bound lookup behind both sliceForTrx variants. `bound` says
+    // whether some binding claims this trx at all, which is what distinguishes
+    // "held through the settle window, answer nullptr" from "never bound, let
+    // the caller pick its fallback" — the return value alone cannot.
+    SliceModel* boundSliceForTrx(RadioModel* model, int trx, bool& bound) const;
+
     QHash<int, int> m_trxBySliceId;
 };
 

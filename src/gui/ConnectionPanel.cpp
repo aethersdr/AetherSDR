@@ -1,6 +1,8 @@
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // shared nickname + MAC->serial helpers
+#include "core/backends/icom/IcomCredentials.h"  // password -> OS keychain, never settings
+#include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
 #include "core/NetworkPathResolver.h"
@@ -12,6 +14,8 @@
 #include <span>
 
 #include <QAbstractItemView>
+#include <QPointer>
+#include <QLineEdit>
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QInputDialog>
@@ -70,11 +74,32 @@ QJsonObject loadRoutedProfiles()
 
 QString normalizeManualIp(const QString& ip)
 {
-    const QHostAddress address(ip.trimmed());
-    if (address.isNull())
+    const QString trimmed = ip.trimmed();
+    if (trimmed.isEmpty())
         return QString();
 
-    return address.toString();
+    // A numeric address is canonicalised, so "192.168.001.5" and
+    // "192.168.1.5" are one entry rather than two.
+    const QHostAddress address(trimmed);
+    if (!address.isNull())
+        return address.toString();
+
+    // A HOST NAME is legitimate here and used to be dropped SILENTLY, because
+    // QHostAddress parses numeric addresses only. That cost the recent list
+    // every VPN radio reached by DNS name, and it bites hardest on an Icom:
+    // the IC-705's documented default address is ic-705.local, so the one
+    // address the manual explicitly tells the operator to use was the one the
+    // field refused to remember.
+    //
+    // Conservative charset — letters, digits, dot, hyphen, underscore, with
+    // alphanumeric ends — so this widens what we REMEMBER without widening
+    // what we will hand to a resolver.
+    static const QRegularExpression hostName(
+        QStringLiteral("^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$"));
+    if (trimmed.size() <= 253 && hostName.match(trimmed).hasMatch())
+        return trimmed;
+
+    return QString();
 }
 
 void setAutomationError(QString* error, const QString& text)
@@ -148,9 +173,11 @@ QString familyFromProfile(const QJsonObject& profile)
 {
     const QString family =
         profile.value("identity").toObject().value("family").toString().trimmed().toLower();
-    return family == QLatin1String(ConnectionPanel::kFamilyHl2)
-        ? QString::fromLatin1(ConnectionPanel::kFamilyHl2)
-        : QString::fromLatin1(ConnectionPanel::kFamilyFlex);
+    if (family == QLatin1String(ConnectionPanel::kFamilyHl2))
+        return QString::fromLatin1(ConnectionPanel::kFamilyHl2);
+    if (family == QLatin1String(ConnectionPanel::kFamilyIcom))
+        return QString::fromLatin1(ConnectionPanel::kFamilyIcom);
+    return QString::fromLatin1(ConnectionPanel::kFamilyFlex);
 }
 
 RadioBindSettings bindSettingsFromProfile(const QJsonObject& profile)
@@ -251,6 +278,21 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "background: #09111b; color: #d7e4f2; }"
         "QComboBox QAbstractItemView { background: #09111b; color: #d7e4f2; "
         "selection-background-color: #1a3046; border: 1px solid #304050; }";
+    // The Icom credential fields are bare QLineEdits, not combo boxes, so they
+    // do not inherit comboStyle's palette. Without this they render as white
+    // boxes on a dark panel — the same widget, two different looks, in one row.
+    //
+    // TOKENS, and applied through ThemeManager rather than setStyleSheet(). The
+    // neighbouring style strings in this file are pre-existing raw hex and are
+    // left alone, but nothing new should add to that pile: the same four values
+    // already have canonical tokens, so hardcoding them here would have meant
+    // two credential fields that stop following the theme the moment anyone
+    // changes it.
+    const QString lineEditStyle =
+        "QLineEdit { border: 1px solid {{color.background.2}}; border-radius: 4px; "
+        "padding: 4px 6px; background: {{color.background.0}}; "
+        "color: {{color.text.primary}}; }"
+        "QLineEdit:focus { border-color: {{color.accent.bright}}; }";
     const QString modeCardStyle =
         "QCommandLinkButton { text-align: left; border: 1px solid #304050; border-radius: 8px; "
         "padding: 10px 12px; background: #121a25; color: #d7e4f2; }"
@@ -599,11 +641,15 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
 
     constexpr int kManualLabelWidth = 96;
     constexpr int kManualFieldHeight = 30;
-    const auto addManualRow = [&](const QString& labelText, QComboBox* field) {
-        auto* row = new QHBoxLayout;
+    // Returns the row CONTAINER so a caller can hide the label and the field
+    // together. Takes QWidget* rather than QComboBox* because the Icom
+    // credential fields are QLineEdits; both calls below it are QWidget methods.
+    const auto addManualRow = [&](const QString& labelText, QWidget* field) -> QWidget* {
+        auto* rowWidget = new QWidget(manualGroup);
+        auto* row = new QHBoxLayout(rowWidget);
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(12);
-        auto* label = new QLabel(labelText, manualGroup);
+        auto* label = new QLabel(labelText, rowWidget);
         label->setMinimumWidth(kManualLabelWidth);
         label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -611,7 +657,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         field->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         row->addWidget(label);
         row->addWidget(field, 1);
-        manualForm->addLayout(row);
+        manualForm->addWidget(rowWidget);
+        return rowWidget;
     };
 
     // Radio type. A FlexRadio answers a TCP/4992 command-plane probe; a
@@ -627,6 +674,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualRadioTypeCombo->setStyleSheet(comboStyle);
     m_manualRadioTypeCombo->addItem(tr("FlexRadio"), QString::fromLatin1(kFamilyFlex));
     m_manualRadioTypeCombo->addItem(tr("Hermes-Lite 2"), QString::fromLatin1(kFamilyHl2));
+    m_manualRadioTypeCombo->addItem(tr("Icom (network)"), QString::fromLatin1(kFamilyIcom));
     addManualRow(QStringLiteral("Radio type:"), m_manualRadioTypeCombo);
 
     m_manualIpCombo = new QComboBox(manualGroup);
@@ -647,6 +695,54 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualIpEdit->setPlaceholderText("Example: 10.0.0.25");
     m_manualIpEdit->setMinimumHeight(26);
     addManualRow(QStringLiteral("Radio IP:"), m_manualIpCombo);
+
+    // Icom credentials. Hidden for every other family — see
+    // updateManualFamilyHints(). An Icom will not answer the RS-BA1 handshake
+    // without them, so unlike the Flex and HL2 paths this is not optional.
+    m_manualIcomUserEdit = new QLineEdit(manualGroup);
+    m_manualIcomUserEdit->setObjectName(QStringLiteral("connectionManualIcomUser"));
+    m_manualIcomUserEdit->setAccessibleName(tr("Icom network username"));
+    m_manualIcomUserEdit->setAccessibleDescription(
+        tr("The network user name configured on the radio"));
+    m_manualIcomUserEdit->setClearButtonEnabled(true);
+    m_manualIcomUserEdit->setPlaceholderText(tr("Radio network user name"));
+    ThemeManager::instance().applyStyleSheet(m_manualIcomUserEdit, lineEditStyle);
+    m_manualIcomUserRow = addManualRow(QStringLiteral("Icom user:"), m_manualIcomUserEdit);
+
+    m_manualIcomPassEdit = new QLineEdit(manualGroup);
+    m_manualIcomPassEdit->setObjectName(QStringLiteral("connectionManualIcomPassword"));
+    m_manualIcomPassEdit->setAccessibleName(tr("Icom network password"));
+    m_manualIcomPassEdit->setAccessibleDescription(
+        tr("The network password configured on the radio. Stored in the operating "
+           "system keychain, never in the settings file."));
+    m_manualIcomPassEdit->setEchoMode(QLineEdit::Password);
+    m_manualIcomPassEdit->setPlaceholderText(tr("Radio network password"));
+    ThemeManager::instance().applyStyleSheet(m_manualIcomPassEdit, lineEditStyle);
+    m_manualIcomPassRow = addManualRow(QStringLiteral("Icom password:"), m_manualIcomPassEdit);
+
+    // The CI-V address is the third thing the operator has to read off the
+    // radio, alongside the two above — theirs live in the Network menu, this
+    // one in Connectors > CI-V. Without it the address can only ever be the
+    // IC-705 default, and every other model in kModels is unreachable: CI-V is
+    // addressed, so an IC-9700 on 0xA2 silently ignores everything sent to
+    // 0xA4. No ID reply, no model, and the conservative unknown fallback means
+    // no scope and no transmit — which reads as "this backend has no
+    // panadapter yet" rather than "wrong address".
+    //
+    // Blank is the normal case: the placeholder shows what will be used, which
+    // is the model the RS-BA1 handshake already named. Typing here is the
+    // override for a radio whose address has been changed from default.
+    m_manualIcomCivEdit = new QLineEdit(manualGroup);
+    m_manualIcomCivEdit->setObjectName(QStringLiteral("connectionManualIcomCivAddress"));
+    m_manualIcomCivEdit->setAccessibleName(tr("Icom CI-V address"));
+    m_manualIcomCivEdit->setAccessibleDescription(
+        tr("The radio's CI-V address in hex, from MENU > SET > Connectors > CI-V. "
+           "Leave blank to use the address for the model the radio reports."));
+    m_manualIcomCivEdit->setClearButtonEnabled(true);
+    m_manualIcomCivEdit->setPlaceholderText(tr("auto (e.g. A2 for IC-9700)"));
+    ThemeManager::instance().applyStyleSheet(m_manualIcomCivEdit, lineEditStyle);
+    m_manualIcomCivRow = addManualRow(QStringLiteral("Icom CI-V:"), m_manualIcomCivEdit);
+
     manualGroupLayout->addLayout(manualForm);
 
     auto* manualActionRow = new QHBoxLayout;
@@ -673,6 +769,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualGroupLayout->addWidget(m_manualResultLabel);
 
     m_manualAdvancedToggle = new QToolButton(manualGroup);
+    m_manualAdvancedToggle->setObjectName(QStringLiteral("connectionManualAdvancedToggle"));
     m_manualAdvancedToggle->setText("Advanced: choose the VPN source path");
     m_manualAdvancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_manualAdvancedToggle->setCheckable(true);
@@ -681,13 +778,16 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualGroupLayout->addWidget(m_manualAdvancedToggle, 0, Qt::AlignLeft);
 
     m_manualAdvancedWidget = new QWidget(manualGroup);
+    m_manualAdvancedWidget->setObjectName(QStringLiteral("connectionManualAdvancedSection"));
     auto* manualAdvancedLayout = new QVBoxLayout(m_manualAdvancedWidget);
     manualAdvancedLayout->setContentsMargins(8, 4, 8, 4);
     manualAdvancedLayout->setSpacing(6);
-    manualAdvancedLayout->addWidget(makeWrappedLabel(
+    auto* manualAdvancedHint = makeWrappedLabel(
         "Most users can leave this on Auto. Pick a source path only if your VPN creates more "
         "than one active network adapter or a saved path is no longer available.",
-        kHintLabelStyle));
+        kHintLabelStyle);
+    manualAdvancedHint->setObjectName(QStringLiteral("connectionManualAdvancedHint"));
+    manualAdvancedLayout->addWidget(manualAdvancedHint);
     auto* sourceRow = new QHBoxLayout;
     sourceRow->setContentsMargins(0, 0, 0, 0);
     sourceRow->addWidget(new QLabel("Source path:", m_manualAdvancedWidget));
@@ -1146,10 +1246,12 @@ bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp,
     const QString wantedFamily = family.trimmed().toLower();
     if (!wantedFamily.isEmpty()
         && wantedFamily != QLatin1String(kFamilyFlex)
-        && wantedFamily != QLatin1String(kFamilyHl2)) {
+        && wantedFamily != QLatin1String(kFamilyHl2)
+        && wantedFamily != QLatin1String(kFamilyIcom)) {
         setAutomationError(
             error,
-            QStringLiteral("unknown radio family '%1' (use flex or hl2)").arg(family.trimmed()));
+            QStringLiteral("unknown radio family '%1' (use flex, hl2 or icom)")
+                .arg(family.trimmed()));
         return false;
     }
 
@@ -1828,9 +1930,11 @@ void ConnectionPanel::setManualFamily(const QString& family)
     if (!m_manualRadioTypeCombo)
         return;
 
-    const QString wanted = family.trimmed().toLower() == QLatin1String(kFamilyHl2)
-        ? QString::fromLatin1(kFamilyHl2)
-        : QString::fromLatin1(kFamilyFlex);
+    const QString lowered = family.trimmed().toLower();
+    const QString wanted =
+        lowered == QLatin1String(kFamilyHl2)  ? QString::fromLatin1(kFamilyHl2)
+      : lowered == QLatin1String(kFamilyIcom) ? QString::fromLatin1(kFamilyIcom)
+                                              : QString::fromLatin1(kFamilyFlex);
     const int index = m_manualRadioTypeCombo->findData(wanted);
     if (index < 0 || index == m_manualRadioTypeCombo->currentIndex()) {
         updateManualFamilyHints();
@@ -1852,10 +1956,62 @@ void ConnectionPanel::setManualFamily(const QString& family)
 
 void ConnectionPanel::updateManualFamilyHints()
 {
-    const bool hl2 = currentManualFamily() == QLatin1String(kFamilyHl2);
+    const QString family = currentManualFamily();
+    const bool hl2  = family == QLatin1String(kFamilyHl2);
+    const bool icom = family == QLatin1String(kFamilyIcom);
+
+    // The credential pair belongs to Icom alone. Hiding the row CONTAINERS
+    // rather than the fields keeps their labels from being left behind.
+    if (m_manualIcomUserRow)
+        m_manualIcomUserRow->setVisible(icom);
+    if (m_manualIcomPassRow)
+        m_manualIcomPassRow->setVisible(icom);
+    if (m_manualIcomCivRow)
+        m_manualIcomCivRow->setVisible(icom);
+
+    if (icom) {
+        // Fill from settings, and read the password out of the keychain — which
+        // is asynchronous, so the field populates a beat later. Guarded by the
+        // widget pointer inside the callback because the panel can be closed
+        // between the request and the answer.
+        if (m_manualIcomUserEdit && m_manualIcomUserEdit->text().isEmpty())
+            m_manualIcomUserEdit->setText(IcomSettings::username());
+        // Show a stored override; leave blank when it is the default, so the
+        // placeholder can say "auto" rather than presenting A4 as a choice the
+        // operator made.
+        if (m_manualIcomCivEdit && m_manualIcomCivEdit->text().isEmpty()) {
+            const std::uint8_t civ = IcomSettings::civAddress();
+            if (civ != IcomSettings::kDefaultCivAddress)
+                m_manualIcomCivEdit->setText(
+                    QStringLiteral("%1").arg(civ, 2, 16, QLatin1Char('0')).toUpper());
+        }
+        if (m_manualIpEdit && m_manualIpEdit->text().isEmpty())
+            m_manualIpEdit->setText(IcomSettings::lastHost());
+        if (m_manualIcomPassEdit && m_manualIcomPassEdit->text().isEmpty()) {
+            QPointer<QLineEdit> field(m_manualIcomPassEdit);
+            IcomCredentials::load(this, [field](const QString& password) {
+                if (field && field->text().isEmpty())
+                    field->setText(password);
+            });
+        }
+    }
+
     if (m_manualHintLabel) {
         m_manualHintLabel->setText(
-            hl2
+            icom
+                ? QStringLiteral(
+                      "Enter the radio address and the network user name and password set on "
+                      "the radio itself. On the radio, Network Control must be ON (IC-705: "
+                      "Menu > Set > WLAN set > Remote settings). The password is stored in "
+                      "your operating system keychain, never in the settings file.\n\n"
+                      "TO TRANSMIT, the radio must also be told to take its modulation from "
+                      "the network. Under Menu > Set > Connectors > MOD Input, set BOTH:\n"
+                      "    \u2022  DATA OFF MOD \u2192 WLAN  (SSB, CW, AM, FM \u2014 voice)\n"
+                      "    \u2022  DATA MOD \u2192 WLAN  (FT8 and other data modes)\n"
+                      "Each covers a different set of modes, so setting only one leaves the "
+                      "other silent. If either is left on MIC or USB the radio ignores the "
+                      "audio AetherSDR sends: it keys, makes no power, and reports no error.")
+                : hl2
                 ? QStringLiteral(
                       "Use this path when discovery broadcasts cannot reach the radio — a VPN, a "
                       "routed subnet, or a switch that drops broadcasts. AetherSDR sends a "
@@ -1866,8 +2022,10 @@ void ConnectionPanel::updateManualFamilyHints()
                       "care of the probe."));
     }
     if (m_manualIpEdit) {
-        m_manualIpEdit->setPlaceholderText(hl2 ? QStringLiteral("Example: 192.168.1.21")
-                                               : QStringLiteral("Example: 10.0.0.25"));
+        m_manualIpEdit->setPlaceholderText(
+            icom ? QStringLiteral("Example: ic-705.local")
+          : hl2  ? QStringLiteral("Example: 192.168.1.21")
+                 : QStringLiteral("Example: 10.0.0.25"));
     }
 }
 
@@ -2001,6 +2159,120 @@ void ConnectionPanel::probeRadio(const QString& ip)
     // Metis discovery datagram — so there is nothing to gain from trying both,
     // and trying HL2 first (as this used to) charged every Flex connect the HL2
     // timeout before it started.
+    if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
+        // NO ANONYMOUS PROBE. A Flex answers TCP/4992 and an HL2 answers a
+        // Metis datagram without credentials, so both can be probed before
+        // committing. An Icom will not answer usefully until the RS-BA1 login
+        // has succeeded — so the connect IS the probe, and a wrong password
+        // surfaces as a session failure rather than as "nothing there".
+        QString user = m_manualIcomUserEdit ? m_manualIcomUserEdit->text().trimmed()
+                                            : QString();
+        QString pass = m_manualIcomPassEdit ? m_manualIcomPassEdit->text() : QString();
+        // Fall back to stored credentials when the fields are empty. This is
+        // what makes the bridge's `connect ip <host> icom` work at all: an
+        // automation launch has no dialog to type into, so without it the verb
+        // could only ever report "needs a user name and password".
+        if (user.isEmpty())
+            user = IcomSettings::username();
+        if (pass.isEmpty())
+            pass = IcomCredentials::sessionPassword();
+        if (user.isEmpty() || pass.isEmpty()) {
+            resetManualConnectButton();
+            setManualMessage(
+                QStringLiteral("An Icom needs the network user name and password set on the "
+                               "radio. Check Network Control is ON in the radio's menu, then "
+                               "enter the same credentials here."),
+                true);
+            return;
+        }
+
+        IcomSettings::setUsername(user);
+        IcomSettings::setLastHost(trimmedIp);
+
+        // Hex, with or without an 0x prefix or a trailing h — the radio's own
+        // menu writes it as "A2h", so accept what the operator is looking at.
+        // An unparseable or out-of-range entry is IGNORED rather than clamped:
+        // a wrong CI-V address is silent (the radio simply never answers), so
+        // guessing on the operator's behalf would hide their typo behind the
+        // exact symptom this field exists to cure.
+        if (m_manualIcomCivEdit) {
+            QString civ = m_manualIcomCivEdit->text().trimmed();
+            if (civ.isEmpty()) {
+                // BLANK MEANS AUTO, and it has to mean that on the way OUT as
+                // well as in. Without this an override could be typed but never
+                // taken back: clearing the field left the stored value in place
+                // and the placeholder then said "auto" while the radio was
+                // still being addressed at the old override. Restores the
+                // default rather than writing 0, so civAddress() has a real
+                // address to fall back on.
+                IcomSettings::setCivAddress(IcomSettings::kDefaultCivAddress);
+            } else {
+                if (civ.startsWith(QLatin1String("0x"), Qt::CaseInsensitive))
+                    civ = civ.mid(2);
+                if (civ.endsWith(QLatin1Char('h'), Qt::CaseInsensitive))
+                    civ.chop(1);
+                bool ok = false;
+                const uint addr = civ.toUInt(&ok, 16);
+                if (ok && addr > 0 && addr <= 0xFF) {
+                    IcomSettings::setCivAddress(static_cast<std::uint8_t>(addr));
+                } else {
+                    // SAY SO rather than connecting with something else. This
+                    // field exists because a wrong CI-V address fails SILENTLY
+                    // — the radio just never answers — so silently ignoring bad
+                    // input reproduces the exact symptom the field is here to
+                    // cure, and the operator would be left reading a "no reply"
+                    // that their typo caused.
+                    setStatusText(tr("CI-V address \"%1\" is not a hex byte "
+                                     "(try A2, 0xA2 or A2h) — not connecting.")
+                                      .arg(m_manualIcomCivEdit->text().trimmed()));
+                    m_manualIcomCivEdit->setFocus();
+                    m_manualIcomCivEdit->selectAll();
+                    return;
+                }
+            }
+        }
+        // Keychain for the password, never the settings file — and the save
+        // primes the session cache synchronously, so the connect below cannot
+        // race the keyring write.
+        IcomCredentials::save(pass);
+
+        // RESOLVE FIRST. QHostAddress parses NUMERIC addresses only — given a
+        // host name it yields a null address SILENTLY, and the connect then
+        // goes to "" and times out with a message about the radio's network
+        // settings. That bites hardest on exactly the documented case: the
+        // IC-705's default name is ic-705.local, which is what this field's own
+        // placeholder suggests.
+        QHostAddress resolved(trimmedIp);
+        if (resolved.isNull()) {
+            const QHostInfo hostInfo = QHostInfo::fromName(trimmedIp);
+            if (hostInfo.addresses().isEmpty()) {
+                resetManualConnectButton();
+                setManualMessage(
+                    QStringLiteral("Could not resolve \"%1\". Check the name, or enter the "
+                                   "radio's IP address instead.").arg(trimmedIp),
+                    true);
+                return;
+            }
+            resolved = hostInfo.addresses().first();
+        }
+
+        RadioInfo info;
+        info.family   = QString::fromLatin1(kFamilyIcom);
+        info.address  = resolved;
+        info.port     = IcomSettings::controlPort();
+        info.model    = QStringLiteral("Icom");
+        info.name     = info.model;
+        // No discovery means no MAC and no reported serial, so the host is the
+        // only stable identity this radio has for us. It has to be SOMETHING:
+        // the restore/persist scope keys off it.
+        info.serial   = QStringLiteral("icom:%1").arg(resolved.toString());
+        info.nickname = info.model;
+        rememberManualIp(trimmedIp);
+        resetManualConnectButton();
+        emit connectRequested(info);
+        return;
+    }
+
     if (currentManualFamily() == QLatin1String(kFamilyHl2)) {
         // Only a genuine timeout earns the "check the radio" message. A bind
         // failure has already reported itself, and pointing the operator at the

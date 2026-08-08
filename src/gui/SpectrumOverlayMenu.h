@@ -59,10 +59,16 @@ public:
                              int renderMode = 0,
                              int dssFloorDepth = 6,
                              int dssGain = 70,
-                             const QColor& lineColor = QColor(0x00, 0xe5, 0xff));
+                             const QColor& lineColor = QColor(0x00, 0xe5, 0xff),
+                             int dssRowSpan = 100);
     // Update only the radio-owned pan processing controls from live status.
     // Signal blockers keep status echoes from generating commands back to the
     // radio.
+    // Grey the 3D Span row out when the GPU mesh path is unavailable. The CPU
+    // image fallback ignores rowSpanFactor entirely, so the control would move,
+    // label, and persist while nothing on screen changed.
+    void setDssRowSpanSupported(bool supported);
+
     void syncPanProcessingSettings(int avg, int fps, bool weightedAvg);
     void syncWfLineDuration(int rate);
     void syncKiwiWaterfallSettings(int minDbm, int maxDbm, bool autoScale,
@@ -184,6 +190,7 @@ signals:
     void spectrumRenderModeChanged(int mode);
     void dssFloorDepthChanged(int dB);
     void dssGainChanged(int pct);
+    void dssRowSpanChanged(int pct);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
     // Emitted when user selects a band from the sub-panel.  stackKeyHint is
@@ -374,6 +381,10 @@ private:
     QLabel*      m_dssFloorLabel{nullptr};
     QSlider*     m_dssGainSlider{nullptr};  // 3DSS colour floor (0-100)
     QLabel*      m_dssGainLabel{nullptr};
+    QSlider*     m_dssRowSpanSlider{nullptr};  // 3DSS wedge close-in (0-100)
+    QLabel*      m_dssRowSpanLabel{nullptr};
+    QLabel*      m_dssRowSpanTitle{nullptr};
+    bool         m_dssRowSpanSupported{true};
     QComboBox*   m_gpuCombo{nullptr};   // render-GPU selector (multi-GPU only)
     QSlider*     m_rateSlider{nullptr};
     QLabel*      m_rateLabel{nullptr};

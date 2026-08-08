@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.7.4.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.8.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,11 +91,48 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Qt6 components
-# Qt 6.2 minimum: matches Ubuntu 22.04 LTS (our oldest supported distro)
-# and is the floor where QWindow::startSystemMove() — used by the
-# frameless title-bar drag in TitleBar / ContainerWidget / PanadapterApplet
-# — became available.  Binary distributions bundle Qt 6.7+ for QRhiWidget.
-find_package(Qt6 6.2 REQUIRED COMPONENTS
+# Qt 6.8 minimum, matching the Qt every shipped artifact is built against:
+# the AppImage (both arches, .github/workflows/appimage.yml), the Windows
+# installer (check-windows pins 6.8.3 in ci.yml), and the Linux CI image
+# (.github/docker/Dockerfile installs 6.8.3 via aqt). One number, so a Qt API
+# that compiles in CI also compiles for a release build.
+#
+# Raised from 6.2 deliberately. The old floor was nominal — nothing tested it
+# after Ubuntu 22.04 left the matrix, and the only leg anywhere near it was the
+# CI image on Ubuntu 24.04's Qt 6.4.2, a release EOL upstream since the 6.4
+# series ended at 6.4.3. That gap rejected valid code (PR #4646, QList::assign)
+# while testing a Qt no artifact shipped.
+#
+# Consequence for source builds: Ubuntu 24.04's distro Qt (6.4.2) no longer
+# satisfies this — build against 6.8+ from aqt/Qt online installer, or use a
+# distro carrying it (Debian Trixie, Ubuntu 25.10+, Fedora 41+, Arch).
+# 6.8 also clears QRhiWidget (6.7+), so the GPU spectrum path is no longer
+# conditionally compiled out on Linux CI.
+#
+# Probe QUIET first so a below-floor Qt gets an actionable error instead of
+# CMake's bare "the version found is not compatible", which names neither the
+# floor as a project decision nor the way out. Ubuntu 24.04 LTS (Qt 6.4.2) is
+# the common case, it has the largest install base of any supported distro, and
+# it was a documented apt line here until this floor moved — so the people most
+# likely to hit this have the least context for it, and the README they need is
+# a document they have already scrolled past.
+#
+# Falls through untouched when Qt is absent entirely (the REQUIRED call below
+# emits the normal not-found error) or already satisfies the floor.
+find_package(Qt6 QUIET COMPONENTS Core)
+if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
+    message(FATAL_ERROR
+        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
+        "This is the Qt every AetherSDR release binary is built against.\n"
+        "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
+        "Fedora 41+ and Arch all ship 6.8 or newer.\n"
+        "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
+        "or the Qt online installer and re-run with "
+        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
+        "\"Building from Source\" dependency section.")
+endif()
+
+find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
@@ -331,11 +368,17 @@ endif()
 
 # GPU-accelerated spectrum/waterfall rendering via QRhi (#391)
 # Requires: Qt 6.7+ (QRhiWidget), Qt6::ShaderTools (build-time shader compilation)
-# Defaults to ON but auto-disables on Qt < 6.7 (e.g. Ubuntu 24.04 ships Qt 6.4).
+# The version guard below is unreachable now that find_package demands 6.8 — it
+# is kept as a cheap backstop so lowering the floor again can't silently produce
+# a build that references QRhiWidget on a Qt that lacks it.
 if(AETHER_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
         set(AETHER_GPU_SPECTRUM OFF)
-        message(STATUS "GPU spectrum rendering disabled (requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.7.x/gcc_64 to use a newer Qt installation)")
+        # 6.8.3, not 6.7.x, in the suggested path: this guard is unreachable
+        # while the floor is 6.8, so if it ever fires the floor has been
+        # lowered — and pointing that reader at a 6.7 install would send them
+        # to a Qt find_package still rejects.
+        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 to use a newer Qt installation)")
     else()
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
@@ -376,6 +419,30 @@ if(AETHER_GPU_SPECTRUM)
             if(DEBIAN_PRIVATE_INC)
                 set(Qt6GuiPrivate_FOUND TRUE)
                 set(DEBIAN_GPU_FIX_REQUIRED TRUE) # Mark for Step 2 (manual include dirs)
+            endif()
+            # macOS framework layout. Qt's own macOS builds — the official
+            # installer and aqtinstall alike — ship QtGui as a framework, so the
+            # private headers live at QtGui.framework/Headers/<ver>/QtGui, one
+            # path component short of the SDK layout probed above (which expects
+            # a further QtGui/ beneath the include root). They also ship no
+            # Qt6GuiPrivate CMake package at all, so nothing above finds them.
+            #
+            # This is not a hypothetical layout: pinning the Apple Silicon DMG
+            # to aqt Qt 6.8.3 (#4688 §1) moved that leg off Homebrew's Qt, which
+            # *does* provide Qt6GuiPrivate — and AETHER_GPU_SPECTRUM promptly
+            # turned itself OFF, with the CPU QPainter fallback compiled in and
+            # the workflow green. Only the #4690 assertion caught it. Probe the
+            # framework layout here so the gate agrees with the wiring in the
+            # AETHER_GPU_SPECTRUM block below, which has always had a branch for
+            # this shape and could never be reached.
+            if(NOT Qt6GuiPrivate_FOUND AND APPLE)
+                foreach(_inc IN LISTS _qt_gui_incs)
+                    if(EXISTS "${_inc}/${Qt6_VERSION}/QtGui/private/qhighdpiscaling_p.h")
+                        set(QT_FRAMEWORK_PRIVATE_INC "${_inc}/${Qt6_VERSION}")
+                        set(Qt6GuiPrivate_FOUND TRUE)
+                        break()
+                    endif()
+                endforeach()
             endif()
         endif()
 
@@ -552,6 +619,17 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
+    src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
+    src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
+    src/core/backends/icom/IcomStream.cpp    # IcomCIV Phase 0 (one UDP stream + ARQ)
+    src/core/backends/icom/IcomSession.cpp   # IcomCIV Phase 0 (handshake orchestration)
+    src/core/backends/icom/IcomScope.cpp     # IcomCIV Phase 2 (0x27 waveform -> panadapter)
+    src/core/backends/icom/IcomAudio.cpp     # IcomCIV Phase 3 (codecs + the 1364/556 split)
+    src/core/backends/icom/IcomMeters.cpp    # IcomCIV Phase 4 (calibration + poll scheduler)
+    src/core/backends/icom/IcomModels.cpp    # IcomCIV Phase 5 (per-model capability table)
+    src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
+    src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
+    src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
@@ -624,6 +702,8 @@ set(CORE_SOURCES
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
+    src/core/N1MMSpotClient.cpp
+    src/core/N1MMSpotParser.cpp
     src/core/PropForecastClient.cpp
     src/core/PskReporterClient.cpp
     src/core/LocationAddressResolver.cpp
@@ -635,6 +715,7 @@ set(CORE_SOURCES
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
+    src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
@@ -659,6 +740,7 @@ set(CORE_SOURCES
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
     src/core/RNNoiseFilter.cpp
+    src/core/OpusTxPacer.cpp
     src/core/SpecbleachFilter.cpp
     src/core/CwDecoder.cpp
     src/core/CwCallsignSpotter.cpp
@@ -737,6 +819,7 @@ endif()
 
 set(MODEL_SOURCES
     src/models/Nr2SettingsModel.cpp
+    src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
@@ -968,6 +1051,7 @@ set(GUI_SOURCES
     src/gui/GradientEditorDialog.cpp
     src/gui/TokenEditorWidget.cpp
     src/gui/CompactColorPicker.cpp
+    src/gui/ImageFileDialog.cpp
 )
 
 # Bundled RNNoise (Mozilla/Xiph BSD-3) — client-side neural noise suppression
@@ -1436,7 +1520,37 @@ if (ENABLE_ASR)
             #    and have the runtime clamp has_bfloat to match, the same way it
             #    already clamps has_tensor. This is not a preference: asking for 3.1
             #    against a 13.0 deployment target is a hard compile error.
-            if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
+            #
+            #    The mapping is one shader-language version per macOS release —
+            #    metal2.4 = macOS 12, metal3.0 = 13, metal3.1 = 14 — so the tier has
+            #    to follow the deployment target exactly, and the same hard error
+            #    applies at every step. The Intel DMG dropped to 12.0 once its Qt
+            #    stopped being hand-built at 13.0 (its floor was the deployment
+            #    target of that hand-built Qt, not a product decision), which is why
+            #    a third tier exists here at all.
+            #
+            #    ggml's own shader carries exactly one version guard,
+            #    `__METAL_VERSION__ < 310`, i.e. the bf16 kernels already handled by
+            #    NO_BF16 — nothing in it distinguishes 3.0 from 2.4. That makes the
+            #    2.4 build plausible but NOT proven: ggml may still use unguarded
+            #    Metal-3 intrinsics. REQUIRE_ASR_GPU=ON on the DMG job means a wrong
+            #    answer is a loud build failure rather than a silently CPU-only
+            #    artifact, so this is safe to discover in CI.
+            #
+            #    Note the 2.x tier is spelled `macos-metal2.4`, NOT `metal2.4`.
+            #    Metal 3 unified the platforms and dropped the prefix, so 3.0/3.1
+            #    below are correct unqualified while everything at 2.x needs it.
+            #    The unqualified 2.4 spelling is not a legacy alias — the compiler
+            #    rejects it outright ("invalid value 'metal2.4' in '-std=metal2.4'")
+            #    and lists ios-metal2.4 / macos-metal2.4 / metal3.0 / metal3.1 /
+            #    metal3.2 as the accepted set. That killed the first Intel DMG
+            #    build to reach this tier, at 32%, in run 30764239938.
+            if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 13.0)
+                set(GGML_METAL_STD "macos-metal2.4" CACHE STRING "" FORCE)
+                set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
+                message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
+                    "(macos-metal2.4, no bf16 — props.has_bfloat clamped to match)")
+            elseif (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
                 set(GGML_METAL_STD "metal3.0" CACHE STRING "" FORCE)
                 set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
                 message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
@@ -2238,13 +2352,26 @@ if(AETHER_GPU_SPECTRUM)
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
         )
+    elseif(QT_FRAMEWORK_PRIVATE_INC)
+        # macOS framework layout located during detection. Both dirs, matching
+        # what Qt's own Qt6::Gui generator expression adds when the private
+        # module is available: <ver>/ resolves QtGui/private/... spellings,
+        # <ver>/QtGui/ resolves the <rhi/qrhi.h> the spectrum widgets include.
+        message(STATUS "Applying framework private QtGui include paths to AetherSDR (${QT_FRAMEWORK_PRIVATE_INC})")
+        target_include_directories(AetherSDR PRIVATE
+            "${QT_FRAMEWORK_PRIVATE_INC}"
+            "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+        )
     endif()
 
     if(TARGET Qt6::GuiPrivate)
         target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
-    elseif(NOT DEBIAN_GPU_FIX_REQUIRED)
-        # No GuiPrivate target and no manual path (e.g. some macOS layouts) —
-        # locate the rhi/ headers within the Qt6::Gui include dirs.
+    elseif(NOT DEBIAN_GPU_FIX_REQUIRED AND NOT QT_FRAMEWORK_PRIVATE_INC)
+        # No GuiPrivate target and neither manual path applied — last resort:
+        # locate the rhi/ headers within the Qt6::Gui include dirs. Qt's macOS
+        # framework layout used to land here and no longer does (the branch
+        # above handles it), so this now covers only distributions that expose
+        # rhi/ directly on the Qt6::Gui include path.
         get_target_property(_qt_gui_inc Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
         foreach(_dir IN LISTS _qt_gui_inc)
             if(EXISTS "${_dir}/rhi/qrhi.h")
@@ -2261,6 +2388,11 @@ if(AETHER_GPU_SPECTRUM)
         endforeach()
     endif()
 
+    # Shaders in this list get qsb's default GLSL set (100es/120/150). Anything
+    # using GLSL 130+ syntax (e.g. the `flat` qualifier) must NOT go here — the
+    # 120 slice would bake illegal code that only the driver rejects, on-device,
+    # where CI can't see it. Put such shaders in the GLSL-130+ block below;
+    # tools/check_shader_dialects.py fails the build-gate if they land here.
     qt_add_shaders(AetherSDR "aether_shaders"
         PREFIX "/shaders"
         FILES
@@ -2273,9 +2405,42 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
             resources/shaders/panscope.frag
+            resources/shaders/wavescope.frag
+    )
+
+    # Shaders needing GLSL 130+. dss_mesh (3D-FFT stacked-trace) is the only one
+    # today: it uses the `flat` interpolation qualifier — added for ridge
+    # stability in #4539 — which is legal only in GLSL 130 / ES 300 and later.
+    # SPIRV-Cross cannot lower an interpolation qualifier the way it lowers
+    # explicit locations and UBO blocks, so `flat` reaches every baked slice
+    # verbatim; the qsb default (100es, 120, 150) therefore bakes a 120 slice
+    # containing `flat varying float …`, which is a syntax error, and a 100es
+    # slice where `flat` is a reserved word. Both still BAKE — qsb exits 0 — so
+    # the only symptom is a driver rejecting the shader at runtime.
+    #
+    # Bake instead the flat-capable slices our GL backends actually report:
+    # 130 (OpenGL 3.0, e.g. Mesa compat-profile caps), 140 (desktop OpenGL 3.1 —
+    # the Raspberry Pi's v3d driver, which is what #4746 hit: no 140 slice baked,
+    # so QRhi fell back to 120 and the 3D FFT was silently disabled), 150
+    # (OpenGL 3.2+, what desktop GPUs already selected — byte-identical to
+    # before), and 300es (OpenGL ES 3, which previously matched only the illegal
+    # 100es slice). HLSL 50 / MSL 12 / SPIR-V are untouched: only GLSL is
+    # overridden, so the D3D11, Metal and Vulkan paths bake exactly as before.
+    #
+    # On an older GL<3.0 / GLES2 context no slice matches. QShader stays valid,
+    # so this is NOT caught by the vs.isValid() guard — QRhi finds no GLSL code
+    # and the m_dssMeshFillPipeline->create() call in
+    # SpectrumWidget::initDssMeshPipeline fails, m_dssMeshReady stays false, and
+    # the CPU image fallback still renders the 3D FFT. That is no worse than
+    # before: those contexts previously selected 120/100es, which never
+    # compiled. No shader-source change — #4539's `flat` is preserved.
+    # Complementary to #4730 (OpenGL outline rendering).
+    qt_add_shaders(AetherSDR "aether_shaders_glsl130"
+        PREFIX "/shaders"
+        GLSL "130,140,150,300es"
+        FILES
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
-            resources/shaders/wavescope.frag
     )
 endif()
 
@@ -2417,6 +2582,24 @@ if(HIDAPI_FOUND)
     endforeach()
     list(REMOVE_DUPLICATES HIDAPI_NORMALIZED_INCLUDE_DIRS)
     target_include_directories(aethercore PUBLIC ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
+    # pkg_check_modules sets HIDAPI_LIBRARIES to a bare name ("hidapi"), so the
+    # link needs the -L that HIDAPI_LIBRARY_DIRS carries — exactly as portaudio
+    # and fftw3 do below. hidapi was the one dependency missing it, and it went
+    # unnoticed because the only prefix it ever came from on macOS was
+    # Homebrew's, already covered by the global link_directories() near the top
+    # of this file. #4706 moved hidapi to a from-source prefix so it could be
+    # built at the deployment target, which is off every default search path:
+    # CMake still reported "Found hidapi, version 0.15.0" from the .pc file and
+    # the DMG build then died at 100% with "ld: library 'hidapi' not found".
+    # Empty on Windows, where HIDAPI_LIBRARIES is a full path — a no-op there.
+    #
+    # PUBLIC, not PRIVATE: aethercore is a STATIC library, so the link that has
+    # to resolve -lhidapi is the AetherSDR executable's. PRIVATE link libraries
+    # still reach it (CMake records them behind $<LINK_ONLY:>), but PRIVATE link
+    # DIRECTORIES do not — which produces exactly one symptom, -lhidapi on the
+    # exe link line with no -L to find it by. PRIVATE here was tried first and
+    # failed the DMG build the same way.
+    target_link_directories(aethercore PUBLIC ${HIDAPI_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${HIDAPI_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND HIDAPI_DLL)
@@ -2482,9 +2665,19 @@ endif()
 # sherpa-onnx (detected further below) bundles the SAME ONNX Runtime version we
 # stage (1.27 — the setup scripts are pinned to match). If it's staged, link its
 # libonnxruntime for our ORT code too, so the app ships/loads a single runtime
-# instead of two identical copies, and there's no rpath ambiguity. On macOS
-# sherpa's runtime is universal2, so this also covers Intel Macs, where the
-# standalone ONNX Runtime prebuilt is Apple-Silicon-only at 1.27.
+# instead of two identical copies, and there's no rpath ambiguity.
+#
+# macOS is the exception, and it goes the other way: same version, but NOT the
+# same binary. k2-fsa build their copy on whatever macOS their runner happens to
+# be, which stamps LC_BUILD_VERSION minos 15.5 into both slices of the
+# universal2 archive; Microsoft's own 1.27.0 build is 14.0. dyld enforces that
+# stamp on every dylib macdeployqt stages, so preferring sherpa's would set the
+# DMG's real minimum macOS to 15.5 no matter what CMAKE_OSX_DEPLOYMENT_TARGET
+# says — the app would not launch at all below it, which is #4532.
+# setup-sherpa-onnx.sh deletes sherpa's copy on macOS for the same reason; the
+# install name and C API are identical, so sherpa's own dylib resolves against
+# the upstream runtime unchanged. Upstream publishes no x86_64 macOS build, so
+# Intel Macs get no ORT and no sherpa backend at all — see macos-dmg.yml.
 if(ORT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
     if(WIN32)
         # sherpa's Windows bundle carries onnxruntime.lib + onnxruntime.dll; link
@@ -2495,10 +2688,12 @@ if(ORT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
             set(ORT_DLLS "")
             message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
         endif()
+    elseif(APPLE)
+        message(STATUS "ONNX Runtime: keeping the upstream 1.27 runtime, not sherpa's "
+            "(sherpa's macOS build is stamped minos 15.5 and would become the bundle's floor)")
     else()
         file(GLOB _sherpa_ort
-            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so"
-            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.dylib")
+            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so")
         if(_sherpa_ort)
             list(GET _sherpa_ort 0 ORT_LIBRARIES)
             message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
@@ -2510,7 +2705,12 @@ if(PORTAUDIO_FOUND)
     target_sources(aethercore PRIVATE src/core/CwSidetonePortAudioSink.cpp)
     target_compile_definitions(aethercore PUBLIC HAVE_PORTAUDIO)
     target_include_directories(aethercore PRIVATE ${PORTAUDIO_INCLUDE_DIRS})
-    target_link_directories(aethercore PRIVATE ${PORTAUDIO_LIBRARY_DIRS})
+    # PUBLIC for the reason spelled out at the hidapi block above: aethercore is
+    # static, so a PRIVATE link directory never reaches the executable that does
+    # the linking. portaudio has not failed yet only because its library has so
+    # far always sat on a default search path; that stopped being guaranteed when
+    # #4706 moved it into third_party/macos-deps.
+    target_link_directories(aethercore PUBLIC ${PORTAUDIO_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${PORTAUDIO_LIBRARIES})
 endif()
 
@@ -2527,7 +2727,8 @@ if(FFTW3_FOUND)
     # bundled third_party/fftw3). The library link stays PRIVATE (symbols reach
     # the exe transitively through the static lib).
     target_include_directories(aethercore PUBLIC ${FFTW3_INCLUDE_DIRS})
-    target_link_directories(aethercore PRIVATE ${FFTW3_LIBRARY_DIRS})
+    # PUBLIC — same static-library propagation rule as hidapi and portaudio.
+    target_link_directories(aethercore PUBLIC ${FFTW3_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${FFTW3_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND FFTW3_DLL)
@@ -2834,6 +3035,84 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# IcomCIV wire layers — pure encode/decode, standalone (no Qt / aethercore).
+# An Icom networked radio is two protocols stacked: CI-V is the command plane
+# and RS-BA1 is the UDP transport it travels inside. Both halves unit-test
+# without a socket, and CivCodec is deliberately transport-free so a future
+# USB / local-serial mode reuses it unchanged.
+add_executable(icom_protocol_test
+    tests/icom_protocol_test.cpp
+    src/core/backends/icom/IcomProtocol.cpp)
+target_include_directories(icom_protocol_test PRIVATE src)
+add_test(NAME icom_protocol_test COMMAND icom_protocol_test)
+
+add_executable(icom_civ_test
+    tests/icom_civ_test.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_civ_test PRIVATE src)
+add_test(NAME icom_civ_test COMMAND icom_civ_test)
+
+add_executable(icom_scope_test
+    tests/icom_scope_test.cpp
+    src/core/backends/icom/IcomScope.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_scope_test PRIVATE src)
+add_test(NAME icom_scope_test COMMAND icom_scope_test)
+
+add_executable(icom_audio_test
+    tests/icom_audio_test.cpp
+    src/core/backends/icom/IcomAudio.cpp
+    src/core/backends/icom/IcomProtocol.cpp)
+target_include_directories(icom_audio_test PRIVATE src)
+add_test(NAME icom_audio_test COMMAND icom_audio_test)
+
+# IcomCIV phases 4-5 — meter calibration curves, the poll scheduler (driven by
+# a synthetic clock), and the per-model capability table.
+add_executable(icom_meters_test
+    tests/icom_meters_test.cpp
+    src/core/backends/icom/IcomMeters.cpp
+    src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_meters_test PRIVATE src)
+add_test(NAME icom_meters_test COMMAND icom_meters_test)
+
+# IcomCIV phases 0-3 end to end — the session against a fake IC-705 on
+# localhost. This is what proves the ORDER of the RS-BA1 handshake, which is the
+# part of the protocol Icom documents nowhere.
+add_executable(icom_session_test
+    tests/icom_session_test.cpp
+    src/core/backends/icom/IcomSession.cpp
+    src/core/backends/icom/IcomStream.cpp
+    src/core/backends/icom/IcomProtocol.cpp
+    src/core/backends/icom/CivCodec.cpp
+    src/core/backends/icom/IcomScope.cpp
+    src/core/backends/icom/IcomAudio.cpp)
+target_include_directories(icom_session_test PRIVATE src tests)
+target_link_libraries(icom_session_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME icom_session_test COMMAND icom_session_test)
+
+# IcomCIV backend seam test — the IRadioBackend implementor against the fake
+# IC-705, with the TCI/WSJT-X audio contract as the load-bearing assertion.
+add_executable(icom_backend_test tests/icom_backend_test.cpp)
+target_include_directories(icom_backend_test PRIVATE src tests)
+target_link_libraries(icom_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME icom_backend_test COMMAND icom_backend_test)
+
+# IcomCIV live probe — REQUIRES A REAL RADIO, so deliberately NOT registered
+# with add_test(). Receive-only: it never sends a PTT command.
+#   cmake --build build --target icom_live_probe
+#   ./build/icom_live_probe ic-705.local <user> <password>
+add_executable(icom_live_probe EXCLUDE_FROM_ALL
+    tests/icom_live_probe.cpp
+    src/core/backends/icom/IcomSession.cpp
+    src/core/backends/icom/IcomStream.cpp
+    src/core/backends/icom/IcomProtocol.cpp
+    src/core/backends/icom/CivCodec.cpp
+    src/core/backends/icom/IcomScope.cpp
+    src/core/backends/icom/IcomAudio.cpp)
+target_include_directories(icom_live_probe PRIVATE src)
+target_link_libraries(icom_live_probe PRIVATE Qt6::Core Qt6::Network)
+
 # HL2 live band-filter probe — REQUIRES REAL HARDWARE, so deliberately NOT
 # registered with add_test(). Build it and run it by hand against a radio:
 #   cmake --build build --target hl2_live_band_filter_probe
@@ -2893,6 +3172,15 @@ target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
 
+# AM/SAM come back from WDSP's envelope detector with the carrier as a DC
+# pedestal; the blocker on the audio output must strip it without touching the
+# modes that were already zero-mean, and without its corner creeping up into
+# the audio band.
+add_executable(hl2_am_dcblock_test tests/hl2_am_dcblock_test.cpp)
+target_include_directories(hl2_am_dcblock_test PRIVATE src)
+target_link_libraries(hl2_am_dcblock_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_am_dcblock_test COMMAND hl2_am_dcblock_test)
+
 # The RX DSP must demodulate at every IQ rate the operator can select by zooming.
 add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
 target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
@@ -2947,6 +3235,13 @@ target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
 target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
 
+# HL2 connect re-entrancy — a connect or a disconnect landing while the WDSP
+# chains are still opening. Needs no radio; see the file header.
+add_executable(hl2_connect_reentrancy_test tests/hl2_connect_reentrancy_test.cpp)
+target_include_directories(hl2_connect_reentrancy_test PRIVATE src tests)
+target_link_libraries(hl2_connect_reentrancy_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -2963,6 +3258,9 @@ add_executable(client_eq_smoothing_test
 target_include_directories(client_eq_smoothing_test PRIVATE src)
 target_link_libraries(client_eq_smoothing_test PRIVATE Qt6::Widgets)
 set_target_properties(client_eq_smoothing_test PROPERTIES AUTOMOC ON)
+add_test(NAME client_eq_smoothing_test COMMAND client_eq_smoothing_test)
+set_tests_properties(client_eq_smoothing_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
 
 add_executable(client_comp_test
     tests/client_comp_test.cpp
@@ -3141,6 +3439,16 @@ target_link_libraries(nr2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(nr2_settings_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME nr2_settings_model_test COMMAND nr2_settings_model_test)
 
+add_executable(rn2_settings_model_test
+    tests/rn2_settings_model_test.cpp
+    src/models/Rn2SettingsModel.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(rn2_settings_model_test PRIVATE src tests)
+target_link_libraries(rn2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(rn2_settings_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME rn2_settings_model_test COMMAND rn2_settings_model_test)
+
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
     src/models/PanadapterModel.cpp
@@ -3242,6 +3550,35 @@ add_executable(declared_bands_test
 target_include_directories(declared_bands_test PRIVATE src)
 target_link_libraries(declared_bands_test PRIVATE Qt6::Core)
 add_test(NAME declared_bands_test COMMAND declared_bands_test)
+
+# Pins the BandDefs.h band edges through BandSettings::bandForFrequency() —
+# the lookup every frequency->band consumer shares, including the TX-filter
+# PTT preflight. #4723 shipped a 60m upper edge 1.3 kHz below the top of a
+# legal channel and nothing in the tree noticed.
+add_executable(band_edges_test
+    tests/band_edges_test.cpp
+    src/models/BandSettings.cpp
+)
+target_include_directories(band_edges_test PRIVATE src)
+target_link_libraries(band_edges_test PRIVATE Qt6::Core)
+add_test(NAME band_edges_test COMMAND band_edges_test)
+
+# Band-plan segment labels feed isVoiceSegmentLabel(), which gates S-History /
+# QRM voice detection — a label carrying no recognised emission token silently
+# switches voice markers off for that spectrum. Reads the shipped resource, so
+# the assertion is about the file that actually ships (#4723).
+qt_add_resources(BANDPLAN_VOICE_LABELS_TEST_RESOURCES resources/resources.qrc)
+add_executable(bandplan_voice_labels_test
+    tests/bandplan_voice_labels_test.cpp
+    src/core/VoiceSignalDetector.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    ${BANDPLAN_VOICE_LABELS_TEST_RESOURCES}
+)
+target_include_directories(bandplan_voice_labels_test PRIVATE src)
+target_link_libraries(bandplan_voice_labels_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME bandplan_voice_labels_test COMMAND bandplan_voice_labels_test)
 
 add_executable(radio_discovery_test
     tests/radio_discovery_test.cpp
@@ -3505,11 +3842,35 @@ target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
 target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
 add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
 
+# tests/TestEventLoop.h is test infrastructure that makes correctness claims, so
+# it carries its own proof — including a negative case that pins the #4693
+# iteration-count idiom as genuinely broken, so the trap cannot quietly stop
+# being a trap. No aethercore link: the header depends only on Qt, and keeping
+# the target minimal means it still builds when the app does not. Every case
+# drives a worker thread, which is the delivery path the helpers exist to
+# observe.
+add_executable(test_event_loop_test tests/test_event_loop_test.cpp)
+target_include_directories(test_event_loop_test PRIVATE tests)
+target_link_libraries(test_event_loop_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME test_event_loop_test COMMAND test_event_loop_test)
+
+# Just the voice fixture — linking the full resources.qrc pulled 5.8 MB of
+# application assets into a unit test to reach one 458 KB WAV (PR #4689 review).
+qt_add_resources(RNNOISE_FILTER_TEST_RESOURCES tests/rnnoise_filter_test.qrc)
 add_executable(rnnoise_filter_test
     tests/rnnoise_filter_test.cpp
+    ${RNNOISE_FILTER_TEST_RESOURCES}
 )
 target_link_libraries(rnnoise_filter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)
+
+add_executable(opus_tx_pacer_test
+    tests/opus_tx_pacer_test.cpp
+    src/core/OpusTxPacer.cpp
+)
+target_include_directories(opus_tx_pacer_test PRIVATE src)
+target_link_libraries(opus_tx_pacer_test PRIVATE Qt6::Core)
+add_test(NAME opus_tx_pacer_test COMMAND opus_tx_pacer_test)
 
 add_executable(adaptive_filter_test
     tests/adaptive_filter_test.cpp
@@ -3562,6 +3923,15 @@ set_target_properties(kiwi_sdr_manager_password_test PROPERTIES AUTOMOC ON)
 add_test(NAME kiwi_sdr_manager_password_test
          COMMAND kiwi_sdr_manager_password_test)
 
+add_executable(kiwi_sdr_manager_csv_test
+    tests/kiwi_sdr_manager_csv_test.cpp
+)
+target_include_directories(kiwi_sdr_manager_csv_test PRIVATE src)
+target_link_libraries(kiwi_sdr_manager_csv_test PRIVATE
+    aethercore Qt6::Core Qt6::Test)
+set_target_properties(kiwi_sdr_manager_csv_test PROPERTIES AUTOMOC ON)
+add_test(NAME kiwi_sdr_manager_csv_test COMMAND kiwi_sdr_manager_csv_test)
+
 add_executable(kiwi_sdr_trace_math_test
     tests/kiwi_sdr_trace_math_test.cpp
 )
@@ -3583,6 +3953,13 @@ add_executable(spectrum_preview_logic_test
 target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
+
+add_executable(software_opengl_request_test
+    tests/software_opengl_request_test.cpp
+)
+target_include_directories(software_opengl_request_test PRIVATE src)
+target_link_libraries(software_opengl_request_test PRIVATE Qt6::Core)
+add_test(NAME software_opengl_request_test COMMAND software_opengl_request_test)
 
 # Kiwi-display recenter write policy — pins that tune-driven recenters on a
 # kiwi-display pan stay widget-local (never pairing a new center with the
@@ -3678,6 +4055,7 @@ target_include_directories(iambic_keyer_test PRIVATE src)
 if(UNIX)
     target_link_libraries(iambic_keyer_test PRIVATE pthread)
 endif()
+add_test(NAME iambic_keyer_test COMMAND iambic_keyer_test)
 
 add_executable(passive_spots_policy_test
     tests/passive_spots_policy_test.cpp
@@ -3694,6 +4072,15 @@ add_executable(spot_mode_resolver_test
 target_include_directories(spot_mode_resolver_test PRIVATE src)
 target_link_libraries(spot_mode_resolver_test PRIVATE Qt6::Core)
 add_test(NAME spot_mode_resolver_test COMMAND spot_mode_resolver_test)
+
+add_executable(n1mm_spot_client_test
+    tests/n1mm_spot_client_test.cpp
+    src/core/N1MMSpotParser.cpp
+    src/models/BandSettings.cpp
+)
+target_include_directories(n1mm_spot_client_test PRIVATE src)
+target_link_libraries(n1mm_spot_client_test PRIVATE Qt6::Core)
+add_test(NAME n1mm_spot_client_test COMMAND n1mm_spot_client_test)
 
 add_executable(navtex_model_test
     tests/navtex_model_test.cpp
@@ -3794,23 +4181,6 @@ target_include_directories(spe_protocol_test PRIVATE src)
 target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
 add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
 
-# HGauge range-change contract (PR #4531): a rescale must re-map the current
-# reading onto the new axis even when the reading itself never changes.
-# Renders the widget and measures painted fill — the defect this guards was
-# invisible to value/min/max assertions.
-add_executable(hgauge_range_test
-    tests/hgauge_range_test.cpp
-    src/gui/DragValuePopup.cpp   # HGauge's hover readout — header-only otherwise
-)
-target_include_directories(hgauge_range_test PRIVATE src src/gui)
-target_link_libraries(hgauge_range_test PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets
-)
-set_target_properties(hgauge_range_test PROPERTIES AUTOMOC ON)
-add_test(NAME hgauge_range_test COMMAND hgauge_range_test)
-set_tests_properties(hgauge_range_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
@@ -3861,6 +4231,14 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 
 if(APPLE)
+    add_executable(mac_nr_filter_test
+        tests/mac_nr_filter_test.cpp
+        src/core/MacNRFilter.cpp
+    )
+    target_include_directories(mac_nr_filter_test PRIVATE src)
+    target_link_libraries(mac_nr_filter_test PRIVATE Qt6::Core "-framework Accelerate")
+    add_test(NAME mac_nr_filter_test COMMAND mac_nr_filter_test)
+
     add_executable(mac_startup_abort_guard_test
         tests/mac_startup_abort_guard_test.cpp
         src/MacStartupAbortGuard.cpp
@@ -4084,6 +4462,69 @@ target_link_libraries(s_meter_geometry_test PRIVATE
 set_target_properties(s_meter_geometry_test PROPERTIES AUTOMOC ON)
 add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
 set_tests_properties(s_meter_geometry_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(hgauge_range_test
+    tests/hgauge_range_test.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(hgauge_range_test PRIVATE src src/gui)
+target_link_libraries(hgauge_range_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+set_target_properties(hgauge_range_test PROPERTIES AUTOMOC ON)
+add_test(NAME hgauge_range_test COMMAND hgauge_range_test)
+# AETHER_AUTOMATION is NOT set here on purpose — the test qputenv()s it itself,
+# before the first HGauge caches the gate, so running the binary directly
+# exercises the same assertions ctest does.
+set_tests_properties(hgauge_range_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# HGauge hover readout (#3936 follow-up): exactly one badge on screen across a
+# meter-to-meter traverse, and it releases itself even if the leaveEvent is
+# dropped and the meter keeps updating.
+add_executable(hgauge_hover_popup_test
+    tests/hgauge_hover_popup_test.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(hgauge_hover_popup_test PRIVATE src src/gui)
+target_link_libraries(hgauge_hover_popup_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets)
+set_target_properties(hgauge_hover_popup_test PROPERTIES AUTOMOC ON)
+add_test(NAME hgauge_hover_popup_test COMMAND hgauge_hover_popup_test)
+set_tests_properties(hgauge_hover_popup_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# RangeSlider accessibility announcements (#4565): arrow-key bursts debounce to
+# one settled announcement, while discrete handle-focus moves announce
+# immediately instead of being swallowed by that debounce.
+add_executable(range_slider_a11y_test
+    tests/range_slider_a11y_test.cpp
+    src/gui/RangeSlider.cpp
+)
+target_include_directories(range_slider_a11y_test PRIVATE src)
+target_link_libraries(range_slider_a11y_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(range_slider_a11y_test PROPERTIES AUTOMOC ON)
+add_test(NAME range_slider_a11y_test COMMAND range_slider_a11y_test)
+set_tests_properties(range_slider_a11y_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# RelayBar accessibility announcements (#4565): an ATU sweep debounces to one
+# settled position, and the last-published value is forgotten on focus loss so
+# a position that moved while unfocused is still announced when it returns.
+# HGauge.h is listed so AUTOMOC picks up RelayBar's Q_OBJECT (header-only class).
+add_executable(relay_bar_a11y_test
+    tests/relay_bar_a11y_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/HGauge.h
+)
+target_include_directories(relay_bar_a11y_test PRIVATE src)
+target_link_libraries(relay_bar_a11y_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(relay_bar_a11y_test PROPERTIES AUTOMOC ON)
+add_test(NAME relay_bar_a11y_test COMMAND relay_bar_a11y_test)
+set_tests_properties(relay_bar_a11y_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
@@ -4325,11 +4766,29 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
 
+# AX.25 airtime model + link-liveness behaviour (T3 idle poll, bounded REJ
+# recovery, SABME refusal, Karn-safe RTT sampling). See docs/HFMODEM.md.
+add_executable(ax25_link_timing_test
+    tests/ax25_link_timing_test.cpp
+    src/core/tnc/Ax25.cpp
+    src/core/tnc/Ax25Connection.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(ax25_link_timing_test PRIVATE src tests)
+target_link_libraries(ax25_link_timing_test PRIVATE Qt6::Core)
+add_test(NAME ax25_link_timing_test COMMAND ax25_link_timing_test)
+
 add_executable(pms_mailbox_test
     tests/pms_mailbox_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/pms/PmsMailbox.cpp
+    # Ax25Connection logs link timing / RTT via lcAx25Link; LogManager brings
+    # AsyncLogWriter (member) along, same pattern as tnc_terminal_test.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(pms_mailbox_test PRIVATE src)
@@ -4581,6 +5040,13 @@ target_include_directories(hl2_txdsp_test PRIVATE src)
 target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
 
+# radiocert's measurement primitives. Header-only by design so this needs no
+# Qt and no link against aethercore — see the test's header comment for why it
+# exists at all (both shipped bugs in the diagnostic were in this arithmetic).
+add_executable(radio_certification_math_test tests/radio_certification_math_test.cpp)
+target_include_directories(radio_certification_math_test PRIVATE src)
+add_test(NAME radio_certification_math_test COMMAND radio_certification_math_test)
+
 add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
 target_include_directories(hl2_tx_loopback_test PRIVATE src)
 target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -4600,15 +5066,57 @@ target_include_directories(radiomodel_dax_null_test PRIVATE src)
 target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
 
+add_executable(dbm_range_plausibility_test tests/dbm_range_plausibility_test.cpp)
+target_include_directories(dbm_range_plausibility_test PRIVATE src)
+target_link_libraries(dbm_range_plausibility_test PRIVATE Qt6::Core)
+add_test(NAME dbm_range_plausibility_test COMMAND dbm_range_plausibility_test)
+
+add_executable(radiomodel_pan_range_null_test tests/radiomodel_pan_range_null_test.cpp)
+target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
+target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
+
 add_executable(radiomodel_pan_id_mapping_test tests/radiomodel_pan_id_mapping_test.cpp)
 target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
 target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
 
+# RadioModel audio-mute model-state contract (#4771).
+add_executable(radiomodel_audio_mute_test tests/radiomodel_audio_mute_test.cpp)
+target_include_directories(radiomodel_audio_mute_test PRIVATE src)
+target_link_libraries(radiomodel_audio_mute_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_audio_mute_test COMMAND radiomodel_audio_mute_test)
+
 add_executable(demo_backend_swap_test tests/demo_backend_swap_test.cpp)
 target_include_directories(demo_backend_swap_test PRIVATE src)
 target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME demo_backend_swap_test COMMAND demo_backend_swap_test)
+
+add_executable(demo_applet_tooltip_test
+    tests/demo_applet_tooltip_test.cpp
+    src/gui/DemoApplet.cpp
+)
+target_include_directories(demo_applet_tooltip_test PRIVATE src)
+target_link_libraries(demo_applet_tooltip_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME demo_applet_tooltip_test COMMAND demo_applet_tooltip_test)
+set_tests_properties(demo_applet_tooltip_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# IcomCIV backend selection — proves family="icom" reaches IcomCivBackend
+# through RadioModel's real swap path. Without this, every layer below can be
+# green while nothing in the application can construct it.
+# IcomCIV settings + credentials. The load-bearing check is the SECURITY one:
+# the Icom network password must never reach the settings database. Own process
+# because AppSettings is a process-wide singleton.
+add_executable(icom_settings_test tests/icom_settings_test.cpp)
+target_include_directories(icom_settings_test PRIVATE src tests)
+target_link_libraries(icom_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_settings_test COMMAND icom_settings_test)
+
+add_executable(icom_family_test tests/icom_family_test.cpp)
+target_include_directories(icom_family_test PRIVATE src)
+target_link_libraries(icom_family_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_family_test COMMAND icom_family_test)
 
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
@@ -4620,7 +5128,7 @@ add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
 # both connection edges, and the `!connected || caps.hasX` rule the GUI applies
 # restores the permissive value on disconnect.
 add_executable(radio_capability_gating_test tests/radio_capability_gating_test.cpp)
-target_include_directories(radio_capability_gating_test PRIVATE src)
+target_include_directories(radio_capability_gating_test PRIVATE src tests)
 target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
 
@@ -4709,6 +5217,11 @@ target_link_libraries(location_address_resolver_test PRIVATE
 set_target_properties(location_address_resolver_test PROPERTIES AUTOMOC ON)
 add_test(NAME location_address_resolver_test COMMAND location_address_resolver_test)
 
+add_executable(display_presence_test tests/display_presence_test.cpp)
+target_include_directories(display_presence_test PRIVATE src)
+target_link_libraries(display_presence_test PRIVATE Qt6::Core)
+add_test(NAME display_presence_test COMMAND display_presence_test)
+
 add_executable(amp_model_test tests/amp_model_test.cpp)
 target_include_directories(amp_model_test PRIVATE src)
 target_link_libraries(amp_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4796,6 +5309,24 @@ if(UNIX)
     target_link_libraries(async_log_writer_test PRIVATE pthread)
 endif()
 set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
+
+# Support & Diagnostics category toggle must enable Info alongside Debug
+# (#4419): most categories declare a QtWarningMsg threshold, and the filter
+# rules previously re-enabled .debug only, leaving every qCInfo on those
+# categories unreachable.
+add_executable(log_manager_filter_rules_test
+    tests/log_manager_filter_rules_test.cpp
+    src/core/LogManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(log_manager_filter_rules_test PRIVATE src)
+target_link_libraries(log_manager_filter_rules_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(log_manager_filter_rules_test PRIVATE pthread)
+endif()
+set_target_properties(log_manager_filter_rules_test PROPERTIES AUTOMOC ON)
+add_test(NAME log_manager_filter_rules_test COMMAND log_manager_filter_rules_test)
 
 # Pre-filled GitHub issue body + redaction-at-render guarantee (#3705).
 # IssueReport.cpp depends only on redactPii (AsyncLogWriter.cpp) — no
@@ -4948,6 +5479,32 @@ target_link_libraries(help_dialog_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Test
 )
 set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
+
+# FreeDV Reporter status-message row (#4231). Guarded like the dialog
+# itself — FreeDvReporterDialog only exists when WebSockets are available.
+# Dialog-side only: the test never reaches qso.freedv.org.
+if(Qt6WebSockets_FOUND)
+    # src/gui/ sources belong to the AetherSDR executable rather than
+    # aethercore, so the dialog's GUI dependencies are listed explicitly;
+    # SliceModel/ThemeManager/settings come in via aethercore.
+    add_executable(freedv_reporter_message_test
+        tests/freedv_reporter_message_test.cpp
+        src/gui/FreeDvReporterDialog.cpp
+        src/gui/FreeDvReporterModel.cpp
+        src/gui/PersistentDialog.cpp
+        src/gui/FramelessResizer.cpp
+        src/gui/FramelessWindowTitleBar.cpp
+    )
+    target_include_directories(freedv_reporter_message_test PRIVATE src)
+    target_link_libraries(freedv_reporter_message_test PRIVATE
+        aethercore Qt6::Core Qt6::Widgets Qt6::Test
+    )
+    set_target_properties(freedv_reporter_message_test PROPERTIES AUTOMOC ON)
+    add_test(NAME freedv_reporter_message_test
+             COMMAND freedv_reporter_message_test)
+    set_tests_properties(freedv_reporter_message_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 
 # Regression guard for #3662: the AetherControl window must never demand a
 # minimum height taller than the screen (auto-engages compact when it would).
@@ -5129,6 +5686,11 @@ add_executable(host_voice_chain_policy_test
 )
 target_include_directories(host_voice_chain_policy_test PRIVATE src)
 add_test(NAME host_voice_chain_policy_test COMMAND host_voice_chain_policy_test)
+add_executable(hl2_tx_level_policy_test
+    tests/hl2_tx_level_policy_test.cpp
+)
+target_include_directories(hl2_tx_level_policy_test PRIVATE src)
+add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -5188,6 +5750,44 @@ set_target_properties(hl2_pc_audio_lock_test PROPERTIES AUTOMOC ON)
 add_test(NAME hl2_pc_audio_lock_test COMMAND hl2_pc_audio_lock_test)
 set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Title-bar headphone mute reconcile contract (#4722) — needs QApplication +
+# Widgets, same dependency set as hl2_pc_audio_lock_test above.
+add_executable(titlebar_headphone_mute_test
+    tests/titlebar_headphone_mute_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's dialogs are frameless, so the resizer + frameless title bar
+    # come along; ThemeManager pulls its logging deps.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(titlebar_headphone_mute_test PRIVATE src tests)
+target_link_libraries(titlebar_headphone_mute_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(titlebar_headphone_mute_test PROPERTIES AUTOMOC ON)
+add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
+set_tests_properties(titlebar_headphone_mute_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
+add_executable(icom_replay_test tests/icom_replay_test.cpp)
+target_include_directories(icom_replay_test PRIVATE src)
+target_link_libraries(icom_replay_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME icom_replay_test COMMAND icom_replay_test)
+
+add_executable(rx_filter_step_test tests/rx_filter_step_test.cpp)
+target_include_directories(rx_filter_step_test PRIVATE src)
+target_link_libraries(rx_filter_step_test PRIVATE Qt6::Core)
+add_test(NAME rx_filter_step_test COMMAND rx_filter_step_test)
 
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
@@ -5360,6 +5960,7 @@ set(AETHER_SETTINGS_CONSUMERS
     panadapter_message_overlay_test
     app_settings_safety_test
     nr2_settings_model_test
+    rn2_settings_model_test
     panadapter_model_rx_antenna_test
     qso_recorder_slice_lifetime_test
     qso_recorder_pc_audio_guard_test
@@ -5377,6 +5978,7 @@ set(AETHER_SETTINGS_CONSUMERS
     ax25_libmodem_shim_test
     ax25_replay
     ax25_session_analyze
+    ax25_link_timing_test
     pms_mailbox_test
     aprs_messenger_test
     tnc_terminal_test
@@ -5394,9 +5996,12 @@ set(AETHER_SETTINGS_CONSUMERS
     transmit_model_test
     container_widget_test
     hl2_pc_audio_lock_test
+    titlebar_headphone_mute_test
     amp_applet_test
     container_manager_test
     container_nesting_test
+    log_manager_filter_rules_test
+    bandplan_voice_labels_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

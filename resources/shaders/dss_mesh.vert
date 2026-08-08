@@ -32,6 +32,21 @@ layout(std140, binding = 0) uniform U {
     float visibleRows;        // perspective depth; texture also holds exit reserve
     float plotWidthPx;        // DSS viewport width in physical pixels
     float plotHeightPx;       // DSS viewport height in physical pixels
+    // Frequency span each mesh row covers, as a multiple of the on-screen
+    // viewport bandwidth. 1.0 is the classic clipped trapezoid. Above 1.0 the
+    // NEAR rows run off both edges of the plot and the existing perspective
+    // narrowing walks them back in with depth, so the flanking wedges close
+    // from the front. The projection itself is untouched — a signal still lands
+    // at 0.5 + (freq - 0.5) * depthScale — so the converging slant, the
+    // frequency ruler, and every marker stay exactly where they were.
+    // 1/backWidthFrac (1.667) is the point where the deepest row lands exactly
+    // on the plot edge and no wedge remains at any depth; the host clamps
+    // there and otherwise tapers to the overhang actually available.
+    float rowSpanFactor;
+    float meshCols;           // mesh columns per row; >= texCols so a widened
+                              // row still samples every texel on screen
+    // std140 rounds this 22-float scalar run up to the next vec4 boundary.
+    // SpectrumWidget writes two explicit zeros to match — see kDssMeshUboFloats.
     vec4  bgFill;             // plot background colour (for haze)
     vec4  shadowBands[8];     // low u, high u, centre u, band alpha
     vec4  shadowStyles[8];    // cue rgb, centre-line alpha
@@ -55,6 +70,9 @@ layout(location = 4) out float vFrequency;
 layout(location = 5) out float vLayerAlpha;
 layout(location = 6) out float vRibbonCoord;  // -1..+1 across AA outline
 layout(location = 7) flat out float vOverlayLayer;
+// Distance to this row's silhouette in plot-width units. vFrequency can no
+// longer serve: past the plot edge it leaves [0,1] and reads as "outside".
+layout(location = 8) out float vSideDistance;
 
 vec4 sampleHistory(float texU, float sourceAge, float rows)
 {
@@ -71,7 +89,27 @@ vec4 sampleHistory(float texU, float sourceAge, float rows)
         heightTex, vec2(texU, fract(rowOffset + sourceAge / rows)));
 }
 
-float effectiveDbmAt(float geometryU, float sampleAge, float rows)
+// Perspective narrowing with depth. Unchanged, and still the ONLY thing that
+// places a frequency on screen — widening the rows must not touch it.
+float dssDepthScale(float geometryV)
+{
+    return mix(1.0, backWidthFrac, geometryV);
+}
+
+// Mesh column u (0..1 across the drawn row) -> frequency in viewport units,
+// where 0..1 spans the on-screen bandwidth. rowSpanFactor > 1 pushes the ends
+// outside that range, into the offscreen overhang served by the supplemental
+// (native waterfall tile) channel. Depth-independent: every row covers the same
+// frequency range and the perspective decides how wide it lands.
+float dssFreqUnit(float meshU)
+{
+    return 0.5 + (meshU - 0.5) * rowSpanFactor;
+}
+
+// Returns (dBm, covered). `covered` is 0 where neither the exact FFT row nor the
+// calibrated tile overhang had data for this frequency, which lets the caller
+// feather the extended wedge out instead of drawing a flat floor plateau.
+vec2 effectiveDbmAt(float geometryU, float sampleAge, float rows)
 {
     int frameAge = int(clamp(
         floor(sampleAge + 0.5), 0.0, float(103)));
@@ -91,7 +129,7 @@ float effectiveDbmAt(float geometryU, float sampleAge, float rows)
         ? vec4(floorDbm, 0.0, floorDbm, 0.0)
         : sampleHistory(texU, sampleAge, rows);
     if (historySample.g > 0.5) {
-        return historySample.r;
+        return vec2(historySample.r, 1.0);
     }
 
     float supplementalBandwidthMhz = frame.w;
@@ -109,21 +147,21 @@ float effectiveDbmAt(float geometryU, float sampleAge, float rows)
             vec4 supplementalSample =
                 sampleHistory(supplementalTexU, sampleAge, rows);
             if (supplementalSample.a > 0.5) {
-                return supplementalSample.b;
+                return vec2(supplementalSample.b, 1.0);
             }
         }
     }
-    return floorDbm;
+    return vec2(floorDbm, 0.0);
 }
 
-vec2 ridgeNdcAt(float geometryU, float dbm, float geometryV)
+vec2 ridgeNdcAt(float freqUnit, float dbm, float geometryV)
 {
     float strengthLinear = clamp(
         (dbm - floorDbm) / max(rangeDb, 1.0), 0.0, 1.0);
     float strengthHeight =
         pow(strengthLinear, max(zCurve, 0.05));
-    float width = mix(1.0, backWidthFrac, geometryV);
-    float plotX = 0.5 + (geometryU - 0.5) * width;
+    float width = dssDepthScale(geometryV);
+    float plotX = 0.5 + (freqUnit - 0.5) * width;
     float baselineY =
         mix(1.0, 1.0 - depthSpanFrac, geometryV);
     float ridge =
@@ -190,7 +228,9 @@ void main()
     // A zoom-created gap is not an amplitude measurement. Pin it to the
     // baseline before both height and colour mapping so later range changes
     // cannot recolour or lift it, while leaving row/layer visibility untouched.
-    float dbm = effectiveDbmAt(u, sampleAge, rows);
+    float freqUnit = dssFreqUnit(u);
+    vec2 sampled = effectiveDbmAt(freqUnit, sampleAge, rows);
+    float dbm = sampled.x;
     // Linear strength drives COLOUR (LUT[sLin] = dbmToRgb(floor+sLin*range),
     // matching the CPU path); the zCurve lift applies to HEIGHT only.
     float sLin = clamp((dbm - floorDbm) / max(rangeDb, 1.0), 0.0, 1.0);
@@ -199,13 +239,23 @@ void main()
         (dbm - floorDbm) / max(colorRangeDb, 1.0), 0.0, 1.0);
 
     // Receding perspective trapezoid in plot space [0,1] (0,0 = top-left).
-    float w = mix(1.0, backWidthFrac, geometryV);      // narrows with depth
-    float plotX = 0.5 + (u - 0.5) * w;
+    // Unchanged: rowSpanFactor widened the frequency range the row COVERS, not
+    // the way a frequency maps to screen. A row wider than the viewport simply
+    // has its ends fall outside [0,1] and get clipped, which is exactly the
+    // near-row overflow that closes the wedge.
+    float w = dssDepthScale(geometryV);                // narrows with depth
+    float plotX = 0.5 + (freqUnit - 0.5) * w;
     float baseY = mix(1.0, 1.0 - depthSpanFrac,
                       geometryV);                       // baseline rises with depth
     float ridge = sH * frontMaxRidgeFrac * w;          // far ridges shorter
     float topY  = baseY - ridge;                       // up = smaller y
     float plotY = edge > 0.5 ? 1.0 : topY;
+    // Distance from this column to the nearer silhouette edge, in plot-width
+    // units. It reaches 0 at both mesh ends, so the side fade always applies
+    // there; on a widened row those ends sit outside the plot and the fade is
+    // clipped away with them, which is why widening shows no fade band inside
+    // the viewport.
+    vSideDistance = min(u, 1.0 - u) * rowSpanFactor * w;
 
     vec2 ndc = vec2(plotX * 2.0 - 1.0, 1.0 - plotY * 2.0);
     if (ribbonOutline) {
@@ -213,13 +263,19 @@ void main()
         // through subpixels, producing a whole-surface strobe. Expand each
         // outline into a two-pixel screen-space ribbon; the fragment shader
         // analytically softens its edges.
-        float du = 1.0 / max(texCols - 1.0, 1.0);
+        // One MESH column, which is no longer one texel: the mesh is wider than
+        // the viewport so its column pitch is the tangent's natural step.
+        float du = 1.0 / max(meshCols - 1.0, 1.0);
         float previousU = max(u - du, 0.0);
         float nextU = min(u + du, 1.0);
+        float previousFreq = dssFreqUnit(previousU);
+        float nextFreq = dssFreqUnit(nextU);
         vec2 previousNdc = ridgeNdcAt(
-            previousU, effectiveDbmAt(previousU, sampleAge, rows), geometryV);
+            previousFreq,
+            effectiveDbmAt(previousFreq, sampleAge, rows).x, geometryV);
         vec2 nextNdc = ridgeNdcAt(
-            nextU, effectiveDbmAt(nextU, sampleAge, rows), geometryV);
+            nextFreq,
+            effectiveDbmAt(nextFreq, sampleAge, rows).x, geometryV);
         vec2 viewportHalf =
             vec2(max(plotWidthPx, 1.0), max(plotHeightPx, 1.0)) * 0.5;
         vec2 tangentPx = (nextNdc - previousNdc) * viewportHalf;
@@ -246,7 +302,17 @@ void main()
     vLut = edge > 0.5 ? colorStrength * 0.6 : colorStrength;
     vDepth = clamp(geometryV, 0.0, 1.0);
     vEdge  = edge;
-    vFrequency = u;
-    vBoundaryFade = clamp(validRows - sampleAge, 0.0, 1.0);
+    // Frequency in viewport units, which is what the slice-shadow decals expect.
+    // Now leaves [0,1] on a widened row; vSideDistance carries the silhouette.
+    vFrequency = freqUnit;
+    // Feather the widened wedge where no channel had data, instead of extruding
+    // a flat floor plateau out to the plot edge. vBoundaryFade already fades the
+    // curtain toward bgFill and dims the ridge, and discards at zero, so folding
+    // coverage in here needs no fragment-shader change. Inside the on-screen
+    // viewport an uncovered bin keeps its existing floor rendering.
+    float insideViewport =
+        (freqUnit >= 0.0 && freqUnit <= 1.0) ? 1.0 : 0.0;
+    vBoundaryFade = clamp(validRows - sampleAge, 0.0, 1.0)
+        * max(insideViewport, sampled.y);
     vOverlayLayer = overlayLayer ? 1.0 : 0.0;
 }

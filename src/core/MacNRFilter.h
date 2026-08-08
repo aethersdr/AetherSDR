@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include <QByteArray>
+#include <algorithm>
 #include <atomic>
 #include <vector>
 #include <Accelerate/Accelerate.h>
@@ -14,12 +15,15 @@ namespace AetherSDR {
 // MMSE-Wiener filter with minimum-statistics noise floor tracking.
 // Uses vDSP's real FFT, hardware-accelerated on Apple Silicon via AMX.
 //
-// Improvements over original (v0.7.9):
+// Design characteristics:
 //   - Processes at 24 kHz natively — no 24↔48 kHz resampling.
 //     Eliminates the double-resampler chain that caused clicks, phase
 //     distortion, and int16 mid-point quantisation noise.
 //   - 512-point FFT at 24 kHz → 46.9 Hz/bin (2× better than NR2).
-//   - 25-frame noise history (~267 ms) vs 10 frames (~107 ms) before.
+//   - Smoothed-periodogram minimum statistics with calibrated bias and
+//     rate-limited upward tracking, using a 25-frame history (~267 ms).
+//   - Near-silent frames freeze the learned noise floor so mute, squelch, and
+//     TX gaps cannot collapse it and cause a burst when audio resumes.
 //   - Per-bin Wiener gain is temporally smoothed (GSMOOTH) to suppress
 //     musical-noise artefacts caused by rapid frame-to-frame gain swings.
 //   - Output accumulator ensures exact byte-count match with no silence
@@ -52,7 +56,8 @@ public:
 
 private:
     void updateGainFromFrame(const float* inBuf);
-    void synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf);
+    void synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf,
+                                        float synthesisStrength);
 
     // ── FFT parameters ─────────────────────────────────────────────────
     static constexpr int LOG2N = 9;           // log2(512)
@@ -61,12 +66,18 @@ private:
     static constexpr int NBINS = N / 2 + 1;   // 257 unique spectral bins
 
     // ── Algorithm tuning ───────────────────────────────────────────────
-    static constexpr int   HIST    = 25;    // noise history frames (~267 ms)
-    static constexpr float ALPHA   = 0.92f; // decision-directed smoothing
-    static constexpr float OVER    = 2.0f;  // oversubtraction — punches harder at noise bins
-    static constexpr float FLOOR   = 0.05f; // minimum Wiener gain (~26 dB max suppression)
-    static constexpr float BIAS    = 1.2f;  // min-stats bias correction
-    static constexpr float GSMOOTH = 0.70f; // temporal gain smoothing (faster response)
+    static constexpr int   HIST             = 25;    // noise history frames (~267 ms)
+    static constexpr float POWER_SMOOTH     = 0.80f;  // smoothed-periodogram coefficient
+    static constexpr float MINSTAT_BIAS     = 1.85f;  // calibrated for a 25-frame smoothed minimum
+    static constexpr float NOISE_RISE       = 0.90f;  // avoid chasing speech on upward noise updates
+    static constexpr float MIN_FRAME_POWER  = 1e-8f;  // freeze estimator below -80 dBFS RMS
+    static constexpr float INITIAL_NOISE_FRACTION = 0.25f; // avoid learning speech at enable time
+    static constexpr float ALPHA            = 0.92f;  // decision-directed smoothing
+    // Full strength deliberately drives stationary bins near FLOOR. The user
+    // strength control blends this mask with dry audio for gentler reduction.
+    static constexpr float OVER             = 2.0f;
+    static constexpr float FLOOR            = 0.05f; // minimum Wiener gain (~26 dB max suppression)
+    static constexpr float GSMOOTH          = 0.70f; // temporal gain smoothing (faster response)
 
     // ── vDSP state ─────────────────────────────────────────────────────
     FFTSetup           m_fftSetup{nullptr};
@@ -86,15 +97,15 @@ private:
     std::vector<float> m_outAccumR; // processed 24 kHz right-channel output
 
     // ── Noise estimator state ─────────────────────────────────────────
-    float              m_powerHistory[HIST][NBINS]{};
+    float              m_powerHistory[HIST][NBINS]{}; // smoothed periodograms
     int                m_histIdx{0};
-    std::vector<float> m_noiseEst;   // current noise floor estimate [NBINS]
-    std::vector<float> m_prevGain;   // previous-frame Wiener gain [NBINS]
-    std::vector<float> m_prevPow;    // previous-frame power spectrum [NBINS]
-    std::vector<float> m_powerBuf;   // current power spectrum [NBINS]
-    std::vector<float> m_gainBuf;    // raw Wiener gain per bin [NBINS]
-    std::vector<float> m_smoothGain; // temporally smoothed gain [NBINS]
-    int                m_frameCount{0};
+    std::vector<float> m_noiseEst;       // current noise floor estimate [NBINS]
+    std::vector<float> m_smoothedPower;  // current smoothed periodogram [NBINS]
+    std::vector<float> m_prevPostSnr;    // previous a-posteriori SNR [NBINS]
+    std::vector<float> m_filterGain;     // unblended synthesis mask [NBINS]
+    std::vector<float> m_powerBuf;       // current power spectrum [NBINS]
+    std::vector<float> m_gainBuf;        // raw Wiener gain per bin [NBINS]
+    bool               m_noiseInitialized{false};
 
     std::atomic<float> m_strength{1.0f};
 };

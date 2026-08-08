@@ -17,8 +17,9 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
+#include "TestDspBuildWait.h"
+
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
 #include <QUdpSocket>
@@ -103,7 +104,9 @@ int main(int argc, char** argv)
     // were. kIqRateHz is the ONE place the rate appears.
     req.params[QStringLiteral("sampleRateHz")] = kIqRateHz;
     backend.connectRadio(req);
-    spin(2500);
+    AetherSDR::test::awaitDspBuild("hl2_tx_loopback_test",
+                                  [&] { return backend.isConnected(); });
+    spin(2500);   // unchanged settle budget; only the connect wait moved out of it
     check(backend.isConnected(), "connected to the simulator");
     if (!backend.isConnected()) {
         std::fprintf(stderr, "hl2_tx_loopback_test: cannot continue unconnected\n");

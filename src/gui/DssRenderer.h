@@ -50,14 +50,119 @@ public:
     // span. Otherwise a high Ref level compresses every real signal into blue.
     static constexpr float kColorSpanDb        = 45.0f;
 
+    // ── Wedge-closing row span ──────────────────────────────────────────────
+    // Because every row covers the SAME frequency span while the far rows
+    // narrow to kBackWidthFrac, the surface leaves two empty triangles beside
+    // it. Widen the span each row covers instead: the near rows then run off
+    // both edges of the plot and the existing perspective narrowing walks them
+    // back in, closing the wedge from the front. The projection below is
+    // untouched, so the converging slant, the frequency ruler and every marker
+    // stay put. dss_mesh.vert applies the SAME formulas.
+
+    // Span at which the DEEPEST row lands exactly on the plot edge. Beyond this
+    // the surface only overhangs further without revealing more of the plot.
+    static constexpr float kMaxRowSpanFactor = 1.0f / kBackWidthFrac;
+
+    // Mesh columns per row for the GPU path. The mesh spans rowSpanFactor x the
+    // viewport, while the height texture holds kCols texels ACROSS THE VIEWPORT
+    // — so a kCols-wide mesh would leave (span-1)/span of those texels unread.
+    // That is not shimmer: the mesh-column-to-frequency mapping is static, so
+    // the same texels are missed every frame and a narrow carrier landing on one
+    // is permanently invisible at a fixed screen position. Size the mesh for the
+    // widest span instead, so the on-screen region is never sparser than the
+    // texture it samples. Below the widest span it merely oversamples, which
+    // Nearest filtering absorbs by repeating texels.
+    static constexpr int kMeshCols =
+        static_cast<int>(kCols * kMaxRowSpanFactor) + 1;
+    // The invariant dss_mesh.vert's Nearest height sampler depends on: at the
+    // widest span the on-screen columns (kMeshCols / kMaxRowSpanFactor) must
+    // still be at least kCols, or bins fall between samples and vanish.
+    static_assert(static_cast<float>(kMeshCols) >= kCols * kMaxRowSpanFactor,
+                  "kMeshCols must keep the on-screen grid at texel density "
+                  "at kMaxRowSpanFactor");
+
+    // Perspective narrowing with depth — the only thing that places a frequency.
+    static float depthScale(float depth)
+    {
+        return 1.0f - std::clamp(depth, 0.0f, 1.0f) * (1.0f - kBackWidthFrac);
+    }
+
+    // Mesh column (0..1 across the drawn row) -> frequency in viewport units,
+    // where 0..1 spans the on-screen bandwidth. Depth-independent by design.
+    static float rowFrequencyUnit(float meshUnit, float rowSpanFactor)
+    {
+        return 0.5f + (meshUnit - 0.5f) * rowSpanFactor;
+    }
+
+    // Fraction of the plot width a row at `depth` covers. >= 1 means that row
+    // reaches both edges and leaves no wedge; the front row is the widest.
+    static float rowScreenCoverage(float depth, float rowSpanFactor)
+    {
+        return depthScale(depth) * rowSpanFactor;
+    }
+
+    // Shallowest depth still leaving a wedge, or 1 when the surface is closed
+    // all the way to the back. Lets the host report how much a given overhang
+    // actually bought.
+    static float wedgeFreeDepth(float rowSpanFactor)
+    {
+        if (rowSpanFactor <= 1.0f) {
+            return 0.0f;
+        }
+        if (rowSpanFactor >= kMaxRowSpanFactor) {
+            return 1.0f;
+        }
+        return (1.0f - 1.0f / rowSpanFactor) / (1.0f - kBackWidthFrac);
+    }
+
+    // Usable span for an overhang of `spanFactor` x the viewport bandwidth.
+    // Clamped at kMaxRowSpanFactor: past it the extra data is off-plot anyway.
+    static float rowSpanFactorForOverhang(float spanFactor)
+    {
+        if (!(spanFactor > 1.0f) || !std::isfinite(spanFactor)) {
+            return 1.0f;
+        }
+        return std::min(spanFactor, kMaxRowSpanFactor);
+    }
+
+    // Row span for a source whose calibrated overhang spans
+    // supplementalBandwidthMhz against a targetBandwidthMhz viewport, scaled by
+    // a 0-100 operator setting. Anything that cannot be trusted -- a
+    // non-positive or non-finite bandwidth, or an overhang no wider than the
+    // viewport -- yields 1.0, the clipped trapezoid, rather than widening into
+    // spectrum that was never captured.
+    //
+    // The percentage scales the AVAILABLE span, not the absolute maximum:
+    // against a ~1.15x tile an absolute reading would clamp everything above
+    // ~22% to the same picture, leaving most of the control's travel dead.
+    static float rowSpanFactorFor(double supplementalBandwidthMhz,
+                                  double targetBandwidthMhz,
+                                  int spanPercent)
+    {
+        if (!std::isfinite(targetBandwidthMhz) || targetBandwidthMhz <= 0.0
+            || !std::isfinite(supplementalBandwidthMhz)
+            || supplementalBandwidthMhz <= targetBandwidthMhz) {
+            return 1.0f;
+        }
+        const float available = rowSpanFactorForOverhang(
+            static_cast<float>(
+                supplementalBandwidthMhz / targetBandwidthMhz));
+        const float fraction =
+            static_cast<float>(std::clamp(spanPercent, 0, 100)) / 100.0f;
+        return 1.0f + fraction * (available - 1.0f);
+    }
+
     // Project a normalized frequency coordinate onto the same perspective
     // plane used by both DSS renderers. depth=0 is the full-width front edge;
     // depth=1 is the narrowed back edge. Slice overlays use this helper so
     // their apparent angle cannot drift from the FFT surface.
+    //
+    // Frequency-in / screen-out, and independent of rowSpanFactor: widening a
+    // row extends the frequency range it covers, never where a frequency lands.
     static QPointF projectPerspective(float frequencyUnit, float depth)
     {
         const float d = std::clamp(depth, 0.0f, 1.0f);
-        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        const float width = depthScale(d);
         return QPointF(0.5f + (frequencyUnit - 0.5f) * width,
                        1.0f - d * kDepthSpanFrac);
     }
@@ -69,7 +174,7 @@ public:
                                   float floorDbm, float rangeDb, float zCurve)
     {
         const float d = std::clamp(depth, 0.0f, 1.0f);
-        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        const float width = depthScale(d);
         const float finiteDbm = std::isfinite(dbm) ? dbm : floorDbm;
         const float strengthLinear = std::clamp(
             (finiteDbm - floorDbm) / std::max(rangeDb, 1.0f),
@@ -180,6 +285,16 @@ public:
     double rowBandwidthMhzAtAge(int age) const;
     double rowSupplementalCenterMhzAtAge(int age) const;
     double rowSupplementalBandwidthMhzAtAge(int age) const;
+    // Bandwidth of the newest VISIBLE row carrying a calibrated overhang wider
+    // than targetBandwidthMhz, or 0 when no such row is on screen.
+    //
+    // The front row is deliberately not authoritative: the FFT-derived producer
+    // that paces rows during TX and during the RX stale-native fallback appends
+    // with no supplemental at all, so keying up would otherwise drop the
+    // overhang to nothing while 90-odd rows of it are still on screen. Once the
+    // last covered row scrolls out, returning 0 is the correct answer.
+    double newestSupplementalBandwidthMhz(double targetBandwidthMhz) const;
+
     RowStats rowStats(int age, float epsilonDb = 0.01f) const;
     quint64 rowGeneration() const { return m_rowGeneration; }
 

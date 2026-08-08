@@ -12,6 +12,7 @@
 namespace AetherSDR {
 
 class MidiControlManager;
+struct MidiBinding;
 
 // MIDI Mapping dialog — dedicated settings window for configuring MIDI
 // controller bindings. Opened from Settings → MIDI Mapping.
@@ -27,6 +28,10 @@ private:
     void refreshPortList();
     void refreshBindingTable();
     void refreshProfileList();
+    // Manual add/edit form (#4760). One form serves both the "Manual…" button
+    // (existing == nullptr) and the per-row edit button (existing == the row's
+    // current binding). Commits through the same addBinding()/save path as Learn.
+    void openManualEditor(const QString& paramId, const MidiBinding* existing);
 
     MidiControlManager* m_manager;
 

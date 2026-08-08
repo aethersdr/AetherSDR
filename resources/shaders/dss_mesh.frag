@@ -8,10 +8,11 @@ layout(location = 0) in float vLut;
 layout(location = 1) in float vDepth;
 layout(location = 2) in float vEdge;
 layout(location = 3) in float vBoundaryFade;
-layout(location = 4) in float vFrequency;
+layout(location = 4) in float vFrequency;   // viewport units; leaves [0,1] when widened
 layout(location = 5) in float vLayerAlpha;
 layout(location = 6) in float vRibbonCoord;
 layout(location = 7) flat in float vOverlayLayer;
+layout(location = 8) in float vSideDistance;  // to the row silhouette, plot units
 
 layout(std140, binding = 0) uniform U {
     float rowOffset;
@@ -34,6 +35,9 @@ layout(std140, binding = 0) uniform U {
     float visibleRows;
     float plotWidthPx;
     float plotHeightPx;
+    float rowSpanFactor;  // see dss_mesh.vert; 1.0 = classic clipped trapezoid
+    float meshCols;       // mesh columns per row (>= texCols)
+    // std140 pads this 22-float scalar run out to bgFill's vec4 alignment.
     vec4  bgFill;
     vec4  shadowBands[8];
     vec4  shadowStyles[8];
@@ -109,11 +113,8 @@ void main()
         float flatOutlineScale = mix(1.0, 0.42, flatOutline);
         float ribbonCoverage =
             1.0 - smoothstep(0.15, 1.0, abs(vRibbonCoord));
-        float perspectiveWidth =
-            mix(1.0, backWidthFrac, clamp(vDepth, 0.0, 1.0));
         float sideDistancePx =
-            max(min(vFrequency, 1.0 - vFrequency), 0.0)
-            * max(plotWidthPx, 1.0) * perspectiveWidth;
+            max(vSideDistance, 0.0) * max(plotWidthPx, 1.0);
         // The stacked endpoints form a high-contrast comb against the black
         // outside of the perspective surface. Successive exact FFT rows can
         // legitimately put those endpoints at different heights, so any
@@ -145,11 +146,8 @@ void main()
     c = mix(c, bgFill.rgb, clamp(vDepth * haze, 0.0, 1.0));
     c = mix(bgFill.rgb, c, vBoundaryFade);
     c = applySliceShadow(c, shadowFade);
-    float perspectiveWidth =
-        mix(1.0, backWidthFrac, clamp(vDepth, 0.0, 1.0));
     float sideDistancePx =
-        max(min(vFrequency, 1.0 - vFrequency), 0.0)
-        * max(plotWidthPx, 1.0) * perspectiveWidth;
+        max(vSideDistance, 0.0) * max(plotWidthPx, 1.0);
     // The curtain has the same exposed stacked endpoints as the ridge. Fade
     // only the narrow side strip so adjacent curtain heights cannot form a
     // flashing comb against the black outside of the perspective surface.

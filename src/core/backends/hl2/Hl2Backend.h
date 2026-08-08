@@ -13,6 +13,8 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <deque>
+#include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -83,10 +85,12 @@ public:
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
+    void setMicGain(int level) override;
     // No default argument here on purpose: defaults on virtuals bind statically,
     // so repeating the base's is how the two quietly diverge later. The sole
     // call site passes it explicitly.
     void setTune(bool on, int tunePowerPercent) override;
+    void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
@@ -98,6 +102,23 @@ public:
 
     HealthSnapshot healthSnapshot() const override;
     LinkStats linkStats() const override;
+
+signals:
+    // Connect-time progress for the CLIENT-SIDE DSP build, and deliberately not
+    // on the IRadioBackend seam: WDSP is this backend's alone (a Flex
+    // demodulates in firmware, an Icom does not use WDSP at all), so a neutral
+    // signal would be one every other family had to ignore.
+    //
+    // `stage` is already operator-facing text, and carries NO counter of its own
+    // — `done`/`total` are the counter, so the label owns how (or whether) a
+    // fraction is rendered. They count WDSP channel opens, which means receivers
+    // and only receivers: the transmit chain designs FIR kernels and opens
+    // nothing, so it is not a step and is not in `total`.
+    //
+    // Emitted from the GUI thread, including the terminal one, so a slot may
+    // touch widgets directly.
+    void dspSetupProgress(const QString& stage, int done, int total);
+    void dspSetupFinished();
 
 private:
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
@@ -116,6 +137,45 @@ private:
     void applyLnaGainDb(int gainDb);   // the one true LNA application
     void rememberCurrentBandState();
     void notifyOperatingStateChanged();
+
+    // ---- the connect's three phases ----
+    //
+    // connectRadio() used to be one straight-line function that waited on the
+    // I/O thread through Qt::BlockingQueuedConnection for every WDSP open. The
+    // work was correctly OFF the GUI thread; the GUI thread simply stood there
+    // holding its breath for all of it. On a machine with no FFTW wisdom yet
+    // that is tens of seconds of an application that answers nothing at all —
+    // measured at 21-82 s here, load-dependent, with the automation bridge (a
+    // GUI-thread server) going completely silent for the whole window.
+    //
+    // So it is split. connectRadio() itself still does every member seeding
+    // SYNCHRONOUSLY — hl2_state_restore_test reads currentOperatingState()
+    // immediately after it returns, and that contract is worth keeping — and
+    // then hands the channel opens to beginDspSetup() and returns to the event
+    // loop. finishDspSetup() resumes on the GUI thread when the opens are done
+    // and starts the wire.
+    //
+    // What did NOT change is the ORDER: every DSP chain is still open and
+    // configured before MetisClient::start(), because EP2 must not stop (see
+    // the note above buildReceivers() and HERMES.md §20.8). The sequence stays
+    // serial on the I/O thread; only the GUI thread stopped waiting for it.
+    void beginDspSetup();
+
+    // Everything the async build needs to carry across event-loop turns (the
+    // wire params, the RX and TX configs, and which connect it belongs to). A
+    // local could not: connectRadio() has returned long before the I/O thread
+    // answers. Defined in the .cpp so this header keeps its forward
+    // declarations of MetisClient/Hl2RxDsp/Hl2TxDsp instead of including all
+    // three for three member types.
+    struct PendingConnect;
+    struct DspSetupResult;
+    void finishDspSetup(const DspSetupResult& result);
+
+    std::unique_ptr<PendingConnect> m_pendingConnect;
+    // A connect that arrived while m_pendingConnect was still building. Held
+    // rather than served inline — see the guard at the top of connectRadio().
+    std::unique_ptr<RadioConnectRequest> m_queuedConnect;
+    quint64 m_connectGeneration = 0;
 
     void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
@@ -429,6 +489,7 @@ private:
     bool m_adcOverload = false;
     bool m_keyed = false;
     bool m_tuning = false;
+    bool m_txMonitor = false;
     bool m_toneFromTune = false;
     // Last drive the operator asked for through setTxPower(), so TUNE can drop to
     // tune power and put it back on release. Seeded to the same value
@@ -523,6 +584,99 @@ private:
     static constexpr double kPaTempAlpha = 0.2;
     double m_paTempC = 0.0;
     bool   m_havePaTemp = false;
+
+    // ---- Forward-power peak hold ----
+    //
+    // WHY THE SHARED BALLISTICS ABOVE ARE NOT ENOUGH HERE, and why this is a
+    // peak ESTIMATE rather than a peak measurement.
+    //
+    // A Flex reports FWDPWR from a detector the radio itself peak-reads, so
+    // MeterModel's fast-attack EMA is smoothing an already-peak-tracking
+    // signal. The HL2 has nothing of the kind: forward power is one 12-bit
+    // conversion from the `slow_adc` I2C converter, round-robined with reverse
+    // power, temperature and bias current, with no peak detector and no
+    // averaging anywhere in the gateware (rtl/slow_adc.v, rtl/control.v ~L262 —
+    // tier 1 on the source-precedence ladder). Each reading is the RF envelope
+    // at whatever instant the I2C transaction happened to land, and we see one
+    // every kTelemetryMinIntervalMs.
+    //
+    // Speech peaks last tens of milliseconds. Sampling that envelope at 10 Hz
+    // lands on a peak essentially never, so an SSB reading sat 8-12 dB below
+    // PEP while a constant-envelope FT8 or WSPR transmission — where every
+    // instant IS the peak — read full scale. That is the whole of the reported
+    // "6 W on FT8, 1 W on voice": both were making the same PEP.
+    //
+    // No host-side filter can recover a peak that was never sampled. What a
+    // hold CAN do is accumulate the maximum across a transmission: ~30
+    // independent samples in a 3 s over lands within a few dB of true PEP, and
+    // converges further the longer the operator talks. So this is honest as an
+    // estimate that settles, and dishonest as an instantaneous reading — which
+    // is why the meter description says so and why the raw counts keep being
+    // logged and published for the bridge alongside it.
+    //
+    // Instant attack, slow release, in WATTS rather than counts because the
+    // calibration curve is markedly non-linear and a peak held in counts would
+    // decay at a rate that changed with level.
+    //
+    // 0.05 per 10 Hz sample is a ~2 s release, matching what an outboard PEP
+    // wattmeter does. Slower would keep a peak past the end of the over; faster
+    // would decay between syllables and give the reading back to the average,
+    // which is exactly the failure this exists to fix.
+    //
+    // ONE DOWNSTREAM CONSEQUENCE, stated because it is not obvious: TxApplet
+    // runs its own ~2 s PEP hold + linear decay on the FWDPWR gauge (#2561),
+    // fed from MeterModel::txPeakChanged and documented there as taking the
+    // "pre-smoothed" sample. On this backend that sample is now itself held, so
+    // the applet's PEP tick and the gauge fill converge on the same number
+    // where they diverge on a Flex. That is the honest outcome rather than a
+    // defect — the fill is a peak estimate here BECAUSE the hardware gives us
+    // nothing to smooth — but the applet's tick carries no extra information on
+    // an HL2, and anyone reading the two as independent would be wrong.
+    static constexpr double kFwdPeakReleaseAlpha = 0.05;
+    double m_fwdPeakWatts = 0.0;
+
+    // Operator's MIC slider position, 0..100. Kept alongside the value pushed
+    // into the modulator so the automation bridge and any diagnostic can report
+    // what the operator asked for, not just the linear gain it became — the two
+    // are related by a mapping that is easy to get backwards when reading a log.
+    // 50 is unity; see setMicGain().
+    int m_micLevel = 50;
+
+    // ---- Voice-chain mirrors, for healthSnapshot() ----
+    //
+    // Same reason as m_drops and m_linkCounters above: these originate on the
+    // DSP worker, and healthSnapshot() is called from the GUI thread. Mirroring
+    // on signal delivery means the readout is a plain read of a value that
+    // already lives on the reading thread, instead of reaching across for it.
+    //
+    // Both are published as meters too. They are ALSO kept here because a meter
+    // is a stream nobody can query after the fact, and the whole point of
+    // exposing these is answering "what was the chain doing on that over?" — a
+    // question the operator asks once the over is finished.
+    //
+    // NaN, not 0, for "never reported": the ALC applying 0 dB is a real and
+    // common state, so a zero default would be indistinguishable from a
+    // modulator that has never run.
+    double m_alcGainDb = std::numeric_limits<double>::quiet_NaN();
+    double m_alcPeakDbfs = std::numeric_limits<double>::quiet_NaN();
+    // The linear gain the MODULATOR holds, echoed back by Hl2TxDsp rather than
+    // computed here. NaN until the modulator has confirmed one, so "the push
+    // never landed" is distinguishable from "it landed at unity" — which is the
+    // exact pair that was indistinguishable while this control was dead.
+    double m_appliedMicGainLinear = std::numeric_limits<double>::quiet_NaN();
+
+    // The ALC hold threshold the modulator was CONFIGURED with, captured from
+    // the Config that connectRadio() hands it. Read by healthSnapshot() and by
+    // setKeying()'s "raise mic gain" diagnostic, both of which previously
+    // re-derived it from a default-constructed Config and so would have gone on
+    // reporting -45 dBFS the day connectRadio() set the field to anything else.
+    //
+    // Seeded with Config's own default so a snapshot taken before the first
+    // connect still reports what the modulator would use. The literal is spelt
+    // out because Hl2TxDsp is only forward-declared in this header — a
+    // static_assert in Hl2Backend.cpp pins it to Config's default, so the two
+    // cannot drift silently.
+    double m_alcHoldBelowDbfs = -45.0;
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
