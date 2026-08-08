@@ -5886,6 +5886,14 @@ void MainWindow::wireMeters()
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
     connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
+    // Also refresh on infoChanged (#4813): maxPowerLevelChanged only fires when
+    // the numeric value actually changes, which it doesn't on connect if the
+    // radio's exciter limit matches TransmitModel's compiled-in default (100W —
+    // exactly the AU- case above). infoChanged fires once "info" comes back and
+    // model() is populated, so this is what actually catches the initial scale
+    // on connect instead of leaving it wrong until the next real power-level
+    // edge (e.g. a band change that happens to carry a different limit).
+    connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.
     // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)
