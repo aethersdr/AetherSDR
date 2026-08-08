@@ -2,6 +2,7 @@
 #include "AmpAppletStyles.h"
 #include "HGauge.h"
 #include "core/ThemeManager.h"
+#include "core/TxKeyingMarker.h"
 #include "MeterSmoother.h"
 
 #include <QVBoxLayout>
@@ -210,6 +211,7 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_pwrLevelBtn->setToolTip(tr("Output power level — click to cycle LOW / MID / HIGH"));
     connect(m_pwrLevelBtn, &QPushButton::clicked, this, &SpeApplet::powerLevelClicked);
     m_tuneBtn = makeKeyBtn("TUNE");
+    markTxKeying(m_tuneBtn);  // ATU tune runs with RF drive — keys TX (#3646)
     m_tuneBtn->setToolTip(tr("Start ATU tuning (front-panel TUNE key)"));
     connect(m_tuneBtn, &QPushButton::clicked, this, &SpeApplet::tuneClicked);
     m_offBtn = makeKeyBtn("OFF");

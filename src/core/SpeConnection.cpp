@@ -175,8 +175,10 @@ void SpeConnection::onTransportUp()
     m_responding = false;
     m_currentModelId.clear();
     // Renegotiated per connection — a proxy reconfigured between sessions
-    // must not be judged on the previous session's answer.
+    // must not be judged on the previous session's answer (nor on the
+    // previous session's carried scan tail).
     m_comPortOption = Spe::Rfc2217::OptionReply::None;
+    m_rfc2217Tail.clear();
     qCInfo(lcTuner) << "SpeConnection: connected via" << description();
 
     // First poll immediately — the timer only fires after a full interval,
@@ -231,8 +233,15 @@ void SpeConnection::onReadyRead()
     // negotiation on its own, so nothing is consumed here; this only records
     // whether RFC 2217 control is actually available, which powerOn() needs
     // to know before it claims the pulse reached the amplifier.
+    //
+    // Scanned over the previous read's 2-byte tail + this chunk: the 3-byte
+    // DO/DONT sequence can straddle a TCP segment boundary, and a stateless
+    // per-chunk scan would miss it — reporting "never confirmed" against a
+    // correctly configured proxy. Only the tail is carried, never re-scanning
+    // whole chunks, so a reply can't be double-counted either.
     if (m_mode == Mode::Network) {
-        const auto reply = Spe::Rfc2217::scanComPortOptionReply(chunk);
+        const auto reply = Spe::Rfc2217::scanComPortOptionReply(m_rfc2217Tail + chunk);
+        m_rfc2217Tail = chunk.right(2);
         if (reply != Spe::Rfc2217::OptionReply::None && reply != m_comPortOption) {
             m_comPortOption = reply;
             if (reply == Spe::Rfc2217::OptionReply::Accepted) {

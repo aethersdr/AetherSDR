@@ -204,7 +204,7 @@ distinguishes:
 
 - **disconnected()** — the transport itself went away (socket drop, serial
   unplug). Applet hides, auto-reconnect arms.
-- **respondingChanged(false)** — the transport is up but ~10 consecutive
+- **respondingChanged(false)** — the transport is up but 30 consecutive
   polls (~3 s) went unanswered. The applet stays visible but greys its pill
   to "—" and disables the command buttons (which would otherwise silently
   do nothing). Polling continues; the first reply flips it back.

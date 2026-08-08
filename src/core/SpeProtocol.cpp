@@ -253,7 +253,10 @@ QString powerLevelName(QChar code)
         case u'L': return QStringLiteral("LOW");
         case u'M': return QStringLiteral("MID");
         case u'H': return QStringLiteral("HIGH");
-        default:   return QString(code);
+        // Empty for a null QChar (Status::powerLevel's not-yet-reported
+        // default) so the GUI's "PWR" fallback engages instead of a stray
+        // NUL glyph; unknown real letters still echo through.
+        default:   return code.isNull() ? QString() : QString(code);
     }
 }
 

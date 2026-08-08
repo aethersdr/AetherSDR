@@ -145,7 +145,7 @@ private:
     bool  m_connected{false};
     bool  m_responding{false};
 
-    // Telemetry arrives at the ~3 Hz poll rate — gentler than ACOM's ~10 Hz
+    // Telemetry arrives at the 10 Hz poll rate — same order as ACOM's ~10 Hz
     // push, but the same dirty-flag/10 Hz-timer throttle is kept so label
     // repaints and accessibility NameChanged events stay bounded regardless
     // of what a future faster poll (or a chatty firmware) delivers.

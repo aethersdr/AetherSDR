@@ -163,14 +163,18 @@ private:
     // from its reply to WILL COM-PORT-OPTION. Network mode only; a local
     // serial port drives its own lines and needs no negotiation.
     Spe::Rfc2217::OptionReply m_comPortOption{Spe::Rfc2217::OptionReply::None};
+    // Last 2 bytes of the previous network read — prepended to the next scan
+    // so a DO/DONT reply split across TCP segments is still seen (the
+    // sequence is 3 bytes, so 2 carried bytes always suffice).
+    QByteArray m_rfc2217Tail;
 
     // Responding/silent tracking: a poll counts as unanswered if no Status
     // frame arrived since the previous tick. A few misses are tolerated
-    // (serial latency, a busy amp) before flagging silence.
+    // (serial latency, a busy amp, a marginal link) before flagging silence.
     bool m_statusSeenSinceTick{false};
     int  m_silentPolls{0};
     bool m_responding{false};
-    static constexpr int kSilentPollLimit = 10;  // ~3 s at the poll cadence
+    static constexpr int kSilentPollLimit = 30;  // ~3 s at the 100 ms poll cadence
 };
 
 }  // namespace AetherSDR
