@@ -60,7 +60,10 @@ void AsrAudioTap::onRxAudio(const QString& source,
                           m_clock.isValid() ? m_clock.elapsed() : 0)) {
         return;
     }
-    const QVector<float> mono = AsrTapPolicy::toMono(stereoFloat32Pcm);
+    // receivePresentationPostDspAudioReady is documented (and, at every emit
+    // site, actually) fixed at 2 channels — see AudioEngine.h's doc comment
+    // on the signal. Passed explicitly rather than inferred (#4489).
+    const QVector<float> mono = AsrTapPolicy::toMono(stereoFloat32Pcm, 2);
     if (mono.isEmpty()) {
         return;
     }
