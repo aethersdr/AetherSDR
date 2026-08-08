@@ -301,6 +301,10 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         const AsrTranscript result = m_backend->transcribe(seg.samples, &error);
         if (!error.isEmpty()) {
             emit errorOccurred(error);
+            // A failed decode yields no tail — same as an empty one below: drop
+            // the reference so the next continuation doesn't de-dup against a
+            // stale, pre-failure segment.
+            m_prevSegmentText.clear();
             continue;
         }
         if (result.text.isEmpty()) {
@@ -316,7 +320,9 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         // that segment's tail — strip them so nothing is emitted twice.
         QString emitText = result.text;
         if (seg.continuesPrevious && !m_prevSegmentText.isEmpty()) {
-            emitText = stripOverlapWords(m_prevSegmentText, result.text, m_segmenter.overlapMs());
+            // Use the window captured when THIS segment closed, not the live
+            // slider — a mid-backlog slider move must not re-scope a queued strip.
+            emitText = stripOverlapWords(m_prevSegmentText, result.text, seg.overlapMs);
         }
         m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
         if (emitText.isEmpty()) {

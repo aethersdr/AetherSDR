@@ -178,12 +178,20 @@ int main()
         expect(!ovOut.empty() && !ovOut.front().continuesPrevious,
                "overlap: first segment is not a continuation");
         bool laterAllContinue = ovOut.size() >= 2;
+        bool laterWindowRecorded = ovOut.size() >= 2;
         for (std::size_t i = 1; i < ovOut.size(); ++i) {
             if (!ovOut[i].continuesPrevious) {
                 laterAllContinue = false;
             }
+            // 200 ms carried (< half of the 500 ms budget, so unclamped here).
+            if (ovOut[i].overlapMs != 200) {
+                laterWindowRecorded = false;
+            }
         }
         expect(laterAllContinue, "overlap: later segments are flagged as continuations");
+        expect(laterWindowRecorded, "overlap: continuations record the carried window (200 ms)");
+        expect(!ovOut.empty() && ovOut.front().overlapMs == 0,
+               "overlap: a non-continuation segment records no carried window");
         // No segment in the plain run is ever flagged a continuation.
         bool plainNoneContinue = true;
         for (const auto& s : plainOut) {
@@ -231,6 +239,24 @@ int main()
             }
         }
         expect(!anyContinue, "overlap: a silence-tail cap close is not flagged a continuation");
+    }
+
+    // Overlap ≥ maxSegmentMs must stay bounded: the carry is clamped to half the
+    // segment budget, so each reseeded segment is ≥ half fresh audio and the
+    // decode count stays near ~2× realtime instead of exploding (a runaway
+    // "decode every frame" backlog). 2 s of continuous speech at a 300 ms cap
+    // yields ~13 segments here; without the clamp it would be ~170.
+    {
+        AsrSegmenter seg;
+        seg.setMaxSegmentMs(300);
+        seg.setOverlapMs(1000); // >> the 300 ms cap
+        std::vector<float> audio;
+        appendTone(audio, 2000); // continuous speech
+        auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        // ~2× realtime bound: 2000 ms / (300/2 ms fresh per segment) ≈ 13, well
+        // under 30; the pre-clamp bug produced ~170.
+        expect(out.size() < 30, "overlap: overlap >= cap stays bounded (carry clamped to half budget)");
+        expect(out.size() >= 2, "overlap: overlap >= cap still splits into segments");
     }
 
     std::printf(g_failures == 0 ? "\nASR segmenter: ALL PASS\n"

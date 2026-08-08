@@ -32,6 +32,7 @@ void AsrSegmenter::reset()
     m_trailingSilence = 0;
     m_speechSamples = 0;
     m_pendingContinues = false;
+    m_pendingOverlapMs = 0;
     if (m_vad != nullptr) {
         m_vad->reset();
     }
@@ -76,15 +77,22 @@ void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
 
     // Snapshot the trailing window BEFORE m_segment is moved out below.
     std::vector<float> carry;
+    int carryMs = 0;
     if (continueUtterance) {
         int overlapSamples =
             std::min(framesToSamples(m_config.overlapMs), static_cast<int>(m_segment.size()));
-        // Never carry so much that the reseeded segment re-hits the cap without
-        // any forward progress (overlapMs ≥ maxSegmentMs) — always leave room for
-        // at least one new frame before the next cap could fire.
-        overlapSamples = std::min(overlapSamples, std::max(0, m_maxSegmentSamples - m_frameSamples));
+        // Bound the carry to HALF the segment budget so the reseeded segment is
+        // always at least half fresh audio before the next cap. Without this a
+        // large overlap (≥ maxSegmentMs — both are user sliders) would carry
+        // nearly the whole segment forward every cap, force-decoding the same
+        // audio over and over (a runaway backlog through the backpressure-free
+        // pushAudio path). Half-budget caps the intrinsic overlap cost at ~2×
+        // realtime for every slider combination.
+        overlapSamples = std::min(overlapSamples, m_maxSegmentSamples / 2);
         if (overlapSamples > 0) {
             carry.assign(m_segment.end() - overlapSamples, m_segment.end());
+            carryMs = static_cast<int>(static_cast<long long>(overlapSamples) * 1000
+                                       / m_config.sampleRate);
         }
     }
 
@@ -92,6 +100,7 @@ void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
         ClosedSegment cs;
         cs.samples = std::move(m_segment);
         cs.continuesPrevious = m_pendingContinues; // this segment itself began with carried audio
+        cs.overlapMs = m_pendingContinues ? m_pendingOverlapMs : 0; // window carried into THIS segment
         out.push_back(std::move(cs));
     }
 
@@ -99,13 +108,16 @@ void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
     m_trailingSilence = 0;
     m_speechSamples = 0;
     m_pendingContinues = false;
+    m_pendingOverlapMs = 0;
 
     if (!carry.empty()) {
         // Still mid-utterance: seed the next segment with the carried audio
-        // instead of starting from silence, and mark it so the worker de-dups
-        // the repeated leading words. m_inSpeech stays true.
+        // instead of starting from silence, and mark it (with the window size in
+        // force now) so the worker de-dups the repeated leading words against the
+        // right budget. m_inSpeech stays true.
         m_speechSamples = static_cast<int>(carry.size());
         m_pendingContinues = true;
+        m_pendingOverlapMs = carryMs;
         m_segment = std::move(carry);
     } else {
         m_inSpeech = false;

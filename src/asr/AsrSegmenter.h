@@ -54,10 +54,14 @@ public:
     // seeded with trailing audio carried across the PREVIOUS segment's cap-forced
     // close (segment overlap) — its leading words re-transcribe the tail of that
     // segment, so the consumer must de-duplicate them. false for an ordinary
-    // (non-overlapping) segment.
+    // (non-overlapping) segment. `overlapMs` records how much audio was actually
+    // carried into this segment (0 when continuesPrevious is false); it is
+    // captured at close time so de-dup uses the window in force when the segment
+    // closed, not whatever the slider reads later.
     struct ClosedSegment {
         std::vector<float> samples;
         bool continuesPrevious = false;
+        int overlapMs = 0;
     };
 
     AsrSegmenter() : AsrSegmenter(Config{}) {}
@@ -119,6 +123,7 @@ private:
     int m_trailingSilence = 0;      // samples of silence since last speech frame
     int m_speechSamples = 0;        // speech-only samples (excludes hangover), gates minSpeech
     bool m_pendingContinues = false; // next emitted segment was seeded with carried overlap audio
+    int m_pendingOverlapMs = 0;      // ms of audio carried into that next segment (for its overlapMs)
 };
 
 } // namespace AetherSDR
