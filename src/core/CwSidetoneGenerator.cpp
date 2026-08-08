@@ -80,6 +80,12 @@ void CwSidetoneGenerator::setKeyDown(bool down) noexcept
     // lock, so the audio thread stays wait-free.  The timestamp is taken
     // inside the lock so queue order equals timestamp order — process()
     // relies on that for its edges-are-time-ordered early-out.
+    // Worst case among producers: the GUI thread descheduled inside the
+    // section leaves a keying worker spinning until the holder resumes.
+    // The section is ~20 instructions, so the window is vanishingly
+    // small, and the cost is one edge timestamped late by the wait —
+    // the same per-edge epsilon class as wake latency, and never a
+    // correctness concern.
     while (m_edgeLock.test_and_set(std::memory_order_acquire)) { /* spin */ }
     const auto now = std::chrono::steady_clock::now();
     const uint32_t head = m_edgeHead.load(std::memory_order_relaxed);

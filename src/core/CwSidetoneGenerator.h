@@ -95,8 +95,14 @@ private:
 
     // Release the timestamp→sample anchor only after this much continuous
     // idle: longer than any inter-element or inter-character gap at
-    // paddle speeds (180 ms at 20 WPM), short enough to bound
-    // steady_clock vs audio-clock drift between keying sequences.
+    // typical paddle speeds (180 ms inter-character at 20 WPM), short
+    // enough to bound steady_clock vs audio-clock drift between keying
+    // sequences.  Below 15 WPM an inter-character gap (3 units of
+    // 1200/wpm ms) exceeds this and the anchor is released between
+    // characters — harmless, since at those speeds a unit is >=85 ms and
+    // block quantization of the next onset is inaudible; element lengths
+    // stay exact either way, because they come from the keyer's grid,
+    // not the anchor.
     static constexpr int kReanchorIdleMs = 250;
 
     void applyKeyEdge(bool down) noexcept;  // state-machine transition
