@@ -720,12 +720,12 @@ void section11(CatClient& c, Runner& r)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY, RT, RG, RC, RD, RU, XT)
+// Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, RT, RG, RC, RD, RU, XT)
 // ═════════════════════════════════════════════════════════════════════════════
 
 void section12(CatClient& c, Runner& r)
 {
-    r.section(QStringLiteral("Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY, RT, RG, XT)"));
+    r.section(QStringLiteral("Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, RT, RG, XT)"));
 
     // ── AG: VFO A audio gain (0-100, 3-digit) ──────────────────────────────
     QString origAg = c.query(QStringLiteral("AG"));
@@ -807,10 +807,10 @@ void section12(CatClient& c, Runner& r)
 
     if (origPt.startsWith(QLatin1String("PT"))) { c.send(origPt); QThread::msleep(50); }
 
-    // ── KY: CW send / busy query ─────────────────────────────────────────────
-    resp = c.query(QStringLiteral("KY"));
-    r.check(QStringLiteral("12.13 KY; (query) → KY0 (not busy) or KY1 (busy)"),
-            resp == QLatin1String("KY0") || resp == QLatin1String("KY1"), repr(resp));
+    // KY (CW keyer busy query) is exercised in section 13, which is --cw-gated:
+    // it only answers KY0/KY1 on a rig with a radio-side keyer, so a keyerless
+    // target (e.g. the built-in demo) correctly returns "?;". It has no place in
+    // this ungated Tier-2 section.
 
     // ── RT: RIT state (0/1) ──────────────────────────────────────────────────
     resp = c.query(QStringLiteral("RT"));
