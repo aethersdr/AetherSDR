@@ -3,6 +3,7 @@
 #include "core/RadioSettingsScope.h"
 
 #include <QJsonObject>
+#include <QtGlobal>
 
 #include <algorithm>
 #include <cmath>
@@ -83,7 +84,13 @@ void Hl2FreqCal::savePpb(const RadioSettingsScope& scope, int ppb)
         // row rather than storing a 0, so a reset genuinely returns the radio to
         // never-calibrated instead of leaving a document that reads the same but
         // shadows any future family-wide default.
-        scope.removeFeature(QLatin1String(kFeature));
+        // Check the write result: setFeature()/removeFeature() refuse while the
+        // store is not ReadyToSave, and a mutation that silently does not
+        // persist while the UI repaints from the spinbox is the worst failure
+        // shape here — nothing reads an NCO register back, so the operator would
+        // only discover it on the next connect (AGENTS.md, PR #4621 review).
+        if (!scope.removeFeature(QLatin1String(kFeature)))
+            qWarning("Hl2FreqCal: calibration reset did not persist");
         AppSettings::instance().save();
         return;
     }
@@ -91,7 +98,8 @@ void Hl2FreqCal::savePpb(const RadioSettingsScope& scope, int ppb)
     // calibration change (Principle XIV — persisted as a unit).
     QJsonObject doc = scope.featureExact(QLatin1String(kFeature));
     doc[QLatin1String(kFieldPpb)] = clamped;
-    scope.setFeature(QLatin1String(kFeature), kSchemaVersion, doc);
+    if (!scope.setFeature(QLatin1String(kFeature), kSchemaVersion, doc))
+        qWarning("Hl2FreqCal: %d ppb did not persist", clamped);
     AppSettings::instance().save();
 }
 

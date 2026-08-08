@@ -2496,9 +2496,21 @@ void Hl2Backend::repushAllFrequencies()
 void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
 {
     const int clamped = Hl2FreqCal::clampPpb(ppb);
-    if (persist)
-        Hl2FreqCal::savePpb(RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial),
-                            clamped);
+    if (persist) {
+        // Never write an empty radio_id row (AGENTS.md): RadioSettingsScope
+        // falls back exact-radio → family-wide on read, so a row written with no
+        // identity is silently adopted by every HL2 that has none of its own —
+        // exactly the contamination the per-MAC key exists to prevent.
+        // m_radioSerial is only assigned in connectRadio(), so this is reachable
+        // before the first connect and from a hand-built connect request.
+        if (m_radioSerial.isEmpty()) {
+            qCWarning(lcHl2) << "HL2: not persisting frequency calibration —"
+                             << "no radio identity yet; applying for this session only";
+        } else {
+            Hl2FreqCal::savePpb(RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial),
+                                clamped);
+        }
+    }
     if (clamped == m_freqCalPpb)
         return;                       // no-op: do not churn every NCO for nothing
     m_freqCalPpb = clamped;
@@ -2817,6 +2829,16 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         // rather than fabricated later.
         if (verb == QLatin1String("freqcal.set")) {
             applyFreqCalPpb(arg.toInt(), /*persist=*/true);
+            if (requestId != 0)
+                emit extensionResult(requestId, QVariant(m_freqCalPpb));
+            return;
+        }
+        // Live trim: apply and re-push, but do NOT touch the settings store.
+        // Trim auto-repeats at 120 ms and AppSettings::save() is a full
+        // non-atomic file write, so persisting every repeat would hammer the
+        // store eight times a second. The UI commits once on button release.
+        if (verb == QLatin1String("freqcal.set_live")) {
+            applyFreqCalPpb(arg.toInt(), /*persist=*/false);
             if (requestId != 0)
                 emit extensionResult(requestId, QVariant(m_freqCalPpb));
             return;

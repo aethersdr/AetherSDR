@@ -2959,9 +2959,11 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doTune(a.value, a.id);
             });
 
+        // Help stays ONE literal: gen_bridge_docs.py's _ADD_RE captures a single
+        // quoted string for the help field, so a split string loses everything
+        // after the first half in the generated verb table.
         add("freqcal", {},
-            "freqcal [get|set <ppb>|from_vfo <reference_mhz>|reset] — "
-            "manual frequency calibration (radios that cannot calibrate themselves)",
+            "freqcal [get|set <ppb>|from_vfo <reference_mhz>|reset] — manual frequency calibration (radios that cannot calibrate themselves)",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doFreqCal(a.action, a.value);
@@ -6421,11 +6423,10 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
                        {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
 }
 
-// ── VFO tuning (#3646) ──────────────────────────────────────────────────────
-// Set a slice's frequency (MHz). The most fundamental control the VfoWidget
-// couldn't expose (it's custom-painted). Honors the slice lock guard. An
-// optional slice id targets a specific slice directly — without it the active
-// slice is tuned (the original behavior), which forced external scripts into a
+// ── Manual frequency calibration (HL2) ───────────────────────────
+// get / set <ppb> / from_vfo <reference_mhz> / reset. Only reachable on
+// radios whose host owns the correction (RadioCapabilities::
+// hostFrequencyCalibration).
 QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& value)
 {
     if (!m_radioModel)
@@ -6453,6 +6454,15 @@ QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& va
 
     if (verb == QLatin1String("get"))
         return report(QStringLiteral("get"));
+
+    // Mutating verbs need a radio identity. With an empty radioId the write
+    // would land on the family-wide default row and be inherited by every other
+    // radio of this family, so refuse rather than return ok:true against a
+    // number that contaminated the wrong radios (AGENTS.md).
+    if (verb != QLatin1String("get") && scope.radioId().isEmpty()) {
+        return err(QStringLiteral("freqcal: no radio identity yet — connect the radio "
+                                  "before calibrating"));
+    }
 
     auto applyPpb = [this](int ppb) {
         m_radioModel->invokeBackendExtension(QStringLiteral("hl2"),
@@ -6508,6 +6518,11 @@ QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& va
                    .arg(action));
 }
 
+// ── VFO tuning (#3646) ──────────────────────────────────────────────────────
+// Set a slice's frequency (MHz). The most fundamental control the VfoWidget
+// couldn't expose (it's custom-painted). Honors the slice lock guard. An
+// optional slice id targets a specific slice directly — without it the active
+// slice is tuned (the original behavior), which forced external scripts into a
 // racy select → tune → restore flap when driving a non-active slice.
 QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
 {

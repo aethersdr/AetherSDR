@@ -767,6 +767,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, calItem] {
         calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+        // A different radio may now be connected — re-read its own calibration
+        // so a later Trim press cannot commit the previous radio's number.
+        if (m_calibrationReseed)
+            m_calibrationReseed();
     });
     addPage(hardwareCategory, QStringLiteral("Antennas"),
         QStringLiteral("antenna names ant1 ant2 rx in transverter"), [this] { return buildAntennaNamesTab(); });
@@ -835,8 +839,17 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     + item->data(0, Qt::UserRole + 1).toString();
                 const bool matches = needle.isEmpty()
                     || haystack.contains(needle, Qt::CaseInsensitive);
+                // Capability-gated rows must survive the filter: recomputing
+                // setHidden() purely from the keyword match would unhide a page
+                // the radio cannot use (typing "calibration" on a Flex would
+                // surface the HL2-only page, whose controls move while nothing
+                // reaches the radio).
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
-                if (!apdRow || m_model->transmitModel().apdConfigurable()) {
+                const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
+                const bool gated =
+                    (apdRow && !m_model->transmitModel().apdConfigurable())
+                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration);
+                if (!gated) {
                     item->setHidden(!matches);
                 }
                 anyVisible = anyVisible || !item->isHidden();
@@ -879,6 +892,16 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         "QPushButton:hover { background: {{color.background.1}}; }");
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     layout->addWidget(buttons);
+}
+
+void RadioSetupDialog::showEvent(QShowEvent* event)
+{
+    PersistentDialog::showEvent(event);
+    // The dialog is a showOrRaisePersistent singleton and pages are built once,
+    // so anything that changed the stored calibration while it was closed (a
+    // `freqcal` bridge call, a different radio) has to be re-read here.
+    if (m_calibrationReseed)
+        m_calibrationReseed();
 }
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
@@ -2514,10 +2537,14 @@ QWidget* RadioSetupDialog::buildRxTab()
         auto calibrationActive = std::make_shared<bool>(false);
         auto pllRunningSeen = std::make_shared<bool>(false);
         auto calibrationRun = std::make_shared<int>(0);
-        auto setCalStatus = [calStatus](const QString& text, const QString& color) {
+        // Takes a THEME TOKEN, not a colour literal. A raw setStyleSheet() with
+        // a token name in the colour slot is not merely ignored — Qt discards
+        // the whole rule, taking the font-size with it and leaving default
+        // black text, which is near-invisible on the dark theme.
+        auto setCalStatus = [calStatus](const QString& text, const QString& token) {
             calStatus->setText(text);
-            calStatus->setStyleSheet(
-                QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(color));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(calStatus,
+                QStringLiteral("QLabel { color: {{%1}}; font-size: 11px; }").arg(token));
         };
 
         connect(startBtn, &QPushButton::clicked, this,
@@ -2534,7 +2561,7 @@ QWidget* RadioSetupDialog::buildRxTab()
             *pllRunningSeen = false;
             startBtn->setEnabled(false);
             startBtn->setText("Busy");
-            setCalStatus("Starting...", "#8aa8c0");
+            setCalStatus("Starting...", "color.text.secondary");
 
             qCDebug(lcProtocol) << "RadioSetupDialog: frequency calibration requested"
                                  << "cal_freq=" << calFreq
@@ -2862,7 +2889,15 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
         const double fixed = refCombo->currentData().toDouble();
         if (fixed > 0.0)
             return fixed;
-        return customEdit->text().toDouble() * 1.0e6;
+        // Parse with the same locale the QDoubleValidator accepts. Validating
+        // system-locale ("10,000000" on de_DE) and parsing C-locale would let a
+        // visibly-valid field read back as 0, and Calibrate would report an
+        // empty reference over a field that plainly contains one.
+        bool ok = false;
+        const double mhz = QLocale::system().toDouble(customEdit->text(), &ok);
+        if (!ok)
+            return 0.0;
+        return mhz * 1.0e6;
     };
     connect(refCombo, &QComboBox::currentIndexChanged, this, [refCombo, customEdit](int) {
         customEdit->setVisible(refCombo->currentData().toDouble() <= 0.0);
@@ -2927,20 +2962,41 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
         readout->setText(text);
     };
 
-    auto apply = [this, ppbSpin, refreshReadout](int ppb) {
+    // persist=false applies live without writing the settings store — used by
+    // the auto-repeating Trim buttons, which commit once on release.
+    auto apply = [this, ppbSpin, refreshReadout](int ppb, bool persist = true) {
         QSignalBlocker blocker(ppbSpin);
         ppbSpin->setValue(Hl2FreqCal::clampPpb(ppb));
         // The backend owns clamping, persistence and the re-push. Going through
         // it rather than writing settings here is what keeps a mid-session
         // change audible immediately instead of at the next tune.
         m_model->invokeBackendExtension(QStringLiteral("hl2"),
-                                        QStringLiteral("freqcal.set"), 0,
-                                        QVariant(ppbSpin->value()));
+                                        persist ? QStringLiteral("freqcal.set")
+                                                : QStringLiteral("freqcal.set_live"),
+                                        0, QVariant(ppbSpin->value()));
         refreshReadout();
     };
 
+    // Commit on editing-finished rather than on every intermediate keystroke:
+    // with keyboard tracking on, typing "-1782" would persist four partial
+    // values and command four intermediate frequencies to the radio.
+    ppbSpin->setKeyboardTracking(false);
     connect(ppbSpin, &QSpinBox::valueChanged, this, [apply](int v) { apply(v); });
     connect(resetBtn, &QPushButton::clicked, this, [apply] { apply(0); });
+
+    // Re-seed from the store whenever the dialog is shown or the connected
+    // radio changes. The page is built once per process and the dialog is a
+    // persistent singleton, so without this the spinbox would keep the value it
+    // read at first build — and the next Trim press would commit that number to
+    // whichever radio is connected now.
+    QPointer<QSpinBox> spinGuard(ppbSpin);
+    m_calibrationReseed = [this, spinGuard, refreshReadout] {
+        if (!spinGuard)
+            return;
+        QSignalBlocker blocker(spinGuard);
+        spinGuard->setValue(Hl2FreqCal::loadPpb(m_model->settingsScope()));
+        refreshReadout();
+    };
 
     // ── Trim ─────────────────────────────────────────────────────────────────
     //
@@ -2982,12 +3038,19 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     grid->addWidget(trimRow, row, 1, 1, 2);
     ++row;
 
+    // Applied live while held (the beat note has to move under the operator's
+    // hand), persisted once on release.
     connect(downBtn, &QPushButton::clicked, this, [apply, ppbSpin, stepCombo] {
-        apply(ppbSpin->value() - stepCombo->currentData().toInt());
+        apply(ppbSpin->value() - stepCombo->currentData().toInt(), /*persist=*/false);
     });
     connect(upBtn, &QPushButton::clicked, this, [apply, ppbSpin, stepCombo] {
-        apply(ppbSpin->value() + stepCombo->currentData().toInt());
+        apply(ppbSpin->value() + stepCombo->currentData().toInt(), /*persist=*/false);
     });
+    for (QPushButton* b : {downBtn, upBtn}) {
+        connect(b, &QPushButton::released, this, [apply, ppbSpin] {
+            apply(ppbSpin->value());
+        });
+    }
 
     gvb->addLayout(grid);
 
@@ -3049,11 +3112,21 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
 
     // Keep the "off by N Hz at this frequency" line honest as the operator
     // tunes around looking for the reference.
-    for (SliceModel* s : m_model->slices()) {
+    auto trackSlice = [this, refreshReadout](SliceModel* s) {
         if (s)
             connect(s, &SliceModel::frequencyChanged, this,
                     [refreshReadout] { refreshReadout(); });
-    }
+    };
+    for (SliceModel* s : m_model->slices())
+        trackSlice(s);
+    // Slices created after the page was built (including every slice, when the
+    // page was built before connecting) would otherwise never move the "off by
+    // N Hz" line — the one line that gives this page its reason to exist.
+    connect(m_model, &RadioModel::sliceAdded, this,
+            [trackSlice, refreshReadout](SliceModel* s) {
+        trackSlice(s);
+        refreshReadout();
+    });
     refreshReadout();
 
     vbox->addStretch(1);
