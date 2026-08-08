@@ -60,9 +60,13 @@ void AsrAudioTap::onRxAudio(const QString& source,
                           m_clock.isValid() ? m_clock.elapsed() : 0)) {
         return;
     }
-    // receivePresentationPostDspAudioReady is documented (and, at every emit
-    // site, actually) fixed at 2 channels — see AudioEngine.h's doc comment
-    // on the signal. Passed explicitly rather than inferred (#4489).
+    // receivePresentationPostDspAudioReady has exactly one emit site
+    // (AudioEngine.cpp:4491), and the captureAutomationAudio call right
+    // above it tags that same buffer as 2 channels — so 2 is correct here
+    // today. Passed explicitly rather than inferred from the block's byte
+    // count (#4489); the contract lives only in this parameter, not in a
+    // formal doc comment on the signal, so it's worth re-checking here if
+    // that emit site ever changes.
     const QVector<float> mono = AsrTapPolicy::toMono(stereoFloat32Pcm, 2);
     if (mono.isEmpty()) {
         return;
