@@ -15501,8 +15501,11 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         const auto& kiwiSpots = m_bandPlanMgr ? m_bandPlanMgr->kiwiDxSpots()
                                                : QVector<BandPlanManager::KiwiDxSpot>{};
         p.setRenderHint(QPainter::Antialiasing, true);
-        p.setPen(QPen(QColor(0x00, 0xe5, 0xff), 1));
-        p.setBrush(QColor(0x00, 0xe5, 0xff, 220));
+        const QColor kiwiColor = AetherSDR::ThemeManager::instance().color("color.accent.bright");
+        p.setPen(QPen(kiwiColor, 1));
+        QColor fill = kiwiColor;
+        fill.setAlpha(220);
+        p.setBrush(fill);
         const int cy = bandY + bandH / 2;
         for (const auto& spot : kiwiSpots) {
             if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) continue;

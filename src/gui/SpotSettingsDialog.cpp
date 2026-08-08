@@ -8,6 +8,7 @@
 #include <QGridLayout>
 #include <QColorDialog>
 #include "core/ThemeManager.h"
+#include "Theme.h"
 
 namespace AetherSDR {
 
@@ -58,11 +59,8 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
         emit settingsChanged();
     };
 
-    static const QString kToggleStyle = QStringLiteral(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
     auto applyToggleStyle = [](QPushButton* btn) {
-        btn->setStyleSheet(kToggleStyle);
+        applyToggleButtonStyle(btn, ToggleTribe::Success);
     };
 
     // ── Spots: Enabled/Disabled ─────────────────────────────────────────
