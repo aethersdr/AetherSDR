@@ -1907,9 +1907,10 @@ MainWindow::MainWindow(QWidget* parent)
             });
             m_radioModel.createRxAudioStream();
         } else {
-            // Stop the local sink so audio isn't played locally even when
-            // the remote_audio_rx stream is still alive for a TCI client
-            // (#1571 follow-up).
+            // Stop the local sink so audio isn't played locally, then drop
+            // the remote_audio_rx stream. TCI clients get RX audio via DAX
+            // (#1331), not this stream, so there's no client to keep it
+            // alive for.
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->stopRxStream();
             });

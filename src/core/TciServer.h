@@ -117,8 +117,6 @@ public:
     void rearmDaxForProfileLoad();
 
 public slots:
-    // RX audio from main audio pipeline (float32 stereo, 24 kHz)
-    void onRxAudioReady(const QByteArray& pcm);
     // RX audio from DAX pipeline (float32 stereo, 24 kHz)
     void onDaxAudioReady(int channel, const QByteArray& pcm);
     // IQ data from DAX IQ stream (big-endian float32 I/Q pairs)
