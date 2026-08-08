@@ -832,9 +832,21 @@ public:
     // directly; the client lock logic does, exactly as the GUI path does. Call on
     // the GUI thread (owns SliceModel).
     // Returns false (and issues no tune) when the target is rejected — a null
-    // slice or a non-positive / non-finite frequency — so the CAT protocol layer
-    // can report the failure instead of acknowledging a tune that never happened.
+    // slice or an implausible frequency (see isPlausibleCatTuneMhz) — so the CAT
+    // protocol layer can report the failure instead of acknowledging a tune that
+    // never happened.
     bool tuneSliceForCat(SliceModel* slice, double mhz);
+
+    // Is this a physically plausible CAT-tune target (MHz)? The single policy for
+    // the boundary check tuneSliceForCat applies. rigctld pre-validates with it
+    // too: its handlers answer the client synchronously and then marshal the tune
+    // through a queued call, so tuneSliceForCat's bool is unobservable to them —
+    // without this they would answer success and silently drop an out-of-range
+    // tune. Rejects non-positive, non-finite, and absurdly-high targets (a
+    // multi-step UP whose product runs away, a fat-fingered set); the radio still
+    // enforces its real band limits — this only stops the physically impossible
+    // from being broadcast via frequencyChanged before the radio rejects it.
+    static bool isPlausibleCatTuneMhz(double mhz);
 
     // Effective pan geometry: the deferred pending value if one is queued,
     // else the live model value, else NaN when the pan is unknown. Caller-side

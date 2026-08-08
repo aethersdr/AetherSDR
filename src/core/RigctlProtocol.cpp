@@ -737,7 +737,9 @@ QString RigctlProtocol::cmdSetFreq(const QString& arg)
 
     bool ok;
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
-    if (parts.isEmpty() || !ok || !(hz > 0.0)) return rprt(-1);  // RIG_EINVAL (reject <=0/NaN)
+    // RIG_EINVAL: reject <=0 / NaN / absurdly high (same predicate the tune seam
+    // uses — see RadioModel::isPlausibleCatTuneMhz).
+    if (parts.isEmpty() || !ok || !RadioModel::isPlausibleCatTuneMhz(hz / 1e6)) return rprt(-1);
 
     // VFOB/SUB addresses the split TX slice. targetable_vfo lets clients set the
     // TX VFO freq directly without a preceding set_split_vfo (WSJT-X Rig split
@@ -1207,7 +1209,8 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     dropVfoPrefix(parts);   // "set_split_freq VFOB <hz>" in chk_vfo=1 mode
     bool ok = false;
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
-    if (parts.isEmpty() || !ok || !(hz > 0.0)) return rprt(-1);  // reject <=0/NaN
+    // Reject <=0 / NaN / absurdly high (same predicate as the tune seam).
+    if (parts.isEmpty() || !ok || !RadioModel::isPlausibleCatTuneMhz(hz / 1e6)) return rprt(-1);
     const double mhz = hz / 1e6;
     return applySplitParam(
         [this, mhz]{ m_pendingSplitFreqMHz = mhz; },
@@ -2056,8 +2059,10 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
         const double mhz = slice->frequency() + slice->stepHz() / 1e6;
         // Validate before queueing: tuneSliceForCat's bool is unobservable across
         // the queued invocation, so a rejected target would otherwise be dropped
-        // while we answered RPRT 0 (a false success). Mirrors set_freq/set_split_freq.
-        if (!(mhz > 0.0)) return rprt(-1);
+        // while we answered RPRT 0 (a false success). A multi-step UP can overflow
+        // to an absurd frequency, so use the same plausibility predicate the seam
+        // does. Mirrors set_freq/set_split_freq.
+        if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);
@@ -2068,7 +2073,7 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
         const double mhz = slice->frequency() - slice->stepHz() / 1e6;
         // A multi-step DOWN can underflow past 0; reject here (see UP above) rather
         // than acknowledge a tune tuneSliceForCat will silently drop.
-        if (!(mhz > 0.0)) return rprt(-1);
+        if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);

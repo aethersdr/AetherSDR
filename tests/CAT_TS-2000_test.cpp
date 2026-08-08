@@ -1301,6 +1301,22 @@ void section15(CatClient& c, Runner& r)
                      ? faUnder.mid(2).toLongLong() : -1;
     r.check(QStringLiteral("15.26 DN99999999 (underflow) → VFO A unchanged, no negative freq"),
             underHz == baseHz, repr(faUnder));
+
+    // 15.27  Upper-bound guard (symmetric with the 15.25 underflow): an absurdly
+    // high FA target (10 THz, far above any amateur allocation) must be rejected
+    // at the boundary — "?;" and no tune — rather than optimistically broadcast.
+    // The guard lives in RadioModel::isPlausibleCatTuneMhz, applied by the seam
+    // tuneSliceForCat. A finite UP/DN step math (or a fat-fingered set) can overflow
+    // to a value like this. query() consumes the "?;" so it can't desync the FA poll.
+    const QString faOver = c.query(QStringLiteral("FA10000000000000"));
+    r.check(QStringLiteral("15.27 FA 10 THz (overflow) rejected with \"?;\""),
+            faOver == QLatin1String("?"), repr(faOver));
+    QString faAfter;
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(baseHz), faAfter);
+    qint64 overHz = (faAfter.startsWith(QLatin1String("FA")) && isDigits(faAfter.mid(2), 11))
+                    ? faAfter.mid(2).toLongLong() : -1;
+    r.check(QStringLiteral("15.28 FA 10 THz (overflow) → VFO A unchanged"),
+            overHz == baseHz, repr(faAfter));
 }
 
 } // namespace

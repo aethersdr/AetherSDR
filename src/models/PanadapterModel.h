@@ -41,13 +41,15 @@ public:
     bool centerKnown() const { return m_centerKnown; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // True when a target frequency (MHz) lies within this pan's current span
-    // [center - bw/2, center + bw/2]. The single source of truth for the
-    // CAT/TCI VFO-tune recenter policy: in-span retunes keep autopan=0 (no
-    // yank), out-of-span targets recenter/re-band the display. Until the radio
-    // has reported a real center (centerKnown), m_centerMhz is a placeholder,
-    // so treat the target as out of span — that recenters, which is the safe
-    // direction and establishes the center. A non-positive bandwidth (span not
-    // yet known) is likewise never in span.
+    // [center - bw/2, center + bw/2]. The source of truth for the CAT
+    // (rigctld / SmartCAT) VFO-tune recenter policy — RadioModel::tuneSliceForCat
+    // is the only caller: in-span retunes keep autopan=0 (no yank), out-of-span
+    // targets recenter/re-band the display. (TciServer::tuneSliceAndConfirm keeps
+    // its own inline in-span check for now — a separate path pending dedup; do not
+    // assume it routes through here.) Until the radio has reported a real center
+    // (centerKnown), m_centerMhz is a placeholder, so treat the target as out of
+    // span — that recenters, which is the safe direction and establishes the
+    // center. A non-positive bandwidth (span not yet known) is likewise never in span.
     bool spanContainsMhz(double mhz) const {
         if (!m_centerKnown) {
             return false;

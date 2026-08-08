@@ -527,6 +527,20 @@ void section2c(RigctlClient& c, Runner& r, qint64 origFreq)
     r.check(QStringLiteral("2c.4  get_freq confirms return to the original frequency (%1 Hz)").arg(origFreq),
             qAbs(restored - origFreq) < 100,
             QStringLiteral("got %1").arg(restored));
+
+    // 2c.5/2c.6  Upper-bound guard: an absurdly high target (10 THz, far above any
+    // amateur allocation) must be rejected at the boundary — RIG_EINVAL, no tune —
+    // rather than optimistically broadcast. Symmetric with the <=0/NaN rejection;
+    // the guard lives in RadioModel::isPlausibleCatTuneMhz, applied synchronously
+    // by cmdSetFreq (its queued tune can't observe the seam's bool). A finite step
+    // math (set_freq / a multi-step UP) can overflow to a value like this.
+    lines = c.send(QStringLiteral("\\set_freq 10000000000000"));
+    r.check(QStringLiteral("2c.5  absurd set_freq (10 THz) rejected with RPRT -1"),
+            c.rprt(lines) == -1, lines.join(QStringLiteral(" | ")));
+    const qint64 unchanged = pollFreqField(c, QStringLiteral("\\get_freq"), origFreq);
+    r.check(QStringLiteral("2c.6  VFO unchanged after the rejected absurd set_freq (%1 Hz)").arg(origFreq),
+            qAbs(unchanged - origFreq) < 100,
+            QStringLiteral("got %1").arg(unchanged));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

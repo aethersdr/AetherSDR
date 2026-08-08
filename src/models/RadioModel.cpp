@@ -4598,6 +4598,19 @@ bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
     return dispatchPanBand(panId, bandKey);
 }
 
+// Sanity ceiling for a CAT-commanded tune (MHz). Well above the highest amateur
+// allocation (~250 GHz, incl. microwave/transverter), so a real tune is never
+// rejected, while a gross overflow — a multi-step UP/DN whose product runs away,
+// or a fat-fingered absurd set — is caught before it broadcasts a bogus
+// frequencyChanged. The radio enforces its actual band limits; this only rejects
+// the physically impossible.
+static constexpr double kMaxCatTuneMhz = 1.0e6; // 1 THz
+
+bool RadioModel::isPlausibleCatTuneMhz(double mhz)
+{
+    return std::isfinite(mhz) && mhz > 0.0 && mhz < kMaxCatTuneMhz;
+}
+
 bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
 {
     // This mutates SliceModel, which lives on this model's (GUI) thread. Every
@@ -4611,13 +4624,15 @@ bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
     }
     // Boundary validation (Principle VII): this is the single seam every CAT /
     // rigctld retune funnels through, so reject an implausible frequency here
-    // once rather than in each caller. A non-positive or non-finite target
-    // (a client sending FA-5000;, a multi-step DN/UP that underflows, a parse
-    // that yielded NaN/inf) would otherwise be pushed optimistically into the
-    // model and broadcast via frequencyChanged before the radio rejects it.
-    // Return false so the caller answers the client with an error rather than
-    // acknowledging a tune that was thrown away.
-    if (!(mhz > 0.0 && std::isfinite(mhz))) {
+    // once rather than in each caller. A non-positive, non-finite, or absurdly
+    // high target (a client sending FA-5000;, a multi-step DN/UP that under- or
+    // overflows, a parse that yielded NaN/inf) would otherwise be pushed
+    // optimistically into the model and broadcast via frequencyChanged before the
+    // radio rejects it. Return false so the caller answers the client with an
+    // error rather than acknowledging a tune that was thrown away. (rigctld also
+    // pre-validates with this same predicate — its queued tune can't observe this
+    // bool; see isPlausibleCatTuneMhz.)
+    if (!isPlausibleCatTuneMhz(mhz)) {
         return false;
     }
     // Recenter policy: an in-span retune keeps autopan=0 (no yank — external
