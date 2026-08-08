@@ -1,6 +1,7 @@
 // Unit tests for KiwiSDR DX Community spots loading and parsing.
 
 #include "models/BandPlanManager.h"
+#include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
 #include <QString>
@@ -32,6 +33,11 @@ bool expect(bool condition, const char* label)
 
 int main(int argc, char* argv[])
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-kiwisdr-dx-spots-test"));
+    if (!settingsProfile.isValid()) {
+        std::fprintf(stderr, "FAIL could not create isolated settings profile\n");
+        return 1;
+    }
     QCoreApplication app(argc, argv);
     Q_INIT_RESOURCE(resources);
 
@@ -71,6 +77,17 @@ int main(int argc, char* argv[])
     expect(foundAlpha, "Alpha F1 RUS entry found in loaded spots");
     expect(foundGrimeton, "SAQ SWE entry found in loaded spots");
     expect(foundWideband, "Alpha wideband entry with passband boundaries found");
+
+    // Test spot mode normalization / whitelist
+    expect(BandPlanManager::normalizeSpotMode("CWN") == "CW", "normalizeSpotMode converts CWN to CW");
+    expect(BandPlanManager::normalizeSpotMode("AMN") == "AM", "normalizeSpotMode converts AMN to AM");
+    expect(BandPlanManager::normalizeSpotMode("DRM") == "AM", "normalizeSpotMode converts DRM to AM");
+    expect(BandPlanManager::normalizeSpotMode("SAL") == "SAM", "normalizeSpotMode converts SAL to SAM");
+    expect(BandPlanManager::normalizeSpotMode("SAU") == "SAM", "normalizeSpotMode converts SAU to SAM");
+    expect(BandPlanManager::normalizeSpotMode("NBFM") == "FM", "normalizeSpotMode converts NBFM to FM");
+    expect(BandPlanManager::normalizeSpotMode("USB") == "USB", "normalizeSpotMode preserves valid mode USB");
+    expect(BandPlanManager::normalizeSpotMode("IQ").isEmpty(), "normalizeSpotMode returns empty for unsupported mode IQ");
+    expect(BandPlanManager::normalizeSpotMode("GARBAGE").isEmpty(), "normalizeSpotMode returns empty for unknown mode GARBAGE");
 
     std::cout << "Summary: " << g_pass << " passed, " << g_fail << " failed.\n";
     return (g_fail == 0) ? 0 : 1;

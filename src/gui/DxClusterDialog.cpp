@@ -2388,7 +2388,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     bool passiveSpots     = SpotCommandPolicy::passiveModeFromSetting(
                                 s.value(SpotCommandPolicy::kPassiveSpotsModeKey, "False"));
     bool memoriesEnabled  = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
-    bool kiwiDxSpots      = s.value("ShowKiwiDxSpots", "True").toString() == "True";
+    bool kiwiDxSpots      = s.value("ShowKiwiDxSpots", "False").toString() == "True";
     bool autoMode         = s.value("SpotAutoSwitchMode", "True").toString() == "True";
     bool sHistorySignals  = s.value("SHistoryMarkersEnabled", "False").toString() == "True";
     bool sHistoryQrm      = s.value("SHistoryQrmEnabled", "False").toString() == "True";

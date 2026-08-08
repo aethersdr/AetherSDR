@@ -21,6 +21,7 @@
 
 #include "AetherDspWidget.h"
 #include "BandRecallSliceSelectionPolicy.h"
+#include "models/BandPlanManager.h"
 #include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
 #include "AppletPanel.h"
@@ -4321,20 +4322,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         queueActiveSliceForSpectrumTarget(target->sliceId());
         applyTuneRequest(target, mhz, TuneIntent::AbsoluteJump, "kiwi-spot-click");
 
-            const bool autoSwitchMode =
-                AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True";
-            if (autoSwitchMode) {
-                QString mappedMode = mode;
-                if (mode == "CWN") mappedMode = "CW";
-                else if (mode == "AMN") mappedMode = "AM";
-                if (!mappedMode.isEmpty()) {
-                    target->setMode(mappedMode);
-                }
+        const bool autoSwitchMode =
+            AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True";
+        if (autoSwitchMode) {
+            const QString mappedMode = BandPlanManager::normalizeSpotMode(mode);
+            if (!mappedMode.isEmpty()) {
+                target->setMode(mappedMode);
             }
+        }
 
-            if (loHz != 0 || hiHz != 0) {
-                target->setFilterWidth(loHz, hiHz);
-            }
+        if (loHz != 0 || hiHz != 0) {
+            target->setFilterWidth(loHz, hiHz);
+        }
     });
     connect(sw, &SpectrumWidget::incrementalTuneRequested,
             this, [this, resolveSpectrumTuneTarget](double mhz) {

@@ -88,6 +88,30 @@ void BandPlanManager::loadKiwiDxSpots()
     emit kiwiDxSpotsChanged();
 }
 
+QString BandPlanManager::normalizeSpotMode(const QString& rawMode)
+{
+    const QString mode = rawMode.trimmed().toUpper();
+    if (mode == QStringLiteral("CWN") || mode == QStringLiteral("CW")) {
+        return QStringLiteral("CW");
+    }
+    if (mode == QStringLiteral("AMN") || mode == QStringLiteral("AM") || mode == QStringLiteral("DRM")) {
+        return QStringLiteral("AM");
+    }
+    if (mode == QStringLiteral("SAM") || mode == QStringLiteral("SAL") || mode == QStringLiteral("SAU")) {
+        return QStringLiteral("SAM");
+    }
+    if (mode == QStringLiteral("NBFM") || mode == QStringLiteral("FM")) {
+        return QStringLiteral("FM");
+    }
+    if (mode == QStringLiteral("NFM") || mode == QStringLiteral("DFM")
+        || mode == QStringLiteral("USB") || mode == QStringLiteral("LSB")
+        || mode == QStringLiteral("RTTY") || mode == QStringLiteral("DIGU")
+        || mode == QStringLiteral("DIGL") || mode == QStringLiteral("FDV")) {
+        return mode;
+    }
+    return QString();
+}
+
 void BandPlanManager::setActivePlan(const QString& name)
 {
     for (const auto& p : m_plans) {

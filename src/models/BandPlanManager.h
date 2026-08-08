@@ -101,6 +101,10 @@ public:
     void loadKiwiDxSpots();
     const QVector<KiwiDxSpot>& kiwiDxSpots() const { return m_kiwiDxSpots; }
 
+    // Normalizes spot mode strings (e.g. CWN->CW, AMN->AM, SAL/SAU->SAM, NBFM->FM)
+    // to a valid SmartSDR mode. Returns empty QString for unrecognized or unsupported modes.
+    static QString normalizeSpotMode(const QString& rawMode);
+
 signals:
     void planChanged();
     void kiwiDxSpotsChanged();

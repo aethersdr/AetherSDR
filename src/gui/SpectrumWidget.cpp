@@ -2447,7 +2447,7 @@ void SpectrumWidget::loadSettings()
         m_bandPlanFontSize = s.value("BandPlanFontSize", "6").toInt();
     }
     m_bandPlanShowSpots = s.value("BandPlanShowSpots", "True").toString() == "True";
-    m_showKiwiDxSpots = s.value("ShowKiwiDxSpots", "True").toString() == "True";
+    m_showKiwiDxSpots = s.value("ShowKiwiDxSpots", "False").toString() == "True";
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
