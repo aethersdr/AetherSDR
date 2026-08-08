@@ -11,8 +11,17 @@ namespace AetherSDR {
 //
 // Same contract as SliceDelta: a populated optional means "the caller means
 // this", an empty one means "leave it alone". That is what lets one call carry
-// a panadapter drag (centre AND width together, so the filter mask is rebuilt
-// once instead of twice) and also carry a single menu toggle.
+// a single menu toggle and also PERMITS a centre+width change to arrive as one
+// edit rather than two — worth having on a host-DSP backend, where each edit
+// rebuilds the whole filter mask. No caller builds that combined delta yet:
+// SpectrumWidget's drag emits tnfMoveRequested and tnfWidthRequested as
+// separate signals, and the bridge's `notch set` applies one key at a time, so
+// today a diagonal drag still costs two rebuilds. The seam allows the fix; it
+// is not itself the fix.
+//
+// `active` is likewise accepted but not round-tripped: TnfEntry has no such
+// field, so TnfModel::applyNotchDelta drops it. It is backend-internal — a
+// per-notch bypass a backend may honour and the model cannot currently show.
 //
 // It is also how the seam stays honest about features only some radios have.
 // `depth` is a Flex concept — three notch depths — and a WDSP notched bandpass

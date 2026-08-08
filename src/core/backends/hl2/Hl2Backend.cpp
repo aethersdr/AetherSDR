@@ -1368,6 +1368,15 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // (EP6 silence then resume) does not. See m_passbandDerivedThisConnect.
     m_passbandDerivedThisConnect = false;
 
+    // Notches are SESSION state, and the same call is true on both sides of the
+    // seam: RadioModel::onDisconnected() calls m_tnfModel.clear(), and a
+    // same-family reconnect rebuilds no backend, so anything kept here would be
+    // replayed into WDSP by seedNotches() with nothing on screen naming it —
+    // audible nulls with no marker to right-click and no id to remove them by.
+    // m_nextNotchId deliberately keeps counting: an id is never reused.
+    m_notches.clear();
+    m_notchesEnabled = true;
+
     // The span the operator last chose, snapped to a rate we can actually run
     // and to the current low-bandwidth ceiling. Applied BEFORE the explicit
     // param below so an automation/test caller can still pin a rate outright.
@@ -2079,6 +2088,17 @@ void Hl2Backend::seedNotches(const Receiver& r)
     // placed against a tune frequency of zero lands ~7 MHz away from where it
     // was asked for.
     pushNotchTune(r);
+    // REPLACE, never append. pushInitialState() calls this on every linkUp, and
+    // MetisClient re-emits linkUp after an EP6 silence timeout without any new
+    // connectRadio() — the receivers and their Hl2RxDsp objects survive that,
+    // so a seed that only added would give every notch a second copy in WDSP
+    // while m_notches still held one. The positional index the whole stable-id
+    // mapping rests on would then address the wrong notch, and the duplicate
+    // would keep notching a frequency with no UI entry to remove it. Clearing
+    // first makes seeding idempotent wherever it is called from, which is the
+    // property this path needs — a once-per-connect guard would fix the linkUp
+    // case and leave the non-idempotency one refactor away from returning.
+    QMetaObject::invokeMethod(r.dsp, "clearNotches", Qt::QueuedConnection);
     for (std::size_t index = 0; index < m_notches.size(); ++index) {
         const NotchRecord& notch = m_notches[index];
         QMetaObject::invokeMethod(r.dsp, "addNotch", Qt::QueuedConnection,
@@ -2152,9 +2172,12 @@ void Hl2Backend::setNotch(int notchId, const AetherSDR::NotchDelta& delta)
     if (delta.active)
         notch.active = *delta.active;
 
-    // ONE edit for a centre+width change, not two. That matters here in a way
-    // it does not on a Flex: each edit rebuilds the whole multi-bandpass filter
-    // mask, and a panadapter drag delivers these ~30 times a second.
+    // A combined centre+width delta lands as ONE edit here, which matters in a
+    // way it does not on a Flex: each edit rebuilds the whole multi-bandpass
+    // filter mask, and a panadapter drag delivers these ~30 times a second.
+    // Nothing builds that combined delta yet — SpectrumWidget emits move and
+    // width separately — so a diagonal drag still pays for two rebuilds. See
+    // NotchDelta.h.
     for (const Receiver& r : m_rx) {
         if (r.dsp)
             QMetaObject::invokeMethod(r.dsp, "editNotch", Qt::QueuedConnection,

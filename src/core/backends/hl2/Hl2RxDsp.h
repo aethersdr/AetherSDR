@@ -121,8 +121,18 @@ public:
     Q_INVOKABLE void addNotch(int index, double centerHz, double widthHz, bool active);
     Q_INVOKABLE void editNotch(int index, double centerHz, double widthHz, bool active);
     Q_INVOKABLE void removeNotch(int index);
+    // Empty both the mirror and WDSP's database. This is what makes seeding
+    // IDEMPOTENT: Hl2Backend::seedNotches() clears before it replays, so a
+    // second seed against a chain that already holds the set replaces it
+    // instead of appending a duplicate of every notch.
+    Q_INVOKABLE void clearNotches();
     Q_INVOKABLE void setNotchesEnabled(bool on);
     Q_INVOKABLE void setNotchTuneFrequency(double tuneHz);
+
+    // Mirror size, and WDSP's own count. These must agree — the positional
+    // index map depends on it — so both are exposed for the test that pins it.
+    [[nodiscard]] int notchCount() const;
+    [[nodiscard]] int wdspNotchCount() const;
 
     // Mute the DEMODULATOR while transmitting.
     //

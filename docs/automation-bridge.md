@@ -1255,7 +1255,7 @@ process — so `add` cannot tell you the id it created. Re-poll `notch list`.
 |---|---|---|
 | `list` | — | every notch the model holds, plus the radio's declared `maxNotchFilters`, `minWidthHz` and `hasDepth`. **Report the capabilities alongside the list deliberately:** an empty list on a radio that cannot notch is indistinguishable from a notch that was placed and silently dropped, and only `maxNotchFilters` tells the two apart |
 | `add` | `<freqMhz>` | place a notch at an absolute RF frequency. The width comes from the model's create default; pass it and it is echoed but not honoured. Async on Flex (the radio assigns the id) — re-poll `list` |
-| `set` | `<id> [freq=<mhz>] [width=<hz>] [depth=<1-3>]` | move, resize, or re-depth an existing notch. Multiple keys in one call arrive at the backend as one delta, which is what a panadapter drag does. `depth` is Flex-only — a WDSP notch is a full null, and `hasDepth` in `list` says which you have |
+| `set` | `<id> [freq=<mhz>] [width=<hz>] [depth=<1-3>]` | move, resize, or re-depth an existing notch. Each key is applied as its own delta, in the order given — the seam accepts a combined centre+width delta but no caller builds one yet, so a two-key call costs two filter-mask rebuilds. `depth` is Flex-only — a WDSP notch is a full null, and `hasDepth` in `list` says which you have |
 | `remove` | `<id>` | remove a notch. Removal is optimistic in the model, so `list` reflects it immediately |
 | `enable` | `0` / `1` | the global notch bypass (`tnf_enabled` on a Flex). Individual notches keep their own state underneath |
 
@@ -3001,7 +3001,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 58 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 59 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3030,6 +3030,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
+| `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters |
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |

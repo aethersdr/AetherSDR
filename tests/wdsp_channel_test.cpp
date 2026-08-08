@@ -255,7 +255,8 @@ bool runNotchIndexTest()
 
     // Deleting the middle notch must close the gap: what was index 2 becomes
     // index 1. A caller holding stable ids has to remap here or it edits the
-    // wrong notch — this is the exact behaviour Hl2NotchBook exists to absorb.
+    // wrong notch — this is the exact behaviour Hl2Backend::notchIndexFor()
+    // and the ordered m_notches vector exist to absorb.
     if (!require(channel->removeNotch(1), "could not remove the middle notch") ||
         !require(channel->notchCount() == 2, "notch count did not fall to 2")) {
         return false;
@@ -326,6 +327,11 @@ bool runNotchAttenuationTest()
     config.agcMode = 0;
     config.agcFixedGainDb = 0.0;
     config.blockForOutput = true;
+    // The tap count HL2 actually runs (Hl2RxDsp::kRxFilterTaps), so the null is
+    // measured in the configuration the operator hears rather than in WDSP's
+    // 2048 default — which is also the one whose 200 Hz notch floor this PR
+    // exists to get away from.
+    config.filterTaps = 8192;
 
     const double tuneHz = 7'000'000.0;
     // The tone's audio pitch, and therefore the RF frequency it corresponds to.

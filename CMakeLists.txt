@@ -3059,6 +3059,11 @@ target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
 
+add_executable(hl2_notch_seed_test tests/hl2_notch_seed_test.cpp)
+target_include_directories(hl2_notch_seed_test PRIVATE src)
+target_link_libraries(hl2_notch_seed_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_notch_seed_test COMMAND hl2_notch_seed_test)
+
 # HL2 backend — IRadioBackend seam contract against a capped fake HL2.
 add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)

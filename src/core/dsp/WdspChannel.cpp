@@ -424,6 +424,14 @@ int WdspChannel::notchCount() const noexcept
 {
     if (m_config.direction != Direction::Receive)
         return 0;
+    // RXANBPGetNumNotches takes the channel's own csDSP, so it is safe against
+    // the DSP thread — but not against close() on another thread, which frees
+    // the NOTCHDB under g_setupMutex. Every other accessor on this class either
+    // goes through beginControlOperation() or takes that lock; these two are
+    // read-only and cheap, so the lock is all they need to match the contract.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
+        return 0;
     int count = 0;
     RXANBPGetNumNotches(m_channelId, &count);
     return count;
@@ -433,6 +441,10 @@ bool WdspChannel::notchAt(int index, double* centerHz, double* widthHz,
                           bool* active) const noexcept
 {
     if (m_config.direction != Direction::Receive || index < 0)
+        return false;
+    // See notchCount() — same interlock, same reason.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
         return false;
     double center = 0.0;
     double width = 0.0;

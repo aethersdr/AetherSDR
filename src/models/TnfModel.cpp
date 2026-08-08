@@ -61,6 +61,9 @@ void TnfModel::applyNotchDelta(int id, const NotchDelta& delta)
         t.depthDb = *delta.depthDb;
     if (delta.permanent)
         t.permanent = *delta.permanent;
+    // delta.active is deliberately NOT carried: TnfEntry has no such field, and
+    // a per-notch bypass has no representation in the overlay or the TNF menu.
+    // It is backend-internal — see the note in NotchDelta.h.
 
     qCDebug(lcProtocol) << "TnfModel: notch" << id << "freq=" << t.freqMhz
              << "width=" << t.widthHz;

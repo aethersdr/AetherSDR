@@ -5946,8 +5946,7 @@ QJsonObject AutomationServer::doNotch(const QString& action, const QString& arg)
         const QString value = arg.trimmed();
         if (value.isEmpty())
             return err(QStringLiteral("notch enable requires 0 or 1"));
-        const bool on = (value == QLatin1String("1") || value.compare(
-                             QLatin1String("true"), Qt::CaseInsensitive) == 0);
+        const bool on = parseBool(value);
         tnf.requestGlobalTnfEnabled(on);
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("notch"), QStringLiteral("enable")},

@@ -282,8 +282,9 @@ public:
         Q_UNUSED(widthHz);
     }
     // Move, resize, or otherwise change an existing notch. A delta rather than
-    // a fixed argument list for two reasons: a panadapter drag changes centre
-    // and width together and should rebuild the filter mask once, and the
+    // a fixed argument list for two reasons: it PERMITS a centre+width change
+    // to rebuild the filter mask once instead of twice (no caller does that
+    // yet — see NotchDelta.h), and the
     // Flex-only fields (depth, permanent) can then ride along without a
     // host-DSP backend having to pretend it understands them.
     virtual void setNotch(int notchId, const AetherSDR::NotchDelta& delta)

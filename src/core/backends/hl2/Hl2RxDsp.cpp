@@ -159,9 +159,26 @@ void Hl2RxDsp::addNotch(int index, double centerHz, double widthHz, bool active)
     widthHz = std::max(widthHz, kMinNotchWidthHz);
     if (index < 0 || index > static_cast<int>(m_notches.size()))
         return;
+    // Order matters: WDSP first, and the mirror only if it took it. The mirror
+    // is what configure() replays after a rate change, so an entry WDSP refused
+    // (database full, or a beginControlOperation that lost to a concurrent
+    // reconfigure) would put every index above it permanently out of step —
+    // and the desync would outlive the rebuild that might have resynced it.
+    // With no channel yet the mirror still takes it; that replay is the point.
+    if (m_channel && !m_channel->addNotch(index, centerHz, widthHz, active))
+        return;
     m_notches.insert(m_notches.begin() + index, Notch {centerHz, widthHz, active});
-    if (m_channel)
-        m_channel->addNotch(index, centerHz, widthHz, active);
+}
+
+void Hl2RxDsp::clearNotches()
+{
+    // Delete from the top down so each removal is the last index — WDSP closes
+    // the gap on every delete, exactly as removeNotch() relies on.
+    for (int index = static_cast<int>(m_notches.size()) - 1; index >= 0; --index) {
+        if (m_channel)
+            m_channel->removeNotch(index);
+    }
+    m_notches.clear();
 }
 
 void Hl2RxDsp::editNotch(int index, double centerHz, double widthHz, bool active)
@@ -169,18 +186,18 @@ void Hl2RxDsp::editNotch(int index, double centerHz, double widthHz, bool active
     widthHz = std::max(widthHz, kMinNotchWidthHz);
     if (index < 0 || index >= static_cast<int>(m_notches.size()))
         return;
+    if (m_channel && !m_channel->editNotch(index, centerHz, widthHz, active))
+        return;   // see addNotch(): the mirror must not claim what WDSP refused
     m_notches[static_cast<std::size_t>(index)] = Notch {centerHz, widthHz, active};
-    if (m_channel)
-        m_channel->editNotch(index, centerHz, widthHz, active);
 }
 
 void Hl2RxDsp::removeNotch(int index)
 {
     if (index < 0 || index >= static_cast<int>(m_notches.size()))
         return;
+    if (m_channel && !m_channel->removeNotch(index))
+        return;   // see addNotch(): the mirror must not lose what WDSP kept
     m_notches.erase(m_notches.begin() + index);
-    if (m_channel)
-        m_channel->removeNotch(index);
 }
 
 void Hl2RxDsp::setNotchesEnabled(bool on)
@@ -188,6 +205,16 @@ void Hl2RxDsp::setNotchesEnabled(bool on)
     m_notchesEnabled = on;
     if (m_channel)
         m_channel->setNotchesEnabled(on);
+}
+
+int Hl2RxDsp::notchCount() const
+{
+    return static_cast<int>(m_notches.size());
+}
+
+int Hl2RxDsp::wdspNotchCount() const
+{
+    return m_channel ? m_channel->notchCount() : 0;
 }
 
 void Hl2RxDsp::setNotchTuneFrequency(double tuneHz)
