@@ -1340,7 +1340,7 @@ int MainWindow::injectMidiVfoCcForAutomation(int value)
 
 void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 {
-    if (steps == 0)
+    if (steps == 0 || !UlanziDialMappings::isKnownWheelAction(actionId))
         return;
 
     if (actionId == "WheelFrequency") {
