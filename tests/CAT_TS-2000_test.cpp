@@ -720,12 +720,12 @@ void section11(CatClient& c, Runner& r)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, RT, RG, RC, RD, RU, XT)
+// Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY, RT, RG, RC, RD, RU, XT)
 // ═════════════════════════════════════════════════════════════════════════════
 
-void section12(CatClient& c, Runner& r)
+void section12(CatClient& c, Runner& r, bool doCw)
 {
-    r.section(QStringLiteral("Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, RT, RG, XT)"));
+    r.section(QStringLiteral("Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY, RT, RG, XT)"));
 
     // ── AG: VFO A audio gain (0-100, 3-digit) ──────────────────────────────
     QString origAg = c.query(QStringLiteral("AG"));
@@ -807,10 +807,20 @@ void section12(CatClient& c, Runner& r)
 
     if (origPt.startsWith(QLatin1String("PT"))) { c.send(origPt); QThread::msleep(50); }
 
-    // KY (CW keyer busy query) is exercised in section 13, which is --cw-gated:
-    // it only answers KY0/KY1 on a rig with a radio-side keyer, so a keyerless
-    // target (e.g. the built-in demo) correctly returns "?;". It has no place in
-    // this ungated Tier-2 section.
+    // ── KY: CW keyer busy query (0=idle, 1=sending) ────────────────────────
+    // The KY; *query* is read-only (it reports keyer-busy state, it never keys —
+    // that's KY<text>;), but the whole KY family is refused with "?;" on a rig
+    // without a radio-side keyer (hasRadioSideCwKeyer()==false, e.g. the built-in
+    // demo). Gate it behind --cw like section 13 so a keyerless/ungated run SKIPs
+    // instead of failing, while keyered rigs (any Flex) keep the coverage.
+    if (doCw) {
+        resp = c.query(QStringLiteral("KY"));
+        r.check(QStringLiteral("12.13 KY; (query) → KY0 (idle) or KY1 (sending)"),
+                resp == QLatin1String("KY0") || resp == QLatin1String("KY1"), repr(resp));
+    } else {
+        r.skip(QStringLiteral("12.13 KY; (query) → KY0 or KY1"),
+               QStringLiteral("--cw not set — keyerless targets answer '?;'"));
+    }
 
     // ── RT: RIT state (0/1) ──────────────────────────────────────────────────
     resp = c.query(QStringLiteral("RT"));
@@ -1304,7 +1314,7 @@ int main(int argc, char* argv[])
     if (doPtt) { section9ptt(c, r); } else { section9skip(r); }
     section10(c, r);
     section11(c, r);
-    section12(c, r);
+    section12(c, r, doCw);
     if (doCw) { section13cw(c, r); } else { section13skip(r); }
     if (doPty) { section14pty(r, parser.value(QStringLiteral("pty"))); } else { section14ptySkip(r); }
     section15(c, r);
