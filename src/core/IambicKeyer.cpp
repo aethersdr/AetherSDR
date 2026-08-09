@@ -232,6 +232,16 @@ void IambicKeyer::workerLoop()
             // Deadline armed BEFORE the key-down callback, so the
             // callback's cost (sidetone gate flip, per-edge trace log,
             // queued radio post) cannot push the edge out.
+            // Catch-up limiter: a stall longer than one element leaves every
+            // following deadline already past, so both wait loops fall
+            // straight through and the worker emits zero-length elements —
+            // and zero-length `cw key` edges on air — until the grid catches
+            // up.  Re-anchor instead.  Ordinary wake latency is orders of
+            // magnitude inside one element, so the self-correcting property
+            // this whole change exists for is untouched; only a stall that
+            // already lost an element stops trying to win the time back.
+            const auto markNow = std::chrono::steady_clock::now();
+            if (grid + onDuration < markNow) grid = markNow;
             const auto onDeadline = grid + onDuration;
             emitKeyDown(true);
             {
@@ -248,6 +258,10 @@ void IambicKeyer::workerLoop()
             grid = onDeadline;
 
             // ── Inter-element gap ──────────────────────────────────────
+            // Same limiter for the gap: without it the element that absorbed
+            // the stall is followed by a zero-length space.
+            const auto gapNow = std::chrono::steady_clock::now();
+            if (grid + offDuration < gapNow) grid = gapNow;
             const auto offDeadline = grid + offDuration;
             emitKeyDown(false);
             if (m_stopRequested.load(std::memory_order_acquire)) break;

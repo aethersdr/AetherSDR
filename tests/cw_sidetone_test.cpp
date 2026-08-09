@@ -1,6 +1,7 @@
 #include "core/CwSidetoneGenerator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -39,6 +40,44 @@ std::vector<float> runFrames(CwSidetoneGenerator& gen, int frames)
     std::vector<float> mono(frames);
     for (int i = 0; i < frames; ++i) mono[i] = stereo[2 * i];
     return mono;
+}
+
+// 48 kHz samples spanned by a measured wall-clock interval, plus margin.
+// The placement cases size their render window from the interval they
+// actually measured rather than a fixed constant: a scheduler stall inside
+// one of their spin loops then lengthens the window instead of pushing the
+// edge past the end of it and failing.
+int samplesFor(std::chrono::steady_clock::duration d, int marginFrames = 960)
+{
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(d).count();
+    return static_cast<int>(ns * 48000 / 1'000'000'000LL) + marginFrames;
+}
+
+// Count contiguous runs of audible 8-sample windows.
+int toneBursts(const std::vector<float>& buf)
+{
+    int bursts = 0;
+    bool loudRun = false;
+    for (int i = 0; i + 8 <= static_cast<int>(buf.size()); i += 8) {
+        const float peak = maxAbs(std::vector<float>(
+            buf.begin() + i, buf.begin() + i + 8));
+        const bool loud = peak > 0.1f;
+        if (loud && !loudRun) ++bursts;
+        loudRun = loud;
+    }
+    return bursts;
+}
+
+// Key one element of `ms` on, `ms` off, spinning on the real clock.
+void keyElement(CwSidetoneGenerator& gen, int ms)
+{
+    using clock = std::chrono::steady_clock;
+    gen.setKeyDown(true);
+    auto t = clock::now();
+    while (clock::now() - t < std::chrono::milliseconds(ms)) { /* spin */ }
+    gen.setKeyDown(false);
+    t = clock::now();
+    while (clock::now() - t < std::chrono::milliseconds(ms)) { /* spin */ }
 }
 
 } // namespace
@@ -191,12 +230,14 @@ int main()
         gen.setKeyDown(false);
         const auto b1 = clock::now();
 
-        auto mono = runFrames(gen, 1440);  // one 30 ms block covers both edges
+        // One block covering both edges, sized from the interval measured
+        // above so a stall in the spin loop can't push the key-up past it.
+        auto mono = runFrames(gen, std::max(1440, samplesFor(b1 - a0)));
 
         // Envelope edge: last 8-sample window whose peak clears threshold
         // (single samples of a sine pass through zero mid-tone).
         int lastLoud = -1;
-        for (int i = 0; i + 8 <= 1440; i += 8) {
+        for (int i = 0; i + 8 <= static_cast<int>(mono.size()); i += 8) {
             const float peak = maxAbs(std::vector<float>(
                 mono.begin() + i, mono.begin() + i + 8));
             if (peak > 0.1f) lastLoud = i + 8;
@@ -223,7 +264,8 @@ int main()
         gen2.setKeyDown(false);
         const auto d1 = clock::now();
         std::vector<float> cat;
-        for (int b = 0; b < 12; ++b) {
+        const int blocks2 = std::max(12, (samplesFor(d1 - c0) + 127) / 128);
+        for (int b = 0; b < blocks2; ++b) {
             auto blk = runFrames(gen2, 128);
             cat.insert(cat.end(), blk.begin(), blk.end());
         }
@@ -270,7 +312,8 @@ int main()
         gen.setKeyDown(false);
 
         std::vector<float> cat;
-        for (int b = 0; b < 30; ++b) {
+        const int blocks = std::max(30, (samplesFor(c1 - a0) + 127) / 128);
+        for (int b = 0; b < blocks; ++b) {
             auto blk = runFrames(gen, 128);
             cat.insert(cat.end(), blk.begin(), blk.end());
         }
@@ -314,6 +357,71 @@ int main()
         auto third = runFrames(gen, 480);
         ok &= expect(maxAbs(third) == 0.0f,
                      "true final key-up survives queue overflow via fallback");
+    }
+
+    // ── 10. Edges queued while process() is not being called must not replay
+    // into the next burst.  Not every consumer is pumped continuously: the
+    // recorder's sidetone generator renders only while the radio is
+    // transmitting a CW over (AudioEngine::onCwRecordPump), while
+    // setKeyDown() keeps queueing from every paddle edge regardless.  Without
+    // the staleness guard the next over anchors on keying from seconds ago
+    // and plays it back ahead of the real elements.
+    {
+        using clock = std::chrono::steady_clock;
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);
+
+        // Three elements keyed with the consumer stopped — nothing rendered.
+        for (int k = 0; k < 3; ++k) keyElement(gen, 10);
+        // Age them past the re-anchor threshold, still unpumped.
+        const auto q = clock::now();
+        while (clock::now() - q < std::chrono::milliseconds(300)) { /* spin */ }
+
+        // The consumer starts again, and one real element is keyed.
+        const auto e0 = clock::now();
+        keyElement(gen, 10);
+
+        std::vector<float> cat;
+        const int blocks = std::max(40, (samplesFor(clock::now() - e0) + 127) / 128);
+        for (int b = 0; b < blocks; ++b) {
+            auto blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+        ok &= expect(toneBursts(cat) == 1,
+                     "stale queued edges are dropped, not replayed into the"
+                     " next burst");
+    }
+
+    // ── 11. A consumer that pauses long enough for the anchor's wall clock to
+    // outrun its stream position re-anchors instead of deferring every edge
+    // past the end of the block forever (the same pause, seen from the other
+    // side: here the queue is empty across the gap, so only the mapping is
+    // stale).
+    {
+        using clock = std::chrono::steady_clock;
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);
+
+        keyElement(gen, 10);                       // establishes the anchor
+        for (int b = 0; b < 20; ++b) runFrames(gen, 128);
+
+        const auto q = clock::now();               // consumer stops rendering
+        while (clock::now() - q < std::chrono::milliseconds(400)) { /* spin */ }
+
+        const auto e0 = clock::now();
+        keyElement(gen, 10);
+        std::vector<float> cat;
+        const int blocks = std::max(40, (samplesFor(clock::now() - e0) + 127) / 128);
+        for (int b = 0; b < blocks; ++b) {
+            auto blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+        ok &= expect(toneBursts(cat) == 1,
+                     "element after a consumer pause still sounds, once");
     }
 
     return ok ? 0 : 1;

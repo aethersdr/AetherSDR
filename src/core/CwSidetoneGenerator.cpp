@@ -90,16 +90,20 @@ void CwSidetoneGenerator::setKeyDown(bool down) noexcept
     const auto now = std::chrono::steady_clock::now();
     const uint32_t head = m_edgeHead.load(std::memory_order_relaxed);
     const uint32_t tail = m_edgeTail.load(std::memory_order_acquire);
+    // Mirror the latest state BEFORE publishing the head.  The lock excludes
+    // other producers but not the audio thread, so a producer descheduled
+    // mid-section is observable either way — this order makes it harmless.
+    // Mirror ahead of the queue: process() applies it at the next block start
+    // (the pre-#4809 behavior, and what rescues the final key-up on queue
+    // overflow) and the queued edge is then a no-op through applyKeyEdge().
+    // The reverse order lets the consumer advance m_gateDown past a stale
+    // mirror, and the same fallback then injects an inverted edge — a dropout
+    // mid-element, plus a second phantom edge undoing it.
+    m_keyDown.store(down, std::memory_order_relaxed);
     if (head - tail < kEdgeQueueSize) {
         m_edgeQueue[head % kEdgeQueueSize] = {now, down};
         m_edgeHead.store(head + 1, std::memory_order_release);
     }
-    // Mirror the latest state inside the same critical section so it can
-    // never disagree with the last queued edge: on queue overflow
-    // (pathological) process() falls back to applying this at the next
-    // block start — the pre-#4809 behavior — so the final key-up can
-    // never be lost.
-    m_keyDown.store(down, std::memory_order_relaxed);
     m_edgeLock.clear(std::memory_order_release);
 }
 
@@ -210,6 +214,59 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
     // Prealloc covers a full ring drain after a scheduler stall, so the
     // audio callback never heap-allocates here.
     QVarLengthArray<std::pair<int, bool>, kEdgeQueueSize> blockEdges;
+
+    // ── Keep the mapping honest about real time ───────────────────────
+    // Everything below assumes process() is pumped in real time, so that
+    // m_streamPos and the anchor's wall clock advance together.  Not every
+    // consumer is: the recorder's sidetone generator renders only while the
+    // radio is transmitting a CW over (AudioEngine::onCwRecordPump), while
+    // setKeyDown() keeps queueing from every paddle edge regardless.  Left
+    // alone, that generator anchors on keying from seconds or minutes ago
+    // and replays it into the next over, and — when the pump stops with the
+    // gate still down — never reaches the Idle branch below that would have
+    // released the anchor, so it renders one unbroken tone instead.
+    //
+    // Two guards, both bounded by the same idle threshold that governs a
+    // normal re-anchor.  One clock read per block, and only while there is
+    // an anchor or something queued.
+    const bool haveQueued = m_edgeTail.load(std::memory_order_relaxed)
+                            != m_edgeHead.load(std::memory_order_acquire);
+    if (m_haveAnchor || haveQueued) {
+        const auto nowTp = std::chrono::steady_clock::now();
+        const int64_t idleLimit =
+            static_cast<int64_t>(m_sampleRateHz) * kReanchorIdleMs / 1000;
+        auto toSamples = [this](std::chrono::steady_clock::duration d) {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()
+                   * m_sampleRateHz / 1'000'000'000LL;
+        };
+        // (1) The mapping itself has gone stale — wall clock has run ahead of
+        // the samples we have rendered by more than a re-anchor's worth,
+        // which only happens when process() stopped being called.  Tested
+        // one-sided on purpose: a stream position ahead of wall clock is
+        // ordinary prefill (the QAudioSink path fills a 50 ms buffer up
+        // front) and must not re-anchor.
+        if (m_haveAnchor) {
+            const int64_t expected = m_anchorPos + toSamples(nowTp - m_anchorTime);
+            if (expected - blockStart > idleLimit)
+                m_haveAnchor = false;
+        }
+        // (2) About to anchor afresh: drop edges old enough to belong to a
+        // previous keying sequence rather than replaying them here.  The
+        // retained m_keyDown mirror still delivers the true current state
+        // through the fallback below, so nothing that matters is lost.
+        if (!m_haveAnchor) {
+            for (;;) {
+                const uint32_t tail = m_edgeTail.load(std::memory_order_relaxed);
+                if (tail == m_edgeHead.load(std::memory_order_acquire))
+                    break;
+                if (toSamples(nowTp - m_edgeQueue[tail % kEdgeQueueSize].t)
+                        <= idleLimit)
+                    break;
+                m_edgeTail.store(tail + 1, std::memory_order_release);
+            }
+        }
+    }
+
     for (;;) {
         const uint32_t tail = m_edgeTail.load(std::memory_order_relaxed);
         if (tail == m_edgeHead.load(std::memory_order_acquire))

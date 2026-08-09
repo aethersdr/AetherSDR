@@ -84,9 +84,10 @@ private:
     // One timestamped key transition from setKeyDown().  The queue is a
     // fixed-size MPSC ring: producers = the keying threads (head,
     // serialized by m_edgeLock), consumer = the audio thread (tail).
-    // Size 64 is ~32 elements of headroom — far beyond what fits in one
-    // audio block even at 60 WPM, and every element arrives twice
-    // (worker-direct plus the GUI cwKeyDownChanged echo).
+    // Size 64 is ~16 elements of headroom: 2 slots per element (down + up),
+    // doubled again because every element arrives twice (worker-direct plus
+    // the GUI cwKeyDownChanged echo).  Still far beyond what fits in one
+    // audio block even at 60 WPM.
     struct KeyEdge {
         std::chrono::steady_clock::time_point t;
         bool down;
@@ -103,6 +104,11 @@ private:
     // block quantization of the next onset is inaudible; element lengths
     // stay exact either way, because they come from the keyer's grid,
     // not the anchor.
+    //
+    // process() reuses this same threshold for the two guards that keep the
+    // mapping honest when it is NOT pumped in real time: how far the anchor
+    // may drift from wall clock before it is dropped, and how old a queued
+    // edge may be before a fresh anchor discards it instead of replaying it.
     static constexpr int kReanchorIdleMs = 250;
 
     void applyKeyEdge(bool down) noexcept;  // state-machine transition
