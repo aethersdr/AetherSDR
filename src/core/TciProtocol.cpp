@@ -817,7 +817,21 @@ QString TciProtocol::cmdTxGain(const QStringList& args, bool /*isSet*/)
         float g = AppSettings::instance().value("TciTxGain", "1.00").toFloat();
         return QStringLiteral("tx_gain:%1;").arg(qBound(0, qRound(g * 100.0f), 100));
     }
-    int pct = qBound(0, args[args.size() == 1 ? 0 : 1].toInt(), 100);
+    // Same malformed-input shape as cmdVolume above, and the third instance
+    // of it in this file after #4345's DRIVE read: "tx_gain:" splits to a
+    // single empty string rather than an empty arg list, so it reaches the
+    // SET branch, and an unchecked toInt() turns that into 0 — silently
+    // muting the WSJT-X/JTDX TX audio path and broadcasting a well-formed
+    // "tx_gain:0;" that a second client cannot tell from a real change.
+    // Listed as item 2 of #4523's triage plan alongside cmdVolume; dropped
+    // rather than guessed, matching the "ignore silently" posture the parser
+    // already takes for unrecognised commands.
+    bool gainOk = false;
+    const int raw = args[args.size() == 1 ? 0 : 1].toInt(&gainOk);
+    if (!gainOk) {
+        return {};
+    }
+    const int pct = qBound(0, raw, 100);
     m_pendingTxGain = pct;
     m_pendingNotification = QStringLiteral("tx_gain:%1;").arg(pct);
     return {};
@@ -1169,9 +1183,19 @@ QString TciProtocol::cmdVolume(const QStringList& args, bool /*isSet*/)
     // matching the "ignore silently" posture already used for unrecognised
     // commands; this also catches the same shape for the legacy 2-arg form
     // (e.g. "volume:0,").
+    //
+    // std::isfinite is part of the same check, not a separate paranoia: Qt's
+    // toDouble() accepts the literals "inf"/"-inf"/"nan" and reports ok, so
+    // they reach the arithmetic below with the ok flag satisfied. "inf" takes
+    // the val >= 1.0 percent branch, std::lround(+inf) is out of long's range
+    // (unspecified), and the narrowing cast lands on 0 — i.e. "volume:inf"
+    // would MUTE the radio and broadcast a well-formed "volume:-60;", the
+    // same undetectable-from-the-wire failure as the empty-argument case, at
+    // the other end of the range. ("1e400" is already rejected: overflow
+    // clears ok, unlike the literal spellings.)
     bool volOk = false;
     const double val = args[args.size() == 1 ? 0 : 1].toDouble(&volOk);
-    if (!volOk) {
+    if (!volOk || !std::isfinite(val)) {
         return {};
     }
     const int pct = (val >= 1.0)

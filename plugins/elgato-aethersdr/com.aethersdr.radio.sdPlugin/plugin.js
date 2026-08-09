@@ -205,9 +205,12 @@ function tciSend(cmd) {
 // form below is a read and the replies arrive on the same path as broadcasts.
 //
 // `volume` is the exception and MUST stay bare: cmdVolume tests args.isEmpty(),
-// but "volume:" splits to [""] which is NOT empty, so the colon form falls
-// into the SET branch and drives master volume to 100%. Sent without a colon
-// the args list really is empty and it reads instead.
+// but "volume:" splits to [""] which is NOT empty, so the colon form reaches
+// the SET branch rather than the read. As of #4523 it fails that branch's
+// argument check and is dropped — no reply, no notification — instead of
+// being parsed as 0 dB and applied as 100%. So the colon form is still not a
+// read: it is nothing at all. Sent without a colon the args list really is
+// empty and it reads instead.
 let stateRequestTimer = null;
 
 function requestState() {

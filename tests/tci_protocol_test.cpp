@@ -426,12 +426,102 @@ bool testVolumeMalformedInputIsDropped()
         return false;
     }
 
+    // The ok flag alone does not cover this: Qt's toDouble() parses the
+    // literals "inf"/"-inf"/"nan" and reports ok, so they satisfy the check
+    // above and reach the arithmetic. "inf" takes the val >= 1.0 percent
+    // branch, std::lround(+inf) is out of long's range, and the narrowing
+    // cast lands on 0 — the malformed input would MUTE the radio and
+    // broadcast a well-formed "volume:-60;". Same undetectable-from-the-wire
+    // failure as "volume:", at the other end of the range.
+    for (const auto& nonFinite : { QStringLiteral("volume:inf"),
+                                   QStringLiteral("volume:-inf"),
+                                   QStringLiteral("volume:nan"),
+                                   QStringLiteral("volume:0,inf") }) {
+        protocol.handleCommand(nonFinite);
+        if (!check(protocol.pendingMasterVolume() == -1
+                       && protocol.pendingNotification().isEmpty(),
+                qPrintable(QStringLiteral("\"%1\" must not be recorded as a "
+                                          "master-volume SET").arg(nonFinite)))) {
+            return false;
+        }
+    }
+
+    // Overflow already cleared the ok flag before this change; pinned so the
+    // isfinite() check above can't be "simplified" back out on the theory
+    // that toDouble() rejects everything non-finite. It rejects this one and
+    // accepts the literals above.
+    protocol.handleCommand(QStringLiteral("volume:1e400"));
+    if (!check(protocol.pendingMasterVolume() == -1,
+            "\"volume:1e400\" must not be recorded as a master-volume SET")) {
+        return false;
+    }
+
     // Bare "volume" (no colon at all) is the documented GET form and must be
     // unaffected — this is what distinguishes "no argument" from "malformed
     // argument", which is the whole point of the fix.
     const QString getResponse = protocol.handleCommand(QStringLiteral("volume"));
     if (!check(getResponse.startsWith(QStringLiteral("volume:")),
             "bare \"volume\" GET must still reply with the current level")) {
+        return false;
+    }
+    return true;
+}
+
+// #4523 (triage item 2): cmdTxGain is the same command shape as cmdVolume —
+// 1 arg = spec form, 2 = legacy trx-prefixed — and had the same defect.
+// "tx_gain:" splits to a single empty string, reaches the SET branch, and an
+// unchecked toInt() silently yields 0: the WSJT-X/JTDX TX audio path muted,
+// broadcast as a well-formed "tx_gain:0;" a second client can't distinguish
+// from a real change. This is the third instance of the class after #4345.
+bool testTxGainMalformedInputIsDropped()
+{
+    TciProtocol protocol(nullptr);
+
+    // Sanity first, so "the fix refuses everything" can't pass as success —
+    // both the spec form and the legacy trx-prefixed one.
+    protocol.handleCommand(QStringLiteral("tx_gain:60"));
+    if (!check(protocol.pendingTxGain() == 60
+                   && !protocol.pendingNotification().isEmpty(),
+            "a well-formed tx_gain SET must still take effect")) {
+        return false;
+    }
+    protocol.handleCommand(QStringLiteral("tx_gain:0,60"));
+    if (!check(protocol.pendingTxGain() == 60,
+            "the legacy trx-prefixed tx_gain SET must still take effect")) {
+        return false;
+    }
+
+    // Clamping is unchanged: it applies to a value that parsed, not to one
+    // that didn't. 0 remains a legitimate operator-requested mute.
+    protocol.handleCommand(QStringLiteral("tx_gain:150"));
+    if (!check(protocol.pendingTxGain() == 100,
+            "an out-of-range tx_gain must still clamp rather than drop")) {
+        return false;
+    }
+    protocol.handleCommand(QStringLiteral("tx_gain:0"));
+    if (!check(protocol.pendingTxGain() == 0,
+            "an explicit tx_gain:0 must still be honoured as a real mute")) {
+        return false;
+    }
+
+    // The defect: malformed input must not land on 0 — which is exactly what
+    // an explicit mute looks like on the wire, hence the assertion above.
+    for (const auto& malformed : { QStringLiteral("tx_gain:"),
+                                   QStringLiteral("tx_gain:0,"),
+                                   QStringLiteral("tx_gain:loud") }) {
+        protocol.handleCommand(malformed);
+        if (!check(protocol.pendingTxGain() == -1
+                       && protocol.pendingNotification().isEmpty(),
+                qPrintable(QStringLiteral("\"%1\" must not be recorded as a "
+                                          "tx_gain SET").arg(malformed)))) {
+            return false;
+        }
+    }
+
+    // Bare "tx_gain" is the GET form and must still read.
+    const QString getResponse = protocol.handleCommand(QStringLiteral("tx_gain"));
+    if (!check(getResponse.startsWith(QStringLiteral("tx_gain:")),
+            "bare \"tx_gain\" GET must still reply with the current gain")) {
         return false;
     }
     return true;
@@ -506,15 +596,21 @@ static RadioInfo demoInfo()
 // per the pattern in radiomodel_audio_mute_test.cpp / demo_backend_swap_test.cpp.
 bool testModulationEndToEndRejectsUnknownName()
 {
+    // The demo backend is in-process, so both waits below settle in a few
+    // milliseconds locally. They poll to a deadline rather than sleeping a
+    // fixed span, so a loaded CI runner makes this test slower rather than
+    // red; the bound is deliberately generous for that reason, and costs
+    // nothing when it is not needed.
+    constexpr int kSettleTries = 100;   // × 50 ms = 5 s ceiling
     RadioModel model;
     model.connectToRadio(demoInfo());
-    for (int i = 0; i < 40 && !model.isConnected(); ++i)
+    for (int i = 0; i < kSettleTries && !model.isConnected(); ++i)
         spin(50);
     if (!check(model.isConnected(), "precondition: connected to the demo backend")) {
         return false;
     }
     SliceModel* slice = nullptr;
-    for (int i = 0; i < 40 && model.slices().isEmpty(); ++i)
+    for (int i = 0; i < kSettleTries && model.slices().isEmpty(); ++i)
         spin(50);
     slice = model.slices().value(0);
     if (!check(slice != nullptr, "precondition: the demo backend announced a slice")) {
@@ -610,6 +706,7 @@ int main(int argc, char** argv)
         || !testWsjtxRoutingContracts()
         || !testDeferredCommands() || !testDriveWireContract()
         || !testVolumeMalformedInputIsDropped()
+        || !testTxGainMalformedInputIsDropped()
         || !testTciToSmartSdrReportsUnrecognisedNames()
         || !testModulationEndToEndRejectsUnknownName()) {
         return 1;
