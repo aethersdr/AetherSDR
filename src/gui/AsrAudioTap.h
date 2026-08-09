@@ -58,8 +58,9 @@ public:
 private:
     void onRxAudio(const QString& source,
                    const QString& sourceId,
-                   const QByteArray& stereoFloat32Pcm,
-                   int sampleRate);
+                   const QByteArray& pcmFloat,
+                   int sampleRate,
+                   int channels);
 
     AudioEngine* m_audio = nullptr;
     AsrEngine* m_asr = nullptr;

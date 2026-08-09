@@ -50,8 +50,9 @@ void AsrAudioTap::setEnabled(bool on)
 
 void AsrAudioTap::onRxAudio(const QString& source,
                             const QString& sourceId,
-                            const QByteArray& stereoFloat32Pcm,
-                            int sampleRate)
+                            const QByteArray& pcmFloat,
+                            int sampleRate,
+                            int channels)
 {
     if (!m_enabled || m_asr == nullptr) {
         return;
@@ -60,14 +61,11 @@ void AsrAudioTap::onRxAudio(const QString& source,
                           m_clock.isValid() ? m_clock.elapsed() : 0)) {
         return;
     }
-    // receivePresentationPostDspAudioReady has exactly one emit site
-    // (AudioEngine.cpp:4491), and the captureAutomationAudio call right
-    // above it tags that same buffer as 2 channels — so 2 is correct here
-    // today. Passed explicitly rather than inferred from the block's byte
-    // count (#4489); the contract lives only in this parameter, not in a
-    // formal doc comment on the signal, so it's worth re-checking here if
-    // that emit site ever changes.
-    const QVector<float> mono = AsrTapPolicy::toMono(stereoFloat32Pcm, 2);
+    // channels comes straight off the signal (#4489) instead of being
+    // assumed here — a future mono RX source is then a one-line change at
+    // AudioEngine's emit site, and toMono() rejects a caller that gets it
+    // wrong instead of silently mis-decoding.
+    const QVector<float> mono = AsrTapPolicy::toMono(pcmFloat, channels);
     if (mono.isEmpty()) {
         return;
     }

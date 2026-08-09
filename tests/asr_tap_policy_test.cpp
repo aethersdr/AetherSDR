@@ -198,6 +198,15 @@ static void testMalformedLengthIsRejectedNotReinterpreted()
     check(AsrTapPolicy::toMono(in, 0).isEmpty(), "a zero channel count is rejected");
     check(AsrTapPolicy::toMono(in, 3).isEmpty(),
           "an unsupported channel count is rejected rather than guessed at");
+
+    // A byte count that isn't a whole number of floats truncates on the way
+    // to totalFloats, so it can pass the frame check on a shorter, silently
+    // wrong count. 9 bytes claimed as stereo would truncate to 2 floats (one
+    // frame, accepted) with the trailing byte dropped without a word — this
+    // must be caught before the frame check ever sees it.
+    QByteArray partial(9, '\0');
+    check(AsrTapPolicy::toMono(partial, 2).isEmpty(),
+          "a byte count that isn't a whole number of floats is rejected, not truncated");
 }
 
 // The property the whole change exists to protect: EVERY sample handed to the

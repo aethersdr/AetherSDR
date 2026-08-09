@@ -4488,11 +4488,13 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             externalSource ? externalSource->id : QString(),
             *output, scopeSampleRate, 2);
         if (!txPresentationGated) {
+            // Same literal captureAutomationAudio() already uses two lines up —
+            // this path always produces interleaved stereo.
             emit receivePresentationPostDspAudioReady(
                 source == RxDspSource::KiwiSdr ? QStringLiteral("kiwi")
                                                : QStringLiteral("flex"),
                 externalSource ? externalSource->id : QString(),
-                *output, scopeSampleRate);
+                *output, scopeSampleRate, 2);
         }
         outputBuffer.append(*output);
         if (!txPresentationGated) {

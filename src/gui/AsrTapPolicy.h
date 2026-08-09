@@ -100,6 +100,13 @@ public:
         if (channels != 1 && channels != 2) {
             return {};
         }
+        // A byte count that isn't a whole number of floats truncates below —
+        // a block malformed at the sample level, not just the frame level. A
+        // 9-byte block claimed as stereo would otherwise become 2 floats,
+        // pass the frame check below, and silently drop its trailing byte.
+        if (pcmFloat32.size() % static_cast<int>(sizeof(float)) != 0) {
+            return {};
+        }
         const int totalFloats =
             static_cast<int>(pcmFloat32.size() / static_cast<int>(sizeof(float)));
         if (totalFloats <= 0 || totalFloats % channels != 0) {
