@@ -27,6 +27,7 @@ private:
 
     QPushButton* m_spotsToggle;
     QPushButton* m_memoriesToggle;
+    QPushButton* m_kiwiDxToggle;
     QSlider*     m_levelsSlider;
     QLabel*      m_levelsValue;
     QSlider*     m_positionSlider;
@@ -45,6 +46,7 @@ private:
 
     bool   m_spotsEnabled{true};
     bool   m_memoriesEnabled{false};
+    bool   m_kiwiDxEnabled{true};
     bool   m_overrideColors{false};
     bool   m_overrideBg{true};
     bool   m_overrideBgAutoMode{true};

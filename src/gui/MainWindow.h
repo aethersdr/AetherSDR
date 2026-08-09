@@ -43,6 +43,7 @@
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
+#include "core/EibiClient.h"
 #include "core/N1MMSpotClient.h"
 #include "core/PropForecastClient.h"
 #ifdef HAVE_WEBSOCKETS
@@ -1009,6 +1010,8 @@ private:
     WsjtxClient*       m_wsjtxClient{nullptr};
     SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
+    EibiClient*          m_eibiClient{nullptr};
+    QHash<QString, int>  m_eibiSpotKeyToId;
     N1MMSpotClient*      m_n1mmSpotClient{nullptr};
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
@@ -1359,8 +1362,17 @@ private:
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
     QLabel* m_fdxIndicator{nullptr};
+    // Manufacturer row above the model. Hidden unless the connected radio
+    // reports a make its own model string does not already carry — see
+    // refreshRadioIdentityLabels().
+    QLabel* m_radioMakeLabel{nullptr};
     QLabel* m_radioInfoLabel{nullptr};
     QLabel* m_radioVersionLabel{nullptr};
+    // Last manufacturer the backend reported. Cached because it arrives on
+    // capabilitiesChanged while the model and version arrive on infoChanged,
+    // and every one of those edges has to repaint the same three labels.
+    QString m_radioManufacturer;
+    void refreshRadioIdentityLabels();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)

@@ -14,6 +14,7 @@
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "core/EibiClient.h"
 #include <QVariant>
 #include <QVariantAnimation>
 
@@ -1612,9 +1613,7 @@ QVariantMap SpectrumWidget::automationDssReset(bool kiwiStream)
     m_nativeWaterfallFallbackHoldUntilMs = m_hasNativeWaterfall
         ? m_lastNativeTileMs + 60'000
         : 0;
-    m_wfBlankerRingCount = 0;
-    m_wfBlankerRingIdx = 0;
-    m_wfLastGoodLevels.clear();
+    resetWfBlankerState();
     resetDssUploadState();
     update();
 
@@ -2447,6 +2446,7 @@ void SpectrumWidget::loadSettings()
         m_bandPlanFontSize = s.value("BandPlanFontSize", "6").toInt();
     }
     m_bandPlanShowSpots = s.value("BandPlanShowSpots", "True").toString() == "True";
+    m_showKiwiDxSpots = s.value("ShowKiwiDxSpots", "False").toString() == "True";
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
@@ -2680,8 +2680,13 @@ void SpectrumWidget::applyActiveVfoZOrder()
 
 void SpectrumWidget::setBandPlanManager(BandPlanManager* mgr) {
     m_bandPlanMgr = mgr;
-    if (mgr)
+    if (mgr) {
         connect(mgr, &BandPlanManager::planChanged, this, QOverload<>::of(&QWidget::update));
+        connect(mgr, &BandPlanManager::kiwiDxSpotsChanged, this, [this]() {
+            markOverlayDirty();
+            update();
+        });
+    }
 }
 
 void SpectrumWidget::setFftAverage(int frames) {
@@ -4722,9 +4727,17 @@ void SpectrumWidget::setWfBlankerEnabled(bool on)
     s.setValue(settingsKey("WaterfallBlankingEnabled"), on ? "True" : "False");
     s.save();
     if (!on) {
-        m_wfBlankerRingCount = 0;
-        m_wfBlankerRingIdx = 0;
+        resetWfBlankerState();
     }
+}
+
+void SpectrumWidget::resetWfBlankerState()
+{
+    m_wfBlankerRingCount = 0;
+    m_wfBlankerRingIdx = 0;
+    m_wfLastGoodLevels.clear();
+    m_wfLastGoodSupplementalLevels.clear();
+    m_wfLastGoodFrames = {};
 }
 
 void SpectrumWidget::setWfBlankerThreshold(float t)
@@ -6413,6 +6426,7 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfLive = true;
     m_wfRowsSinceRateChange = 0;
     m_prevTileLevels.clear();
+    resetWfBlankerState();
     m_kiwiSdrFftTrace.clear();
     m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrLastWaterfallBins.clear();
@@ -7218,6 +7232,7 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         resetVisibleWaterfallFrequencyFrames(newCenterMhz, newBandwidthMhz);
     }
     m_prevTileLevels.clear();
+    resetWfBlankerState();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
@@ -7793,8 +7808,7 @@ void SpectrumWidget::setTransmitting(bool tx)
         m_wfPrevTimecode   = 0;
         m_wfPrevTimecodeMs = 0;
         m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
-        m_wfBlankerRingCount = 0;                        // reset stale blanker baseline
-        m_wfLastGoodLevels.clear();                       // forget any TX-era last-good row
+        resetWfBlankerState();                            // forget stale TX-era blanker rows
         // Drop the FFT trace's client-side EMA so the first clean RX frame is
         // taken raw instead of weighted against TX-contaminated history. During
         // the UNKEY_REQUESTED window the radio keeps streaming TX-contaminated
@@ -8469,6 +8483,18 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         }
     }
 
+    const double incomingSupplementalCenterMhz =
+        (lowFreqMhz + highFreqMhz) * 0.5;
+    const double incomingSupplementalBandwidthMhz =
+        highFreqMhz - lowFreqMhz;
+    const WaterfallBlankerFrameBundle incomingFrames{
+        FrequencyFrame{m_centerMhz, m_bandwidthMhz},
+        FrequencyFrame{incomingSupplementalCenterMhz,
+                       incomingSupplementalBandwidthMhz},
+    };
+    WaterfallBlankerFrameBundle outputFrames = incomingFrames;
+    bool blankerSubstitutedRow = false;
+
     // NB Waterfall Blanker (#277) — suppress impulse rows.
     // Skip entirely during TX: with show-tx-in-waterfall enabled, TX-era tiles
     // flow through and would otherwise poison the rolling baseline.  Post-TX,
@@ -8494,18 +8520,33 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         // Detect impulse (need ≥8 rows of history)
         if (m_wfBlankerRingCount >= 8 && baseline > 0.0f
                 && rowMean > baseline * m_wfBlankerThreshold) {
-            // Impulse detected — replace with last good row (interpolate)
-            if (m_wfLastGoodLevels.size() == destWidth) {
+            // Impulse detected — replace the complete last-good capture. The
+            // two pixel rows and their frequency frames are one value: mixing
+            // an old viewport row with the rejected tile's supplemental row
+            // produces a permanently misregistered line after pan/zoom.
+            const bool haveCachedBundle =
+                m_wfLastGoodLevels.size() == destWidth
+                && m_wfLastGoodSupplementalLevels.size() == destWidth
+                && m_wfLastGoodFrames.isValid();
+            if (haveCachedBundle) {
                 levels = m_wfLastGoodLevels;
+                supplementalLevels = m_wfLastGoodSupplementalLevels;
+                outputFrames = waterfallBlankerFrameBundleForOutput(
+                    true, m_wfLastGoodFrames, incomingFrames);
             } else {
                 // No previous good row yet — fill with noise floor color
                 const quint8 floorLevel = encodeWaterfallLevel(
                     intensityToWaterfallLevel(baseline));
                 std::fill(levels.begin(), levels.end(), floorLevel);
+                std::fill(supplementalLevels.begin(),
+                          supplementalLevels.end(), floorLevel);
             }
+            blankerSubstitutedRow = true;
             m_wfBlankerRing[m_wfBlankerRingIdx] = std::min(rowMean, baseline * 1.05f);
         } else {
             m_wfLastGoodLevels = levels;
+            m_wfLastGoodSupplementalLevels = supplementalLevels;
+            m_wfLastGoodFrames = incomingFrames;
             m_wfBlankerRing[m_wfBlankerRingIdx] = rowMean;
         }
         m_wfBlankerRingIdx = (m_wfBlankerRingIdx + 1) % WF_BLANKER_N;
@@ -8514,12 +8555,12 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     }
 
     // Write rows into history + visible viewport.
-    const bool canInterp = (m_prevTileLevels.size() == destWidth && rowsToPush > 1);
+    // A substituted row may come from a different frequency frame. Do not
+    // blend it with the current temporal endpoint or seed the next blend with
+    // it; interpolation across coordinate systems recreates the same defect.
+    const bool canInterp = !blankerSubstitutedRow
+        && m_prevTileLevels.size() == destWidth && rowsToPush > 1;
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
-    const double supplementalCenterMhz =
-        (lowFreqMhz + highFreqMhz) * 0.5;
-    const double supplementalBandwidthMhz =
-        highFreqMhz - lowFreqMhz;
     // Every row delivered by one native tile shares this calibration. Keep the
     // overlap scan, quantile sort, and whole-tile conversion out of the row
     // loop if a backend ever delivers more than one row per update.
@@ -8551,27 +8592,30 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
         appendHistoryRow(
             interpolatedLevels.constData(), nowMs,
-            -1.0, -1.0,
+            outputFrames.primaryFrame.centerMhz,
+            outputFrames.primaryFrame.bandwidthMhz,
             supplementalLevels.constData(),
-            supplementalCenterMhz,
-            supplementalBandwidthMhz);
+            outputFrames.supplementalFrame.centerMhz,
+            outputFrames.supplementalFrame.bandwidthMhz);
         appendDssWaterfallRow(
             displaySpectrumBins(),
             -1.0,
             -1.0,
             true,
             dssSupplemental,
-            supplementalCenterMhz,
-            supplementalBandwidthMhz);
+            incomingSupplementalCenterMhz,
+            incomingSupplementalBandwidthMhz);
         if (m_wfLive) {
             // The whole tile gets one start() after the loop; don't restart the
             // scroll clock once per appended row.
             appendVisibleRow(
-                interpolatedRow.constData(), -1.0, -1.0,
+                interpolatedRow.constData(),
+                outputFrames.primaryFrame.centerMhz,
+                outputFrames.primaryFrame.bandwidthMhz,
                 /*startScrollAnimation=*/false,
                 supplementalRow.constData(),
-                supplementalCenterMhz,
-                supplementalBandwidthMhz);
+                outputFrames.supplementalFrame.centerMhz,
+                outputFrames.supplementalFrame.bandwidthMhz);
         } else {
             rebuildWaterfallViewport();
         }
@@ -8581,7 +8625,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         // per-row starts the appendVisibleRow calls above used to issue.
         startWaterfallScrollAnimation(static_cast<float>(rowsToPush));
     }
-    m_prevTileLevels = levels;
+    if (blankerSubstitutedRow) {
+        m_prevTileLevels.clear();
+    } else {
+        m_prevTileLevels = levels;
+    }
     recordWaterfallFrame(rowsToPush);
     if (PerfTelemetry::instance().enabled())
         PerfTelemetry::instance().recordWaterfallNativeRows(rowsToPush);
@@ -8607,6 +8655,10 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
                                   m_dssFloorOffsetDb),
                               false);
     saveCurrentWaterfallStreamState();
+    // Blanker history is native-stream state and is not part of the cached
+    // per-source viewport. Never carry its baseline or last-good capture
+    // through a Flex/Kiwi source transition.
+    resetWfBlankerState();
     // Retained intensity/DSS scrollback follows the visible source. Keep the
     // small live viewport/DSS rings in every cached state for an immediate
     // toggle, but release all deep histories before choosing the new owner.
@@ -9333,6 +9385,24 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             m_spotClickConsumed = true;   // suppress release-to-tune (#1647)
             ev->accept();
             return;
+        }
+    }
+
+    // Click on KiwiSDR DX Community spot marker
+    const int bandH = m_bandPlanFontSize + 4;
+    const int bandY = specH - bandH + 1;
+    if (m_showKiwiDxSpots && m_bandPlanFontSize > 0 && ev->button() == Qt::LeftButton && y >= bandY && y <= specH) {
+        const int mx = static_cast<int>(ev->position().x());
+        const auto& kiwiSpots = m_bandPlanMgr ? m_bandPlanMgr->kiwiDxSpots()
+                                               : QVector<BandPlanManager::KiwiDxSpot>{};
+        for (const auto& spot : kiwiSpots) {
+            const int sx = mhzToX(spot.freqMhz);
+            if (std::abs(mx - sx) <= 5) {
+                emit kiwiSpotClicked(spot.freqMhz, spot.mode, spot.loOffsetHz, spot.hiOffsetHz);
+                m_spotClickConsumed = true;
+                ev->accept();
+                return;
+            }
         }
     }
 
@@ -10796,6 +10866,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
     if (y >= bandBarTop && y <= specH2) {
         const int mx2 = static_cast<int>(ev->position().x());
+        // Check standard band plan spots first (DX Cluster / Memories)
         const auto& spots = m_bandPlanMgr ? m_bandPlanMgr->spots() : QVector<BandPlanManager::Spot>{};
         for (const auto& spot : spots) {
             const int sx = mhzToX(spot.freqMhz);
@@ -10807,6 +10878,33 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     this,
                     QRect(sx - 5, bandBarTop, 11, specH2 - bandBarTop));
                 return;
+            }
+        }
+        // Fall back to KiwiSDR DX spots if no standard spot matched
+        if (m_showKiwiDxSpots && m_bandPlanFontSize > 0 && m_bandPlanMgr) {
+            for (const auto& spot : m_bandPlanMgr->kiwiDxSpots()) {
+                const int sx = mhzToX(spot.freqMhz);
+                if (std::abs(mx2 - sx) <= 5) {
+                    QString tip = QString("<b>%1 kHz — %2</b>")
+                        .arg(spot.freqMhz * 1000.0, 0, 'f', 2)
+                        .arg(spot.name.toHtmlEscaped());
+                    if (!spot.mode.isEmpty()) {
+                        tip += QString("<br><b>Mode:</b> %1").arg(spot.mode.toHtmlEscaped());
+                    }
+                    if (spot.loOffsetHz != 0 || spot.hiOffsetHz != 0) {
+                        const int bw = std::abs(spot.hiOffsetHz - spot.loOffsetHz);
+                        tip += QString("<br><b>Passband:</b> %1 .. %2 Hz (BW: %3 Hz)")
+                            .arg(spot.loOffsetHz).arg(spot.hiOffsetHz).arg(bw);
+                    }
+                    if (!spot.notes.isEmpty()) {
+                        QString notesHtml = spot.notes.toHtmlEscaped();
+                        notesHtml.replace("\n", "<br>");
+                        tip += QString("<br><b>Notes:</b> %1").arg(notesHtml);
+                    }
+                    QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
+                        tip, this, QRect(sx - 5, bandBarTop, 11, specH2 - bandBarTop));
+                    return;
+                }
             }
         }
         QToolTip::hideText();
@@ -11013,11 +11111,11 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     QDialog dlg(this);
     dlg.setWindowTitle("Add Spot");
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
-                      "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
-                      "QDoubleSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
-                      "QDoubleSpinBox::up-button { background: #304060; width: 16px; }"
-                      "QDoubleSpinBox::down-button { background: #304060; width: 16px; }"
-                      "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
+                      "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
+                      "QDoubleSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
+                      "QDoubleSpinBox::up-button { background: {{color.background.2}}; width: 16px; }"
+                      "QDoubleSpinBox::down-button { background: {{color.background.2}}; width: 16px; }"
+                      "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
                       "QLabel { color: {{color.text.primary}}; }"
                       "QCheckBox { color: {{color.text.primary}}; }");
 
@@ -15477,6 +15575,31 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         }
         p.setRenderHint(QPainter::Antialiasing, false);
     }
+
+    // Draw KiwiSDR DX Community spots (cyan diamonds)
+    if (m_showKiwiDxSpots) {
+        const auto& kiwiSpots = m_bandPlanMgr ? m_bandPlanMgr->kiwiDxSpots()
+                                               : QVector<BandPlanManager::KiwiDxSpot>{};
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QColor kiwiColor = AetherSDR::ThemeManager::instance().color("color.accent.bright");
+        p.setPen(QPen(kiwiColor, 1));
+        QColor fill = kiwiColor;
+        fill.setAlpha(220);
+        p.setBrush(fill);
+        const int cy = bandY + bandH / 2;
+        for (const auto& spot : kiwiSpots) {
+            if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) continue;
+            const int sx = mhzToX(spot.freqMhz);
+            const QPoint points[4] = {
+                QPoint(sx, cy - 4),
+                QPoint(sx + 4, cy),
+                QPoint(sx, cy + 4),
+                QPoint(sx - 4, cy)
+            };
+            p.drawPolygon(points, 4);
+        }
+        p.setRenderHint(QPainter::Antialiasing, false);
+    }
 }
 
 // ─── TNF markers ────────────────────────────────────────────────────────────
@@ -15745,6 +15868,27 @@ int SpectrumWidget::tnfAtPixel(int x, int preferredId) const
 
 static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm)
 {
+    if (sm.source == QStringLiteral("EiBi")) {
+        QString tip = QStringLiteral("<b>%1</b> &nbsp;<b>%2 MHz</b>")
+            .arg(sm.callsign.toHtmlEscaped())
+            .arg(sm.freqMhz, 0, 'f', 4);
+
+        if (!sm.comment.isEmpty()) {
+            const QStringList parts = sm.comment.split(QStringLiteral(" | "));
+            QStringList lines;
+            lines.reserve(parts.size());
+            for (const QString& part : parts) {
+                lines << part.toHtmlEscaped();
+            }
+            if (!lines.isEmpty()) {
+                tip += QStringLiteral("<br>") + lines.join(QStringLiteral("<br>"));
+            }
+        }
+        tip += QStringLiteral("<br><small style='color:%1;'>Source: EiBi Shortwave Schedules (eibispace.de)</small>")
+                   .arg(AetherSDR::ThemeManager::instance().color(QStringLiteral("color.text.label")).name());
+        return tip;
+    }
+
     QString tip = QString("<b>%1</b>  %2 MHz").arg(sm.callsign).arg(sm.freqMhz, 0, 'f', 4);
     if (!sm.source.isEmpty())
         tip += QString("<br>Source: %1").arg(sm.source);

@@ -8,6 +8,7 @@
 #include <QGridLayout>
 #include <QColorDialog>
 #include "core/ThemeManager.h"
+#include "Theme.h"
 
 namespace AetherSDR {
 
@@ -23,6 +24,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     auto& s = AppSettings::instance();
     m_spotsEnabled       = s.value("IsSpotsEnabled", "True").toString() == "True";
     m_memoriesEnabled    = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
+    m_kiwiDxEnabled      = s.value("ShowKiwiDxSpots", "False").toString() == "True";
     m_overrideColors     = s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True";
     m_overrideBg         = s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True";
     m_overrideBgAutoMode = s.value("IsSpotsOverrideToAutoBackgroundColorEnabled", "True").toString() == "True";
@@ -90,6 +92,22 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
         save("IsMemorySpotsEnabled", on ? "True" : "False");
     });
     grid->addWidget(m_memoriesToggle, row++, 1, Qt::AlignLeft);
+
+    // ── Kiwi DX: Enabled/Disabled ───────────────────────────────────────
+    grid->addWidget(new QLabel("Kiwi DX:"), row, 0);
+    m_kiwiDxToggle = new QPushButton(m_kiwiDxEnabled ? "Enabled" : "Disabled");
+    m_kiwiDxToggle->setCheckable(true);
+    m_kiwiDxToggle->setChecked(m_kiwiDxEnabled);
+    m_kiwiDxToggle->setFixedWidth(80);
+    m_kiwiDxToggle->setToolTip(
+        "Overlay KiwiSDR Community DX database spots (beacons, utilities, time signals) on the band plan strip.");
+    applyToggleButtonStyle(m_kiwiDxToggle, ToggleTribe::Success);
+    connect(m_kiwiDxToggle, &QPushButton::toggled, this, [this, save](bool on) {
+        m_kiwiDxToggle->setText(on ? "Enabled" : "Disabled");
+        m_kiwiDxEnabled = on;
+        save("ShowKiwiDxSpots", on ? "True" : "False");
+    });
+    grid->addWidget(m_kiwiDxToggle, row++, 1, Qt::AlignLeft);
 
     // ── Levels slider ───────────────────────────────────────────────────
     grid->addWidget(new QLabel("Levels:"), row, 0);

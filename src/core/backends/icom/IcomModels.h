@@ -111,4 +111,26 @@ struct IcomModel {
 // number an operator will act on.
 [[nodiscard]] std::span<const CurvePoint> powerCurveFor(const IcomModel& model);
 
+// The front-end stages this model offers, in register order (index 0 is OFF).
+//
+// EMPTY means we have no verified ladder for this model, and the caller must
+// publish NOTHING rather than fall back to another radio's — the same rule
+// powerCurveFor states above, for the same reason. The stages are genuinely
+// per-model: an IC-7610's attenuator has several steps where the IC-705 has
+// one, and the IC-9700's preamp ladder is not the HF ladder. A button labelled
+// "20 dB" on a radio whose register means something else is exactly the
+// misdescription the control registry exists to make visible.
+//
+// A control that does not appear is a better answer than one that appears and
+// lies, so an empty span means the operator simply does not get the button.
+[[nodiscard]] std::span<const std::string_view> preampLabelsFor(const IcomModel& model);
+
+// Attenuator positions. The label is what the operator reads; the dB is what
+// goes on the wire (BCD — see cmdSetAttenuator), so the two must not drift.
+struct AttenStep {
+    std::string_view label;
+    int db;
+};
+[[nodiscard]] std::span<const AttenStep> attenStepsFor(const IcomModel& model);
+
 }  // namespace AetherSDR::icom

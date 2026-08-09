@@ -513,3 +513,15 @@ sherpa-onnx model.
   Copyright (c) 2024 Useful Sensors, Inc.
   License: MIT
   Source:  https://github.com/usefulsensors/moonshine
+
+
+25. KiwiSDR Community DX Database
+-----------------------------------
+Bundled at resources/dist.dx_community.json for the "Show KiwiSDR DX Community Spots"
+overlay layer. Contains community-curated utility, beacon, broadcast, and DX spots
+(frequency, mode, station name, notes).
+
+  Copyright (c) John Seamons and KiwiSDR community contributors
+  License: GPL-2.0 / GPL-3.0 / LGPL-2.1 / MIT (per KiwiSDR repository root _LICENSE)
+  Source:  https://github.com/jks-prv/KiwiSDR/blob/master/unix_env/kiwi.config/dist.dx_community.json
+

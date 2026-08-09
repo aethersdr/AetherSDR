@@ -619,6 +619,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
+    src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
     src/core/backends/icom/IcomStream.cpp    # IcomCIV Phase 0 (one UDP stream + ARQ)
@@ -627,6 +628,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomAudio.cpp     # IcomCIV Phase 3 (codecs + the 1364/556 split)
     src/core/backends/icom/IcomMeters.cpp    # IcomCIV Phase 4 (calibration + poll scheduler)
     src/core/backends/icom/IcomModels.cpp    # IcomCIV Phase 5 (per-model capability table)
+    src/core/backends/icom/IcomControls.cpp  # the CI-V control registry (controls.map / controls.scrub)
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
@@ -702,6 +704,8 @@ set(CORE_SOURCES
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
+    src/core/EibiClient.cpp
+    src/core/EibiCodeMaps.cpp
     src/core/N1MMSpotClient.cpp
     src/core/N1MMSpotParser.cpp
     src/core/PropForecastClient.cpp
@@ -3201,6 +3205,26 @@ target_include_directories(hl2_notch_seed_test PRIVATE src)
 target_link_libraries(hl2_notch_seed_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_notch_seed_test COMMAND hl2_notch_seed_test)
 
+# HL2 manual frequency calibration — simulates the gateware's own NCO arithmetic
+# (radio.v freqcomp/M2/M3) on a deliberately wrong master clock, so the
+# correction is checked against the hardware's behaviour rather than against its
+# own algebra. Also pins the sign convention and the wire command banks.
+add_executable(hl2_freq_cal_test tests/hl2_freq_cal_test.cpp)
+target_include_directories(hl2_freq_cal_test PRIVATE src)
+target_link_libraries(hl2_freq_cal_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_freq_cal_test COMMAND hl2_freq_cal_test)
+
+# Calibration page Trim buttons — applied live while held, persisted exactly
+# once on release. Pins the Qt auto-repeat property the split rests on (every
+# repeat tick emits released()/clicked() with the button still DOWN), so a
+# regression shows up as one failing assertion rather than as a settings file
+# written eight times a second. Widgets only — no project sources.
+add_executable(hl2_trim_autorepeat_test tests/hl2_trim_autorepeat_test.cpp)
+target_link_libraries(hl2_trim_autorepeat_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
+add_test(NAME hl2_trim_autorepeat_test COMMAND hl2_trim_autorepeat_test)
+set_tests_properties(hl2_trim_autorepeat_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # HL2 backend — IRadioBackend seam contract against a capped fake HL2.
 add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)
@@ -3820,6 +3844,17 @@ target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_test)
 
+qt_add_resources(KIWISDR_DX_SPOTS_TEST_RESOURCES resources/resources.qrc)
+add_executable(kiwisdr_dx_spots_test
+    tests/kiwisdr_dx_spots_test.cpp
+    src/models/BandPlanManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    ${KIWISDR_DX_SPOTS_TEST_RESOURCES}
+)
+target_include_directories(kiwisdr_dx_spots_test PRIVATE src tests)
+target_link_libraries(kiwisdr_dx_spots_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME kiwisdr_dx_spots_test COMMAND kiwisdr_dx_spots_test)
+
 add_executable(biquad_test
     tests/biquad_test.cpp
     src/core/Biquad.cpp
@@ -4083,6 +4118,13 @@ add_executable(n1mm_spot_client_test
 target_include_directories(n1mm_spot_client_test PRIVATE src)
 target_link_libraries(n1mm_spot_client_test PRIVATE Qt6::Core)
 add_test(NAME n1mm_spot_client_test COMMAND n1mm_spot_client_test)
+
+add_executable(eibi_client_test
+    tests/eibi_client_test.cpp
+)
+target_include_directories(eibi_client_test PRIVATE src)
+target_link_libraries(eibi_client_test PRIVATE Qt6::Core Qt6::Network Qt6::Test aethercore)
+add_test(NAME eibi_client_test COMMAND eibi_client_test)
 
 add_executable(navtex_model_test
     tests/navtex_model_test.cpp
@@ -5959,6 +6001,7 @@ set(AETHER_SETTINGS_CONSUMERS
     qso_recorder_slice_lifetime_test
     qso_recorder_pc_audio_guard_test
     band_plan_license_filter_test
+    kiwisdr_dx_spots_test
     passive_spots_policy_test
     digital_voice_waveform_process_test
     dstar_model_test

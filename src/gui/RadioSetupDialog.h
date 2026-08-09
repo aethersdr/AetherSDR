@@ -78,6 +78,7 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
     QWidget* buildRadioTab();
@@ -87,6 +88,11 @@ private:
     QWidget* buildTxTab();
     QWidget* buildPhoneCwTab();
     QWidget* buildRxTab();
+    // Manual frequency calibration, for families where correcting the radio's
+    // oscillator error is the CLIENT's job (RadioCapabilities::
+    // hostFrequencyCalibration — the HL2 today). A Flex calibrates itself and
+    // keeps its own Frequency Offset group on the Receive page.
+    QWidget* buildCalibrationTab();
     QWidget* buildAudioTab();
     QWidget* buildFiltersTab();
     QWidget* buildXvtrTab();
@@ -187,6 +193,13 @@ private:
 
     // External APD page (visible only when the radio reports apd configurable=1)
     int                       m_apdPageIndex{-1};
+    int                       m_calibrationPageIndex{-1};
+    // Re-seeds the Calibration page from the LIVE backend value. The page is
+    // built once per process (buildDeferredTab erases the builder) and the
+    // dialog is a showOrRaisePersistent singleton, so without this the spinbox
+    // keeps whatever it read at first build — and the next Trim press would
+    // commit that stale number to whichever radio is connected now.
+    std::function<void()>     m_calibrationReseed;
     QHash<QString, QComboBox*> m_apdSamplerCombos;
 
     // Peripherals tab — savers run on dialog close to persist field edits

@@ -68,6 +68,29 @@ struct FrequencyFrame {
     }
 };
 
+// A native waterfall tile supplies two independently calibrated rows: the
+// viewport row and the full-tile supplemental row. A blanked row must keep
+// their capture frames paired with the matching pixels.
+struct WaterfallBlankerFrameBundle {
+    FrequencyFrame primaryFrame;
+    FrequencyFrame supplementalFrame;
+
+    bool isValid() const
+    {
+        return primaryFrame.isValid() && supplementalFrame.isValid();
+    }
+};
+
+inline WaterfallBlankerFrameBundle waterfallBlankerFrameBundleForOutput(
+    bool useCachedBundle,
+    const WaterfallBlankerFrameBundle& cachedBundle,
+    const WaterfallBlankerFrameBundle& incomingBundle)
+{
+    return useCachedBundle && cachedBundle.isValid()
+        ? cachedBundle
+        : incomingBundle;
+}
+
 struct FrequencyPreviewTransform {
     double scale{1.0};
     double offset{0.0};

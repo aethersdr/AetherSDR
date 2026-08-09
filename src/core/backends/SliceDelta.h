@@ -68,6 +68,11 @@ struct SliceDelta {
     std::optional<bool>        anfl;
     std::optional<bool>        anft;
     std::optional<bool>        apf;
+    // The radio's own single in-passband notch (RadioCapabilities::
+    // hasManualNotch). Distinct from `anf`, which is the auto notch that finds
+    // its own tone, and from the TNFs, which are pinned to absolute
+    // frequencies.
+    std::optional<bool>        mn;
     // DSP levels
     std::optional<int>         apfLevel;
     std::optional<int>         nbLevel;
@@ -77,6 +82,8 @@ struct SliceDelta {
     std::optional<int>         nrsLevel;
     std::optional<int>         nrfLevel;
     std::optional<int>         anflLevel;
+    // Manual-notch POSITION, 0..100 across the passband — not a frequency.
+    std::optional<int>         mnLevel;
 
     // AGC / squelch / RIT / XIT
     std::optional<QString>     agcMode;

@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Mirrors .github/workflows/windows-installer.yml end-to-end so a native build
-    produces the same artifact as CI — but on hardware with enough cores/RAM that
+    produces the same artifact as CI -- but on hardware with enough cores/RAM that
     the full ASR + GPU (whisper Vulkan) build finishes fast instead of hitting the
     GitHub runner's 6-hour timeout. (That timeout is a 4-core/16 GB free-runner
     resource limit, not a real build problem; a 32-core box with plenty of RAM
@@ -12,7 +12,7 @@
 
     Stages the third_party deps via the same setup-*.ps1 scripts CI uses,
     configures with the release flags (ASR ONNX + sherpa + GPU Vulkan all
-    REQUIRED — fail-loud if a runtime is missing), builds, deploys Qt + all
+    REQUIRED -- fail-loud if a runtime is missing), builds, deploys Qt + all
     runtime DLLs (ONNX Runtime, sherpa-onnx, vulkan-1), and optionally packages
     the Inno Setup installer.
 
@@ -33,7 +33,7 @@
 
 .PARAMETER Jobs
     Build parallelism. Defaults to the CPU count. Do NOT copy CI's -j2 workaround
-    here — that was only for the 4-core/16 GB runner.
+    here -- that was only for the 4-core/16 GB runner.
 
 .PARAMETER Installer
     Also build the Inno Setup installer (needs ISCC.exe). Otherwise stops after
@@ -76,7 +76,7 @@ if (-not $QtDir -or -not (Test-Path "$QtDir\bin\windeployqt.exe")) {
 Write-Host "  MSVC + CMake + Ninja OK; Qt = $QtDir; jobs = $Jobs" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# 1. third_party deps — the exact scripts CI runs (each is idempotent/cached).
+# 1. third_party deps -- the exact scripts CI runs (each is idempotent/cached).
 # ---------------------------------------------------------------------------
 Write-Host "== Staging third_party deps ==" -ForegroundColor Cyan
 foreach ($s in @(
@@ -97,7 +97,7 @@ if (-not $env:VULKAN_SDK) {
 Write-Host "  VULKAN_SDK = $env:VULKAN_SDK" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# 2. Configure — same flags as windows-installer.yml (minus the empty vcpkg
+# 2. Configure -- same flags as windows-installer.yml (minus the empty vcpkg
 #    toolchain vars; zlib is vendored). CMAKE_PREFIX_PATH points CMake at Qt and
 #    the Vulkan SDK (glslc + SPIRV-Headers) so REQUIRE_ASR_GPU can succeed.
 # ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
 # ---------------------------------------------------------------------------
 # 3. Build. Opus first (ExternalProject ordering), then everything at full -j.
-#    No ggml-vulkan isolation / -j2 needed here — that was a CI-runner workaround.
+#    No ggml-vulkan isolation / -j2 needed here -- that was a CI-runner workaround.
 # ---------------------------------------------------------------------------
 Write-Host "== Build (opus, then full -j$Jobs) ==" -ForegroundColor Cyan
 cmake --build build --target build_opus -j $Jobs
@@ -121,7 +121,7 @@ cmake --build build -j $Jobs
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
 # ---------------------------------------------------------------------------
-# 4. Deploy — mirror the workflow's "Deploy Qt" step.
+# 4. Deploy -- mirror the workflow's "Deploy Qt" step.
 # ---------------------------------------------------------------------------
 Write-Host "== Deploy ==" -ForegroundColor Cyan
 $deploy = "$repo\deploy"
@@ -152,7 +152,7 @@ Get-ChildItem build\*.dll -ErrorAction SilentlyContinue | ForEach-Object {
 }
 # Vulkan loader (whisper GPU): the exe hard-links it, so it must ship. Its
 # location varies by SDK layout (runtime\x64 on newer SDKs, Bin on older) with a
-# driver copy in System32 — take the first that exists.
+# driver copy in System32 -- take the first that exists.
 $vkCandidates = @(
     (Join-Path $env:VULKAN_SDK "runtime\x64\vulkan-1.dll"),
     (Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"),
@@ -166,18 +166,27 @@ Write-Host "  deploy\ staged ($((Get-ChildItem $deploy).Count) items)" -Foregrou
 # Quick sanity: confirm the GPU + ASR runtimes actually landed in the payload.
 foreach ($need in @("vulkan-1.dll", "onnxruntime.dll")) {
     if (-not (Test-Path "$deploy\$need")) {
-        Write-Warning "expected $need not present in deploy\ — check the build config"
+        Write-Warning "expected $need not present in deploy\ -- check the build config"
     }
 }
 
 # ---------------------------------------------------------------------------
-# 5. (optional) Installer — Inno Setup, mirroring the workflow's packaging.
+# 5. (optional) Installer -- Inno Setup, mirroring the workflow's packaging.
 # ---------------------------------------------------------------------------
 if ($Installer) {
     Assert-Tool iscc "Install Inno Setup 6 (provides ISCC.exe) to build the installer."
     Write-Host "== Staging MSVC runtime + building installer ==" -ForegroundColor Cyan
     & powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\stage-msvc-runtime.ps1 -OutputDir installer-runtime
+    # Surface the staging script's own message. Without this the common local
+    # failure -- a VS install missing the OpenMP redist component -- shows up as
+    # the Copy-Item below erroring on an absent directory, which reads as a path
+    # problem rather than "install the MSVC v143 redist component".
+    if ($LASTEXITCODE -ne 0) { throw "MSVC runtime staging failed -- see the output above." }
     Copy-Item installer-runtime\*.dll $deploy\ -Force
+    # Same gate CI runs -- catch a payload that leans on the machine's own VC++
+    # redistributable here rather than on a user's machine (#4781).
+    & powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-deploy-dependencies.ps1 -DeployDir $deploy
+    if ($LASTEXITCODE -ne 0) { throw "deploy\ payload is not self-contained -- see the audit output above." }
     $version = (Get-Content CMakeLists.txt | Select-String -Pattern 'project\(AetherSDR VERSION (\d+\.\d+\.\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1)
     if (-not $version) { $version = "0.0.0-local" }
     $runtimeDir = (Resolve-Path "installer-runtime").Path

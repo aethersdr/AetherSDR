@@ -21,6 +21,7 @@
 
 #include "AetherDspWidget.h"
 #include "BandRecallSliceSelectionPolicy.h"
+#include "models/BandPlanManager.h"
 #include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
 #include "AppletPanel.h"
@@ -1586,6 +1587,9 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
             targetVfo->setSmartSdrPlus(sub.contains("SmartSDR+"));
             targetVfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
             targetVfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
+            targetVfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
+            targetVfo->setHasManualNotch(m_radioModel.hasManualNotch());
+            targetVfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
             wireVfoWidget(targetVfo, s);
             targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
             wireVfoTelemetry(targetVfo, s);
@@ -2127,6 +2131,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
         vfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
         vfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
+        vfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
+        vfo->setHasManualNotch(m_radioModel.hasManualNotch());
+        vfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
 
         wireVfoWidget(vfo, s);
 
@@ -3469,7 +3476,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // aligned with the wire command (TCI dds: follows this center) — and
         // during a profile load it defers rather than letting sendCmd drop it
         // silently (#4142).
-        m_radioModel.requestPanCenter(applet->panId(), center);
+        //
+        // DRAG: this is the operator moving the window itself, which on a
+        // backend whose scope is slaved to the VFO is a retune and nothing
+        // else. Every other centre-only caller in this file is a follow,
+        // reveal or recentre and takes the default (Range) — see
+        // RadioModel::requestPanCenter().
+        m_radioModel.requestPanCenter(applet->panId(), center, -1.0,
+                                      IRadioBackend::PanCenterIntent::Drag);
     });
     // Band/Segment Zoom toggle off the pan's radio-authoritative model state
     // (togglePanZoomModeForPan) — shared with the keyboard/MIDI shortcuts
@@ -4306,6 +4320,35 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!panId.isEmpty())
             m_radioModel.addSliceOnPan(panId, mhz);
     });
+    connect(sw, &SpectrumWidget::kiwiSpotClicked,
+            this, [this, resolveSpectrumTuneTarget, resolveClickedPanId](double mhz, const QString& mode, int loHz, int hiHz) {
+        SliceModel* target = resolveSpectrumTuneTarget();
+        if (!target) {
+            // Empty pan → spawn a slice on it at the spot frequency, matching
+            // the frequencyClicked path. Do NOT fall back to activeSlice():
+            // that slice lives on a different pan (#3086). slice create is
+            // async, so the mode/filter below cannot target the new slice.
+            const QString panId = resolveClickedPanId();
+            if (!panId.isEmpty())
+                m_radioModel.addSliceOnPan(panId, mhz);
+            return;
+        }
+        queueActiveSliceForSpectrumTarget(target->sliceId());
+        applyTuneRequest(target, mhz, TuneIntent::AbsoluteJump, "kiwi-spot-click");
+
+        const bool autoSwitchMode =
+            AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True";
+        if (autoSwitchMode) {
+            const QString mappedMode = BandPlanManager::normalizeSpotMode(mode);
+            if (!mappedMode.isEmpty()) {
+                target->setMode(mappedMode);
+            }
+        }
+
+        if (loHz != 0 || hiHz != 0) {
+            target->setFilterWidth(loHz, hiHz);
+        }
+    });
     connect(sw, &SpectrumWidget::incrementalTuneRequested,
             this, [this, resolveSpectrumTuneTarget](double mhz) {
         if (auto* target = resolveSpectrumTuneTarget()) {
@@ -4359,7 +4402,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                     // (#4142). The SpectrumWidget owns its own view during an
                     // edge-pan drag, so the gesture still tracks the cursor;
                     // the radio catches up when the deferred center flushes.
-                    m_radioModel.requestPanCenter(pan->panId(), centerMhz);
+                    //
+                    // DRAG: the gesture this whole block exists for. On a
+                    // slaved-scope backend it is the one centre write that is
+                    // MEANT to move the radio — see
+                    // RadioModel::requestPanCenter().
+                    m_radioModel.requestPanCenter(
+                        pan->panId(), centerMhz, -1.0,
+                        IRadioBackend::PanCenterIntent::Drag);
                 }
             }
         }

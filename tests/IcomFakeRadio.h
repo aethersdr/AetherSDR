@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <vector>
 
 namespace AetherSDR::icom::test {
@@ -194,6 +195,12 @@ public:
     // retuning the radio.
     [[nodiscard]] const std::vector<CivFrame>& civCommands() const { return m_civLog; }
     void clearCivLog() { m_civLog.clear(); }
+
+    // GO DEAF. The radio keeps its UDP streams up — the transport stays
+    // perfectly healthy — and simply stops answering CI-V. That is the exact
+    // shape of the stall this exists to reproduce: `isConnected()` stays true,
+    // link statistics keep climbing, and the command plane is dead.
+    void setCivSilent(bool silent) { m_civSilent = silent; }
     [[nodiscard]] int audioPacketsFromClient() const { return m_audioFromClient; }
 
     // Push an unsolicited CI-V frame (CI-V Transceive, or a scope sweep).
@@ -312,6 +319,10 @@ private:
             return;
         ++m_civCommands;
         m_civLog.push_back(*frame);
+        // Logged BEFORE the silence check: a deaf radio still receives, which
+        // is what lets a test assert the command went out and got no answer.
+        if (m_civSilent)
+            return;
 
         // Name itself. A real radio answers 0x19 0x00 with its own CI-V
         // address, and that is how a client learns WHICH Icom it is talking to
@@ -334,10 +345,103 @@ private:
             pushCiv(reply);
             return;
         }
+        // ---- READS ANSWERED FROM PERSISTED STATE ------------------------
+        //
+        // A real Icom remembers its own settings across power cycles and reports
+        // them on request, and AetherSDR's whole contract with this family is
+        // that it READS that state rather than pushing its own (Constitution
+        // II/III). A fake radio that ACKs every read without answering it cannot
+        // test that contract at all — the client would look correct while
+        // adopting nothing.
+        //
+        // A read is the command with NO payload byte. The set form carries one,
+        // and answering that with a value would be a radio talking back to its
+        // own command.
+        if (frame->cmd == cmd::kFunction && frame->hasSub && frame->data.empty()) {
+            auto it = m_functions.find(frame->sub);
+            if (it != m_functions.end()) {
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kFunction,
+                         frame->sub, it->second, kCivEom});
+                return;
+            }
+        }
+        if (frame->cmd == cmd::kLevel && frame->hasSub && frame->data.empty()) {
+            auto it = m_levels.find(frame->sub);
+            if (it != m_levels.end()) {
+                // Two BCD bytes, 0000..0255 — the shape decodeLevel expects.
+                const int v = it->second;
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kLevel,
+                         frame->sub,
+                         static_cast<std::uint8_t>(((v / 1000) << 4) | ((v / 100) % 10)),
+                         static_cast<std::uint8_t>((((v / 10) % 10) << 4) | (v % 10)),
+                         kCivEom});
+                return;
+            }
+        }
+        if (frame->cmd == cmd::kTuneOffset && frame->hasSub && frame->data.empty()) {
+            if (frame->sub == tuneOffset::kFrequency) {
+                // Two BCD bytes little-endian, then a sign byte.
+                const int hz = m_ritHz < 0 ? -m_ritHz : m_ritHz;
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kTuneOffset,
+                         frame->sub,
+                         static_cast<std::uint8_t>((((hz / 10) % 10) << 4) | (hz % 10)),
+                         static_cast<std::uint8_t>((((hz / 1000) % 10) << 4) | ((hz / 100) % 10)),
+                         static_cast<std::uint8_t>(m_ritHz < 0 ? 0x01 : 0x00),
+                         kCivEom});
+                return;
+            }
+            const std::uint8_t on = frame->sub == tuneOffset::kRitOnOff
+                                        ? (m_ritOn ? 1 : 0) : (m_xitOn ? 1 : 0);
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kTuneOffset,
+                     frame->sub, on, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kControl && frame->hasSub
+            && frame->sub == control::kTuner && frame->data.empty()) {
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kControl,
+                     control::kTuner, m_tunerState, kCivEom});
+            return;
+        }
+
         // Everything else is acknowledged.
         pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
         (void)s;
     }
+
+public:
+    // The radio's PERSISTED state, as a test wants to arrange it. Defaults are
+    // deliberately NOT the client's defaults — every one of these would read as
+    // "working" if the client simply kept its own value, so a test that asserts
+    // these exact numbers is asserting the pull actually happened.
+    std::map<std::uint8_t, std::uint8_t> m_functions{
+        {func::kNoiseReduce, 1},     // NR ON
+        {func::kNoiseBlanker, 1},    // NB ON
+        {func::kAutoNotch, 0},
+        {func::kManualNotch, 1},     // manual notch ON
+        {func::kCompressor, 1},      // PROC ON
+        {func::kMonitorFn, 1},       // monitor ON
+        {func::kVox, 1},             // VOX ON
+        {func::kPreamp, 2},          // P.AMP2
+        {func::kAgc, 3},             // SLOW
+    };
+    std::map<std::uint8_t, int> m_levels{
+        {level::kAf, 128},        // ~50 %
+        {level::kRf, 255},        // 100 %
+        {level::kSquelch, 0},
+        {level::kNrLevel, 77},    // ~30 %
+        {level::kNbLevel, 179},   // ~70 %
+        {level::kRfPower, 51},    // ~20 %
+        {level::kMicGain, 153},   // ~60 %
+        {level::kCompLevel, 102}, // ~40 %
+        {level::kNotchPos, 128},  // ~50 %
+        {level::kVoxGain, 204},   // ~80 %
+    };
+    int  m_ritHz = -1230;
+    bool m_ritOn = true;
+    bool m_xitOn = false;
+    std::uint8_t m_tunerState = 0x01;   // matched
+
+private:
 
     void audio(FakeStream&, const QByteArray& b)
     {
@@ -359,6 +463,7 @@ private:
     bool m_usernameObfuscated = false;
     int m_authCount = 0;
     int m_civCommands = 0;
+    bool m_civSilent = false;
     int m_audioFromClient = 0;
     quint32 m_announcedCiv = 0;
     quint32 m_announcedAudio = 0;

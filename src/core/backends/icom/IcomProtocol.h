@@ -52,7 +52,24 @@ inline constexpr std::uint16_t kAudioPort   = 50003;
 // simply stops. wfview renews at 60 s; kappanhang re-auths on a 1-minute
 // ticker. 60 s is the observed contract, so renew comfortably inside it.
 inline constexpr int kTokenRenewalMs   = 60'000;
-inline constexpr int kTokenRenewEarlyMs = 45'000;   // what we actually use
+// RENEW THREE TIMES INSIDE THE CONTRACT, not once.
+//
+// 45 s gave exactly one attempt before the 60 s expiry, and a renewal is a
+// single UDP datagram. On a clean wired link that is fine. On the link this was
+// found on — an IC-705 on 2.4 GHz WiFi 4 at -65 dBm with 14.7% TX retries and
+// 802.11 power-save latency spiking to 300 ms — one shot is not enough, and
+// losing it is silent: the radio's token expires, it stops honouring the
+// session, and the transport keeps running so nothing above notices.
+//
+// 20 s gives three independent chances, and the ack tracking in IcomSession
+// turns a lost one into an immediate resend rather than a dead session.
+inline constexpr int kTokenRenewEarlyMs = 20'000;
+// How long a renewal may go unacknowledged before we resend it. Sized off the
+// observed worst-case round trip on a power-saving link, with margin.
+inline constexpr int kTokenAckGraceMs   = 2'500;
+// No auth acknowledgement for this long means the token is gone or about to be.
+// Below the 60 s contract so the failure is reported while it is still true.
+inline constexpr int kTokenDeadMs       = 50'000;
 
 // Idle keepalive cadence. The radio drops a stream that goes quiet. kappanhang
 // sends every 100 ms and relaxes to 1 s once nothing has been transmitted for
@@ -342,7 +359,12 @@ struct StreamRequest {
     std::uint32_t sampleRateHz = 48000;
     std::uint16_t civLocalPort   = kSerialPort;
     std::uint16_t audioLocalPort = kAudioPort;
-    std::uint16_t txBufferMs = 200;
+    // 300 ms, which is kappanhang's txSeqBufLength — the value a byte-exact
+    // IC-705 client negotiates. Ours was 200 ms for no recorded reason. This is
+    // the radio's OWN jitter buffer for the audio we send it, so on a link that
+    // delivers in bursts (WiFi power-save can stall 300 ms at a time) an
+    // undersized one drops audio that arrived only slightly late.
+    std::uint16_t txBufferMs = 300;
     bool enableTx = true;
 };
 
@@ -402,9 +424,35 @@ struct StreamGrant {
 // 5.8 ms, and kappanhang's "10 ms per packet" is an average across the pair.
 // Reconstruct by concatenating payloads in sequence order and let the audio
 // device clock it.
+// THE FRAME IS A DURATION, and its byte count is derived from it.
+//
+// It used to be the constant 1920 with the split pair defining it, which is
+// only 20 ms at 48 kHz mono s16 — the rate and the sample width were baked into
+// a number that looked like a protocol constant. Changing the rate to 16 kHz
+// while leaving 1920 in place produced 60 ms frames; the radio's jitter buffer
+// read them as discontinuities and discarded every one, giving a keyed
+// transmitter with zero forward power and nothing on the air.
+//
+// kappanhang derives it the same way:
+//   audioFrameSize = (audioSampleRate * audioSampleBytes * audioFrameLength) / 1s
+inline constexpr int         kAudioFrameMs      = 20;
+inline constexpr int         kAudioSampleBytes  = 2;    // s16, mono
+inline constexpr std::uint32_t kAudioRateHz     = 48000;
+inline constexpr std::size_t kAudioFrameBytes =
+    static_cast<std::size_t>(kAudioRateHz) * kAudioSampleBytes * kAudioFrameMs / 1000;  // 1920
+
+// The 1364/556 pair is MTU fragmentation of that frame, not a protocol rule:
+// 1920 bytes does not fit one comfortable datagram alongside the 24-byte
+// header. kappanhang splits at exactly these offsets and so do we. The
+// static_assert is the guard the old constants could not provide — if the frame
+// duration or the rate ever moves, this stops the build instead of silently
+// shipping frames the radio will drop.
 inline constexpr std::size_t kAudioSplitLarge = 1364;
-inline constexpr std::size_t kAudioSplitSmall = 556;
-inline constexpr std::size_t kAudioFrameBytes = kAudioSplitLarge + kAudioSplitSmall;  // 1920
+inline constexpr std::size_t kAudioSplitSmall = kAudioFrameBytes - kAudioSplitLarge;  // 556
+static_assert(kAudioFrameBytes == 1920,
+              "The 1364/556 split is sized for a 20 ms frame at 48 kHz mono s16. "
+              "Changing the rate or the frame duration requires re-deriving the "
+              "packet split — see IcomAudio's TxPacketizer.");
 
 [[nodiscard]] std::vector<std::uint8_t> buildAudio(std::uint32_t localSid,
                                                     std::uint32_t remoteSid,

@@ -440,6 +440,49 @@ int testWaterfallPaletteRecolorPlan()
     return 0;
 }
 
+int testWaterfallBlankerFrameBundleSelection()
+{
+    using namespace AetherSDR;
+    const WaterfallBlankerFrameBundle cached{
+        FrequencyFrame{14.1, 0.2}, FrequencyFrame{14.1, 0.8},
+    };
+    const WaterfallBlankerFrameBundle incoming{
+        FrequencyFrame{14.2, 0.1}, FrequencyFrame{14.2, 0.4},
+    };
+
+    const WaterfallBlankerFrameBundle substituted =
+        waterfallBlankerFrameBundleForOutput(true, cached, incoming);
+    if (!nearlyEqual(substituted.primaryFrame.centerMhz,
+                     cached.primaryFrame.centerMhz)
+        || !nearlyEqual(substituted.primaryFrame.bandwidthMhz,
+                        cached.primaryFrame.bandwidthMhz)
+        || !nearlyEqual(substituted.supplementalFrame.centerMhz,
+                        cached.supplementalFrame.centerMhz)
+        || !nearlyEqual(substituted.supplementalFrame.bandwidthMhz,
+                        cached.supplementalFrame.bandwidthMhz)) {
+        return fail(
+            "blanker substitution must retain the complete cached frame pair");
+    }
+
+    const WaterfallBlankerFrameBundle uncached =
+        waterfallBlankerFrameBundleForOutput(
+            true, WaterfallBlankerFrameBundle{}, incoming);
+    const WaterfallBlankerFrameBundle accepted =
+        waterfallBlankerFrameBundleForOutput(false, cached, incoming);
+    if (!nearlyEqual(uncached.primaryFrame.centerMhz,
+                     incoming.primaryFrame.centerMhz)
+        || !nearlyEqual(uncached.supplementalFrame.bandwidthMhz,
+                        incoming.supplementalFrame.bandwidthMhz)
+        || !nearlyEqual(accepted.primaryFrame.centerMhz,
+                        incoming.primaryFrame.centerMhz)
+        || !nearlyEqual(accepted.supplementalFrame.centerMhz,
+                        incoming.supplementalFrame.centerMhz)) {
+        return fail(
+            "blanker fallback and accepted rows must use the incoming frame pair");
+    }
+    return 0;
+}
+
 // The property a palette recolour has to hold and a viewport rebuild does not:
 // recolouring in place may not move, drop, or duplicate a single visible row.
 // A rebuild gets away with re-laying the ring out from scanline 0 only because
@@ -1055,6 +1098,10 @@ int main()
         return result;
     }
     if (const int result = testWaterfallPaletteRecolorPlan(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallBlankerFrameBundleSelection();
+        result != 0) {
         return result;
     }
     if (const int result = testWaterfallVisibleRowForAge(); result != 0) {

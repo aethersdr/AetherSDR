@@ -59,6 +59,39 @@ int main(int argc, char** argv)
     QObject::connect(&backend, &IRadioBackend::audioFrameReady, &app,
                      [&](const QByteArray&) { ++speakerBuffers; });
 
+    // ACCUMULATED, not last-wins. Each delta carries only the fields that
+    // moved, so a plain "keep the newest" would show one setting and forget the
+    // nine that arrived in their own frames a millisecond earlier.
+    SliceDelta lastSliceState;
+    TransmitDelta lastTransmitState;
+    const auto mergeSlice = [&lastSliceState](const SliceDelta& d) {
+        if (d.nr) lastSliceState.nr = d.nr;
+        if (d.nb) lastSliceState.nb = d.nb;
+        if (d.anf) lastSliceState.anf = d.anf;
+        if (d.mn) lastSliceState.mn = d.mn;
+        if (d.agcMode) lastSliceState.agcMode = d.agcMode;
+        if (d.nrLevel) lastSliceState.nrLevel = d.nrLevel;
+        if (d.nbLevel) lastSliceState.nbLevel = d.nbLevel;
+        if (d.audioGain) lastSliceState.audioGain = d.audioGain;
+        if (d.ritOn) lastSliceState.ritOn = d.ritOn;
+        if (d.xitOn) lastSliceState.xitOn = d.xitOn;
+        if (d.ritFreq) lastSliceState.ritFreq = d.ritFreq;
+    };
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &app,
+                     [&](int, const SliceDelta& d) { mergeSlice(d); });
+    QObject::connect(&backend, &IRadioBackend::transmitChanged, &app,
+                     [&](const TransmitDelta& d) {
+        if (d.speechProcEnable) lastTransmitState.speechProcEnable = d.speechProcEnable;
+        if (d.speechProcLevel) lastTransmitState.speechProcLevel = d.speechProcLevel;
+        if (d.rfPower) lastTransmitState.rfPower = d.rfPower;
+        if (d.micLevel) lastTransmitState.micLevel = d.micLevel;
+        if (d.sbMonitor) lastTransmitState.sbMonitor = d.sbMonitor;
+        if (d.voxEnable) lastTransmitState.voxEnable = d.voxEnable;
+        if (d.voxLevel) lastTransmitState.voxLevel = d.voxLevel;
+        if (d.atuEnabled) lastTransmitState.atuEnabled = d.atuEnabled;
+        if (d.atuStatusRaw) lastTransmitState.atuStatusRaw = d.atuStatusRaw;
+    });
+
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
     QSignalSpy sliceSpy(&backend, &IRadioBackend::sliceChanged);
     QSignalSpy meterDefSpy(&backend, &IRadioBackend::meterDefined);
@@ -97,11 +130,17 @@ int main(int argc, char** argv)
     check(rfGainInfoSpy.count() == 1, "the RF-gain range is advertised");
     if (rfGainInfoSpy.count() == 1) {
         const auto args = rfGainInfoSpy.first();
-        // A three-position preamp, NOT a dB register. Advertising a continuous
-        // range gives the operator a slider that sweeps over a control with
-        // three detents.
-        check(args.at(1).toInt() == 0 && args.at(2).toInt() == 2 && args.at(3).toInt() == 1,
-              "as the real discrete 0..2 step 1, not a fabricated dB range");
+        // THE REAL RF-GAIN REGISTER (14 02), 0000..0255, published as a
+        // percentage. This slider used to drive the three-position PREAMP
+        // (16 02) and label its positions "0 dB / 1 dB / 2 dB" — the radio
+        // calls them OFF, P.AMP1 and P.AMP2 and publishes no gain figures for
+        // them, so none of those numbers was a decibel of anything.
+        check(args.at(1).toInt() == 0 && args.at(2).toInt() == 100 && args.at(3).toInt() == 1,
+              "as the real 0..100 continuous gain");
+        // 14 02 has no published dB mapping, so a dB label would be the same
+        // invention in a new place.
+        check(args.at(4).toString() == QStringLiteral("%"),
+              "in percent, because the register has no published dB scale");
     }
 
     // ---- model discovery (Phase 5) ----------------------------------------
@@ -249,27 +288,125 @@ int main(int argc, char** argv)
               "and stops again on unkey");
     }
 
+    // ---- THE CONNECT-TIME STATE PULL --------------------------------------
+    //
+    // An Icom remembers its own settings across power cycles and reports them on
+    // request, so AetherSDR's contract with this family is to READ that state at
+    // connect and never push its own (Constitution II/III). Every value the fake
+    // radio holds is deliberately NOT the client's default: a client that simply
+    // kept its own numbers would look identical to one that read them, and only
+    // asserting the radio's exact values can tell the two apart.
+    //
+    // This is the regression net for the whole class of bug the registry found —
+    // a read that is issued and whose reply is dropped looks exactly like a read
+    // that was never issued.
+    {
+        const SliceDelta sl = lastSliceState;
+        const TransmitDelta tx = lastTransmitState;
+
+        check(sl.nr.value_or(false), "NR ON is adopted from the radio");
+        check(sl.nb.value_or(false), "NB ON is adopted");
+        check(!sl.anf.value_or(true), "ANF OFF is adopted");
+        check(sl.mn.value_or(false), "the manual notch's ON state is adopted");
+        check(sl.agcMode.value_or(QString()) == QLatin1String("slow"),
+              "AGC SLOW is adopted, not our own default");
+        check(std::abs(sl.nrLevel.value_or(-1) - 30) <= 1,
+              "the NR LEVEL comes back as ~30%, not the client's default");
+        check(std::abs(sl.nbLevel.value_or(-1) - 70) <= 1, "and the NB level as ~70%");
+        check(std::abs(sl.audioGain.value_or(-1) - 50) <= 1,
+              "AF gain is read at connect — the control this branch made settable");
+
+        check(tx.speechProcEnable.value_or(false), "the compressor's ON state is adopted");
+        check(std::abs(tx.speechProcLevel.value_or(-1) - 40) <= 1,
+              "and its level as ~40%");
+        check(std::abs(tx.rfPower.value_or(-1) - 20) <= 1,
+              "RF POWER comes from the radio — pushing our own would key at the "
+              "wrong drive on the first transmission");
+        check(std::abs(tx.micLevel.value_or(-1) - 60) <= 1, "mic gain as ~60%");
+        check(tx.sbMonitor.value_or(false),
+              "the TX monitor's ON state is adopted — its reply used to be dropped "
+              "by the 0x16 switch's default");
+        check(tx.voxEnable.value_or(false),
+              "VOX ON is adopted — same dropped-reply bug");
+        check(std::abs(tx.voxLevel.value_or(-1) - 80) <= 1, "and the VOX gain as ~80%");
+        check(tx.atuEnabled.value_or(false) && tx.atuStatusRaw.has_value(),
+              "the antenna tuner reports its own state, so the ATU button opens "
+              "where the radio is");
+
+        check(sl.ritOn.value_or(false), "RIT ON is adopted");
+        check(!sl.xitOn.value_or(true), "XIT OFF is adopted");
+        check(sl.ritFreq.value_or(0) == -1230,
+              "and the RIT OFFSET comes back SIGNED — folding the sign byte into "
+              "the magnitude tunes the wrong way");
+    }
+
+    // ---- the CI-V stall detector ------------------------------------------
+    //
+    // The transport can be healthy while the COMMAND PLANE is dead: the control
+    // stream keeps pinging, link statistics keep climbing, isConnected() stays
+    // true, and the radio has answered no CI-V frame for a minute. That happened
+    // on the bench and took real time to diagnose, because nothing anywhere said
+    // so — every meter simply stopped at the same instant.
+    //
+    // What makes it triageable is naming the LAST COMMAND SENT. "The radio
+    // stopped answering after 16 02 02" is a bug report; "the radio stopped
+    // answering" is a guess.
+    {
+        radio.clearCivLog();
+        radio.setCivSilent(true);
+
+        // A command the radio receives and does not answer.
+        backend.setPanPreamp(QStringLiteral("0"), 1);
+        QTest::qWait(150);
+        check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                          [](const CivFrame& f) {
+                              return f.cmd == cmd::kFunction && f.hasSub
+                                  && f.sub == func::kPreamp;
+                          }),
+              "a deaf radio still RECEIVES — the command reached it");
+
+        // The detector needs its own threshold to elapse with no inbound frame.
+        // Deliberately wall-clock rather than injectable: the thing being tested
+        // is that a real session notices real silence.
+        QSignalSpy healthSpy(&backend, &IRadioBackend::linkStatsUpdated);
+        QTest::qWait(7000);
+
+        check(healthSpy.count() > 0,
+              "link statistics keep flowing while the command plane is dead — "
+              "which is exactly why the transport cannot be trusted to report this");
+
+        // The warning is emitted through the log category rather than a signal,
+        // so what is asserted here is the STATE that produces it: the backend
+        // still believes it is connected while nothing has come back.
+        check(backend.isConnected(),
+              "and isConnected() still reports true — the lie the detector exists "
+              "to break");
+
+        radio.setCivSilent(false);
+        QTest::qWait(300);
+    }
+
     // ---- the pan intents --------------------------------------------------
     //
     // The sweep pushed above put the radio at a 100 kHz span (200 kHz wide),
     // which is what both of these reason against.
     {
-        // DRAGGING THE PAN MUST NOT RETUNE THE RADIO. This used to forward to
-        // setSliceFrequency() on the theory that in centre mode moving the
-        // window IS retuning — true of the hardware, backwards from the
-        // operator, who dragged the waterfall to look around and walked the VFO
-        // off frequency instead. Zoom dispatches centre alongside bandwidth, so
-        // it moved the radio too.
+        // A ZOOM'S CENTRE MUST NOT RETUNE THE RADIO. Centre and bandwidth
+        // travel together on a range change, so every zoom click carries a
+        // centre; honouring it walked the VFO across the band one click at a
+        // time. Refused, and re-asserted immediately so the view does not
+        // drift for a frame before the next sweep contradicts it.
         radio.clearCivLog();
         QSignalSpy panSpy(&backend, &IRadioBackend::panCenterBandwidthChanged);
-        backend.setPanCenter(QStringLiteral("0"), 14'050'000.0);
+        backend.setPanCenter(QStringLiteral("0"), 14'050'000.0,
+                             IRadioBackend::PanCenterIntent::Range);
         QTest::qWait(120);
 
         const auto& sent = radio.civCommands();
         const bool retuned = std::any_of(sent.begin(), sent.end(), [](const CivFrame& f) {
             return f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx;
         });
-        check(!retuned, "a pan-centre request sends NO frequency command");
+        check(!retuned, "a zoom's pan-centre sends NO frequency command");
         check(panSpy.count() > 0,
               "and re-asserts the radio's real centre, so the view snaps back "
               "rather than drifting for a frame");
@@ -277,6 +414,47 @@ int main(int argc, char** argv)
             check(std::fabs(panSpy.first().at(1).toDouble() - 14.1) < 1e-6,
                   "re-asserted at the radio's centre, not the requested one");
         }
+    }
+
+    {
+        // A DRAG RETUNES, and does not snap back.
+        //
+        // In centre mode the scope window IS the operating frequency, so the
+        // window cannot slide over stationary spectrum: refusing a drag left
+        // the trace following the mouse for one frame and then jumping back,
+        // which is the panadapter's most basic gesture reading as a bug. The
+        // radio is at 14.1 MHz with a 200 kHz window; 14.05 is a quarter of the
+        // span away, far outside the dead zone.
+        radio.clearCivLog();
+        QSignalSpy panSpy(&backend, &IRadioBackend::panCenterBandwidthChanged);
+        backend.setPanCenter(QStringLiteral("0"), 14'050'000.0,
+                             IRadioBackend::PanCenterIntent::Drag);
+        QTest::qWait(120);
+
+        const auto& sent = radio.civCommands();
+        auto it = std::find_if(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kSetFreq;
+        });
+        check(it != sent.end(), "a pan DRAG reaches the radio as a frequency command");
+        check(panSpy.count() == 0,
+              "and does NOT re-assert the old centre — no snap-back");
+    }
+
+    {
+        // THE DEAD ZONE. A click with a pixel of hand movement arrives here as
+        // a centre a few Hz off; one-to-one tuning would move the dial on every
+        // stray click. 200 Hz against a 100 kHz half-span is well inside the
+        // 1% dead zone.
+        radio.clearCivLog();
+        backend.setPanCenter(QStringLiteral("0"), 14'100'200.0,
+                             IRadioBackend::PanCenterIntent::Drag);
+        QTest::qWait(120);
+
+        const auto& sent = radio.civCommands();
+        const bool retuned = std::any_of(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kSetFreq || f.cmd == cmd::kSetFreqTrx;
+        });
+        check(!retuned, "a drag inside the dead zone sends no frequency command");
     }
 
     {
@@ -305,6 +483,112 @@ int main(int argc, char** argv)
             check(span.has_value() && *span == 250'000,
                   "and steps to the NEXT span up (250 kHz), not back to 100 kHz");
         }
+    }
+
+    // ---- controls scrub: RE-ASSERT, never re-default -----------------------
+    //
+    // `controls scrub` is documented as leaving the radio untouched: it drives
+    // every settable control AT ITS CURRENT VALUE and watches the wire, so the
+    // question is "does this intent reach a register", not "does the radio
+    // obey". That contract has exactly two ways to break, and both are silent —
+    // the scrub reports the row LINKED either way, because the frame did reach
+    // the wire. The radio is simply left somewhere else afterwards.
+    {
+        radio.clearCivLog();
+        const QVariantMap res = backend.controlScrub(QString());
+        QTest::qWait(200);
+        const auto& sent = radio.civCommands();
+
+        check(!res.contains(QStringLiteral("error")), "the scrub runs on a live session");
+
+        // 1. THE MIRROR MUST HOLD THE RADIO'S VALUE, NOT OUR DEFAULT.
+        //
+        // The scrub re-asserts from the backend's "last intent per control"
+        // mirrors, and those were written only by the SETTERS — so on a session
+        // where the operator had touched nothing, they still held their
+        // construction defaults. The fake radio runs RF gain at 100 %; a scrub
+        // reading a default mirror would have driven it to 0 and handed the
+        // operator a deaf receiver, then called the row LINKED.
+        auto rfGain = std::find_if(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kLevel && f.hasSub && f.sub == level::kRf;
+        });
+        check(rfGain != sent.end(), "the scrub drives RF gain");
+        if (rfGain != sent.end()) {
+            const auto raw = decodeLevel(rfGain->data);
+            check(raw.has_value() && *raw >= 250,
+                  "and re-asserts the RADIO's 100%, not the mirror's construction "
+                  "default of 0 — which would have deafened the receiver and "
+                  "reported the row LINKED");
+        }
+        auto af = std::find_if(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kLevel && f.hasSub && f.sub == level::kAf;
+        });
+        check(af != sent.end(), "the scrub drives AF gain");
+        if (af != sent.end()) {
+            const auto raw = decodeLevel(af->data);
+            check(raw.has_value() && std::abs(*raw - 128) <= 2,
+                  "at the radio's own ~50%, adopted through the ordinary decode "
+                  "path rather than invented here");
+        }
+
+        // 2. A VALUE NOBODY ESTABLISHED IS NOT A CURRENT VALUE.
+        //
+        // The fake IC-705 deliberately does not answer the attenuator read —
+        // one lost datagram on the lossy link this backend exists for looks
+        // exactly the same. Re-asserting an unestablished mirror sends
+        // "attenuator OFF" to an operator who may have it engaged. NOT-TESTED
+        // is the honest third outcome, and the scrub already has that state;
+        // this is the nr/nb/anf/notch sentinel rule, generalised.
+        const bool touchedAtten = std::any_of(sent.begin(), sent.end(),
+                                              [](const CivFrame& f) {
+            return f.cmd == cmd::kAttenuator;
+        });
+        check(!touchedAtten,
+              "a control the radio never reported is NOT driven — re-asserting an "
+              "unestablished mirror would switch the operator's attenuator off");
+
+        QString attenStatus;
+        for (const QVariant& row : res.value(QStringLiteral("rows")).toList()) {
+            const QVariantMap m = row.toMap();
+            if (m.value(QStringLiteral("id")).toString() == QLatin1String("atten"))
+                attenStatus = m.value(QStringLiteral("status")).toString();
+        }
+        check(attenStatus == QLatin1String("NOT-TESTED"),
+              "and it is REPORTED as NOT-TESTED rather than LINKED, so the check "
+              "does not claim coverage it does not have");
+
+        // 3. PTT, the ATU and power-off are never scrubbed (Principle VI).
+        const bool keyed = std::any_of(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kControl && f.hasSub
+                && (f.sub == control::kPtt || f.sub == control::kTuner);
+        });
+        check(!keyed, "and the scrub never touches PTT or the antenna tuner");
+    }
+
+    // ---- a refused mode correction must SURVIVE the caller ------------------
+    //
+    // SAM has no IC-705 equivalent, so the backend refuses it and re-asserts
+    // what the radio is actually in — otherwise the mode indicator reads SAM
+    // over an AM demodulator. The correction has to be QUEUED: SliceModel calls
+    // us from modeChangeRequested and emits modeChanged(requestedMode) on the
+    // line after that signal returns, so a direct emit here is applied and then
+    // announced away, leaving the indicator lying exactly as it did before.
+    {
+        int corrections = 0;
+        QString correctedMode;
+        auto conn = QObject::connect(&backend, &IRadioBackend::sliceChanged, &app,
+                                     [&](int, const SliceDelta& d) {
+            if (d.mode) { ++corrections; correctedMode = *d.mode; }
+        });
+        backend.setSliceMode(0, QStringLiteral("SAM"));
+        check(corrections == 0,
+              "a refused mode emits NOTHING synchronously — a direct emit is "
+              "overwritten by the caller's own modeChanged on the next line");
+        QTest::qWait(50);
+        check(corrections == 1 && !correctedMode.isEmpty(),
+              "and the correction arrives on the next event-loop turn, naming the "
+              "mode the radio is really in");
+        QObject::disconnect(conn);
     }
 
     // ---- health -----------------------------------------------------------

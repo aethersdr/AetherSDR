@@ -195,9 +195,70 @@ static void testModes()
     check(modeToNeutral(CivMode::Usb, true) == "DIGU", "reverse DIGU");
     check(modeToNeutral(CivMode::Dv, false).empty(), "D-STAR has no neutral mode");
 
-    check(filterForWidthHz(3000) == 1, "3.0 kHz selects FIL1");
-    check(filterForWidthHz(2400) == 2, "2.4 kHz selects FIL2");
-    check(filterForWidthHz(500) == 3, "500 Hz selects FIL3");
+    // THE LADDER IS PER MODE. FIL1 is 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in
+    // AM and 15 kHz in FM, so snapping every mode against the SSB thresholds —
+    // which this used to do — put every AM width on FIL1 and every CW width on
+    // FIL3. Three buttons, one filter, in both directions.
+    check(filterForWidthHz("USB", 3000) == 1, "SSB 3.0 kHz selects FIL1");
+    check(filterForWidthHz("USB", 2400) == 2, "SSB 2.4 kHz selects FIL2");
+    check(filterForWidthHz("USB", 1800) == 3, "SSB 1.8 kHz selects FIL3");
+
+    check(filterForWidthHz("CW", 1200) == 1, "CW 1.2 kHz selects FIL1");
+    check(filterForWidthHz("CW", 500) == 2, "CW 500 Hz selects FIL2");
+    check(filterForWidthHz("CW", 250) == 3, "CW 250 Hz selects FIL3");
+    // The regression in one line: under the old SSB thresholds every one of
+    // these was FIL3, because they are all below 2100.
+    check(filterForWidthHz("CW", 1200) != filterForWidthHz("CW", 250),
+          "and CW widths do not all collapse onto one slot");
+
+    check(filterForWidthHz("AM", 9000) == 1, "AM 9 kHz selects FIL1");
+    check(filterForWidthHz("AM", 6000) == 2, "AM 6 kHz selects FIL2");
+    check(filterForWidthHz("AM", 3000) == 3, "AM 3 kHz selects FIL3");
+    check(filterForWidthHz("AM", 9000) != filterForWidthHz("AM", 3000),
+          "and AM widths do not all collapse onto one slot");
+
+    check(filterForWidthHz("FM", 15000) == 1, "FM 15 kHz selects FIL1");
+    check(filterForWidthHz("FM", 7000) == 3, "FM 7 kHz selects FIL3");
+
+    // SAM is AM's ladder. It used to fall through to SSB, so a broadcast
+    // station in synchronous AM was received through a 2.4 kHz filter.
+    check(filterWidthsForMode("SAM") == filterWidthsForMode("AM"),
+          "SAM takes AM's filter ladder, not SSB's");
+
+    // NARROWEST FIRST, deliberately the REVERSE of the radio's FIL numbering
+    // (FIL1 is the widest slot). Listing it in FIL order put 3.0k/2.4k/1.8k on
+    // screen, reading wide-to-narrow while every other filter row in the app
+    // runs narrow-to-wide — the buttons looked reversed because they were.
+    check((filterWidthsForMode("USB") == std::vector<int>{1800, 2400, 3000}),
+          "the published SSB ladder is narrow-to-wide, matching the rest of the UI");
+    check((filterWidthsForMode("AM") == std::vector<int>{3000, 6000, 9000}),
+          "and so is AM's");
+    // The ORDER of the published list must not change which slot a width picks.
+    check(filterForWidthHz("USB", 3000) == 1 && filterForWidthHz("USB", 1800) == 3,
+          "and the FIL mapping is unaffected by the display order");
+    // WFM has ONE filter; publishing it three times would give the operator
+    // three identical buttons, two of which read as broken.
+    check(filterWidthsForMode("WFM").size() == 1, "WFM publishes its single filter once");
+
+    // A sideband passband sits off the carrier and carries its sideband in the
+    // sign; AM and its relatives straddle it.
+    {
+        const auto [lo, hi] = passbandForModeAndFilter("USB", 2);
+        check(lo == 300 && hi == 2700, "USB FIL2 is +300..+2700");
+    }
+    {
+        const auto [lo, hi] = passbandForModeAndFilter("LSB", 2);
+        check(lo == -2700 && hi == -300, "LSB FIL2 mirrors it");
+    }
+    {
+        const auto [lo, hi] = passbandForModeAndFilter("AM", 2);
+        check(lo == -3000 && hi == 3000, "AM FIL2 straddles the carrier at 6 kHz wide");
+    }
+    {
+        // The reported bug, as a number: SAM used to come out at -1500..1500.
+        const auto [lo, hi] = passbandForModeAndFilter("SAM", 2);
+        check(hi - lo == 6000, "SAM FIL2 is 6 kHz wide, not the 3 kHz SSB fallback");
+    }
 }
 
 static void testCommands()
