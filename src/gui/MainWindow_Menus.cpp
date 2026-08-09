@@ -49,8 +49,6 @@
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
-#include "gui/MiniPanWidget.h"
-#include "core/MiniPanSettings.h"
 
 #include <QActionGroup>
 #include <QColor>
@@ -979,57 +977,6 @@ void MainWindow::buildMenuBar()
     connect(m_minimalModeAction, &QAction::toggled, this, [this](bool on) {
         toggleMinimalMode(on);
     });
-
-    // Mini-Pan — detachable K4-style narrow scope. A single long-lived window;
-    // toggling off (or its close button) hides it, preserving geometry/state.
-    auto* miniPanAct = viewMenu->addAction(tr("Mini-Pan"));
-    miniPanAct->setCheckable(true);
-    miniPanAct->setToolTip(
-        tr("A small ±5/±10 kHz scope centered on the active VFO, in its own\n"
-           "floating window — usable alongside contest logging software and\n"
-           "when the main panadapter is hidden in Minimal Mode."));
-    connect(miniPanAct, &QAction::toggled, this, [this, miniPanAct](bool on) {
-        if (on) {
-            if (!m_miniPan) {
-                m_miniPan = new MiniPanWidget(this);
-                m_miniPan->setFramelessMode(
-                    AppSettings::instance().value("FramelessWindow", "True")
-                        .toString() == "True");
-                // X-button close: uncheck the menu AND free the radio-side pan.
-                connect(m_miniPan, &MiniPanWidget::closedByUser, this,
-                        [this, miniPanAct]() {
-                    m_miniPanFeedWanted = false;
-                    { QSignalBlocker b(miniPanAct); miniPanAct->setChecked(false); }
-                    teardownMiniPanFeed();
-                });
-                // Debounced resize → re-push the pan's xpixels from scope width.
-                connect(m_miniPan, &MiniPanWidget::scopeResized, this,
-                        [this]() { pushMiniPanXpixels(); });
-                // ±5/±10 kHz change → re-push the radio pan bandwidth.
-                connect(m_miniPan, &MiniPanWidget::spanChanged, this,
-                        [this](double kHz) {
-                    m_radioModel.setMiniPanBandwidth(kHz / 1000.0);
-                });
-            }
-            m_miniPanFeedWanted = true;               // intent survives (dis)connect
-            m_miniPan->show();
-            m_miniPan->raise();
-            m_miniPan->activateWindow();
-            refreshMiniPanFollow();                   // centre on the active VFO
-            ensureMiniPanFeed();                      // create the pan if connected
-            MiniPanSettings::setOpen(true);
-        } else {
-            m_miniPanFeedWanted = false;
-            teardownMiniPanFeed();                    // free the radio-side pan
-            if (m_miniPan) m_miniPan->hide();
-            MiniPanSettings::setOpen(false);
-        }
-    });
-    // Reopen at startup if it was open last session (deferred so initial layout
-    // settles first — matches the applet-panel-float restore).
-    if (MiniPanSettings::open()) {
-        QTimer::singleShot(0, this, [miniPanAct]() { miniPanAct->setChecked(true); });
-    }
 
     auto* framelessAct = viewMenu->addAction("Frameless Window");
     framelessAct->setCheckable(true);

@@ -11,11 +11,7 @@ namespace AetherSDR {
 
 namespace {
 const QString kMiniPanKey = QStringLiteral("MiniPan");
-
-const QString kGeometryField    = QStringLiteral("geometryBase64");
-const QString kOpenField        = QStringLiteral("open");
-const QString kSpanField        = QStringLiteral("spanKHz");
-const QString kAlwaysOnTopField = QStringLiteral("alwaysOnTop");
+const QString kSpanField  = QStringLiteral("spanKHz");
 } // namespace
 
 QJsonObject MiniPanSettings::readObj()
@@ -36,30 +32,6 @@ void MiniPanSettings::write(const QJsonObject& o)
     s.save();
 }
 
-QByteArray MiniPanSettings::geometryBase64()
-{
-    return readObj().value(kGeometryField).toString().toUtf8();
-}
-
-void MiniPanSettings::setGeometryBase64(const QByteArray& base64)
-{
-    QJsonObject o = readObj();
-    o[kGeometryField] = QString::fromUtf8(base64);
-    write(o);
-}
-
-bool MiniPanSettings::open()
-{
-    return readObj().value(kOpenField).toBool(false);
-}
-
-void MiniPanSettings::setOpen(bool on)
-{
-    QJsonObject o = readObj();
-    o[kOpenField] = on;
-    write(o);
-}
-
 double MiniPanSettings::spanKHz()
 {
     const double v = readObj().value(kSpanField).toDouble(kSpanNarrowKHz);
@@ -74,18 +46,6 @@ void MiniPanSettings::setSpanKHz(double kHz)
     QJsonObject o = readObj();
     o[kSpanField] = (std::isfinite(kHz) && kHz == kSpanWideKHz) ? kSpanWideKHz
                                                                 : kSpanNarrowKHz;
-    write(o);
-}
-
-bool MiniPanSettings::alwaysOnTop()
-{
-    return readObj().value(kAlwaysOnTopField).toBool(false);
-}
-
-void MiniPanSettings::setAlwaysOnTop(bool on)
-{
-    QJsonObject o = readObj();
-    o[kAlwaysOnTopField] = on;
     write(o);
 }
 

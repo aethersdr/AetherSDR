@@ -32,7 +32,7 @@
 #include "CopyAssistController.h"
 #endif
 #include "PanadapterStack.h"
-#include "gui/MiniPanWidget.h"
+#include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
@@ -7337,25 +7337,34 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 }
 
 // ── Mini-pan glue ─────────────────────────────────────────────────────────────
-// The mini-pan window is pure presentation; MainWindow owns its dedicated radio
+// The mini-pan applet is pure presentation; MainWindow owns its dedicated radio
 // pan, feeds its scope, and drives its centre/passband from the followed VFO.
+// The applet's own show/hide drives m_miniPanFeedWanted, so the radio-side pan
+// exists exactly while the applet is on screen — no pan slot held by a hidden
+// tile, and no View-menu entry point (unreachable in Minimal Mode). (#4562)
+
+MiniPanApplet* MainWindow::miniPanApplet() const
+{
+    return m_appletPanel ? m_appletPanel->miniPanApplet() : nullptr;
+}
 
 void MainWindow::ensureMiniPanFeed()
 {
-    // The single create chokepoint — safe to call from the menu toggle, from a
-    // connect event, and when the main pan appears, in any order. Idempotent.
-    if (!m_miniPanFeedWanted || !m_miniPan) return;
+    // The single create chokepoint — safe to call when the applet is shown, from
+    // a connect event, and when the main pan appears, in any order. Idempotent.
+    auto* applet = miniPanApplet();
+    if (!m_miniPanFeedWanted || !applet) return;
     if (!m_radioModel.isConnected()) return;         // create once connected
     if (!m_radioModel.miniPanId().isEmpty()) return; // already have the pan
     if (m_radioModel.miniPanCreating()) return;      // a create is already in flight
     // Wait for the main pan: the mini-pan must be created AFTER it (the model's
     // maxPanadapters and the mini-pan ownership-claim both rely on the main pan
-    // already existing). On an open-at-startup restore, connect fires before the
-    // main pan is added — panadapterAdded re-invokes us once it is. (#minipan)
+    // already existing). On a restore-visible-at-startup, connect fires before
+    // the main pan is added — panadapterAdded re-invokes us once it is.
     if (m_radioModel.panadapters().isEmpty()) return;
     const double c = activeSlice() ? activeSlice()->frequency() : 0.0;
-    m_radioModel.createMiniPan(c, m_miniPan->spanMhz());   // ±5/±10 kHz per the window
-    // Bind the readout/passband now so the window is live even if the create is
+    m_radioModel.createMiniPan(c, applet->spanMhz());   // ±5/±10 kHz per the applet
+    // Bind the readout/passband now so the applet is live even if the create is
     // still in flight. The xpixels push is NOT done here — createMiniPan is
     // async and miniPanId() is still empty, so it would no-op; miniPanReady
     // does it (for a fresh create and for a reconnect reclaim alike).
@@ -7366,12 +7375,13 @@ void MainWindow::refreshMiniPanFollow()
 {
     disconnect(m_miniPanFreqConn);
     disconnect(m_miniPanFiltConn);
-    if (!m_miniPan || !m_miniPanFeedWanted) return;
+    auto* applet = miniPanApplet();
+    if (!applet || !m_miniPanFeedWanted) return;
 
     auto* s = activeSlice();
     if (!s) {
-        m_miniPan->setCenterMhz(0.0);
-        m_miniPan->setPassbandHz(0, 0);
+        applet->setCenterMhz(0.0);
+        applet->setPassbandHz(0, 0);
         return;
     }
     // Live centre: update the readout immediately (it is local and free), but
@@ -7380,21 +7390,22 @@ void MainWindow::refreshMiniPanFollow()
     // §5). The readout stays instant; only the pan re-centre coalesces.
     m_miniPanFreqConn = connect(s, &SliceModel::frequencyChanged, this,
                                 [this](double mhz) {
-        if (m_miniPan) m_miniPan->setCenterMhz(mhz);
+        if (auto* a = miniPanApplet()) a->setCenterMhz(mhz);
         m_miniPanPendingCenterMhz = mhz;
         m_miniPanCenterTimer.start();
     });
     m_miniPanFiltConn = connect(s, &SliceModel::filterChanged, this,
                                 [this]() {
-        if (auto* cur = activeSlice(); cur && m_miniPan)
-            m_miniPan->setPassbandHz(cur->filterLow(), cur->filterHigh());
+        if (auto* cur = activeSlice(); cur)
+            if (auto* a = miniPanApplet())
+                a->setPassbandHz(cur->filterLow(), cur->filterHigh());
     });
-    m_miniPan->setCenterMhz(s->frequency());
+    applet->setCenterMhz(s->frequency());
     // Re-binding is a discrete event (slice switch, pan (re)create), not a
     // tuning stream — push it straight through rather than through the timer.
     m_miniPanCenterTimer.stop();
     m_radioModel.setMiniPanCenter(s->frequency());
-    m_miniPan->setPassbandHz(s->filterLow(), s->filterHigh());
+    applet->setPassbandHz(s->filterLow(), s->filterHigh());
 }
 
 void MainWindow::teardownMiniPanFeed()
@@ -7403,26 +7414,27 @@ void MainWindow::teardownMiniPanFeed()
     disconnect(m_miniPanFiltConn);
     m_miniPanCenterTimer.stop();   // don't re-centre a pan we just removed
     m_radioModel.removeMiniPan();
-    if (m_miniPan) m_miniPan->scope()->updateSpectrum(QVector<float>{});
+    if (auto* a = miniPanApplet())
+        a->scope()->updateSpectrum(QVector<float>{});
 }
 
 void MainWindow::pushMiniPanXpixels()
 {
-    if (!m_miniPan) return;
-    auto* sc = m_miniPan->scope();
-    if (sc)
+    auto* applet = miniPanApplet();
+    if (!applet) return;
+    if (auto* sc = applet->scope())
         m_radioModel.setMiniPanPixels(sc->width(), sc->height());
 }
 
 void MainWindow::miniPanCreateFailed()
 {
-    if (!m_miniPan) return;
-    // The radio refused the pan (no free slot, or a create error). Close the
-    // window through its own X-button path — that unchecks the View-menu item,
-    // tears the feed down and persists MiniPan open=false. Leaving it up would
-    // park a permanently blank scope on screen that reopens blank next launch
-    // (plan §7: "leave the View toggle unchecked").
-    m_miniPan->close();
+    // The radio refused the pan (no free slot, or a create error). Hide the
+    // applet rather than leaving a permanently blank scope docked in the panel
+    // (plan §7 — the toggle must not stay on). Hiding routes through the
+    // applet's own hideEvent, so the tray button, the container's visibility and
+    // m_miniPanFeedWanted all end up consistent without a second code path.
+    if (auto* a = miniPanApplet())
+        a->hide();
     statusBar()->showMessage(
         tr("No panadapter slot free for the Mini-Pan"), 4000);
 }
@@ -8237,8 +8249,6 @@ void MainWindow::setFramelessWindow(bool on)
         m_appletPanel->containerManager()->setFramelessMode(on);
     if (m_connPanel)
         m_connPanel->setFramelessMode(on);
-    if (m_miniPan)
-        m_miniPan->setFramelessMode(on);
     if (m_titleBar)
         m_titleBar->setChildDialogsFramelessMode(on);
     // RadioSetupDialog frameless propagation flows through the

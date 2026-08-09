@@ -50,7 +50,7 @@
 #include "DaxIqApplet.h"
 #include "TciApplet.h"
 #include "PanadapterStack.h"
-#include "gui/MiniPanWidget.h"
+#include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
 #include "models/PanadapterModel.h"
 #include "SMeterWidget.h"
@@ -1235,12 +1235,13 @@ void MainWindow::wirePanLifecycle()
     // ── Mini-pan — feed its scope from the dedicated narrow pan's stream ──
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady, this,
             [this](quint32 streamId, const QVector<float>& bins, qint64) {
-        if (!m_miniPan || !m_miniPanFeedWanted) return;
+        auto* applet = miniPanApplet();
+        if (!applet || !m_miniPanFeedWanted) return;
         const QString id = m_radioModel.miniPanId();
         if (id.isEmpty()) return;
         if (auto* pan = m_radioModel.panadapter(id);
             pan && pan->panStreamId() == streamId) {
-            m_miniPan->scope()->updateSpectrum(bins);
+            applet->scope()->updateSpectrum(bins);
         }
     });
     // Create/recreate the mini-pan's pan whenever we (re)connect and it's wanted —
@@ -1258,18 +1259,19 @@ void MainWindow::wirePanLifecycle()
     // both no-op at create time because miniPanId() is still empty then.
     connect(&m_radioModel, &RadioModel::miniPanReady, this,
             [this](const QString&) {
-        if (!m_miniPan || !m_miniPanFeedWanted) return;
+        auto* applet = miniPanApplet();
+        if (!applet || !m_miniPanFeedWanted) return;
         refreshMiniPanFollow();
         pushMiniPanXpixels();
         // The span the scope draws must be the span the RADIO settled on, not
         // the one we asked for: it clamps to min_bw/max_bw server-side, and a
         // scope drawing its own labels over a clamped span is wrong by the
         // clamp ratio. Re-push the selection, then follow the echo. (#4562)
-        m_radioModel.setMiniPanBandwidth(m_miniPan->spanMhz());
+        m_radioModel.setMiniPanBandwidth(applet->spanMhz());
         if (auto* pan = m_radioModel.panadapter(m_radioModel.miniPanId())) {
             connect(pan, &PanadapterModel::infoChanged, this, [this, pan]() {
-                if (m_miniPan && pan->bandwidthMhz() > 0.0)
-                    m_miniPan->scope()->setSpanKHz(pan->bandwidthMhz() * 1000.0);
+                if (auto* a = miniPanApplet(); a && pan->bandwidthMhz() > 0.0)
+                    a->scope()->setSpanKHz(pan->bandwidthMhz() * 1000.0);
             }, Qt::UniqueConnection);
         }
     });
@@ -1281,11 +1283,12 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panadapterReclaimed, this,
             [this](PanadapterModel*) { ensureMiniPanFeed(); });
     // The radio refused the pan (slot limit, or a create error). Do not leave a
-    // checked menu item and a dead window that reopens dead next launch — close
-    // it and clear the persisted open-state (plan §7).
+    // permanently blank scope docked in the panel with its tray button lit
+    // (plan §7).
     connect(&m_radioModel, &RadioModel::panadapterLimitReached, this,
             [this](int, const QString&) {
-        if (m_miniPanFeedWanted && m_miniPan && m_radioModel.miniPanId().isEmpty())
+        if (m_miniPanFeedWanted && miniPanApplet()
+            && m_radioModel.miniPanId().isEmpty())
             miniPanCreateFailed();
     });
     // Debounced re-centre of the dedicated pan while tuning (plan §5).
@@ -1294,6 +1297,33 @@ void MainWindow::wirePanLifecycle()
     connect(&m_miniPanCenterTimer, &QTimer::timeout, this, [this]() {
         m_radioModel.setMiniPanCenter(m_miniPanPendingCenterMhz);
     });
+
+    // ── Mini-pan applet intents ──────────────────────────────────────────────
+    // The applet's visibility IS the feature's on/off switch: shown by the tray
+    // button (the only entry point that exists in Minimal Mode), by a float, or
+    // by a layout apply; hidden by the tray button or the container's close.
+    // Binding the radio-side pan to it means a hidden mini-pan never holds a pan
+    // slot, and there is no second persisted "open" flag to drift out of sync
+    // with the container framework's own visibility state. (#4562)
+    if (auto* mini = miniPanApplet()) {
+        connect(mini, &MiniPanApplet::feedWanted, this, [this](bool wanted) {
+            if (wanted == m_miniPanFeedWanted) return;
+            m_miniPanFeedWanted = wanted;
+            if (wanted) {
+                refreshMiniPanFollow();   // centre on the active VFO
+                ensureMiniPanFeed();      // create the pan if connected
+            } else {
+                teardownMiniPanFeed();    // free the radio-side pan
+            }
+        });
+        // Debounced resize → re-push the pan's xpixels from the scope width.
+        connect(mini, &MiniPanApplet::scopeResized, this,
+                [this]() { pushMiniPanXpixels(); });
+        // ±5/±10 kHz change → re-push the radio pan bandwidth.
+        connect(mini, &MiniPanApplet::spanChanged, this, [this](double kHz) {
+            m_radioModel.setMiniPanBandwidth(kHz / 1000.0);
+        });
+    }
 
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
             this, [this, profileLoadFrameReady](quint32 streamId,
@@ -1490,7 +1520,7 @@ void MainWindow::wirePanLifecycle()
         // itself never reaches here (it does not emit panadapterAdded).
         ensureMiniPanFeed();
 
-        // The mini-pan's dedicated pan renders in its own floating MiniPanWidget,
+        // The mini-pan's dedicated pan renders in the Mini-Pan applet,
         // never the main stack. Building a main-stack applet for it would also
         // auto-create a slice on it and make it the active pan — exactly what the
         // mini-pan must avoid. Leave it out of the stack entirely.

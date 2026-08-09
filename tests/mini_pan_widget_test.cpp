@@ -1,17 +1,21 @@
-// Offscreen smoke tests for the mini-pan window shell (PR1).
+// Offscreen tests for the mini-pan applet.
 //
-// Exercises MiniPanScope's render API and MiniPanWidget's window behavior:
-// independent top-level type, close==hide, geometry + open-state persistence,
-// and frameless-chrome toggle. No radio feed (that is PR2) — the scope is fed
-// synthetic bins only to prove updateSpectrum() paints without crashing.
+// Covers MiniPanScope's render API, MiniPanApplet's feed lifecycle (show/hide
+// is what creates and frees the radio-side pan, so it has to be exact), and the
+// Constitution Principle V single-object span persistence.
+//
+// What is deliberately NOT here: geometry, float/dock, always-on-top and
+// close==hide. Those are ContainerWidget / FloatingContainerWindow behaviour
+// now, covered by container_widget_test / container_manager_test — the mini-pan
+// no longer hand-rolls any of it.
 //
 // Run:  QT_QPA_PLATFORM=offscreen ./build/mini_pan_widget_test
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/MiniPanSettings.h"
+#include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
-#include "gui/MiniPanWidget.h"
 
 #include <QApplication>
 #include <QJsonDocument>
@@ -58,70 +62,78 @@ void testScopeApi()
     report("scope renders empty feed without crash", true);
 }
 
-void testWindowBasics()
+void testAppletBasics()
 {
-    MiniPanWidget w;
-    report("objectName addressable", w.objectName() == "miniPanWindow",
-           w.objectName().toStdString());
-    report("is a top-level window (Qt::Window)",
-           (w.windowFlags() & Qt::Window) == Qt::Window);
-    report("scope() present", w.scope() != nullptr);
-    report("WA_DeleteOnClose off (single instance)",
-           !w.testAttribute(Qt::WA_DeleteOnClose));
+    MiniPanApplet a;
+    report("objectName addressable", a.objectName() == "miniPanApplet",
+           a.objectName().toStdString());
+    report("scope() present", a.scope() != nullptr);
+    report("fits the 260px applet panel", a.sizeHint().width() == 260,
+           std::to_string(a.sizeHint().width()));
 
-    auto* label = w.findChild<QLabel*>("miniPanFreq");
-    w.setCenterMhz(14.074);
+    // It must embed as an ordinary child — the container framework supplies the
+    // window when the operator floats it. Constructing it under a parent is how
+    // AppletPanel uses it; a widget that forced Qt::Window on itself (as the
+    // MiniPanWidget it replaced did) would stay a detached top-level here.
+    QWidget host;
+    auto* child = new MiniPanApplet(&host);
+    report("embeds as a child widget, not a detached window",
+           !child->isWindow() && child->parentWidget() == &host);
+
+    auto* label = a.findChild<QLabel*>("miniPanFreq");
+    a.setCenterMhz(14.074);
     report("frequency readout follows setCenterMhz",
            label && label->text() == "14.074000",
            label ? label->text().toStdString() : "no label");
+    a.setCenterMhz(0.0);
+    report("no active slice → placeholder readout",
+           label && label->text() == QString::fromUtf8("—.———"));
 }
 
-void testCloseIsHide()
+// The applet's visibility IS the feature's on/off switch — MainWindow creates
+// and frees the dedicated radio pan on this signal, so a stuck or duplicated
+// edge means either a leaked pan slot or a dead scope.
+void testFeedLifecycle()
 {
-    MiniPanWidget w;
-    w.show();
-    QSignalSpy spy(&w, &MiniPanWidget::closedByUser);
-    const bool closed = w.close();          // returns true if it accepted close
-    report("close() kept the instance alive (not deleted)", true);
-    report("close() hid the window instead of closing",
-           !w.isVisible() && !closed);
-    report("closedByUser emitted once", spy.count() == 1,
+    MiniPanApplet a;
+    QSignalSpy spy(&a, &MiniPanApplet::feedWanted);
+
+    a.show();
+    report("show() requests the feed", spy.count() == 1
+               && spy.at(0).at(0).toBool() == true,
            std::to_string(spy.count()));
-    report("open state persisted false on close", !MiniPanSettings::open());
-}
 
-void testGeometryPersistence()
-{
-    AppSettings::instance().remove(kMiniPanRootKey);
-    {
-        MiniPanWidget w;
-        w.show();
-        w.setGeometry(120, 90, 360, 220);
-        w.close();                          // flushes geometry to settings
-    }
-    const QByteArray saved =
-        QByteArray::fromBase64(MiniPanSettings::geometryBase64());
-    report("geometry persisted on close", !saved.isEmpty());
+    a.hide();
+    report("hide() releases the feed", spy.count() == 2
+               && spy.at(1).at(0).toBool() == false,
+           std::to_string(spy.count()));
 
-    MiniPanWidget w2;
-    w2.show();                              // restores on first show
-    report("restored geometry round-trips size",
-           w2.size() == QSize(360, 220),
-           (std::to_string(w2.width()) + "x" + std::to_string(w2.height())));
+    a.show();
+    report("re-show requests it again", spy.count() == 3
+               && spy.at(2).at(0).toBool() == true,
+           std::to_string(spy.count()));
 }
 
 void testSpanPersistence()
 {
     MiniPanSettings::setSpanKHz(MiniPanSettings::kSpanWideKHz);
     {
-        MiniPanWidget w;
+        MiniPanApplet a;
         report("restores ±10 kHz span (20 kHz) from settings",
-               qFuzzyCompare(w.spanMhz(), 0.020),
-               std::to_string(w.spanMhz()));
-        w.setSpanKHz(MiniPanSettings::kSpanNarrowKHz);
+               qFuzzyCompare(a.spanMhz(), 0.020),
+               std::to_string(a.spanMhz()));
+        a.setSpanKHz(MiniPanSettings::kSpanNarrowKHz);
         report("spanMhz() reflects setSpanKHz(10)",
-               qFuzzyCompare(w.spanMhz(), 0.010));
+               qFuzzyCompare(a.spanMhz(), 0.010));
     }
+    // setSpanKHz() is the MainWindow-driven path (radio echo) — it must NOT
+    // persist or re-emit, or the radio's own clamp would overwrite the
+    // operator's choice in the store.
+    report("radio-driven setSpanKHz did not overwrite the stored span",
+           qFuzzyCompare(MiniPanSettings::spanKHz(),
+                         MiniPanSettings::kSpanWideKHz),
+           std::to_string(MiniPanSettings::spanKHz()));
+
     // A hand-edited out-of-range span is rejected by the settings validator,
     // so it can never reach "display pan set … bandwidth=".
     {
@@ -131,36 +143,28 @@ void testSpanPersistence()
             kMiniPanRootKey,
             QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
         AppSettings::instance().save();
-        MiniPanWidget w;
+        MiniPanApplet a;
         report("invalid persisted span falls back to ±5 kHz",
-               qFuzzyCompare(w.spanMhz(), 0.010));
+               qFuzzyCompare(a.spanMhz(), 0.010));
     }
     AppSettings::instance().remove(kMiniPanRootKey);
 }
 
-// Principle V: the whole feature config is ONE nested object under ONE key —
-// a regression here means someone re-introduced flat keys.
+// Principle V: the feature config is ONE nested object under ONE key — a
+// regression here means someone re-introduced flat keys. The window-era keys
+// are listed explicitly because they existed on this branch and must not
+// come back; geometry/open/always-on-top now belong to the container framework.
 void testConfigIsOneObject()
 {
     AppSettings::instance().remove(kMiniPanRootKey);
     MiniPanSettings::setSpanKHz(MiniPanSettings::kSpanWideKHz);
-    MiniPanSettings::setAlwaysOnTop(true);
-    MiniPanSettings::setOpen(true);
-    MiniPanSettings::setGeometryBase64("Zm9v");
 
     const QJsonObject o = QJsonDocument::fromJson(
         AppSettings::instance().value(kMiniPanRootKey, QString{})
             .toString().toUtf8()).object();
-    report("all four fields live in the one MiniPan object",
-           o.contains("spanKHz") && o.contains("alwaysOnTop")
-               && o.contains("open") && o.contains("geometryBase64"),
+    report("span lives in the one MiniPan object", o.contains("spanKHz"),
            QJsonDocument(o).toJson(QJsonDocument::Compact).toStdString());
-    report("round-trips through the object",
-           MiniPanSettings::alwaysOnTop() && MiniPanSettings::open()
-               && qFuzzyCompare(MiniPanSettings::spanKHz(),
-                                MiniPanSettings::kSpanWideKHz));
 
-    // No legacy flat key is written any more.
     for (const char* legacy : {"MiniPanGeometry", "MiniPanOpen",
                                "MiniPanSpanKHz", "MiniPanAlwaysOnTop"}) {
         report((std::string("no flat key ") + legacy).c_str(),
@@ -168,17 +172,6 @@ void testConfigIsOneObject()
                    .toString().isEmpty());
     }
     AppSettings::instance().remove(kMiniPanRootKey);
-}
-
-void testFramelessToggle()
-{
-    MiniPanWidget w;
-    w.setFramelessMode(true);
-    report("frameless flag set when on",
-           (w.windowFlags() & Qt::FramelessWindowHint) != Qt::WindowFlags());
-    w.setFramelessMode(false);
-    report("frameless flag cleared when off",
-           (w.windowFlags() & Qt::FramelessWindowHint) == Qt::WindowFlags());
 }
 
 } // namespace
@@ -189,12 +182,10 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
 
     testScopeApi();
-    testWindowBasics();
-    testCloseIsHide();
-    testGeometryPersistence();
+    testAppletBasics();
+    testFeedLifecycle();
     testSpanPersistence();
     testConfigIsOneObject();
-    testFramelessToggle();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);
     return g_failed ? 1 : 0;

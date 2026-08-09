@@ -860,7 +860,7 @@ set(GUI_SOURCES
     src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
     src/gui/MiniPanScope.cpp
-    src/gui/MiniPanWidget.cpp
+    src/gui/MiniPanApplet.cpp
     src/gui/RangeSlider.cpp
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
@@ -5198,12 +5198,12 @@ add_test(NAME container_widget_test COMMAND container_widget_test)
 set_tests_properties(container_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Mini-pan window shell (PR1): scope render API + independent-window behavior,
-# close==hide, geometry/open-state persistence, frameless toggle.  Offscreen.
+# Mini-pan applet: scope render API, feed lifecycle driven by show/hide, and
+# the Principle V single-object span persistence.  Offscreen.
 add_executable(mini_pan_widget_test
     tests/mini_pan_widget_test.cpp
     src/gui/MiniPanScope.cpp
-    src/gui/MiniPanWidget.cpp
+    src/gui/MiniPanApplet.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     ${AETHER_SETTINGS_SOURCES}

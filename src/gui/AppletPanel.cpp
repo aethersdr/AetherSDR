@@ -18,6 +18,7 @@
 #include "PhoneApplet.h"
 #include "EqApplet.h"
 #include "AetherClockApplet.h"
+#include "MiniPanApplet.h"
 #include "WaveApplet.h"
 #include "ClientEqApplet.h"
 #include "ClientCompApplet.h"
@@ -775,6 +776,14 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_aetherClockApplet = new AetherClockApplet;
     m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
+
+    // Mini-Pan — the K4-style narrow scope. Deliberately an applet and NOT a
+    // View-menu item: the menu bar does not exist in Minimal Mode, which is
+    // exactly when the operator wants this. The tray button below is the only
+    // entry point reachable there. Off by default (it costs a radio pan slot);
+    // float it out via the container title bar to keep it over a logging app.
+    m_miniPanApplet = new MiniPanApplet;
+    m_appletOrder.append(makeEntry("MPAN", "Mini-Pan", m_miniPanApplet, false, m_drawer, m_drawerLayout, "MINI"));
 
     // CEQ and CMP intentionally have no toggle button in the tray —
     // their visibility follows DSP bypass state, driven externally
