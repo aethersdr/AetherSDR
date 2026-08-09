@@ -53,6 +53,34 @@ launch, and it had to be specially re-adopted across every reconnect (#4566).
 Every defect found in that PR traced back to owning a radio object. A view that
 owns nothing cannot have any of them.
 
+### Appearance follows the main pan
+
+The mini-pan is a magnifier on the main trace, so it renders with the main
+pan's Display settings rather than its own:
+
+| Display control | How it reaches the mini-pan |
+|---|---|
+| FFT AVG | radio-side pan property (`display pan set … average=`) — already in the bins |
+| FFT FPS | radio-side (`requestPanDisplayRates`) — frames arrive at that rate |
+| FFT Line (colour, width) | mirrored from the source pan's `SpectrumWidget` |
+| FFT Fill (colour, alpha) | mirrored from the source pan's `SpectrumWidget` |
+| FFT Floor | the floor slider moves the pan's dBm window, so it arrives with the scale |
+| FFT Scale (dBm strip) | mirrored from `PanadapterModel::minDbm()/maxDbm()` |
+
+The first two need no code at all — re-slicing the same pan's frames carries
+them. The rest are pulled per frame in `feedMiniPanFromPanFrame` rather than
+wired signal-by-signal: the reads are plain members, the scope's setters are
+change-gated, and pulling cannot drift out of sync or miss a control nobody
+remembered to connect.
+
+The dBm window comes from the radio-authoritative `PanadapterModel`, not the
+widget's copy (Principle II). The scope does **no** local auto-scaling — a
+second opinion on the noise floor would disagree with the main pan about how
+tall a signal is and would ignore the operator's FFT Floor entirely.
+
+Only the chrome the main pan has no equivalent of — the passband band, the
+centre hairline, the ±span labels, the grid — stays on theme tokens.
+
 ---
 
 ## 2. It is an applet, not a View-menu window

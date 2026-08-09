@@ -7409,10 +7409,30 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
 
     const double span = applet->spanMhz();
     // Floor for samples outside the pan: the frame's own minimum, so the gap
-    // sits at the bottom of the auto-scaled view instead of inventing a level.
+    // sits at the bottom of the view instead of inventing a level.
     const float floorDbm = *std::min_element(bins.cbegin(), bins.cend());
 
-    applet->scope()->updateSpectrum(
+    // Mirror the source pan's display settings so the mini-pan reads as a
+    // magnifier on the main trace rather than a differently-styled second
+    // opinion. Pulled per frame rather than wired signal-by-signal: the values
+    // are plain member reads, the setters are change-gated, and pulling cannot
+    // drift out of sync or miss a control we forgot to connect.
+    //
+    // FFT AVG and FFT FPS need nothing here — both are radio-side pan
+    // properties ("display pan set … average=", requestPanDisplayRates), so
+    // re-slicing this pan's frames already carries them.
+    auto* scope = applet->scope();
+    // The dBm window covers the operator's FFT Scale (the dBm strip) AND the
+    // FFT Floor slider — the floor control works by moving this window, and the
+    // radio echoes the result back into the model. Principle II: take it from
+    // the radio-authoritative model, not from the widget's own copy.
+    scope->setDbmRange(pan->minDbm(), pan->maxDbm());
+    if (auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr) {
+        scope->setTraceAppearance(sw->fftLineColor(), sw->fftFillColor(),
+                                  sw->fftFillAlpha(), sw->fftLineWidth());
+    }
+
+    scope->updateSpectrum(
         AetherSDR::MiniPan::resliceWindow(
             bins,
             pan->centerMhz() - panBw / 2.0, panBw,

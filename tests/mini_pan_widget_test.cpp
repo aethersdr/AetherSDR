@@ -22,6 +22,7 @@
 #include <QApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QImage>
 #include <QLabel>
 #include <QSignalSpy>
 #include <QVector>
@@ -177,6 +178,60 @@ void testConfigIsOneObject()
     AppSettings::instance().remove(kMiniPanRootKey);
 }
 
+// The scope must render in the SOURCE pan's dBm window, not one it derives
+// itself: a local auto-scale would disagree with the main pan about how tall a
+// signal is, and would ignore the operator's FFT Floor slider entirely.
+void testDbmWindowIsAuthoritative()
+{
+    MiniPanScope scope;
+    scope.resize(300, 160);
+    scope.setSpanKHz(10.0);
+
+    // Levels INSIDE both windows — a signal pinned at the top or bottom clamps
+    // identically under either range and would prove nothing.
+    QVector<float> bins(64, -100.0f);
+    bins[32] = -60.0f;
+    scope.setDbmRange(-120.0f, -40.0f);   // -100 sits 75% down
+    scope.updateSpectrum(bins);
+    const QImage wide = scope.grab().toImage();
+
+    // Same frame, half the window: -100 now sits 50% down. The trace must move,
+    // proving the range drives the vertical mapping, not the bin values.
+    scope.setDbmRange(-120.0f, -80.0f);
+    scope.updateSpectrum(bins);
+    const QImage narrow = scope.grab().toImage();
+
+    report("dBm range drives the vertical scale", wide != narrow);
+
+    // Feeding the same frame twice with the same range must be stable — a
+    // local auto-scale would keep drifting the floor between identical frames.
+    scope.updateSpectrum(bins);
+    report("identical frames render identically (no local auto-scale drift)",
+           scope.grab().toImage() == narrow);
+}
+
+// The trace mirrors the main pan's FFT Line / FFT Fill; the themed chrome does
+// not. An invalid colour means "nothing mirrored yet" and must fall back.
+void testTraceAppearanceMirrors()
+{
+    MiniPanScope scope;
+    scope.resize(300, 160);
+    scope.setDbmRange(-120.0f, -40.0f);
+    QVector<float> bins(64, -100.0f);
+    bins[32] = -50.0f;
+    scope.updateSpectrum(bins);
+    const QImage themed = scope.grab().toImage();
+
+    scope.setTraceAppearance(QColor(255, 0, 0), QColor(255, 0, 0), 0.7f, 2.0f);
+    const QImage mirrored = scope.grab().toImage();
+    report("mirrored FFT Line/Fill colours change the trace",
+           themed != mirrored);
+
+    scope.setTraceAppearance(QColor(), QColor(), 0.7f, 1.2f);
+    report("invalid colours fall back to the theme token",
+           scope.grab().toImage() == themed);
+}
+
 // The whole mini-pan data path: cut a narrow window out of a main-pan frame.
 // No radio object is created, so this mapping is the feature.
 void testReslice()
@@ -242,6 +297,8 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
 
     testScopeApi();
+    testDbmWindowIsAuthoritative();
+    testTraceAppearanceMirrors();
     testReslice();
     testAppletBasics();
     testFeedLifecycle();
