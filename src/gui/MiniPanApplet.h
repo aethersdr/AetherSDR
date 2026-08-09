@@ -18,9 +18,13 @@
 //
 // The mini-pan is a VIEW, not a radio object: it creates no panadapter and no
 // slice. MainWindow re-slices the FFT frames the active slice's pan is already
-// streaming down to this window's +/-5 or +/-10 kHz, and drives centre/passband
+// streaming down to this window's +/-5 or +/-10 kHz, and drives carrier/passband
 // from the followed VFO through the setters below. So the applet costs a radio
 // nothing to open — no pan slot, nothing to leak, no phantom slice.
+//
+// The window is centred on the PASSBAND centre rather than the carrier, so on
+// SSB the received signal sits in the middle instead of hard against one edge.
+// MainWindow and MiniPanScope share MiniPan::passbandCenterOffsetHz for that.
 //
 // This widget holds NO radio/slice references (so it links into a light
 // offscreen test). It reports two intents back up: feedWanted() (shown/hidden)
@@ -43,9 +47,10 @@ public:
     QSize sizeHint() const override;
 
     // Driven by MainWindow from the followed VFO slice.
-    void setCenterMhz(double mhz);        // 0 → placeholder readout
+    void setVfoMhz(double mhz);           // carrier: readout + hairline. 0 → placeholder
     void setSpanKHz(double kHz);
-    void setPassbandHz(int lowHz, int highHz);
+    void setPassbandHz(int lowHz, int highHz);   // Hz from the carrier; its centre
+                                                 // is what the view centres on
 
     MiniPanScope* scope() const { return m_scope; }
     double spanKHz() const { return m_spanKHz; }
@@ -68,7 +73,7 @@ private:
 
     MiniPanScope* m_scope{nullptr};
 
-    double  m_centerMhz{0.0};
+    double  m_vfoMhz{0.0};
     double  m_spanKHz{10.0};   // ±5 kHz default (10 kHz total span)
 };
 

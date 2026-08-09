@@ -89,11 +89,15 @@ void testAppletBasics()
     // that row was dead space above an already-short trace.
     report("no separate readout label above the scope",
            a.findChild<QLabel*>("miniPanFreq") == nullptr);
-    a.setCenterMhz(14.074);
-    report("frequency readout follows setCenterMhz",
+    // The readout shows the CARRIER, not the passband centre the view is built
+    // around — the operator's dial frequency is the number they need, and it is
+    // the frequency the hairline marks.
+    a.setVfoMhz(14.074);
+    a.setPassbandHz(100, 2800);          // USB: view centre is 1.45 kHz higher
+    report("frequency readout follows the carrier, not the view centre",
            a.scope()->readoutText() == "14.074000",
            a.scope()->readoutText().toStdString());
-    a.setCenterMhz(0.0);
+    a.setVfoMhz(0.0);
     report("no active slice → placeholder readout",
            a.scope()->readoutText() == QString::fromUtf8("—.———"));
 
@@ -286,6 +290,67 @@ void testHeatMapAndGrid()
     scope.setShowGrid(true);
 }
 
+// Which frequency ends up in the middle. On SSB the carrier sits at the edge of
+// the filter, so centring on it spent half of an already narrow view on the
+// sideband the filter throws away — the window centres on the passband instead.
+// MainWindow cuts the re-slice around this offset and MiniPanScope places the
+// hairline and the wash with it, so a regression here desynchronises the trace
+// from the chrome as well as mis-centring both.
+void testPassbandCentreOffset()
+{
+    using AetherSDR::MiniPan::passbandCenterOffsetHz;
+
+    report("USB 100..2800 centres 1450 Hz above the carrier",
+           qFuzzyCompare(passbandCenterOffsetHz(100, 2800), 1450.0),
+           std::to_string(passbandCenterOffsetHz(100, 2800)));
+    report("LSB -2800..-100 centres 1450 Hz below the carrier",
+           qFuzzyCompare(passbandCenterOffsetHz(-2800, -100), -1450.0),
+           std::to_string(passbandCenterOffsetHz(-2800, -100)));
+
+    // A filter that straddles the carrier (AM/FM, and CW filters centred on the
+    // pitch) is unaffected — the view stays exactly where it was before.
+    report("symmetric passband still centres on the carrier",
+           qFuzzyIsNull(passbandCenterOffsetHz(-3000, 3000)));
+    // No slice, or filter edges not known yet: fall back to the carrier rather
+    // than inventing an offset from nonsense.
+    report("hidden passband falls back to the carrier",
+           qFuzzyIsNull(passbandCenterOffsetHz(0, 0))
+               && qFuzzyIsNull(passbandCenterOffsetHz(2800, 100)));
+}
+
+// The render side of the same rule: the wash must land symmetrically about the
+// middle of the widget, and the hairline must leave the middle to stay on the
+// carrier. Both are drawn from carrier-relative offsets, so an unshifted one
+// would put the band off-centre or the hairline on the wrong frequency.
+void testPassbandCentredRender()
+{
+    MiniPanScope scope;
+    scope.resize(300, 160);
+    scope.setDbmRange(-120.0f, -40.0f);
+    scope.setSpanKHz(10.0);              // ±5 kHz across 300 px → 30 px per kHz
+    scope.setShowGrid(false);            // keep the field plain to sample against
+    scope.setPassbandHz(100, 2800);      // USB: 2.7 kHz wide, centred 1450 Hz up
+    const QImage usb = scope.grab().toImage();
+
+    // Band half-width 1350 Hz → x 109.5..190.5 about the centre at 150. Sample
+    // well inside and well outside, clear of both edges and of the carrier
+    // hairline (1450 Hz below centre → x ≈ 106).
+    const int y = scope.height() - 5;    // below the top label row
+    const QRgb field = usb.pixel(30, y);
+    report("passband wash is centred on the widget",
+           usb.pixel(130, y) != field && usb.pixel(130, y) == usb.pixel(170, y));
+    report("outside the passband is plain field",
+           usb.pixel(70, y) == field && usb.pixel(230, y) == field);
+
+    // Same filter WIDTH, straddling the carrier: the wash is identical geometry,
+    // so the only thing that can differ is where the hairline is — which is the
+    // assertion. If the hairline were still pinned to the middle these would
+    // compare equal.
+    scope.setPassbandHz(-1350, 1350);
+    report("carrier hairline moves off centre on a sideband filter",
+           scope.grab().toImage() != usb);
+}
+
 // The whole mini-pan data path: cut a narrow window out of a main-pan frame.
 // No radio object is created, so this mapping is the feature.
 void testReslice()
@@ -354,6 +419,8 @@ int main(int argc, char** argv)
     testDbmWindowIsAuthoritative();
     testTraceAppearanceMirrors();
     testHeatMapAndGrid();
+    testPassbandCentreOffset();
+    testPassbandCentredRender();
     testReslice();
     testAppletBasics();
     testFeedLifecycle();

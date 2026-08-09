@@ -1,7 +1,7 @@
 #pragma once
 
 // Mini-pan re-slice: take one main-pan FFT frame and cut a narrow window out of
-// it around the followed VFO.
+// it around the followed VFO's passband (see passbandCenterOffsetHz below).
 //
 // This is the whole mini-pan data path. There is no dedicated radio pan and no
 // slice — the applet is a VIEW of bins the main pan is already streaming, so
@@ -59,5 +59,28 @@ inline QVector<float> resliceWindow(const QVector<float>& bins,
 // Output width for the re-sliced trace. Enough to render smoothly at any applet
 // width; a wide main pan simply repeats its few in-range bins across it.
 inline constexpr int kResliceOutputBins = 512;
+
+// Offset of the passband centre from the VFO carrier, in Hz, given the slice's
+// filter edges (Hz offsets from the carrier, e.g. USB 100..2800 → +1450).
+//
+// The mini-pan centres its window HERE, not on the carrier. On a single-sideband
+// mode the carrier sits at the edge of the passband, so a carrier-centred view
+// pushed the whole received signal into one half of an already narrow scope and
+// wasted the other half on the sideband that is filtered out. Centring on the
+// passband puts what the operator is actually listening to in the middle, which
+// is what a tuning aid is for. Symmetric modes (AM/FM, and CW filters that
+// straddle the carrier) give 0 and are unaffected.
+//
+// A hidden passband (hi <= lo — no slice, or filter edges not yet known) falls
+// back to 0, i.e. the carrier, rather than inventing an offset.
+//
+// This lives here, next to the re-slice, because MainWindow uses it to pick the
+// window it cuts and MiniPanScope uses it to place the carrier hairline and the
+// passband wash. Two copies of this arithmetic would mean the trace and the
+// chrome disagreeing about which frequency is in the middle.
+inline double passbandCenterOffsetHz(int lowHz, int highHz)
+{
+    return highHz > lowHz ? (lowHz + highHz) / 2.0 : 0.0;
+}
 
 } // namespace AetherSDR::MiniPan

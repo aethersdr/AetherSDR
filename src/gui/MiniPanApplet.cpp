@@ -20,7 +20,7 @@ MiniPanApplet::MiniPanApplet(QWidget* parent)
     setObjectName("miniPanApplet");   // addressable for automation/tests
     setAccessibleName(tr("Mini-pan"));
     setAccessibleDescription(
-        tr("Narrow-span scope centred on the active VFO. "
+        tr("Narrow-span scope centred on the active VFO's receive passband. "
            "Right-click to choose ±5 or ±10 kHz."));
 
     // The scope fills the tile. The frequency readout is drawn INSIDE it, on
@@ -49,10 +49,10 @@ QSize MiniPanApplet::sizeHint() const
     return {260, 150};
 }
 
-void MiniPanApplet::setCenterMhz(double mhz)
+void MiniPanApplet::setVfoMhz(double mhz)
 {
-    m_centerMhz = mhz;
-    if (m_scope) m_scope->setCenterMhz(mhz);
+    m_vfoMhz = mhz;
+    if (m_scope) m_scope->setVfoMhz(mhz);
 }
 
 void MiniPanApplet::setSpanKHz(double kHz)

@@ -3,10 +3,16 @@
 // MiniPanScope — the slim K4-style spectrum trace at the heart of the mini-pan.
 //
 // A deliberately bare tuning-aid render: dark field, a translucent passband band,
-// a centre hairline, a filled FFT trace, and ±span corner labels. NO overlay menu,
+// a carrier hairline, a filled FFT trace, and ±span corner labels. NO overlay menu,
 // dBm strip, waterfall or time axis — everything SpectrumWidget carries that a
 // tuning aid does not want (which is why the mini-pan does not reuse it; see
 // docs/minipan-implementation.md §3).
+//
+// The view is centred on the PASSBAND centre, not on the carrier — so on SSB the
+// received audio sits in the middle of the scope and the hairline marking the
+// carrier sits off to one side (MiniPan::passbandCenterOffsetHz). Everything the
+// paint draws is an offset from that centre, which is also the centre of the
+// window MainWindow re-slices, so the trace and the chrome agree.
 //
 // Appearance MIRRORS the main pan rather than inventing its own: MainWindow
 // pushes the source pan's FFT line/fill colours and its dBm window every frame,
@@ -35,14 +41,21 @@ public:
     void setDbmRange(float minDbm, float maxDbm);
     // Total visible span in kHz (e.g. 10.0 for a ±5 kHz view).
     void setSpanKHz(double kHz);
-    // Centre (VFO) frequency for the readout drawn in the top row, between the
-    // ±span labels. 0 renders the placeholder. Drawn here rather than in a
-    // QLabel above the scope so the trace gets the full height of the tile.
-    void setCenterMhz(double mhz);
+    // VFO (carrier) frequency: the readout drawn in the top row between the
+    // ±span labels, and the frequency the hairline marks. 0 renders the
+    // placeholder. Drawn here rather than in a QLabel above the scope so the
+    // trace gets the full height of the tile.
+    //
+    // NOT the centre of the view — that is the passband centre, which this and
+    // setPassbandHz() together determine.
+    void setVfoMhz(double mhz);
     // The readout exactly as drawn — for tests and automation, which have no
     // QLabel to read now.
     QString readoutText() const;
-    // Passband band as Hz offsets from centre (e.g. USB 100..2800). lo>=hi hides it.
+    // Passband as Hz offsets from the CARRIER (e.g. USB 100..2800), exactly as
+    // SliceModel reports them. lo>=hi hides the band and falls the view back to
+    // carrier-centred. Its midpoint is what the view centres on, so the band
+    // itself always renders symmetrically about the middle of the widget.
     void setPassbandHz(int lowHz, int highHz);
     // Mirror the source pan's FFT trace appearance (FFT Line / FFT Fill).
     // An invalid line or fill colour falls back to the theme's spectrum token,
@@ -60,7 +73,7 @@ protected:
 
 private:
     QVector<float> m_bins;
-    double m_centerMhz{0.0};
+    double m_vfoMhz{0.0};
     float  m_minDbm{-130.0f};
     float  m_maxDbm{-40.0f};
     double m_spanKHz{10.0};

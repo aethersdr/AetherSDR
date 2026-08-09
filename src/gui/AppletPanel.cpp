@@ -793,8 +793,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // Mini-Pan — the K4-style narrow scope. Deliberately an applet and NOT a
     // View-menu item: the menu bar does not exist in Minimal Mode, which is
     // exactly when the operator wants this. The tray button below is the only
-    // entry point reachable there. Off by default (it costs a radio pan slot);
-    // float it out via the container title bar to keep it over a logging app.
+    // entry point reachable there. Off by default because it is a specialist
+    // view, not because it is expensive — it creates nothing on the radio, it
+    // just re-slices the main pan's frames. Float it out via the container
+    // title bar to keep it over a logging app.
     m_miniPanApplet = new MiniPanApplet;
     m_appletOrder.append(makeEntry("MPAN", "Mini-Pan", m_miniPanApplet, false, m_drawer, m_drawerLayout, "MINI"));
 

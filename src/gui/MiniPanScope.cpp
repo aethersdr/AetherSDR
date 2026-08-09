@@ -1,6 +1,7 @@
 #include "gui/MiniPanScope.h"
 
 #include "gui/FftHeatMap.h"
+#include "gui/MiniPanReslice.h"   // passbandCenterOffsetHz — shared with the re-slice
 #include "gui/SpectrumGrid.h"
 
 #include "core/ThemeManager.h"
@@ -33,8 +34,8 @@ MiniPanScope::MiniPanScope(QWidget* parent)
     setMinimumHeight(90);
     setAccessibleName(tr("Mini-pan spectrum scope"));
     setAccessibleDescription(
-        tr("Narrow spectrum trace centred on the active VFO, with the "
-           "receive passband shaded."));
+        tr("Narrow spectrum trace centred on the active VFO's receive passband, "
+           "which is shaded, with a hairline on the carrier frequency."));
 
     // The render paints through raw QPainter keyed off ThemeManager::color(),
     // so applyStyleSheet's reverse-map never sees these. Declare them so an
@@ -107,17 +108,17 @@ void MiniPanScope::setSpanKHz(double kHz)
     update();
 }
 
-void MiniPanScope::setCenterMhz(double mhz)
+void MiniPanScope::setVfoMhz(double mhz)
 {
-    if (qFuzzyCompare(m_centerMhz, mhz)) return;
-    m_centerMhz = mhz;
+    if (qFuzzyCompare(m_vfoMhz, mhz)) return;
+    m_vfoMhz = mhz;
     update();
 }
 
 QString MiniPanScope::readoutText() const
 {
-    return m_centerMhz > 0.0 ? QString::number(m_centerMhz, 'f', 6)
-                             : QStringLiteral("—.———");
+    return m_vfoMhz > 0.0 ? QString::number(m_vfoMhz, 'f', 6)
+                          : QStringLiteral("—.———");
 }
 
 void MiniPanScope::setPassbandHz(int lowHz, int highHz)
@@ -141,16 +142,28 @@ void MiniPanScope::paintEvent(QPaintEvent*)
     p.fillRect(rect(), tm.color(this, QStringLiteral("color.background.spectrum")));
 
     const double halfHz = m_spanKHz * 1000.0 / 2.0;   // e.g. 5000 Hz for ±5 kHz
-    const auto xOf = [&](double offHz) {
-        return w * 0.5 + (offHz / halfHz) * (w * 0.5);
+
+    // The view is centred on the PASSBAND centre, so a carrier-relative offset
+    // (which is what SliceModel reports, and what MainWindow re-slices around)
+    // has to be shifted by the carrier's own position before it can be drawn.
+    // Same helper MainWindow picks the re-slice window with — one definition, so
+    // the trace and this chrome cannot end up centred on different frequencies.
+    const double carrierOffHz =
+        -MiniPan::passbandCenterOffsetHz(m_pbLoHz, m_pbHiHz);
+    const auto xOf = [&](double offHzFromCentre) {
+        return w * 0.5 + (offHzFromCentre / halfHz) * (w * 0.5);
+    };
+    const auto xOfCarrierRel = [&](double offHzFromCarrier) {
+        return xOf(offHzFromCarrier + carrierOffHz);
     };
 
     // Passband band (translucent, brighter than the field). color.slice.a is
     // the same token the main panadapter shades slice A's passband with, so
-    // the two views read as one system.
+    // the two views read as one system. It lands symmetrically about the middle
+    // by construction — that is what centring on the passband means.
     if (m_pbHiHz > m_pbLoHz) {
-        const double x0 = std::clamp(xOf(m_pbLoHz), 0.0, w);
-        const double x1 = std::clamp(xOf(m_pbHiHz), 0.0, w);
+        const double x0 = std::clamp(xOfCarrierRel(m_pbLoHz), 0.0, w);
+        const double x1 = std::clamp(xOfCarrierRel(m_pbHiHz), 0.0, w);
         p.fillRect(QRectF(x0, 0, x1 - x0, h),
                    tinted("color.slice.a", kPassbandAlpha));
     }
@@ -162,7 +175,7 @@ void MiniPanScope::paintEvent(QPaintEvent*)
     //
     // No VERTICAL rules: the main pan's frequency spacing is chosen for its own
     // span (tens of kHz and up), so inside a 10 kHz window it yields one line or
-    // none. The centre hairline already marks the only frequency of interest.
+    // none. The carrier hairline already marks the only frequency of interest.
     if (m_showGrid) {
         const float range = m_maxDbm - m_minDbm;
         if (range > 0.0f) {
@@ -177,9 +190,18 @@ void MiniPanScope::paintEvent(QPaintEvent*)
         }
     }
 
-    // Centre hairline.
-    p.setPen(tinted("color.accent", kHairlineAlpha));
-    p.drawLine(QPointF(w * 0.5, 0), QPointF(w * 0.5, h));
+    // Carrier hairline — the VFO the readout above it shows. It sits dead centre
+    // only on a symmetric passband; on SSB it marks the sideband's edge, which is
+    // the point of centring on the passband instead.
+    //
+    // Skipped entirely when the carrier falls outside the span (a filter wider
+    // than the view can push it out): clamping it to the edge would plant the
+    // dial frequency on a frequency it is not on, and this is a tuning aid.
+    if (std::abs(carrierOffHz) <= halfHz) {
+        p.setPen(tinted("color.accent", kHairlineAlpha));
+        const double xc = xOf(carrierOffHz);
+        p.drawLine(QPointF(xc, 0), QPointF(xc, h));
+    }
 
     // FFT trace: filled polygon + bright line, in the source pan's own colours
     // and dBm window so the two views agree.

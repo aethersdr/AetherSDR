@@ -7673,7 +7673,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 // ── Mini-pan glue ─────────────────────────────────────────────────────────────
 // The mini-pan applet is pure presentation, and it is a VIEW — it creates no
 // radio objects at all. It re-slices the FFT bins of the pan the active slice
-// already lives on down to a +/-5 or +/-10 kHz window around that slice.
+// already lives on down to a +/-5 or +/-10 kHz window centred on that slice's
+// PASSBAND (MiniPan::passbandCenterOffsetHz — on SSB the carrier sits at the
+// edge of the filter, so centring on it wasted half the view).
 //
 // That is the whole architecture: no dedicated pan (no slot consumed, nothing
 // to leak on quit, no reconnect zombie, no active-pan hijack) and no slice
@@ -7695,7 +7697,7 @@ void MainWindow::refreshMiniPanFollow()
 
     auto* s = activeSlice();
     if (!s) {
-        applet->setCenterMhz(0.0);
+        applet->setVfoMhz(0.0);
         applet->setPassbandHz(0, 0);
         applet->scope()->updateSpectrum(QVector<float>{});
         return;
@@ -7705,9 +7707,13 @@ void MainWindow::refreshMiniPanFollow()
     // already streaming. Nothing is sent to the radio, so tuning needs no
     // debounce -- the old "display pan set ... center=" push is gone with the
     // dedicated pan.
+    //
+    // A filter change moves the VIEW as well as the shading, because the window
+    // is centred on the passband -- feedMiniPanFromPanFrame re-derives that from
+    // the same slice on the next frame, so the two cannot disagree.
     m_miniPanFreqConn = connect(s, &SliceModel::frequencyChanged, this,
                                 [this](double mhz) {
-        if (auto* a = miniPanApplet()) a->setCenterMhz(mhz);
+        if (auto* a = miniPanApplet()) a->setVfoMhz(mhz);
     });
     m_miniPanFiltConn = connect(s, &SliceModel::filterChanged, this,
                                 [this]() {
@@ -7715,7 +7721,7 @@ void MainWindow::refreshMiniPanFollow()
             if (auto* a = miniPanApplet())
                 a->setPassbandHz(cur->filterLow(), cur->filterHigh());
     });
-    applet->setCenterMhz(s->frequency());
+    applet->setVfoMhz(s->frequency());
     applet->setPassbandHz(s->filterLow(), s->filterHigh());
 }
 
@@ -7774,11 +7780,22 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
         scope->setDbmRange(pan->minDbm(), pan->maxDbm());
     }
 
+    // Centre the window on the PASSBAND centre, not the carrier: on SSB the
+    // carrier sits at the edge of the filter, so a carrier-centred cut spent
+    // half of an already narrow view on the rejected sideband. Re-derived from
+    // the slice here rather than read back off the applet, so the trace is cut
+    // from this frame's actual filter state; MiniPanScope places the hairline
+    // and the passband wash with the same helper.
+    const double centerMhz =
+        s->frequency()
+        + AetherSDR::MiniPan::passbandCenterOffsetHz(s->filterLow(),
+                                                     s->filterHigh()) / 1.0e6;
+
     scope->updateSpectrum(
         AetherSDR::MiniPan::resliceWindow(
             bins,
             pan->centerMhz() - panBw / 2.0, panBw,
-            s->frequency() - span / 2.0, span,
+            centerMhz - span / 2.0, span,
             AetherSDR::MiniPan::kResliceOutputBins, floorDbm));
 }
 

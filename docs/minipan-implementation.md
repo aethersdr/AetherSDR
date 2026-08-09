@@ -12,7 +12,7 @@ panadapter is hidden (Minimal Mode) or alongside contest-logging software.
 
 The mini-pan **creates nothing on the radio**. It re-slices the FFT frames the
 active slice's panadapter is already streaming down to a ±5 or ±10 kHz window
-around that slice.
+around that slice's passband.
 
 No dedicated panadapter, no slice. That is the whole architecture, and it is
 what makes the feature free to open: no pan slot consumed against
@@ -27,6 +27,34 @@ sub-range around the VFO into a fixed-width output, interpolating between
 source bins (so a narrow main pan upsamples smoothly rather than stair-stepping)
 and padding with the frame's own floor outside the pan's edges (so the
 frequency axis stays honest instead of smearing edge data across the gap).
+
+### It centres on the passband, not the carrier
+
+The window is centred on the middle of the receive filter —
+`MiniPan::passbandCenterOffsetHz(filterLow, filterHigh)` above the carrier.
+
+On a single-sideband mode the carrier sits at the *edge* of the passband (USB
+100..2800 Hz), so a carrier-centred view pushed everything the operator is
+listening to into one half of an already narrow scope and spent the other half
+on the sideband the filter throws away. Symmetric filters — AM, FM, and CW
+filters that straddle the carrier — give an offset of 0 and are unchanged.
+
+Two consumers share that one helper, which is why it lives next to the re-slice
+rather than in either of them:
+
+| Consumer | Uses it for |
+|---|---|
+| `MainWindow::feedMiniPanFromPanFrame` | the centre of the window it cuts out of the frame |
+| `MiniPanScope::paintEvent` | placing the passband wash and the carrier hairline |
+
+Two copies would let the trace and the chrome disagree about which frequency is
+in the middle.
+
+The hairline still marks the **carrier**, and the readout still shows it — so on
+SSB the hairline sits off to one side against the edge of the wash, exactly as
+it reads on the main pan. A filter wider than the span can push the carrier out
+of view; the hairline is then not drawn at all, rather than clamped to the edge
+where it would name a frequency it is not on.
 
 ### The trade: resolution follows the main pan
 
@@ -145,9 +173,12 @@ button, float, dock, layout apply — and MainWindow starts or stops consuming
 frames on it. A hidden applet costs nothing per frame, and because nothing
 radio-side is created or destroyed there is no state to get out of sync.
 
-Centre and passband come from the active slice (`frequencyChanged`,
-`filterChanged`), rebound on active-slice change. All of it is local: nothing is
-sent to the radio, so tuning needs no debounce.
+Carrier and passband come from the active slice (`frequencyChanged`,
+`filterChanged`), rebound on active-slice change. Because the view is centred on
+the passband, a filter change moves the window as well as the shading — the feed
+re-derives the centre from the same slice on the next frame, so the trace and the
+chrome cannot disagree. All of it is local: nothing is sent to the radio, so
+tuning needs no debounce.
 
 ---
 
@@ -174,6 +205,10 @@ Nothing the radio owns is persisted (Principle III).
   here would put a signal at a frequency it is not on), a window outside the
   pan reads as floor rather than clamped edge data, a straddling window pads
   the outside half, and degenerate inputs return empty;
+- the passband centring — the offset itself (SSB either way, symmetric filters
+  unchanged, hidden passband falls back to the carrier) and the render it drives
+  (the wash lands symmetric about the middle, the hairline leaves the middle to
+  stay on the carrier);
 - the scope render API against synthetic and empty frames;
 - the show/hide feed lifecycle, exact edges;
 - span persistence, including that the radio-echo path does not overwrite the
