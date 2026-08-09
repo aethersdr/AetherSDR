@@ -3896,6 +3896,26 @@ void RadioModel::removePanadapter(const QString& panId)
 
 // ── Mini-pan: dedicated narrow display-only pan ───────────────────────────────
 
+void RadioModel::flushDeferredPanAnnouncements()
+{
+    if (m_deferredPanAnnouncements.isEmpty()) return;
+    const QStringList ids = m_deferredPanAnnouncements;
+    m_deferredPanAnnouncements.clear();
+    for (const QString& id : ids) {
+        // The mini-pan is the one pan that stays unannounced — it is
+        // display-only and renders in its applet, never the main stack.
+        if (!m_miniPanId.isEmpty() && id == m_miniPanId) continue;
+        if (auto* pan = m_panadapters.value(id, nullptr)) {
+            qCDebug(lcProtocol) << "RadioModel: announcing deferred panadapter" << id;
+            emit panadapterAdded(pan);
+        }
+    }
+    // The active-pan chokepoint was blind while m_miniPanId was unknown, so the
+    // mini-pan could have taken the slot in that window. Hand it back now.
+    if (!m_miniPanId.isEmpty() && m_activePanId == m_miniPanId)
+        m_activePanId = firstActiveEligiblePan();
+}
+
 QString RadioModel::firstActiveEligiblePan() const
 {
     for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it)
@@ -3927,8 +3947,10 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
         return;
     }
     const int gen = ++m_miniPanGen;        // stamp this create attempt
-    m_miniPanPending = true;               // the next new pan is ours (claimed in
-                                           // ensureOwnedPanadapter before panadapterAdded)
+    // "a create of ours is in flight" — NOT a claim on any particular pan.
+    // While it is set, ensureOwnedPanadapter defers panadapterAdded for new
+    // pans; the reply below names the real id and flushes the rest. (#4562)
+    m_miniPanPending = true;
     qCDebug(lcProtocol) << "RadioModel::createMiniPan: center" << centerMhz
                         << "span" << spanMhz << "gen" << gen;
     sendCmd("display panafall create x=100 y=100",
@@ -3937,7 +3959,8 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
             qCWarning(lcProtocol) << "RadioModel::createMiniPan: create failed, code"
                                   << Qt::hex << code << "body:" << body;
             if (gen == m_miniPanGen) {
-                m_miniPanPending = false;  // disarm — else the next user pan is hijacked
+                m_miniPanPending = false;
+                flushDeferredPanAnnouncements();   // nothing is ours — announce all
                 emit panadapterLimitReached(maxPanadapters(), m_model);
             }
             return;
@@ -3952,33 +3975,21 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
                 if (!wfId.isEmpty())
                     sendCommand(QStringLiteral("display panafall remove ") + wfId);
             }
+            flushDeferredPanAnnouncements();   // none of them were ours
             return;   // gen change already reset m_miniPanPending (remove/disconnect)
         }
         if (panId.isEmpty()) {
             qCWarning(lcProtocol) << "RadioModel::createMiniPan: no pan id in" << body;
-            m_miniPanPending = false;      // disarm — else the next user pan is hijacked
+            m_miniPanPending = false;
+            flushDeferredPanAnnouncements();   // we cannot tell which is ours
             return;
         }
-        // The pending flag is a positional claim ("the next new pan is ours"),
-        // so any OTHER pan that appeared inside the create round trip (the user
-        // hitting Add Panadapter, a profile apply) can have taken it. The reply
-        // is authoritative: hand the mis-claimed pan back to the UI — otherwise
-        // it stays applet-less and slice-less forever — and adopt the real id.
-        if (!m_miniPanId.isEmpty() && m_miniPanId != panId) {
-            const QString misclaimed = m_miniPanId;
-            qCWarning(lcProtocol) << "RadioModel::createMiniPan: pending claim took"
-                                  << misclaimed << "but the radio gave us" << panId
-                                  << "— releasing the mis-claimed pan";
-            m_miniPanId = panId;           // set BEFORE announcing, so the guards see it
-            if (auto* wrong = m_panadapters.value(misclaimed, nullptr)) {
-                if (m_activePanId.isEmpty())
-                    setActivePanId(misclaimed);
-                emit panadapterAdded(wrong);
-            }
-        }
         m_miniPanId = panId;               // authoritative id from the create reply
-        m_miniPanPending = false;          // claim resolved (status-first path already did)
+        m_miniPanPending = false;
         ensureOwnedPanadapter(panId);      // owned — but setActivePanId refuses it
+        // Now that the real id is known, release every pan that arrived during
+        // the round trip. Only ours stays unannounced.
+        flushDeferredPanAnnouncements();
         // Configure synchronously, in dependency order, while the id is known.
         // These used to run behind a 200 ms timer, which fired AFTER the
         // miniPanReady consumers had already pushed the live VFO centre and the
@@ -3997,7 +4008,11 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
 void RadioModel::removeMiniPan()
 {
     ++m_miniPanGen;                        // invalidate any in-flight create reply
-    m_miniPanPending = false;              // ...and any unclaimed pending create
+    m_miniPanPending = false;
+    // Toggled off mid-create: nothing arriving in that window was ours after
+    // all, so release the deferred announcements now rather than stranding them
+    // on a reply that may never come.
+    flushDeferredPanAnnouncements();
     if (m_miniPanId.isEmpty()) return;
     const QString id = m_miniPanId;
     m_miniPanId.clear();                   // clear first — active-pan guard tracks it
@@ -4975,6 +4990,7 @@ void RadioModel::stageSessionModelsForReconnect()
     m_miniPanId.clear();
     ++m_miniPanGen;        // invalidate any in-flight createMiniPan reply
     m_miniPanPending = false;
+    m_deferredPanAnnouncements.clear();   // those models are being staged away
 
     m_ownedSliceIds.clear();
     if (!m_rawSliceModeLists.isEmpty()) {
@@ -5067,6 +5083,7 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     m_staleMiniPanId.clear();
     ++m_miniPanGen;        // invalidate any in-flight createMiniPan reply
     m_miniPanPending = false;
+    m_deferredPanAnnouncements.clear();   // those models are being destroyed
     for (auto it = livePans.cbegin(); it != livePans.cend(); ++it) {
         if (!it.value()) continue;
         emit panadapterRemoved(it.key());
@@ -7677,17 +7694,6 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
         }
     } else {
         pan = new PanadapterModel(normalizedPanId, this);
-        // Claim the mini-pan id the instant its pan is created — synchronously,
-        // before panadapterAdded is emitted below — so that emit (and every
-        // active-pan/applet guard) sees it. The create reply that names the id
-        // can otherwise race behind the pan's own status message. Require a pan
-        // to already exist (map non-empty): the mini-pan is always created after
-        // the main pan, so the FIRST pan can never mis-claim the pending flag,
-        // even if createMiniPan set it before the main pan appeared. (#minipan)
-        if (m_miniPanPending && !m_panadapters.isEmpty()) {
-            m_miniPanId = normalizedPanId;
-            m_miniPanPending = false;
-        }
     }
     pan->setClientHandle(QString::number(clientHandle(), 16));
     m_panadapters[normalizedPanId] = pan;
@@ -7757,6 +7763,19 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
             emit miniPanReady(normalizedPanId);
     } else if (reclaimed) {
         emit panadapterReclaimed(pan);
+    } else if (m_miniPanPending) {
+        // A "display panafall create" of ours is in flight and the radio has
+        // not yet told us which id is ours. DEFER the announcement instead of
+        // guessing positionally: this used to claim "the next new pan is the
+        // mini-pan", which silently stole any unrelated pan that arrived in the
+        // round trip — a leftover pan in the connect replay, another client's,
+        // a profile load — and left it applet-less. The create reply names the
+        // real id; flushDeferredPanAnnouncements() then announces everything
+        // except it. (#4562)
+        qCDebug(lcProtocol) << "RadioModel: deferring panadapterAdded for"
+                            << normalizedPanId << "— mini-pan create in flight";
+        if (!m_deferredPanAnnouncements.contains(normalizedPanId))
+            m_deferredPanAnnouncements.append(normalizedPanId);
     } else {
         emit panadapterAdded(pan);
     }

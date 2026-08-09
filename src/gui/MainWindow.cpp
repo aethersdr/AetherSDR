@@ -3541,6 +3541,16 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
     }
 
+    // Same event-loop reasoning as the sockets above, and the same failure mode
+    // as the orphaned D-STAR helper: the mini-pan's dedicated pan is radio-side
+    // state that only teardownMiniPanFeed() frees, and that runs on the applet
+    // being hidden — never on quit. Without this the pan SURVIVES on the radio,
+    // and the next session's connect replay hands it back as an ordinary client
+    // pan that gets a main-stack applet. Quitting with the mini-pan open grew
+    // the pan count by one every launch and burned a pan slot each time.
+    // Sent here while the connection is still open. (#4562)
+    m_radioModel.removeMiniPan();
+
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());

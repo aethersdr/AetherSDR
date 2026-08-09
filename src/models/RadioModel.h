@@ -1238,6 +1238,9 @@ private:
     QString firstActiveEligiblePan() const;
     // Requested mini-pan span clamped to the pan's radio-reported limits.
     double clampMiniPanSpan(double spanMhz) const;
+    // Announce every pan whose panadapterAdded was held back while a mini-pan
+    // create was in flight — all except the mini-pan itself.
+    void flushDeferredPanAnnouncements();
     void updateStreamFilters();
     void handleGpsStatus(const QString& rawBody);
     void emitOtherClientsChanged();
@@ -1511,7 +1514,12 @@ private:
     // die: pan ids collide across radios, so it must never reach another one.
     QString m_staleMiniPanId;
     int     m_miniPanGen{0};   // invalidates in-flight createMiniPan on remove
-    bool    m_miniPanPending{false};  // next newly-created pan is the mini-pan
+    bool    m_miniPanPending{false};  // a "display panafall create" of ours is in flight
+    // Pans that appeared while that create was in flight, held back until the
+    // reply says which id is ours. Guessing positionally instead stole whatever
+    // pan happened to arrive first — a leftover pan in the connect replay,
+    // another client's, a profile load — and left it applet-less. (#4562)
+    QStringList m_deferredPanAnnouncements;
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
     QMap<QString, PanadapterModel*> m_stalePanadapters;  // previous session, kept alive for UI reuse
     // #3977: eviction bookkeeping, all cleared on disconnect (handles are
