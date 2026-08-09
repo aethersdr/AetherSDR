@@ -79,10 +79,10 @@ is a supported family yet, and FlexRadio remains the supported target:
 - **Hermes-Lite 2** — **experimental**. Four independent receivers, SSB voice,
   CW/RTTY decoding, AX.25 packet, band switching with hardware filters, manual
   notch filters, host frequency calibration and per-radio state restore.
-- **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, verified
-  on the IC-705 (receive, scope, transmit, FT8) and the IC-9700 (receive and
-  scope; transmit unverified). Only the IC-705 and IC-7300MK2 are verified
-  against their own CI-V guides — an unrecognised model gets no scope and no
+- **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
+  on the IC-705 (receive, scope, transmit, FT8). Only the IC-705 and IC-7300MK2
+  are verified against their own CI-V guides — an unrecognised model gets no
+  scope and no transmit rather than optimistic defaults.
   transmit rather than optimistic defaults.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
