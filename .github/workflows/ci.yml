@@ -202,6 +202,21 @@ jobs:
       - name: Test HL2 AM/SAM DC blocker
         run: ctest --test-dir build -R "hl2_am_dcblock_test" --output-on-failure
 
+      # ulanzi_mapping_migration_test joins the gate for the same reason as the
+      # steps above, and #4834 is what made it earn the slot. Guarding wheel
+      # dispatch on UlanziDialMappings::knownWheelActions() turned an
+      # unrecognised action id from a harmless fall-through into an early
+      # return, so an action added to the else-if chain and forgotten in the
+      # registry is now a control that silently does nothing — no log, no
+      # crash, nothing any other assertion in the tree can see. The test parses
+      # the chain out of the source and asserts the two are the same set, which
+      # is only worth having if it runs before the merge rather than on the
+      # weekly sanitizers job. Pure string and settings work against a target
+      # the Build step already linked: no widgets, no event loop, no wall
+      # clock, milliseconds to run.
+      - name: Test Ulanzi dial mappings and wheel-action registry drift
+        run: ctest --test-dir build -R "ulanzi_mapping_migration_test" --output-on-failure
+
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted

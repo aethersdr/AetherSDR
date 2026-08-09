@@ -172,6 +172,11 @@ const QStringList& UlanziDialMappings::knownWheelActions()
 {
     // Mirrors the else-if chain in MainWindow::applyFlexControlWheelAction
     // (MainWindow_Controllers.cpp) — a new wheel action must be added to BOTH.
+    // That is enforced, not just asked for: ulanzi_mapping_migration_test
+    // parses the chain out of the source and asserts the two are the same set
+    // in both directions. Since applyFlexControlWheelAction now returns early
+    // on an id missing from this list, drift here is a silently dead control
+    // rather than a harmless fall-through.
     static const QStringList kKnownWheelActions = {
         QStringLiteral("WheelFrequency"),
         QStringLiteral("WheelRit"),

@@ -186,7 +186,6 @@ int main(int argc, char** argv)
     ok &= expect(!UlanziDialMappings::isKnownWheelAction(QStringLiteral("NotAnAction")),
                  "'NotAnAction' is not a known wheel action");
     const QStringList& known = UlanziDialMappings::knownWheelActions();
-    ok &= expect(known.size() == 18, "knownWheelActions registry contains exactly 18 dispatch actions");
     bool allKnown = true;
     for (const QString& action : known) {
         if (!UlanziDialMappings::isKnownWheelAction(action)) {
@@ -198,7 +197,11 @@ int main(int argc, char** argv)
 
     // ── drift detection: assert every actionId handled by applyFlexControlWheelAction is registered ─
     auto extractDispatchActions = []() -> QStringList {
+        // AETHER_SOURCE_DIR comes from CMake so this works for an
+        // out-of-source build too; the relative forms are the fallback for a
+        // hand-compiled run from the source root or a build directory.
         QStringList candidates = {
+            QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Controllers.cpp"),
             QStringLiteral("src/gui/MainWindow_Controllers.cpp"),
             QStringLiteral("../src/gui/MainWindow_Controllers.cpp"),
             QStringLiteral("../../src/gui/MainWindow_Controllers.cpp")
@@ -213,12 +216,28 @@ int main(int argc, char** argv)
         const QString content = QString::fromUtf8(file.readAll());
         file.close();
 
-        const int start = content.indexOf(QStringLiteral("applyFlexControlWheelAction("));
+        // Anchor on the DEFINITION, not the first mention: the name also
+        // appears at ~:370 as a call inside handleFlexControlTuneSteps, and
+        // anchoring there would sweep a thousand lines of unrelated functions
+        // into the window and attribute their action-id comparisons to this
+        // one.
+        const int start = content.indexOf(
+            QStringLiteral("void MainWindow::applyFlexControlWheelAction("));
         if (start < 0) return {};
-        const int end = content.indexOf(QStringLiteral("QJsonObject MainWindow::buildControlDevicesSnapshot"), start);
-        const QString fnBody = end > start ? content.mid(start, end - start) : content.mid(start, 2500);
+        // Bound on the closing brace in column 0, or give up. A fixed-size
+        // window would silently cover part of the chain and still report a
+        // pass, which is worse than no check at all.
+        const int end = content.indexOf(QStringLiteral("\n}\n"), start);
+        if (end < 0) return {};
+        const QString fnBody = content.mid(start, end - start);
 
-        static const QRegularExpression rx(QStringLiteral("actionId\\s*==\\s*\"([^\"]+)\""));
+        // The optional wrapper matters: `actionId == QLatin1String("...")` is
+        // used in this very file at ~:2549 and is the dominant form in
+        // FlexControlDialog.cpp and HidEncoderManager.cpp. Matching only bare
+        // literals would let a branch written that way escape both the
+        // registry and this check, and the guard would then drop it silently.
+        static const QRegularExpression rx(QStringLiteral(
+            "actionId\\s*==\\s*(?:QLatin1String\\(|QStringLiteral\\()?\"([^\"]+)\""));
         QRegularExpressionMatchIterator it = rx.globalMatch(fnBody);
         QStringList list;
         while (it.hasNext()) {
@@ -240,6 +259,21 @@ int main(int argc, char** argv)
     }
     ok &= expect(allDispatchRegistered,
                  "every actionId handled in applyFlexControlWheelAction is registered in UlanziDialMappings::knownWheelActions()");
+
+    // And the other direction, so the two are one set rather than one subset.
+    // A registry entry with no branch left behind by a removal is a dead id
+    // the guard would wave through; it also replaces a hand-counted size
+    // assertion that had to be edited every time an action was added.
+    bool allRegisteredDispatched = true;
+    for (const QString& action : known) {
+        if (!dispatchActions.contains(action)) {
+            std::cout << "[FAIL] Action '" << action.toStdString()
+                      << "' in UlanziDialMappings::knownWheelActions() has no branch in applyFlexControlWheelAction\n";
+            allRegisteredDispatched = false;
+        }
+    }
+    ok &= expect(allRegisteredDispatched,
+                 "every action in UlanziDialMappings::knownWheelActions() is handled in applyFlexControlWheelAction");
 
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;

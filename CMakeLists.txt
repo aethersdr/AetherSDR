@@ -5635,6 +5635,11 @@ add_executable(ulanzi_mapping_migration_test
     ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ulanzi_mapping_migration_test PRIVATE src tests)
+# The drift assertion parses the wheel-action else-if chain out of
+# MainWindow_Controllers.cpp at run time, so it needs to find the source tree
+# from wherever ctest runs it.
+target_compile_definitions(ulanzi_mapping_migration_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(ulanzi_mapping_migration_test PRIVATE Qt6::Core)
 add_test(NAME ulanzi_mapping_migration_test COMMAND ulanzi_mapping_migration_test)
 
