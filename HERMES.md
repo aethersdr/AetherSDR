@@ -3031,9 +3031,11 @@ confirming it (§7, and the wrong-sideband account in §14.6).
   a different state. The test now defaults to loopback, refuses to key anything
   whose discovery MAC is not hpsdrsim's synthetic `AA:BB:CC:DD:xx:FF`, asserts
   the analytic sign, and anchors the receive end on the simulator's own scene
-  tones first (§14.6). Its skip paths exit 77 with `SKIP_RETURN_CODE` set, so the
-  ordinary machine — no simulator running — reports `Skipped` rather than a
-  `Passed` that measured nothing.
+  tones first (§14.6). It also skips when the simulator reports it is already
+  streaming to somebody else (discovery status `0x03`), which is the collision
+  clause above finally fixed in code rather than in a warning. Its skip paths
+  exit 77 with `SKIP_RETURN_CODE` set, so the ordinary machine — no simulator
+  running — reports `Skipped` rather than a `Passed` that measured nothing.
 - **The link-budget ceiling is derived, not measured.** 70% of 100BASE-T is a
   working figure. Where the drop counter actually starts moving is still a
   number nobody has written down, and it is the one that would justify or move

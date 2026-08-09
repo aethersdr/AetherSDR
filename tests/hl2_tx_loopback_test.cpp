@@ -48,6 +48,7 @@
 #include "TestDspBuildWait.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
 #include <QUdpSocket>
@@ -81,7 +82,7 @@ static void spin(int ms)
 // no-simulator case is the ordinary one, not the exception.
 constexpr int kSkipExit = 77;
 
-enum class Probe { NoReply, NotSimulator, Simulator };
+enum class Probe { NoReply, Unreadable, NotSimulator, Simulator };
 
 // hpsdrsim builds its discovery reply with a synthetic MAC written byte by byte
 // in its source: AA BB CC DD <radio-type> FF. No HPSDR board ships an
@@ -95,35 +96,64 @@ enum class Probe { NoReply, NotSimulator, Simulator };
 // LAN, silently reaching a simulator on a DIFFERENT machine — which is where the
 // "fails non-deterministically" reputation came from, since the answers depended
 // on what that other machine was doing at the time.
+//
+// Which hpsdrsim: the g0orx/pihpsdr build HERMES.md §7 pins as the fixture. It
+// writes those bytes at hpsdrsim.c:628-633. Current upstream (dl1ycf/pihpsdr)
+// uses a different synthetic MAC, so a simulator built from that one reads as
+// NotSimulator and this test skips rather than running against it.
 static Probe findSimulator(const QString& host, AetherSDR::hl2::DiscoveryReply* out)
 {
+    const QHostAddress target(host);
     QUdpSocket s;
     if (!s.bind(QHostAddress(QHostAddress::AnyIPv4), 0))
         return Probe::NoReply;
     const auto req = AetherSDR::hl2::discoveryRequest();
     s.writeDatagram(reinterpret_cast<const char*>(req.data()),
-                    static_cast<qint64>(req.size()), QHostAddress(host),
+                    static_cast<qint64>(req.size()), target,
                     AetherSDR::hl2::kMetisPort);
-    if (!s.waitForReadyRead(1500))
-        return Probe::NoReply;
 
-    QByteArray dg(2048, 0);
-    const qint64 got = s.readDatagram(dg.data(), dg.size());
-    if (got <= 0)
-        return Probe::NoReply;
-    const auto reply = AetherSDR::hl2::parseDiscoveryReply(
-        std::span<const std::uint8_t>(
-            reinterpret_cast<const std::uint8_t*>(dg.constData()),
-            static_cast<std::size_t>(got)));
-    if (!reply)
-        return Probe::NotSimulator;
-    if (out)
-        *out = *reply;
+    // Read until the deadline instead of believing the first datagram, and
+    // ignore anything that did not come from the host we probed. Taking the
+    // first packet is a narrow version of this test's own root cause: one stray
+    // sender consumes the window, and the answer that decides whether we may key
+    // never gets looked at.
+    QElapsedTimer clock;
+    clock.start();
+    bool answeredUnparseable = false;
+    while (true) {
+        const qint64 remaining = 1500 - clock.elapsed();
+        if (remaining <= 0 || !s.waitForReadyRead(static_cast<int>(remaining)))
+            break;
+        while (s.hasPendingDatagrams()) {
+            QByteArray dg(2048, 0);
+            QHostAddress from;
+            const qint64 got = s.readDatagram(dg.data(), dg.size(), &from);
+            if (got <= 0)
+                continue;
+            if (!from.isEqual(target, QHostAddress::TolerantConversion))
+                continue;
+            const auto reply = AetherSDR::hl2::parseDiscoveryReply(
+                std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(dg.constData()),
+                    static_cast<std::size_t>(got)));
+            // Answered, but not as a discovery reply. Kept distinct from the
+            // MAC mismatch below so the skip message can say which it was —
+            // reporting an all-zero MAC for a packet that never parsed sends
+            // whoever reads it looking for a device that does not exist.
+            if (!reply) {
+                answeredUnparseable = true;
+                continue;
+            }
+            if (out)
+                *out = *reply;
 
-    const auto& mac = reply->mac;
-    const bool synthetic = mac[0] == 0xAA && mac[1] == 0xBB && mac[2] == 0xCC
-                        && mac[3] == 0xDD && mac[5] == 0xFF;
-    return synthetic ? Probe::Simulator : Probe::NotSimulator;
+            const auto& mac = reply->mac;
+            const bool synthetic = mac[0] == 0xAA && mac[1] == 0xBB && mac[2] == 0xCC
+                                && mac[3] == 0xDD && mac[5] == 0xFF;
+            return synthetic ? Probe::Simulator : Probe::NotSimulator;
+        }
+    }
+    return answeredUnparseable ? Probe::Unreadable : Probe::NoReply;
 }
 
 // The IQ sample rate this test runs the receiver at, and therefore the span the
@@ -178,6 +208,17 @@ int main(int argc, char** argv)
     const QString simHost = qEnvironmentVariableIsSet("AETHER_HL2_SIM_HOST")
         ? qEnvironmentVariable("AETHER_HL2_SIM_HOST")
         : QStringLiteral("127.0.0.1");
+    // QHostAddress parses IP literals only — it does not resolve names. A
+    // hostname silently becomes a null address, the probe goes nowhere, and the
+    // result is a skip that reads exactly like "the simulator is down". Say so
+    // instead of leaving somebody to debug a simulator that was running fine.
+    if (QHostAddress(simHost).isNull()) {
+        std::fprintf(stderr,
+            "hl2_tx_loopback_test: SKIPPED — AETHER_HL2_SIM_HOST=\"%s\" is not an "
+            "IP literal. Give the simulator's address; names are not resolved.\n",
+            qPrintable(simHost));
+        return kSkipExit;
+    }
 
     AetherSDR::hl2::DiscoveryReply reply;
     switch (findSimulator(simHost, &reply)) {
@@ -185,6 +226,14 @@ int main(int argc, char** argv)
         std::fprintf(stderr,
             "hl2_tx_loopback_test: SKIPPED — nothing answering discovery at %s. "
             "Start hpsdrsim (-hermeslite2 -P1), or set AETHER_HL2_SIM_HOST.\n",
+            qPrintable(simHost));
+        return kSkipExit;
+    case Probe::Unreadable:
+        std::fprintf(stderr,
+            "hl2_tx_loopback_test: SKIPPED — %s answered the discovery probe, but "
+            "the reply did not parse as a Metis discovery response. This test keys "
+            "the transmitter, so it refuses to run against an unidentified "
+            "responder.\n",
             qPrintable(simHost));
         return kSkipExit;
     case Probe::NotSimulator:
@@ -200,6 +249,20 @@ int main(int argc, char** argv)
             reply.mac[3], reply.mac[4], reply.mac[5]);
         return kSkipExit;
     case Probe::Simulator:
+        // Somebody else's session. hpsdrsim serves one client: connecting tears
+        // down its EP6 handler and re-points it at us, and this test then keys
+        // PTT. Leaving it alone is the same call as the NotSimulator arm — and
+        // it is the collision HERMES.md used to warn about, now that the local
+        // simulator is the default target rather than an accident.
+        if (reply.streaming) {
+            std::fprintf(stderr,
+                "hl2_tx_loopback_test: SKIPPED — the simulator at %s reports it is "
+                "already streaming to another client (discovery status 0x03). "
+                "Taking its session over would break that client, and this test "
+                "then keys PTT.\n",
+                qPrintable(simHost));
+            return kSkipExit;
+        }
         break;
     }
 
@@ -362,6 +425,13 @@ int main(int argc, char** argv)
                 voice = lastSpectrum;
         }
         backend.setKeying(false);
+
+        // Assert the capture happened. Without this the three checks below are
+        // skipped in silence when `voice` never arrived, and the test still
+        // prints "all checks passed" — the same silent-green shape as a skip
+        // that exits 0, one level down.
+        check(voice.size() == baseline.size() && !voice.empty(),
+              "spectrum still flowing during the mic-path transmission");
 
         if (voice.size() == baseline.size() && !voice.empty()) {
             const int n = static_cast<int>(voice.size());

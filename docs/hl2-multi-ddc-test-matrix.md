@@ -40,8 +40,10 @@ open /Users/patj/aether/AetherSDR/.worktrees/feat-hl2-multi-rx/build/AetherSDR.a
   machine — so a local simulator made it run when it should have skipped. It now
   defaults to loopback and refuses to key anything that does not answer discovery
   with hpsdrsim's synthetic `AA:BB:CC:DD:xx:FF` MAC, so it cannot reach the
-  radio. Point it elsewhere with `AETHER_HL2_SIM_HOST` if the simulator is on
-  another box.
+  radio. It also skips a simulator that is already streaming to another client,
+  so running the suite cannot take a session out from under an app you have
+  driving it. Point it elsewhere with `AETHER_HL2_SIM_HOST` (an IP literal —
+  names are not resolved) if the simulator is on another box.
 - Only one client per radio. Check nothing else is connected first.
 - Turn on the HL2 log: `QT_LOGGING_RULES="aether.hl2*=true"`. Most rows below
   are confirmed from a log line, not from the screen.
