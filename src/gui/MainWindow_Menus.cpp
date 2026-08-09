@@ -76,6 +76,11 @@
 
 namespace AetherSDR {
 
+namespace {
+// Stall timeout for the About dialog's GitHub contributor fetch (#4688 §6).
+constexpr int kTransferTimeoutMs = 15000;
+} // namespace
+
 void MainWindow::buildMenuBar()
 {
     auto* fileMenu = menuBar()->addMenu("&File");
@@ -112,7 +117,7 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn);
+                              m_kiwiSdrManager, &m_acomConn, &m_speConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     });
@@ -310,7 +315,7 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn);
+                              m_kiwiSdrManager, &m_acomConn, &m_speConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)
@@ -360,11 +365,20 @@ void MainWindow::buildMenuBar()
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = !m_spotHubDialog;
         showOrRaisePersistent(m_spotHubDialog, m_dxCluster, m_rbnClient, m_wsjtxClient,
-                              m_spotCollectorClient, m_potaClient,
+                              m_spotCollectorClient, m_potaClient, m_eibiClient, m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                               m_freedvClient,
 #endif
                               &m_radioModel, &m_dxccProvider);
+#ifdef HAVE_WEBSOCKETS
+        // Every open, not just the first: this dialog is a persistent
+        // singleton, so without this the field would only ever show
+        // whatever FreeDvMyMessage was at first construction, silently
+        // reverting anything sent from the FreeDV Reporter panel since
+        // (#4231 review).
+        if (m_spotHubDialog)
+            m_spotHubDialog->reloadFreedvMessage();
+#endif
         if (!wasFresh || !m_spotHubDialog) return;
         auto* dlg = m_spotHubDialog.data();
         dlg->setTotalSpots(m_radioModel.spotModel().spots().size());
@@ -391,6 +405,7 @@ void MainWindow::buildMenuBar()
                 sw->setSpotBgColor(bgColor);
                 sw->setSpotBgOpacity(bgOpacity);
                 sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
+                sw->setKiwiDxSpotsEnabled(s.value("ShowKiwiDxSpots", "False").toString() == "True");
                 sw->setSHistorySnapToStep(
                     s.value("SHistorySnapToStep", "False").toString() == "True");
             }
@@ -398,7 +413,12 @@ void MainWindow::buildMenuBar()
             // Memories feed toggle, apply immediately without mutating the cache.
             m_radioModel.spotModel().refresh();
         };
-        connect(dlg, &DxClusterDialog::settingsChanged, this, refreshSpots);
+        connect(dlg, &DxClusterDialog::settingsChanged, this, [this, refreshSpots] {
+            refreshSpots();
+            if (m_eibiClient) {
+                QMetaObject::invokeMethod(m_eibiClient, &EibiClient::updateActiveSpots, Qt::QueuedConnection);
+            }
+        });
         // Signal/QRM History Markers live exclusively on the SpotHub
         // Display tab (no View-menu duplicate, by design — a single UI
         // surface with no risk of state drift).
@@ -451,6 +471,24 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::potaStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); }); });
+        connect(dlg, &DxClusterDialog::eibiStartRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(true); });
+        });
+        connect(dlg, &DxClusterDialog::eibiStopRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, [this] { m_eibiClient->setEnabled(false); });
+        });
+        connect(dlg, &DxClusterDialog::eibiUpdateNowRequested,
+                this, [this] {
+            QMetaObject::invokeMethod(m_eibiClient, &EibiClient::forceUpdate, Qt::QueuedConnection);
+        });
+        connect(dlg, &DxClusterDialog::n1mmStartRequested,
+                this, [this](quint16 port) {
+            QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->startListening(port); });
+        });
+        connect(dlg, &DxClusterDialog::n1mmStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->stopListening(); }); });
 #ifdef HAVE_WEBSOCKETS
         connect(dlg, &DxClusterDialog::freedvStartRequested,
                 this, [this] { QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->startConnection(); }); });
@@ -1381,6 +1419,9 @@ void MainWindow::buildMenuBar()
 
         // Fetch live contributor list from GitHub API
         auto* nam = new QNetworkAccessManager(dlg);
+        // Bound the contributor fetch (#4688 §6) — without it a half-open
+        // connection leaves the About dialog's list pending with no error.
+        nam->setTransferTimeout(kTransferTimeoutMs);
         auto* reply = nam->get(QNetworkRequest(
             QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
         connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {

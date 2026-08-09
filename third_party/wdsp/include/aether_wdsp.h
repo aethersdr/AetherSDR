@@ -51,6 +51,56 @@ void SetRXASNBAOutputBandwidth(int channel, double lowHz, double highHz);
 // panadapter centre) still while the slice tunes within the passband.
 void SetRXAShiftFreq(int channel, double shiftHz);
 void SetRXAShiftRun(int channel, int run);
+
+// ── Manual notch filters (the notched-bandpass stage, nbp0) ────────────────
+//
+// This is the host-side equivalent of a Flex TNF, and on a direct-sampling
+// radio it is the ONLY notch there is: the HL2 protocol carries no DSP at all
+// (HL2 oracle addendum 3 §B4), so a notch either happens here or not at all.
+//
+// COORDINATE SPACE — the one thing to get right. Notch centres are ABSOLUTE
+// frequencies in the same units the host feeds RXANBPSetTuneFrequency(); WDSP
+// subtracts (tunefreq + shift) internally when it rebuilds the filter mask
+// (nbp.c calc_nbp_lightweight). Feed it RF Hz and a notch stays glued to the
+// interferer as the operator tunes — which is what makes it a *tracking*
+// notch rather than an audio-frequency one. Feed it baseband offsets and it
+// will appear to work until the moment someone tunes.
+//
+// A host that calls SetRXAShiftFreq() MUST also call RXANBPSetShiftFrequency()
+// with the matching value; nothing inside WDSP connects the two, so the notch
+// silently drifts off the signal by the shift amount otherwise.
+//
+// The notch handle is a POSITIONAL INDEX into a dense array, not a stable id.
+// Add inserts at `notch` and shifts everything above it up; Delete closes the
+// gap and shifts everything above it down. A caller holding its own stable ids
+// must remap after every delete or it will edit the wrong notch.
+//
+// Width has a floor that depends on the filter length, and it is enforced
+// SILENTLY: the nbp stage is created with autoincr=1 (RXA.c), so a notch
+// narrower than min_notch_width() is widened rather than refused. That floor is
+// 1600 / (nc / 256) * (rate / 48000) Hz for the default window type — 200 Hz at
+// nc=2048, 50 Hz at nc=8192. Ask for 50 Hz at 2048 taps and WDSP gives you 200
+// without saying so, which is the difference between notching one carrier and
+// notching the carrier plus everything around it.
+//
+// Returns 0 on success and -1 when `notch` is out of range (Add also fails once
+// the database is full; RXA.c creates it with room for 1024).
+int RXANBPAddNotch(int channel, int notch, double fcenterHz, double fwidthHz,
+                   int active);
+int RXANBPEditNotch(int channel, int notch, double fcenterHz, double fwidthHz,
+                    int active);
+int RXANBPDeleteNotch(int channel, int notch);
+int RXANBPGetNotch(int channel, int notch, double* fcenterHz, double* fwidthHz,
+                   int* active);
+void RXANBPGetNumNotches(int channel, int* nnotches);
+// The tuned frequency notch centres are measured against. Push this on every
+// NCO change.
+void RXANBPSetTuneFrequency(int channel, double tunefreqHz);
+// The companion to SetRXAShiftFreq — see the coordinate-space note above.
+void RXANBPSetShiftFrequency(int channel, double shiftHz);
+// Global enable for every notch on the channel, equivalent to a Flex
+// tnf_enabled. Individual notches keep their own `active` flag underneath it.
+void RXANBPSetNotchesRun(int channel, int run);
 // Bandpass filter length and minimum-phase mode. Composite calls, like
 // RXASetPassband: RXASetNC also stops and restarts the channel.
 void RXASetNC(int channel, int nc);

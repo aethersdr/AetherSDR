@@ -1,9 +1,13 @@
 #include "DxClusterDialog.h"
 #include "DxClusterStartupCommandsDialog.h"
 #include "FlowLayout.h"
+// For MessageMaxLength — the two surfaces share FreeDvMyMessage, so they
+// must share its cap too. Header self-guards on HAVE_WEBSOCKETS.
+#include "FreeDvReporterDialog.h"
 #include "GuardedSlider.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
+#include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
 #include "models/RadioModel.h"
@@ -182,9 +186,14 @@ QVariant SpotTableModel::data(const QModelIndex& index, int role) const
         if (index.column() == ColFreq)
             return QColor(0xe0, 0xd0, 0x60);  // yellow-ish
     }
-    // Store freq in UserRole for sorting
+    // Store freq/time in UserRole so QSortFilterProxyModel can sort on them
+    // (#4749: Time was the only always-visible column with no sortable
+    // value, so clicking it did nothing and there was no way back to
+    // newest-first order once Freq had been sorted).
     if (role == Qt::UserRole && index.column() == ColFreq)
         return spot.freqMhz;
+    if (role == Qt::UserRole && index.column() == ColTime)
+        return spot.utcTime;
 
     return {};
 }
@@ -300,7 +309,8 @@ bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceP
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
                                    WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
-                                   PotaClient* potaClient,
+                                   PotaClient* potaClient, EibiClient* eibiClient,
+                                   N1MMSpotClient* n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                                    FreeDvClient* freedvClient,
 #endif
@@ -310,7 +320,8 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     : PersistentDialog("SpotHub", "DxClusterDialogGeometry", parent),
       m_client(clusterClient), m_rbnClient(rbnClient),
       m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
-      m_potaClient(potaClient),
+      m_potaClient(potaClient), m_eibiClient(eibiClient),
+      m_n1mmSpotClient(n1mmSpotClient),
 #ifdef HAVE_WEBSOCKETS
       m_freedvClient(freedvClient),
 #endif
@@ -331,6 +342,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     m_wsjtxLogPath   = wsjtxClient->logFilePath();
     m_potaLogPath    = potaClient->logFilePath();
     m_scLogPath      = spotCollectorClient->logFilePath();
+    m_n1mmLogPath    = n1mmSpotClient->logFilePath();
 #ifdef HAVE_WEBSOCKETS
     m_freedvLogPath  = freedvClient->logFilePath();
 #endif
@@ -350,6 +362,8 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildWsjtxTab(tabs);
     buildSpotCollectorTab(tabs);
     buildPotaTab(tabs);
+    buildEiBiTab(tabs);
+    buildN1mmTab(tabs);
 #ifdef HAVE_WEBSOCKETS
     buildFreeDvTab(tabs);
 #endif
@@ -588,6 +602,74 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
 
     // POTA log loaded in deferred loadLogFiles() (#748)
+
+    // ── Live updates from N1MM/DXLog client (#2906) ───────────────────
+    connect(n1mmSpotClient, &N1MMSpotClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
+        bool follow = isAtBottom(m_n1mmConsole);
+        m_n1mmConsole->appendPlainText(line);
+        if (follow) {
+            auto* sb = m_n1mmConsole->verticalScrollBar();
+            sb->setValue(sb->maximum());
+        }
+    });
+
+    // Unlike the other feeds, an N1MM "add" is usually an *update* — the logger
+    // re-broadcasts a callsign every time its status changes, and re-sends
+    // unchanged entries too. Logging every one would bury the list in
+    // near-identical rows for a single station. Log a row only when the status
+    // actually changes (or the call is new on this band), so the list reads as
+    // that station's status history rather than its broadcast rate. This path
+    // deliberately bypasses queueSpotCmd, so it gets no isDuplicateSpot cover.
+    connect(n1mmSpotClient, &N1MMSpotClient::spotAdded, this, [this](const N1mmSpot& n1mm) {
+        const QString key = N1MMSpotParser::spotKey(n1mm.dxCall, n1mm.freqMhz);
+        const auto prev = m_n1mmLastLoggedStatus.constFind(key);
+        if (prev != m_n1mmLastLoggedStatus.constEnd() && prev.value() == n1mm.statusRaw)
+            return;
+        m_n1mmLastLoggedStatus.insert(key, n1mm.statusRaw);
+
+        DxSpot spot;
+        spot.dxCall = n1mm.dxCall;
+        spot.freqMhz = n1mm.freqMhz;
+        spot.spotterCall = n1mm.spotterCall;
+        spot.comment = n1mm.statusRaw.isEmpty() ? n1mm.comment
+                     : (n1mm.comment.isEmpty() ? n1mm.statusRaw : n1mm.comment + " [" + n1mm.statusRaw + "]");
+        // Matches the model-side source string (SmartSDR's "N1MM-<StationName>").
+        spot.source = n1mm.stationName.isEmpty()
+                    ? QStringLiteral("N1MM")
+                    : QStringLiteral("N1MM-") + n1mm.stationName;
+        m_spotBatch.append(spot);
+    });
+    // The Spot List tab is a chronological log of everything received, across
+    // every source — no source removes rows from it — so a delete drops the
+    // panadapter marker and is recorded here rather than un-logging the spot.
+    connect(n1mmSpotClient, &N1MMSpotClient::spotDeleted, this, [this](const QString& dxCall, double freqMhz) {
+        // Forget the last-logged status too, so if the logger re-adds this call
+        // on this band it opens a fresh row rather than being suppressed as a
+        // no-change repeat.
+        m_n1mmLastLoggedStatus.remove(N1MMSpotParser::spotKey(dxCall, freqMhz));
+        m_n1mmConsole->appendPlainText(QString("--- delete %1 @ %2 MHz (panadapter marker removed) ---")
+                                           .arg(dxCall).arg(freqMhz, 0, 'f', 3));
+    });
+
+    connect(n1mmSpotClient, &N1MMSpotClient::listening, this, [this] {
+        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmSpotClient->port()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Stop");
+        m_n1mmConsole->appendPlainText("--- Listening ---");
+    });
+    connect(n1mmSpotClient, &N1MMSpotClient::stopped, this, [this] {
+        m_n1mmStatusLabel->setText("Stopped");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Start");
+        m_n1mmConsole->appendPlainText("--- Stopped ---");
+    });
+    connect(n1mmSpotClient, &N1MMSpotClient::bindFailed, this, [this](const QString& err) {
+        m_n1mmStatusLabel->setText("Bind failed");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Start");
+        m_n1mmConsole->appendPlainText(
+            QString("--- Bind failed on port %1: %2 ---").arg(m_n1mmSpotClient->port()).arg(err));
+    });
 
 #ifdef HAVE_WEBSOCKETS
     // ── Live updates from FreeDV client ───────────────────────────────
@@ -1616,6 +1698,394 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     tabs->addTab(page, "POTA");
 }
 
+void DxClusterDialog::updateEibiTimestamps()
+{
+    if (!m_eibiClient || !m_eibiCacheTimeLabel || !m_eibiNextFetchLabel) return;
+
+    const QDateTime lastMod = m_eibiClient->cacheLastModified();
+    const QDateTime nextFetch = m_eibiClient->nextFetchTime();
+
+    if (lastMod.isValid()) {
+        m_eibiCacheTimeLabel->setText(lastMod.toString("yyyy-MM-dd HH:mm") + " UTC");
+    } else {
+        m_eibiCacheTimeLabel->setText("Not cached");
+    }
+
+    if (nextFetch.isValid()) {
+        const qint64 secsLeft = QDateTime::currentDateTimeUtc().secsTo(nextFetch);
+        if (secsLeft <= 0) {
+            m_eibiNextFetchLabel->setText("Due now");
+        } else {
+            const qint64 days = secsLeft / 86400;
+            const qint64 hours = (secsLeft % 86400) / 3600;
+            m_eibiNextFetchLabel->setText(QString("%1 (%2d %3h)").arg(nextFetch.toString("yyyy-MM-dd HH:mm UTC")).arg(days).arg(hours));
+        }
+    } else {
+        m_eibiNextFetchLabel->setText("On start");
+    }
+}
+
+void DxClusterDialog::buildEiBiTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(8);
+
+    auto& s = AppSettings::instance();
+
+    // ── Settings ────────────────────────────────────────────────────────
+    auto* connGroup = new QGroupBox("EiBi Shortwave Broadcast Feed");
+    auto* connLayout = new QVBoxLayout(connGroup);
+    connLayout->setSpacing(4);
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+    int row = 0;
+
+    grid->addWidget(new QLabel("Server:"), row, 0);
+    auto* serverLabel = new QLabel("www.eibispace.de/dx/eibi.txt (HTTP 7-day cache)");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(serverLabel, "QLabel { color: {{color.text.label}}; }");
+    grid->addWidget(serverLabel, row, 1);
+    row++;
+
+    grid->addWidget(new QLabel("Cache File:"), row, 0);
+    m_eibiCacheTimeLabel = new QLabel("Checking...");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiCacheTimeLabel, "QLabel { color: {{color.text.label}}; }");
+    grid->addWidget(m_eibiCacheTimeLabel, row, 1);
+    row++;
+
+    grid->addWidget(new QLabel("Next Auto-Fetch:"), row, 0);
+    m_eibiNextFetchLabel = new QLabel("Checking...");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiNextFetchLabel, "QLabel { color: {{color.text.label}}; }");
+    grid->addWidget(m_eibiNextFetchLabel, row, 1);
+    row++;
+
+    connLayout->addLayout(grid);
+
+    // Button row
+    auto* btnRow = new QHBoxLayout;
+    const bool autoStartOn = s.value("EiBiAutoStart", s.value("EiBiSpotsEnabled", "False")).toString() == "True";
+    m_eibiAutoStartBtn = new QPushButton(autoStartOn ? "Auto-Start: ON" : "Auto-Start: OFF");
+    m_eibiAutoStartBtn->setCheckable(true);
+    m_eibiAutoStartBtn->setChecked(autoStartOn);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiAutoStartBtn, kSpotHubToggle);
+    connect(m_eibiAutoStartBtn, &QPushButton::toggled, this, [](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("EiBiAutoStart", on ? "True" : "False");
+        s.setValue("EiBiSpotsEnabled", on ? "True" : "False");
+        s.save();
+    });
+    btnRow->addWidget(m_eibiAutoStartBtn);
+    btnRow->addStretch();
+
+    const bool isEnabled = m_eibiClient && m_eibiClient->isEnabled();
+    m_eibiStatusLabel = new QLabel(isEnabled ? "Active" : "Stopped");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+    btnRow->addWidget(m_eibiStatusLabel);
+    btnRow->addStretch();
+
+    m_eibiUpdateBtn = new QPushButton("Update Now");
+    m_eibiUpdateBtn->setFixedWidth(100);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiUpdateBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
+        "border: 1px solid {{color.background.2}}; padding: 4px; border-radius: 3px; }"
+        "QPushButton:hover { background: {{color.background.2}}; }");
+    connect(m_eibiUpdateBtn, &QPushButton::clicked, this, [this] {
+        m_eibiStatusLabel->setText("Downloading schedule...");
+        m_eibiStartBtn->setText("Stop");
+        emit eibiUpdateNowRequested();
+    });
+    btnRow->addWidget(m_eibiUpdateBtn);
+
+    m_eibiStartBtn = new QPushButton(isEnabled ? "Stop" : "Start");
+    m_eibiStartBtn->setFixedWidth(100);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
+        "QPushButton:hover { background: {{color.accent.bright}}; }"
+        "QPushButton:disabled { background: {{color.background.2}}; color: {{color.text.label}}; }");
+    connect(m_eibiStartBtn, &QPushButton::clicked, this, [this] {
+        const bool active = m_eibiClient && m_eibiClient->isEnabled();
+        if (active) {
+            m_eibiStartBtn->setText("Start");
+            m_eibiStatusLabel->setText("Stopped");
+            emit eibiStopRequested();
+        } else {
+            m_eibiStartBtn->setText("Stop");
+            m_eibiStatusLabel->setText("Loading schedule...");
+            emit eibiStartRequested();
+        }
+    });
+    btnRow->addWidget(m_eibiStartBtn);
+    connLayout->addLayout(btnRow);
+
+    layout->addWidget(connGroup);
+
+    // ── Console output ──────────────────────────────────────────────────
+    auto* consoleRow = new QHBoxLayout;
+    auto* consoleLabel = new QLabel("EiBi Schedules & Broadcasts");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
+    consoleRow->addWidget(consoleLabel);
+    consoleRow->addStretch();
+
+    auto* spotColorLabel = new QLabel("Spot Color:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(spotColorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+    consoleRow->addWidget(spotColorLabel);
+
+    QColor eibiColor(s.value("EiBiSpotColor", "#8aa8c0").toString());
+    auto* eibiColorBtn = new QPushButton;
+    eibiColorBtn->setFixedSize(18, 18);
+    auto updateColorBtnStyle = [eibiColorBtn](const QString& hex) {
+        AetherSDR::ThemeManager::instance().applyStyleSheet(eibiColorBtn, QString(
+            "QPushButton { background: %1; border: 2px solid {{color.background.2}}; border-radius: 3px; }"
+            "QPushButton:hover { border-color: {{color.text.secondary}}; }").arg(hex));
+    };
+    updateColorBtnStyle(eibiColor.name());
+    connect(eibiColorBtn, &QPushButton::clicked, this, [this, updateColorBtnStyle] {
+        QColor c = QColorDialog::getColor(
+            QColor(AppSettings::instance().value("EiBiSpotColor", "#8aa8c0").toString()),
+            this, "EiBi Spot Color");
+        if (c.isValid()) {
+            updateColorBtnStyle(c.name());
+            AppSettings::instance().setValue("EiBiSpotColor", c.name());
+            AppSettings::instance().save();
+            emit settingsChanged();
+        }
+    });
+    consoleRow->addWidget(eibiColorBtn);
+    layout->addLayout(consoleRow);
+
+    m_eibiConsole = new QPlainTextEdit;
+    m_eibiConsole->setReadOnly(true);
+    m_eibiConsole->setMaximumBlockCount(2000);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_eibiConsole, "QPlainTextEdit {"
+        "  background: {{color.background.0}};"
+        "  color: {{color.text.secondary}};"
+        "  font-family: monospace;"
+        "  font-size: 11px;"
+        "  border: 1px solid {{color.background.1}};"
+        "  padding: 4px;"
+        "}");
+    layout->addWidget(m_eibiConsole, 1);
+
+    if (m_eibiClient) {
+        connect(m_eibiClient, &EibiClient::spotsUpdated, this, [this](const QVector<DxSpot>& spots) {
+            const bool active = m_eibiClient && m_eibiClient->isEnabled();
+            if (active && !spots.isEmpty()) {
+                m_eibiStatusLabel->setText(QString("Active (%1 spots)").arg(spots.size()));
+                m_eibiStartBtn->setText("Stop");
+            } else if (active && spots.isEmpty()) {
+                m_eibiStatusLabel->setText("Active (0 spots)");
+                m_eibiStartBtn->setText("Stop");
+            } else {
+                m_eibiStatusLabel->setText("Stopped");
+                m_eibiStartBtn->setText("Start");
+            }
+            updateEibiTimestamps();
+            const QString timeStr = QDateTime::currentDateTimeUtc().toString("hh:mm:ss") + " UTC";
+            if (active) {
+                m_eibiConsole->appendPlainText(QString("[%1] EiBi schedule updated: %2 active broadcast spots").arg(timeStr).arg(spots.size()));
+            } else {
+                m_eibiConsole->appendPlainText(QString("[%1] EiBi schedule feed stopped").arg(timeStr));
+            }
+        });
+        connect(m_eibiClient, &EibiClient::fetchFailed, this, [this](const QString& err) {
+            m_eibiStatusLabel->setText("Fetch failed");
+            m_eibiStartBtn->setText("Start");
+            m_eibiConsole->appendPlainText(QString("[ERROR] EiBi schedule download failed: %1").arg(err));
+            updateEibiTimestamps();
+        });
+    }
+
+    updateEibiTimestamps();
+
+    auto* eibiBtnRow = new QHBoxLayout;
+    eibiBtnRow->addStretch();
+    eibiBtnRow->addWidget(makeConsoleClearButton(m_eibiConsole, &m_eibiLogPath, "eibiClearBtn"));
+    layout->addLayout(eibiBtnRow);
+
+    tabs->addTab(page, "EiBi");
+}
+
+void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(8);
+
+    auto& s = AppSettings::instance();
+
+    // ── Connection settings ─────────────────────────────────────────────
+    auto* connGroup = new QGroupBox("N1MM/DXLog UDP Listener");
+    auto* connLayout = new QVBoxLayout(connGroup);
+    connLayout->setSpacing(4);
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+
+    grid->addWidget(new QLabel("UDP Port:"), 0, 0);
+    m_n1mmPortSpin = new QSpinBox;
+    m_n1mmPortSpin->setRange(1, 65535);
+    m_n1mmPortSpin->setValue(s.value("N1MMSpotPort", 12060).toInt());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
+    grid->addWidget(m_n1mmPortSpin, 0, 1);
+
+    // Contest spots are long-lived compared with the other feeds (a station
+    // sits on a frequency for hours), so this is minutes rather than the
+    // seconds-scale slider the WSJT-X tab uses. 0 = never expire; the logger's
+    // own "delete" is then the only thing that clears a spot.
+    grid->addWidget(new QLabel("Spot Lifetime:"), 1, 0);
+    m_n1mmLifetimeSpin = new QSpinBox;
+    m_n1mmLifetimeSpin->setRange(0, 1440);
+    m_n1mmLifetimeSpin->setValue(s.value("N1MMSpotLifetimeSec", 10800).toInt() / 60);
+    m_n1mmLifetimeSpin->setSuffix(" min");
+    m_n1mmLifetimeSpin->setSpecialValueText("Never expire");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmLifetimeSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
+    connect(m_n1mmLifetimeSpin, &QSpinBox::valueChanged, this, [](int minutes) {
+        auto& s = AppSettings::instance();
+        s.setValue("N1MMSpotLifetimeSec", minutes * 60);
+        s.save();
+    });
+    grid->addWidget(m_n1mmLifetimeSpin, 1, 1);
+
+    connLayout->addLayout(grid);
+
+    auto* helpLabel = new QLabel(
+        "Receives contest bandmap spots from N1MM+ or DXLog via the SmartSDR-CAT\n"
+        "compatible N1MMSpot UDP broadcast (default port 12060 — the same port\n"
+        "SmartSDR CAT uses, so existing logger configurations work unchanged).\n"
+        "In N1MM+: Config -> Configure Ports... -> Broadcast Data -> check\n"
+        "\"Spots\", set this address/port as an additional destination.\n"
+        "(\"Contacts\" broadcasts logged QSOs, not bandmap spots, and is ignored here.)");
+    helpLabel->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(helpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    connLayout->addWidget(helpLabel);
+
+    // Button row
+    auto* btnRow = new QHBoxLayout;
+    m_n1mmAutoStartBtn = new QPushButton(
+        s.value("N1MMSpotAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
+    m_n1mmAutoStartBtn->setCheckable(true);
+    m_n1mmAutoStartBtn->setChecked(s.value("N1MMSpotAutoStart", "False").toString() == "True");
+    ThemeManager::instance().applyStyleSheet(m_n1mmAutoStartBtn, kSpotHubToggle);
+    connect(m_n1mmAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_n1mmAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
+        auto& s = AppSettings::instance();
+        s.setValue("N1MMSpotAutoStart", on ? "True" : "False");
+        s.save();
+    });
+    btnRow->addWidget(m_n1mmAutoStartBtn);
+    btnRow->addStretch();
+
+    m_n1mmStatusLabel = new QLabel("Stopped");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+    btnRow->addWidget(m_n1mmStatusLabel);
+    btnRow->addStretch();
+
+    m_n1mmStartBtn = new QPushButton(m_n1mmSpotClient->isListening() ? "Stop" : "Start");
+    m_n1mmStartBtn->setFixedWidth(100);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
+        "QPushButton:hover { background: {{color.accent.bright}}; }"
+        "QPushButton:disabled { background: {{color.background.2}}; color: {{color.text.label}}; }");
+    connect(m_n1mmStartBtn, &QPushButton::clicked, this, [this] {
+        if (m_n1mmSpotClient->isListening()) {
+            emit n1mmStopRequested();
+            return;
+        }
+        quint16 port = static_cast<quint16>(m_n1mmPortSpin->value());
+        auto& s = AppSettings::instance();
+        s.setValue("N1MMSpotPort", port);
+        s.save();
+        emit n1mmStartRequested(port);
+    });
+    btnRow->addWidget(m_n1mmStartBtn);
+    connLayout->addLayout(btnRow);
+
+    layout->addWidget(connGroup);
+
+    // ── Contest status colors ───────────────────────────────────────────
+    // One swatch per N1MM status flag, matching the SmartSDR habits contest
+    // operators already know (needed/mult stands out, dupes fade back).
+    auto* colorGroup = new QGroupBox("Contest Status Colors");
+    auto* colorGrid = new QGridLayout(colorGroup);
+    colorGrid->setSpacing(6);
+
+    // Swatch chrome comes from tokens so the picker matches the active theme;
+    // only the swatch fill (%1) is the operator's chosen spot colour.
+    const QString swatchTemplate =
+        "QPushButton { background: %1; border: 2px solid {{color.background.2}};"
+        " border-radius: 3px; }"
+        "QPushButton:hover { border-color: {{color.text.primary}}; }";
+
+    // Each flag falls back to its theme token until the operator overrides it.
+    auto statusColor = [](const N1MMSpotParser::StatusColorSpec& spec) {
+        const QString stored =
+            AppSettings::instance().value(spec.settingsKey, "").toString();
+        return stored.isEmpty()
+             ? ThemeManager::instance().color(QString::fromLatin1(spec.themeToken))
+             : QColor(stored);
+    };
+
+    int row = 0;
+    for (const auto& spec : N1MMSpotParser::kStatusColorSpecs) {
+        auto* label = new QLabel(spec.label);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+        colorGrid->addWidget(label, row / 2, (row % 2) * 2);
+
+        // kStatusColorSpecs has static storage, so the pointer stays valid for
+        // the lifetime of the button.
+        const auto* specPtr = &spec;
+        auto* colorBtn = new QPushButton;
+        colorBtn->setFixedSize(18, 18);
+        ThemeManager::instance().applyStyleSheet(
+            colorBtn, swatchTemplate.arg(statusColor(spec).name()));
+        connect(colorBtn, &QPushButton::clicked, this,
+                [this, colorBtn, swatchTemplate, statusColor, specPtr] {
+            QColor c = QColorDialog::getColor(statusColor(*specPtr), this, "N1MM Status Color");
+            if (c.isValid()) {
+                ThemeManager::instance().applyStyleSheet(
+                    colorBtn, swatchTemplate.arg(c.name()));
+                AppSettings::instance().setValue(specPtr->settingsKey, c.name());
+                AppSettings::instance().save();
+            }
+        });
+        colorGrid->addWidget(colorBtn, row / 2, (row % 2) * 2 + 1);
+        ++row;
+    }
+    layout->addWidget(colorGroup);
+
+    // ── Console output ──────────────────────────────────────────────────
+    auto* consoleLabel = new QLabel("N1MM Spots");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
+    layout->addWidget(consoleLabel);
+
+    m_n1mmConsole = new QPlainTextEdit;
+    m_n1mmConsole->setReadOnly(true);
+    m_n1mmConsole->setMaximumBlockCount(2000);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmConsole, "QPlainTextEdit {"
+        "  background: {{color.background.0}};"
+        "  color: {{color.text.secondary}};"
+        "  font-family: monospace;"
+        "  font-size: 11px;"
+        "  border: 1px solid {{color.background.1}};"
+        "  padding: 4px;"
+        "}");
+    layout->addWidget(m_n1mmConsole, 1);
+
+    auto* n1mmBtnRow = new QHBoxLayout;
+    n1mmBtnRow->addStretch();
+    n1mmBtnRow->addWidget(makeConsoleClearButton(m_n1mmConsole, &m_n1mmLogPath, "n1mmClearBtn"));
+    layout->addLayout(n1mmBtnRow);
+
+    // Update status if already listening
+    if (m_n1mmSpotClient->isListening()) {
+        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmSpotClient->port()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Stop");
+    }
+
+    tabs->addTab(page, "N1MM");
+}
+
 #ifdef HAVE_WEBSOCKETS
 void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
 {
@@ -1830,9 +2300,22 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     reportLayout->addWidget(new QLabel("Station Msg:"), frow, 0);
     m_fdvMessageEdit = new QLineEdit;
     m_fdvMessageEdit->setPlaceholderText("Optional message shown on reporter map");
+    // Same cap as the FreeDV Reporter panel's field, so the bound is real at
+    // both entry points — otherwise a long message set here would sail past
+    // it, and the panel's reloadMessage() would then silently truncate what
+    // it displays relative to what is actually being broadcast (#4231 review).
+    m_fdvMessageEdit->setMaxLength(FreeDvReporterDialog::MessageMaxLength);
     m_fdvMessageEdit->setText(s.value("FreeDvMyMessage", "").toString());
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_fdvMessageEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_fdvMessageEdit, &QLineEdit::editingFinished, this, [this] {
+        // Focus-out without an edit must not write: this dialog is a
+        // persistent singleton whose copy of FreeDvMyMessage can be stale
+        // (the FreeDV Reporter panel writes the same setting), and
+        // re-emitting it would silently revert a message sent there.
+        // setText() clears the flag, so reloadFreedvMessage() composes with
+        // this (#4231 review).
+        if (!m_fdvMessageEdit->isModified()) return;
+        m_fdvMessageEdit->setModified(false);
         auto& as = AppSettings::instance();
         QString msg = m_fdvMessageEdit->text().trimmed();
         as.setValue("FreeDvMyMessage", msg);
@@ -2114,6 +2597,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     bool passiveSpots     = SpotCommandPolicy::passiveModeFromSetting(
                                 s.value(SpotCommandPolicy::kPassiveSpotsModeKey, "False"));
     bool memoriesEnabled  = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
+    bool kiwiDxSpots      = s.value("ShowKiwiDxSpots", "False").toString() == "True";
     bool autoMode         = s.value("SpotAutoSwitchMode", "True").toString() == "True";
     bool sHistorySignals  = s.value("SHistoryMarkersEnabled", "False").toString() == "True";
     bool sHistoryQrm      = s.value("SHistoryQrmEnabled", "False").toString() == "True";
@@ -2191,6 +2675,13 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         });
         toggleRow->addWidget(memoriesToggle);
 
+        auto* kiwiDxToggle = makeToggle("Kiwi DX", kiwiDxSpots,
+            "Overlay KiwiSDR Community DX database spots (beacons, utilities, time signals) on the band plan strip.");
+        connect(kiwiDxToggle, &QPushButton::toggled, this, [save](bool on) {
+            save("ShowKiwiDxSpots", on ? "True" : "False");
+        });
+        toggleRow->addWidget(kiwiDxToggle);
+
         auto* autoModeToggle = makeToggle("Auto", autoMode,
             "Automatically switch slice mode when clicking a spot\n"
             "that includes mode information (e.g. CW, FT8, RTTY)");
@@ -2244,8 +2735,9 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             truncateLogFile(m_potaLogPath);
             truncateLogFile(m_scLogPath);
             truncateLogFile(m_freedvLogPath);
+            truncateLogFile(m_n1mmLogPath);
             for (QPlainTextEdit* console : {m_console, m_rbnConsole, m_wsjtxConsole,
-                                            m_scConsole, m_potaConsole}) {
+                                            m_scConsole, m_potaConsole, m_n1mmConsole}) {
                 if (console)
                     console->clear();
             }
@@ -2810,6 +3302,22 @@ void DxClusterDialog::setTotalSpots(int count)
     if (m_totalSpotsLabel)
         m_totalSpotsLabel->setText(QString::number(count));
 }
+
+#ifdef HAVE_WEBSOCKETS
+void DxClusterDialog::reloadFreedvMessage()
+{
+    if (!m_fdvMessageEdit) return;
+
+    const QString stored = AppSettings::instance()
+                               .value("FreeDvMyMessage", "").toString();
+    // isModified(), not hasFocus() — same reasoning as the reporter panel's
+    // reloadMessage(): focus has already left by the time the menu action
+    // fires. setText() clears the flag, which is also what keeps this from
+    // arming the editingFinished guard above (#4231 review).
+    if (!m_fdvMessageEdit->isModified() && m_fdvMessageEdit->text() != stored)
+        m_fdvMessageEdit->setText(stored);
+}
+#endif
 
 void DxClusterDialog::flushSpotBatch()
 {

@@ -27,6 +27,7 @@
 #include "ReceivePresentationSync.h"
 #include "SpectralNR.h"
 #include "models/Nr2SettingsModel.h"
+#include "models/Rn2SettingsModel.h"
 #ifdef HAVE_SPECBLEACH
 #include "SpecbleachFilter.h"
 #endif
@@ -71,6 +72,7 @@
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -79,6 +81,7 @@ static void logNr2WisdomSummary(const QString& context);
 static void logNr2WisdomGenerationSummary(SpectralNR::WisdomResult result);
 static void applyNr2Settings(SpectralNR& nr2);
 static void copyNr2Settings(const SpectralNR& source, SpectralNR& target);
+static void applyRn2Settings(RNNoiseFilter& rn2);
 #ifdef HAVE_SPECBLEACH
 static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4);
 static void copyNr4Settings(const SpecbleachFilter& source,
@@ -1030,6 +1033,8 @@ AudioEngine::createRn2Filter(const QString& label) const
             << "AudioEngine: RN2 rnnoise_create() failed for" << label;
         return {};
     }
+    // Restore the feature-owned RN2 configuration.
+    applyRn2Settings(*filter);
     return filter;
 }
 
@@ -1839,16 +1844,20 @@ AudioEngine::AudioEngine(QObject* parent)
         DeviceDiagnostics::buildAudioStartupSnapshot(this, QJsonObject{}));
     logNr2WisdomSummary(QStringLiteral("startup"));
 
-    // Opus TX pacing timer — sends one queued packet every 10ms for even
-    // delivery timing. Without this, QAudioSource delivers bursts of samples
-    // that get Opus-encoded and sent back-to-back, causing jitter-induced
-    // crackling on SmartLink/WAN connections.
+    // Opus TX pacing timer — follows a 10 ms wall-clock schedule. The mic
+    // callback and RN2 share this event loop, so late timer events drain a
+    // small bounded catch-up batch rather than permanently losing ground.
     m_opusTxPaceTimer = new QTimer(this);
     m_opusTxPaceTimer->setTimerType(Qt::PreciseTimer);
     m_opusTxPaceTimer->setInterval(10);
+    m_opusTxPaceClock.start();
     connect(m_opusTxPaceTimer, &QTimer::timeout, this, [this]() {
-        if (m_opusTxQueue.isEmpty()) return;
-        emit txPacketReady(m_opusTxQueue.takeFirst());
+        OpusTxPacer::DrainResult drain =
+            m_opusTxPacer.takeDue(m_opusTxPaceClock.elapsed(),
+                                  m_txPacketCount);
+        for (const QByteArray& packet : drain.packets) {
+            emit txPacketReady(packet);
+        }
     });
     m_opusTxPaceTimer->start();
 
@@ -3046,6 +3055,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 
         if (requestedMode == QLatin1String("RN2")) {
             RNNoiseFilter rn2;
+            applyRn2Settings(rn2);
             if (!rn2.isValid()) {
                 return QJsonObject{
                     {QStringLiteral("ok"), false},
@@ -4478,11 +4488,14 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             externalSource ? externalSource->id : QString(),
             *output, scopeSampleRate, 2);
         if (!txPresentationGated) {
+            // Same literal the captureAutomationAudio() call just above passes
+            // for this same buffer — this path always produces interleaved
+            // stereo. A mono RX source changes both, together.
             emit receivePresentationPostDspAudioReady(
                 source == RxDspSource::KiwiSdr ? QStringLiteral("kiwi")
                                                : QStringLiteral("flex"),
                 externalSource ? externalSource->id : QString(),
-                *output, scopeSampleRate);
+                *output, scopeSampleRate, 2);
         }
         outputBuffer.append(*output);
         if (!txPresentationGated) {
@@ -6476,6 +6489,14 @@ static void applyNr2Settings(SpectralNR& nr2)
     nr2.setAeFilter(config.aeFilter);
 }
 
+// RN2's only user-adjustable parameter. The TX (ProcessedMono) instance is
+// deliberately NOT fed this: the dry mix exists so RX gaps between phrases do
+// not go dead, which is meaningless for a mic pre-amp.
+static void applyRn2Settings(RNNoiseFilter& rn2)
+{
+    rn2.setDryMix(Rn2SettingsModel::instance().config().rxDryMix);
+}
+
 static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
 {
     target.setGainMax(source.gainMax());
@@ -6637,6 +6658,18 @@ void AudioEngine::setNr2Enabled(bool on)
     }
     qCDebug(lcAudio) << "AudioEngine: NR2" << (on ? "enabled" : "disabled");
     emit nr2EnabledChanged(on);
+}
+
+void AudioEngine::setRn2DryMix(float value)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_rn2) m_rn2->setDryMix(value);
+    if (m_kiwiSdrRn2) m_kiwiSdrRn2->setDryMix(value);
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->rn2) {
+            source->rn2->setDryMix(value);
+        }
+    }
 }
 
 void AudioEngine::setNr2GainMax(float v)
@@ -7089,6 +7122,20 @@ void AudioEngine::setRn2TxEnabled(bool on)
     saveAetherialTubePreampTxSettings();
     qCDebug(lcAudio) << "AudioEngine: RN2 TX (RNNoise mic pre-amp)" << (on ? "enabled" : "disabled");
     emit rn2TxEnabledChanged(on);
+}
+
+QJsonObject AudioEngine::opusTxPacingDiagnostics() const
+{
+    return QJsonObject{
+        {QStringLiteral("queueDepth"), m_opusTxPacer.queueDepth()},
+        {QStringLiteral("maxQueueDepth"), m_opusTxPacer.maxQueueDepth()},
+        {QStringLiteral("packetsSent"),
+         static_cast<double>(m_opusTxPacer.packetsSent())},
+        {QStringLiteral("catchUpPackets"),
+         static_cast<double>(m_opusTxPacer.catchUpPackets())},
+        {QStringLiteral("droppedPackets"),
+         static_cast<double>(m_opusTxPacer.droppedPackets())},
+    };
 }
 
 // ─── DFNR (DeepFilterNet3 neural noise reduction) ────────────────────────────
@@ -8257,8 +8304,7 @@ void AudioEngine::onTxAudioReady()
             // Word 0: type=3 (ExtDataWithStream), C=1, T=0, TSI=3, TSF=1
             p[0] = qToBigEndian<quint32>(
                 (3u << 28) | (1u << 27) | (3u << 22) | (1u << 20)
-                | ((m_txPacketCount & 0x0F) << 16) | sizeWords);
-            m_txPacketCount = (m_txPacketCount + 1) & 0x0F;
+                | sizeWords);
             p[1] = qToBigEndian(m_remoteTxStreamId);    // remote_audio_tx stream
             p[2] = qToBigEndian<quint32>(0x00001C2D);   // OUI (FlexRadio)
             p[3] = qToBigEndian<quint32>(0x534C0000 | 0x8005);  // ICC=0x534C, PCC=0x8005
@@ -8267,12 +8313,22 @@ void AudioEngine::onTxAudioReady()
             memcpy(pkt.data() + 28, opus.constData(), opus.size());
 
             // Queue for paced delivery instead of sending immediately.
-            // The 10ms pacing timer drains one packet per tick for even
-            // timing over SmartLink/WAN. Cap queue to ~200ms to prevent
-            // runaway growth if the mic delivers faster than real-time.
-            m_opusTxQueue.append(pkt);
-            if (m_opusTxQueue.size() > 20)
-                m_opusTxQueue.removeFirst();
+            // The 10 ms pacer follows elapsed deadlines and drains a bounded
+            // catch-up batch after a late timer event. Cap the queue to
+            // ~200 ms if the producer still outruns that recovery.
+            if (m_opusTxPacer.enqueue(std::move(pkt))) {
+                ++m_opusTxDropsSinceLog;
+                if (!m_opusTxDropLogTimer.isValid()
+                    || m_opusTxDropLogTimer.hasExpired(1000)) {
+                    qCWarning(lcAudio)
+                        << "AudioEngine: Opus TX pacing queue overflow — dropped"
+                        << m_opusTxDropsSinceLog
+                        << "oldest 10 ms packet(s); queue depth"
+                        << m_opusTxPacer.queueDepth();
+                    m_opusTxDropsSinceLog = 0;
+                    m_opusTxDropLogTimer.restart();
+                }
+            }
         }
         return;
     }
@@ -8453,6 +8509,27 @@ void AudioEngine::setRadeMode(bool on)
 
 void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
 {
+    // A host-modulating backend (HL2) runs the modulator on THIS host and has
+    // no Flex TX stream id — the AFSK belongs in the final-monitor tap, not in
+    // VITA-49 packets aimed at a Flex. Gating on m_txStreamId here silently
+    // discarded every AX.25 frame on such a radio, the same class of bug that
+    // made WSJT-X key the rig and transmit silence (see setHostModulation()
+    // and feedDaxTxAudioInternal()).
+    //
+    // forceRadioDaxRoute is irrelevant on this arm — the host-modulation branch
+    // returns before the route choice — but it is passed for symmetry with the
+    // WSPR pump, which feeds the same entry point with pre-shaped tones.
+    //
+    // No PTT gate here: Hl2Backend::submitTxAudio drops audio unless keyed, so
+    // the gate lives with the consumer. m_transmitting is decoded from Flex
+    // interlock status a host-modulating radio never sends, so testing it would
+    // discard everything.
+    if (m_hostModulation) {
+        feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
+                               /*forceRadioDaxRoute=*/true);
+        return;
+    }
+
     if (m_txStreamId == 0) return;
 
     // Gate modem audio on PTT (prevents radio pre-buffer build-up)
@@ -8499,7 +8576,7 @@ void AudioEngine::setTransmitting(bool tx)
         m_txAccumulator.clear();
         m_txFloatAccumulator.clear();
         m_daxPreTxBuffer.clear();
-        m_opusTxQueue.clear();
+        m_opusTxPacer.clear();
     }
 }
 

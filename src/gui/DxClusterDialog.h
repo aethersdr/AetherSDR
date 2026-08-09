@@ -4,6 +4,7 @@
 
 #include <QAbstractTableModel>
 #include <QSortFilterProxyModel>
+#include <QHash>
 #include <QSet>
 #include <QVector>
 #include "core/DxClusterClient.h"
@@ -11,6 +12,8 @@
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
+#include "core/EibiClient.h"
+#include "core/N1MMSpotClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
 #endif
@@ -84,7 +87,8 @@ class DxClusterDialog : public PersistentDialog {
 public:
     explicit DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
                              WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
-                             PotaClient* potaClient,
+                             PotaClient* potaClient, EibiClient* eibiClient,
+                             N1MMSpotClient* n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                              FreeDvClient* freedvClient,
 #endif
@@ -94,6 +98,14 @@ public:
 
     void updateStatus();
     void setTotalSpots(int count);
+#ifdef HAVE_WEBSOCKETS
+    // Re-reads FreeDvMyMessage from AppSettings. Called on each SpotHub open
+    // so an edit made in the FreeDV Reporter panel (same setting) is
+    // reflected here — this dialog is a persistent singleton
+    // (showOrRaisePersistent), so without this the field would only ever
+    // show whatever it was at first construction (#4231 review).
+    void reloadFreedvMessage();
+#endif
 
 signals:
     void connectRequested(const QString& host, quint16 port, const QString& callsign);
@@ -106,6 +118,11 @@ signals:
     void spotCollectorStopRequested();
     void potaStartRequested(int intervalSec);
     void potaStopRequested();
+    void eibiStartRequested();
+    void eibiStopRequested();
+    void eibiUpdateNowRequested();
+    void n1mmStartRequested(quint16 port);
+    void n1mmStopRequested();
 #ifdef HAVE_WEBSOCKETS
     void freedvStartRequested();
     void freedvStopRequested();
@@ -135,6 +152,9 @@ private:
     void buildWsjtxTab(QTabWidget* tabs);
     void buildSpotCollectorTab(QTabWidget* tabs);
     void buildPotaTab(QTabWidget* tabs);
+    void buildEiBiTab(QTabWidget* tabs);
+    void updateEibiTimestamps();
+    void buildN1mmTab(QTabWidget* tabs);
 #ifdef HAVE_WEBSOCKETS
     void buildFreeDvTab(QTabWidget* tabs);
 #endif
@@ -160,14 +180,18 @@ private:
     QString m_rbnLogPath;
     QString m_wsjtxLogPath;
     QString m_potaLogPath;
+    QString m_eibiLogPath;
     QString m_freedvLogPath;
     QString m_scLogPath;
+    QString m_n1mmLogPath;
 
     DxClusterClient*      m_client;
     DxClusterClient*      m_rbnClient;
     WsjtxClient*          m_wsjtxClient;
     SpotCollectorClient*  m_spotCollectorClient;
     PotaClient*           m_potaClient;
+    EibiClient*           m_eibiClient;
+    N1MMSpotClient*       m_n1mmSpotClient;
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*    m_freedvClient;
 #endif
@@ -219,6 +243,26 @@ private:
     QPushButton*    m_potaAutoStartBtn;
     QLabel*         m_potaStatusLabel;
     QPlainTextEdit* m_potaConsole;
+
+    // EiBi tab
+    QPushButton*    m_eibiStartBtn{nullptr};
+    QPushButton*    m_eibiUpdateBtn{nullptr};
+    QPushButton*    m_eibiAutoStartBtn{nullptr};
+    QLabel*         m_eibiStatusLabel{nullptr};
+    QLabel*         m_eibiCacheTimeLabel{nullptr};
+    QLabel*         m_eibiNextFetchLabel{nullptr};
+    QPlainTextEdit* m_eibiConsole{nullptr};
+
+    // N1MM/DXLog tab (#2906)
+    QSpinBox*       m_n1mmPortSpin{nullptr};
+    QSpinBox*       m_n1mmLifetimeSpin{nullptr};
+    QPushButton*    m_n1mmStartBtn{nullptr};
+    QPushButton*    m_n1mmAutoStartBtn{nullptr};
+    QLabel*         m_n1mmStatusLabel{nullptr};
+    QPlainTextEdit* m_n1mmConsole{nullptr};
+    // spotKey() -> last status logged to the Spot List, so a re-broadcast that
+    // changed nothing doesn't add another row for the same station (#2906).
+    QHash<QString, QString> m_n1mmLastLoggedStatus;
 
 #ifdef HAVE_WEBSOCKETS
     // FreeDV tab — connection controls

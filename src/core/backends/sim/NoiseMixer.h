@@ -154,7 +154,10 @@ private:
     // phase jump is exactly the click genCw's 5 ms raised-cosine edges exist
     // to prevent. m_cwPhase stays purely as the keying-schedule clock. (#4618)
     double m_cwPhaseRad = 0.0;
-    qint64 m_plPhase = 0;      // sample counter; long overflows in ~25 h on LLP64 (#4618)
+    // Power-line fundamental phase as CONTINUOUS RADIANS (harmonic h derives as
+    // sin(h·φ)) — the last absolute-time oscillator, converted in #4668 so a
+    // live 50↔60 Hz change bends instead of teleporting. Wrapped to [0, 2π).
+    double m_plPhaseRad = 0.0;
     // Voice playback: the bundled speech clip's samples (mono float, 24 kHz),
     // loaded once, and the loop read position.
     std::vector<float> m_voiceSamples;

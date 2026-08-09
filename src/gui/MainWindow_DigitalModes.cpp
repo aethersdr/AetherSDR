@@ -143,6 +143,40 @@ void MainWindow::startKissTncOnStartupIfConfigured()
 #endif
 }
 
+Ax25HfPacketDecodeDialog* MainWindow::ensureAx25HfPacketDecodeDialog()
+{
+    if (m_ax25HfPacketDecodeDialog)
+        return m_ax25HfPacketDecodeDialog.data();
+
+    // Construct hidden and persistent, exactly as
+    // startKissTncOnStartupIfConfigured() does. The automation bridge must be
+    // able to drive the modem on a headless soak box where nobody ever opened
+    // the window; the dialog is a service host, not just a view.
+    TncSettings::migrateLegacy();
+    auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, activeSlice(), this);
+    dlg->setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+    m_ax25HfPacketDecodeDialog = dlg;
+    trackPersistentDialog(dlg);
+#ifdef HAVE_MQTT
+    dlg->setMqttClient(m_mqttClient);
+#endif
+    return dlg;
+}
+
+QJsonObject MainWindow::automationModemCommand(const QString& verb,
+                                               const QString& action,
+                                               const QString& value)
+{
+    Ax25HfPacketDecodeDialog* dlg = ensureAx25HfPacketDecodeDialog();
+    if (!dlg) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"), QStringLiteral("could not construct the AetherModem window")}};
+    }
+    return dlg->automationCommand(verb, action, value);
+}
+
 // External-controller methods (FlexControl, HID encoders / RC-28 / TMate 2 /
 // Ulanzi / PowerMate / Shuttle, StreamDeck labels, control-devices snapshot)
 // live in MainWindow_Controllers.cpp (#3351 Phase 1a).
@@ -928,6 +962,21 @@ void MainWindow::showFreeDvReporter()
         connect(m_freedvClient, &FreeDvClient::stationRemoved,
                 m_freedvReporterDialog, &FreeDvReporterDialog::onStationRemoved,
                 Qt::QueuedConnection);
+        // Status message (#4231) — the client lives on m_spotThread, so the
+        // send hops threads via invokeMethod (mirrors the SpotHub wiring in
+        // MainWindow_Menus.cpp), and the enable/disable state comes back over
+        // a queued connection.
+        connect(m_freedvReporterDialog, &FreeDvReporterDialog::messageChanged,
+                this, [this](const QString& msg) {
+            QMetaObject::invokeMethod(m_freedvClient,
+                                      [this, msg] { m_freedvClient->updateMessage(msg); });
+        });
+        connect(m_freedvClient, &FreeDvClient::reportingStateChanged,
+                m_freedvReporterDialog, &FreeDvReporterDialog::setReportingActive,
+                Qt::QueuedConnection);
+        // Seed: reporting may already be on when the dialog is first opened.
+        m_freedvReporterDialog->setReportingActive(
+            m_freedvClient->isReportingEnabled());
         if (auto* s = activeSlice())
             m_freedvReporterDialog->setActiveSlice(s);
         // Seed with current state — bulk_update fires at connect time, before the
@@ -951,6 +1000,9 @@ void MainWindow::showFreeDvReporter()
             grid = m_freedvClient->myGrid();
         m_freedvReporterDialog->setMyGrid(grid);
     }
+    // Re-read the message every open so an edit made in SpotHub's FreeDV tab
+    // (same FreeDvMyMessage setting) doesn't leave this field stale (#4231).
+    m_freedvReporterDialog->reloadMessage();
     m_freedvReporterDialog->show();
     m_freedvReporterDialog->raise();
     m_freedvReporterDialog->activateWindow();

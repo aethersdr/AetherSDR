@@ -104,8 +104,9 @@ TU — the whole point is to stop `MainWindow.cpp` from re-accreting.
 
 - **It's the same class.** Define `void MainWindow::foo()` in the sibling TU;
   declare `foo()` in `MainWindow.h` as usual. No `friend`, no new class.
-- **Carry includes explicitly.** The Linux CI floor is **Qt 6.4.2**; do not rely
-  on transitive includes that only resolve on newer Qt. A sibling TU must
+- **Carry includes explicitly.** The Linux CI image is on **Qt 6.8.3** while
+  macOS runs 6.11.x; do not rely on transitive includes that only resolve on
+  the newer Qt. A sibling TU must
   `#include` every header for the symbols *it* uses, even if `MainWindow.cpp`
   already included them. (This bit #3532; grep moved code for `Q[A-Z]` symbols
   and add the includes.)

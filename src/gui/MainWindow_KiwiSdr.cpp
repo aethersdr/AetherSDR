@@ -1426,7 +1426,8 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
             spectrum->wfColorScheme(), spectrum->showGrid(),
             spectrum->fftLineWidth(), spectrum->wfAutoBlackRadioSide(),
             spectrum->spectrumRenderMode(), spectrum->dssFloorDepth(),
-            spectrum->dssGain(), spectrum->fftLineColor());
+            spectrum->dssGain(), spectrum->fftLineColor(),
+            spectrum->dssRowSpan());
     };
 
     // Capture the pre-sync display source: leaving kiwi display is the

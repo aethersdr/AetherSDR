@@ -884,13 +884,7 @@ void KiwiSdrClient::openWebSockets()
             }
         }
     });
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(m_soundSocket, &QWebSocket::errorOccurred, this,
-#else
-    connect(m_soundSocket,
-            QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error),
-            this,
-#endif
             [this](QAbstractSocket::SocketError) {
                 const QString error =
                     m_soundSocket ? m_soundSocket->errorString() : QString();
@@ -951,13 +945,7 @@ void KiwiSdrClient::openWebSockets()
             }
         }
     });
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(m_waterfallSocket, &QWebSocket::errorOccurred, this,
-#else
-    connect(m_waterfallSocket,
-            QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error),
-            this,
-#endif
             [this](QAbstractSocket::SocketError) {
                 const QString error = m_waterfallSocket
                     ? m_waterfallSocket->errorString()

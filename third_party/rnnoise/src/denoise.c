@@ -454,10 +454,12 @@ void rnn_pitch_filter(kiss_fft_cpx *X, const kiss_fft_cpx *P, const float *Ex, c
   }
 }
 
-float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
+static float rnnoise_process_frame_impl(DenoiseState *st, float *out,
+                                        const float *in, float dry_mix) {
   int i;
   kiss_fft_cpx X[FREQ_SIZE];
   kiss_fft_cpx P[FREQ_SIZE];
+  kiss_fft_cpx dry_X[FREQ_SIZE];
   float x[FRAME_SIZE];
   float Ex[NB_BANDS], Ep[NB_BANDS];
   float Exp[NB_BANDS];
@@ -468,10 +470,14 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   int silence;
   static const float a_hp[2] = {-1.99599, 0.99600};
   static const float b_hp[2] = {-2, 1};
+  dry_mix = MIN16(1.f, MAX16(0.f, dry_mix));
   rnn_biquad(x, st->mem_hp_x, in, b_hp, a_hp, FRAME_SIZE);
   silence = rnn_compute_frame_features(st, X, P, Ex, Ep, Exp, features, x);
 
   if (!silence) {
+    if (dry_mix > 0) {
+      RNN_COPY(dry_X, st->delayed_X, FREQ_SIZE);
+    }
 #if !TRAINING
     compute_rnn(&st->model, &st->rnn, g, &vad_prob, features, st->arch);
 #endif
@@ -492,6 +498,13 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
       st->delayed_X[i].i *= gf[i];
     }
 #endif
+    if (dry_mix > 0) {
+      const float wet_mix = 1.f - dry_mix;
+      for (i=0;i<FREQ_SIZE;i++) {
+        st->delayed_X[i].r = wet_mix*st->delayed_X[i].r + dry_mix*dry_X[i].r;
+        st->delayed_X[i].i = wet_mix*st->delayed_X[i].i + dry_mix*dry_X[i].i;
+      }
+    }
   }
   frame_synthesis(st, out, st->delayed_X);
 
@@ -503,3 +516,11 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   return vad_prob;
 }
 
+float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
+  return rnnoise_process_frame_impl(st, out, in, 0.f);
+}
+
+float rnnoise_process_frame_with_dry_mix(DenoiseState *st, float *out,
+                                         const float *in, float dry_mix) {
+  return rnnoise_process_frame_impl(st, out, in, dry_mix);
+}

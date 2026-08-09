@@ -13,6 +13,7 @@
 #include "AmpApplet.h"
 #include "DemoApplet.h"
 #include "AcomApplet.h"
+#include "SpeApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -759,6 +760,18 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // SPE Expert amplifier — independent of AMP (PGXL) and ACOM for the same
+    // multi-amplifier-station reason. See
+    // docs/architecture/spe-expert-amplifier-design.md.
+    m_speApplet = new SpeApplet;
+    {
+        auto entry = makeEntry("SPE", "SPE Expert Amplifier", m_speApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_speBtn = entry.btn;
+        markHardwareConditional("SPE");
+        m_appletOrder.append(entry);
+    }
+
     m_txApplet = new TxApplet;
     m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true, m_drawer, m_drawerLayout));
 
@@ -1469,6 +1482,24 @@ void AppletPanel::applyCapabilityVisibility(const QString& id,
     applyBarLayout();
 }
 
+void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
+{
+    if (m_rxApplet)
+        m_rxApplet->setRadioFilterWidths(widthsHz);
+}
+
+void AppletPanel::setMicLevelMeterAvailable(bool available)
+{
+    if (m_phoneCwApplet)
+        m_phoneCwApplet->setMicLevelMeterAvailable(available);
+}
+
+void AppletPanel::setSelectableMicInputs(bool selectable)
+{
+    if (m_phoneCwApplet)
+        m_phoneCwApplet->setSelectableMicInputs(selectable);
+}
+
 void AppletPanel::setProfilesVisible(bool visible)
 {
     applyCapabilityVisibility(QStringLiteral("PROF"),
@@ -1518,6 +1549,12 @@ void AppletPanel::setAmpVisible(bool visible)
 void AppletPanel::setAcomVisible(bool visible)
 {
     updateHardwareAvailability("ACOM", "Applet_ACOM", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setSpeVisible(bool visible)
+{
+    updateHardwareAvailability("SPE", "Applet_SPE", visible);
     applyBarLayout();
 }
 

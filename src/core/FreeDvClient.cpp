@@ -37,12 +37,7 @@ void FreeDvClient::initialize()
     connect(m_ws, &QWebSocket::connected, this, &FreeDvClient::onWsConnected);
     connect(m_ws, &QWebSocket::disconnected, this, &FreeDvClient::onWsDisconnected);
     connect(m_ws, &QWebSocket::textMessageReceived, this, &FreeDvClient::onWsTextMessage);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(m_ws, &QWebSocket::errorOccurred, this, &FreeDvClient::onWsError);
-#else
-    connect(m_ws, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error),
-            this, &FreeDvClient::onWsError);
-#endif
     connect(m_reconnectTimer, &QTimer::timeout, this, &FreeDvClient::onReconnectTimer);
     connect(m_snrTimer,       &QTimer::timeout, this, &FreeDvClient::onSnrTimer);
 
@@ -528,6 +523,7 @@ void FreeDvClient::enableReporting(const QString& callsign, const QString& grid,
 
     qCDebug(lcDxCluster) << "FreeDvClient: reporting enabled for" << callsign
                           << "grid" << grid << "freq" << freqMhz << "MHz";
+    emit reportingStateChanged(true);
 
     if (m_connected.load() &&
         m_ws->state() != QAbstractSocket::ClosingState) {
@@ -548,6 +544,7 @@ void FreeDvClient::disableReporting()
     m_lastSnr    = -99.0f;
 
     qCDebug(lcDxCluster) << "FreeDvClient: reporting disabled";
+    emit reportingStateChanged(false);
 
     if (m_connected.load() &&
         m_ws->state() != QAbstractSocket::ClosingState) {
@@ -609,7 +606,7 @@ void FreeDvClient::updateRxSynced(bool synced)
 void FreeDvClient::updateRxCallsign(const QString& callsign)
 {
     qCDebug(lcDxCluster) << "FreeDvClient: EOO callsign received:" << callsign
-                        << "reporting=" << m_reportingEnabled
+                        << "reporting=" << m_reportingEnabled.load()
                         << "connected=" << m_connected.load()
                         << "synced=" << m_radeSynced
                         << "snr=" << m_lastSnr;

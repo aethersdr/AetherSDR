@@ -107,23 +107,30 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 # the Tier-2 .github/workflows/ default above. The release signing/publish
 # pipeline runs with the signing secret, and codeql.yml invokes the security
 # scan (which is NOT a required status check, so a Tier-2 edit could disable it
-# undetected). Routine CI workflows stay Tier 2. Keep these two lists in sync
+# undetected). Routine CI workflows stay Tier 2. Keep the list below in sync
 # with .github/workflows/ as workflows are added/renamed.
 #
 # The criterion is "produces or feeds a signed/official release artifact." That
 # includes producer workflows whose output a Tier-1 release step consumes, even
 # if the producer itself doesn't hold a secret — poisoning the input defeats the
 # consumer's gate. Specifically:
-#   - build-macos-qt.yml publishes the Qt tarball (deps-qt-* release) that the
-#     Tier-1 macos-dmg.yml downloads and bakes into the *signed* DMG.
 #   - streamdeck-plugins.yml uploads *.zip artifacts onto the v* release, which
 #     sign-release.yml (Tier 1) then GPG-signs with the release key.
-# Both were left at Tier 2 in the initial carve-out; a Tier-2 edit to either
-# reaches around the release gate, so they are carved to Tier 1 as well.
+# It was left at Tier 2 in the initial carve-out; a Tier-2 edit reaches around
+# the release gate, so it is carved to Tier 1 as well.
+#
+# build-macos-qt.yml was listed here for the same reason — it published the
+# deps-qt-* Qt tarball that macos-dmg.yml baked into the signed DMG. That
+# workflow is retired: both macOS legs now take Qt from aqtinstall, as Windows
+# and both AppImages already did. Worth naming what that does to the supply
+# chain rather than treating it as a pure win — it drops a build input we
+# produced ourselves and could audit, in favour of prebuilt binaries from Qt's
+# CDN. The trade is deliberate: it is the same trust boundary every other
+# release artifact already sits behind, and it retires a ~2 h from-source build
+# nobody was reviewing the output of.
 .github/workflows/codeql.yml             @aethersdr/maintainers
 .github/workflows/sign-release.yml       @aethersdr/maintainers
 .github/workflows/macos-dmg.yml          @aethersdr/maintainers
-.github/workflows/build-macos-qt.yml     @aethersdr/maintainers
 .github/workflows/windows-installer.yml  @aethersdr/maintainers
 .github/workflows/appimage.yml           @aethersdr/maintainers
 .github/workflows/docker-ci-image.yml    @aethersdr/maintainers

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/tnc/Ax25.h"
+#include "core/tnc/Ax25LinkTiming.h"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -88,6 +89,28 @@ public:
     void setMaxRetries(int n2);
     void setPaclen(int bytes);
 
+    // Which air interface the mailbox is answering on; re-derives T1/T2/T3 and
+    // paclen from it. Call whenever the modem profile changes. Until this
+    // existed the mailbox was pinned to VHF-sized timers with no operator
+    // control at all — see docs/HFMODEM.md §1.
+    void setLinkProfile(const ax25::LinkTimingProfile& profile);
+    // One-line description of the active link timing, for the GUI status panel.
+    QString linkSummary() const;
+    // The underlying data link, read-only — for the automation bridge's
+    // `link status` snapshot (live counters and RTT samples).
+    const Ax25Connection* link() const { return m_link; }
+
+    // How long a connected caller may sit silent before the mailbox hangs up.
+    // The mailbox serves one caller at a time and refuses everyone else with DM
+    // while busy, so an abandoned session locks it out for the whole channel.
+    // Milliseconds is the primitive; minutes is the operator-facing convenience.
+    void setSessionIdleTimeoutMs(int ms);
+    void setSessionIdleTimeoutMinutes(int minutes) { setSessionIdleTimeoutMs(minutes * 60000); }
+    int sessionIdleTimeoutMs() const { return m_sessionIdleMs; }
+    int sessionIdleTimeoutMinutes() const { return m_sessionIdleMs / 60000; }
+    // Whether a session is currently being watched for inactivity.
+    bool sessionIdleTimerActive() const;
+
     // ---- Stats for the GUI -------------------------------------------------
     int messageCount() const { return m_messages.size(); }
     int callerCount() const { return m_callers.size(); }
@@ -107,6 +130,12 @@ public slots:
     // Force-disconnect the current caller (graceful DISC).
     void disconnectCaller();
 
+    // Drop the session immediately WITHOUT transmitting anything, leaving the
+    // mailbox's enabled state alone. For when the radio interface goes away
+    // under us (the modem being switched off): a graceful DISC would key a
+    // transmitter the operator just asked us to stop using.
+    void dropLink();
+
     // Send a beacon immediately (also called by the hourly timer).
     void sendBeaconNow();
 
@@ -122,6 +151,8 @@ private:
     void onLinkConnected(const ax25::Address& peer);
     void onLinkDisconnected(const ax25::Address& peer, bool byPeer);
     void onLinkData(const QByteArray& data);
+    void onSessionIdleTimeout();
+    void touchSession(); // caller showed signs of life; restart the idle clock
 
     void recordHeard(const ax25::Frame& frame);
     void recordCaller(const ax25::Address& peer);
@@ -156,8 +187,16 @@ private:
     void saveCallers() const;
     void saveHeard() const;
 
+    // Cap on unterminated inbound text. paclen tops out at 256 bytes and a
+    // mailbox command is a few dozen characters, so anything approaching this
+    // is a stuck peer or noise decoded off the channel, never real input.
+    static constexpr int kMaxLineBufferChars = 4096;
+    static constexpr int kDefaultSessionIdleMs = 10 * 60 * 1000;
+
     Ax25Connection* m_link{nullptr};
     QTimer* m_beaconTimer{nullptr};
+    QTimer* m_sessionIdleTimer{nullptr};
+    int m_sessionIdleMs{kDefaultSessionIdleMs};
 
     bool m_enabled{false};
     ax25::Address m_listen; // primary listen address (invalid until configured)

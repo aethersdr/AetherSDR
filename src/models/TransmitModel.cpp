@@ -389,11 +389,13 @@ void TransmitModel::setTransmitting(bool tx)
 void TransmitModel::atuStart()
 {
     emit commandReady("atu start");
+    emit atuCommandIssued(true);
 }
 
 void TransmitModel::atuBypass()
 {
     emit commandReady("atu bypass");
+    emit atuCommandIssued(false);
 }
 
 void TransmitModel::setAtuMemories(bool on)
@@ -460,6 +462,12 @@ void TransmitModel::setMicLevel(int level)
         m_micLevel = level;
         emit micStateChanged();  // PhoneCwApplet's mic slider binds to this
     }
+    // Unconditional, like commandReady below and deliberately NOT inside the
+    // changed test: a host-modulating backend is the authority on its own gain
+    // and may have been reset (reconnect, radio swap) while m_micLevel stood
+    // still. Re-asserting a value the seam already holds is free; failing to
+    // re-assert one it has lost leaves the operator's slider lying.
+    emit micLevelCommandIssued(level);
     emit commandReady(QString("transmit set miclevel=%1").arg(level));
 }
 
@@ -498,6 +506,16 @@ bool TransmitModel::applySpeechProcessorState(bool on, int level)
     }
     m_speechProcEnable = on;
     m_speechProcLevel = level;
+    emit micStateChanged();
+    return true;
+}
+
+bool TransmitModel::applyMicSelectionState(const QString& input)
+{
+    if (input.isEmpty() || m_micSelection == input) {
+        return false;
+    }
+    m_micSelection = input;
     emit micStateChanged();
     return true;
 }
@@ -546,6 +564,7 @@ void TransmitModel::setVoxEnable(bool on)
     m_voxEnable = on;  // optimistic update — radio may not echo
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_enable=%1").arg(on ? 1 : 0));
+    emit voxCommandIssued(on, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setVoxLevel(int level)
@@ -554,6 +573,7 @@ void TransmitModel::setVoxLevel(int level)
     m_voxLevel = level;
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_level=%1").arg(level));
+    emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setVoxDelay(int delay)
@@ -562,6 +582,7 @@ void TransmitModel::setVoxDelay(int delay)
     m_voxDelay = delay;
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_delay=%1").arg(delay));
+    emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setMicBoost(bool on)

@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.7.4.1
+## Current cycle: post-v26.8.1
 
 ### In flight
 
@@ -22,11 +22,24 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   interface. Remaining: the versioned protocol (RFC step 3+) that lets a
   headless `aetherd` and thin UI clients split apart; UI code still consumes
   models directly, and that remains correct until it lands.
+- **Hermes-Lite 2 — from experimental to supported** — the backend arrived
+  experimental in v26.7.4 and grew most of the way to parity in v26.8.1: four
+  independent receivers, the SSB voice chain, CW/RTTY decoding and the QSO
+  recorder, AX.25 packet with an on-air-proven mailbox, band switching with
+  hardware filters and preamp, host-side memory channels, per-MAC operating-state
+  restore with per-band drive/LNA memory, live connection health and a Radio
+  Health dialog. **The experimental → supported call itself is still open**;
+  what remains before making it is wider mode coverage, panadapter/waterfall
+  parity with the Flex path, and hardening the raw-IQ DSP chain (HL2 ships raw
+  IQ, so the client does all the tune/decimate/demodulate work a Flex does
+  on-radio).
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
-  The storage layer moved to SQLite (RFC #4603); new radio-scoped
-  configuration lands as versioned feature documents in `radio_settings`,
-  and legacy flat keys migrate feature-by-feature.
+  The storage layer moved to SQLite and the scoped feature-document store,
+  BandStack and memory-bank fold-ins, and the Settings Browser all shipped in
+  v26.8.1 (RFC #4603, PRs 1–6). New radio-scoped configuration lands as
+  versioned feature documents in `radio_settings`; the remaining work is
+  migrating the legacy flat keys feature-by-feature.
 - **TX DSP chain visual rebuild** — stage-per-applet chain with the
   visual `CHAIN` widget as the primary entry point.
 - **Flathub submission** — the AppStream metainfo and manpage landed in
@@ -34,21 +47,10 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Queued (next cycle)
 
-- **Hermes-Lite 2 — from experimental to supported** — an experimental backend
-  landed in v26.7.4 (receive, transmit, TCI/WSJT-X, operator-controllable span,
-  per-radio nicknames), but HL2 is not a supported radio family yet. Getting
-  there means wider mode coverage, panadapter/waterfall parity with the Flex
-  path, and hardening the raw-IQ DSP chain (HL2 ships raw IQ, so the client does
-  all the tune/decimate/demodulate work a Flex does on-radio).
-  **Multi-receiver** is now in: the shipping gateware exposes four DDCs behind
-  its single ADC, and the backend runs up to four independent slices and
-  panadapters, opted into and remembered. Both axes draw on one 100BASE-T link,
-  so four receivers are available through 192 kHz and three at 384 kHz. Still to
-  prove on real hardware — the simulator's scene does not follow the NCO, so
-  independent tuning is confirmed only at the register level.
 - **KiwiSDR follow-ups** — WebSDR / OpenWebRX support on top of the shipped
   public-receiver browser (per-receiver passwords, idle-release, and
-  waterfall polish already landed in v26.7.2).
+  waterfall polish landed in v26.7.2; warm audio through TX and the
+  resume-after-TX-delay option in v26.8.1).
 - **Extended region band plans** — DXCC entities outside IARU R1/R2/R3.
 - **macOS VirtualAudioBridge audit** ([#2940](https://github.com/aethersdr/AetherSDR/issues/2940))
   — focused security review of the macOS shared-memory audio bridge.
@@ -117,6 +119,46 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **Hermes-Lite 2 — four independent receivers** — up to four DDCs behind the
+  single ADC, each with its own NCO, slice, WDSP channel, audio, S-meter and
+  panadapter, added and closed at runtime. Sample rate, LNA gain, band and
+  antenna are shared because the hardware shares them; four receivers are
+  available through 192 kHz and three at 384 kHz on one 100BASE-T link
+  (v26.8.1).
+- **Hermes-Lite 2 — the SSB voice chain, decoders and packet** — the EQ applet,
+  PROC, TX cut filters, eSSB and the ALC/compression meters are wired to the
+  host modulator; CW and RTTY decoding and the QSO recorder work; and AX.25
+  packet (APRS, KISS TNC, terminal, mailbox) transmits, proven on the air with
+  two complete BBS sessions on 21.100 MHz (v26.8.1).
+- **Hermes-Lite 2 — band switching, memory and operating-state restore** —
+  band buttons, hardware LPF/BPF filters and the hardware preamp reach the
+  radio; host-side memory channels work on any radio with no slots of its own;
+  and frequency, mode, passband and span are restored per MAC, with TX drive
+  and LNA gain remembered per band (v26.8.1).
+- **Client settings on SQLite** — transactional saves, startup integrity checks,
+  verified backups with quarantine and restore, credentials moved to the OS
+  keychain, a `--config` command line for repairing a store that blocks startup,
+  per-radio versioned feature documents, and a Settings Browser for reading and
+  editing the whole store (RFC #4603, v26.8.1).
+- **Capability-gated UI** — every Flex-only surface hides itself on a backend
+  that has no such thing, declared by concept rather than by radio family:
+  profiles, DAX, the ATU chain, SmartLink, GPS presence, PA supply voltage, and
+  the DVK button's SmartSDR+ entitlement (v26.8.1).
+- **Qt 6.8.3 LTS everywhere** — the source floor, the CI image, both AppImage
+  architectures, the Windows installer and both macOS legs are now the same
+  pinned Qt, so one version covers every check and every artifact. The Apple
+  Silicon DMG stopped taking whatever Homebrew was publishing, the ARM AppImage
+  stopped silently falling back to CPU spectrum drawing, and the Linux AppImage
+  runs natively on Wayland (v26.8.1).
+- **The Intel Mac DMG reaches older hardware** — it declares and honours a
+  macOS 12.0 floor, down from 13.0. The speech-to-text runtime is published at a
+  macOS 15.5 floor and one library's floor becomes the whole bundle's, so
+  speech-to-text is dropped from the Intel artifact to get there; Apple Silicon
+  keeps it (v26.8.1).
+- **TCI PTT keys the slice the client asked for** — the fault two operators
+  reported across v26.7.3 and v26.7.4 was four separate defects in one path;
+  receiver numbers are also now stable across a slice recreate, and the routing
+  decision is logged (v26.8.1).
 - **TCI rig control hotfix** — a `vfo:` SET confirmed the *pre-tune* frequency,
   so WSJT-X concluded the radio had never moved and failed every band change,
   and relative tuning from a control surface oscillated instead of walking.

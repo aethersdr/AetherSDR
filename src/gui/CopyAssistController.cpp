@@ -155,7 +155,8 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     const QString savedGpu =
         CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QString()).toString();
     if (!savedGpu.isEmpty()) {
-        m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice always wins
+        m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice wins, unless it is known bad
+        m_gpuDeviceExplicit = true;
     }
     m_settings->setCurrentTier(m_tierId);
 
@@ -229,6 +230,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             return;
         }
         m_gpuDevice = index;
+        m_gpuDeviceExplicit = true;
         saveInt("AsrGpuDevice", index);
         if (m_backend != AsrBackendKind::Remote) {
             m_tap->setEnabled(false);
@@ -306,6 +308,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // per-utterance A/B/C labeling.
     m_speakerModels = new AsrModelManager(this);
     connect(m_speakerModels, &AsrModelManager::progress, this, [this](qint64 got, qint64 total) {
+        if (!m_defaultSpeakerRequestPending) {
+            return; // labeling switched off mid-download — stop repainting progress
+        }
         m_panel->setStatus(total > 0
                                ? tr("Downloading speaker model… %1%").arg(static_cast<int>(got * 100 / total))
                                : tr("Downloading speaker model…"));
@@ -315,6 +320,16 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     connect(m_speakerModels, &AsrModelManager::finished, this,
             [this](const QString& path) { onSpeakerModelReady(path); });
     connect(m_speakerModels, &AsrModelManager::failed, this, [this](const QString& err) {
+        const bool stillWanted = m_defaultSpeakerRequestPending && m_settings->labelSpeakers();
+        // Always clear the intent, including on the path that swallows the
+        // error: leaving it set would make the next completion look current.
+        m_defaultSpeakerRequestPending = false;
+        if (!stillWanted) {
+            // The operator already turned labeling off. Drop the error, but
+            // don't strand the panel on the abandoned download's progress text.
+            restoreListeningStatus();
+            return;
+        }
         m_panel->setStatus(tr("Speaker model download failed: %1").arg(err));
         m_settings->setLabelSpeakers(false);
     });
@@ -330,15 +345,36 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         saveInt("AsrSpeakerThreshold", pct);
         m_asr->setSpeakerThreshold(pct / 100.0f); // live, no engine rebuild
     });
+    // Boundary-word recovery / segment overlap (RFC #4821). Set the value before
+    // connecting so this init doesn't fire the slot; applied live afterward.
+    m_settings->setBoundaryOverlapMs(
+        CopyAssistSettings::value(QStringLiteral("AsrBoundaryOverlapMs"), QStringLiteral("0"))
+            .toString().toInt());
+    connect(m_settings, &CopyAssistSettingsDialog::boundaryOverlapChanged, this, [this](int ms) {
+        saveInt("AsrBoundaryOverlapMs", ms);
+        if (m_asr) {
+            m_asr->setOverlapMs(ms); // live, no engine rebuild
+        }
+    });
     connect(m_settings, &CopyAssistSettingsDialog::labelSpeakersToggled, this, [this](bool on) {
         CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
         if (!m_constructed) {
             return;
         }
+        m_asr->setSpeakerLabelingEnabled(on);
         if (on) {
             ensureSpeakerModel();
         } else {
-            rebuildEngine();
+            m_defaultSpeakerRequestPending = false;
+            if (!m_speakerLoad.isPending()) {
+                if (m_enabled && m_asr->isReady()) {
+                    m_tap->setEnabled(true);
+                }
+                // A "Preparing…"/"Downloading…" message may still be on screen
+                // from the enable this cancels; a load still in flight restores
+                // it from onSpeakerModelLoaded() instead.
+                restoreListeningStatus();
+            }
         }
     });
     connect(m_settings, &CopyAssistSettingsDialog::browseSpeakerModelRequested, this,
@@ -363,6 +399,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_models, &AsrModelManager::failed, this, [this](const QString& err) {
         m_panel->setBusy(false);
+        m_gpuFallbackNotice.clear(); // the fallback reload never got a model
         m_panel->setStatus(tr("Model download failed: %1").arg(err));
         m_panel->setAsrEnabled(false);
     });
@@ -462,11 +499,69 @@ void CopyAssistController::startGpuDiscovery()
     });
 }
 
-void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus)
+void CopyAssistController::reconcileAfterGpuFallback()
 {
+    // Reached from the event loop, so re-check every condition the caller saw:
+    // between queueing and running, the operator may have picked another device,
+    // switched to a backend that has no GPU of its own (remote/sherpa), or an
+    // earlier fallback may already have reconciled this one. Without the backend
+    // check a stale queued reconcile would stamp a GPU notice over the status of
+    // a backend the GPU has nothing to do with.
+    if (m_backend != AsrBackendKind::Whisper || m_gpuDevice < 0
+        || !asrGpuDeviceFailed(m_gpuDevice)) {
+        return;
+    }
+
+    // Reached queued from either signal: after a load-time fallback (the
+    // backend already retried on CPU and is running) or after a decode-time
+    // failure (the engine is still aimed at the latched device). Relabel the
+    // device and move the resolution off it — applyGpuDevices() rebuilds the
+    // engine when that changes the resolved device, which is what actually
+    // retires a decode-poisoned engine — then say so in the panel.
+    const int failedDevice = m_gpuDevice;
+    for (AsrGpuDevice& d : m_gpuDevices) {
+        if (d.index == failedDevice) {
+            d.usable = false;
+        }
+    }
+    const QString failedName = [&] {
+        for (const AsrGpuDevice& d : m_gpuDevices) {
+            if (d.index == failedDevice) {
+                return d.name;
+            }
+        }
+        return tr("The selected GPU");
+    }();
+
+    // A device known bad must be overridden even when explicitly chosen.
+    m_gpuDeviceExplicit = false;
+    applyGpuDevices(m_gpuDevices);
+
+    const bool onCpu = m_gpuDevice < 0;
+    const QString notice = onCpu
+        ? tr("%1 is unavailable — running on CPU. Transcription will be slower.")
+              .arg(failedName)
+        : tr("%1 is unavailable — switched to another GPU.").arg(failedName);
+
+    // applyGpuDevices() moved the resolution off the latched device, which
+    // rebuilt the engine — model-less, tap off. Left there, the panel looks
+    // live while the pipeline decodes nothing until the operator toggles
+    // Enable. Reload so the fallback ends in a running engine; the notice is
+    // parked for the rebuilt engine's ready() handler, which would otherwise
+    // overwrite it with "Listening…" the moment the reload lands.
+    if (m_enabled && m_backend == AsrBackendKind::Whisper) {
+        m_gpuFallbackNotice = notice;
+        beginEnable();
+    } else {
+        m_panel->setStatus(notice);
+    }
+}
+
+void CopyAssistController::applyGpuDevices(std::vector<AsrGpuDevice> gpus)
+{
+    m_gpuDevices = std::move(gpus);
     const int previousDevice = m_gpuDevice;
     int resolvedDevice = previousDevice;
-    bool persistResolvedDevice = false;
 
     // Adding or clearing combo items changes its current index. Suppress the
     // dialog's outward gpuChanged/tierChanged signals while discovery state is
@@ -476,28 +571,41 @@ void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus
         const QSignalBlocker blocker(m_settings);
         m_settings->clearGpuDevices();
 
-        if (!gpus.empty()) {
-            for (const AsrGpuDevice& gpu : gpus) {
-                m_settings->addGpuDevice(gpu.index, gpu.name);
+        if (!m_gpuDevices.empty()) {
+            for (const AsrGpuDevice& gpu : m_gpuDevices) {
+                // An unusable device stays selectable for diagnostics, but the
+                // combo says why it is not the default — whether it failed the
+                // capability probe or a load attempt this session.
+                m_settings->addGpuDevice(gpu.index,
+                                         gpu.usable ? gpu.name
+                                                    : tr("%1 (unavailable)").arg(gpu.name));
             }
             m_settings->addGpuDevice(-1, tr("CPU")); // explicit force-CPU option
 
-            if (resolvedDevice != -1
-                && (resolvedDevice < 0
-                    || resolvedDevice >= static_cast<int>(gpus.size()))) {
-                resolvedDevice = 0;
-                persistResolvedDevice = true;
+            const bool outOfRange = resolvedDevice != -1
+                && (resolvedDevice < 0 || resolvedDevice >= static_cast<int>(m_gpuDevices.size()));
+            const bool resolvedUnusable = [&] {
+                for (const AsrGpuDevice& g : m_gpuDevices) {
+                    if (g.index == resolvedDevice) {
+                        return !g.usable;
+                    }
+                }
+                return false;
+            }();
+            // Fall back to the first usable device (else CPU) when the choice
+            // was never explicit, has gone out of range, or names a device that
+            // cannot run the decode. A device the operator picked explicitly is
+            // still overridden once it is known-bad — leaving it selected would
+            // re-enter the failure on the next load.
+            // Not persisted: an unusable device can become usable again after a
+            // driver fix or reboot, and writing a computed value over the saved
+            // preference would pin that computation permanently.
+            if (!m_gpuDeviceExplicit || outOfRange || resolvedUnusable) {
+                resolvedDevice = asrResolveDefaultGpuIndex(m_gpuDevices);
             }
             m_settings->setCurrentGpu(resolvedDevice);
             m_settings->setGpuSelectorVisible(true);
             m_settings->setGpuSelectorEnabled(true);
-
-            // Preserve the existing GPU-host default, but only while the
-            // operator has not made an explicit model choice during the probe.
-            if (m_useGpuDefaultIfAvailable) {
-                m_tierId = QStringLiteral("large-v3-turbo");
-                m_settings->setCurrentTier(m_tierId);
-            }
         } else {
             // A failed, timed-out, or CPU-only probe must not trigger the same
             // registry initialization again from Whisper's worker. Force CPU
@@ -507,12 +615,35 @@ void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus
             m_settings->setGpuSelectorEnabled(false);
             m_settings->setGpuSelectorVisible(false);
         }
+
+        // Tier follows the device resolution (asrReconcileDefaultTier): the
+        // GPU-host default is preserved only while the operator has not made
+        // an explicit model choice AND the decode will actually run on a
+        // usable GPU — and an earlier auto-raise is walked back to the base
+        // default the moment resolution falls off the GPU. Without the
+        // walk-back, the load-time fallback arm kept large-v3-turbo running
+        // on CPU: the "backlog climbing, no text" symptom this PR opens with
+        // (#4767 review). An explicitly chosen tier is never changed.
+        const bool resolvedGpuUsable = resolvedDevice >= 0 && [&] {
+            for (const AsrGpuDevice& g : m_gpuDevices) {
+                if (g.index == resolvedDevice) {
+                    return g.usable;
+                }
+            }
+            return false;
+        }();
+        const AsrTierResolution tier = asrReconcileDefaultTier(
+            m_tierId, m_useGpuDefaultIfAvailable, m_gpuDefaultTierActive,
+            resolvedGpuUsable, QStringLiteral("large-v3-turbo"),
+            AsrModelCatalog::defaultTierId());
+        m_gpuDefaultTierActive = tier.gpuDefaultActive;
+        if (tier.tierId != m_tierId) {
+            m_tierId = tier.tierId;
+            m_settings->setCurrentTier(m_tierId);
+        }
     }
 
     m_gpuDevice = resolvedDevice;
-    if (persistResolvedDevice) {
-        saveInt("AsrGpuDevice", resolvedDevice);
-    }
     if (resolvedDevice != previousDevice && m_backend == AsrBackendKind::Whisper) {
         m_tap->setEnabled(false);
         buildEngine();
@@ -544,13 +675,9 @@ void CopyAssistController::buildEngine()
         segConfig.vadModelPath =
             CopyAssistSettings::value(QStringLiteral("AsrVadModelPath"), QString()).toString().toStdString();
     }
-    // Optional speaker labeling (A/B/C…): a speaker-embedding .onnx path + the
-    // cosine match threshold (stored 0–100 → 0.0–1.0).
-    if (CopyAssistSettings::value(QStringLiteral("AsrSpeakerEnabled"), QStringLiteral("False")).toString()
-        == QStringLiteral("True")) {
-        segConfig.speakerModelPath =
-            CopyAssistSettings::value(QStringLiteral("AsrSpeakerModelPath"), QString()).toString().toStdString();
-    }
+    // Speaker embedding is loaded only after the new engine's signals are
+    // connected below. This makes replacement deterministic: a GPU/VAD/backend
+    // rebuild never relies on an init-time completion from a dying engine.
     segConfig.speakerThreshold =
         CopyAssistSettings::value(QStringLiteral("AsrSpeakerThreshold"), QStringLiteral("50"))
             .toString().toInt() / 100.0f;
@@ -570,15 +697,40 @@ void CopyAssistController::buildEngine()
 
     connect(m_asr, &AsrEngine::ready, this, [this] {
         m_panel->setBusy(false);
-        if (m_enabled) {
+        if (m_enabled && !m_speakerLoad.isPending()) {
             m_tap->setEnabled(true);
-            m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
-                                                                   : tr("Listening…"));
+            if (!m_gpuFallbackNotice.isEmpty()) {
+                // This ready() is the reload after a GPU fallback: keep the
+                // explanation on screen instead of a bare "Listening…", so
+                // the operator learns why the decode moved (and why it may
+                // now be slower) rather than seeing business as usual.
+                m_panel->setStatus(m_gpuFallbackNotice);
+                m_gpuFallbackNotice.clear();
+            } else {
+                m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
+                                                                       : tr("Listening…"));
+            }
             writeFreqMarkerIfNeeded(); // "on start": head the log with the frequency
+        }
+        // The model loaded, but the backend may have got there by falling back
+        // to CPU after the chosen GPU failed. The latch is the only signal —
+        // a successful fallback still reports ready() — so ask it, then make
+        // the selectors tell the truth instead of naming a device that is not
+        // running the decode (#4502).
+        //
+        // Queued, not direct: reconciling can change the resolved device, and
+        // that rebuilds the engine — which deletes the AsrEngine whose ready()
+        // emission this lambda is running inside. Deferring to the event loop
+        // lets that emission unwind before its sender is destroyed.
+        if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
+            && asrGpuDeviceFailed(m_gpuDevice)) {
+            QMetaObject::invokeMethod(
+                this, [this] { reconcileAfterGpuFallback(); }, Qt::QueuedConnection);
         }
     });
     connect(m_asr, &AsrEngine::loadFailed, this, [this](const QString& err) {
         m_panel->setBusy(false);
+        m_gpuFallbackNotice.clear(); // failed reload: this message wins instead
         m_panel->setStatus(tr("Model load failed: %1").arg(err));
         m_panel->setAsrEnabled(false);
     });
@@ -586,16 +738,32 @@ void CopyAssistController::buildEngine()
             [this](const QString& text, float confidence, int speaker) {
                 // Prefix a speaker label ([A], [B]…) when labeling is on.
                 const QString labeled =
-                    speaker >= 0
+                    m_settings->labelSpeakers() && speaker >= 0
                         ? QStringLiteral("[%1] %2").arg(QChar(u'A' + speaker)).arg(text)
                         : text;
                 m_panel->appendText(labeled, confidence);
                 appendToLogFile(labeled);
             });
-    connect(m_asr, &AsrEngine::error, this, [this](const QString& err) { m_panel->setStatus(err); });
+    connect(m_asr, &AsrEngine::error, this, [this](const QString& err) {
+        m_panel->setStatus(err);
+        // A decode-time GPU failure latches the device in
+        // WhisperAsrBackend::transcribe(); the engine itself is still aimed at
+        // it and would throw again on every utterance. Reconcile off the error
+        // signal exactly as the ready() path does — queued, because the
+        // reconcile rebuilds the engine this handler's sender belongs to. The
+        // entry guard in reconcileAfterGpuFallback() makes repeats harmless.
+        if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
+            && asrGpuDeviceFailed(m_gpuDevice)) {
+            QMetaObject::invokeMethod(
+                this, [this] { reconcileAfterGpuFallback(); }, Qt::QueuedConnection);
+        }
+    });
     connect(m_asr, &AsrEngine::backlogChanged, m_panel, &CopyAssistPanel::setBacklog);
+    connect(m_asr, &AsrEngine::speakerModelLoaded, this,
+            &CopyAssistController::onSpeakerModelLoaded);
 
     applyTuning();
+    replaySpeakerConfiguration();
 }
 
 void CopyAssistController::applyTuning()
@@ -604,6 +772,7 @@ void CopyAssistController::applyTuning()
     m_asr->setSpeechRms(sensitivityToRms(
         CopyAssistSettings::value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt()));
     m_asr->setSilenceDurationMs(CopyAssistSettings::value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
+    m_asr->setOverlapMs(CopyAssistSettings::value(QStringLiteral("AsrBoundaryOverlapMs"), QStringLiteral("0")).toString().toInt());
 }
 
 void CopyAssistController::onEnableToggled(bool on)
@@ -614,6 +783,7 @@ void CopyAssistController::onEnableToggled(bool on)
         requestEnable();
     } else {
         m_enableAfterGpuDiscovery = false;
+        m_gpuFallbackNotice.clear(); // a pending fallback reload no longer matters
         m_tap->setEnabled(false);
         m_panel->setBusy(false);
         m_panel->setStatus(tr("Disabled"));
@@ -692,6 +862,14 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     const AsrBackendKind prev = m_backend;
     m_backend = kind;
     m_tierId = tierId;
+    // The tier is now an explicit operator choice — even if it is the GPU-default
+    // tier itself — so a later fallback must never walk it back. Cleared here
+    // rather than at the top of onTierChanged() because the three prompting
+    // branches (remote / custom / sherpa) can still be cancelled, and a cancel
+    // leaves the auto-raised tier in place: clearing the flag early would strand
+    // Large v3 Turbo on CPU after a fallback, the exact regression the flag exists
+    // to prevent. setBackend() is reached only once the change is committed.
+    m_gpuDefaultTierActive = false;
 
     // Language applies to whisper/remote only; sherpa-onnx picks it from the
     // model. Keep the selector's visibility in sync with the active backend.
@@ -732,6 +910,15 @@ void CopyAssistController::requestEnable()
 void CopyAssistController::beginEnable()
 {
     m_panel->setBusy(true);
+    // Arm speaker labeling here rather than from buildEngine(): pressing Enable
+    // is the operator action that justifies fetching the ~24 MB model when the
+    // cache is missing it, whereas constructing an engine is not (#4737).
+    // Idempotent — a model already loaded into this engine is a no-op, and a
+    // download already in flight is left alone. Runs before the ASR-model
+    // status lines below so the headline stays the whisper/remote load.
+    if (m_settings->labelSpeakers()) {
+        ensureSpeakerModel();
+    }
     if (m_backend == AsrBackendKind::Remote) {
         // No local model to fetch — the remote endpoint is contacted per
         // utterance. load() just marks the backend ready.
@@ -742,6 +929,7 @@ void CopyAssistController::beginEnable()
         // catalog download + SHA verification (we don't know its checksum).
         if (m_customModelPath.isEmpty() || !QFileInfo::exists(m_customModelPath)) {
             m_panel->setBusy(false);
+            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
             m_panel->setStatus(tr("Custom model file not found — pick it again."));
             m_panel->setAsrEnabled(false);
             return;
@@ -753,6 +941,7 @@ void CopyAssistController::beginEnable()
         // discovers the bundle's files). No download/verify.
         if (m_sherpaModelDir.isEmpty() || !QDir(m_sherpaModelDir).exists()) {
             m_panel->setBusy(false);
+            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
             m_panel->setStatus(tr("sherpa-onnx model folder not found — pick it again."));
             m_panel->setAsrEnabled(false);
             return;
@@ -919,18 +1108,40 @@ void CopyAssistController::ensureSpeakerModel()
     const QString custom = m_settings->speakerModelPath();
     if (!custom.isEmpty() && QFileInfo::exists(custom)
         && custom != m_speakerModels->modelPath(speakerEmbedderTier())) {
-        rebuildEngine();
+        m_defaultSpeakerRequestPending = false;
+        queueSpeakerModelLoad(custom);
         return;
     }
+    const AsrModelTier tier = speakerEmbedderTier();
+    const QString path = m_speakerModels->modelPath(tier);
+    if (m_speakerLoad.isPending(path)) {
+        m_panel->setStatus(tr("Preparing speaker model…"));
+        return; // off/on while this worker load is in flight only changes intent
+    }
+    if (m_speakerLoad.isLoaded(path) && !m_speakerLoad.isPending()) {
+        queueSpeakerModelLoad(path);
+        return;
+    }
+
     m_panel->setStatus(tr("Preparing speaker model…"));
-    m_speakerModels->ensure(speakerEmbedderTier());
+    // ensure() emits failed synchronously while verifying/downloading. Treat a
+    // second on/off/on as continued intent for the existing work instead.
+    m_desiredSpeakerModelPath = path;
+    m_defaultSpeakerRequestPending = true;
+    if (!m_speakerModels->isBusy()) {
+        m_speakerModels->ensure(tier);
+    }
 }
 
 void CopyAssistController::onSpeakerModelReady(const QString& path)
 {
+    if (!m_defaultSpeakerRequestPending || path != m_desiredSpeakerModelPath) {
+        return;
+    }
+    m_defaultSpeakerRequestPending = false;
     m_settings->setSpeakerModelPath(path);
     CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerModelPath"), path);
-    rebuildEngine();
+    queueSpeakerModelLoad(path);
 }
 
 void CopyAssistController::promptSpeakerModel()
@@ -950,7 +1161,117 @@ void CopyAssistController::promptSpeakerModel()
     }
     m_settings->setSpeakerModelPath(path);
     CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerModelPath"), path);
-    rebuildEngine();
+    m_defaultSpeakerRequestPending = false;
+    queueSpeakerModelLoad(path);
+}
+
+void CopyAssistController::queueSpeakerModelLoad(const QString& path)
+{
+    if (path.isEmpty()) {
+        return;
+    }
+
+    m_desiredSpeakerModelPath = path;
+    m_asr->setSpeakerLabelingEnabled(m_settings->labelSpeakers());
+    if (m_speakerLoad.isPending(path)) {
+        m_panel->setStatus(tr("Preparing speaker model…"));
+        return; // applies equally to default and custom off/on sequences
+    }
+    if (m_speakerLoad.isLoaded(path) && !m_speakerLoad.isPending()) {
+        if (m_enabled && m_asr->isReady()) {
+            m_tap->setEnabled(true);
+        }
+        return;
+    }
+
+    m_speakerLoad.begin(path);
+    m_panel->setStatus(tr("Preparing speaker model…"));
+    // Stop feeding the worker while it prepares. This is not a priority boost:
+    // loadSpeakerModel() is queued BEHIND whatever audio is already backlogged
+    // on that same thread, so on a deep backlog "Preparing speaker model…" can
+    // sit for a while either way. What it avoids is piling up further decodes
+    // that the operator's pending labeling choice may make moot. The tap
+    // resumes from onSpeakerModelLoaded() on the controller thread.
+    m_tap->setEnabled(false);
+    m_asr->setSpeakerModelPath(path);
+}
+
+void CopyAssistController::onSpeakerModelLoaded(const QString& path, bool loaded)
+{
+    if (!m_speakerLoad.complete(path, loaded)) {
+        return; // a superseded custom/default request is still queued behind it
+    }
+
+    // Latched rather than re-derived: setLabelSpeakers(false) below flips
+    // labelSpeakers() as a side effect, so testing it again afterwards would
+    // overwrite the failure message with "Listening…".
+    bool reportedFailure = false;
+    if (!loaded && m_settings->labelSpeakers()) {
+        m_panel->setStatus(tr("Speaker model load failed."));
+        m_settings->setLabelSpeakers(false);
+        reportedFailure = true;
+    }
+    m_asr->setSpeakerLabelingEnabled(m_settings->labelSpeakers());
+    if (m_enabled && m_asr->isReady()) {
+        m_tap->setEnabled(true);
+    }
+    if (!reportedFailure) {
+        restoreListeningStatus();
+    }
+}
+
+void CopyAssistController::restoreListeningStatus()
+{
+    if (!m_enabled || !m_asr->isReady()) {
+        return; // not listening — leave "Disabled"/"Loading model…" alone
+    }
+    m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
+                                                           : tr("Listening…"));
+    // The ready() lambda skips its whole body while a speaker load is pending,
+    // so this resume point owes the log the same "on start" frequency header it
+    // would have written. writeFreqMarkerIfNeeded() dedups, so the ordinary
+    // "already marked" case costs nothing.
+    writeFreqMarkerIfNeeded();
+}
+
+void CopyAssistController::replaySpeakerConfiguration()
+{
+    // This state belongs to the engine instance, unlike a model-manager
+    // download/verification request. A replacement may destroy an old worker
+    // before its queued completion reaches us, so begin the new instance with a
+    // clean per-engine state and explicitly replay the latest user intent.
+    m_speakerLoad.resetForEngineReplacement();
+    const bool labelSpeakers = m_settings->labelSpeakers();
+    m_asr->setSpeakerLabelingEnabled(labelSpeakers);
+    if (!labelSpeakers) {
+        return;
+    }
+
+    const QString requested = m_desiredSpeakerModelPath.isEmpty()
+                                  ? m_settings->speakerModelPath()
+                                  : m_desiredSpeakerModelPath;
+    if (!requested.isEmpty() && QFileInfo::exists(requested)
+        && requested != m_speakerModels->modelPath(speakerEmbedderTier())) {
+        queueSpeakerModelLoad(requested);
+        return;
+    }
+
+    // Building an engine must never START a download. ensure() fetches ~24 MB
+    // unprompted when the file is absent, and buildEngine() runs from the
+    // constructor and from every GPU/language/VAD/tier change — so without this
+    // guard a stale "labeling on" setting would pull the model at app launch
+    // with Copy Assist switched off. Fetching stays operator-driven (the
+    // labeling toggle); replay only re-arms what is already on disk.
+    if (!QFileInfo::exists(m_speakerModels->modelPath(speakerEmbedderTier()))) {
+        return;
+    }
+
+    // This also preserves a busy default download across replacement: the file
+    // is absent while it downloads, so the guard above returns early, but
+    // m_defaultSpeakerRequestPending survives resetForEngineReplacement() (it is
+    // controller state, not per-engine) and its completion loads into this new
+    // engine via onSpeakerModelReady().
+    ensureSpeakerModel();
 }
 
 void CopyAssistController::rebuildEngine()

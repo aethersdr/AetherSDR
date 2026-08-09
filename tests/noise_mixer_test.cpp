@@ -291,6 +291,57 @@ void testCwPitchChangeSlidesWithoutClick()
            magAt(at650, 650.0) > 20.0 * magAt(at650, 550.0));
 }
 
+
+// #4668: genPowerline was the last absolute-time oscillator left after #4637.
+// The Demo applet ships the Power-line row's 50-60 Hz slider straight to
+// setKnob(Powerline, "freq", ...), and with sin(2*pi*f0*h*t_absolute) a 60->50
+// flip teleports all six harmonics' phase by 2*pi*dF*h*t at once. Same two-half
+// structure as the CW test above, for the same reason: continuity alone is also
+// satisfied by a generator that ignores the knob, so the frequency half pins
+// the knob to the oscillator.
+void testPowerlineFreqChangeStaysContinuous()
+{
+    // ---- half 1: no phase jump across repeated 50 <-> 60 flips --------------
+    NoiseMixer mx;
+    mx.setEnabled(Channel::Powerline, true);
+
+    QVector<float> audio;
+    for (int f = 0; f < 400; ++f) {
+        if (f % 10 == 0)
+            mx.setKnob(Channel::Powerline, QStringLiteral("freq"),
+                       (f % 20 == 0) ? 60.0 : 50.0);
+        audio += mx.mixFrame();
+    }
+
+    float amp = 0.0f;
+    for (float v : audio) amp = std::max(amp, std::abs(v));
+
+    // Each harmonic h carries amplitude ~1/h and slope amp_h*2*pi*60h/24000, so
+    // the 1/h weighting cancels h and all six contribute equal slope. Measured
+    // worst sample step: 0.10 of peak with the accumulator, 1.68 with absolute
+    // time (a teleport can step nearly the full harmonic sum at once). 0.30
+    // separates them by >3x on either side.
+    float worst = 0.0f;
+    for (int i = 1; i < audio.size(); ++i)
+        worst = std::max(worst, std::abs(audio[i] - audio[i - 1]));
+
+    report("powerline freq change keeps all harmonics phase continuous",
+           amp > 0.0f && worst < 0.30f * amp);
+
+    // ---- half 2: the fundamental lands ON the commanded mains freq ----------
+    auto holdFreq = [](double hz) {
+        NoiseMixer m;
+        m.setEnabled(Channel::Powerline, true);
+        m.setKnob(Channel::Powerline, QStringLiteral("freq"), hz);
+        return collect(m, 400);
+    };
+    const QVector<float> at50 = holdFreq(50.0);
+    const QVector<float> at60 = holdFreq(60.0);
+    report("powerline fundamental follows the freq knob",
+           magAt(at50, 50.0) > 5.0 * magAt(at50, 60.0) &&
+           magAt(at60, 60.0) > 5.0 * magAt(at60, 50.0));
+}
+
 void testLevelScalesNoiseHeight()
 {
     auto top = [](double lvl) {
@@ -319,6 +370,7 @@ int main(int argc, char** argv)
     testVoiceChannelSafeWithoutClip();
     testCwKeysDecodableMorse();
     testCwPitchChangeSlidesWithoutClick();
+    testPowerlineFreqChangeStaysContinuous();
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES ABOVE");
     return g_failed == 0 ? 0 : 1;
 }

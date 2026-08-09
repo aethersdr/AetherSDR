@@ -111,6 +111,24 @@ public:
 
     // Sub-models owned by RadioModel (main thread). (#502)
     MeterModel&       meterModel()       { return m_meterModel; }
+
+    // PROOF OF LIFE, per data class, in milliseconds since the last arrival.
+    //
+    // -1 means nothing of that class has EVER arrived this session, which is a
+    // different answer from "arrived a long time ago" and must not collapse
+    // into it. Negative-vs-large is the whole diagnostic.
+    //
+    // Why this exists: a revoked session keeps every model populated. `get
+    // model=pan` answered cheerfully with a centre and a bandwidth while the
+    // panadapter rendered a "Connecting to radio…" spinner, and the only thing
+    // that caught it was a screenshot. Models hold the LAST value they were
+    // given; nothing above them says whether anything is still coming.
+    struct DataLiveness {
+        qint64 spectrumMs = -1;   // scope sweeps / FFT frames
+        qint64 audioMs    = -1;   // demodulated RX audio
+        qint64 meterMs    = -1;   // any meter value at all
+    };
+    [[nodiscard]] DataLiveness dataLiveness() const;
     TunerModel&       tunerModel()       { return m_tunerModel; }
     TransmitModel&    transmitModel()    { return m_transmitModel; }
     EqualizerModel&   equalizerModel()   { return m_equalizerModel; }
@@ -313,6 +331,24 @@ public:
     // Says nothing about the CLIENT-side modules (NR2/NR4/MNR/BNR/DFNR/RN2),
     // which run on this host and work on any family.
     bool hasRadioSideDsp() const;
+    // The two NARROWER claims under it — see the capability struct.
+    //
+    // hasLmsNoiseFilters() keeps hasRadioSideDsp()'s permissive rule: NRL,
+    // ANFL and ANFT existed before the flag did, and hiding them on a
+    // Flex the moment it disconnects would be a regression rather than an
+    // honesty gain.
+    //
+    // hasManualNotch() does NOT, and that asymmetry is the point. MN is a
+    // new button; a permissive default would show it on every radio in
+    // the window before a backend reports, including the Flexes that
+    // notch with TNFs instead and will never claim it.
+    bool hasLmsNoiseFilters() const;
+    bool hasManualNotch() const;
+    // The filter widths the radio declares, widest first, or an EMPTY list
+    // when it declares none. Empty is the permissive answer here — it means
+    // "use the operator's own presets", which is what every radio without a
+    // fixed IF ladder wants and what a disconnected app should show.
+    QList<int> radioFilterWidthsHz() const;
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.
@@ -320,6 +356,26 @@ public:
     // Says nothing about auto-black itself: the client-side (SW) estimate works
     // on every family and is never gated on this.
     bool hasRadioSideWaterfallAutoBlack() const;
+    // Whether the RADIO buffers CW text and sends it on its own keyer
+    // (RadioCapabilities::hasRadioSideCwKeyer), and whether it records and
+    // plays back voice-keyer messages (RadioCapabilities::hasVoiceKeyer). Same
+    // permissive disconnected rule as hasRadioSideDsp().
+    //
+    // These are accessors rather than inline capability reads because the `cwx`
+    // and `dvk` verbs have more entry points than the status-bar buttons: the
+    // FlexControl/Ulanzi macro actions, the MQTT CW-transmit topic, the TCI
+    // cw_msg / cw_macros commands, rigctl's send_morse / stop_morse, SmartCAT's
+    // KY and the automation bridge's `cwx` verb all reach CwxModel without
+    // passing through MainWindow's keyer gate. Every one of them asks here, so
+    // "the radio has no such verb" is answered in one place instead of once per
+    // surface — and the ones that owe a caller a return code answer with an
+    // error instead of a success for work that never happened.
+    //
+    // Says nothing about CW itself: a radio reporting hasRadioSideCwKeyer=false
+    // still transmits CW from a key, a paddle or the host keying path; what it
+    // lacks is a text buffer.
+    bool hasRadioSideCwKeyer() const;
+    bool hasVoiceKeyer() const;
     // Whether this radio has DAX audio/IQ channels. Same permissive
     // disconnected rule as hasRadioSideDsp(): with nothing attached there is
     // nothing to be honest about, and blanking the controls on unplug would look
@@ -730,9 +786,24 @@ public:
     // deferred or could not be dispatched. Callers that also advance view
     // state optimistically must gate that on the return value, or they will
     // re-create the black-waterfall divergence.
+    //
+    // THE INTENT IS THE CALLER'S TO STATE, not something to infer here. On a
+    // backend whose scope window is slaved to the VFO (every networked Icom)
+    // Drag means RETUNE, so "which caller is this" decides whether the radio
+    // moves. Inferring it from whether a bandwidth came along classifies every
+    // centre-only writer — pan-follow, reveal, band change, the WFM recentre —
+    // as a drag, and reveal in particular asks for a DELIBERATELY OFFSET centre
+    // (settle distance from the edge), which would tune the radio most of a
+    // half-span off the signal the operator just clicked.
+    //
+    // Range is the default because it is the one that cannot move a radio: a
+    // slaved-scope backend refuses it and re-asserts its own geometry. Only the
+    // two genuine "the operator moved the window" sites pass Drag.
     bool requestPanCenter(const QString& panId,
                           double centerMhz,
-                          double bandwidthMhz = -1.0);
+                          double bandwidthMhz = -1.0,
+                          IRadioBackend::PanCenterIntent intent =
+                              IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
     // The operator's Display→FFT FPS / Display→Waterfall Rate intent.
     //
@@ -769,6 +840,12 @@ public:
     // menu belongs to one panadapter and must drive that one, not whichever
     // happens to be active when the slider moves.
     void setPanRfGainFor(const QString& panId, int gain);
+    // Discrete receive front-end stages — `step` indexes the label list the
+    // backend published for that pan (PanadapterModel::preampLabels /
+    // attenuatorLabels). Seam-only; see the .cpp for why there is no Flex
+    // wire-text fallback.
+    void setPanPreampFor(const QString& panId, int step);
+    void setPanAttenuatorFor(const QString& panId, int step);
 
     // Display controls — FFT (display pan set)
     void setPanAverage(int frames);
@@ -817,6 +894,9 @@ signals:
     void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
+    // Radio CONFIGURATION advice that does not end the session. See
+    // IRadioBackend::configurationWarning for why this is a separate channel.
+    void configurationWarning(const QString& msg);
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forwarded from
     // WanConnection. UI is expected to prompt the operator and call
     // accept/rejectPresentedWanCert() in response.
@@ -1038,7 +1118,7 @@ public:
     // advance local state to match a command MUST gate that on this return,
     // or the client will claim state the radio never took.
     bool sendCommand(const QString& cmd);
-    // Backend family currently in use ("flex", "hl2", "kiwi", ...).
+    // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
 
     // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
@@ -1055,6 +1135,18 @@ public:
     {
         return RadioSettingsScope(m_family, serial());
     }
+
+    // Fire a vendor-extension verb at the connected backend (IRadioBackend
+    // §"vendor-extension"). Generic on purpose: the model stays free of any one
+    // family's verb vocabulary, exactly as it does for the tuner and amp
+    // intents it already routes this way. requestId 0 means no reply is
+    // expected; a caller that wants one connects to the backend's
+    // extensionResult/extensionError and correlates its own id.
+    //
+    // A no-op when nothing is connected, rather than a crash or a queued call
+    // that lands on the next radio.
+    void invokeBackendExtension(const QString& ns, const QString& verb,
+                                quint64 requestId = 0, const QVariant& arg = {});
     // True when the radio speaks the SmartSDR text-command plane — the only
     // family where sendCmd() reaches anything and a command has a response to
     // await. Every other backend takes typed intents through the IRadioBackend
@@ -1074,6 +1166,17 @@ public:
     // Forward processed transmit audio to a host-modulating backend. No-op when
     // the backend modulates on the radio side.
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz);
+    // Let receive audio through while transmitting. Diagnostic use only — see
+    // IRadioBackend::setTxAudioMonitor.
+    void setTxAudioMonitor(bool on);
+
+    // Whether the BACKEND reports it can transmit.
+    //
+    // Distinct from capabilities(), which is the Flex model-name lookup. Note
+    // that IRadioBackend::capabilities().canTransmit had no consumer anywhere
+    // outside the backends when this was added — the same shape as meterUpdate
+    // and setKeying, both of which were wired to nothing.
+    bool backendCanTransmit() const;
 
     // Request local PTT for our station. Sends "client set local_ptt=1" and applies
     // an optimistic update in case the radio doesn't echo the state change.
@@ -1156,9 +1259,15 @@ private:
     // makes a re-entrant request converge (last wire write == last model
     // write) instead of diverging. bandwidthMhz <= 0 means center-only;
     // centerMhz as NaN means bandwidth-only.
+    // intent is forwarded to the seam untouched — see requestPanCenter(). A
+    // write replayed out of the profile-load queue is Range by construction:
+    // the queue stores geometry, not who asked for it, and Range is the value
+    // that cannot move a radio.
     bool dispatchPanCenterBandwidth(const QString& panId,
                                     double centerMhz,
-                                    double bandwidthMhz);
+                                    double bandwidthMhz,
+                                    IRadioBackend::PanCenterIntent intent =
+                                        IRadioBackend::PanCenterIntent::Range);
     // No model write: band-stack state arrives via radio status.
     bool dispatchPanBand(const QString& panId, const QString& bandKey);
     // Schedules the deferred-pan-write replay for when the hold lifts. Armed by
@@ -1236,7 +1345,8 @@ private:
     void dropAllSessionModelsForFamilySwitch();
 
     // aetherd Gap A (HL2 Phase 1c): the minimal backend-selection seam. Returns
-    // the IRadioBackend for `family` ("flex" default, "hl2" for Hermes-Lite 2).
+    // the IRadioBackend for `family` ("flex" default, "hl2" for Hermes-Lite 2,
+    // "icom" for Icom networked radios, "sim" for demo mode).
     // Replaces the hard-wired make_unique<FlexBackend>; a fuller step-3 registry
     // supersedes it later. Flex-specific construction wiring (command sinks,
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
@@ -1262,7 +1372,7 @@ private:
     // (owned via unique_ptr below). As of 2.2b it OWNS the RadioConnection +
     // PanadapterStream and their worker threads; RadioModel keeps the two
     // NON-OWNING pointers below, obtained from the backend at construction.
-    // Radio family the live backend implements ("flex", "hl2"). Set by
+    // Radio family the live backend implements ("flex", "hl2", "icom"). Set by
     // setupBackend(); compared against the picked radio's RadioInfo::family to
     // decide whether a connect needs a different backend.
     QString m_family;
@@ -1367,6 +1477,10 @@ private:
     static constexpr int kBackendDefaultWfRate = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
+    // Epoch ms of the last arrival of each class; 0 = never. Written on the
+    // hot path, so they are plain scalars rather than anything that allocates.
+    qint64 m_lastSpectrumMs{0};
+    qint64 m_lastAudioMs{0};
     TunerModel       m_tunerModel;
     TransmitModel    m_transmitModel;
     EqualizerModel   m_equalizerModel;

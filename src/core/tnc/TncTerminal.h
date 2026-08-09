@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/tnc/Ax25.h"
+#include "core/tnc/Ax25LinkTiming.h"
 
 #include <QByteArray>
 #include <QObject>
@@ -56,6 +57,19 @@ public:
     void setMaxRetries(int n2);
     void setPaclen(int bytes);
 
+    // Tell the terminal which air interface it is running over, and re-derive
+    // T1/T2/T3 and paclen from it. Call this whenever the modem profile changes:
+    // a timer sized for 1200-baud VHF is shorter than a single 300-baud HF
+    // transmission, which makes HF connected mode fail by arithmetic rather than
+    // by channel conditions. See Ax25LinkTiming.h and docs/HFMODEM.md §1.
+    // Any explicit setRetryTimeoutMs()/setPaclen() afterwards still wins.
+    void setLinkProfile(const ax25::LinkTimingProfile& profile);
+    // What the model recommends for the current profile — for seeding the UI.
+    int recommendedRetryTimeoutMs() const;
+    int recommendedPaclen() const;
+    int expectedRoundTripMs() const;
+    int idlePollMs() const;
+
     // The shared station-heard log (for the MHEARD command and quick-connect).
     // Non-owning; the GUI feeds it from the RX path. Safe to leave unset.
     void setHeardList(HeardList* heard) { m_heard = heard; }
@@ -76,6 +90,11 @@ public:
     // shows only the BBS data and the *** session lines.
     void setVerbose(bool on) { m_verbose = on; }
     bool isVerbose() const { return m_verbose; }
+
+    // The underlying data link, read-only — for status snapshots (the agent
+    // automation bridge's `link status` verb) that need the live counters and
+    // RTT samples rather than the formatted STATUS text.
+    const Ax25Connection* link() const { return m_link; }
 
     Mode mode() const { return m_mode; }
     bool isConnected() const;

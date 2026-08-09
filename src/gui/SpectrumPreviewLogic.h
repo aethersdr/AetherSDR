@@ -8,6 +8,53 @@
 
 namespace AetherSDR {
 
+enum class DssOutlinePipelineMode {
+    DedicatedRibbonPipeline,
+    SharedFillPipeline,
+};
+
+// QRhi's OpenGLES2 backend, which covers desktop GL as well as GLES, reuses the
+// fill program for ribbon outlines: live probes showed flat/stale outlines
+// with a separate, identically configured program.
+// Whether the "3D Span" control can actually affect the display.
+//
+// rowSpanFactor is a dss_mesh.vert uniform, so ONLY the GPU height-map mesh
+// honours it: DssRenderer::rebuild(), the CPU image fallback, ignores it and
+// always draws the narrowing trapezoid. Two independent ways to end up there --
+// a build configured with AETHER_GPU_SPECTRUM=OFF, and a runtime without
+// RGBA16F support leaving m_dssMeshReady false -- and BOTH must disable the
+// control, or it moves, labels and persists while nothing on screen changes,
+// which an operator cannot tell apart from "this source ships no overhang".
+constexpr bool dssRowSpanSupported(bool gpuSpectrumBuild, bool meshReady)
+{
+    return gpuSpectrumBuild && meshReady;
+}
+
+constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
+    bool openGlEs2Backend)
+{
+    return openGlEs2Backend
+        ? DssOutlinePipelineMode::SharedFillPipeline
+        : DssOutlinePipelineMode::DedicatedRibbonPipeline;
+}
+
+// The pipeline the outline draw binds, given the mode above. Templated on the
+// pipeline type purely so the selection stays testable without a QRhi device:
+// SpectrumWidget instantiates it with QRhiGraphicsPipeline*. Keeping the
+// selection here rather than as a ternary at the draw site is what lets
+// spectrum_preview_logic_test pin the mapping the renderer actually uses.
+// dedicatedPipeline is null on OpenGL — never created — so the shared-fill
+// answer must not depend on it.
+template <typename PipelineT>
+constexpr PipelineT* dssOutlinePipelineFor(DssOutlinePipelineMode mode,
+                                           PipelineT* fillPipeline,
+                                           PipelineT* dedicatedPipeline)
+{
+    return mode == DssOutlinePipelineMode::SharedFillPipeline
+        ? fillPipeline
+        : dedicatedPipeline;
+}
+
 struct FrequencyFrame {
     double centerMhz{0.0};
     double bandwidthMhz{0.0};
@@ -20,6 +67,29 @@ struct FrequencyFrame {
             && bandwidthMhz > 0.0;
     }
 };
+
+// A native waterfall tile supplies two independently calibrated rows: the
+// viewport row and the full-tile supplemental row. A blanked row must keep
+// their capture frames paired with the matching pixels.
+struct WaterfallBlankerFrameBundle {
+    FrequencyFrame primaryFrame;
+    FrequencyFrame supplementalFrame;
+
+    bool isValid() const
+    {
+        return primaryFrame.isValid() && supplementalFrame.isValid();
+    }
+};
+
+inline WaterfallBlankerFrameBundle waterfallBlankerFrameBundleForOutput(
+    bool useCachedBundle,
+    const WaterfallBlankerFrameBundle& cachedBundle,
+    const WaterfallBlankerFrameBundle& incomingBundle)
+{
+    return useCachedBundle && cachedBundle.isValid()
+        ? cachedBundle
+        : incomingBundle;
+}
 
 struct FrequencyPreviewTransform {
     double scale{1.0};
@@ -268,6 +338,64 @@ enum class WaterfallPipelineMode {
     Legacy,
     RowFrequencyFrames,
 };
+
+struct WaterfallPaletteRecolorPlan {
+    bool retainNativeFrames{false};
+    FrequencyFrame primaryFrame;
+    FrequencyFrame supplementalFrame;
+};
+
+inline WaterfallPaletteRecolorPlan waterfallPaletteRecolorPlan(
+    WaterfallPipelineMode pipelineMode,
+    const FrequencyFrame& historyFrame,
+    const FrequencyFrame& supplementalHistoryFrame,
+    const FrequencyFrame& viewportFrame)
+{
+    if (pipelineMode == WaterfallPipelineMode::RowFrequencyFrames) {
+        return WaterfallPaletteRecolorPlan{
+            true,
+            historyFrame.isValid() ? historyFrame : viewportFrame,
+            supplementalHistoryFrame.isValid()
+                ? supplementalHistoryFrame : FrequencyFrame{},
+        };
+    }
+    return WaterfallPaletteRecolorPlan{false, viewportFrame, {}};
+}
+
+// Scanline that a retained row of age `ageRows` occupies in a visible ring
+// whose newest row sits at `writeRowOrigin`. appendVisibleRow() decrements the
+// write row *before* writing, so age 0 is the origin itself and age grows
+// downward, wrapping — which is exactly the order drawWaterfall() blits from.
+//
+// The origin is the whole reason a palette recolour is not just a viewport
+// rebuild: a rebuild re-lays the ring out from scanline 0 (origin 0), which is
+// invisible only because it repaints everything at once. Recolouring in place
+// must keep the live origin, or the waterfall jumps by m_wfWriteRow rows the
+// moment the operator touches the Scheme dropdown.
+inline int waterfallVisibleRowForAge(int writeRowOrigin, int ageRows,
+                                     int height)
+{
+    if (height <= 0) {
+        return -1;
+    }
+    const int origin = ((writeRowOrigin % height) + height) % height;
+    const int age = ((ageRows % height) + height) % height;
+    return (origin + age) % height;
+}
+
+// Mirror of texturedquad.frag and texturedquad_rowframes.frag: both cubic
+// shaders clamp source ages in logical history before mapping them into the
+// physical ring. Wrapping an out-of-range tap directly would blend the newest
+// and oldest rows across the visible history boundary.
+inline int waterfallCubicPhysicalRowForSourceAge(int writeRowOrigin,
+                                                 int sourceAge, int height)
+{
+    if (height <= 0) {
+        return -1;
+    }
+    return waterfallVisibleRowForAge(
+        writeRowOrigin, std::clamp(sourceAge, 0, height - 1), height);
+}
 
 struct WaterfallRowFrameReadiness {
     bool requested{false};

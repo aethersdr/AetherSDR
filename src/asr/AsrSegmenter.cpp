@@ -31,6 +31,8 @@ void AsrSegmenter::reset()
     m_inSpeech = false;
     m_trailingSilence = 0;
     m_speechSamples = 0;
+    m_pendingContinues = false;
+    m_pendingOverlapMs = 0;
     if (m_vad != nullptr) {
         m_vad->reset();
     }
@@ -57,22 +59,85 @@ void AsrSegmenter::setHangoverMs(int ms)
     m_hangoverSamples = framesToSamples(ms);
 }
 
-void AsrSegmenter::closeSegment(std::vector<std::vector<float>>& out)
+void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
 {
     // Gate on speech content, not total length: the segment also carries the
     // hangover silence, which must not count toward the minimum-speech floor.
-    if (m_speechSamples >= m_minSpeechSamples) {
-        out.push_back(std::move(m_segment));
+    const bool qualifies = m_speechSamples >= m_minSpeechSamples;
+
+    // Continue the same utterance across this close only when it's the
+    // maxSegmentMs cap firing (speech still ongoing, not real silence), overlap
+    // is configured, the segment closing now actually qualifies (an unqualified
+    // segment's audio is discarded, not emitted — nothing to carry), AND the cut
+    // lands mid-speech (m_trailingSilence == 0). If the cap fires during the
+    // hangover, the trailing window is silence: there is no split word to
+    // recover, and carrying it would wrongly count that silence as speech.
+    const bool continueUtterance =
+        forceCap && m_config.overlapMs > 0 && qualifies && m_trailingSilence == 0;
+
+    // Snapshot the trailing window BEFORE m_segment is moved out below.
+    std::vector<float> carry;
+    int carryMs = 0;
+    if (continueUtterance) {
+        int overlapSamples =
+            std::min(framesToSamples(m_config.overlapMs), static_cast<int>(m_segment.size()));
+        // Bound the carry to HALF the segment budget so the reseeded segment is
+        // always at least half fresh audio before the next cap. Without this a
+        // large overlap (≥ maxSegmentMs — both are user sliders) would carry
+        // nearly the whole segment forward every cap, force-decoding the same
+        // audio over and over (a runaway backlog through the backpressure-free
+        // pushAudio path). Half-budget caps the intrinsic overlap cost at ~2×
+        // realtime for every slider combination.
+        overlapSamples = std::min(overlapSamples, m_maxSegmentSamples / 2);
+        if (overlapSamples > 0) {
+            carry.assign(m_segment.end() - overlapSamples, m_segment.end());
+            carryMs = static_cast<int>(static_cast<long long>(overlapSamples) * 1000
+                                       / m_config.sampleRate);
+        }
     }
+
+    if (qualifies) {
+        ClosedSegment cs;
+        cs.samples = std::move(m_segment);
+        cs.continuesPrevious = m_pendingContinues; // this segment itself began with carried audio
+        cs.overlapMs = m_pendingContinues ? m_pendingOverlapMs : 0; // window carried into THIS segment
+        out.push_back(std::move(cs));
+    }
+
     m_segment.clear();
-    m_inSpeech = false;
     m_trailingSilence = 0;
     m_speechSamples = 0;
+    m_pendingContinues = false;
+    m_pendingOverlapMs = 0;
+
+    if (!carry.empty()) {
+        // Still mid-utterance: seed the next segment with the carried audio
+        // instead of starting from silence, and mark it (with the window size in
+        // force now) so the worker de-dups the repeated leading words against the
+        // right budget. m_inSpeech stays true.
+        //
+        // The carry counts toward m_speechSamples deliberately, reversing the
+        // hazard note in #4821's triage (maintainer-ruled on the RFC before this
+        // landed). Not counting it would mean a continuation carrying less than
+        // minSpeechMs of NEW speech never qualifies — and the second half of the
+        // word split at the cap is exactly that case, so the floor would discard
+        // the fragment this whole feature exists to recover. The price is the
+        // documented Approach-A margin: if the speaker stops immediately after
+        // the cap, the continuation clears the floor on carried audio alone and
+        // emits one decode that is entirely the previous tail, recovered only
+        // when the worker's de-dup strips it back to empty.
+        m_speechSamples = static_cast<int>(carry.size());
+        m_pendingContinues = true;
+        m_pendingOverlapMs = carryMs;
+        m_segment = std::move(carry);
+    } else {
+        m_inSpeech = false;
+    }
 }
 
-std::vector<std::vector<float>> AsrSegmenter::feed(const float* samples, int count)
+std::vector<AsrSegmenter::ClosedSegment> AsrSegmenter::feed(const float* samples, int count)
 {
-    std::vector<std::vector<float>> out;
+    std::vector<ClosedSegment> out;
 
     for (int i = 0; i < count; ++i) {
         m_frame.push_back(samples[i]);
@@ -108,14 +173,14 @@ std::vector<std::vector<float>> AsrSegmenter::feed(const float* samples, int cou
             m_segment.insert(m_segment.end(), m_frame.begin(), m_frame.end());
             m_trailingSilence += static_cast<int>(m_frame.size());
             if (m_trailingSilence >= m_hangoverSamples) {
-                closeSegment(out);
+                closeSegment(out, /*forceCap=*/false);
             }
         }
         // else: silence outside speech — ignored.
 
         // Hard cap on a single utterance.
         if (m_inSpeech && static_cast<int>(m_segment.size()) >= m_maxSegmentSamples) {
-            closeSegment(out);
+            closeSegment(out, /*forceCap=*/true);
         }
 
         m_frame.clear();
@@ -124,16 +189,18 @@ std::vector<std::vector<float>> AsrSegmenter::feed(const float* samples, int cou
     return out;
 }
 
-std::vector<std::vector<float>> AsrSegmenter::flush()
+std::vector<AsrSegmenter::ClosedSegment> AsrSegmenter::flush()
 {
-    std::vector<std::vector<float>> out;
+    std::vector<ClosedSegment> out;
     // Fold any partial frame into the segment before closing.
     if (m_inSpeech && !m_frame.empty()) {
         m_segment.insert(m_segment.end(), m_frame.begin(), m_frame.end());
     }
     m_frame.clear();
     if (m_inSpeech) {
-        closeSegment(out);
+        // End of stream: never a candidate to continue via overlap (there's no
+        // next segment to carry into).
+        closeSegment(out, /*forceCap=*/false);
     }
     return out;
 }

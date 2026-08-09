@@ -5,14 +5,19 @@
 #include "core/AppSettings.h"
 #include "gui/ConnectionPanel.h"
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QFont>
 #include <QLabel>
+#include <QLayout>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSpacerItem>
 #include <QStyle>
+#include <QToolButton>
 
 #include <cstdio>
 #include <string>
@@ -34,9 +39,63 @@ void report(const char* name, bool ok, const std::string& detail = {})
     }
 }
 
+// Not every environment can host every proof: a work area with no room above
+// the panel's auto-fit height cannot exercise the growth branch at all. Say so
+// out loud rather than failing. #4679 was exactly a precondition the
+// environment could not meet being reported as a product defect.
+void reportSkipped(const char* name, const std::string& detail = {})
+{
+    std::printf("[SKIP] %-58s %s\n", name, detail.c_str());
+}
+
 int bottomInPanel(QWidget* widget, QWidget* panel)
 {
     return widget->mapTo(panel, QPoint(0, widget->height())).y();
+}
+
+// Every word-wrapped label currently on screen has room for the lines it will
+// actually draw. The failure this catches is a label handed one line's height
+// for two lines of text, which Qt renders as a sliced row overlapping its
+// neighbour rather than as anything obviously broken.
+bool wrappedLabelsFit(QWidget* bodyContent)
+{
+    if (!bodyContent) {
+        return false;
+    }
+    const QList<QLabel*> labels = bodyContent->findChildren<QLabel*>();
+    for (QLabel* label : labels) {
+        if (!label->wordWrap() || !label->isVisibleTo(bodyContent)) {
+            continue;
+        }
+        const int requiredHeight = label->heightForWidth(label->width());
+        if (requiredHeight > 0 && label->height() < requiredHeight) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Put the panel on the manual/VPN page with "Advanced: choose the VPN source
+// path" open. The section only auto-reveals when the host has more than one
+// IPv4 candidate, which a test machine cannot be relied on to have, so drive
+// the widgets directly and keep the geometry deterministic.
+bool expandManualAdvancedSection(ConnectionPanel& panel)
+{
+    auto* manualMode =
+        panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"));
+    auto* toggle =
+        panel.findChild<QToolButton*>(QStringLiteral("connectionManualAdvancedToggle"));
+    auto* section =
+        panel.findChild<QWidget*>(QStringLiteral("connectionManualAdvancedSection"));
+    if (!manualMode || !toggle || !section) {
+        return false;
+    }
+    manualMode->click();
+    toggle->setVisible(true);
+    toggle->setChecked(true);
+    section->setVisible(true);
+    QApplication::processEvents();
+    return true;
 }
 
 bool setScaledApplicationFont(QApplication& app,
@@ -128,23 +187,31 @@ void checkFooterReachable(QApplication& app,
                    >= body->mapTo(&panel, QPoint(0, body->height())).y(),
            suffix);
 
-    bool wrappedLabelsFit = bodyContent != nullptr;
-    if (bodyContent) {
-        const QList<QLabel*> labels = bodyContent->findChildren<QLabel*>();
-        for (QLabel* label : labels) {
-            if (!label->wordWrap() || !label->isVisibleTo(bodyContent)) {
-                continue;
-            }
-            const int requiredHeight = label->heightForWidth(label->width());
-            if (requiredHeight > 0 && label->height() < requiredHeight) {
-                wrappedLabelsFit = false;
-                break;
-            }
-        }
-    }
     report("visible wrapped labels receive their required height",
-           wrappedLabelsFit,
+           wrappedLabelsFit(bodyContent),
            suffix);
+
+    // The manual/VPN page with Advanced open is the tallest state this dialog
+    // has, and it is the one an operator reported squashed: the source-path
+    // combo drawn as a sliver under a hint clipped to a sliced single line.
+    // Worth its own pass because the section is collapsed by default, so the
+    // sweep above skips both widgets via isVisibleTo().
+    report("manual page reveals its Advanced source-path section",
+           expandManualAdvancedSection(panel),
+           suffix);
+    report("visible wrapped labels still fit with Advanced expanded",
+           wrappedLabelsFit(bodyContent),
+           suffix);
+
+    auto* sourcePath =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualSourcePath"));
+    report("source-path combo is allocated the height it asks for",
+           sourcePath && sourcePath->isVisible()
+               && sourcePath->height() >= sourcePath->minimumSizeHint().height(),
+           suffix + " h="
+               + std::to_string(sourcePath ? sourcePath->height() : -1)
+               + " wants="
+               + std::to_string(sourcePath ? sourcePath->minimumSizeHint().height() : -1));
 
     // Behavioural, not a policy read-back: squeeze the window below the body's
     // own minimum width and require a usable horizontal scrollbar. Asserting
@@ -266,29 +333,91 @@ int main(int argc, char** argv)
     // recovers; without the second half a deliberately short window springs
     // back on every reopen.
     //
-    // Run at 150 %, because that is where the fixed 660 px opening height was
-    // short of the body — at 100 % it happens to be enough and growth would go
-    // untested.
+    // Font scaling is not a deterministic way to reach the growth branch: the
+    // platform font and style metrics may still fit at the nominal opening
+    // height. Instead, first let fitToScreen() own the current height, then
+    // drive the scroll body's preferred height above it and back down again
+    // with a harness-only spacer. Both directions are proved as behaviour — a
+    // scrollbar before the re-fit, the pixels handed back after the spacer
+    // goes away — rather than assumed from a particular metric.
     {
-        std::string fontDetail;
-        setScaledApplicationFont(app, originalFont, 1.5, &fontDetail);
         ConnectionPanel growPanel;
         growPanel.setFramelessMode(true);
         growPanel.show();
         QApplication::processEvents();
         growPanel.fitToScreen(screen);
         QApplication::processEvents();
-        const int autoHeight = growPanel.height();
+        const int initialAutoHeight = growPanel.height();
         QScrollArea* body = growPanel.findChild<QScrollArea*>(
             QStringLiteral("connectionBodyScrollArea"));
-        report("auto-sized panel opens without needing to scroll",
-               body && body->verticalScrollBar()->maximum() == 0,
-               "height=" + std::to_string(autoHeight) + " vbarMax="
-                   + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
-        report("auto-sized panel grows past the nominal opening height",
-               autoHeight > ConnectionPanel::kPreferredHeight,
-               "height=" + std::to_string(autoHeight) + " kPreferredHeight="
-                   + std::to_string(ConnectionPanel::kPreferredHeight));
+        QWidget* bodyContent = growPanel.findChild<QWidget*>(
+            QStringLiteral("connectionBodyContent"));
+
+        // Forcing growth needs room above the height fitToScreen() just chose.
+        // Offscreen — what CTest runs, and what #4679 was reported from — has
+        // hundreds of pixels spare; a hand run against a work area already
+        // clamping the panel has none, and there the branch is unreachable
+        // rather than broken.
+        constexpr int kGrowthHeadroom = 40;
+        const int growthWorkAreaHeight =
+            screen ? screen->availableGeometry().height() : 0;
+
+        if (growthWorkAreaHeight - initialAutoHeight < kGrowthHeadroom) {
+            reportSkipped("growth proof needs headroom above the auto-fit height",
+                          "autoHeight=" + std::to_string(initialAutoHeight)
+                              + " workAreaH=" + std::to_string(growthWorkAreaHeight));
+        } else {
+            const int forcedPreferredHeight = initialAutoHeight + kGrowthHeadroom;
+            QSpacerItem* spacer = nullptr;
+            if (body && bodyContent && bodyContent->layout()) {
+                const int chromeHeight =
+                    growPanel.sizeHint().height() - body->sizeHint().height();
+                const int naturalPreferredHeight =
+                    chromeHeight + bodyContent->sizeHint().height();
+                spacer = new QSpacerItem(
+                    0,
+                    qMax(1, forcedPreferredHeight - naturalPreferredHeight),
+                    QSizePolicy::Minimum,
+                    QSizePolicy::Fixed);
+                bodyContent->layout()->addItem(spacer);
+                QApplication::processEvents();
+            }
+            report("growth setup overflows an auto-fit-owned height",
+                   body && body->verticalScrollBar()->maximum() > 0,
+                   "height=" + std::to_string(initialAutoHeight) + " target="
+                       + std::to_string(forcedPreferredHeight) + " vbarMax="
+                       + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
+
+            growPanel.fitToScreen(screen);
+            QApplication::processEvents();
+            const int grownHeight = growPanel.height();
+            report("auto-sized panel opens without needing to scroll",
+                   body && body->verticalScrollBar()->maximum() == 0,
+                   "height=" + std::to_string(grownHeight) + " vbarMax="
+                       + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
+            report("auto-sized panel grows from its prior auto-fit height",
+                   grownHeight > initialAutoHeight,
+                   "height=" + std::to_string(grownHeight) + " initialAutoHeight="
+                       + std::to_string(initialAutoHeight));
+
+            // The other direction, and the only non-vacuous route to it: take
+            // the extra height back out of the body while fitToScreen() still
+            // owns the window height, and require the re-fit to hand the pixels
+            // back. Resizing to a height fitToScreen() already chose and
+            // re-fitting proves nothing — that lands on the shrink path, which
+            // stays green with the production growth branch deleted.
+            if (spacer && bodyContent && bodyContent->layout()) {
+                bodyContent->layout()->removeItem(spacer);
+                delete spacer;
+                QApplication::processEvents();
+            }
+            growPanel.fitToScreen(screen);
+            QApplication::processEvents();
+            report("a height fit-to-screen set is reclaimed toward the body",
+                   growPanel.height() == initialAutoHeight,
+                   "height=" + std::to_string(growPanel.height())
+                       + " initialAutoHeight=" + std::to_string(initialAutoHeight));
+        }
 
         // Simulate the operator dragging it short, then reopening.
         growPanel.resize(growPanel.width(), ConnectionPanel::kSafeMinimumHeight);
@@ -297,15 +426,6 @@ int main(int argc, char** argv)
         report("a height the operator chose survives a re-fit",
                growPanel.height() == ConnectionPanel::kSafeMinimumHeight,
                "height=" + std::to_string(growPanel.height()));
-
-        // A height fitToScreen() itself set is fair game to reclaim.
-        growPanel.resize(growPanel.width(), autoHeight);
-        growPanel.fitToScreen(screen);
-        QApplication::processEvents();
-        report("a height fit-to-screen set is reclaimed toward the body",
-               growPanel.height() == autoHeight,
-               "height=" + std::to_string(growPanel.height())
-                   + " autoHeight=" + std::to_string(autoHeight));
     }
 
     app.setFont(originalFont);

@@ -17,6 +17,8 @@
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
+#include "core/N1MMSpotClient.h"
+#include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -25,11 +27,14 @@
 #endif
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/SpotModel.h"
 
 #include <QDateTime>
+#include <QMessageBox>
+#include <QSet>
 #ifdef HAVE_MQTT
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -54,6 +59,8 @@ void MainWindow::wireSpotSubsystem()
     m_wsjtxClient = new WsjtxClient;
     m_spotCollectorClient = new SpotCollectorClient;
     m_potaClient = new PotaClient;
+    m_eibiClient = new EibiClient;
+    m_n1mmSpotClient = new N1MMSpotClient;
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
 #endif
@@ -121,6 +128,15 @@ void MainWindow::wireSpotSubsystem()
             QJsonDocument::fromJson(payload).object();
         const QString text = obj.value(QStringLiteral("text")).toString().trimmed();
         if (text.isEmpty()) return;
+        // The CWX capability gate, same as the panel's F1-F12 shortcuts and the
+        // FlexControl macro action: this ends in `cwx send`, and a radio with no
+        // text buffer swallows it. Say so in the log rather than accepting a
+        // published message that goes nowhere.
+        if (!m_radioModel.hasRadioSideCwKeyer()) {
+            qCWarning(lcMqtt) << "cw/transmit ignored:"
+                              << "radio has no radio-side CW keyer";
+            return;
+        }
         auto& tx = m_radioModel.transmitModel();
         const int wpm = obj.value(QStringLiteral("speed_wpm")).toInt(0);
         const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);
@@ -220,10 +236,64 @@ void MainWindow::wireSpotSubsystem()
     m_wsjtxClient->moveToThread(m_spotThread);
     m_spotCollectorClient->moveToThread(m_spotThread);
     m_potaClient->moveToThread(m_spotThread);
+    m_eibiClient->moveToThread(m_spotThread);
+    m_n1mmSpotClient->moveToThread(m_spotThread);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient->moveToThread(m_spotThread);
 #endif
     m_spotThread->start();
+
+    // ── EiBi Shortwave Schedules ─────────────────────────────────────────────
+    connect(m_eibiClient, &EibiClient::spotsUpdated,
+            this, [this](const QVector<DxSpot>& spots) {
+        QSet<QString> currentKeys;
+        currentKeys.reserve(spots.size());
+
+        for (const auto& spot : spots) {
+            if (spot.dxCall.trimmed().isEmpty() || spot.freqMhz <= 0.0)
+                continue;
+
+            const QString key = spot.dxCall + QLatin1Char(':') + QString::number(spot.freqMhz, 'f', 4);
+            currentKeys.insert(key);
+
+            int spotId = m_eibiSpotKeyToId.value(key, -1);
+            if (spotId == -1) {
+                spotId = m_nextPassiveSpotId--;
+                m_eibiSpotKeyToId[key] = spotId;
+            }
+
+            QMap<QString, QString> kvs;
+            kvs["callsign"] = QString(spot.dxCall).replace(' ', QChar(0x7f));
+            kvs["rx_freq"] = QString::number(spot.freqMhz, 'f', 6);
+            kvs["tx_freq"] = QString::number(spot.freqMhz, 'f', 6);
+            kvs["source"] = QStringLiteral("EiBi");
+            kvs["spotter_callsign"] = spot.spotterCall;
+            kvs["lifetime_seconds"] = QString::number(spot.lifetimeSec);
+            kvs["timestamp"] = QString::number(QDateTime::currentSecsSinceEpoch());
+            if (!spot.comment.isEmpty())
+                kvs["comment"] = QString(spot.comment).replace(' ', QChar(0x7f));
+            const QString eibiColor = AppSettings::instance().value("EiBiSpotColor", "#8aa8c0").toString();
+            kvs["color"] = eibiColor;
+
+            m_radioModel.spotModel().applySpotStatus(spotId, kvs);
+        }
+
+        // Remove spots that are no longer active
+        auto it = m_eibiSpotKeyToId.begin();
+        while (it != m_eibiSpotKeyToId.end()) {
+            if (!currentKeys.contains(it.key())) {
+                m_radioModel.spotModel().removeSpot(it.value());
+                it = m_eibiSpotKeyToId.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    });
+
+    connect(m_eibiClient, &EibiClient::fetchFailed,
+            this, [this](const QString& err) {
+        statusBar()->showMessage(QStringLiteral("EiBi schedule download failed: %1").arg(err), 5000);
+    });
 
     // Construct each client's sockets/timers on the SpotClients thread (#1929).
     // On Windows, QTcpSocket / QUdpSocket / QWebSocket bind their internal
@@ -240,10 +310,15 @@ void MainWindow::wireSpotSubsystem()
                               Qt::QueuedConnection);
     QMetaObject::invokeMethod(m_potaClient, &PotaClient::initialize,
                               Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_eibiClient, &EibiClient::initialize,
+                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_n1mmSpotClient, &N1MMSpotClient::initialize,
+                              Qt::QueuedConnection);
 #ifdef HAVE_WEBSOCKETS
     QMetaObject::invokeMethod(m_freedvClient, &FreeDvClient::initialize,
                               Qt::QueuedConnection);
 #endif
+
 
     // ── HF Propagation Forecast ────────────────────────────────────────────
     m_propForecast = new PropForecastClient(this);
@@ -416,9 +491,140 @@ void MainWindow::wireSpotSubsystem()
             m_passiveSpotExpiryMs.remove(spotId);
             m_radioModel.spotModel().removeSpot(spotId);
         }
+
+        // N1MM keeps its own key→id map so a re-add updates in place. Drop the
+        // entries whose spots just expired here too, or the map grows for the
+        // life of the session (#2906).
+        if (!expired.isEmpty() && !m_n1mmSpotIdByKey.isEmpty()) {
+            const QSet<int> expiredIds(expired.cbegin(), expired.cend());
+            for (auto it = m_n1mmSpotIdByKey.begin(); it != m_n1mmSpotIdByKey.end(); ) {
+                if (expiredIds.contains(it.value()))
+                    it = m_n1mmSpotIdByKey.erase(it);
+                else
+                    ++it;
+            }
+        }
     });
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
-            this, [this] { m_passiveSpotExpiryMs.clear(); });
+            this, [this] { m_passiveSpotExpiryMs.clear(); m_n1mmSpotIdByKey.clear(); });
+
+    // ── N1MM/DXLog contest logger spots (#2906) ───────────────────────────
+    // Unlike the other feeds, N1MM tells us explicitly when a spot is added,
+    // updated (re-"add" for a callsign already on this band), or removed
+    // ("delete", e.g. when the station moves within the band), so this
+    // bypasses queueSpotCmd's freq-based dedup and keys spots by
+    // N1MMSpotParser::spotKey() (callsign+band) instead. A generous lifetime
+    // still backstops the model in case the logger exits without sending
+    // deletes for its open spots.
+    // Per-flag colour: the operator's stored override if they picked one,
+    // otherwise the flag's theme token so contest spots follow the theme.
+    auto n1mmColorForStatus = [](const QString& statusFlag) {
+        for (const auto& spec : N1MMSpotParser::kStatusColorSpecs) {
+            if (statusFlag != QLatin1String(spec.flag))
+                continue;
+            const QString stored =
+                AppSettings::instance().value(spec.settingsKey, "").toString();
+            if (!stored.isEmpty())
+                return stored;
+            return ThemeManager::instance()
+                       .color(QString::fromLatin1(spec.themeToken)).name();
+        }
+        return QString();
+    };
+
+    // Deliberately not gated on m_radioModel.isConnected() the way queueSpotCmd
+    // is, and deliberately not routed through
+    // SpotCommandPolicy::shouldSendSpotAddCommands(): N1MM markers are
+    // client-side only. The radio has no way to express N1MM's explicit
+    // add/update/delete semantics, so these never become `spot add` commands
+    // and never appear in SmartSDR or other clients — which also means a radio
+    // reconnect must not throw away the logger's bandmap state.
+    connect(m_n1mmSpotClient, &N1MMSpotClient::spotAdded,
+            this, [this, n1mmColorForStatus](const N1mmSpot& n1mm) {
+        if (n1mm.dxCall.trimmed().isEmpty() || n1mm.freqMhz <= 0.0)
+            return;
+
+        const QString key = N1MMSpotParser::spotKey(n1mm.dxCall, n1mm.freqMhz);
+        const int lifetimeSec = AppSettings::instance().value("N1MMSpotLifetimeSec", 10800).toInt();
+
+        QString color = n1mmColorForStatus(n1mm.statusFlag);
+        if (color.length() == 7)
+            color = "#FF" + color.mid(1);
+
+        QMap<QString, QString> kvs;
+        kvs["callsign"] = QString(n1mm.dxCall).replace(' ', QChar(0x7f));
+        kvs["rx_freq"] = QString::number(n1mm.freqMhz, 'f', 6);
+        kvs["tx_freq"] = QString::number(n1mm.freqMhz, 'f', 6);
+        // "N1MM-<StationName>" matches what SmartSDR puts in Spot.Source for
+        // logger-fed spots, so a multi-op setup can tell which logger PC a
+        // spot came from — and migrating operators see the source string they
+        // already know. Plain "N1MM" when the logger omits <StationName>.
+        kvs["source"] = n1mm.stationName.isEmpty()
+                      ? QStringLiteral("N1MM")
+                      : QStringLiteral("N1MM-") + n1mm.stationName;
+        kvs["spotter_callsign"] = n1mm.spotterCall;
+        kvs["lifetime_seconds"] = QString::number(lifetimeSec);
+        // Use the logger's own timestamp: it drives the marker's age display
+        // and fade, so stamping "now" would make a station N1MM has held on
+        // its bandmap for hours read as freshly spotted — and would reset the
+        // age on every status re-add (new → dupe, mult flag flipping).
+        kvs["timestamp"] = QString::number(n1mm.timestamp.isValid()
+                                               ? n1mm.timestamp.toSecsSinceEpoch()
+                                               : QDateTime::currentSecsSinceEpoch());
+        kvs["color"] = color;
+        if (!n1mm.mode.isEmpty())
+            kvs["mode"] = n1mm.mode;
+
+        QString comment = n1mm.comment;
+        if (!n1mm.statusRaw.isEmpty())
+            comment = comment.isEmpty() ? n1mm.statusRaw : (comment + " [" + n1mm.statusRaw + "]");
+        if (!comment.isEmpty())
+            kvs["comment"] = QString(comment).replace(' ', QChar(0x7f));
+
+        auto it = m_n1mmSpotIdByKey.constFind(key);
+        int spotId;
+        if (it != m_n1mmSpotIdByKey.constEnd()) {
+            spotId = it.value();
+        } else {
+            spotId = m_nextPassiveSpotId--;
+            m_n1mmSpotIdByKey.insert(key, spotId);
+        }
+        m_radioModel.spotModel().applySpotStatus(spotId, kvs);
+
+        // 0 (or negative) means "no expiry" — same convention as
+        // addPassiveSpotToModel and the DX-cluster lifetime helper above.
+        // Inserting unconditionally would make the 1 Hz sweeper delete the
+        // spot on its next tick.
+        if (lifetimeSec > 0) {
+            const qint64 expiresAt = QDateTime::currentMSecsSinceEpoch()
+                                   + qint64(lifetimeSec) * 1000;
+            m_passiveSpotExpiryMs.insert(spotId, expiresAt);
+        }
+    });
+
+    connect(m_n1mmSpotClient, &N1MMSpotClient::spotDeleted,
+            this, [this](const QString& dxCall, double freqMhz) {
+        const QString key = N1MMSpotParser::spotKey(dxCall, freqMhz);
+        const auto it = m_n1mmSpotIdByKey.constFind(key);
+        if (it == m_n1mmSpotIdByKey.constEnd())
+            return;
+        const int spotId = it.value();
+        m_n1mmSpotIdByKey.erase(it);
+        m_passiveSpotExpiryMs.remove(spotId);
+        m_radioModel.spotModel().removeSpot(spotId);
+    });
+
+    // Stopping the listener drops its markers. Without this they'd linger for
+    // N1MMSpotLifetimeSec (3 h by default, and forever at 0 = no expiry), long
+    // after the logger feeding them is gone. The other sources don't hit this
+    // because queueSpotCmd gives them the much shorter cluster lifetime.
+    connect(m_n1mmSpotClient, &N1MMSpotClient::stopped, this, [this] {
+        for (auto it = m_n1mmSpotIdByKey.cbegin(); it != m_n1mmSpotIdByKey.cend(); ++it) {
+            m_passiveSpotExpiryMs.remove(it.value());
+            m_radioModel.spotModel().removeSpot(it.value());
+        }
+        m_n1mmSpotIdByKey.clear();
+    });
 
     connect(m_dxCluster, &DxClusterClient::spotReceived,
             this, [queueSpotCmd](const DxSpot& spot) {

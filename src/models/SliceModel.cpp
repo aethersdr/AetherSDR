@@ -363,6 +363,7 @@ void SliceModel::setNb(bool on)
 {
     m_nb = on;
     sendCommand(QString("slice set %1 nb=%2").arg(m_id).arg(on ? 1 : 0));
+    emit noiseBlankerCommandIssued(on, m_nbLevel);
     emit nbChanged(on);
 }
 
@@ -370,6 +371,7 @@ void SliceModel::setNr(bool on)
 {
     m_nr = on;
     sendCommand(QString("slice set %1 nr=%2").arg(m_id).arg(on ? 1 : 0));
+    emit noiseReductionCommandIssued(on, m_nrLevel);
     emit nrChanged(on);
 }
 
@@ -377,7 +379,21 @@ void SliceModel::setAnf(bool on)
 {
     m_anf = on;
     sendCommand(QString("slice set %1 anf=%2").arg(m_id).arg(on ? 1 : 0));
+    emit autoNotchCommandIssued(on);
     emit anfChanged(on);
+}
+
+// NO sendCommand(). There is no Flex wire text for this — a Flex notches with
+// TNFs, which are a different instrument (see RadioCapabilities::hasManualNotch)
+// — so the intent goes to the seam and nowhere else. Inventing a `slice set
+// <id> mn=` verb would send a command no radio answers and make the control
+// look wired on a family that does not have it.
+void SliceModel::setMn(bool on)
+{
+    if (m_mn == on) return;
+    m_mn = on;
+    emit manualNotchCommandIssued(on, m_mnLevel);
+    emit mnChanged(on);
 }
 
 // v4 DSP toggles — command keys differ from status keys (FlexLib Slice.cs)
@@ -445,6 +461,7 @@ void SliceModel::setNbLevel(int v)
     if (m_nbLevel == v) return;
     m_nbLevel = v;
     sendCommand(QString("slice set %1 nb_level=%2").arg(m_id).arg(v));
+    emit noiseBlankerCommandIssued(m_nb, v);
     emit nbLevelChanged(v);
 }
 
@@ -454,6 +471,7 @@ void SliceModel::setNrLevel(int v)
     if (m_nrLevel == v) return;
     m_nrLevel = v;
     sendCommand(QString("slice set %1 nr_level=%2").arg(m_id).arg(v));
+    emit noiseReductionCommandIssued(m_nr, v);
     emit nrLevelChanged(v);
 }
 
@@ -464,6 +482,19 @@ void SliceModel::setAnfLevel(int v)
     m_anfLevel = v;
     sendCommand(QString("slice set %1 anf_level=%2").arg(m_id).arg(v));
     emit anfLevelChanged(v);
+}
+
+// Position, not depth — 0 is one edge of the passband and 100 the other.
+// Re-emits the enable alongside it so a drag while the notch is off still
+// records where it will land, and the seam never has to remember a position it
+// was not given.
+void SliceModel::setMnLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_mnLevel == v) return;
+    m_mnLevel = v;
+    emit manualNotchCommandIssued(m_mn, v);
+    emit mnLevelChanged(v);
 }
 
 void SliceModel::setNrlLevel(int v)
@@ -598,6 +629,7 @@ void SliceModel::setSquelch(bool on, int level)
     if (levelChanged)
         sendCommand(QString("slice set %1 squelch_level=%2").arg(m_id).arg(level));
 
+    emit squelchCommandIssued(on, level);
     emit squelchChanged(on, level);
 }
 
@@ -626,6 +658,7 @@ void SliceModel::setRit(bool on, int hz)
     m_ritFreq = hz;
     sendCommand(QString("slice set %1 rit_on=%2 rit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    emit ritCommandIssued(on, hz);
     emit ritChanged(on, hz);
 }
 
@@ -635,6 +668,7 @@ void SliceModel::setXit(bool on, int hz)
     m_xitFreq = hz;
     sendCommand(QString("slice set %1 xit_on=%2 xit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    emit xitCommandIssued(on, hz);
     emit xitChanged(on, hz);
 }
 
@@ -1316,6 +1350,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_anft = *d.anft;
         emit anftChanged(m_anft);
     }
+    if (d.mn.has_value()) {
+        m_mn = *d.mn;
+        emit mnChanged(m_mn);
+    }
     if (d.apf.has_value()) {
         bool v = *d.apf;
         if (m_apf != v) { m_apf = v; emit apfChanged(v); }
@@ -1361,6 +1399,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.anflLevel.has_value()) {
         int v = *d.anflLevel;
         if (m_anflLevel != v) { m_anflLevel = v; emit anflLevelChanged(v); }
+    }
+    if (d.mnLevel.has_value()) {
+        int v = *d.mnLevel;
+        if (m_mnLevel != v) { m_mnLevel = v; emit mnLevelChanged(v); }
     }
     if (d.agcMode.has_value()) {
         m_agcMode = *d.agcMode;

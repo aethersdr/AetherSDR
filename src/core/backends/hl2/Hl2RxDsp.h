@@ -3,8 +3,10 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <cmath>
 #include <complex>
 #include <memory>
+#include <numbers>
 #include <vector>
 
 #include "core/backends/hl2/Hl2Spectrum.h"
@@ -29,6 +31,21 @@ public:
     // WDSP's internal DSP rate. Constant at 48 kHz and independent of both the
     // HL2 IQ rate and the audio rate — see the note in configure().
     static constexpr int kWdspDspSampleRateHz = 48000;
+
+    // RX filter length. This is also the manual-notch resolution: WDSP's
+    // narrowest notch is 1600 / (taps/256) Hz at kWdspDspSampleRateHz, and it
+    // WIDENS a narrower request instead of rejecting it. 8192 taps buys a 50 Hz
+    // floor (pihpsdr's value); WDSP's own default of 2048 would floor it at
+    // 200 Hz, wide enough to swallow a CW signal next to the carrier being
+    // notched. Keep kMinNotchWidthHz in step if this changes — the UI offers
+    // widths from it.
+    static constexpr int kRxFilterTaps = 8192;
+    static constexpr double kMinNotchWidthHz =
+        1600.0 / (static_cast<double>(kRxFilterTaps) / 256.0)
+        * (static_cast<double>(kWdspDspSampleRateHz) / 48000.0);
+    static_assert(kMinNotchWidthHz <= 50.0,
+                  "RX filter taps no longer allow a 50 Hz notch; the width "
+                  "presets in the TNF menu assume one.");
 
     struct Config {
         int inputSampleRateHz = 48000;   // HL2 IQ sample rate
@@ -90,6 +107,35 @@ public:
     // holds across a sample-rate change without needing to be recomputed.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
 
+    // ── Manual notch filters ──────────────────────────────────────────────
+    //
+    // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
+    // notch ids onto it — this class just does as it is told, in the order it
+    // is told, so the two stay in step across every receiver.
+    //
+    // Centres are ABSOLUTE RF Hz. setNotchTuneFrequency() must follow the NCO,
+    // or the notches stay where the NCO used to be.
+    //
+    // The set is MIRRORED here as well as in WDSP, because reconfigure()
+    // destroys the notch database along with the channel. Without the copy, an
+    // operator's notches vanish on a sample-rate change — the same reason the
+    // shift is kept.
+    Q_INVOKABLE void addNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void editNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void removeNotch(int index);
+    // Empty both the mirror and WDSP's database. This is what makes seeding
+    // IDEMPOTENT: Hl2Backend::seedNotches() clears before it replays, so a
+    // second seed against a chain that already holds the set replaces it
+    // instead of appending a duplicate of every notch.
+    Q_INVOKABLE void clearNotches();
+    Q_INVOKABLE void setNotchesEnabled(bool on);
+    Q_INVOKABLE void setNotchTuneFrequency(double tuneHz);
+
+    // Mirror size, and WDSP's own count. These must agree — the positional
+    // index map depends on it — so both are exposed for the test that pins it.
+    [[nodiscard]] int notchCount() const;
+    [[nodiscard]] int wdspNotchCount() const;
+
     // Mute the DEMODULATOR while transmitting.
     //
     // Suppressing audio further downstream is not enough: this pipeline keeps
@@ -115,6 +161,91 @@ public:
         return m_channel ? m_channel->channelIdForTest() : -1;
     }
 
+    // Demodulated-audio DC blocker, one pole per channel.
+    //
+    // WDSP's AM/SAM detector is an ENVELOPE detector — amd.c emits
+    // sqrt(I^2 + Q^2), which is strictly non-negative — so the carrier arrives
+    // as a DC pedestal. Nothing upstream removes it:
+    //
+    //   * `levelfade` (ON by default, RXA.c) computes
+    //     `audio += dc_insert - dc` from an 8 Hz-corner and a 0.11 Hz-corner
+    //     average. That cancels FADING and deliberately holds the pedestal at
+    //     the long-term carrier level; it is not a DC blocker.
+    //   * The AM/SAM passband is symmetric about the carrier ({-4000, +4000}
+    //     in Hl2Backend::defaultPassbandForMode) because both detectors need
+    //     it that way, which puts 0 Hz mid-band.
+    //
+    // Left in, the pedestal eats output headroom and skews every
+    // zero-referenced consumer downstream — the WAVE applet draws `peak` and
+    // `rms`, both magnitudes, mirrored about a hard centreline, so a DC-shifted
+    // trace renders as a second inverted phantom copy of itself in the lower
+    // half.
+    //
+    // SCOPE: this runs on WdspChannel's OUTPUT, downstream of the whole RXA
+    // chain, so it fixes the audio we deliver but NOT what WDSP itself saw.
+    // wcpAGC sits after amd INSIDE RXA and still rides the pedestal; correcting
+    // that would need DC removal between the two, which WDSP exposes no hook
+    // for. Turning `levelfade` off does not help either — it only stops the
+    // fade correction, leaving sqrt(I^2+Q^2) just as non-negative.
+    //
+    // WHY HERE AND NOT IN WdspChannel: the root cause is amd's envelope
+    // detector, which belongs to WDSP, so a blocker on WdspChannel's own RX
+    // output would fix it once for every future consumer instead of per caller.
+    // Hl2RxDsp is the only WDSP RECEIVE consumer in the tree today — Hl2TxDsp is
+    // the one other user and is transmit-only — so per-caller costs nothing yet.
+    // It does mean the next WDSP RX path added will NOT inherit this: whoever
+    // adds one should push the blocker down into WdspChannel rather than repeat
+    // it here.
+    //
+    // Applied to EVERY mode rather than switched on for AM/SAM: SSB, CW and
+    // the digital modes are already zero-mean so it is a no-op there, FM wants
+    // it for the same reason AM does, and an unconditional filter has no
+    // mode-change state that can be got wrong.
+    //
+    // Public, with the pole helper below, so hl2_am_dcblock_test can pin the
+    // unconfigured bypass and the rate-dependent corner directly. Neither is
+    // reachable through configure(), which only ever hands it a valid rate.
+    struct DcBlocker {
+        float r = 0.0f;    // pole radius, set by configure(); <= 0 bypasses
+        float x1 = 0.0f;
+        float y1 = 0.0f;
+
+        [[nodiscard]] float process(float x) noexcept
+        {
+            // Bypass rather than filter when unconfigured. `y = x - x1 + r*y1`
+            // at r = 0 is a DIFFERENTIATOR, not a passthrough, so a missed
+            // configure() would otherwise gut the low end of the audio.
+            if (!(r > 0.0f))
+                return x;
+            float y = x - x1 + r * y1;
+            // Flush to zero. During silence y1 decays geometrically toward
+            // denormal, and denormal arithmetic is punitively slow on x86.
+            if (!(std::fabs(y) > 1e-20f))
+                y = 0.0f;
+            x1 = x;
+            y1 = y;
+            return y;
+        }
+
+        void reset() noexcept { x1 = 0.0f; y1 = 0.0f; }
+    };
+
+    // -3 dB corner, Hz. Well below the 100 Hz that even a wide AM passband
+    // carries as audio, and far below the CW pitch, so it removes the pedestal
+    // without touching program material.
+    static constexpr double kDcBlockerCornerHz = 20.0;
+
+    // Pole radius placing DcBlocker's -3 dB corner at `cornerHz`. Split out of
+    // configure() so the corner can be asserted at more than one audio rate:
+    // hardcoding the pole for one rate leaves the filter working and the corner
+    // silently wrong, which no end-to-end DC measurement notices.
+    [[nodiscard]] static float dcBlockerPole(double cornerHz,
+                                             double sampleRateHz) noexcept
+    {
+        return static_cast<float>(
+            std::exp(-2.0 * std::numbers::pi * cornerHz / sampleRateHz));
+    }
+
 public slots:
     // Feed one IQ block (normalized complex<float>). Emits spectrumReady per FFT
     // frame and audioReady/meterUpdate per completed WdspChannel block.
@@ -135,6 +266,19 @@ private:
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
     Config m_config;
 
+    // Notch set, mirrored so reconfigure() can replay it — see the note on
+    // addNotch(). Index in this vector IS the WDSP notch index; keeping them
+    // identical is the entire trick, and it works because every mutation here
+    // performs the same insert/erase WDSP performs.
+    struct Notch {
+        double centerHz = 0.0;
+        double widthHz = 0.0;
+        bool active = true;
+    };
+    std::vector<Notch> m_notches;
+    bool m_notchesEnabled = true;
+    double m_notchTuneHz = 0.0;
+
     bool m_audioMuted = false;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on
     // the first block and only read/written on the DSP thread.
@@ -148,6 +292,9 @@ private:
     std::vector<std::complex<float>> m_conjugated;
     std::vector<float> m_i, m_q;                    // deinterleaved input scratch
     std::vector<float> m_left, m_right;             // WdspChannel output scratch
+    // Applied to m_left/m_right on the way into m_stereo. See DcBlocker above
+    // for why AM/SAM need it, and for what it deliberately does not fix.
+    DcBlocker m_dcBlockL, m_dcBlockR;
     std::vector<float> m_stereo;                    // interleaved audio out
     std::vector<float> m_bins;                      // spectrum scratch
 };

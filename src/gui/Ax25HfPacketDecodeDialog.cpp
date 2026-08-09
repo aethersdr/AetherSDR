@@ -18,6 +18,7 @@
 #include "core/tnc/Ax25FrameFormatter.h"
 #include "core/tnc/HeardList.h"
 #include "core/tnc/KissTncServer.h"
+#include "core/tnc/Ax25Connection.h" // link snapshots for the automation bridge
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
@@ -115,17 +116,28 @@ constexpr auto kPmsWelcomeSetting = "AetherModemPmsWelcome";
 constexpr auto kPmsBeaconEnabledSetting = "AetherModemPmsBeaconEnabled";
 constexpr auto kPmsBeaconTextSetting = "AetherModemPmsBeaconText";
 
-// TNC Terminal settings keys (persisted in AppSettings).
-constexpr auto kTerminalMyCallSetting = "AetherModemTerminalMyCall";
-constexpr auto kTerminalLastCallSetting = "AetherModemTerminalLastCall";
-constexpr auto kTerminalTxTailSetting = "AetherModemTerminalTxTailMs";
-constexpr auto kTerminalRetrySecsSetting = "AetherModemTerminalRetrySecs";
-constexpr auto kTerminalMaxTriesSetting = "AetherModemTerminalMaxTries";
-constexpr auto kTerminalPaclenSetting = "AetherModemTerminalPaclen";
-constexpr auto kTerminalLogSetting = "AetherModemTerminalLogEnabled";
-constexpr int kTerminalDefaultRetrySecs = 6;
+// TNC Terminal settings live as ONE nested-JSON object under this key — see
+// TerminalSettings in the header (Principle V). The seven legacy flat keys it
+// replaced are read once by TerminalSettings::migrateLegacy() and then unused.
+// TXDELAY override in HDLC flags, 0 = the profile default. Exposed because the
+// preamble is the largest single term in the HF airtime budget (2.13 s of every
+// 5.07 s data frame and 3.30 s acknowledgement at 80 flags) and the only way to
+// find the right value is to sweep it on the air against measured frame error
+// rate. A knob rather than a constant so a sweep needs no rebuild per step.
+constexpr auto kTxPreambleFlagsSetting = "AetherModemTxPreambleFlags";
+constexpr auto kTerminalSettingsKey = "AetherModemTerminal";
+
+// 0 = Auto: derive T1 and paclen from the modem profile via Ax25LinkTiming.h.
+// Auto is the default because the previous fixed values (T1 6 s, paclen 128)
+// were sized for 1200-baud VHF and are physically impossible at 300 baud — T1
+// expired before the frame it was timing had finished transmitting. A non-zero
+// value is an explicit operator override and is honoured as-is, except when it
+// is below the modelled round trip for the active profile (see
+// overrideImpossibleT1ForProfile). See docs/HFMODEM.md §1.
+constexpr int kTerminalAutoTiming = 0;
+constexpr int kTerminalDefaultRetrySecs = kTerminalAutoTiming;
 constexpr int kTerminalDefaultMaxTries = 8;
-constexpr int kTerminalDefaultPaclen = 128;
+constexpr int kTerminalDefaultPaclen = kTerminalAutoTiming;
 
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
@@ -144,6 +156,10 @@ constexpr int kTxChunkMs = 20;
 // radio's DAX TX buffer depth. Raise if clipping persists; lower if the FIFO
 // overflows.
 constexpr int kTxLeadBufferMs = 120;
+// How long a transmit may wait for a DAX TX stream before giving up. Generous
+// against a slow Flex `stream create` round trip, short enough that a backend
+// which silently drops the command does not strand the TX queue.
+constexpr int kTxStreamWaitTimeoutMs = 5000;
 
 constexpr const char* kAetherModemStyle = R"(
 QWidget {
@@ -528,6 +544,81 @@ void TncSettings::setPort(int p)
     QJsonObject o = readObj();
     o["port"] = QString::number(p);
     write(o);
+}
+
+// ---------------------------------------------------------------------------
+// TerminalSettings — the terminal's configuration as one nested object
+// ---------------------------------------------------------------------------
+
+TerminalSettings TerminalSettings::load()
+{
+    const QString json =
+        AppSettings::instance().value(kTerminalSettingsKey, QString{}).toString();
+    const QJsonObject o = json.isEmpty()
+        ? QJsonObject{}
+        : QJsonDocument::fromJson(json.toUtf8()).object();
+
+    TerminalSettings s;
+    s.myCall = o.value("myCall").toString(QString{});
+    s.lastCall = o.value("lastCall").toString(QString{});
+    s.retrySecs = o.value("retrySecs").toString(QString::number(kAuto)).toInt();
+    s.maxTries = o.value("maxTries").toString(QString::number(kDefaultMaxTries)).toInt();
+    s.paclen = o.value("paclen").toString(QString::number(kAuto)).toInt();
+    s.txTailMs = o.value("txTailMs").toString(QString::number(kDefaultTxTailMs)).toInt();
+    s.txPreambleFlags = o.value("txPreambleFlags").toString(QString::number(kAuto)).toInt();
+    s.logEnabled = o.value("logEnabled").toString(QStringLiteral("False"))
+        == QLatin1String("True");
+    return s;
+}
+
+void TerminalSettings::save() const
+{
+    QJsonObject o;
+    o["myCall"] = myCall;
+    o["lastCall"] = lastCall;
+    o["retrySecs"] = QString::number(retrySecs);
+    o["maxTries"] = QString::number(maxTries);
+    o["paclen"] = QString::number(paclen);
+    o["txTailMs"] = QString::number(txTailMs);
+    o["txPreambleFlags"] = QString::number(txPreambleFlags);
+    o["logEnabled"] = logEnabled ? QStringLiteral("True") : QStringLiteral("False");
+
+    auto& app = AppSettings::instance();
+    app.setValue(kTerminalSettingsKey,
+                 QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+    app.save();
+}
+
+void TerminalSettings::migrateLegacy()
+{
+    auto& app = AppSettings::instance();
+    if (app.contains(kTerminalSettingsKey))
+        return; // already migrated
+
+    // Read the legacy flat keys with the defaults the old code used. Note
+    // retrySecs and paclen migrate their OLD defaults (6 s / 128) rather than
+    // the new Auto: a stored value is an operator's value and is carried across
+    // as-is. A fresh profile has no flat keys at all and simply lands on the
+    // struct's Auto defaults, which is where we want new installs.
+    TerminalSettings s;
+    s.myCall = app.value("AetherModemTerminalMyCall", QString{}).toString();
+    s.lastCall = app.value("AetherModemTerminalLastCall", QString{}).toString();
+    s.retrySecs = app.value("AetherModemTerminalRetrySecs",
+                            QString::number(kAuto)).toString().toInt();
+    s.maxTries = app.value("AetherModemTerminalMaxTries",
+                           QString::number(kDefaultMaxTries)).toString().toInt();
+    s.paclen = app.value("AetherModemTerminalPaclen",
+                         QString::number(kAuto)).toString().toInt();
+    s.txTailMs = app.value("AetherModemTerminalTxTailMs",
+                           QString::number(kDefaultTxTailMs)).toString().toInt();
+    s.logEnabled = app.value("AetherModemTerminalLogEnabled",
+                             QStringLiteral("False")).toString() == QLatin1String("True");
+    // txPreambleFlags has no legacy key — it is new with the nested blob.
+    s.save();
+
+    // The legacy flat keys are left in place, exactly as TncSettings::
+    // migrateLegacy() does: AppSettings is XML and a future cleanup PR can drop
+    // them once no other reader touches them. The nested object is authoritative.
 }
 
 void TncSettings::migrateLegacy()
@@ -1286,9 +1377,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     // Restore TNC Terminal state.
     applyTerminalConfigFromUi(false);
-    const bool termLogOn = AppSettings::instance()
-        .value(kTerminalLogSetting, QStringLiteral("False")).toString()
-            == QStringLiteral("True");
+    const bool termLogOn = TerminalSettings::load().logEnabled;
     if (termLogOn && m_terminalLogEnable)
         m_terminalLogEnable->setChecked(true); // fires the toggled handler
     refreshTerminalStatus();
@@ -1382,6 +1471,11 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
     m_shimConfig = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
+    // ax25DemodConfigForProfile() returns profile defaults, so re-apply the
+    // operator's TXDELAY override or switching bands would silently discard it
+    // mid-sweep — and the sweep would be measuring the wrong preamble.
+    if (m_terminalTxPreamble)
+        m_shimConfig.txPreambleFlags = m_terminalTxPreamble->value();
     QMetaObject::invokeMethod(m_shim, [shim = m_shim, cfg = m_shimConfig]() {
         shim->configure(cfg);
     }, Qt::QueuedConnection);
@@ -1395,7 +1489,434 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
 
     if (m_log)
         appendSystemLine(QStringLiteral("Configured %1.").arg(ax25DemodDescription(m_shimConfig)));
+
+    // The connected-mode timers belong to the air interface, not to the tab
+    // they were typed into: switching between 300 baud HF and 1200 baud VHF
+    // changes one I-frame's airtime by a factor of four.
+    applyLinkTimingProfile();
+    overrideImpossibleT1ForProfile();
     refreshStatus();
+}
+
+// ---------------------------------------------------------------------------
+// Agent automation bridge — `modem` and `link` verbs
+// ---------------------------------------------------------------------------
+
+namespace {
+
+QJsonObject automationError(const QString& message)
+{
+    return QJsonObject{{QStringLiteral("ok"), false},
+                       {QStringLiteral("error"), message}};
+}
+
+const char* linkStateName(Ax25Connection::State state)
+{
+    switch (state) {
+    case Ax25Connection::State::Disconnected:  return "disconnected";
+    case Ax25Connection::State::Connecting:    return "connecting";
+    case Ax25Connection::State::Connected:     return "connected";
+    case Ax25Connection::State::Disconnecting: return "disconnecting";
+    }
+    return "unknown";
+}
+
+// Everything a soak script needs to assert on one side of a link, in one
+// object. The point of exposing measured RTT alongside the configured T1 is
+// that a bridge test can assert on timing directly instead of scraping the
+// aether.ax25.link log — `t1TooShort` is the same verdict the log marks.
+QJsonObject linkSnapshot(const Ax25Connection& link)
+{
+    const auto& s = link.stats();
+    QJsonObject rtt{
+        {QStringLiteral("samples"), int(s.rttSamples)},
+        {QStringLiteral("lastMs"), double(s.rttLastMs)},
+        {QStringLiteral("minMs"), double(s.rttMinMs)},
+        {QStringLiteral("avgMs"), double(s.averageRttMs())},
+        {QStringLiteral("maxMs"), double(s.rttMaxMs)},
+    };
+    QJsonObject counters{
+        {QStringLiteral("iSent"), int(s.iSent)},
+        {QStringLiteral("iResent"), int(s.iResent)},
+        {QStringLiteral("iRcvd"), int(s.iRcvd)},
+        {QStringLiteral("iDropped"), int(s.iDropped)},
+        {QStringLiteral("iDuplicate"), int(s.iDuplicate)},
+        {QStringLiteral("rrRcvd"), int(s.rrRcvd)},
+        {QStringLiteral("rnrRcvd"), int(s.rnrRcvd)},
+        {QStringLiteral("rejRcvd"), int(s.rejRcvd)},
+        {QStringLiteral("rejSent"), int(s.rejSent)},
+        {QStringLiteral("rejRecoveries"), int(s.rejRecoveries)},
+        {QStringLiteral("t1Timeouts"), int(s.t1Timeouts)},
+        {QStringLiteral("t2Acks"), int(s.t2Acks)},
+        {QStringLiteral("t3Polls"), int(s.t3Polls)},
+        {QStringLiteral("frmrRcvd"), int(s.frmrRcvd)},
+        {QStringLiteral("invalidNr"), int(s.invalidNr)},
+        {QStringLiteral("infoBytesSent"), double(s.infoBytesSent)},
+        {QStringLiteral("infoBytesReceived"), double(s.infoBytesReceived)},
+    };
+    // Frame-error-rate inputs. FER cannot be computed from one side: only the
+    // SENDER knows how many transmissions went out, and only the RECEIVER knows
+    // how many decoded. Each side therefore publishes its own half, and the
+    // pairing is
+    //
+    //     FER = 1 - (peer.rxDecoded / self.txAttempts)
+    //
+    // measured over the same session. Deliberately NOT a single number here: a
+    // side that invented one would be guessing at the other end's count, and
+    // this is the metric the TXDELAY sweep turns on. It is also immune to T1
+    // behaviour — it counts transmissions against decodes and does not care how
+    // long we waited between them, so timing changes cannot skew it.
+    const quint32 txAttempts = s.iSent + s.iResent;
+    const quint32 rxDecoded = s.iRcvd + s.iDuplicate;
+    QJsonObject quality{
+        {QStringLiteral("txAttempts"), int(txAttempts)},
+        {QStringLiteral("rxDecoded"), int(rxDecoded)},
+        // Our retransmissions as a share of everything we sent — a same-side
+        // proxy for loss, but it conflates a lost data frame with a lost ack.
+        {QStringLiteral("retransmitPct"),
+         txAttempts > 0 ? int((100 * s.iResent) / txAttempts) : 0},
+        // Of the frames we decoded, the share that were repeats — i.e. how often
+        // OUR acknowledgement went missing. The one loss figure a single side
+        // can measure honestly.
+        {QStringLiteral("ackLossPct"),
+         rxDecoded > 0 ? int((100 * s.iDuplicate) / rxDecoded) : 0},
+        {QStringLiteral("note"),
+         QStringLiteral("FER = 1 - peer.rxDecoded / self.txAttempts")},
+    };
+
+    return QJsonObject{
+        {QStringLiteral("state"), QLatin1String(linkStateName(link.state()))},
+        {QStringLiteral("quality"), quality},
+        {QStringLiteral("peer"), link.remoteAddress().isValid()
+                                     ? link.remoteAddress().toString() : QString()},
+        {QStringLiteral("local"), link.localAddress().isValid()
+                                      ? link.localAddress().toString() : QString()},
+        {QStringLiteral("vs"), link.sendSeq()},
+        {QStringLiteral("vr"), link.recvSeq()},
+        {QStringLiteral("unacked"), link.unacked()},
+        {QStringLiteral("sendQueueBytes"), link.sendQueueBytes()},
+        {QStringLiteral("retries"), link.retries()},
+        {QStringLiteral("maxRetries"), link.maxRetries()},
+        {QStringLiteral("sessionMs"), double(link.sessionDurationMs())},
+        {QStringLiteral("t1Ms"), link.retryTimeoutMs()},
+        {QStringLiteral("t3Ms"), link.idlePollMs()},
+        {QStringLiteral("idlePollArmed"), link.idlePollArmed()},
+        {QStringLiteral("paclen"), link.paclen()},
+        {QStringLiteral("baud"), link.linkProfile().baud},
+        {QStringLiteral("preambleFlags"), link.linkProfile().preambleFlags},
+        {QStringLiteral("modelIFrameMs"), link.expectedIFrameAirtimeMs()},
+        {QStringLiteral("modelRttMs"), link.expectedRoundTripMs()},
+        {QStringLiteral("recommendedT1Ms"), link.recommendedRetryTimeoutMs()},
+        // True when the link has measured round trips at or beyond its own T1 —
+        // the timer cannot succeed and no channel improvement will help.
+        {QStringLiteral("t1TooShort"),
+         s.rttSamples > 0 && s.averageRttMs() >= link.retryTimeoutMs()},
+        {QStringLiteral("rtt"), rtt},
+        {QStringLiteral("counters"), counters},
+    };
+}
+
+} // namespace
+
+QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
+                                                        const QString& action,
+                                                        const QString& value)
+{
+    const bool isLink = (verb == QLatin1String("link"));
+
+    // ── modem ───────────────────────────────────────────────────────────────
+    if (!isLink) {
+        if (action == QLatin1String("profile")) {
+            const QString name = value.trimmed().toLower();
+            QRadioButton* button = nullptr;
+            if (name == QLatin1String("hf300") || name == QLatin1String("hf")
+                || name == QLatin1String("300"))
+                button = m_hf300Profile;
+            else if (name == QLatin1String("vhf1200") || name == QLatin1String("vhf")
+                     || name == QLatin1String("1200"))
+                button = m_vhf1200Profile;
+            if (!button)
+                return automationError(QStringLiteral(
+                    "modem profile expects hf300 or vhf1200 (got '%1')").arg(value));
+            // Click the radio button rather than calling setModemProfile()
+            // directly: the toggled() handler is what persists the choice and
+            // re-derives the link timing, so driving the widget keeps the bridge
+            // on the same path a human takes.
+            button->setChecked(true);
+        } else if (action == QLatin1String("on") || action == QLatin1String("off")
+                   || action == QLatin1String("enable")
+                   || action == QLatin1String("disable")) {
+            if (!m_enableDecode)
+                return automationError(QStringLiteral("modem enable control is unavailable"));
+            const bool on = (action == QLatin1String("on")
+                             || action == QLatin1String("enable"));
+            m_enableDecode->setChecked(on);
+            // Verify rather than assume: the modem can refuse to start (no
+            // audio engine, no attached slice). Reporting ok for work that did
+            // not happen is worse than reporting the failure.
+            if (m_enableDecode->isChecked() != on) {
+                return automationError(QStringLiteral(
+                    "modem refused to turn %1 — see the AetherModem system log")
+                    .arg(on ? QStringLiteral("on") : QStringLiteral("off")));
+            }
+        } else if (action == QLatin1String("preamble") || action == QLatin1String("txd")) {
+            // The TXDELAY sweep knob. Driving the spinner rather than the config
+            // directly keeps persistence and the link-timing re-derivation on
+            // the one path a human uses.
+            if (!m_terminalTxPreamble)
+                return automationError(QStringLiteral("TXDELAY control is unavailable"));
+            bool ok = false;
+            const int flags = value.trimmed().toLower() == QLatin1String("auto")
+                ? kTerminalAutoTiming
+                : value.trimmed().toInt(&ok);
+            if (!ok && value.trimmed().toLower() != QLatin1String("auto"))
+                return automationError(QStringLiteral(
+                    "modem preamble expects a flag count or 'auto' (got '%1')").arg(value));
+            if (flags < 0 || flags > 127)
+                return automationError(QStringLiteral(
+                    "TXDELAY flags out of range 0-127 (got %1)").arg(flags));
+            m_terminalTxPreamble->setValue(flags);
+            applyTerminalConfigFromUi(true);
+        } else if (!action.isEmpty() && action != QLatin1String("status")) {
+            return automationError(QStringLiteral(
+                "unknown modem action '%1' (status|profile|on|off|preamble)").arg(action));
+        }
+
+        QJsonObject modem{
+            {QStringLiteral("profile"), ax25ModemProfileName(m_shimConfig.profile)},
+            {QStringLiteral("profileId"), profileSettingsValue(m_shimConfig.profile)},
+            {QStringLiteral("baud"), m_shimConfig.baud},
+            {QStringLiteral("sampleRate"), m_shimConfig.sampleRate},
+            {QStringLiteral("markHz"), m_shimConfig.markHz},
+            {QStringLiteral("spaceHz"), m_shimConfig.spaceHz},
+            {QStringLiteral("lanes"), ax25DemodLaneCount(m_shimConfig)},
+            // What the modulator will actually transmit, and what it costs.
+            // Both are what the TXDELAY sweep is varying.
+            {QStringLiteral("preambleFlags"), ax25EffectiveTxPreambleFlags(m_shimConfig)},
+            {QStringLiteral("preambleMs"),
+             m_shimConfig.baud > 0
+                 ? ax25EffectiveTxPreambleFlags(m_shimConfig) * 8 * 1000 / m_shimConfig.baud
+                 : 0},
+            {QStringLiteral("preambleOverridden"), m_shimConfig.txPreambleFlags > 0},
+            {QStringLiteral("enabled"), m_enableDecode && m_enableDecode->isChecked()},
+            {QStringLiteral("description"), ax25DemodDescription(m_shimConfig)},
+        };
+        // Decoder health, so a soak can tell "no frames because the band is
+        // dead" from "no frames because the audio tap never started".
+        QJsonObject demod{
+            {QStringLiteral("rmsDbfs"), m_lastDiagnostics.rmsDbfs},
+            {QStringLiteral("peakDbfs"), m_lastDiagnostics.peakDbfs},
+            {QStringLiteral("clippedPercent"), m_lastDiagnostics.clippedPercent},
+            {QStringLiteral("markMinusSpaceDb"), m_lastDiagnostics.markMinusSpaceDb},
+            {QStringLiteral("receiveGateOpen"), m_lastDiagnostics.receiveGateOpen},
+            {QStringLiteral("hdlcFrameCandidates"),
+             double(m_lastDiagnostics.hdlcFrameCandidates)},
+            {QStringLiteral("plausibleAx25Candidates"),
+             double(m_lastDiagnostics.plausibleAx25Candidates)},
+            {QStringLiteral("framesAccepted"), double(m_lastDiagnostics.framesAccepted)},
+            {QStringLiteral("rejectBadFcs"), double(m_lastDiagnostics.rejectBadFcs)},
+            {QStringLiteral("rejectTooShort"), double(m_lastDiagnostics.rejectTooShort)},
+            {QStringLiteral("rejectMalformed"), double(m_lastDiagnostics.rejectMalformed)},
+        };
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("modem"), modem},
+                           {QStringLiteral("demod"), demod}};
+    }
+
+    // ── link ────────────────────────────────────────────────────────────────
+    if (!m_terminal)
+        return automationError(QStringLiteral("terminal is unavailable"));
+
+    if (action == QLatin1String("connect")) {
+        if (!m_terminal->hasMyCall())
+            return automationError(QStringLiteral(
+                "set MYCALL before connecting (Terminal tab, or `link mycall`)"));
+        if (m_terminal->isConnected() || m_terminal->isConnecting())
+            return automationError(QStringLiteral("already %1 to %2 — disconnect first")
+                .arg(m_terminal->isConnected() ? QStringLiteral("connected")
+                                               : QStringLiteral("connecting"),
+                     m_terminal->peerCall()));
+        if (value.isEmpty())
+            return automationError(QStringLiteral(
+                "link connect needs a callsign: link connect <call> [via <digi>[,<digi>]]"));
+        // The terminal's own command parser handles VIA paths and callsign
+        // validation. Make sure we are at the command prompt first, or the line
+        // would be sent to a peer as data instead of being interpreted.
+        m_terminal->enterCommandMode();
+        m_terminal->submitLine(QStringLiteral("CONNECT %1").arg(value));
+        if (!m_terminal->isConnected() && !m_terminal->isConnecting()) {
+            // The parser rejected it (bad callsign / bad digipeater); it has
+            // already explained why in the transcript.
+            return automationError(QStringLiteral(
+                "connect to '%1' was rejected — see the terminal transcript").arg(value));
+        }
+    } else if (action == QLatin1String("disconnect")) {
+        if (!m_terminal->isConnected() && !m_terminal->isConnecting())
+            return automationError(QStringLiteral("not connected"));
+        m_terminal->disconnectLink();
+    } else if (action == QLatin1String("mycall")) {
+        if (value.isEmpty())
+            return automationError(QStringLiteral("link mycall needs a callsign"));
+        if (m_terminalMyCall) {
+            m_terminalMyCall->setText(value.trimmed().toUpper());
+            applyTerminalConfigFromUi(true);
+        } else {
+            m_terminal->setMyCall(value);
+        }
+        if (!m_terminal->hasMyCall())
+            return automationError(QStringLiteral("invalid callsign '%1'").arg(value));
+    } else if (action == QLatin1String("listen") || action == QLatin1String("alias")) {
+        // The mailbox cannot be enabled without a valid listen callsign, so a
+        // soak script has to be able to set one.
+        if (!m_pms)
+            return automationError(QStringLiteral("mailbox is unavailable"));
+        const bool isAlias = (action == QLatin1String("alias"));
+        QLineEdit* field = isAlias ? m_pmsAliasCall : m_pmsListenCall;
+        if (!field)
+            return automationError(QStringLiteral("mailbox callsign field is unavailable"));
+        field->setText(value.trimmed().toUpper());
+        applyPmsConfigFromUi(true);
+        if (!isAlias && !m_pms->hasValidAddress()) {
+            return automationError(QStringLiteral(
+                "invalid mailbox listen callsign '%1'").arg(value));
+        }
+    } else if (action == QLatin1String("pms")) {
+        const QString state = value.trimmed().toLower();
+        if (state != QLatin1String("on") && state != QLatin1String("off"))
+            return automationError(QStringLiteral("link pms expects on or off"));
+        if (!m_pmsEnable || !m_pms)
+            return automationError(QStringLiteral("mailbox control is unavailable"));
+        const bool on = (state == QLatin1String("on"));
+        m_pmsEnable->setChecked(on);
+        // The mailbox refuses to come up without a valid listen callsign and
+        // silently unchecks itself. Verify the state actually took, so the verb
+        // cannot report success for a mailbox that is not listening.
+        if (m_pms->isEnabled() != on) {
+            return automationError(QStringLiteral(
+                "mailbox refused to turn %1%2")
+                .arg(on ? QStringLiteral("on") : QStringLiteral("off"),
+                     on && !m_pms->hasValidAddress()
+                         ? QStringLiteral(" — set a listen callsign first "
+                                          "(`link listen <call>`)")
+                         : QStringLiteral(" — see the AetherModem system log")));
+        }
+    } else if (!action.isEmpty() && action != QLatin1String("status")) {
+        return automationError(QStringLiteral(
+            "unknown link action '%1' "
+            "(status|connect|disconnect|mycall|listen|alias|pms)").arg(action));
+    }
+
+    QJsonObject terminal{
+        {QStringLiteral("myCall"), m_terminal->myCall()},
+        {QStringLiteral("mode"), m_terminal->mode() == TncTerminal::Mode::Converse
+                                     ? QStringLiteral("converse") : QStringLiteral("command")},
+        {QStringLiteral("connected"), m_terminal->isConnected()},
+        {QStringLiteral("connecting"), m_terminal->isConnecting()},
+        {QStringLiteral("peer"), m_terminal->peerCall()},
+        {QStringLiteral("summary"), m_terminal->statusSummary()},
+        {QStringLiteral("txBytes"), double(m_terminal->txBytes())},
+        {QStringLiteral("rxBytes"), double(m_terminal->rxBytes())},
+    };
+    if (const Ax25Connection* link = m_terminal->link())
+        terminal.insert(QStringLiteral("link"), linkSnapshot(*link));
+
+    QJsonObject pms;
+    if (m_pms) {
+        pms = QJsonObject{
+            {QStringLiteral("enabled"), m_pms->isEnabled()},
+            {QStringLiteral("listen"), m_pms->listenCallsign()},
+            {QStringLiteral("alias"), m_pms->aliasCallsign()},
+            {QStringLiteral("callerConnected"), m_pms->isCallerConnected()},
+            {QStringLiteral("caller"), m_pms->connectedCaller()},
+            {QStringLiteral("messages"), m_pms->messageCount()},
+            {QStringLiteral("idleTimeoutMs"), m_pms->sessionIdleTimeoutMs()},
+            {QStringLiteral("timing"), m_pms->linkSummary()},
+        };
+        if (const Ax25Connection* link = m_pms->link())
+            pms.insert(QStringLiteral("link"), linkSnapshot(*link));
+    }
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("terminal"), terminal},
+                       {QStringLiteral("pms"), pms}};
+}
+
+void Ax25HfPacketDecodeDialog::applyLinkTimingProfile()
+{
+    // Our own keying overhead is dead air on every transmission, so it is part
+    // of the round-trip budget the timers are sized from.
+    const int txOverheadMs = kTxLeadMs + kTxDaxSettleMs + m_txTailMs;
+    const ax25::LinkTimingProfile profile = ax25LinkTimingForConfig(m_shimConfig, txOverheadMs);
+
+    if (m_terminal)
+        m_terminal->setLinkProfile(profile);
+    if (m_pms)
+        m_pms->setLinkProfile(profile);
+
+    // Operator overrides win over the model, but only where one was actually set.
+    if (m_terminal) {
+        if (m_terminalRetrySecs && m_terminalRetrySecs->value() != kTerminalAutoTiming)
+            m_terminal->setRetryTimeoutMs(m_terminalRetrySecs->value() * 1000);
+        if (m_terminalPaclen && m_terminalPaclen->value() != kTerminalAutoTiming)
+            m_terminal->setPaclen(m_terminalPaclen->value());
+    }
+
+    if (m_log && m_terminal) {
+        // applyTerminalConfigFromUi() lands here on every spinbox edit, so only
+        // say something when the answer actually changed.
+        const QString summary = QStringLiteral(
+            "Link timing for %1 baud: T1 %2 ms%3, paclen %4%5, T3 %6 s "
+            "(modelled round trip %7 ms).")
+            .arg(profile.baud)
+            .arg(m_terminal->recommendedRetryTimeoutMs())
+            .arg(m_terminalRetrySecs && m_terminalRetrySecs->value() != kTerminalAutoTiming
+                     ? QStringLiteral(" (overridden to %1 ms)")
+                           .arg(m_terminalRetrySecs->value() * 1000)
+                     : QString())
+            .arg(m_terminal->recommendedPaclen())
+            .arg(m_terminalPaclen && m_terminalPaclen->value() != kTerminalAutoTiming
+                     ? QStringLiteral(" (overridden to %1)").arg(m_terminalPaclen->value())
+                     : QString())
+            .arg(m_terminal->idlePollMs() / 1000)
+            .arg(m_terminal->expectedRoundTripMs());
+        if (summary != m_lastLinkTimingSummary) {
+            m_lastLinkTimingSummary = summary;
+            appendSystemLine(summary);
+        }
+    }
+}
+
+void Ax25HfPacketDecodeDialog::overrideImpossibleT1ForProfile()
+{
+    if (!m_terminal || !m_terminalRetrySecs)
+        return;
+    const int overrideMs = m_terminalRetrySecs->value() * 1000;
+    if (overrideMs == 0)
+        return; // already Auto
+    const int modelRttMs = m_terminal->expectedRoundTripMs();
+    if (overrideMs >= modelRttMs)
+        return; // aggressive, perhaps, but not impossible — leave it alone
+
+    // Below the modelled round trip T1 cannot succeed: it expires before the
+    // peer's acknowledgement can physically arrive, so every I-frame
+    // retransmits and the link dies at N2.
+    //
+    // Override the LINK only — the operator's stored value is left exactly as
+    // they set it. This runs on every profile change, so rewriting the setting
+    // would silently destroy a deliberate choice: an 8 s T1 is impossible on
+    // HF 300 but perfectly sensible on VHF 1200, and a single band switch would
+    // otherwise erase it for good with no way to get it back. The value is
+    // theirs; only its applicability to *this* profile is ours to judge, and
+    // switching back restores it.
+    m_terminal->setRetryTimeoutMs(m_terminal->recommendedRetryTimeoutMs());
+    appendSystemLine(QStringLiteral(
+        "Retry timeout of %1 s is shorter than this profile's %2 ms round trip — "
+        "every frame would time out before the ack could arrive. Using %3 ms for "
+        "this profile; your setting is unchanged and applies again on a profile "
+        "where it fits.")
+        .arg(overrideMs / 1000)
+        .arg(modelRttMs)
+        .arg(m_terminal->recommendedRetryTimeoutMs()));
 }
 
 void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
@@ -1415,6 +1936,33 @@ void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
     } else {
         if (m_captureActive)
             finishAudioCapture(false);
+
+        // Switching the modem off must stop the RADIO, not just the decoder.
+        // Previously this stopped only the RX tap: an in-flight transmission
+        // kept keying, the TX queue kept draining, and a connected-mode session
+        // kept running its T1 retransmits — so a stuck link went on transmitting
+        // long after the operator had switched the modem off, while the terminal
+        // still showed "Connected" to a peer it could no longer hear. Keying a
+        // transmitter the operator has just disabled is exactly what Principle VI
+        // forbids, and being deaf makes every one of those transmissions futile.
+        if (m_txActive || m_txPendingStream)
+            finishTransmit(true, QStringLiteral("modem disabled"));
+        if (!m_kissTxQueue.isEmpty()) {
+            appendSystemLine(QStringLiteral(
+                "Dropping %1 queued TX frame(s): the modem is off.")
+                .arg(m_kissTxQueue.size()));
+            m_kissTxQueue.clear();
+        }
+        m_kissTxBusyRetries = 0;
+        // Drop both connected-mode sessions silently — a graceful DISC would
+        // key the transmitter we were just told to stop using, and the peer
+        // cannot be heard anyway. This is also what clears the terminal's
+        // Connect state, which used to survive the modem being switched off.
+        if (m_terminal)
+            m_terminal->reset();
+        if (m_pms)
+            m_pms->dropLink();
+
         if (m_audio)
             m_audio->setTncRxTapEnabled(false);
         QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
@@ -1422,9 +1970,12 @@ void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
         m_lastDiagnosticsUtc = {};
         m_lastActivityHdlc = 0;
         m_lastActivityAccepted = 0;
-        appendSystemLine(QStringLiteral("Modem disabled. RX tap stopped."));
+        appendSystemLine(QStringLiteral("Modem disabled. RX tap stopped, TX stopped, "
+                                        "any connected session dropped."));
     }
     refreshStatus();
+    refreshTerminalStatus();
+    refreshPmsStatus();
 }
 
 void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate)
@@ -1545,6 +2096,9 @@ void Ax25HfPacketDecodeDialog::startTransmit(const QString& text)
 
 void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, bool fromKiss)
 {
+    // Identifies this transmission to any deferred work armed on its behalf
+    // (see armTxStreamWaitTimeout).
+    ++m_txGeneration;
     m_txFromKiss = fromKiss;
     m_pendingTx = tx;
     m_txPcm = tx.stereoFloat32Pcm;
@@ -1573,17 +2127,76 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
         .arg(tx.rmsDbfs, 0, 'f', 1)
         .arg(tx.peakDbfs, 0, 'f', 1));
 
-    if (m_audio->txStreamId() == 0) {
+    // A host-modulating backend (HL2) runs the modulator on this host: there is
+    // no DAX stream to create, and asking for one is worse than pointless. Its
+    // command sink drops `stream create type=dax_tx`, the create fails in the
+    // same millisecond, and ensureDaxTxStream() has already returned true
+    // optimistically — so the failure was only ever logged and this TX waited
+    // for a stream that could never arrive. Observed 2026-07-31 on the HL2:
+    // PTT never keyed, 181 audio chunks never sent, and the 11 frames queued
+    // behind it were dropped when the window closed. Same lesson the WSPR
+    // beacon learned in RadioModel::prepareWsprTransmit().
+    if (!txAudioBypassesDax() && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
         refreshTransmitControls();
         appendSystemLine(QStringLiteral("Requesting DAX TX stream for AetherModem TX."));
         qCInfo(lcAx25) << "AX.25 TX requesting DAX TX stream";
-        if (!m_radio->ensureDaxTxStream(DaxTxRequestReason::AetherModemAx25Tx))
+        if (!m_radio->ensureDaxTxStream(DaxTxRequestReason::AetherModemAx25Tx)) {
             finishTransmit(true, QStringLiteral("DAX TX stream policy rejected stream creation"));
+            return;
+        }
+        // The create reply is asynchronous and its failure path only logs, so
+        // nothing else would ever end this wait. Fail fast instead of hanging
+        // the queue behind a stream that is not coming.
+        armTxStreamWaitTimeout();
         return;
     }
 
     beginTransmitWhenReady();
+}
+
+bool Ax25HfPacketDecodeDialog::txAudioBypassesDax() const
+{
+    if (!m_radio)
+        return false;
+    const RadioCapabilities caps = m_radio->backendCapabilities();
+
+    // THE QUESTION IS "DOES TX AUDIO NEED A DAX STREAM", NOT "WHO RUNS THE
+    // MODULATOR" — and those came apart when takesTxAudioOverSeam was added.
+    //
+    // hostModulates is FALSE on an Icom, correctly: the RADIO modulates. So
+    // this returned false, the caller asked for a DAX TX stream, and an Icom
+    // has none. ensureDaxTxStream() answers TRUE for a seam backend — "there
+    // IS a route, it just isn't DAX" — so the caller's failure path never fires
+    // either. m_txPendingStream is left set, waiting on a stream that cannot
+    // arrive, until the timeout: PTT never keys and every queued frame dies
+    // with it.
+    //
+    // That is the same outage the call site records for the HL2 on 2026-07-31
+    // ("PTT never keyed, 181 audio chunks never sent"), reached from the
+    // opposite direction — the HL2 was excluded because it host-modulates, and
+    // a seam backend needs excluding because its transmit audio does not go
+    // through DAX at all.
+    //
+    // Both take the direct path, so this is ORed here rather than at each call
+    // site: both callers are asking this same question.
+    return caps.hostModulates || caps.takesTxAudioOverSeam;
+}
+
+void Ax25HfPacketDecodeDialog::armTxStreamWaitTimeout()
+{
+    // Stamp the transmission this timer belongs to. Keying only on
+    // m_txPendingStream would let TX #1's timer kill TX #2 if #1 ends and #2
+    // starts pending inside the same 5 s — reachable with a KISS queue draining
+    // back to back — and the failure message would be untrue of the transmit it
+    // aborted.
+    QTimer::singleShot(kTxStreamWaitTimeoutMs, this, [this, gen = m_txGeneration] {
+        if (!m_txPendingStream || gen != m_txGeneration)
+            return; // the stream arrived, or this belongs to an earlier transmit
+        finishTransmit(true, QStringLiteral(
+            "DAX TX stream did not arrive within %1 ms — this radio may have no "
+            "DAX transport").arg(kTxStreamWaitTimeoutMs));
+    });
 }
 
 #ifdef HAVE_MQTT
@@ -1643,7 +2256,8 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         finishTransmit(true, QStringLiteral("audio engine or radio model disappeared before TX"));
         return;
     }
-    if (m_audio->txStreamId() == 0) {
+    const bool bypassesDax = txAudioBypassesDax();
+    if (!bypassesDax && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
         refreshTransmitControls();
         return;
@@ -1658,18 +2272,31 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
     m_txPendingStream = false;
     m_txActive = true;
     m_txPreviousAudioDaxMode = m_audio->isDaxTxMode();
-    m_txPreviousTransmitDax = txModel.daxOn();
     m_txRestoreAudioDaxMode = true;
-    m_txRestoreTransmitDax = true;
 
+    // Local DAX TX mode is what keeps the microphone off the wire while we are
+    // modulating, so it applies on every family. `transmit dax` does not: it
+    // tells a FLEX to take its modulator input from the DAX stream instead of
+    // the mic jacks, and a radio with no on-radio modulator has no such choice
+    // to make. Setting it on a host-modulating backend is dropped by the
+    // command plane anyway, and latching the restore flag for a setting we
+    // never changed would hand back a stale value on unkey.
     m_audio->setDaxTxMode(true);
-    txModel.setDax(true);
-    appendSystemLine(QStringLiteral("Keying transmitter for AX.25 TX on %1; DAX TX stream 0x%2.")
-        .arg(transmitSliceSummary())
-        .arg(m_audio->txStreamId(), 0, 16));
+    if (!bypassesDax) {
+        m_txPreviousTransmitDax = txModel.daxOn();
+        m_txRestoreTransmitDax = true;
+        txModel.setDax(true);
+    }
+
+    const QString route = bypassesDax
+        ? QStringLiteral("host-modulated (no DAX stream)")
+        : QStringLiteral("DAX TX stream 0x%1").arg(m_audio->txStreamId(), 0, 16);
+    appendSystemLine(QStringLiteral("Keying transmitter for AX.25 TX on %1; %2.")
+        .arg(transmitSliceSummary(), route));
     qCInfo(lcAx25).noquote()
-        << QStringLiteral("AX.25 TX start stream=0x%1 %2 chunks=%3 daxSettleMs=%4 leadMs=%5 tailMs=%6")
-            .arg(m_audio->txStreamId(), 0, 16)
+        << QStringLiteral("AX.25 TX start route=%1 %2 chunks=%3 daxSettleMs=%4 leadMs=%5 tailMs=%6")
+            .arg(bypassesDax ? QStringLiteral("seam/host")
+                               : QStringLiteral("dax:0x%1").arg(m_audio->txStreamId(), 0, 16))
             .arg(transmitSliceSummary())
             .arg(m_txChunkCount)
             .arg(kTxDaxSettleMs)
@@ -2544,12 +3171,32 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
         paramRow->addLayout(col);
         return spin;
     };
-    m_terminalRetrySecs = addSpin(QStringLiteral("Retry s"), 1, 60, kTerminalDefaultRetrySecs,
-        QStringLiteral("T1 retransmit timeout in seconds."));
+    m_terminalRetrySecs = addSpin(QStringLiteral("Retry s"), 0, 60, kTerminalDefaultRetrySecs,
+        QStringLiteral("T1 retransmit timeout in seconds. Auto derives it from the modem "
+                       "profile — at 300 baud one I-frame can take over 6 seconds to "
+                       "transmit, so a VHF-sized T1 expires before the ack can arrive."));
+    m_terminalRetrySecs->setSpecialValueText(QStringLiteral("Auto"));
     m_terminalMaxTries = addSpin(QStringLiteral("Tries"), 1, 20, kTerminalDefaultMaxTries,
         QStringLiteral("N2 — retransmit attempts before the link is declared dead."));
-    m_terminalPaclen = addSpin(QStringLiteral("Paclen"), 16, 256, kTerminalDefaultPaclen,
-        QStringLiteral("Max bytes per I-frame."));
+    m_terminalPaclen = addSpin(QStringLiteral("Paclen"), 0, 256, kTerminalDefaultPaclen,
+        QStringLiteral("Max bytes per I-frame. Auto uses 64 on HF 300 (a 128-byte frame is "
+                       "4 seconds of continuous air, and one bit error costs the whole "
+                       "frame) and 128 on VHF 1200."));
+    m_terminalPaclen->setSpecialValueText(QStringLiteral("Auto"));
+    // The spin range has to start at 0 to carry the Auto sentinel, but there is
+    // no such thing as a 7-byte paclen; snap anything below the real floor.
+    connect(m_terminalPaclen, &QSpinBox::valueChanged, this, [this](int value) {
+        if (value > 0 && value < 16)
+            m_terminalPaclen->setValue(16);
+    });
+    m_terminalTxPreamble = addSpin(QStringLiteral("TXD flags"), 0, 127, kTerminalAutoTiming,
+        QStringLiteral("TXDELAY: leading HDLC flags before every frame. Auto uses the "
+                       "profile default (80 on HF 300 = 2.13 s, 64 on VHF 1200). This is "
+                       "the largest single term in the HF airtime budget — 42% of a data "
+                       "frame and 65% of an ack — so lowering it shortens both directions "
+                       "and reduces the chance of a hit. Too low and the far end's AGC "
+                       "and PLL cannot settle, and it copies nothing."));
+    m_terminalTxPreamble->setSpecialValueText(QStringLiteral("Auto"));
     m_terminalTxTail = addSpin(QStringLiteral("TX Tail ms"), 0, 500, kTxTailDefaultMs,
         QStringLiteral("PTT tail (ms) held after the TX audio before unkey. Lower = we hear "
                        "the peer's next frame sooner on a half-duplex link; too low clips the "
@@ -2657,6 +3304,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
             m_terminalTarget->setText(call);
     });
     for (QSpinBox* spin : {m_terminalRetrySecs, m_terminalMaxTries, m_terminalPaclen,
+                           m_terminalTxPreamble,
                            m_terminalTxTail}) {
         connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
             applyTerminalConfigFromUi(true);
@@ -2664,28 +3312,25 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
     }
     connect(m_terminalLogEnable, &QCheckBox::toggled, this, [this](bool on) {
         m_terminal->setLogging(on);
-        AppSettings::instance().setValue(kTerminalLogSetting,
-            on ? QStringLiteral("True") : QStringLiteral("False"));
-        AppSettings::instance().save();
+        TerminalSettings s = TerminalSettings::load();
+        s.logEnabled = on;
+        s.save();
         // Logging may fail to start (e.g. unwritable dir); reflect reality.
         const QSignalBlocker block(m_terminalLogEnable);
         m_terminalLogEnable->setChecked(m_terminal->isLogging());
     });
 
-    // Restore persisted config.
-    m_terminalMyCall->setText(
-        AppSettings::instance().value(kTerminalMyCallSetting, QString()).toString());
-    m_lastDialedCall =
-        AppSettings::instance().value(kTerminalLastCallSetting, QString()).toString();
+    // Restore persisted config from the single nested object (Principle V).
+    TerminalSettings::migrateLegacy(); // no-op once the nested blob exists
+    const TerminalSettings saved = TerminalSettings::load();
+    m_terminalMyCall->setText(saved.myCall);
+    m_lastDialedCall = saved.lastCall;
     m_terminalTarget->setText(m_lastDialedCall); // last BBS, persisted across restarts
-    m_terminalRetrySecs->setValue(AppSettings::instance()
-        .value(kTerminalRetrySecsSetting, kTerminalDefaultRetrySecs).toInt());
-    m_terminalMaxTries->setValue(AppSettings::instance()
-        .value(kTerminalMaxTriesSetting, kTerminalDefaultMaxTries).toInt());
-    m_terminalPaclen->setValue(AppSettings::instance()
-        .value(kTerminalPaclenSetting, kTerminalDefaultPaclen).toInt());
-    m_terminalTxTail->setValue(AppSettings::instance()
-        .value(kTerminalTxTailSetting, kTxTailDefaultMs).toInt());
+    m_terminalRetrySecs->setValue(saved.retrySecs);
+    m_terminalMaxTries->setValue(saved.maxTries);
+    m_terminalPaclen->setValue(saved.paclen);
+    m_terminalTxTail->setValue(saved.txTailMs);
+    m_terminalTxPreamble->setValue(saved.txPreambleFlags);
 
     refreshTerminalHeardCombo();
     return page;
@@ -2713,29 +3358,29 @@ void Ax25HfPacketDecodeDialog::applyTerminalConfigFromUi(bool persist)
         return;
     const QString call = m_terminalMyCall->text().trimmed();
     m_terminal->setMyCall(call);
-    if (m_terminalRetrySecs)
-        m_terminal->setRetryTimeoutMs(m_terminalRetrySecs->value() * 1000);
-    if (m_terminalMaxTries)
-        m_terminal->setMaxRetries(m_terminalMaxTries->value());
-    if (m_terminalPaclen)
-        m_terminal->setPaclen(m_terminalPaclen->value());
     if (m_terminalTxTail)
         m_txTailMs = m_terminalTxTail->value(); // applies to the next transmission
+    if (m_terminalMaxTries)
+        m_terminal->setMaxRetries(m_terminalMaxTries->value());
+    // TXDELAY feeds both the modulator and the airtime model, so it has to land
+    // in m_shimConfig before the timing is re-derived below.
+    if (m_terminalTxPreamble)
+        m_shimConfig.txPreambleFlags = m_terminalTxPreamble->value();
+    // Re-derive from the profile first (the TX tail above feeds the round-trip
+    // budget), then let any explicit override land on top. Auto (0) means "use
+    // the model", which is the default and the only sane choice on HF.
+    applyLinkTimingProfile();
     if (persist) {
-        AppSettings::instance().setValue(kTerminalMyCallSetting, call);
-        if (m_terminalRetrySecs)
-            AppSettings::instance().setValue(kTerminalRetrySecsSetting,
-                QString::number(m_terminalRetrySecs->value()));
-        if (m_terminalMaxTries)
-            AppSettings::instance().setValue(kTerminalMaxTriesSetting,
-                QString::number(m_terminalMaxTries->value()));
-        if (m_terminalPaclen)
-            AppSettings::instance().setValue(kTerminalPaclenSetting,
-                QString::number(m_terminalPaclen->value()));
-        if (m_terminalTxTail)
-            AppSettings::instance().setValue(kTerminalTxTailSetting,
-                QString::number(m_terminalTxTail->value()));
-        AppSettings::instance().save();
+        // One atomic replacement of the whole object rather than six
+        // independent writes (Principle XIV).
+        TerminalSettings s = TerminalSettings::load();
+        s.myCall = call;
+        if (m_terminalRetrySecs)   s.retrySecs = m_terminalRetrySecs->value();
+        if (m_terminalMaxTries)    s.maxTries = m_terminalMaxTries->value();
+        if (m_terminalPaclen)      s.paclen = m_terminalPaclen->value();
+        if (m_terminalTxTail)      s.txTailMs = m_terminalTxTail->value();
+        if (m_terminalTxPreamble)  s.txPreambleFlags = m_terminalTxPreamble->value();
+        s.save();
     }
     refreshTerminalStatus();
 }
@@ -2796,8 +3441,9 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
             m_lastDialedCall = peer;
             if (m_terminalTarget)
                 m_terminalTarget->setText(peer);
-            AppSettings::instance().setValue(kTerminalLastCallSetting, peer);
-            AppSettings::instance().save();
+            TerminalSettings s = TerminalSettings::load();
+            s.lastCall = peer;
+            s.save();
         }
     }
 }

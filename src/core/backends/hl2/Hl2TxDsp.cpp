@@ -138,6 +138,9 @@ void Hl2TxDsp::setFilter(double lowHz, double highHz)
 void Hl2TxDsp::setMicGain(double linear)
 {
     m_micGain = linear < 0.0 ? 0.0 : linear;
+    // Echo what was actually stored, not the argument — the clamp above is
+    // exactly the sort of thing a readout needs to see rather than assume.
+    emit micGainChanged(m_micGain);
 }
 
 double Hl2TxDsp::alcGainDb() const noexcept

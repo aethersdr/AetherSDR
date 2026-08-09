@@ -75,9 +75,9 @@ signals:
     void nr2AeFilterChanged(bool on);
     void nr2UseOriginalGeometryChanged(bool useOriginal);
     // MNR parameter changes
-    void mnrEnabledChanged(bool on);
     void mnrStrengthChanged(float value);
     // DFNR parameter changes
+    void rn2DryMixChanged(float mix);
     void dfnrAttenLimitChanged(float dB);
     void dfnrPostFilterBetaChanged(float beta);
     // NR4 parameter changes
@@ -151,7 +151,6 @@ private:
     QLabel*       m_nr2QsppLabel{nullptr};
 
     // MNR controls
-    QCheckBox*    m_mnrEnableCheck{nullptr};
     QSlider*      m_mnrStrengthSlider{nullptr};
     QLabel*       m_mnrStrengthLabel{nullptr};
 
@@ -170,6 +169,8 @@ private:
     QLabel*       m_nr4SuppressionLabel{nullptr};
 
     // DFNR controls
+    QSlider*      m_rn2DryMixSlider{nullptr};
+    QLabel*       m_rn2DryMixLabel{nullptr};
     QSlider*      m_dfnrAttenSlider{nullptr};
     QLabel*       m_dfnrAttenLabel{nullptr};
     QSlider*      m_dfnrBetaSlider{nullptr};

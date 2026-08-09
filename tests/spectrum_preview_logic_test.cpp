@@ -20,6 +20,30 @@ bool nearlyEqual(double a, double b, double epsilon = 1.0e-12)
     return std::abs(a - b) <= epsilon;
 }
 
+int testDssRowSpanSupported()
+{
+    using namespace AetherSDR;
+
+    // A build without AETHER_GPU_SPECTRUM has no mesh pipeline at all, so the
+    // control can never affect the display whatever the runtime reports. This
+    // is the case that shipped enabled: the only runtime correction lived
+    // inside the GPU-only block, so the software build never corrected it and
+    // the slider moved, labelled and persisted over a fallback that ignores it.
+    if (dssRowSpanSupported(false, false) || dssRowSpanSupported(false, true)) {
+        return fail("a CPU-only build must never offer the 3D span control");
+    }
+
+    // A GPU build still has to prove the mesh came up — RGBA16F support is a
+    // runtime property, and without it the CPU image fallback draws instead.
+    if (dssRowSpanSupported(true, false)) {
+        return fail("a GPU build without the mesh must not offer the control");
+    }
+    if (!dssRowSpanSupported(true, true)) {
+        return fail("the control must be offered once the mesh is ready");
+    }
+    return 0;
+}
+
 int testCursorAnchoredZoom()
 {
     using namespace AetherSDR;
@@ -356,6 +380,200 @@ int testWaterfallPipelineSelection()
     return 0;
 }
 
+int testWaterfallPaletteRecolorPlan()
+{
+    using namespace AetherSDR;
+    const FrequencyFrame historyFrame{14.0, 0.2};
+    const FrequencyFrame supplementalFrame{14.0, 0.8};
+    const FrequencyFrame viewportFrame{14.05, 0.1};
+
+    const WaterfallPaletteRecolorPlan nativePlan =
+        waterfallPaletteRecolorPlan(
+            WaterfallPipelineMode::RowFrequencyFrames,
+            historyFrame, supplementalFrame, viewportFrame);
+    if (!nativePlan.retainNativeFrames
+        || !nearlyEqual(nativePlan.primaryFrame.centerMhz,
+                        historyFrame.centerMhz)
+        || !nearlyEqual(nativePlan.primaryFrame.bandwidthMhz,
+                        historyFrame.bandwidthMhz)
+        || !nearlyEqual(nativePlan.supplementalFrame.centerMhz,
+                        supplementalFrame.centerMhz)
+        || !nearlyEqual(nativePlan.supplementalFrame.bandwidthMhz,
+                        supplementalFrame.bandwidthMhz)
+        || !nearlyEqual(
+            sourceUnitPosition(
+                0.5, nativePlan.primaryFrame, viewportFrame),
+            0.75)) {
+        return fail(
+            "row-frame recolor must retain matching native frame metadata");
+    }
+
+    const WaterfallPaletteRecolorPlan flattenedPlan =
+        waterfallPaletteRecolorPlan(
+            WaterfallPipelineMode::Legacy,
+            historyFrame, supplementalFrame, viewportFrame);
+    if (flattenedPlan.retainNativeFrames
+        || !nearlyEqual(flattenedPlan.primaryFrame.centerMhz,
+                        viewportFrame.centerMhz)
+        || !nearlyEqual(flattenedPlan.primaryFrame.bandwidthMhz,
+                        viewportFrame.bandwidthMhz)
+        || flattenedPlan.supplementalFrame.isValid()
+        || !nearlyEqual(
+            sourceUnitPosition(
+                0.5, flattenedPlan.primaryFrame, viewportFrame),
+            0.5)) {
+        return fail(
+            "legacy recolor must label flattened pixels as the viewport frame");
+    }
+
+    const WaterfallPaletteRecolorPlan missingSupplementalPlan =
+        waterfallPaletteRecolorPlan(
+            WaterfallPipelineMode::RowFrequencyFrames,
+            FrequencyFrame{}, FrequencyFrame{}, viewportFrame);
+    if (!missingSupplementalPlan.retainNativeFrames
+        || !nearlyEqual(missingSupplementalPlan.primaryFrame.centerMhz,
+                        viewportFrame.centerMhz)
+        || missingSupplementalPlan.supplementalFrame.isValid()) {
+        return fail(
+            "missing native frames must fall back without inventing coverage");
+    }
+    return 0;
+}
+
+int testWaterfallBlankerFrameBundleSelection()
+{
+    using namespace AetherSDR;
+    const WaterfallBlankerFrameBundle cached{
+        FrequencyFrame{14.1, 0.2}, FrequencyFrame{14.1, 0.8},
+    };
+    const WaterfallBlankerFrameBundle incoming{
+        FrequencyFrame{14.2, 0.1}, FrequencyFrame{14.2, 0.4},
+    };
+
+    const WaterfallBlankerFrameBundle substituted =
+        waterfallBlankerFrameBundleForOutput(true, cached, incoming);
+    if (!nearlyEqual(substituted.primaryFrame.centerMhz,
+                     cached.primaryFrame.centerMhz)
+        || !nearlyEqual(substituted.primaryFrame.bandwidthMhz,
+                        cached.primaryFrame.bandwidthMhz)
+        || !nearlyEqual(substituted.supplementalFrame.centerMhz,
+                        cached.supplementalFrame.centerMhz)
+        || !nearlyEqual(substituted.supplementalFrame.bandwidthMhz,
+                        cached.supplementalFrame.bandwidthMhz)) {
+        return fail(
+            "blanker substitution must retain the complete cached frame pair");
+    }
+
+    const WaterfallBlankerFrameBundle uncached =
+        waterfallBlankerFrameBundleForOutput(
+            true, WaterfallBlankerFrameBundle{}, incoming);
+    const WaterfallBlankerFrameBundle accepted =
+        waterfallBlankerFrameBundleForOutput(false, cached, incoming);
+    if (!nearlyEqual(uncached.primaryFrame.centerMhz,
+                     incoming.primaryFrame.centerMhz)
+        || !nearlyEqual(uncached.supplementalFrame.bandwidthMhz,
+                        incoming.supplementalFrame.bandwidthMhz)
+        || !nearlyEqual(accepted.primaryFrame.centerMhz,
+                        incoming.primaryFrame.centerMhz)
+        || !nearlyEqual(accepted.supplementalFrame.centerMhz,
+                        incoming.supplementalFrame.centerMhz)) {
+        return fail(
+            "blanker fallback and accepted rows must use the incoming frame pair");
+    }
+    return 0;
+}
+
+// The property a palette recolour has to hold and a viewport rebuild does not:
+// recolouring in place may not move, drop, or duplicate a single visible row.
+// A rebuild gets away with re-laying the ring out from scanline 0 only because
+// it repaints everything at once; a recolour keeps the live write row, so the
+// age → scanline map is the whole correctness argument.
+int testWaterfallVisibleRowForAge()
+{
+    using namespace AetherSDR;
+    constexpr int kHeight = 7;
+
+    // Age 0 is the newest row and sits on the origin itself — that is where
+    // appendVisibleRow() last wrote, and where drawWaterfall() starts blitting.
+    if (waterfallVisibleRowForAge(3, 0, kHeight) != 3
+        || waterfallVisibleRowForAge(0, 0, kHeight) != 0) {
+        return fail("age 0 must land on the write row");
+    }
+
+    // Older rows walk downward and wrap.
+    if (waterfallVisibleRowForAge(5, 1, kHeight) != 6
+        || waterfallVisibleRowForAge(5, 2, kHeight) != 0
+        || waterfallVisibleRowForAge(5, 3, kHeight) != 1) {
+        return fail("increasing age must walk down the ring and wrap");
+    }
+
+    // A full sweep covers every scanline exactly once, from any origin. This
+    // is what "the waterfall cannot move under a palette change" reduces to.
+    for (int origin = 0; origin < kHeight; ++origin) {
+        bool seen[kHeight] = {};
+        for (int age = 0; age < kHeight; ++age) {
+            const int row = waterfallVisibleRowForAge(origin, age, kHeight);
+            if (row < 0 || row >= kHeight || seen[row]) {
+                return fail("a full age sweep must be a permutation of rows");
+            }
+            seen[row] = true;
+        }
+    }
+
+    // Origin 0 is the rebuild path: age is the scanline, unchanged.
+    for (int age = 0; age < kHeight; ++age) {
+        if (waterfallVisibleRowForAge(0, age, kHeight) != age) {
+            return fail("origin 0 must reproduce the plain rebuild layout");
+        }
+    }
+
+    // m_wfWriteRow is decremented modulo the image height by appendVisibleRow,
+    // but a restored stream state can carry one from a differently sized image.
+    if (waterfallVisibleRowForAge(-2, 0, kHeight) != 5
+        || waterfallVisibleRowForAge(kHeight + 2, 0, kHeight) != 2
+        || waterfallVisibleRowForAge(1, -1, kHeight) != 0) {
+        return fail("out-of-range origin and age must normalise, not index OOB");
+    }
+
+    if (waterfallVisibleRowForAge(0, 0, 0) != -1
+        || waterfallVisibleRowForAge(0, 0, -4) != -1) {
+        return fail("an empty image must report no destination row");
+    }
+    return 0;
+}
+
+int testWaterfallCubicSourceAgeBoundary()
+{
+    using namespace AetherSDR;
+    constexpr int kHeight = 7;
+    constexpr int kOrigin = 5;
+
+    // The newest edge's leading cubic tap must duplicate age 0, not wrap to
+    // age kHeight - 1 at the opposite end of the retained history.
+    if (waterfallCubicPhysicalRowForSourceAge(kOrigin, -1, kHeight) != 5
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 0, kHeight) != 5
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 1, kHeight) != 6
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 2, kHeight) != 0) {
+        return fail("waterfall cubic newest-edge taps must clamp logically");
+    }
+
+    // Likewise, the oldest edge's trailing taps duplicate the oldest row
+    // instead of wrapping into the newest history.
+    if (waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight - 2, kHeight)
+            != 3
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight - 1, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, kHeight, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(
+               kOrigin, kHeight + 1, kHeight)
+               != 4
+        || waterfallCubicPhysicalRowForSourceAge(kOrigin, 0, 0) != -1) {
+        return fail("waterfall cubic oldest-edge taps must clamp logically");
+    }
+    return 0;
+}
+
 int testWaterfallScrollProgress()
 {
     using namespace AetherSDR;
@@ -618,6 +836,57 @@ int testDssStartupHistoryAvailability()
     return 0;
 }
 
+int testDssOutlinePipelinePolicy()
+{
+    using namespace AetherSDR;
+    if (dssOutlinePipelineModeForBackend(true)
+            != DssOutlinePipelineMode::SharedFillPipeline
+        || dssOutlinePipelineModeForBackend(false)
+            != DssOutlinePipelineMode::DedicatedRibbonPipeline) {
+        return fail("3D FFT outline pipeline policy is incorrect");
+    }
+    return 0;
+}
+
+// The policy above only names a mode; this pins the pipeline the outline draw
+// actually binds, which is the half that can regress on its own. Renderer proof
+// still comes from the three-backend manual verification — no headless test can
+// reach a QRhi draw — but the selection itself no longer rests on a ternary
+// duplicated at the draw site.
+int testDssOutlinePipelineSelection()
+{
+    using namespace AetherSDR;
+    struct FakePipeline {
+        int id{0};
+    };
+    FakePipeline fill{1};
+    FakePipeline dedicated{2};
+
+    // OpenGL must land on the fill pipeline. That is what makes the rebind at
+    // the outline draw a no-op, so no GL program switch separates it from the
+    // fill draw — the whole point of the Linux fix.
+    if (dssOutlinePipelineFor(dssOutlinePipelineModeForBackend(true), &fill,
+                              &dedicated)
+        != &fill) {
+        return fail("OpenGL outline draw must reuse the fill pipeline");
+    }
+    // Metal/D3D11 keep the already-validated dedicated ribbon pipeline.
+    if (dssOutlinePipelineFor(dssOutlinePipelineModeForBackend(false), &fill,
+                              &dedicated)
+        != &dedicated) {
+        return fail("non-OpenGL outline draw must use the ribbon pipeline");
+    }
+    // initDssMeshPipeline never creates the dedicated pipeline on OpenGL, so
+    // the shared-fill answer must survive a null one rather than disabling
+    // outlines the way a `m_dssMeshLinePipeline`-based guard would.
+    if (dssOutlinePipelineFor(DssOutlinePipelineMode::SharedFillPipeline, &fill,
+                              static_cast<FakePipeline*>(nullptr))
+        != &fill) {
+        return fail("shared-fill outline selection must not need a ribbon pipeline");
+    }
+    return 0;
+}
+
 int testObservedWaterfallCadence()
 {
     using namespace AetherSDR;
@@ -801,6 +1070,9 @@ int testDssSupplementalCoverageCalibration()
 
 int main()
 {
+    if (const int result = testDssRowSpanSupported(); result != 0) {
+        return result;
+    }
     if (const int result = testCursorAnchoredZoom(); result != 0) {
         return result;
     }
@@ -825,6 +1097,19 @@ int main()
     if (const int result = testWaterfallPipelineSelection(); result != 0) {
         return result;
     }
+    if (const int result = testWaterfallPaletteRecolorPlan(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallBlankerFrameBundleSelection();
+        result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallVisibleRowForAge(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallCubicSourceAgeBoundary(); result != 0) {
+        return result;
+    }
     if (const int result = testWaterfallScrollProgress(); result != 0) {
         return result;
     }
@@ -832,6 +1117,12 @@ int main()
         return result;
     }
     if (const int result = testDssStartupHistoryAvailability(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssOutlinePipelinePolicy(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssOutlinePipelineSelection(); result != 0) {
         return result;
     }
     if (const int result = testObservedWaterfallCadence(); result != 0) {

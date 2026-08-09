@@ -15,18 +15,35 @@ namespace {
 // and we start from empty rather than propagating garbage.
 QJsonObject readDocument(const char* context)
 {
-    const QByteArray raw = AppSettings::instance()
+    const QString rawStr = AppSettings::instance()
                                .value(UlanziDialMappings::rootSettingsKey())
-                               .toString().toUtf8();
-    if (raw.isEmpty())
+                               .toString();
+    static QString s_cachedRawStr;
+    static QJsonObject s_cachedObj;
+
+    if (!s_cachedRawStr.isNull() && rawStr == s_cachedRawStr) {
+        return s_cachedObj;
+    }
+
+    if (rawStr.isEmpty()) {
+        s_cachedRawStr = rawStr;
+        s_cachedObj = {};
         return {};
+    }
+
     QJsonParseError err{};
-    const QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
-    if (err.error == QJsonParseError::NoError && doc.isObject())
-        return doc.object();
+    const QJsonDocument doc = QJsonDocument::fromJson(rawStr.toUtf8(), &err);
+    if (err.error == QJsonParseError::NoError && doc.isObject()) {
+        s_cachedRawStr = rawStr;
+        s_cachedObj = doc.object();
+        return s_cachedObj;
+    }
+
     qCWarning(lcDevices) << "Ulanzi Dial: unparseable mappings document under"
                          << UlanziDialMappings::rootSettingsKey() << "—"
                          << err.errorString() << "— starting from empty (" << context << ")";
+    s_cachedRawStr = rawStr;
+    s_cachedObj = {};
     return {};
 }
 
@@ -123,6 +140,69 @@ int UlanziDialMappings::migrateLegacyKeys(const QStringList& pillIds)
                           << "legacy pill binding(s) into" << rootSettingsKey();
     }
     return adopted;
+}
+
+QString UlanziDialMappings::rotaryAction()
+{
+    const QJsonObject obj = readDocument("read");
+    if (obj.contains(QStringLiteral("rotary_action"))) {
+        const QString action = obj.value(QStringLiteral("rotary_action")).toString();
+        return action.isEmpty() ? QStringLiteral("WheelFrequency") : action;
+    }
+
+    auto& s = AppSettings::instance();
+    if (s.contains(QStringLiteral("UlanziDialRotaryAction"))) {
+        const QString legacy = s.value(QStringLiteral("UlanziDialRotaryAction")).toString();
+        s.remove(QStringLiteral("UlanziDialRotaryAction"));
+        if (!legacy.isEmpty()) {
+            setRotaryAction(legacy);
+            return legacy;
+        }
+        s.save();
+    }
+    return QStringLiteral("WheelFrequency");
+}
+
+bool UlanziDialMappings::setRotaryAction(const QString& actionId)
+{
+    return setActionForPill(QStringLiteral("rotary_action"), actionId);
+}
+
+const QStringList& UlanziDialMappings::knownWheelActions()
+{
+    // Mirrors the else-if chain in MainWindow::applyFlexControlWheelAction
+    // (MainWindow_Controllers.cpp) — a new wheel action must be added to BOTH.
+    // That is enforced, not just asked for: ulanzi_mapping_migration_test
+    // parses the chain out of the source and asserts the two are the same set
+    // in both directions. Since applyFlexControlWheelAction now returns early
+    // on an id missing from this list, drift here is a silently dead control
+    // rather than a harmless fall-through.
+    static const QStringList kKnownWheelActions = {
+        QStringLiteral("WheelFrequency"),
+        QStringLiteral("WheelRit"),
+        QStringLiteral("WheelXit"),
+        QStringLiteral("WheelVolume"),
+        QStringLiteral("WheelMasterAf"),
+        QStringLiteral("WheelSliceAudio"),
+        QStringLiteral("WheelHeadphoneVolume"),
+        QStringLiteral("WheelAgcT"),
+        QStringLiteral("WheelApf"),
+        QStringLiteral("NextSlice"),
+        QStringLiteral("PrevSlice"),
+        QStringLiteral("WheelPower"),
+        QStringLiteral("WheelCwSpeed"),
+        QStringLiteral("BandZoom"),
+        QStringLiteral("SegmentZoom"),
+        QStringLiteral("FilterWidth"),
+        QStringLiteral("PanadapterZoom"),
+        QStringLiteral("WheelRfGain")
+    };
+    return kKnownWheelActions;
+}
+
+bool UlanziDialMappings::isKnownWheelAction(const QString& actionId)
+{
+    return knownWheelActions().contains(actionId);
 }
 
 }  // namespace AetherSDR

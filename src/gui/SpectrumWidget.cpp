@@ -7,6 +7,7 @@
 #include "NativeWidgetTopology.h"
 #include "PanadapterRenderScheduler.h"
 #include "PanadapterMessageOverlay.h"
+#include "SoftwareOpenGlRequest.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "DisplaySettings.h"
@@ -14,6 +15,7 @@
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "core/EibiClient.h"
 #include <QVariant>
 #include <QVariantAnimation>
 
@@ -58,6 +60,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "core/DisplayPresence.h"
 #include "core/KiwiSdrProtocol.h"
 #include "InteractionSettings.h"
 #include "models/BandPlanManager.h"
@@ -128,20 +131,35 @@ bool waterfallFrameResizeFailureForced()
         && qEnvironmentVariableIntValue(
                "AETHER_AUTOMATION_FORCE_WF_FRAME_RESIZE_FAILURE") != 0;
 }
+
+bool rhiFailureForcedForAutomation()
+{
+    return qEnvironmentVariableIsSet("AETHER_AUTOMATION")
+        && qEnvironmentVariableIntValue(
+               "AETHER_AUTOMATION_FORCE_RHI_FAILURE") != 0;
+}
+#endif
+
+#ifdef AETHER_GPU_SPECTRUM
+constexpr bool kGpuSpectrumBuild = true;
+#else
+constexpr bool kGpuSpectrumBuild = false;
 #endif
 
 constexpr int dssFillVerticesPerRow()
 {
     // Two exact-row crossfade layers, each with two triangles per column.
-    // Together with the matching ribbon VBO this is about 20.2 MiB of static
-    // vertex storage at 768 columns x 96 visible rows (about 7.3 MiB before
-    // fixed-grid crossfading). It is built once, never rebuilt while scrolling.
-    return (DssRenderer::kCols - 1) * 6 * 2;
+    // Together with the matching ribbon VBO this is about 33.7 MiB of static
+    // vertex storage at kMeshCols (1280) columns x 96 visible rows. It is built
+    // once, never rebuilt while scrolling. The column count is kMeshCols rather
+    // than kCols so the on-screen part of a row widened by rowSpanFactor still
+    // samples the height texture at least once per texel — see kMeshCols.
+    return (DssRenderer::kMeshCols - 1) * 6 * 2;
 }
 
 constexpr int dssLineVerticesPerRow()
 {
-    return (DssRenderer::kCols - 1) * 6 * 2;
+    return (DssRenderer::kMeshCols - 1) * 6 * 2;
 }
 
 constexpr int kMaxWaterfallRowsPerUpdate = 1;
@@ -757,6 +775,10 @@ namespace {
 struct WfStopsCache {
     std::array<std::vector<WfGradientStop>, static_cast<int>(WfColorScheme::Count)> stops;
     bool initialized = false;
+    // Bumped whenever the theme reloads the stops. Combined with the selected
+    // scheme it identifies the exact 256-entry LUT a run of RGB rows was
+    // rendered with — see SpectrumWidget::waterfallPaletteToken().
+    quint64 generation = 0;
 };
 
 WfStopsCache& wfStopsCache()
@@ -777,10 +799,26 @@ const char* wfSchemeToken(WfColorScheme s)
     }
 }
 
+bool sameWfStops(const std::vector<WfGradientStop>& a,
+                 const std::vector<WfGradientStop>& b)
+{
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (a[i].pos != b[i].pos || a[i].r != b[i].r
+            || a[i].g != b[i].g || a[i].b != b[i].b) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void rebuildWfStopsCacheFromTheme()
 {
     auto& c = wfStopsCache();
     auto& tm = ThemeManager::instance();
+    bool changed = !c.initialized;
     for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i) {
         const QBrush br = tm.brush(QString::fromLatin1(
             wfSchemeToken(static_cast<WfColorScheme>(i))));
@@ -799,9 +837,23 @@ void rebuildWfStopsCacheFromTheme()
         // black→white ramp instead of a divide-by-zero on the first paint.
         if (v.size() < 2)
             v = { {0.0f, 0, 0, 0}, {1.0f, 255, 255, 255} };
+        if (!sameWfStops(v, c.stops[i])) {
+            changed = true;
+        }
         c.stops[i] = std::move(v);
     }
     c.initialized = true;
+    // Bump only on a real stop change. Every SpectrumWidget rebuilds this
+    // shared cache on themeChanged, so an unconditional bump would leave each
+    // widget's palette token stale the moment the next widget's handler ran.
+    if (changed) {
+        ++c.generation;
+    }
+}
+
+quint64 wfStopsCacheGeneration()
+{
+    return wfStopsCache().generation;
 }
 
 } // namespace
@@ -841,13 +893,6 @@ static QRgb interpolateGradient(float t, const WfGradientStop* stops, int n)
 }
 
 #ifdef AETHER_GPU_SPECTRUM
-static bool qtSoftwareOpenGlRequested()
-{
-    return qEnvironmentVariableIsSet("AETHER_NO_GPU")
-        || qEnvironmentVariable("QT_OPENGL").compare(
-            QStringLiteral("software"), Qt::CaseInsensitive) == 0;
-}
-
 static bool qrhiDeviceNameLooksSoftware(const QString& deviceName)
 {
     const QString lower = deviceName.toLower();
@@ -863,6 +908,10 @@ static bool qrhiDeviceNameLooksSoftware(const QString& deviceName)
 QString SpectrumWidget::rendererDescription() const
 {
 #ifdef AETHER_GPU_SPECTRUM
+    if (m_rhiFailure.failed()) {
+        return m_rhiFailure.rendererDescription();
+    }
+
     QRhi* currentRhi = rhi();
     if (!currentRhi) {
         return QStringLiteral("QRhi initializing");
@@ -872,7 +921,7 @@ QString SpectrumWidget::rendererDescription() const
     const QRhiDriverInfo driverInfo = currentRhi->driverInfo();
     const QString deviceName = QString::fromUtf8(driverInfo.deviceName).trimmed();
     const bool softwareOpenGl = currentRhi->backend() == QRhi::OpenGLES2
-        && qtSoftwareOpenGlRequested();
+        && softwareOpenGlRequested();
     const bool cpuDevice = driverInfo.deviceType == QRhiDriverInfo::CpuDevice
         || softwareOpenGl
         || qrhiDeviceNameLooksSoftware(deviceName);
@@ -921,6 +970,8 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
 #ifdef AETHER_GPU_SPECTRUM
     m[QStringLiteral("gpu")] = true;
     m[QStringLiteral("renderer")] = rendererDescription();
+    m[QStringLiteral("rendererFailed")] = m_rhiFailure.failed();
+    m[QStringLiteral("rendererFailureReason")] = m_rhiFailure.reason();
     const QSize fixed = fixedColorBufferSize();
     // Unset fixedColorBufferSize() is the null QSize(-1,-1) — isEmpty()
     // covers it (and any degenerate size) → QRhiWidget auto-sizes.
@@ -1563,9 +1614,7 @@ QVariantMap SpectrumWidget::automationDssReset(bool kiwiStream)
     m_nativeWaterfallFallbackHoldUntilMs = m_hasNativeWaterfall
         ? m_lastNativeTileMs + 60'000
         : 0;
-    m_wfBlankerRingCount = 0;
-    m_wfBlankerRingIdx = 0;
-    m_wfLastGoodLevels.clear();
+    resetWfBlankerState();
     resetDssUploadState();
     update();
 
@@ -1842,6 +1891,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAccessibleName(tr("Panadapter spectrum display"));
 #ifdef AETHER_GPU_SPECTRUM
+    m_rhiFailureForcedForAutomation = rhiFailureForcedForAutomation();
+    connect(this, &QRhiWidget::renderFailed, this, [this]() {
+        reportRhiFailure(tr("Qt could not create or present the spectrum renderer."));
+    });
+
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MAC
     setApi(QRhiWidget::Api::Metal);
@@ -1863,7 +1917,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // QT_OPENGL entirely, making the flag a silent no-op there (#3597). On Linux
     // the default backend is already OpenGL, so this is a harmless explicit
     // restatement that keeps the two platforms on the same code path.
-    if (qtSoftwareOpenGlRequested()) {
+    if (softwareOpenGlRequested()) {
         setApi(QRhiWidget::Api::OpenGL);
         qInfo() << "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software — forcing "
                    "OpenGL QRhi backend (software rasterizer) instead of D3D11";
@@ -1873,9 +1927,35 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // main.cpp normally forces native Wayland, but log it if we ended up here.
     if (QGuiApplication::platformName() == QLatin1String("xcb")
         && qEnvironmentVariable("XDG_SESSION_TYPE") == QLatin1String("wayland")) {
-        qWarning() << "SpectrumWidget: running under XWayland with OpenGL — "
-                      "GLX context issues may occur. Set QT_QPA_PLATFORM=wayland "
-                      "or AETHER_NO_GPU=1 to work around (#1233)";
+        if (AetherSDR::detectedDisplayPresence()
+            == AetherSDR::DisplayPresence::Headless) {
+            // main.cpp deliberately prefers xcb on a headless Wayland session
+            // (#4747) — with no DRM scanout, native-Wayland GL cannot allocate a
+            // window surface (the panadapter renders black under an
+            // EGL_BAD_MATCH storm). This is the intended, working path, NOT a
+            // plugin failure — so don't tell this user their Wayland plugin is
+            // missing, and above all don't send them to "wayland;xcb", which is
+            // the #4747 bug. #1233 (GLX child-dialog BadAccess) can still bite
+            // under XWayland but was verified clean on labwc.
+            qInfo() << "SpectrumWidget: headless Wayland session — using XWayland "
+                       "by design (#4747; no DRM scanout for a native-Wayland GL "
+                       "surface). If a real display is attached and you want "
+                       "native Wayland, set QT_QPA_PLATFORM='wayland;xcb' (#1233).";
+        } else {
+            // Display present (or user-forced xcb). Don't advise "set
+            // QT_QPA_PLATFORM=wayland" here: reaching this line means either
+            // main.cpp asked for "wayland;xcb" and the Wayland plugin would not
+            // load, or the user forced xcb — so the old advice was a no-op in the
+            // first case and a startup abort in the second, which is how #1389
+            // happened. Name the workaround that always applies, and the override
+            // only where it helps.
+            qWarning() << "SpectrumWidget: running under XWayland with OpenGL — "
+                          "GLX context issues may occur. The Wayland platform "
+                          "plugin is unavailable or overridden; set "
+                          "AETHER_NO_GPU=1 to work around, or "
+                          "QT_QPA_PLATFORM='wayland;xcb' if you forced xcb "
+                          "yourself (#1233)";
+        }
     }
 #  endif
 #endif
@@ -1884,6 +1964,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
     // Floating overlay menu (child widget, stays on top)
     m_overlayMenu = new SpectrumOverlayMenu(this);
+    // Start the 3D Span row disabled and let the GPU path prove itself below.
+    // A build without AETHER_GPU_SPECTRUM never reaches that code at all, so
+    // defaulting to enabled would leave the control permanently inert there.
+    m_overlayMenu->setDssRowSpanSupported(
+        AetherSDR::dssRowSpanSupported(kGpuSpectrumBuild, false));
     m_overlayMenu->raise();
 
     m_tnfHoverPopup = new QLabel(this);
@@ -2123,14 +2208,18 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
             this, [this]() { markOverlayDirty(); });
 
-    // Refresh the waterfall colormap cache when the theme changes.  Existing
-    // already-rendered rows keep their pre-switch colours (same behaviour as
-    // changing the Scheme: dropdown — recolouring history would force a full
-    // O(rows × cols) repaint we don't currently amortise).  New rows pick up
-    // the new palette on the next push.
+    // Refresh the waterfall colormap cache when the theme changes, then
+    // recolour retained history through the new stops. The theme owns the
+    // gradient behind every Scheme preset (#3122), so a theme switch changes
+    // exactly the same 256-entry LUT the Scheme: dropdown does — leaving
+    // history on the old palette here would band the waterfall at the switch
+    // point. The cost is one viewport repaint, the same work a pan already
+    // does; the retained scrollback stays palette-independent intensity and
+    // recolours as it is scrolled back in.
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, [this]() {
         rebuildWfStopsCacheFromTheme();
+        recolorWaterfallViewport();
         markOverlayDirty();
         update();
     });
@@ -2358,6 +2447,7 @@ void SpectrumWidget::loadSettings()
         m_bandPlanFontSize = s.value("BandPlanFontSize", "6").toInt();
     }
     m_bandPlanShowSpots = s.value("BandPlanShowSpots", "True").toString() == "True";
+    m_showKiwiDxSpots = s.value("ShowKiwiDxSpots", "False").toString() == "True";
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
@@ -2385,8 +2475,9 @@ void SpectrumWidget::loadSettings()
     m_wfColorScheme  = static_cast<WfColorScheme>(
         std::clamp(s.value(settingsKey("DisplayWfColorScheme"), "0").toInt(),
                    0, static_cast<int>(WfColorScheme::Count) - 1));
-    m_dssGain = std::clamp(
-        s.value(settingsKey("Display3DGain"), "70").toInt(), 0, 100);
+    // Principle V: the 3D view's controls live in one owned object. The legacy
+    // flat Display3DGain key is grandfathered and only seeds the first load.
+    loadDisplay3DSettings(s.value(settingsKey("Display3DGain"), "70").toInt());
     m_spectrumRenderMode = static_cast<SpectrumRenderMode>(
         std::clamp(s.value(settingsKey("DisplaySpectrumRenderMode"), "0").toInt(),
                    0, static_cast<int>(SpectrumRenderMode::Count) - 1));
@@ -2419,7 +2510,7 @@ void SpectrumWidget::loadSettings()
             m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
             m_fftLineWidth, m_wfAutoBlackRadioSide,
             static_cast<int>(m_spectrumRenderMode), dssFloorDepth(),
-            m_dssGain, m_fftLineColor);
+            m_dssGain, m_fftLineColor, m_dssRowSpanPct);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
             m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor,
             m_freqScaleFontPt);
@@ -2590,8 +2681,13 @@ void SpectrumWidget::applyActiveVfoZOrder()
 
 void SpectrumWidget::setBandPlanManager(BandPlanManager* mgr) {
     m_bandPlanMgr = mgr;
-    if (mgr)
+    if (mgr) {
         connect(mgr, &BandPlanManager::planChanged, this, QOverload<>::of(&QWidget::update));
+        connect(mgr, &BandPlanManager::kiwiDxSpotsChanged, this, [this]() {
+            markOverlayDirty();
+            update();
+        });
+    }
 }
 
 void SpectrumWidget::setFftAverage(int frames) {
@@ -2600,6 +2696,87 @@ void SpectrumWidget::setFftAverage(int frames) {
         m_overlayMenu->syncPanProcessingSettings(
             m_fftAverage, m_fftFps, m_fftWeightedAvg);
     }
+}
+
+QString SpectrumWidget::display3DSettingsKey() const
+{
+    return settingsKey(QStringLiteral("Display3DSettings"));
+}
+
+void SpectrumWidget::loadDisplay3DSettings(int legacyGain)
+{
+    // Defaults first, so an absent or unreadable object still leaves the
+    // feature fully configured — the "one place to default" Principle V wants.
+    m_dssGain = std::clamp(legacyGain, 0, 100);
+    m_dssRowSpanPct = 100;
+
+    const QString raw = AppSettings::instance()
+        .value(display3DSettingsKey(), QString()).toString();
+    if (raw.trimmed().isEmpty()) {
+        // No object yet: this is the one-time migration off the grandfathered
+        // flat Display3DGain key. Persist it NOW, otherwise the flat key would
+        // be re-read on every launch and "the object owns the value" would only
+        // become true once the operator happened to touch a control.
+        saveDisplay3DSettings();
+    } else {
+        QJsonParseError error;
+        const QJsonDocument doc =
+            QJsonDocument::fromJson(raw.toUtf8(), &error);
+        if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+            // Keep the defaults rather than half-applying a damaged object, and
+            // deliberately do NOT write: overwriting here would destroy the
+            // evidence and whatever a future version may have stored.
+            qCWarning(lcGui).noquote()
+                << "SpectrumWidget: ignoring invalid Display3DSettings"
+                << display3DSettingsKey() << error.errorString();
+        } else {
+            const QJsonObject obj = doc.object();
+            if (obj.contains(QStringLiteral("gain"))) {
+                m_dssGain = std::clamp(
+                    obj.value(QStringLiteral("gain")).toInt(m_dssGain),
+                    0, 100);
+            }
+            if (obj.contains(QStringLiteral("span"))) {
+                m_dssRowSpanPct = std::clamp(
+                    obj.value(QStringLiteral("span")).toInt(m_dssRowSpanPct),
+                    0, 100);
+            }
+            // An existing object is left exactly as written, including one from
+            // a newer version carrying fields this build does not know about.
+        }
+    }
+
+#ifdef AETHER_GPU_SPECTRUM
+    m_dssLutToken = ~0ull;  // gain feeds the GPU palette LUT
+#endif
+    m_dss.invalidate();     // and the CPU fallback surface colours
+}
+
+void SpectrumWidget::saveDisplay3DSettings()
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("version"), 1);
+    obj.insert(QStringLiteral("gain"), std::clamp(m_dssGain, 0, 100));
+    obj.insert(QStringLiteral("span"), std::clamp(m_dssRowSpanPct, 0, 100));
+
+    // One setValue + save for the whole object (Principle XIV): a crash cannot
+    // leave the 3D view half-configured the way per-key writes could.
+    auto& s = AppSettings::instance();
+    s.setValue(display3DSettingsKey(), QString::fromUtf8(
+        QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.save();
+}
+
+void SpectrumWidget::resetDisplay3DSettings()
+{
+    m_dssGain = 70;
+    m_dssRowSpanPct = 100;
+    saveDisplay3DSettings();
+#ifdef AETHER_GPU_SPECTRUM
+    m_dssLutToken = ~0ull;
+#endif
+    m_dss.invalidate();
+    update();
 }
 
 QString SpectrumWidget::displaySourceTraceSettingsKey() const
@@ -3767,6 +3944,15 @@ bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
 {
+    // A FIXED-scale backend has no reference level to move: the floor is where
+    // its calibration puts it. Moving m_refLevel here would ratchet forever,
+    // because the loop only stops when the radio echoes the requested range
+    // back and there is nothing on the other end to echo. This is the gate that
+    // actually stops the runaway — the ones on the outbound command paths stop
+    // the traffic, but m_refLevel is local and would keep marching without this.
+    if (!m_radioOwnsDbmScale) {
+        return;
+    }
     if (noiseFloorAutoAdjustHeld(nowMs)) {
         return;
     }
@@ -4412,6 +4598,7 @@ void SpectrumWidget::setWfColorScheme(int scheme) {
         auto& s = AppSettings::instance();
         s.setValue(settingsKey("DisplayWfColorScheme"), QString::number(static_cast<int>(m_wfColorScheme)));
         s.save();
+        recolorWaterfallViewport();
     }
     update();
 }
@@ -4477,14 +4664,25 @@ void SpectrumWidget::setDssGain(int pct) {
     pct = std::clamp(pct, 0, 100);
     if (pct != m_dssGain) {
         m_dssGain = pct;
-        auto& s = AppSettings::instance();
-        s.setValue(settingsKey("Display3DGain"), QString::number(pct));
-        s.save();
+        saveDisplay3DSettings();
 #ifdef AETHER_GPU_SPECTRUM
         m_dssLutToken = ~0ull;  // force the GPU palette LUT to re-bake next frame
 #endif
         m_dss.invalidate();     // CPU fallback surface re-colours too
     }
+    update();
+}
+
+void SpectrumWidget::setDssRowSpan(int pct) {
+    pct = std::clamp(pct, 0, 100);
+    if (pct == m_dssRowSpanPct) {
+        return;
+    }
+    m_dssRowSpanPct = pct;
+    saveDisplay3DSettings();
+    // Geometry only: the mesh reads it as a uniform and the row store is
+    // untouched, so nothing needs re-uploading. The eased approach in
+    // renderGpuFrame carries the change over the next few frames.
     update();
 }
 
@@ -4530,9 +4728,17 @@ void SpectrumWidget::setWfBlankerEnabled(bool on)
     s.setValue(settingsKey("WaterfallBlankingEnabled"), on ? "True" : "False");
     s.save();
     if (!on) {
-        m_wfBlankerRingCount = 0;
-        m_wfBlankerRingIdx = 0;
+        resetWfBlankerState();
     }
+}
+
+void SpectrumWidget::resetWfBlankerState()
+{
+    m_wfBlankerRingCount = 0;
+    m_wfBlankerRingIdx = 0;
+    m_wfLastGoodLevels.clear();
+    m_wfLastGoodSupplementalLevels.clear();
+    m_wfLastGoodFrames = {};
 }
 
 void SpectrumWidget::setWfBlankerThreshold(float t)
@@ -5469,6 +5675,17 @@ static void remapHistoryRowInto(
     }
 }
 
+static void colorizeHistoryRowInto(
+    QRgb* dst,
+    const quint8* src,
+    int width,
+    const std::array<QRgb, 256>& colorLut)
+{
+    for (int x = 0; x < width; ++x) {
+        dst[x] = colorLut[src[x]];
+    }
+}
+
 void SpectrumWidget::resetVisibleWaterfallFrequencyFrames(
     double centerMhz,
     double bandwidthMhz)
@@ -5568,6 +5785,197 @@ void SpectrumWidget::rebuildDssViewportFromHistoryForFrame(double centerMhz,
     resetDssUploadState();
 }
 
+quint64 SpectrumWidget::waterfallPaletteToken() const
+{
+    // Identifies the exact LUT waterfallHistoryColorLut() would build right
+    // now: the selected scheme plus the theme generation behind it, because a
+    // theme reload rewrites the gradient stops of every preset (#3122).
+    // Asking through wfSchemeStops() forces the lazy first fill, so a token
+    // taken before the first paint is not the pre-init generation.
+    int stopCount = 0;
+    (void)wfSchemeStops(m_wfColorScheme, stopCount);
+    return (wfStopsCacheGeneration() << 8)
+        | static_cast<quint64>(static_cast<int>(m_wfColorScheme));
+}
+
+void SpectrumWidget::paintWaterfallRowsFromHistory(
+    double centerMhz,
+    double bandwidthMhz,
+    int writeRowOrigin,
+    WaterfallPipelineMode pipelineMode)
+{
+    // The single loop behind every "repaint the visible rows from retained
+    // intensity" caller. The two axes callers vary on:
+    //   • writeRowOrigin — which scanline holds the newest row. A pan/resize
+    //     rebuild re-lays the ring out from 0; a palette recolour passes the
+    //     live m_wfWriteRow so the waterfall cannot jump under the operator.
+    //   • pipelineMode — Legacy flattens every row into the destination frame;
+    //     RowFrequencyFrames keeps native pixels and per-row frames so the
+    //     shader reprojects each texture exactly once.
+    // Keeping them one function means the frame bookkeeping (#3578, #3668,
+    // #4081) can only ever be fixed in one place.
+    const int height = m_waterfall.height();
+    if (height <= 0 || !m_waterfallHistory.isConfigured()) {
+        return;
+    }
+    if (m_wfVisibleRowCenterMhz.size() != height
+        || m_wfVisibleRowBwMhz.size() != height
+        || m_wfVisibleSupplementalCenterMhz.size() != height
+        || m_wfVisibleSupplementalBwMhz.size() != height) {
+        resetVisibleWaterfallFrequencyFrames(centerMhz, bandwidthMhz);
+    }
+
+    const int w = m_waterfall.width();
+    const bool haveFrames = m_wfHistoryRowCenterMhz.size()
+        == m_waterfallHistory.capacityRows();
+    const bool haveSupplementalFrames =
+        m_wfHistorySupplementalCenterMhz.size()
+            == m_waterfallHistory.capacityRows()
+        && m_wfHistorySupplementalBwMhz.size()
+            == m_waterfallHistory.capacityRows();
+    // Every other writer of the supplemental image requires an exact size
+    // match (appendVisibleRow, the upload path's supplementalTextureReady);
+    // scanLine() on a stale smaller image would be a heap overflow, not a
+    // wrong pixel.
+    const bool supplementalWritable =
+        m_waterfallSupplemental.size() == m_waterfall.size();
+    const FrequencyFrame viewportFrame{centerMhz, bandwidthMhz};
+    const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
+    for (int age = 0; age < height; ++age) {
+        const int rowIndex = historyRowIndexForAge(
+            m_wfHistoryOffsetRows + age);
+        if (rowIndex < 0) {
+            break;
+        }
+
+        const quint8* src = m_waterfallHistory.row(rowIndex);
+        if (!src) {
+            continue;
+        }
+
+        const int destinationRow =
+            waterfallVisibleRowForAge(writeRowOrigin, age, height);
+        auto* dst = reinterpret_cast<QRgb*>(
+            m_waterfall.scanLine(destinationRow));
+        // With no stamped frames the rows carry no capture information at all,
+        // so fall back to the widget's live frame — NOT the destination frame.
+        // The two differ mid-pan, and treating an unstamped row as already
+        // being in the destination frame would skip the remap it needs.
+        const double rowCenter = haveFrames
+            ? m_wfHistoryRowCenterMhz[rowIndex] : m_centerMhz;
+        const double rowBw = haveFrames
+            ? m_wfHistoryRowBwMhz[rowIndex] : m_bandwidthMhz;
+        const quint8* supplementalSrc =
+            m_waterfallSupplementalHistory.row(rowIndex);
+        const double supplementalCenter = haveSupplementalFrames
+            ? m_wfHistorySupplementalCenterMhz[rowIndex] : 0.0;
+        const double supplementalBw = haveSupplementalFrames
+            ? m_wfHistorySupplementalBwMhz[rowIndex] : 0.0;
+        const WaterfallPaletteRecolorPlan recolorPlan =
+            waterfallPaletteRecolorPlan(
+                pipelineMode,
+                FrequencyFrame{rowCenter, rowBw},
+                FrequencyFrame{supplementalCenter, supplementalBw},
+                viewportFrame);
+        bool wroteSupplemental = false;
+        if (recolorPlan.retainNativeFrames) {
+            colorizeHistoryRowInto(dst, src, w, colorLut);
+            if (supplementalSrc
+                && recolorPlan.supplementalFrame.isValid()
+                && supplementalWritable) {
+                auto* supplementalDst = reinterpret_cast<QRgb*>(
+                    m_waterfallSupplemental.scanLine(destinationRow));
+                colorizeHistoryRowInto(
+                    supplementalDst, supplementalSrc, w, colorLut);
+                wroteSupplemental = true;
+            }
+        } else {
+            remapHistoryRowInto(dst, src, w, colorLut,
+                                rowCenter, rowBw,
+                                centerMhz, bandwidthMhz,
+                                m_kiwiSdrWaterfallActive,
+                                supplementalSrc,
+                                supplementalCenter, supplementalBw);
+        }
+
+        // Label the pixels that were actually written. Claiming supplemental
+        // coverage the image does not hold sends the shader sampling rows the
+        // fill() above left black.
+        m_wfVisibleRowCenterMhz[destinationRow] =
+            recolorPlan.primaryFrame.centerMhz;
+        m_wfVisibleRowBwMhz[destinationRow] =
+            recolorPlan.primaryFrame.bandwidthMhz;
+        m_wfVisibleSupplementalCenterMhz[destinationRow] =
+            wroteSupplemental ? recolorPlan.supplementalFrame.centerMhz : 0.0;
+        m_wfVisibleSupplementalBwMhz[destinationRow] =
+            wroteSupplemental ? recolorPlan.supplementalFrame.bandwidthMhz
+                              : 0.0;
+    }
+}
+
+void SpectrumWidget::recolorWaterfallViewport()
+{
+    if (m_frequencyPreviewActive) {
+        m_waterfallPaletteRefreshPending = true;
+        return;
+    }
+
+    // Claim the palette before the early-outs: once the refresh is serviced
+    // the visible rows are at the current palette either way — recoloured
+    // below, or empty because there is nothing to recolour. Leaving the stamp
+    // stale here would re-arm the stream-restore check on every parked row.
+    m_waterfallPaletteRefreshPending = false;
+    m_wfVisiblePaletteToken = waterfallPaletteToken();
+    if (m_waterfall.isNull() || !m_waterfallHistory.isConfigured()) {
+        return;
+    }
+
+    const int height = m_waterfall.height();
+    if (height <= 0) {
+        return;
+    }
+
+    m_wfHistoryOffsetRows = std::clamp(
+        m_wfHistoryOffsetRows, 0, maxWaterfallHistoryOffsetRows());
+
+    // Rebuild only the already-visible RGB images from the retained,
+    // palette-independent intensity history. Keep the current visible ring
+    // position and scroll clock intact so a palette change cannot move the
+    // waterfall while it is live or paused.
+    m_waterfall.fill(Qt::black);
+    if (!m_waterfallSupplemental.isNull()) {
+        m_waterfallSupplemental.fill(Qt::black);
+    }
+    resetVisibleWaterfallFrequencyFrames(m_centerMhz, m_bandwidthMhz);
+
+#ifdef AETHER_GPU_SPECTRUM
+    const WaterfallPipelineMode pipelineMode = m_wfPipelineMode;
+#else
+    constexpr WaterfallPipelineMode pipelineMode =
+        WaterfallPipelineMode::Legacy;
+#endif
+    paintWaterfallRowsFromHistory(m_centerMhz, m_bandwidthMhz,
+                                  m_wfWriteRow, pipelineMode);
+
+#ifdef AETHER_GPU_SPECTRUM
+    // The image changed in every physical row, so an incremental upload would
+    // be both more complicated and slower than the existing full-upload path.
+    m_wfTexFullUpload = true;
+#endif
+    if (PerfTelemetry::instance().enabled()) {
+        PerfTelemetry::instance().recordWaterfallRebuild();
+    }
+    if (!m_wfLive) {
+        rebuildDssViewportFromHistory();
+    }
+    // Self-sufficient, like rebuildWaterfallViewportForFrame(). Two of the
+    // four callers (the stream restore, clearFrequencyPreview()) do not
+    // repaint afterwards, and relying on the caller is how a recolour that
+    // ran silently ends up on screen a frame late — or not until the next
+    // unrelated update().
+    update();
+}
+
 void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
                                                       double bandwidthMhz)
 {
@@ -5586,45 +5994,20 @@ void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
     }
     m_wfWriteRow = 0;
     resetVisibleWaterfallFrequencyFrames(centerMhz, bandwidthMhz);
+    m_wfVisiblePaletteToken = waterfallPaletteToken();
 
     if (!m_waterfallHistory.isConfigured()) {
         update();
         return;
     }
 
-    const int w = m_waterfall.width();
-    const bool haveFrames = m_wfHistoryRowCenterMhz.size()
-        == m_waterfallHistory.capacityRows();
-    const bool haveSupplementalFrames =
-        m_wfHistorySupplementalCenterMhz.size()
-            == m_waterfallHistory.capacityRows()
-        && m_wfHistorySupplementalBwMhz.size()
-            == m_waterfallHistory.capacityRows();
-    const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
-    for (int y = 0; y < m_waterfall.height(); ++y) {
-        const int rowIndex = historyRowIndexForAge(m_wfHistoryOffsetRows + y);
-        if (rowIndex < 0) {
-            break;
-        }
-        const quint8* src = m_waterfallHistory.row(rowIndex);
-        if (!src) {
-            continue;
-        }
-        auto* dst = reinterpret_cast<QRgb*>(m_waterfall.scanLine(y));
-        const double rowCenter = haveFrames ? m_wfHistoryRowCenterMhz[rowIndex] : m_centerMhz;
-        const double rowBw = haveFrames ? m_wfHistoryRowBwMhz[rowIndex] : m_bandwidthMhz;
-        const quint8* supplementalSrc =
-            m_waterfallSupplementalHistory.row(rowIndex);
-        const double supplementalCenter = haveSupplementalFrames
-            ? m_wfHistorySupplementalCenterMhz[rowIndex] : 0.0;
-        const double supplementalBw = haveSupplementalFrames
-            ? m_wfHistorySupplementalBwMhz[rowIndex] : 0.0;
-        remapHistoryRowInto(dst, src, w, colorLut,
-                            rowCenter, rowBw, centerMhz, bandwidthMhz,
-                            m_kiwiSdrWaterfallActive,
-                            supplementalSrc,
-                            supplementalCenter, supplementalBw);
-    }
+    // The ring was just re-laid out from scanline 0, so there is no native row
+    // ordering left to preserve: every row is flattened into the destination
+    // frame and labelled with it (what resetVisibleWaterfallFrequencyFrames
+    // above already wrote).
+    paintWaterfallRowsFromHistory(centerMhz, bandwidthMhz,
+                                  /*writeRowOrigin=*/0,
+                                  WaterfallPipelineMode::Legacy);
 
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
@@ -5907,6 +6290,9 @@ void SpectrumWidget::commitFrequencyPreview()
 #ifdef AETHER_GPU_SPECTRUM
     m_frequencyScalePreviewNeedsUpload = false;
 #endif
+    if (m_waterfallPaletteRefreshPending) {
+        recolorWaterfallViewport();
+    }
     ++m_frequencyPreviewOverlayCommitRefreshCount;
     ++m_panStats.previewOverlayCommitRefreshes;
     markOverlayDirty("frequencyPreviewCommit", false);
@@ -5915,6 +6301,7 @@ void SpectrumWidget::commitFrequencyPreview()
 
 void SpectrumWidget::clearFrequencyPreview()
 {
+    const bool paletteRefreshPending = m_waterfallPaletteRefreshPending;
     m_frequencyPreviewActive = false;
     m_frequencyPreviewBaseCenterMhz = m_centerMhz;
     m_frequencyPreviewBaseBandwidthMhz = m_bandwidthMhz;
@@ -5925,6 +6312,14 @@ void SpectrumWidget::clearFrequencyPreview()
 #ifdef AETHER_GPU_SPECTRUM
     m_frequencyScalePreviewNeedsUpload = false;
 #endif
+    // m_frequencyPreviewActive has two exits — commitFrequencyPreview() lands
+    // the preview, this abandons it — and a deferred palette refresh has to
+    // drain through both. Leaving it armed here loses a Scheme change made
+    // during a drag that ends in an automation reset or a clearDisplay(),
+    // and leaves the flag set for the next preview to inherit.
+    if (paletteRefreshPending) {
+        recolorWaterfallViewport();
+    }
 }
 
 void SpectrumWidget::requestFrequencyRangeChange(double centerMhz,
@@ -6026,9 +6421,13 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfHistoryWriteRow = 0;
     m_wfHistoryRowCount = 0;
     m_wfHistoryOffsetRows = 0;
+    m_waterfallPaletteRefreshPending = false;
+    // Cleared rows carry no palette, so they are trivially current.
+    m_wfVisiblePaletteToken = waterfallPaletteToken();
     m_wfLive = true;
     m_wfRowsSinceRateChange = 0;
     m_prevTileLevels.clear();
+    resetWfBlankerState();
     m_kiwiSdrFftTrace.clear();
     m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrLastWaterfallBins.clear();
@@ -6194,6 +6593,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.kiwiDisplayRangeAutoRange = m_kiwiSdrDisplayRangeAutoRange;
     updated.kiwiFftTraceFloorDbm = m_kiwiSdrFftTraceFloorDbm;
     updated.kiwiFftTraceFloorValid = m_kiwiSdrFftTraceFloorValid;
+    updated.visiblePaletteToken = m_wfVisiblePaletteToken;
     updated.valid = !updated.waterfall.isNull();
 #ifdef AETHER_GPU_SPECTRUM
     updated.wfTexFullUpload = m_wfTexFullUpload;
@@ -6326,6 +6726,7 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_kiwiSdrDisplayRangeAutoRange = restored.kiwiDisplayRangeAutoRange;
     m_kiwiSdrFftTraceFloorDbm = restored.kiwiFftTraceFloorDbm;
     m_kiwiSdrFftTraceFloorValid = restored.kiwiFftTraceFloorValid;
+    m_wfVisiblePaletteToken = restored.visiblePaletteToken;
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = restored.wfTexFullUpload;
     m_wfLastUploadedRow = restored.wfLastUploadedRow;
@@ -6337,6 +6738,14 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
 #endif
     if (m_waterfallWriteVisible) {
         ensureWaterfallHistory();
+    }
+    // A parked stream keeps already-coloured RGB rows, so a Scheme or theme
+    // change made while the other source was on screen never reached them.
+    // This runs at most once per palette change per stream — begin/end
+    // WaterfallStreamWrite() swap on every hidden-source row, and the stamp
+    // matches on all of those.
+    if (m_wfVisiblePaletteToken != waterfallPaletteToken()) {
+        recolorWaterfallViewport();
     }
 }
 
@@ -6404,6 +6813,7 @@ void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label
     const QString nextLabel = label.trimmed().isEmpty()
         ? QStringLiteral("Connecting to radio…")
         : label.trimmed();
+    const bool becomingVisible = on && !m_connectionAnimationVisible;
     const bool changed = (m_connectionAnimationVisible != on)
         || (on && m_connectionAnimationLabel != nextLabel);
 
@@ -6414,7 +6824,12 @@ void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label
     m_connectionAnimationVisible = on;
     if (on) {
         m_connectionAnimationLabel = nextLabel;
-        m_connectionAnimationClock.restart();
+        // The clock is the ANIMATION's phase, not the label's. Restarting it on
+        // a label change snapped the spinner back to phase zero mid-spin, which
+        // an HL2 connect now does once per receiver as the DSP build reports
+        // progress. Restart only when the overlay is actually appearing.
+        if (becomingVisible || !m_connectionAnimationClock.isValid())
+            m_connectionAnimationClock.restart();
         m_connectionAnimationTimer->start();
     } else {
         m_connectionAnimationLabel.clear();
@@ -6818,6 +7233,7 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         resetVisibleWaterfallFrequencyFrames(newCenterMhz, newBandwidthMhz);
     }
     m_prevTileLevels.clear();
+    resetWfBlankerState();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
@@ -7393,8 +7809,7 @@ void SpectrumWidget::setTransmitting(bool tx)
         m_wfPrevTimecode   = 0;
         m_wfPrevTimecodeMs = 0;
         m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
-        m_wfBlankerRingCount = 0;                        // reset stale blanker baseline
-        m_wfLastGoodLevels.clear();                       // forget any TX-era last-good row
+        resetWfBlankerState();                            // forget stale TX-era blanker rows
         // Drop the FFT trace's client-side EMA so the first clean RX frame is
         // taken raw instead of weighted against TX-contaminated history. During
         // the UNKEY_REQUESTED window the radio keeps streaming TX-contaminated
@@ -8069,6 +8484,18 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         }
     }
 
+    const double incomingSupplementalCenterMhz =
+        (lowFreqMhz + highFreqMhz) * 0.5;
+    const double incomingSupplementalBandwidthMhz =
+        highFreqMhz - lowFreqMhz;
+    const WaterfallBlankerFrameBundle incomingFrames{
+        FrequencyFrame{m_centerMhz, m_bandwidthMhz},
+        FrequencyFrame{incomingSupplementalCenterMhz,
+                       incomingSupplementalBandwidthMhz},
+    };
+    WaterfallBlankerFrameBundle outputFrames = incomingFrames;
+    bool blankerSubstitutedRow = false;
+
     // NB Waterfall Blanker (#277) — suppress impulse rows.
     // Skip entirely during TX: with show-tx-in-waterfall enabled, TX-era tiles
     // flow through and would otherwise poison the rolling baseline.  Post-TX,
@@ -8094,18 +8521,33 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         // Detect impulse (need ≥8 rows of history)
         if (m_wfBlankerRingCount >= 8 && baseline > 0.0f
                 && rowMean > baseline * m_wfBlankerThreshold) {
-            // Impulse detected — replace with last good row (interpolate)
-            if (m_wfLastGoodLevels.size() == destWidth) {
+            // Impulse detected — replace the complete last-good capture. The
+            // two pixel rows and their frequency frames are one value: mixing
+            // an old viewport row with the rejected tile's supplemental row
+            // produces a permanently misregistered line after pan/zoom.
+            const bool haveCachedBundle =
+                m_wfLastGoodLevels.size() == destWidth
+                && m_wfLastGoodSupplementalLevels.size() == destWidth
+                && m_wfLastGoodFrames.isValid();
+            if (haveCachedBundle) {
                 levels = m_wfLastGoodLevels;
+                supplementalLevels = m_wfLastGoodSupplementalLevels;
+                outputFrames = waterfallBlankerFrameBundleForOutput(
+                    true, m_wfLastGoodFrames, incomingFrames);
             } else {
                 // No previous good row yet — fill with noise floor color
                 const quint8 floorLevel = encodeWaterfallLevel(
                     intensityToWaterfallLevel(baseline));
                 std::fill(levels.begin(), levels.end(), floorLevel);
+                std::fill(supplementalLevels.begin(),
+                          supplementalLevels.end(), floorLevel);
             }
+            blankerSubstitutedRow = true;
             m_wfBlankerRing[m_wfBlankerRingIdx] = std::min(rowMean, baseline * 1.05f);
         } else {
             m_wfLastGoodLevels = levels;
+            m_wfLastGoodSupplementalLevels = supplementalLevels;
+            m_wfLastGoodFrames = incomingFrames;
             m_wfBlankerRing[m_wfBlankerRingIdx] = rowMean;
         }
         m_wfBlankerRingIdx = (m_wfBlankerRingIdx + 1) % WF_BLANKER_N;
@@ -8114,12 +8556,12 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     }
 
     // Write rows into history + visible viewport.
-    const bool canInterp = (m_prevTileLevels.size() == destWidth && rowsToPush > 1);
+    // A substituted row may come from a different frequency frame. Do not
+    // blend it with the current temporal endpoint or seed the next blend with
+    // it; interpolation across coordinate systems recreates the same defect.
+    const bool canInterp = !blankerSubstitutedRow
+        && m_prevTileLevels.size() == destWidth && rowsToPush > 1;
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
-    const double supplementalCenterMhz =
-        (lowFreqMhz + highFreqMhz) * 0.5;
-    const double supplementalBandwidthMhz =
-        highFreqMhz - lowFreqMhz;
     // Every row delivered by one native tile shares this calibration. Keep the
     // overlap scan, quantile sort, and whole-tile conversion out of the row
     // loop if a backend ever delivers more than one row per update.
@@ -8151,27 +8593,30 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
         appendHistoryRow(
             interpolatedLevels.constData(), nowMs,
-            -1.0, -1.0,
+            outputFrames.primaryFrame.centerMhz,
+            outputFrames.primaryFrame.bandwidthMhz,
             supplementalLevels.constData(),
-            supplementalCenterMhz,
-            supplementalBandwidthMhz);
+            outputFrames.supplementalFrame.centerMhz,
+            outputFrames.supplementalFrame.bandwidthMhz);
         appendDssWaterfallRow(
             displaySpectrumBins(),
             -1.0,
             -1.0,
             true,
             dssSupplemental,
-            supplementalCenterMhz,
-            supplementalBandwidthMhz);
+            incomingSupplementalCenterMhz,
+            incomingSupplementalBandwidthMhz);
         if (m_wfLive) {
             // The whole tile gets one start() after the loop; don't restart the
             // scroll clock once per appended row.
             appendVisibleRow(
-                interpolatedRow.constData(), -1.0, -1.0,
+                interpolatedRow.constData(),
+                outputFrames.primaryFrame.centerMhz,
+                outputFrames.primaryFrame.bandwidthMhz,
                 /*startScrollAnimation=*/false,
                 supplementalRow.constData(),
-                supplementalCenterMhz,
-                supplementalBandwidthMhz);
+                outputFrames.supplementalFrame.centerMhz,
+                outputFrames.supplementalFrame.bandwidthMhz);
         } else {
             rebuildWaterfallViewport();
         }
@@ -8181,7 +8626,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         // per-row starts the appendVisibleRow calls above used to issue.
         startWaterfallScrollAnimation(static_cast<float>(rowsToPush));
     }
-    m_prevTileLevels = levels;
+    if (blankerSubstitutedRow) {
+        m_prevTileLevels.clear();
+    } else {
+        m_prevTileLevels = levels;
+    }
     recordWaterfallFrame(rowsToPush);
     if (PerfTelemetry::instance().enabled())
         PerfTelemetry::instance().recordWaterfallNativeRows(rowsToPush);
@@ -8207,6 +8656,10 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
                                   m_dssFloorOffsetDb),
                               false);
     saveCurrentWaterfallStreamState();
+    // Blanker history is native-stream state and is not part of the cached
+    // per-source viewport. Never carry its baseline or last-good capture
+    // through a Flex/Kiwi source transition.
+    resetWfBlankerState();
     // Retained intensity/DSS scrollback follows the visible source. Keep the
     // small live viewport/DSS rings in every cached state for an immediate
     // toggle, but release all deep histories before choosing the new owner.
@@ -8912,6 +9365,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
     (void)dragStatePublisher;
 
+    // A prior off-screen-pill press is relevant only to Qt's immediately
+    // following mouseDoubleClickEvent. Any new press starts a new gesture.
+    m_offScreenSliceCenterPressPending = false;
+
     const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
@@ -8929,6 +9386,24 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             m_spotClickConsumed = true;   // suppress release-to-tune (#1647)
             ev->accept();
             return;
+        }
+    }
+
+    // Click on KiwiSDR DX Community spot marker
+    const int bandH = m_bandPlanFontSize + 4;
+    const int bandY = specH - bandH + 1;
+    if (m_showKiwiDxSpots && m_bandPlanFontSize > 0 && ev->button() == Qt::LeftButton && y >= bandY && y <= specH) {
+        const int mx = static_cast<int>(ev->position().x());
+        const auto& kiwiSpots = m_bandPlanMgr ? m_bandPlanMgr->kiwiDxSpots()
+                                               : QVector<BandPlanManager::KiwiDxSpot>{};
+        for (const auto& spot : kiwiSpots) {
+            const int sx = mhzToX(spot.freqMhz);
+            if (std::abs(mx - sx) <= 5) {
+                emit kiwiSpotClicked(spot.freqMhz, spot.mode, spot.loOffsetHz, spot.hiOffsetHz);
+                m_spotClickConsumed = true;
+                ev->accept();
+                return;
+            }
         }
     }
 
@@ -9048,13 +9523,15 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
     }
 
-    // Left-click on off-screen slice indicator → absorb or switch slice
+    // Left-click on an off-screen slice indicator → let MainWindow activate
+    // and center it through the canonical profile-load and Kiwi-safe path.
     if (ev->button() == Qt::LeftButton) {
         for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
             if (!m_offScreenRects[oi].isNull() &&
                 m_offScreenRects[oi].contains(QPoint(static_cast<int>(ev->position().x()), y))) {
                 const auto& so = m_sliceOverlays[oi];
-                if (!so.isActive) emit sliceClicked(so.sliceId);
+                m_offScreenSliceCenterPressPending = true;
+                emit offScreenSliceCenterRequested(so.sliceId);
                 m_spotClickConsumed = true;   // suppress release-to-tune (#1772)
                 ev->accept();
                 return;
@@ -9436,29 +9913,49 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             }
             menu.addAction("Remove TNF", this, [this, hitTnf]{ emit tnfRemoveRequested(hitTnf); });
             auto* widthMenu = menu.addMenu("Width");
+            // Only the presets the radio can actually produce. On a host-DSP
+            // notch the floor is real — WDSP widens anything narrower without
+            // saying so — so offering 50 Hz against a 200 Hz floor would put
+            // three menu entries on screen that all give the same notch.
             for (int w : {50, 100, 200, 500}) {
+                if (w < m_notchMinWidthHz || w > m_notchMaxWidthHz)
+                    continue;
                 QAction* action = widthMenu->addAction(QString("%1 Hz").arg(w), this,
                     [this, hitTnf, w]{ emit tnfWidthRequested(hitTnf, w); });
                 action->setCheckable(true);
                 action->setChecked(tnf && tnf->widthHz == w);
             }
-            auto* depthMenu = menu.addMenu("Depth");
-            const int currentDepth = tnf ? tnf->depthDb : 1;
-            for (const auto& option : std::initializer_list<std::pair<const char*, int>>{
-                     {"Normal", 1}, {"Deep", 2}, {"Very Deep", 3}}) {
-                QAction* action = depthMenu->addAction(option.first, this,
-                    [this, hitTnf, depth = option.second]{ emit tnfDepthRequested(hitTnf, depth); });
-                action->setCheckable(true);
-                action->setChecked(currentDepth == option.second);
+            // Depth is a Flex TNF concept. A host-DSP notch is a full null with
+            // no depth parameter, so the submenu is omitted rather than left
+            // offering three settings that behave identically.
+            if (m_notchHasDepth) {
+                auto* depthMenu = menu.addMenu("Depth");
+                const int currentDepth = tnf ? tnf->depthDb : 1;
+                for (const auto& option : std::initializer_list<std::pair<const char*, int>>{
+                         {"Normal", 1}, {"Deep", 2}, {"Very Deep", 3}}) {
+                    QAction* action = depthMenu->addAction(option.first, this,
+                        [this, hitTnf, depth = option.second]{ emit tnfDepthRequested(hitTnf, depth); });
+                    action->setCheckable(true);
+                    action->setChecked(currentDepth == option.second);
+                }
             }
-            menu.addSeparator();
-            bool isPerm = false;
-            for (const auto& t : m_tnfMarkers)
-                if (t.id == hitTnf) { isPerm = t.permanent; break; }
-            if (isPerm)
-                menu.addAction("Make Temporary", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, false); });
-            else
-                menu.addAction("Make Permanent", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, true); });
+            // "Permanent" means the RADIO keeps the notch across a power cycle,
+            // so it needs a radio with somewhere to keep it — which an HL2, with
+            // no configuration store at all, does not have.
+            //
+            // Gated on the same flag as depth because both are radio-OWNED notch
+            // attributes and today no family has one without the other. Split
+            // them into their own capability the moment one does.
+            if (m_notchHasDepth) {
+                menu.addSeparator();
+                bool isPerm = false;
+                for (const auto& t : m_tnfMarkers)
+                    if (t.id == hitTnf) { isPerm = t.permanent; break; }
+                if (isPerm)
+                    menu.addAction("Make Temporary", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, false); });
+                else
+                    menu.addAction("Make Permanent", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, true); });
+            }
         }
         // General area context menu
         else {
@@ -9471,8 +9968,12 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             const QString freqStr = QString::number(snappedMhz, 'f', 6);
             menu.addAction(QString("Add Spot at %1 MHz...").arg(freqStr), this,
                 [this, snappedMhz]{ showAddSpotDialog(snappedMhz); });
-            menu.addAction(QString("Add TNF at %1 MHz").arg(freqStr), this,
-                [this, freqMhz]{ emit tnfCreateRequested(freqMhz); });
+            // Absent, not disabled, on a radio with no notch engine — and
+            // absent once the radio is full rather than silently doing nothing.
+            if (m_maxNotchFilters > 0 && m_tnfMarkers.size() < m_maxNotchFilters) {
+                menu.addAction(QString("Add TNF at %1 MHz").arg(freqStr), this,
+                    [this, freqMhz]{ emit tnfCreateRequested(freqMhz); });
+            }
             menu.addAction(QString("Add Slice at %1 MHz").arg(freqStr), this,
                 [this, snappedMhz]{ emit sliceCreateRequested(snappedMhz); });
         }
@@ -9960,9 +10461,14 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double newFreq = xToMhz(mx);
         const int dy = static_cast<int>(ev->position().y()) - m_tnfDragStartPos.y();
         const double widthScale = std::pow(2.0, static_cast<double>(-dy) / 48.0);
+        // Clamped to what the radio can actually produce, not to a fixed 10 Hz.
+        // A host-DSP notch has a real floor set by its filter length and it
+        // WIDENS a narrower request silently, so letting the drag go below it
+        // would draw a notch narrower than the one being heard — the overlay
+        // and the audio would disagree, with nothing on screen to say why.
         const int newWidthHz = std::clamp(
             static_cast<int>(std::lround(static_cast<double>(m_dragTnfOrigWidthHz) * widthScale)),
-            10, 12000);
+            m_notchMinWidthHz, m_notchMaxWidthHz);
         for (auto& t : m_tnfMarkers) {
             if (t.id == m_draggingTnfId) {
                 t.freqMhz = newFreq;
@@ -10361,6 +10867,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
     if (y >= bandBarTop && y <= specH2) {
         const int mx2 = static_cast<int>(ev->position().x());
+        // Check standard band plan spots first (DX Cluster / Memories)
         const auto& spots = m_bandPlanMgr ? m_bandPlanMgr->spots() : QVector<BandPlanManager::Spot>{};
         for (const auto& spot : spots) {
             const int sx = mhzToX(spot.freqMhz);
@@ -10372,6 +10879,33 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     this,
                     QRect(sx - 5, bandBarTop, 11, specH2 - bandBarTop));
                 return;
+            }
+        }
+        // Fall back to KiwiSDR DX spots if no standard spot matched
+        if (m_showKiwiDxSpots && m_bandPlanFontSize > 0 && m_bandPlanMgr) {
+            for (const auto& spot : m_bandPlanMgr->kiwiDxSpots()) {
+                const int sx = mhzToX(spot.freqMhz);
+                if (std::abs(mx2 - sx) <= 5) {
+                    QString tip = QString("<b>%1 kHz — %2</b>")
+                        .arg(spot.freqMhz * 1000.0, 0, 'f', 2)
+                        .arg(spot.name.toHtmlEscaped());
+                    if (!spot.mode.isEmpty()) {
+                        tip += QString("<br><b>Mode:</b> %1").arg(spot.mode.toHtmlEscaped());
+                    }
+                    if (spot.loOffsetHz != 0 || spot.hiOffsetHz != 0) {
+                        const int bw = std::abs(spot.hiOffsetHz - spot.loOffsetHz);
+                        tip += QString("<br><b>Passband:</b> %1 .. %2 Hz (BW: %3 Hz)")
+                            .arg(spot.loOffsetHz).arg(spot.hiOffsetHz).arg(bw);
+                    }
+                    if (!spot.notes.isEmpty()) {
+                        QString notesHtml = spot.notes.toHtmlEscaped();
+                        notesHtml.replace("\n", "<br>");
+                        tip += QString("<br><b>Notes:</b> %1").arg(notesHtml);
+                    }
+                    QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
+                        tip, this, QRect(sx - 5, bandBarTop, 11, specH2 - bandBarTop));
+                    return;
+                }
             }
         }
         QToolTip::hideText();
@@ -10578,11 +11112,11 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     QDialog dlg(this);
     dlg.setWindowTitle("Add Spot");
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
-                      "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
-                      "QDoubleSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
-                      "QDoubleSpinBox::up-button { background: #304060; width: 16px; }"
-                      "QDoubleSpinBox::down-button { background: #304060; width: 16px; }"
-                      "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
+                      "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
+                      "QDoubleSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
+                      "QDoubleSpinBox::up-button { background: {{color.background.2}}; width: 16px; }"
+                      "QDoubleSpinBox::down-button { background: {{color.background.2}}; width: 16px; }"
+                      "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
                       "QLabel { color: {{color.text.primary}}; }"
                       "QCheckBox { color: {{color.text.primary}}; }");
 
@@ -10659,18 +11193,28 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
     const int mx = static_cast<int>(ev->position().x());
     const int rightStripW = (y >= wfY) ? waterfallStripWidth() : DBM_STRIP_W;
 
+    // The first press may have recentered the pan and removed its indicator
+    // before Qt delivers this double-click event. Consume the matching event
+    // so its trailing release cannot fall through to click-to-tune.
+    if (ev->button() == Qt::LeftButton
+        && m_offScreenSliceCenterPressPending) {
+        m_offScreenSliceCenterPressPending = false;
+        m_spotClickConsumed = true;
+        ev->accept();
+        return;
+    }
+
     // Consume double-clicks on the dBm and time strips
     if (mx >= width() - rightStripW) {
         ev->accept();
         return;
     }
 
-    // Double-click on off-screen slice indicator → recenter on that slice
+    // Preserve direct/synthetic double-click support through the same owner
+    // path as a normal off-screen indicator press.
     for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
         if (!m_offScreenRects[oi].isNull() && m_offScreenRects[oi].contains(QPoint(mx, y))) {
-            m_centerMhz = m_sliceOverlays[oi].freqMhz;
-            markOverlayDirty();
-            emit centerChangeRequested(m_centerMhz);
+            emit offScreenSliceCenterRequested(m_sliceOverlays[oi].sliceId);
             // Suppress the second mouseRelease's single-click-to-tune emit
             // (Qt fires Press → Release → DoubleClick → Release; without this
             // flag the trailing release would re-tune against the new
@@ -11983,6 +12527,38 @@ bool SpectrumWidget::initWaterfallPipeline()
     return true;
 }
 
+void SpectrumWidget::reportRhiFailure(const QString& reason)
+{
+    const QString detail = reason.trimmed().isEmpty()
+        ? tr("The spectrum renderer failed.")
+        : reason.trimmed();
+    if (!m_rhiFailure.report(detail)) {
+        return;
+    }
+
+    qCWarning(lcGui) << "SpectrumWidget: QRhi failure:" << detail;
+
+#ifdef Q_OS_MAC
+    const QString messageDetail =
+        tr("%1 Rebuild with -DAETHER_GPU_SPECTRUM=OFF.").arg(detail);
+#else
+    const QString messageDetail =
+        tr("%1 Try launching with AETHER_NO_GPU=1, or rebuild with "
+           "-DAETHER_GPU_SPECTRUM=OFF.")
+            .arg(detail);
+#endif
+    upsertOverlayMessage(m_rhiFailure.warningMessage(
+        tr("Spectrum renderer unavailable"), messageDetail));
+}
+
+void SpectrumWidget::clearRhiFailure()
+{
+    if (!m_rhiFailure.clear()) {
+        return;
+    }
+    removeOverlayMessage(QStringLiteral("rhi.render-failed"));
+}
+
 void SpectrumWidget::initOverlayPipeline()
 {
     QRhi* r = rhi();
@@ -12246,10 +12822,55 @@ void SpectrumWidget::uploadDssPaletteLut(QRhiResourceUpdateBatch* batch,
     m_dssLutToken = token;
 }
 
+float SpectrumWidget::dssRowSpanTarget(double targetBandwidthMhz) const
+{
+    // A/B override, read once: this sits in the per-frame render path, and the
+    // environment cannot change under a running process. AETHER_DSS_ROW_SPAN=1
+    // pins the classic clipped trapezoid, 1.667 forces the widest useful
+    // frustum. Negative means "unset or unparseable", so the slider decides.
+    //
+    // Unlike the slider it can demand more span than the source can fill, which
+    // is what exercises the coverage feather in dss_mesh.vert.
+    static const float kForcedSpan = [] {
+        if (!qEnvironmentVariableIsSet("AETHER_DSS_ROW_SPAN")) {
+            return -1.0f;
+        }
+        bool ok = false;
+        const float forced =
+            qEnvironmentVariable("AETHER_DSS_ROW_SPAN").toFloat(&ok);
+        return ok ? std::clamp(forced, 1.0f, DssRenderer::kMaxRowSpanFactor)
+                  : -1.0f;
+    }();
+    if (kForcedSpan > 0.0f) {
+        return kForcedSpan;
+    }
+
+    // Age 0 is NOT authoritative. pushWaterfallRow() -- the FFT-derived producer
+    // that paces rows during TX and during the RX stale-native fallback --
+    // appends with no supplemental at all, so keying up drops age 0's overhang
+    // to zero and would walk the whole surface back to the clipped trapezoid
+    // over ~30 frames, then back out on unkey, on every single over.
+    //
+    // Take the newest row that actually carries a tile instead. dss_mesh.vert
+    // already feathers the rows that genuinely have none, so the host does not
+    // need the front row to be the one with data -- that split is the whole
+    // point of the per-vertex coverage test. Once the last such row scrolls out
+    // of the visible ring there really is no overhang left on screen, and
+    // relaxing to the trapezoid is then the correct answer rather than a
+    // flicker. Also covers Kiwi and anything rebuilt from retained history,
+    // which drop supplemental the same way.
+    return DssRenderer::rowSpanFactorFor(
+        m_dss.newestSupplementalBandwidthMhz(targetBandwidthMhz),
+        targetBandwidthMhz,
+        m_dssRowSpanPct);
+}
+
 void SpectrumWidget::initDssMeshPipeline()
 {
     QRhi* r = rhi();
     m_dssMeshReady = false;
+    m_dssOutlinePipelineMode = dssOutlinePipelineModeForBackend(
+        r->backend() == QRhi::OpenGLES2);
 
     // R stores dBm and G stores captured-frequency coverage. The second channel
     // keeps zoom-created floor spans colour-stable without hiding their lines.
@@ -12290,8 +12911,11 @@ void SpectrumWidget::initDssMeshPipeline()
         return;
     }
 
-    // Height sampled in the vertex stage; Nearest is enough (the grid is as dense
-    // as the texture). Palette is Linear for a smooth floor->peak gradient.
+    // Height sampled in the vertex stage; Nearest is enough because the mesh grid
+    // is never sparser than the texture — kMeshCols is sized so that even at the
+    // widest rowSpanFactor the on-screen columns still cover every texel, so no
+    // bin can fall between two samples. Palette is Linear for a smooth
+    // floor->peak gradient.
     m_dssHeightSampler = r->newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest,
         QRhiSampler::None, QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     m_dssPaletteSampler = r->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
@@ -12336,26 +12960,32 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssMeshFillPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_dssMeshFillPipeline->setTargetBlends({fillBlend});
 
-    // Outline pipeline — alpha-blended screen-space ribbons on a fixed
-    // perspective grid. The shader crossfades exact FFT shapes in place, so
-    // neither native line coverage nor translated ribbon coverage can strobe.
-    QRhiGraphicsPipeline::TargetBlend lblend;
-    lblend.enable = true;
-    lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
-    lblend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-    lblend.srcAlpha = QRhiGraphicsPipeline::One;
-    lblend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-    m_dssMeshLinePipeline = r->newGraphicsPipeline();
-    m_dssMeshLinePipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
-    m_dssMeshLinePipeline->setVertexInputLayout(layout);
-    m_dssMeshLinePipeline->setTopology(QRhiGraphicsPipeline::Triangles);
-    m_dssMeshLinePipeline->setShaderResourceBindings(m_dssMeshSrb);
-    m_dssMeshLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
-    m_dssMeshLinePipeline->setTargetBlends({lblend});
-
-    if (!m_dssMeshFillPipeline->create() || !m_dssMeshLinePipeline->create()) {
-        qCWarning(lcGui) << "SpectrumWidget: dss_mesh pipeline create failed";
+    // OpenGL reuses the fill program below for this unchanged ribbon VBO: live
+    // probes showed flat/stale outlines only after switching to a separate,
+    // identically configured program. Keep the proven Metal/D3D11 path intact.
+    if (!m_dssMeshFillPipeline->create()) {
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh fill pipeline create failed";
         return;
+    }
+    if (m_dssOutlinePipelineMode
+        == DssOutlinePipelineMode::DedicatedRibbonPipeline) {
+        QRhiGraphicsPipeline::TargetBlend lblend;
+        lblend.enable = true;
+        lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+        lblend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+        lblend.srcAlpha = QRhiGraphicsPipeline::One;
+        lblend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+        m_dssMeshLinePipeline = r->newGraphicsPipeline();
+        m_dssMeshLinePipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
+        m_dssMeshLinePipeline->setVertexInputLayout(layout);
+        m_dssMeshLinePipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        m_dssMeshLinePipeline->setShaderResourceBindings(m_dssMeshSrb);
+        m_dssMeshLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_dssMeshLinePipeline->setTargetBlends({lblend});
+        if (!m_dssMeshLinePipeline->create()) {
+            qCWarning(lcGui) << "SpectrumWidget: dss_mesh outline pipeline create failed";
+            return;
+        }
     }
 
     m_dssMeshHeadUploaded = -1;
@@ -12363,7 +12993,12 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssLutToken = ~0ull;
     m_dssMeshReady = true;
     qDebug() << "SpectrumWidget: stacked-trace mesh pipeline created"
-             << cols << "x" << textureRows;
+             << cols << "x" << textureRows
+             << "outline pipeline" << (m_dssOutlinePipelineMode
+                 == DssOutlinePipelineMode::SharedFillPipeline
+                     ? "shared-fill-pipeline" : "dedicated-ribbon-pipeline")
+             << "outline vertices/row"
+             << dssLineVerticesPerRow();
 }
 
 void SpectrumWidget::initDssDepthPipeline()
@@ -12549,18 +13184,26 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
 
     QRhi* r = rhi();
     if (!r) {
-        qWarning() << "SpectrumWidget: QRhi initialization failed — no GPU backend";
+        reportRhiFailure(tr("No QRhi graphics backend is available."));
         return;
     }
 
     qDebug() << "SpectrumWidget: QRhi initialized, backend:" << r->backendName();
 
     if (!initWaterfallPipeline()) {
+        reportRhiFailure(tr("The waterfall rendering pipeline could not be created."));
         return;
     }
     initOverlayPipeline();
     initSpectrumPipeline();
     initDssMeshPipeline();
+    if (m_overlayMenu) {
+        // m_dssMeshReady is only final once every pipeline, texture and sampler
+        // in initDssMeshPipeline() has succeeded, so ask after it returns
+        // rather than from inside it.
+        m_overlayMenu->setDssRowSpanSupported(
+            AetherSDR::dssRowSpanSupported(kGpuSpectrumBuild, m_dssMeshReady));
+    }
     // initDssDepthPipeline() is deliberately NOT called here — its ~458 KB VBO
     // and pipeline are only used on the CPU-image fallback, which most GPU
     // systems never hit. Built lazily on first fallback use in renderGpuFrame.
@@ -12575,7 +13218,9 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     // 3DSS mesh: build the static perspective grid once (geometry never changes —
     // height comes from the ring-buffered texture sampled per-vertex).
     if (m_dssMeshReady) {
-        const int cols = m_dss.cols();
+        // Mesh columns, NOT texture columns: the mesh is wider than the
+        // viewport so a widened row keeps texel density on screen.
+        const int cols = DssRenderer::kMeshCols;
         const int rows = DssRenderer::kVisibleRows;
         QVector<float> fill;
         QVector<float> line;
@@ -12655,6 +13300,12 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     m_wfTexFullUpload = false;
     m_wfLastUploadedRow = m_wfWriteRow;
     m_rhiInitialized = true;
+    if (m_rhiFailureForcedForAutomation) {
+        reportRhiFailure(
+            tr("A blank QRhi surface was forced for automation verification."));
+    } else {
+        clearRhiFailure();
+    }
 
     // Force full overlay repaint + upload — the new GPU texture is empty.
     // Without this, m_overlayStaticDirty and m_overlayNeedsUpload may be
@@ -13019,7 +13670,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         waterfallRowFrequencyFrames,
         scrollSampleOffsetUnit,
         m_wfGpuTexH > 0 ? 1.0f / static_cast<float>(m_wfGpuTexH) : 0.0f,
-        0.0f,
+        static_cast<float>(m_wfGpuTexH),
         0.0f,
     };
     static_assert(sizeof(uniforms) == kWaterfallUboFloats * sizeof(float),
@@ -13592,7 +14243,27 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // UBO would swallow a short initializer list (breaking e.g. preview
             // zoom/pan) without complaint; the shadow descriptors are filled
             // separately below.
-            constexpr int kDssMeshScalarFields = 24;  // through the bgFill vec4
+            // Overhang the near rows past the plot edges by as much as the
+            // offscreen spectrum supports, easing so a zoom or a stream switch
+            // can't snap the silhouette. See dss_mesh.vert's rowSpanFactor.
+            {
+                const float target =
+                    dssRowSpanTarget(dssTargetBandwidthMhz);
+                constexpr float kRowSpanAlpha = 0.12f;
+                m_dssRowSpanFactor += kRowSpanAlpha
+                    * (target - m_dssRowSpanFactor);
+                if (std::abs(target - m_dssRowSpanFactor) < 0.002f) {
+                    m_dssRowSpanFactor = target;
+                } else {
+                    // The ease advances one step per PRESENTED frame, so it has
+                    // to keep its own frames coming. Without this it stalls
+                    // wherever the last repaint left it whenever nothing else is
+                    // driving the pane — an idle or disconnected stream leaves
+                    // the slider reading 100 over a half-widened surface.
+                    coalescedUpdate();
+                }
+            }
+            constexpr int kDssMeshScalarFields = 28;  // through the bgFill vec4
             const float uboScalars[] = {
                 rowOffset,
                 floorDbm, rangeDb, m_dssZCurve,
@@ -13608,6 +14279,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 static_cast<float>(DssRenderer::kVisibleRows),
                 static_cast<float>(specContentW * dpr),
                 static_cast<float>(specRect.height() * dpr),
+                m_dssRowSpanFactor,
+                static_cast<float>(DssRenderer::kMeshCols),
+                // std140 rounds the 22-float scalar run up to bgFill's vec4
+                // alignment. These two are the hole, not fields.
+                0.0f, 0.0f,
                 static_cast<float>(m_bgFillColor.redF()),
                 static_cast<float>(m_bgFillColor.greenF()),
                 static_cast<float>(m_bgFillColor.blueF()),
@@ -13622,7 +14298,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // Slice shadows are decals evaluated by the DSS shader itself.
             // Because the mask modifies the existing curtain/ridge fragments,
             // it cannot hover above or cut through the rendered surface.
-            constexpr int kShadowBandsOffset = 24;
+            constexpr int kShadowBandsOffset = 28;
             static_assert(kShadowBandsOffset == kDssMeshScalarFields,
                 "shadow descriptors must begin right after the scalar prefix");
             constexpr int kShadowStylesOffset =
@@ -13636,6 +14312,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             const double shadowEndMhz =
                 shadowCenterMhz + shadowBandwidthMhz * 0.5;
             int shadowCount = 0;
+            // A widened row covers frequencies outside the on-screen viewport,
+            // so slice decals now live on [-margin, 1+margin] in target-frame
+            // units rather than [0,1]. margin is 0 at span 1.0, which restores
+            // the old clamps exactly.
+            const float shadowUnitMargin =
+                (m_dssRowSpanFactor - 1.0f) * 0.5f;
+            const float shadowUnitLow = -shadowUnitMargin;
+            const float shadowUnitHigh = 1.0f + shadowUnitMargin;
             const auto unitForShadowMhz = [&](double mhz) {
                 return static_cast<float>(
                     (mhz - shadowStartMhz) / shadowBandwidthMhz);
@@ -13651,9 +14335,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     return false;
                 }
                 const int bandBase = kShadowBandsOffset + shadowCount * 4;
-                ubo.at(bandBase) = std::clamp(low, 0.0f, 1.0f);
-                ubo.at(bandBase + 1) = std::clamp(high, 0.0f, 1.0f);
-                ubo.at(bandBase + 2) = std::clamp(cueCenter, 0.0f, 1.0f);
+                ubo.at(bandBase) =
+                    std::clamp(low, shadowUnitLow, shadowUnitHigh);
+                ubo.at(bandBase + 1) =
+                    std::clamp(high, shadowUnitLow, shadowUnitHigh);
+                ubo.at(bandBase + 2) =
+                    std::clamp(cueCenter, shadowUnitLow, shadowUnitHigh);
                 ubo.at(bandBase + 3) =
                     bandVisible ? (active ? 0.42f : 0.17f) : 0.0f;
                 const int styleBase = kShadowStylesOffset + shadowCount * 4;
@@ -13671,11 +14358,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // mark+space pair rather than a carrier cue; markerWidth == 0 draws
             // the passband with no cue at all.
             const auto appendShadow = [&](const SliceOverlay& so) {
+                const double shadowMarginMhz =
+                    static_cast<double>(shadowUnitMargin) * shadowBandwidthMhz;
                 if (shadowCount >= kDssMeshShadowSlices
                     || !std::isfinite(shadowBandwidthMhz)
                     || shadowBandwidthMhz <= 0.0
-                    || so.freqMhz < shadowStartMhz
-                    || so.freqMhz > shadowEndMhz) {
+                    || so.freqMhz < shadowStartMhz - shadowMarginMhz
+                    || so.freqMhz > shadowEndMhz + shadowMarginMhz) {
                     return;
                 }
                 float low = unitForShadowMhz(
@@ -13685,7 +14374,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 if (low > high) {
                     std::swap(low, high);
                 }
-                const bool bandVisible = !(high < 0.0f || low > 1.0f);
+                const bool bandVisible =
+                    !(high < shadowUnitLow || low > shadowUnitHigh);
 
                 struct ShadowCue { float center; QColor color; };
                 std::array<ShadowCue, 2> cues;
@@ -13713,7 +14403,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 std::array<ShadowCue, 2> visible;
                 int visibleCount = 0;
                 for (int i = 0; i < cueCount; ++i) {
-                    if (cues[i].center >= 0.0f && cues[i].center <= 1.0f) {
+                    if (cues[i].center >= shadowUnitLow
+                        && cues[i].center <= shadowUnitHigh) {
                         visible[visibleCount++] = cues[i];
                     }
                 }
@@ -14044,13 +14735,24 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         cb->draw(4);
     }
 
-    if (dssMeshOutlineRows > 0 && m_dssMeshLinePipeline && m_dssMeshSrb) {
+    QRhiGraphicsPipeline* outlinePipeline = dssOutlinePipelineFor(
+        m_dssOutlinePipelineMode, m_dssMeshFillPipeline, m_dssMeshLinePipeline);
+    if (dssMeshOutlineRows > 0 && outlinePipeline && m_dssMeshSrb) {
         const QRhiViewport vp(
             static_cast<float>(specRect.x()) * dpr,
             static_cast<float>(h - specRect.bottom() - 1) * dpr,
             static_cast<float>(specContentW) * dpr,
             static_cast<float>(specRect.height()) * dpr);
-        cb->setGraphicsPipeline(m_dssMeshLinePipeline);
+        // Reuse the working OpenGL fill program for ribbon outlines. Its blend
+        // state matches the dedicated outline pipeline; live probes isolated
+        // the flat/stale rows to the separate-program path.
+        //
+        // On the shared-fill path this rebind is deliberately a no-op: the fill
+        // draw above leaves m_dssMeshFillPipeline current, so QRhi skips the GL
+        // program switch and this draw inherits its state. Do not bind another
+        // pipeline between that draw and this one; doing so reintroduces the
+        // Linux-only flat-row failure that this path avoids.
+        cb->setGraphicsPipeline(outlinePipeline);
         cb->setShaderResources(m_dssMeshSrb);
         cb->setViewport(vp);
         const QRhiCommandBuffer::VertexInput vbuf(m_dssMeshLineVbo, 0);
@@ -14146,6 +14848,13 @@ void SpectrumWidget::render(QRhiCommandBuffer* cb)
     if (!m_rhiInitialized) {
         initialize(cb);
         if (!m_rhiInitialized) return;
+    }
+    if (m_rhiFailureForcedForAutomation) {
+        // Keep the widget on its production QRhi API. Mixing Null with Metal or
+        // D3D11 in one top-level window can crash Qt's backing-store compositor.
+        cb->beginPass(renderTarget(), Qt::black, {1.0f, 0});
+        cb->endPass();
+        return;
     }
     if (m_resizeBufferSettleTimer && m_resizeBufferSettleTimer->isActive()) {
         // Keep presenting fresh FFT/waterfall data into the last settled render
@@ -14243,18 +14952,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 {
     if (width() <= 0 || height() <= freqScaleH() + DIVIDER_H + 2) return;
 
-#ifdef AETHER_GPU_SPECTRUM
-    // GPU mode: render() handles everything via QRhi. Skip the full
-    // QPainter path to avoid redundant rendering + compositing overhead.
-    // This is the single biggest CPU optimization on macOS (100% → 20%).
-    if (m_rhiInitialized) {
-        SPECTRUM_BASE_CLASS::paintEvent(ev);
-        return;
-    }
-#endif
-
-    // panstats: software-path paint cost (GPU builds only reach here before
-    // QRhi init or after GPU teardown).
+    // panstats: software-path paint cost. These counters are written only here,
+    // so they are meaningful only in an AETHER_GPU_SPECTRUM=OFF build — a GPU
+    // build never compiles this function and reports 0.
     m_panStats.paintEvents++;
     struct PaintCost {
         quint64& acc;
@@ -14860,6 +15560,31 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         }
         p.setRenderHint(QPainter::Antialiasing, false);
     }
+
+    // Draw KiwiSDR DX Community spots (cyan diamonds)
+    if (m_showKiwiDxSpots) {
+        const auto& kiwiSpots = m_bandPlanMgr ? m_bandPlanMgr->kiwiDxSpots()
+                                               : QVector<BandPlanManager::KiwiDxSpot>{};
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QColor kiwiColor = AetherSDR::ThemeManager::instance().color("color.accent.bright");
+        p.setPen(QPen(kiwiColor, 1));
+        QColor fill = kiwiColor;
+        fill.setAlpha(220);
+        p.setBrush(fill);
+        const int cy = bandY + bandH / 2;
+        for (const auto& spot : kiwiSpots) {
+            if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) continue;
+            const int sx = mhzToX(spot.freqMhz);
+            const QPoint points[4] = {
+                QPoint(sx, cy - 4),
+                QPoint(sx + 4, cy),
+                QPoint(sx, cy + 4),
+                QPoint(sx - 4, cy)
+            };
+            p.drawPolygon(points, 4);
+        }
+        p.setRenderHint(QPainter::Antialiasing, false);
+    }
 }
 
 // ─── TNF markers ────────────────────────────────────────────────────────────
@@ -14923,6 +15648,19 @@ void SpectrumWidget::clearSwrSweepPoints()
     m_swrSweepCurrentFreqMhz = -1.0;
     m_swrSweepSourceLabel.clear();
     markOverlayDirty();
+}
+
+void SpectrumWidget::setNotchCapabilities(int maxNotches, bool hasDepth,
+                                          int minWidthHz, int maxWidthHz)
+{
+    m_maxNotchFilters = std::max(0, maxNotches);
+    m_notchHasDepth = hasDepth;
+    // Guard the ordering rather than trusting it: these come from a backend,
+    // and an inverted pair would make std::clamp in the drag path undefined.
+    if (minWidthHz > 0 && maxWidthHz > minWidthHz) {
+        m_notchMinWidthHz = minWidthHz;
+        m_notchMaxWidthHz = maxWidthHz;
+    }
 }
 
 void SpectrumWidget::setTnfGlobalEnabled(bool on)
@@ -15115,6 +15853,27 @@ int SpectrumWidget::tnfAtPixel(int x, int preferredId) const
 
 static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm)
 {
+    if (sm.source == QStringLiteral("EiBi")) {
+        QString tip = QStringLiteral("<b>%1</b> &nbsp;<b>%2 MHz</b>")
+            .arg(sm.callsign.toHtmlEscaped())
+            .arg(sm.freqMhz, 0, 'f', 4);
+
+        if (!sm.comment.isEmpty()) {
+            const QStringList parts = sm.comment.split(QStringLiteral(" | "));
+            QStringList lines;
+            lines.reserve(parts.size());
+            for (const QString& part : parts) {
+                lines << part.toHtmlEscaped();
+            }
+            if (!lines.isEmpty()) {
+                tip += QStringLiteral("<br>") + lines.join(QStringLiteral("<br>"));
+            }
+        }
+        tip += QStringLiteral("<br><small style='color:%1;'>Source: EiBi Shortwave Schedules (eibispace.de)</small>")
+                   .arg(AetherSDR::ThemeManager::instance().color(QStringLiteral("color.text.label")).name());
+        return tip;
+    }
+
     QString tip = QString("<b>%1</b>  %2 MHz").arg(sm.callsign).arg(sm.freqMhz, 0, 'f', 4);
     if (!sm.source.isEmpty())
         tip += QString("<br>Source: %1").arg(sm.source);

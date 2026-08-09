@@ -10,6 +10,7 @@
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QVector>
 #include <QtGlobal>
@@ -355,6 +356,91 @@ static void testAliasDial()
     CHECK(tx.size() == txBefore, "frames to an unrelated callsign are ignored");
 }
 
+// The mailbox serves ONE caller at a time and answers every other SABM with DM,
+// so a caller who connects and then wanders off used to lock it out for the
+// whole channel indefinitely: with nothing outstanding T1 is stopped, and
+// nothing else ever reclaimed the session.
+static void testSessionIdleTimeoutFreesMailbox()
+{
+    PmsMailbox pms;
+    pms.setVersionString(QStringLiteral("test"));
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setEnabled(true);
+    pms.setSessionIdleTimeoutMs(1000);
+    // The hangup is a graceful DISC, so the session ends only once that DISC is
+    // acknowledged or its own retry budget runs out. That is bounded (which was
+    // the whole point — the old behaviour was unbounded), but on real timers the
+    // bound is N2 x T1 ~ 37 s. Shrink both so the test observes the same path
+    // quickly rather than testing a different one.
+    pms.setRetryTimeoutMs(1000);
+    pms.setMaxRetries(1);
+
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+
+    pms.onAirFrame(Frame::makeU(local, peer, FrameType::SABM, true, true).encode());
+    CHECK(pms.isCallerConnected(), "caller connected");
+    CHECK(pms.sessionIdleTimerActive(), "the inactivity clock starts with the session");
+
+    // The caller now goes silent. Spin until the mailbox reclaims itself.
+    QDeadlineTimer deadline(4000);
+    while (pms.isCallerConnected() && !deadline.hasExpired())
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+
+    CHECK(!pms.isCallerConnected(), "an abandoned session is reclaimed instead of held forever");
+    bool sawDisc = false;
+    for (const QByteArray& f : tx) {
+        auto d = Frame::decode(f);
+        if (d && d->type == FrameType::DISC)
+            sawDisc = true;
+    }
+    CHECK(sawDisc, "the mailbox hangs up gracefully with DISC rather than just forgetting");
+    CHECK(!pms.sessionIdleTimerActive(), "the clock stops once the session is gone");
+}
+
+// A peer that never sends a line terminator (a stuck TNC, or noise decoded off
+// the channel) must not be able to grow the inbound buffer without bound.
+static void testOverlongInputIsDiscarded()
+{
+    PmsMailbox pms;
+    pms.setVersionString(QStringLiteral("test"));
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setEnabled(true);
+
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    Peer p{&pms, local, peer, &tx, 0, 0};
+
+    pms.onAirFrame(Frame::makeU(local, peer, FrameType::SABM, true, true).encode());
+    p.drainText(); // greeting
+
+    // Feed 16 KB with no CR anywhere.
+    const QByteArray junk(200, 'X');
+    for (int i = 0; i < 80; ++i)
+        p.send(junk);
+
+    const QString out = p.drainText();
+    CHECK(out.contains(QLatin1String("too long")),
+          "the mailbox tells the caller the input was discarded");
+    CHECK(pms.isCallerConnected(),
+          "the link survives — the line was nonsense, not the session");
+
+    // A normal command still works afterwards.
+    p.send(QByteArrayLiteral("H\r"));
+    const QString help = p.drainText();
+    CHECK(help.contains(QLatin1String("HELP")) || help.contains(QLatin1String("Commands"))
+              || !help.isEmpty(),
+          "the mailbox still answers commands after discarding a runaway line");
+}
+
 int main(int argc, char** argv)
 {
     // Isolate AppSettings / PMS storage from the real user config so the test is
@@ -378,6 +464,8 @@ int main(int argc, char** argv)
     testHalfDuplexWindowOneDrainsMultiFrame();
     testMailbox();
     testAliasDial();
+    testSessionIdleTimeoutFreesMailbox();
+    testOverlongInputIsDiscarded();
 
     if (g_failures == 0) {
         std::printf("All PMS mailbox tests passed.\n");

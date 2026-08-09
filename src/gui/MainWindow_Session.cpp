@@ -581,14 +581,24 @@ void MainWindow::wireRadioModel()
         // it says so AND is actually allowed to transmit. An RX-only (or
         // transmit-blocked) backend must not open the mic / lock PC audio. (#4449)
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
-        const bool hostModulates = caps.hostModulates && caps.canTransmit;
-        m_audio->setHostModulation(hostModulates && connected);
+        // TWO DIFFERENT QUESTIONS, and they were one flag until an Icom proved
+        // they are not. `hostModulates` is "does the HOST run the modulator";
+        // takesTxAudioOverSeam is "does transmit audio leave through the seam".
+        // An Icom answers no to the first and YES to the second — its own
+        // firmware modulates, from PCM this computer captures and ships.
+        //
+        // Everything below is about the AUDIO, so all of it keys off the
+        // second. Gating it on the first meant an Icom captured nothing,
+        // processed nothing and emitted nothing: the radio keyed and put no
+        // modulation on the air.
+        const bool seamTxAudio = caps.takesTxAudioOverSeam && caps.canTransmit;
+        m_audio->setHostModulation(seamTxAudio && connected);
         // PC audio is not optional on a host-modulating backend: all audio, both
         // directions, lives on this computer. Turning it off would leave the
         // operator deaf and mute with nothing to explain it.
         if (m_titleBar)
-            m_titleBar->setPcAudioLocked(connected && hostModulates);
-        if (connected && hostModulates) {
+            m_titleBar->setPcAudioLocked(connected && seamTxAudio);
+        if (connected && seamTxAudio) {
             if (!m_audio->isTxStreaming())
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             // RX must be started imperatively, exactly like TX. Locking the
@@ -602,13 +612,22 @@ void MainWindow::wireRadioModel()
             AppSettings::instance().setValue("PcAudioEnabled", "True");
             AppSettings::instance().save();
             audioStartRx();
-        } else if (!connected && hostModulates) {
+        } else if (!connected && seamTxAudio) {
             audioStopTx();
         }
     });
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    // Radio configuration advice: shown, but it does NOT touch the session.
+    // Deliberately not onConnectionError — see IRadioBackend::configurationWarning.
+    // 15 s rather than the usual 4: this one names a four-level menu path the
+    // operator has to walk on the radio's front panel while reading it.
+    connect(&m_radioModel, &RadioModel::configurationWarning,
+            this, [this](const QString& message) {
+        qCWarning(lcProtocol).noquote() << "radio configuration:" << message;
+        statusBar()->showMessage(message, 15000);
+    });
     connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
             this, [this](const QString& message) {
         // A rejected GUI registration is terminal for this attempt. Keep the
@@ -867,8 +886,32 @@ void MainWindow::wireRadioModel()
 #endif
     // Sync PC mic gain directly from slider. In RADE mode, the radio's mic input
     // is unused — the slider controls client-side gain regardless of mic_selection.
+    //
+    // EXCEPT on a backend that modulates on this host, where the SAME slider
+    // already reaches Hl2TxDsp's pre-ALC gain through TransmitModel::setMicLevel
+    // and the seam bridge in RadioModel. Letting both run would apply the
+    // operator's gain TWICE, in series, which is not what a slider labelled once
+    // can mean. The modulator's is the one to keep: setPcMicGain only ever
+    // attenuates (0..100 maps to 0.0..1.0, and AudioEngine skips it entirely at
+    // unity), while the ALC behind the modulator needs the mic pushed UP past
+    // its hold threshold — see Hl2Backend::setMicGain.
+    //
+    // This gate is also why the control was dead rather than doubled before now:
+    // micSelection() is "MIC" until a radio reports otherwise, and an HL2 has no
+    // command plane to report it, so neither branch of the old condition ever
+    // ran and neither did the modulator's — the slider reached nothing at all.
+    //
+    // Through hostModulatesTxAudio() rather than reading caps.hostModulates
+    // bare: that helper is `hostModulates && canTransmit`, which is the form
+    // every other site in this file uses (see the connection-edge handler
+    // above) and the one QsoRecordStartPolicy.h names as canonical. A backend
+    // declaring hostModulates without canTransmit would otherwise lose the PC
+    // path here and get nothing back, since RadioModel's seam would be pushing
+    // gain into a modulator that can never key.
     connect(m_appletPanel->phoneCwApplet(), &PhoneCwApplet::micLevelChanged,
             this, [this](int level) {
+        if (hostModulatesTxAudio())
+            return;
         if (m_radioModel.transmitModel().micSelection() == "PC" || m_audio->isRadeMode()) {
             m_audio->setPcMicGain(level);
             auto& s = AppSettings::instance();
@@ -1441,7 +1484,9 @@ void MainWindow::wirePanLifecycle()
             // DisplaySourceTraceSettings; do not reapply legacy flat keys here.
             sw->setSpectrumRenderMode(
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
-            sw->setDssGain(
+            // Principle V: one owned object, re-applied as a unit. The legacy
+            // flat gain key only seeds it when nothing has been written yet.
+            sw->loadDisplay3DSettings(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
         }
     });
@@ -1468,6 +1513,7 @@ void MainWindow::wirePanLifecycle()
                 menu->setRadioCapabilities(m_radioModel.capabilities());
                 menu->setDeclaredBands(m_radioModel.declaredBands());
                 applyTuningRangeToOverlayMenu(menu);
+                applyNotchCapabilities(sw);
                 applyRadioSideDspToPanDisplay(sw);
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
@@ -1562,6 +1608,41 @@ void MainWindow::wirePanLifecycle()
             applet->spectrumWidget()->setRfGain(gain);
             applet->spectrumWidget()->overlayMenu()->setRfGain(gain);
         });
+        // Discrete front-end stages. Model -> menu for the description and the
+        // current position; menu -> model for the operator's request. The menu
+        // never sets its own state from a click — see the cycle lambda there.
+        connect(pan, &PanadapterModel::preampLabelsChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setPreampLabels);
+        connect(pan, &PanadapterModel::preampStepChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setPreampStep);
+        connect(pan, &PanadapterModel::attenuatorLabelsChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setAttenuatorLabels);
+        connect(pan, &PanadapterModel::attenuatorStepChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setAttenuatorStep);
+        connect(applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::preampStepChanged,
+                this, [this, panId = pan->panId()](int step) {
+            m_radioModel.setPanPreampFor(panId, step);
+        });
+        connect(applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::attenuatorStepChanged,
+                this, [this, panId = pan->panId()](int step) {
+            m_radioModel.setPanAttenuatorFor(panId, step);
+        });
+        // Seed from whatever the model already holds: this wiring can run after
+        // the backend has published, and a control built empty would stay empty
+        // until the operator moved something on the radio.
+        applet->spectrumWidget()->overlayMenu()->setRfGainRange(
+            pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
+            pan->rfGainUnitSuffix());
+        applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
+        applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
+        applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
+        applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and
@@ -2196,6 +2277,10 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
     m_automation->setSliceReceiveSourceHandler(
         [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
+    m_automation->setModemAutomationHandler(
+        [this](const QString& verb, const QString& action, const QString& value) {
+            return automationModemCommand(verb, action, value);
+        });
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
     m_automation->setSliceLinkHandler(

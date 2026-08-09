@@ -16,12 +16,38 @@ jobs:
         include:
           - runner: ubuntu-22.04
             arch: x86_64
-            use_aqt: true
+            qt_host: linux
+            qt_arch: linux_gcc_64
             require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
+            gpu_spectrum: 'ON'  # unchanged: Qt 6.8.3 already enabled it here
+            glslc_source: lunarg
+          # Stays on noble, and must. Qt builds its linux_arm64 desktop binaries
+          # on Ubuntu 24.04 (the packages are literally named
+          # Linux-Ubuntu_24_04-GCC-...-AARCH64), and the shipped libQt6Gui.so.6
+          # requires GLIBC_2.38 — verified with readelf on the downloaded 6.8.3
+          # arm64 tree. Jammy is 2.35, so building this Qt there cannot work.
+          # The x86_64 leg above CAN sit on jammy because Qt builds its x64
+          # binaries against an older base; the asymmetry is Qt's, not ours.
           - runner: ubuntu-24.04-arm
             arch: aarch64
-            use_aqt: false
-            require_gpu: 'OFF'  # ARM/Pi ships CPU-only (no Vulkan expected)
+            qt_host: linux_arm64
+            qt_arch: linux_gcc_arm64
+            # require_gpu is the RELEASE GUARD, not the enable switch: it makes a
+            # missing GPU toolchain fatal at configure time. ENABLE_ASR_VULKAN
+            # defaults ON on non-Apple, so aarch64 has been building ggml-vulkan
+            # all along from noble's own glslc — the v26.7.4.1 release log says
+            # "ASR: Vulkan GPU backend enabled (glslc: /bin/glslc)". It stays OFF
+            # here only because arm64 GPU support is best-effort: whether any
+            # given ARM host has a Vulkan driver worth using is not something a
+            # release should hard-fail on. Do not read this as "no Vulkan".
+            require_gpu: 'OFF'  # best-effort ASR GPU on ARM, not a hard requirement
+            # QRhi spectrum rendering, ON deliberately. It was impossible on
+            # aarch64 until now purely because Ubuntu's Qt 6.4.2 sits below the
+            # 6.7 QRhiWidget floor — the CPU QPainter fallback was a symptom of
+            # the stale Qt, not a choice about ARM. Qt 6.8.3 clears that floor,
+            # so the Pi gets the same renderer as every other platform.
+            gpu_spectrum: 'ON'
+            glslc_source: apt
 
     runs-on: ${{ matrix.runner }}
 
@@ -42,8 +68,8 @@ jobs:
       # x86_64 stays on jammy deliberately: it keeps the AppImage's glibc floor
       # low enough for older distros, so bumping the runner would trade this
       # breakage for a wider, quieter one.
-      - name: Add LunarG Vulkan SDK repository (Ubuntu 22.04)
-        if: matrix.runner == 'ubuntu-22.04'
+      - name: Add LunarG Vulkan SDK repository (jammy)
+        if: matrix.glslc_source == 'lunarg'
         run: |
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
             | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc > /dev/null
@@ -53,14 +79,33 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
+          # libgstreamer-plugins-bad1.0-0 is here for libgstplay-1.0.so.0, which
+          # Qt's own multimedia backend plugin links. It looks like an odd thing
+          # for this app to need, and it is arch-asymmetric for a reason worth
+          # writing down: Qt builds its linux_arm64 binaries on Ubuntu 24.04
+          # against GStreamer 1.24, whose libgstreamermediaplugin.so pulls in
+          # libgstplay; the linux_gcc_64 binaries are built on RHEL 8.10 against
+          # an older GStreamer that has no such dependency. So linuxdeploy's
+          # dependency walk dies with "Could not find dependency:
+          # libgstplay-1.0.so.0" on aarch64 only, while x86_64 sails through.
+          #
+          # That became reachable when #4670 moved aarch64 onto aqt Qt 6.8.3, and
+          # stayed invisible because this workflow runs only on tag pushes and
+          # workflow_dispatch — the first dispatch after #4670 (on the #4692
+          # merge commit) is what surfaced it. Installed on both legs: the
+          # package exists on jammy and noble alike, and one shared list beats a
+          # conditional that has to be revisited every time the matrix moves.
+          # On x86_64 it is a runner-side no-op — linuxdeploy bundles only what
+          # the deployed ELFs actually link, and nothing there links libgstplay.
           sudo apt-get install -y cmake ninja-build pkg-config \
             libvulkan-dev spirv-headers \
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
             libxcb-render-util0 libxcb-xinerama0 libxcb-randr0 libxcb-xfixes0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-            gstreamer1.0-pulseaudio gstreamer1.0-gl \
+            gstreamer1.0-alsa gstreamer1.0-pulseaudio gstreamer1.0-gl \
             libgstreamer-gl1.0-0 libgstreamer-plugins-base1.0-0 \
+            libgstreamer-plugins-bad1.0-0 \
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
             libfftw3-dev libhidapi-dev portaudio19-dev
@@ -76,14 +121,23 @@ jobs:
       #
       # This workflow only runs on tag pushes, so a break here is invisible
       # until release day — hence the explicit assertions on both legs.
-      - name: Install glslc (Ubuntu 24.04+)
-        if: matrix.runner != 'ubuntu-22.04'
+      #
+      # BOTH legs need glslc; only the source differs, which is what the
+      # glslc_source matrix key names. Gating on the runner label instead made
+      # `!= 'ubuntu-22.04'` a proxy for "noble" that holds only by accident of
+      # the current matrix and breaks the moment another jammy-family runner is
+      # added. Do NOT gate this on require_gpu: that flag is the release guard
+      # (fatal-if-missing), not the enable switch — ENABLE_ASR_VULKAN defaults
+      # ON everywhere non-Apple, so gating glslc on require_gpu would silently
+      # drop ggml-vulkan from the aarch64 AppImage with a green build.
+      - name: Install glslc from apt (noble and newer)
+        if: matrix.glslc_source == 'apt'
         run: |
           sudo apt-get install -y glslc
           glslc --version
 
-      - name: Install glslc + SDK headers from LunarG (Ubuntu 22.04)
-        if: matrix.runner == 'ubuntu-22.04'
+      - name: Install glslc + SDK headers from LunarG (jammy)
+        if: matrix.glslc_source == 'lunarg'
         run: |
           sudo apt-get install -y shaderc vulkan-headers
           glslc --version
@@ -96,25 +150,74 @@ jobs:
           grep -q 'VK_EXT_pipeline_robustness' /usr/include/vulkan/vulkan_core.h \
             || { echo "ERROR: Vulkan headers predate VK_EXT_pipeline_robustness — ggml-vulkan will not build"; exit 1; }
 
-      - name: Install system Qt (ARM only)
-        if: matrix.use_aqt == false
-        run: |
-          sudo apt-get install -y qt6-base-dev qt6-multimedia-dev \
-            qt6-websockets-dev qt6-serialport-dev qt6-base-private-dev \
-            qt6-shader-baker qt6-shadertools-dev \
-            libhidapi-dev portaudio19-dev libfftw3-dev
-
-      - name: Install Qt 6.8 LTS via aqtinstall (x86_64)
-        if: matrix.use_aqt == true
+      # Both arches now take aqt. aarch64 used to build against the distro's Qt
+      # because, when the split landed (49ea8a50, 2026-03), Qt published no
+      # prebuilt ARM64 Linux binaries — the commit says exactly that. Qt has
+      # shipped linux_arm64 desktop builds since 6.7, so the reason expired and
+      # nobody re-checked: aarch64 was still on Ubuntu's Qt 6.4.2 while every
+      # other artifact shipped 6.8.3, and README's "Release binaries ship Qt
+      # 6.8.3 LTS" was simply untrue for the Pi build.
+      #
+      # 6.8.7 is not reachable here: Qt's 6.8 LTS goes commercial-only after
+      # 6.8.3, so 6.8.4 is source-only and 6.8.5+ are not published to the open
+      # -source repo at all. 6.8.3 is the newest 6.8 LTS with prebuilt binaries
+      # under the open-source licence, which is what every other artifact pins.
+      #
+      # The aarch64 AppImage's glibc floor has two contributors. Qt sets the hard
+      # lower bound: the arm64 6.8.3 tree needs GLIBC_2.38 (readelf -V on the
+      # shipped libQt6Gui.so.6), so no runner choice can take it below that. The
+      # app's own objects then link against the builder's glibc on top, so the
+      # artifact assembled on noble floors at 2.39. Target check against that: Pi
+      # OS Trixie is glibc 2.41 (Debian 13, Mesa 25.0.7) and runs it; Pi OS
+      # Bookworm is 2.36 and cannot. Bookworm is not a regression here — today's
+      # aarch64 AppImage already builds on noble and already floors at 2.39 — but
+      # it does mean Trixie is the supported Pi baseline, and that should stay
+      # true when this Qt pin moves.
+      - name: Install Qt 6.8.3 LTS via aqtinstall
         run: |
           pip3 install aqtinstall
-          aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
+          # No qtwayland entry, deliberately: it rides in the BASE package.
+          # qt.qt6.683.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
+          # next to qtbase, so this install already lays down
+          # plugins/platforms/libqwayland-generic.so, libqwayland-egl.so and the
+          # three wayland-* integration dirs. There is no "qtwayland" module in
+          # the 6.8.3 repository at all — only qtwaylandcompositor — and aqt
+          # hard-errors on an unknown module ("The packages ['qtwayland'] were
+          # not found"), so naming one here fails the whole release build.
+          #
+          # #1389 — QT_QPA_PLATFORM=wayland aborting with "no Qt platform plugin
+          # could be initialized" — was therefore never a missing module. The
+          # plugin was in this tree and simply never DEPLOYED:
+          # linuxdeploy-plugin-qt copies platforms/libqxcb.so and nothing else
+          # unless EXTRA_PLATFORM_PLUGINS says otherwise. That is fixed in the
+          # AppImage steps below.
+          aqt install-qt ${{ matrix.qt_host }} desktop 6.8.3 ${{ matrix.qt_arch }} \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir ${{ github.workspace }}/Qt
-          echo "Qt6_DIR=${{ github.workspace }}/Qt/6.8.3/gcc_64/lib/cmake/Qt6" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64" >> $GITHUB_ENV
-          echo "PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/bin:$PATH" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          # aqt lays the install down under <version>/<arch minus the host
+          # prefix>: linux_gcc_64 -> gcc_64, linux_gcc_arm64 -> gcc_arm64.
+          # Derive it instead of hardcoding — FOUR separate steps used to spell
+          # out ".../Qt/6.8.3/gcc_64" by hand, so flipping aarch64 onto aqt
+          # without catching all four would have pointed the ARM build at an
+          # x86_64 Qt. QT_ROOT is exported once and reused everywhere below.
+          QT_DIR="${{ matrix.qt_arch }}"
+          QT_ROOT="${{ github.workspace }}/Qt/6.8.3/${QT_DIR#linux_}"
+          # Assert the layout rather than trusting it: a silently-wrong QT_ROOT
+          # would sail through configure (system Qt would satisfy it) and only
+          # show up as a subtly mis-deployed AppImage.
+          if [ ! -x "$QT_ROOT/bin/qmake" ]; then
+            echo "ERROR: no qmake at $QT_ROOT — aqt layout changed"
+            ls -la "${{ github.workspace }}/Qt/6.8.3/" || true
+            exit 1
+          fi
+          {
+            echo "QT_ROOT=$QT_ROOT"
+            echo "Qt6_DIR=$QT_ROOT/lib/cmake/Qt6"
+            echo "CMAKE_PREFIX_PATH=$QT_ROOT"
+            echo "PATH=$QT_ROOT/bin:$PATH"
+            echo "LD_LIBRARY_PATH=$QT_ROOT/lib:$LD_LIBRARY_PATH"
+          } >> "$GITHUB_ENV"
+          "$QT_ROOT/bin/qmake" -query QT_VERSION
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -145,10 +248,11 @@ jobs:
 
       - name: Configure
         run: |
-          CMAKE_EXTRA=""
-          if [ "${{ matrix.use_aqt }}" = "true" ]; then
-            CMAKE_EXTRA="-DCMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64"
-          fi
+          # Without pipefail the step's exit status is tee's, so a cmake failure
+          # would look green. Set it in the script rather than via `shell: bash`
+          # (which also implies -eo pipefail) so the guard is self-contained and
+          # survives anyone editing the step's shell.
+          set -o pipefail
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
@@ -157,9 +261,28 @@ jobs:
             -DREQUIRE_ASR_ONNX=ON \
             -DREQUIRE_ASR_SHERPA=ON \
             -DREQUIRE_ASR_GPU=${{ matrix.require_gpu }} \
+            -DAETHER_GPU_SPECTRUM=${{ matrix.gpu_spectrum }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
-            $CMAKE_EXTRA
+            -DCMAKE_PREFIX_PATH="$QT_ROOT" 2>&1 | tee configure.log
+
+      # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake silently
+      # flips it back OFF if Qt6GuiPrivate can't be located, and CMakeLists.txt
+      # calls out aqtinstall by name as a layout that ships the private QtGui
+      # headers on disk while omitting the Qt6GuiPrivate CMake package — which
+      # is exactly what both legs of this matrix now use. Without this check a
+      # release could quietly ship the CPU QPainter fallback while the workflow
+      # stayed green, which is the failure mode this repo keeps getting bitten
+      # by. Assert on the configure output instead of trusting the flag.
+      - name: Assert GPU spectrum rendering actually enabled
+        if: matrix.gpu_spectrum == 'ON'
+        run: |
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -i "GPU spectrum\|Qt6GuiPrivate\|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering enabled" configure.log
 
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(nproc)
@@ -184,22 +307,63 @@ jobs:
               AppDir/usr/bin/
           fi
 
-          # Bundle Qt6 multimedia backend plugin
-          if [ "${{ matrix.use_aqt }}" = "true" ]; then
-            QT_PLUGIN_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/plugins
-          else
-            QT_PLUGIN_PATH=$(qmake6 -query QT_INSTALL_PLUGINS 2>/dev/null || echo "/usr/lib/$(uname -m)-linux-gnu/qt6/plugins")
-          fi
+          # Bundle Qt6 multimedia backend plugin. Fourth and last site that
+          # hardcoded the x86_64 Qt path; now derived from QT_ROOT like the rest.
+          QT_PLUGIN_PATH="$QT_ROOT/plugins"
           mkdir -p AppDir/usr/plugins/multimedia
-          cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/ 2>/dev/null || true
+          # No `|| true` here. This used to swallow every failure, so a wrong
+          # plugin path produced an AppImage with no multimedia backend and a
+          # green build — audio would simply not work for users. If the plugins
+          # are missing, that is a broken release and the job should say so.
+          cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/
 
-          # Bundle essential GStreamer plugins for audio
+          # Bundle the Wayland client buffer integration. QT_QPA_PLATFORM=wayland
+          # resolves to platforms/libqwayland-generic.so (qwayland-generic.json
+          # declares Keys: ["wayland"]; the EGL *platform* plugin's key is
+          # "wayland-egl", so that name never selects it), and the generic plugin
+          # obtains OpenGL only through a client buffer integration plugin loaded
+          # from this directory — libqt-plugin-wayland-egl.so. Without it native
+          # Wayland comes up with no GL at all, which matters because both legs
+          # ship AETHER_GPU_SPECTRUM=ON.
+          #
+          # It is staged by hand because no linuxdeploy variable reaches this
+          # directory: EXTRA_PLATFORM_PLUGINS covers platforms/ and makes
+          # linuxdeploy auto-deploy wayland-decoration-client and
+          # wayland-shell-integration, but not this one. Copying it here, before
+          # linuxdeploy runs, also gets its NEEDED libs resolved by the same
+          # dependency walk that handles everything else in the AppDir.
+          mkdir -p AppDir/usr/plugins/wayland-graphics-integration-client
+          cp -v "$QT_PLUGIN_PATH"/wayland-graphics-integration-client/* \
+            AppDir/usr/plugins/wayland-graphics-integration-client/
+
+          # Bundle essential GStreamer plugins for audio. linuxdeploy's dependency
+          # walk pulls the GStreamer *core* into the AppDir off Qt's media backend
+          # plugin, so that bundled core is what resolves elements at runtime, not
+          # the host's. An element missing from this directory is an element the
+          # app does not have, on any host.
+          #
+          # No `2>/dev/null || true`, for the reason the multimedia backend copy
+          # above already dropped it: a silent miss ships a green build with
+          # broken audio. That was not hypothetical here. libgstalsa.so has been
+          # named in this list from the start, but `gstreamer1.0-alsa` was never
+          # in the apt list above, so the copy failed on every run and every
+          # release to date shipped with pulsesink as its only output sink — no
+          # ALSA fallback on hosts without PulseAudio or pipewire-pulse, which is
+          # a normal configuration on the headless ARM targets. Fixed by adding
+          # the package; kept fixed by letting a miss fail the job. See #4712.
           GST_PATH=$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || echo "/usr/lib/$(uname -m)-linux-gnu/gstreamer-1.0")
           mkdir -p AppDir/usr/lib/gstreamer-1.0
-          for p in libgstpulseaudio.so libgstpipewiresrc.so libgstalsa.so libgstaudioconvert.so \
-                   libgstaudioresample.so libgstautodetect.so libgstcoreelements.so libgsttypefindfunctions.so; do
-            cp -v "$GST_PATH/$p" AppDir/usr/lib/gstreamer-1.0/ 2>/dev/null || true
+          for p in libgstcoreelements.so libgsttypefindfunctions.so libgstaudioconvert.so \
+                   libgstaudioresample.so libgstautodetect.so libgstpulseaudio.so \
+                   libgstalsa.so; do
+            cp -v "$GST_PATH/$p" AppDir/usr/lib/gstreamer-1.0/
           done
+          # pipewiresrc is the one genuine maybe, so it stays tolerant but noisy:
+          # it is a capture source rather than a sink, PipeWire hosts already get
+          # pulsesrc/pulsesink through pipewire-pulse, and gstreamer1.0-pipewire
+          # is deliberately not in the apt list. A line in the log beats silence.
+          cp -v "$GST_PATH/libgstpipewiresrc.so" AppDir/usr/lib/gstreamer-1.0/ || \
+            echo "note: libgstpipewiresrc.so absent; PipeWire hosts use pulsesrc via pipewire-pulse"
 
       - name: Download linuxdeploy + Qt plugin
         run: |
@@ -210,7 +374,19 @@ jobs:
       - name: Build AppImage
         env:
           QT_SELECT: qt6
+          # EXTRA_QT_PLUGINS is the deprecated alias of EXTRA_QT_MODULES and
+          # takes Qt *module* names, matched against linuxdeploy-plugin-qt's
+          # fixed table in src/qt-modules.h. Plugin *directory* names put here
+          # match nothing and are dropped without a warning, so it cannot reach
+          # platforms/ — the platform plugin has its own variable.
           EXTRA_QT_PLUGINS: multimedia
+          # This is what deploys the Wayland platform plugin (#1389): without it
+          # PlatformPluginsDeployer copies platforms/libqxcb.so and stops. Naming
+          # a libqwayland* plugin here additionally makes linuxdeploy deploy
+          # wayland-decoration-client and wayland-shell-integration on its own —
+          # only wayland-graphics-integration-client has to be staged by hand,
+          # which the "Install to AppDir" step above does.
+          EXTRA_PLATFORM_PLUGINS: libqwayland-generic.so;libqwayland-egl.so
         run: |
           # Sanitize the ref for the output filename: a workflow_dispatch on a
           # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
@@ -219,11 +395,11 @@ jobs:
           # sanitization windows-installer.yml already applies.
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
           export LDAI_OUTPUT="AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
-          if [ "${{ matrix.use_aqt }}" = "true" ]; then
-            export QMAKE=${{ github.workspace }}/Qt/6.8.3/gcc_64/bin/qmake
-          else
-            export QMAKE=$(which qmake6 2>/dev/null || which qmake)
-          fi
+          # linuxdeploy-plugin-qt locates the Qt to bundle via $QMAKE. This is
+          # the third place that used to hardcode the x86_64 ".../gcc_64" path;
+          # it now reuses the QT_ROOT exported by the aqt step, so there is one
+          # source of truth for which Qt gets built AND deployed.
+          export QMAKE="$QT_ROOT/bin/qmake"
           # Let linuxdeploy resolve + bundle the NEEDED libs staged under
           # third_party (outside the standard search path): libqt6keychain.so,
           # libsherpa-onnx-c-api.so, and libonnxruntime.so (the app links sherpa's
@@ -236,6 +412,62 @@ jobs:
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             --output appimage
+
+      # Nothing else in the build would notice these plugins going missing: Qt
+      # dlopen()s them at runtime rather than linking them, so no dependency walk
+      # covers them and the AppImage packages happily without them. That is
+      # exactly how #1389 shipped — the platform plugin sat unused in the Qt tree
+      # while linuxdeploy deployed libqxcb.so and nothing else.
+      #
+      # This is a quality gate, not a safety gate. src/main.cpp now asks for
+      # "wayland;xcb", so a missing plugin costs the Wayland improvement and
+      # falls back to XWayland rather than failing to start. Failing the build
+      # is still right — silently reverting to the old behaviour while the
+      # release notes claim native Wayland is worse than a red run.
+      - name: Assert the Wayland plugins were bundled
+        run: |
+          plugins="AppDir/usr/plugins"
+          fail=0
+          # Anchored to platforms/ deliberately: a libqwayland*.so sitting
+          # anywhere else in the AppDir is not something Qt can load. The `||
+          # true` keeps a missing directory from killing the step under `bash -e`
+          # before it can print why.
+          platform=$(find "$plugins/platforms" -maxdepth 1 -name 'libqwayland*.so' 2>/dev/null | sort || true)
+          if [ -z "$platform" ]; then
+            echo "ERROR: no Wayland platform plugin in $plugins/platforms — the"
+            echo "AppImage would silently fall back to XWayland (the #1389 shape)."
+            echo "EXTRA_PLATFORM_PLUGINS is what deploys it."
+            fail=1
+          else
+            echo "Wayland platform plugin(s):"
+            echo "$platform"
+          fi
+          # The generic platform plugin gets OpenGL only through this one, and no
+          # linuxdeploy variable deploys it — the "Install to AppDir" step stages
+          # it by hand, so a typo there is silent without this check.
+          if [ ! -f "$plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so" ]; then
+            echo "ERROR: libqt-plugin-wayland-egl.so missing from"
+            echo "$plugins/wayland-graphics-integration-client — native Wayland"
+            echo "would come up with no OpenGL."
+            fail=1
+          fi
+          # linuxdeploy deploys these two itself, off the libqwayland* name in
+          # EXTRA_PLATFORM_PLUGINS. If a future linuxdeploy drops that special
+          # case, catch it here rather than in a bug report about undecorated
+          # windows.
+          for d in wayland-decoration-client wayland-shell-integration; do
+            if [ ! -d "$plugins/$d" ]; then
+              echo "ERROR: $plugins/$d missing"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "Qt plugin dirs actually deployed:"
+            find AppDir -type d \( -name platforms -o -name 'wayland-*' \) 2>/dev/null | sort || true
+            exit 1
+          fi
+          echo "Wayland integration plugin dirs:"
+          find "$plugins" -maxdepth 1 -type d -name 'wayland-*' | sort
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

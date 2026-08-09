@@ -13,7 +13,23 @@
 #include <string>
 #include <thread>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+// Only ever used to make the wisdom cache's temp filename unique per process.
+long long currentProcessId()
+{
+#ifdef _WIN32
+    return static_cast<long long>(_getpid());
+#else
+    return static_cast<long long>(::getpid());
+#endif
+}
 
 constexpr int kWdspChannelCount = 32;
 constexpr int kRxChannelType = 0;
@@ -56,15 +72,65 @@ void loadWisdomOnce()
     std::call_once(flag, [] { fftw_import_wisdom_from_filename(wisdomPath().c_str()); });
 }
 
-// Persist wisdom at process exit so EVERY plan measured during the run — not
-// just OpenChannel's, but also the ones SetRXAMode/SetRXABandpassFreqs build when
-// the mode or filter changes — is cached for the next run to import.
+// Write the wisdom cache NOW. Called at the end of open(), under g_setupMutex,
+// where the expensive PATIENT plans have just been measured.
+//
+// EAGER, not only at exit, because at-exit persistence turned out to persist
+// almost nothing. The process dies through Hl2EmergencyStop's handler, which
+// restores SIG_DFL and re-raises so the kill looks exactly like an unhandled
+// one — and an unhandled signal does not run std::atexit. Neither does a crash
+// or a Force Quit. Measured: connect (21 s of FFTW planning), SIGTERM the app,
+// relaunch, connect again — 21 s a SECOND time, with the cache file never
+// created. Every operator who has ever force-quit was paying first-run cost on
+// every run, which is what made a genuinely one-time expense feel permanent.
+//
+// A channel open is rare (connect, add panadapter, rate change) and this writes
+// ~10-50 KB, so paying it per open is not a cost worth optimizing. It runs on
+// the I/O thread, never the GUI thread.
+//
+// WRITE-THEN-RENAME, not a direct write, because this file is shared across
+// PROCESSES and g_setupMutex only serialises threads within one of them. An
+// app instance, a second app instance and the test suite (which ctest runs
+// -j8) all export to the same path, and fftw_export_wisdom_to_filename opens
+// with "w" — it truncates first, so two concurrent exporters leave a short
+// file, and a reader importing mid-write gets a partial one that FFTW rejects
+// WHOLESALE. Observed exactly that: a 48 KB cache came back as 13 KB after a
+// parallel test run, which is a cache that silently stopped working.
+//
+// rename(2) is atomic within a filesystem, so a reader sees either the old
+// complete file or the new complete file, and concurrent writers merely race
+// to be last. The temp name carries the pid so two exporters never share it.
+void exportWisdomNow()
+{
+    namespace fs = std::filesystem;
+    const fs::path final = wisdomPath();
+    const fs::path tmp = fs::path(final).concat(
+        ".tmp." + std::to_string(currentProcessId()));
+    if (!fftw_export_wisdom_to_filename(tmp.string().c_str())) {
+        // It opens with "w", so a failure part way through still leaves a SHORT
+        // file sitting next to the real cache. The name is per-process rather
+        // than per-call, so an unwritable cache directory keeps exactly one of
+        // them rather than accumulating — but a truncated wisdom file is a trap
+        // for whoever debugs this next, so do not leave one.
+        std::error_code rmEc;
+        fs::remove(tmp, rmEc);
+        return;
+    }
+    std::error_code ec;
+    fs::rename(tmp, final, ec);
+    if (ec)
+        fs::remove(tmp, ec);   // leave no debris behind a failed publish
+}
+
+// Persist at process exit as well, so plans measured OUTSIDE an open() —
+// SetRXAMode and SetRXABandpassFreqs build their own when the operator changes
+// mode or drags a filter edge — are cached too. Those are not worth a file
+// write each (a filter drag delivers them at ~30 Hz), so exit is the right
+// moment for them, on the runs where exit is reached at all.
 void armWisdomExportOnce()
 {
     static std::once_flag flag;
-    std::call_once(flag, [] {
-        std::atexit([] { fftw_export_wisdom_to_filename(wisdomPath().c_str()); });
-    });
+    std::call_once(flag, [] { std::atexit([] { exportWisdomNow(); }); });
 }
 
 int acquireChannelId()
@@ -319,10 +385,155 @@ bool WdspChannel::setShift(double shiftHz) noexcept
         // Running the stage at 0 Hz costs a pointless rotate per sample, so
         // switch it off when there is no offset to apply.
         SetRXAShiftRun(m_channelId, shiftHz != 0.0 ? 1 : 0);
+        m_shiftHz = shiftHz;
+        // The notch database tracks the shift separately and WDSP never links
+        // the two itself. Both reference clients set them together (Thetis
+        // radio.cs RXOsc sets SetRXAShiftFreq and RXANBPSetShiftFrequency on
+        // the same line); setting only the first leaves every notch offset by
+        // the shift, which stays invisible until someone tunes off centre.
+        applyNotchShift();
     }
-    m_shiftHz = shiftHz;
     endControlOperation();
     return true;
+}
+
+void WdspChannel::applyNotchShift() noexcept
+{
+    // Caller holds g_setupMutex.
+    //
+    // The SAME value the shift stage got, not a negation of it. Thetis sets
+    // both on one line from one variable (radio.cs RXOsc) for the same reason:
+    // the notch database is not a second opinion about the shift, it is the
+    // copy the filter-mask rebuild reads.
+    RXANBPSetShiftFrequency(m_channelId, m_shiftHz);
+}
+
+bool WdspChannel::addNotch(int index, double centerHz, double widthHz,
+                           bool active) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !std::isfinite(centerHz) || !std::isfinite(widthHz) || widthHz <= 0.0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPAddNotch(m_channelId, index, centerHz, widthHz,
+                                active ? 1 : 0);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::editNotch(int index, double centerHz, double widthHz,
+                            bool active) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !std::isfinite(centerHz) || !std::isfinite(widthHz) || widthHz <= 0.0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPEditNotch(m_channelId, index, centerHz, widthHz,
+                                 active ? 1 : 0);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::removeNotch(int index) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPDeleteNotch(m_channelId, index);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::setNotchesEnabled(bool on) noexcept
+{
+    if (m_config.direction != Direction::Receive || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXANBPSetNotchesRun(m_channelId, on ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setNotchTuneFrequency(double tuneHz) noexcept
+{
+    if (m_config.direction != Direction::Receive || !std::isfinite(tuneHz)
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXANBPSetTuneFrequency(m_channelId, tuneHz);
+    }
+    endControlOperation();
+    return true;
+}
+
+int WdspChannel::notchCount() const noexcept
+{
+    if (m_config.direction != Direction::Receive)
+        return 0;
+    // RXANBPGetNumNotches takes the channel's own csDSP, so it is safe against
+    // the DSP thread — but not against close() on another thread, which frees
+    // the NOTCHDB under g_setupMutex. Every other accessor on this class either
+    // goes through beginControlOperation() or takes that lock; these two are
+    // read-only and cheap, so the lock is all they need to match the contract.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
+        return 0;
+    int count = 0;
+    RXANBPGetNumNotches(m_channelId, &count);
+    return count;
+}
+
+bool WdspChannel::notchAt(int index, double* centerHz, double* widthHz,
+                          bool* active) const noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0)
+        return false;
+    // See notchCount() — same interlock, same reason.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
+        return false;
+    double center = 0.0;
+    double width = 0.0;
+    int isActive = 0;
+    if (RXANBPGetNotch(m_channelId, index, &center, &width, &isActive) != 0)
+        return false;
+    if (centerHz != nullptr) *centerHz = center;
+    if (widthHz != nullptr) *widthHz = width;
+    if (active != nullptr) *active = isActive != 0;
+    return true;
+}
+
+double WdspChannel::minimumNotchWidthHz() const noexcept
+{
+    // WDSP's own min_notch_width() (nbp.c) for the window type RXA.c creates the
+    // stage with (wintype 0). Mirrored here rather than exposed from WDSP
+    // because the value is needed to *offer* widths, before any notch exists.
+    if (m_config.direction != Direction::Receive || m_config.filterTaps <= 0
+        || m_config.dspSampleRate <= 0) {
+        return 0.0;
+    }
+    return 1600.0 / (static_cast<double>(m_config.filterTaps) / 256.0)
+           * (static_cast<double>(m_config.dspSampleRate) / 48000.0);
 }
 
 double WdspChannel::meter(Meter which) const noexcept
@@ -353,6 +564,11 @@ uint64_t WdspChannel::allocationSequenceForTest() noexcept
 uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
 {
     return wdspPortOutstandingAllocations();
+}
+
+std::string WdspChannel::wisdomCachePathForTest()
+{
+    return wisdomPath();
 }
 
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept
@@ -429,7 +645,10 @@ void WdspChannel::open() noexcept
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
     }
-    armWisdomExportOnce();   // cache all measured wisdom (incl. later setMode) at exit
+    // Cache what this open measured, right now, while we still hold the setup
+    // lock -- a kill or a crash before exit must not throw the measurement away.
+    exportWisdomNow();
+    armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
     // Fully configured -- now run. dmode 0: nothing to flush on the way up.
     SetChannelState(m_channelId, 1, 0);
     m_open = true;

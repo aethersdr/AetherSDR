@@ -12,26 +12,26 @@ constexpr int kMaxBufferedFrames = kSampleRate * 5;
 constexpr int kFrameBytes = kChannels * static_cast<int>(sizeof(float));
 constexpr int kMaxBufferedBytes = kMaxBufferedFrames * kFrameBytes;
 constexpr int kCompactThresholdBytes = kSampleRate * kFrameBytes;
-constexpr float kEnvelopeCoeff = 0.006f;
-constexpr float kAttackCoeff = 0.22f;
-constexpr float kReleaseCoeff = 0.035f;
+// Keep balance changes well below the audio envelope rate. The mono DSP owns
+// the program waveform; this estimate only distributes it between channels.
+constexpr float kBalanceEnvelopeCoeff = 4.0e-5f;
+constexpr float kMonoObservabilityEnvelopeCoeff = 0.006f;
 constexpr float kPowerFloor = 1.0e-10f;
+// Keep the same effective input threshold when the envelope coefficient changes.
+constexpr float kBalancePowerFloor =
+    kPowerFloor * (kBalanceEnvelopeCoeff / kMonoObservabilityEnvelopeCoeff);
 constexpr float kMonoObservabilityRatio = 0.01f;
-constexpr float kMinObservableGain = 0.035f;
-constexpr float kMaxGain = 1.0f;
-constexpr float kStereoDetectionRatio = 1.0e-4f;
-constexpr float kProcessedMixAttackCoeff = 0.05f;
-constexpr float kProcessedMixReleaseCoeff = 0.01f;
 
 float clampSample(float sample)
 {
     return std::clamp(sample, -1.0f, 1.0f);
 }
 
-float updatePowerEnvelope(float current, float samplePower)
+float updatePowerEnvelope(
+    float current, float samplePower, float coefficient, float floor)
 {
-    current += kEnvelopeCoeff * (samplePower - current);
-    return current < kPowerFloor ? 0.0f : current;
+    current += coefficient * (samplePower - current);
+    return current < floor ? 0.0f : current;
 }
 
 } // namespace
@@ -58,11 +58,11 @@ void MonoDspStereoAdapter::setProcessingLatencyFrames(int frames)
 void MonoDspStereoAdapter::resetEnvelopeState()
 {
     m_dryMonoPower = 0.0f;
+    m_leftPower = 0.0f;
+    m_rightPower = 0.0f;
     m_dryStereoPower = 0.0f;
-    m_sidePower = 0.0f;
-    m_processedPower = 0.0f;
-    m_gain = 1.0f;
-    m_processedMix = 1.0f;
+    m_leftBalance = 1.0f;
+    m_rightBalance = 1.0f;
 }
 
 int MonoDspStereoAdapter::readableDryStereoBytes() const
@@ -133,60 +133,64 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
         if (m_latencyFramesRemaining > 0) {
             // Preserve the engine's own startup output while retaining dry
             // samples until the processed stream reaches the same timeline.
-            dst[i * kChannels] = clampSample(processed);
-            dst[i * kChannels + 1] = clampSample(processed);
+            dst[i * kChannels] = clampSample(processed * m_leftBalance);
+            dst[i * kChannels + 1] = clampSample(processed * m_rightBalance);
             --m_latencyFramesRemaining;
             continue;
         }
 
         if (dryFrames >= availableFrames) {
-            dst[i * kChannels] = clampSample(processed);
-            dst[i * kChannels + 1] = clampSample(processed);
+            dst[i * kChannels] = clampSample(processed * m_leftBalance);
+            dst[i * kChannels + 1] = clampSample(processed * m_rightBalance);
             continue;
         }
 
         const float left = dry[dryFrames * kChannels];
         const float right = dry[dryFrames * kChannels + 1];
         const float dryMono = 0.5f * (left + right);
-        const float side = 0.5f * (left - right);
         const float dryStereoPower = 0.5f * (left * left + right * right);
 
-        m_dryMonoPower = updatePowerEnvelope(m_dryMonoPower, dryMono * dryMono);
-        m_dryStereoPower = updatePowerEnvelope(m_dryStereoPower, dryStereoPower);
-        m_sidePower = updatePowerEnvelope(m_sidePower, side * side);
-        m_processedPower = updatePowerEnvelope(m_processedPower, processed * processed);
+        m_dryMonoPower = updatePowerEnvelope(
+            m_dryMonoPower,
+            dryMono * dryMono,
+            kMonoObservabilityEnvelopeCoeff,
+            kPowerFloor);
+        m_dryStereoPower = updatePowerEnvelope(
+            m_dryStereoPower,
+            dryStereoPower,
+            kMonoObservabilityEnvelopeCoeff,
+            kPowerFloor);
 
-        float targetGain = kMaxGain;
         const float observableMonoFloor =
             std::max(kPowerFloor, m_dryStereoPower * kMonoObservabilityRatio);
-        // If stereo energy is present but the mono sum cancels, the mono DSP
-        // path has no trustworthy gain estimate. Preserve the dry stereo level.
-        if (m_dryMonoPower >= observableMonoFloor) {
-            targetGain = std::clamp(
-                std::sqrt(std::max(m_processedPower, 0.0f) / m_dryMonoPower),
-                kMinObservableGain,
-                kMaxGain);
+        const float instantObservableMonoFloor =
+            std::max(kPowerFloor, dryStereoPower * kMonoObservabilityRatio);
+        // If stereo energy is present but the mono sum cancels, there is no
+        // trustworthy denominator for a balance estimate. Keep the last valid
+        // balance instead of reintroducing dry audio or amplifying noise
+        // through an unstable ratio.
+        if (dryMono * dryMono >= instantObservableMonoFloor
+            && m_dryMonoPower >= observableMonoFloor) {
+            m_leftPower = updatePowerEnvelope(
+                m_leftPower,
+                left * left,
+                kBalanceEnvelopeCoeff,
+                kBalancePowerFloor);
+            m_rightPower = updatePowerEnvelope(
+                m_rightPower,
+                right * right,
+                kBalanceEnvelopeCoeff,
+                kBalancePowerFloor);
+            const float leftLevel = std::sqrt(std::max(m_leftPower, 0.0f));
+            const float rightLevel = std::sqrt(std::max(m_rightPower, 0.0f));
+            const float totalLevel = leftLevel + rightLevel;
+            if (totalLevel > 0.0f) {
+                m_leftBalance = 2.0f * leftLevel / totalLevel;
+                m_rightBalance = 2.0f * rightLevel / totalLevel;
+            }
         }
-        const float smoothCoeff = targetGain < m_gain ? kAttackCoeff : kReleaseCoeff;
-        m_gain += smoothCoeff * (targetGain - m_gain);
-
-        const float stereoRatio = m_sidePower
-            / std::max(m_dryStereoPower, kPowerFloor);
-        const float targetProcessedMix =
-            stereoRatio <= kStereoDetectionRatio ? 1.0f : 0.0f;
-        const float mixCoeff = targetProcessedMix < m_processedMix
-            ? kProcessedMixAttackCoeff
-            : kProcessedMixReleaseCoeff;
-        m_processedMix += mixCoeff * (targetProcessedMix - m_processedMix);
-        if (std::fabs(m_processedMix - targetProcessedMix) < 1.0e-6f) {
-            m_processedMix = targetProcessedMix;
-        }
-
-        const float envelopeMix = 1.0f - m_processedMix;
-        dst[i * kChannels] = clampSample(
-            m_processedMix * processed + envelopeMix * left * m_gain);
-        dst[i * kChannels + 1] = clampSample(
-            m_processedMix * processed + envelopeMix * right * m_gain);
+        dst[i * kChannels] = clampSample(processed * m_leftBalance);
+        dst[i * kChannels + 1] = clampSample(processed * m_rightBalance);
         ++dryFrames;
     }
 

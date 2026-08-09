@@ -293,6 +293,7 @@ RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
     caps.family = familyName();
+    caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     caps.maxPanadapters = 1;
@@ -304,15 +305,39 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
+    caps.hasLmsNoiseFilters = false;
+    caps.hasManualNotch = false;
+    // Synthesised signals come out exactly where the demo says they are; there
+    // is no oscillator to be wrong about.
+    caps.hostFrequencyCalibration = false;
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
+    caps.hasSelectableMicInputs = false;
+
+    // The demo has no transmitter and no radio to ship audio to.
+    caps.takesTxAudioOverSeam = false;
+    // Continuous/unknown — the operator keeps their own width list.
+    caps.rxFilterWidthsHz = {};
     // Synthetic audio only; nothing to route to a virtual device.
     caps.hasDaxStreams = false;
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
     // No radio-side display engine either — the demo's rows carry no black level.
     caps.hasRadioSideWaterfallAutoBlack = false;
+    // No command plane at all: no radio-side CW text keyer, no voice keyer, and
+    // a simulator that cannot key has nothing to be full duplex about.
+    caps.hasRadioSideCwKeyer = false;
+    caps.hasVoiceKeyer = false;
+    caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
+    // No manual notch. The synthetic scene has an auto-notch in its mixer, but
+    // nothing implements a placed, tracking null — so the +TNF button and the
+    // panadapter's add-notch entries stay hidden here rather than appearing and
+    // doing nothing.
+    caps.maxNotchFilters = 0;
+    caps.notchHasDepth = false;
+    caps.notchMinWidthHz = 0.0;
+    caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
     // The demo radio regenerates its synthetic scene on every connect; there
@@ -483,7 +508,7 @@ void SimBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emit sliceChanged(kSliceId, d);
 }
 
-void SimBackend::setPanCenter(const QString& panId, double hz)
+void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
 {
     // The demo's panadapter centre is driven by its owned PanadapterStream (Route
     // A), which paints a fixed synthetic window around the slice, so there is no

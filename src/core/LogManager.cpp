@@ -38,6 +38,13 @@ Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)
 Q_LOGGING_CATEGORY(lcSHistory,  "aether.shistory",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAx25,       "aether.ax25",        QtWarningMsg)
+// Info by default, like aether.hl2 and for the same reason: this is the only
+// record of what a connected-mode link actually did — measured round-trip times
+// against the configured T1, retransmit ratios, why a session ended. An HF link
+// failure is not reproducible on demand, so the evidence has to already be in a
+// support log that was captured without foreknowledge. Rates are low (a handful
+// of lines per session), so Info costs nothing.
+Q_LOGGING_CATEGORY(lcAx25Link,   "aether.ax25.link",   QtInfoMsg)
 Q_LOGGING_CATEGORY(lcWaveform,   "aether.waveform",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcKiwiSdr,    "aether.kiwisdr",     QtDebugMsg)
 Q_LOGGING_CATEGORY(lcKiwiSdrAudio, "aether.kiwisdr.audio", QtWarningMsg)
@@ -62,7 +69,20 @@ LogManager::LogManager()
         {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
         {"aether.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},
         {"aether.smartlink",  "SmartLink",    "Auth0 login, TLS tunnel, WAN streaming"},
-        {"aether.cat",        "CAT/rigctld",  "rigctld TCP servers, PTY virtual serial ports"},
+        // Label leads with TCI because TciServer.cpp owns the large majority of
+        // this category's call sites — 53 of 76 as of #4750, with CatPort.cpp
+        // next at 15 and the rest scattered. The old "CAT/rigctld" label named
+        // only the minority user, so someone chasing a TCI problem scanned the
+        // checkbox list, saw nothing about TCI, and concluded AetherSDR had no
+        // TCI logging to turn on. It has more than any other rig-control
+        // surface; it was just filed under another name. Deliberately NOT split
+        // into a new aether.tci category: the id is what filter rules and saved
+        // settings key off, so renaming it would silently drop every user's
+        // existing preference for this category, and the two surfaces genuinely
+        // share the rig-control plumbing that the qCInfo lines report on.
+        // The description names the TX-summary fields (blocks/peak/rms/clips)
+        // because those are the tokens an operator greps a support log for.
+        {"aether.cat",        "TCI / CAT / rigctld",  "TCI server (slice and DAX arming, TX audio summary: blocks, peak, rms, clips), rigctld TCP servers, PTY virtual serial ports"},
         {"aether.dax",        "DAX",          "Virtual audio bridge (PipeWire/CoreAudio)"},
         {"aether.meters",     "Meters",       "Meter definitions and value conversion"},
         {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
@@ -78,6 +98,7 @@ LogManager::LogManager()
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
         {"aether.ax25",       "AetherModem", "AX.25 modem lifecycle, RX/TX audio, demod, framing, and packet diagnostics"},
+        {"aether.ax25.link",  "AX.25 Link",  "Connected-mode data link: session open/close, measured round-trip vs configured T1, retransmits, idle-link polls"},
         {"aether.waveform",   "Waveform",    "Docker waveform image install upload and local waveform helper lifecycle"},
         {"aether.kiwisdr",    "KiwiSDR",     "KiwiSDR remote RX antennas: connect, handshake, audio/waterfall negotiation, reconnect, profile lifecycle"},
         {"aether.kiwisdr.audio", "KiwiSDR Audio/DSP", "Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default)"},
@@ -135,6 +156,42 @@ void LogManager::setEnabled(const QString& id, bool on)
             return;
         }
     }
+
+    // NOT IN THE CURATED LIST — register it and honour the request anyway.
+    //
+    // The list above is the set worth OFFERING in the UI, and it was silently
+    // doubling as the set that could be TOGGLED AT ALL: a category it did not
+    // name accepted `setEnabled` and did nothing, while the verb that called it
+    // reported ok. `log set aether.icom.stream on` answered
+    // `{ok: true, enabled: false}`, so the only way to see wire traffic was to
+    // relaunch with QT_LOGGING_RULES — and on a single-client radio every
+    // relaunch costs a session timeout.
+    //
+    // Refusing loudly would be defensible; accepting is better. Qt categories
+    // are created by any translation unit that declares one, so no central list
+    // can be complete, and a diagnostic category nobody thought to curate is
+    // exactly the one you need at 2am.
+    if (!on)
+        return;   // nothing to turn off, and no reason to accrue an entry
+
+    // VALIDATE BEFORE IT REACHES THE FILTER RULES (Principle VII).
+    // applyFilterRules() splices this id into a rule string and hands the whole
+    // thing to QLoggingCategory::setFilterRules(), so an id carrying '=' or a
+    // newline injects rules of its own — and the bridge's `log set <id> on` is a
+    // reachable caller. The cap stops a scripted caller growing the PERSISTED
+    // list without bound, since every distinct id appends an entry and
+    // saveSettings() writes it.
+    static const QRegularExpression kCategoryName(
+        QStringLiteral("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$"));
+    if (!kCategoryName.match(id).hasMatch() || m_categories.size() >= kMaxCategories) {
+        qWarning() << "LogManager: refusing to register category" << id;
+        return;
+    }
+    m_categories.append({id, id, QStringLiteral("Registered on demand")});
+    m_categories.last().enabled = true;
+    applyFilterRules();
+    saveSettings();
+    emit categoryChanged(id, true);
 }
 
 void LogManager::setAllEnabled(bool on)

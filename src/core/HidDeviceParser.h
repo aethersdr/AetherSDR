@@ -26,6 +26,20 @@ class HidDeviceParser {
 public:
     virtual ~HidDeviceParser() = default;
     virtual HidEvent parse(const uint8_t* buf, size_t len) = 0;
+    // ⚠ KEEP THIS <= 64. It is not just a description of the device: it is
+    // passed straight to hid_read() as the length bound on a write into
+    // HidEncoderManager::m_buf, which is a fixed uint8_t[64]. A parser that
+    // returns more than 64 overflows that buffer as soon as the device sends a
+    // report that long, and nothing between here and there will catch it.
+    //
+    // Every parser below satisfies this, but TMate2 returns exactly 64, so
+    // there is no headroom left. If a new device genuinely needs a larger
+    // report, grow m_buf (or clamp at the hid_read call) in the same change —
+    // do not just return the bigger number.
+    //
+    // Returning LESS than the device's real report size is fine and is already
+    // done deliberately: StreamDeck+ advertises 512 in its HID descriptor and
+    // returns 14 here, because only the first 14 bytes carry data we decode.
     virtual size_t reportSize() const = 0;
     virtual int encoderCount() const { return 1; }
 

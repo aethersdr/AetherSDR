@@ -2,6 +2,7 @@
 #include "core/AppSettings.h"
 #include "gui/AmpApplet.h"
 
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QByteArray>
 #include <QComboBox>
@@ -183,6 +184,23 @@ void testFanModePulldown()
     report("unknown fanmode leaves combo selection unchanged",
            combo->currentData().toString() == before,
            combo->currentData().toString());
+
+    // #4731: on a large-enough default UI font, the popup's fixed pixel
+    // width (sized off the combo's own hardcoded 10px stylesheet font)
+    // couldn't fit "Fan: Contest" — the longest item — so Qt's default
+    // ElideMiddle silently mangled it. Widths/fonts aren't trustworthy to
+    // assert on directly in this offscreen, unlaid-out harness (the combo
+    // is never shown, so its geometry never reflects a real style pass),
+    // so guard the three properties the fix actually sets instead: let the
+    // widest item drive the combo's width rather than pinning it, and fail
+    // any future overflow visibly (clipped) instead of mid-eliding it.
+    report("fan combo sizes to its widest item, not a pinned width",
+           combo->sizeAdjustPolicy() == QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    report("fan combo reserves room for \"Fan: Contest\"",
+           combo->minimumContentsLength() >= static_cast<int>(QStringLiteral("Fan: Contest").length()),
+           QString::number(combo->minimumContentsLength()));
+    report("fan combo popup does not silently mid-elide overflow",
+           combo->view()->textElideMode() == Qt::ElideNone);
 }
 
 } // namespace

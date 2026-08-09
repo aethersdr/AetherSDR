@@ -43,6 +43,8 @@
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
+#include "core/EibiClient.h"
+#include "core/N1MMSpotClient.h"
 #include "core/PropForecastClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
@@ -70,12 +72,14 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/SpeConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
 #include <QSplitter>
 #include <QPointer>
 
+class QDialog;
 class QMessageBox;
 #include <QLabel>
 #include <QList>
@@ -361,6 +365,10 @@ private:
     // than tuning it somewhere it hears nothing. A backend that reports no
     // range leaves every band enabled (the Flex behaviour).
     void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    // Push RadioCapabilities' notch fields into one panadapter: the +TNF
+    // button's visibility, the right-click add/remove entries, the depth and
+    // permanence submenus, and the width clamps on drag-resize.
+    void applyNotchCapabilities(SpectrumWidget* sw) const;
 
     // The one place a declared RadioCapabilities flag turns into UI visibility.
     //
@@ -812,6 +820,14 @@ private:
     void showNetworkDiagnosticsDialog();
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
+    // Construct the AetherModem window hidden if it does not exist yet, and
+    // return it. The window hosts the KISS TNC, the mailbox, and the terminal,
+    // so the automation bridge has to be able to reach it on a headless box
+    // where nobody ever opened it.
+    Ax25HfPacketDecodeDialog* ensureAx25HfPacketDecodeDialog();
+    // Agent automation bridge entry point for the `modem` and `link` verbs.
+    QJsonObject automationModemCommand(const QString& verb, const QString& action,
+                                       const QString& value);
 #ifdef AETHER_ASR_ENABLED
     void showCopyAssist();
 #endif
@@ -980,6 +996,7 @@ private:
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
+    SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
@@ -1007,6 +1024,9 @@ private:
     WsjtxClient*       m_wsjtxClient{nullptr};
     SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
+    EibiClient*          m_eibiClient{nullptr};
+    QHash<QString, int>  m_eibiSpotKeyToId;
+    N1MMSpotClient*      m_n1mmSpotClient{nullptr};
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -1079,6 +1099,10 @@ private:
     QStringList m_spotCmdBatch;
     int m_nextPassiveSpotId{-2000000};
     QHash<int, qint64> m_passiveSpotExpiryMs;
+    // N1MM spot identity: N1MMSpotParser::spotKey(dxcall, freq) -> passive
+    // spot id, so an "add" for a callsign already on this band updates the
+    // existing spot instead of minting a duplicate (#2906).
+    QHash<QString, int> m_n1mmSpotIdByKey;
     // External controllers run on a dedicated worker thread (#502)
     QThread*             m_extCtrlThread{nullptr};
 #ifdef HAVE_SERIALPORT
@@ -1094,6 +1118,8 @@ private:
     // radio-authoritative model state — togglePanZoomModeForPan, #4057.)
     void togglePanZoomMode(bool segmentZoom);
     void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
+    void setPanZoomMode(bool segmentZoom, bool enable);
+    void zoomActivePanadapter(double factor);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -1161,8 +1187,6 @@ private:
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
-    QTimer                     m_dialCoalesceTimer;
-    int                        m_dialPendingSteps{0};
     QSet<QString>              m_dialActiveMidiGates;
     // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
     // dial release cannot un-key a PTT the keyboard is still holding.
@@ -1296,6 +1320,7 @@ private:
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<ContributeDialog> m_contributeDialog;
     QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
 #endif
@@ -1354,8 +1379,17 @@ private:
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
     QLabel* m_fdxIndicator{nullptr};
+    // Manufacturer row above the model. Hidden unless the connected radio
+    // reports a make its own model string does not already carry — see
+    // refreshRadioIdentityLabels().
+    QLabel* m_radioMakeLabel{nullptr};
     QLabel* m_radioInfoLabel{nullptr};
     QLabel* m_radioVersionLabel{nullptr};
+    // Last manufacturer the backend reported. Cached because it arrives on
+    // capabilitiesChanged while the model and version arrive on infoChanged,
+    // and every one of those edges has to repaint the same three labels.
+    QString m_radioManufacturer;
+    void refreshRadioIdentityLabels();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)

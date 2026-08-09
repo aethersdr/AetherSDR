@@ -1,5 +1,6 @@
 // Capability-gated UI surfaces: hasProfiles, hasDaxStreams, hasExtendedDsp,
-// hasSupplyVoltageTelemetry.
+// hasSupplyVoltageTelemetry, and the three status-bar toggles
+// (hasRadioSideCwKeyer / hasVoiceKeyer / hasFullDuplex).
 //
 // The rule these guard (RadioCapabilities.h header comment, aetherd RFC §1) is
 // that no call site asks "is this a Flex". A surface is gated on a DECLARED
@@ -49,6 +50,37 @@
 //                 on a radio reporting false, and it must go permissive on
 //                 disconnect or the mask could never restore a stashed HW
 //                 intent (docs/architecture/radio-capabilities-map.md). (#4606)
+//   status bar    the CWX / DVK / FDX labels are HIDDEN, not dimmed, on a radio
+//                 whose firmware runs none of those verbs. Three separate flags
+//                 rather than one ride on hasRadioSideDsp, because a family
+//                 could plausibly have a voice keyer without full duplex. TWO
+//                 neighbours in that row are NOT gated: ASR, because Copy
+//                 Assist runs whisper on this host off the engine's post-DSP RX
+//                 audio, and TNF, because a host-side notch is landing and the
+//                 TNF / +TNF surfaces are what it will drive — gating either
+//                 would remove a control that works or is about to (the
+//                 EQ-applet mistake, one row over). The keyer F1-F12 SHORTCUTS
+//                 carry the same two flags as their buttons: an
+//                 ApplicationShortcut stays armed whether or not its label is
+//                 on screen. hasVoiceKeyer is evaluated AHEAD of the SmartSDR+
+//                 entitlement gate, which fails open on an unknown license
+//                 (#4210) and would otherwise leave DVK live on every radio
+//                 that reports none at all. Both flags are read through
+//                 RadioModel::hasRadioSideCwKeyer() / hasVoiceKeyer(), because
+//                 the `cwx` verb has six more entry points than the buttons —
+//                 the FlexControl/Ulanzi macro action, the MQTT cw/transmit
+//                 topic, TCI cw_msg / cw_macros, rigctl send_morse / stop_morse,
+//                 SmartCAT KY and the bridge's `cwx` verb — and all of them ask
+//                 the accessor.
+//
+// A NOTE ON WHAT THE HELPERS BELOW DO AND DO NOT PIN. This target links
+// aethercore, not the GUI (CMakeLists.txt), so nothing here can call
+// MainWindow::applyCapabilitiesToUi() or updateKeyerAvailability() directly.
+// uiWouldShow() is therefore a MIRROR of the visibility expression and pins
+// nothing on the MainWindow side — deleting a `caps.x &&` there leaves this
+// green. What IS pinned for real: every backend's declaration, and, for the two
+// keyers, the RadioModel accessor the gate is built on, which the shortcut
+// helpers call rather than paraphrase.
 //   extended DSP  hasExtendedDspFilters() resolves through the BACKEND while
 //                 connected and falls back to the model-name table when not,
 //                 with Flex's answer unchanged on both routes.
@@ -67,9 +99,13 @@
 
 #include "models/RadioModel.h"
 #include "models/ModelCapabilities.h"
+#include "gui/DvkAvailabilityGate.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/icom/IcomCivBackend.h"
+
+#include "TestEventLoop.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -84,12 +120,50 @@ static void check(bool ok, const char* what)
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
 }
 
+// This file is where the shared wait came from: it spun on an iteration count
+// (`for (200x) processEvents(AllEvents, 10)`), which waits approximately zero
+// because processEvents() strips WaitForMoreEvents and returns immediately on an
+// empty queue. Both edge assertions below therefore passed on luck — on whether
+// the emission happened to be queued already — and lost that luck on a loaded
+// box (#4693). AetherTest::waitForSignal() is that fix, generalised; the trap
+// itself is pinned as a negative case in tests/test_event_loop_test.cpp so it
+// cannot quietly stop being a trap. See tests/TestEventLoop.h for the full
+// account and for which helper to reach for.
+
 // The exact expression MainWindow::applyCapabilitiesToUi() applies to every
 // capability-gated surface. Stated once here so the assertions below read as
 // "what would the UI do", not as a paraphrase of it.
 static bool uiWouldShow(bool connected, bool declared)
 {
     return !connected || declared;
+}
+
+// The expressions MainWindow::updateKeyerAvailability() applies to the two
+// keyers' F1-F12 arming. Separate from uiWouldShow() because the BUTTON and the
+// SHORTCUT are two gates: hiding the label leaves an ApplicationShortcut armed,
+// which is how a keypress ends up silently doing nothing.
+//
+// These take the MODEL rather than a bool, so the capability half is the
+// PRODUCTION accessor and not a paraphrase of it: RadioModel::hasRadioSideCwKeyer()
+// / hasVoiceKeyer() carry the permissive disconnected rule themselves, and they
+// are the same call MainWindow makes — and the same one the FlexControl macro
+// action, the MQTT cw/transmit topic, TCI's cw_msg / cw_macros, rigctl's
+// send_morse, SmartCAT's KY and the automation bridge's `cwx` verb make. Only the mode half is restated, because MainWindow is
+// not linkable from this target (it links aethercore, not the GUI).
+static bool cwxShortcutsWouldArm(const RadioModel& model, bool txModeIsCw)
+{
+    return model.hasRadioSideCwKeyer() && txModeIsCw;
+}
+
+static bool dvkShortcutsWouldArm(const RadioModel& model, bool txModeIsVoice)
+{
+    // The entitlement gate is the second input on a radio that HAS the feature;
+    // with the mode true and no license reported it answers None (fails open),
+    // so this expression isolates the capability, which is the new half.
+    return model.hasVoiceKeyer()
+           && dvkIndicatorBlocker(txModeIsVoice, /*licenseSeen=*/false,
+                                  /*licenseEnabled=*/false)
+                  == DvkIndicatorBlocker::None;
 }
 
 // GPS presence has two layers: the family must support a position source and
@@ -169,6 +243,27 @@ int main(int argc, char** argv)
               "hasRadioSideDsp and hasExtendedDsp are independent");
         check(caps.hasRadioSideWaterfallAutoBlack,
               "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
+        // The three status-bar toggles. Same regression shape as the supply-rail
+        // field above and worse in kind: these are shipping SmartSDR features
+        // whose only implementation is a command-plane verb, so a field added
+        // without touching FlexBackend deletes CWX, DVK or FDX from every Flex.
+        check(caps.hasRadioSideCwKeyer,
+              "Flex declares hasRadioSideCwKeyer (the `cwx` text buffer)");
+        check(caps.hasVoiceKeyer,
+              "Flex declares hasVoiceKeyer (the `dvk` recorder)");
+        check(caps.hasFullDuplex,
+              "Flex declares hasFullDuplex (radio set full_duplex_enabled=)");
+        // Three flags, not one ride on hasRadioSideDsp. All three are true on a
+        // Flex and false on both other backends, so the shipped set cannot
+        // demonstrate that they are separable — assert it on the struct, which
+        // is where a future merge would start. A family could plausibly have a
+        // voice keyer without full duplex, or full duplex without either.
+        RadioCapabilities statusBar;
+        statusBar.hasRadioSideDsp = true;
+        check(!statusBar.hasRadioSideCwKeyer
+                  && !statusBar.hasVoiceKeyer
+                  && !statusBar.hasFullDuplex,
+              "hasRadioSideDsp implies none of the three status-bar capabilities");
         // Separate from hasRadioSideDsp on purpose: one is audio DSP driven by
         // command-plane verbs, the other a display-plane computation embedded in
         // the waterfall stream. Both happen to be true on a Flex and false on an
@@ -259,6 +354,36 @@ int main(int argc, char** argv)
         // not the stack.
         check(!caps.hasSupplyVoltageTelemetry,
               "HL2 declares hasSupplyVoltageTelemetry=false (PATEMP, no +13.8A)");
+        // The three status-bar toggles. The HL2 has no CW text buffer, no voice
+        // recorder and no full-duplex setting, so all three labels go away
+        // entirely rather than sitting permanently dim.
+        check(!caps.hasRadioSideCwKeyer,
+              "HL2 declares hasRadioSideCwKeyer=false (no text buffer)");
+        check(!caps.hasVoiceKeyer,
+              "HL2 declares hasVoiceKeyer=false (no on-radio recorder)");
+        check(!caps.hasFullDuplex,
+              "HL2 declares hasFullDuplex=false (exclusive T/R changeover)");
+        // The keyer F1-F12 shortcuts, evaluated as updateKeyerAvailability()
+        // evaluates them. These are ApplicationShortcuts that stay armed whether
+        // or not their button is on screen, so hiding the labels is not enough:
+        // without the capability in this expression an HL2 in CW keeps F1-F12
+        // firing `cwx send` into a backend with no such verb.
+        // DECLARED, on the struct. The accessors cannot be exercised here: the
+        // HL2 fixture reaches the post-swap state without hardware, so
+        // isConnected() is false and hasRadioSideCwKeyer() answers permissively
+        // whatever the backend declares. The Sim block below is genuinely
+        // connected and is where the accessor path is pinned.
+        // hasVoiceKeyer is ANDed AHEAD of the SmartSDR+ entitlement gate, whose
+        // unknown-entitlement rule fails OPEN (#4210 — the radio must say no
+        // before the UI does). Right for a Flex mid-handshake, and exactly why
+        // it cannot be the only gate: an HL2 never reports a license at all, so
+        // on the entitlement alone the DVK button stays live forever.
+        check(dvkIndicatorBlocker(/*txModeIsVoice=*/true,
+                                  /*licenseSeen=*/false,
+                                  /*licenseEnabled=*/false)
+                  == DvkIndicatorBlocker::None,
+              "the DVK entitlement gate alone fails open on a radio that reports "
+              "no license — hasVoiceKeyer is what closes it");
         // RFC #4603: the HL2 persists nothing on-radio — the client is its
         // memory for exactly these declared domains (per-band drive/LNA maps
         // ride the extension document, RFC PR 3).
@@ -287,16 +412,21 @@ int main(int argc, char** argv)
         // object lives on a worker thread and reaches Connected before its
         // queued signal has crossed to this one, so waiting on isConnected()
         // races the very emission under test.
-        for (int i = 0; i < 200 && spy.count() == 0; ++i) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
+        //
+        // The relay is the anchor for BOTH checks below, so it is waited on and
+        // asserted first. isConnected() reads the connection's atomic state, which
+        // flips the instant the worker sets Connected — before the queued signal
+        // chain has been delivered here. Asserting it before the relay has landed
+        // means a worker that has not been scheduled at all inverts every
+        // connected-branch assertion in this block, not just this one. (#4693)
+        const bool relayFired = AetherTest::waitForSignal(spy);
+
+        // Without it applyCapabilitiesToUi() never runs and every gated surface
+        // keeps the previous radio's answer.
+        check(relayFired,
+              "relay: capabilitiesChanged fired on the connect edge");
         check(model.isConnected(),
               "synthetic demo connect reached the connected state");
-
-        // The relay fired for that edge. Without it applyCapabilitiesToUi()
-        // never runs and every gated surface keeps the previous radio's answer.
-        check(spy.count() > 0,
-              "relay: capabilitiesChanged fired on the connect edge");
         if (spy.count() > 0) {
             const QList<QVariant> args = spy.last();
             check(args.value(0).toBool(),
@@ -316,6 +446,27 @@ int main(int argc, char** argv)
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
+        check(!caps.hasRadioSideCwKeyer,
+              "Sim declares hasRadioSideCwKeyer=false");
+        check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
+        check(!caps.hasFullDuplex, "Sim declares hasFullDuplex=false");
+        // The two keyer ACCESSORS, on the one backend in this file that really
+        // connects — so this is the only place the permissive rule inside them
+        // can be shown to be off rather than assumed. Five surfaces ask through
+        // here: the status-bar gate, the FlexControl/Ulanzi CwxF1..F12 macro
+        // action, the MQTT cw/transmit topic, TCI cw_msg / cw_macros, rigctl
+        // send_morse / stop_morse, SmartCAT KY and the automation bridge's
+        // `cwx` verb. All but the first reach CwxModel without passing the
+        // status bar at all, and each would otherwise emit `cwx send` at a radio
+        // with no such verb.
+        check(!model.hasRadioSideCwKeyer(),
+              "connected Sim: hasRadioSideCwKeyer() is false through the accessor");
+        check(!model.hasVoiceKeyer(),
+              "connected Sim: hasVoiceKeyer() is false through the accessor");
+        check(!cwxShortcutsWouldArm(model, /*txModeIsCw=*/true),
+              "connected + hasRadioSideCwKeyer=false disarms F1-F12 even in CW");
+        check(!dvkShortcutsWouldArm(model, /*txModeIsVoice=*/true),
+              "connected + hasVoiceKeyer=false disarms F1-F12 even in a voice mode");
         check(caps.clientSettingsDomains
                   == RadioCapabilities::ClientSettingsDomains{},
               "Sim declares clientSettingsDomains EMPTY (synthetic scene "
@@ -335,6 +486,19 @@ int main(int argc, char** argv)
               "connected + hasGpsLocation=false hides the GPS stack and its separator");
         check(!uiWouldShow(model.isConnected(), caps.hasSupplyVoltageTelemetry),
               "connected + hasSupplyVoltageTelemetry=false hides the volts readout");
+        check(!uiWouldShow(model.isConnected(), caps.hasRadioSideCwKeyer),
+              "connected + hasRadioSideCwKeyer=false hides CWX and its panel");
+        check(!uiWouldShow(model.isConnected(), caps.hasVoiceKeyer),
+              "connected + hasVoiceKeyer=false hides DVK and its panel");
+        check(!uiWouldShow(model.isConnected(), caps.hasFullDuplex),
+              "connected + hasFullDuplex=false hides FDX");
+        // ASR sits in the same status-bar row and is deliberately NOT in that
+        // list, which is why no assertion here hides it: AsrAudioTap feeds
+        // whisper from the engine's post-DSP RX audio on THIS host, so Copy
+        // Assist works on every family. There is no capability to gate it on,
+        // and adding one would delete a working control — the mistake the EQ
+        // applet already made and reverted
+        // (docs/architecture/radio-capabilities-map.md).
 
         // hasRadioSideDsp reaches the UI through its own accessor, which applies
         // the permissive rule itself (there is no model-name table to fall back
@@ -370,12 +534,11 @@ int main(int argc, char** argv)
     {
         QSignalSpy spy(&model, &RadioModel::capabilitiesChanged);
         model.disconnectFromRadio();
-        for (int i = 0; i < 200 && spy.count() == 0; ++i) {
-            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        }
-        check(!model.isConnected(), "disconnected from the synthetic demo radio");
-        check(spy.count() > 0,
+        // Same ordering as the connect edge above, for the same reason. (#4693)
+        const bool relayFired = AetherTest::waitForSignal(spy);
+        check(relayFired,
               "relay: capabilitiesChanged fired on the disconnect edge");
+        check(!model.isConnected(), "disconnected from the synthetic demo radio");
 
         const RadioCapabilities caps = model.backendCapabilities();
         check(uiWouldShow(model.isConnected(), caps.hasProfiles),
@@ -403,6 +566,59 @@ int main(int argc, char** argv)
         // design exists to prevent. (#4606)
         check(model.hasRadioSideWaterfallAutoBlack(),
               "disconnected: hasRadioSideWaterfallAutoBlack() goes permissive, HW back");
+        check(uiWouldShow(model.isConnected(), caps.hasRadioSideCwKeyer),
+              "disconnected: the CWX indicator is restored");
+        check(uiWouldShow(model.isConnected(), caps.hasVoiceKeyer),
+              "disconnected: the DVK indicator is restored");
+        check(uiWouldShow(model.isConnected(), caps.hasFullDuplex),
+              "disconnected: the FDX indicator is restored");
+        // The keyer shortcuts follow the buttons back. Disarmed while an HL2 was
+        // attached, armed again with nothing attached and the TX slice in the
+        // right mode — the same permissive rule, applied to the gate that is not
+        // a widget.
+        check(model.hasRadioSideCwKeyer() && model.hasVoiceKeyer(),
+              "disconnected: both keyer accessors go permissive");
+        check(cwxShortcutsWouldArm(model, /*txModeIsCw=*/true),
+              "disconnected: F1-F12 rearm for CWX in a CW TX mode");
+        check(dvkShortcutsWouldArm(model, /*txModeIsVoice=*/true),
+              "disconnected: F1-F12 rearm for DVK in a voice TX mode");
+    }
+
+    // ---- The TX-intent callbacks are installed once too --------------------
+    //
+    // Same ownership rule as the connection-edge relay checked further down, on
+    // the other three connections setupBackend() used to make with RadioModel on
+    // both ends: rfPowerChanged, moxCommandIssued and tuneCommandIssued (sender
+    // &m_transmitModel, a RadioModel value member; receiver `this`). They are
+    // installed as one block, so counting one of them counts all three.
+    // setupBackend() has run three times by here — ctor Flex, HL2, Sim — so a
+    // per-backend installation leaves three live copies.
+    //
+    // Counted through the refusal cascade, the one publicly observable
+    // consequence of a duplicate: the sim declares canTransmit=false, so a TUNE
+    // intent is refused, and the refusal calls TransmitModel::stopTune(), which
+    // re-emits tuneCommandIssued(false) unconditionally. One live callback =>
+    // one unlatch. Nothing is keyed and nothing reaches a radio: the model is
+    // disconnected, the backend is the simulator, and the path under test is the
+    // one that REFUSES to transmit.
+    //
+    // The signal is invoked directly for the same reason the relay check does
+    // it below — this asserts the WIRING, not TransmitModel's PTT preflight.
+    // (If stopTune() ever stops re-emitting unconditionally the count changes;
+    // this comment is the place to start reading when it does.)
+    {
+        check(!model.isConnected() && model.family() == QLatin1String("sim"),
+              "TX-intent ownership check runs disconnected, on the sim backend");
+        check(!model.backendCapabilities().canTransmit,
+              "TX-intent ownership check runs against an RX-only backend");
+        QSignalSpy spy(&model.transmitModel(), &TransmitModel::tuneCommandIssued);
+        const bool invoked = QMetaObject::invokeMethod(
+            &model.transmitModel(), "tuneCommandIssued", Qt::DirectConnection,
+            Q_ARG(bool, true));
+        check(invoked, "tuneCommandIssued can be invoked for the ownership check");
+        check(spy.count() == 2,
+              "family swaps leave exactly one TX-intent callback (one TUNE "
+              "intent, one refusal unlatch)");
     }
 
     // ---- Round-trip back to Flex ------------------------------------------
@@ -420,6 +636,9 @@ int main(int argc, char** argv)
               "round-trip: Flex regains hasRadioSideDsp after sim -> Flex");
         check(caps.hasRadioSideWaterfallAutoBlack,
               "round-trip: Flex regains hasRadioSideWaterfallAutoBlack");
+        check(caps.hasRadioSideCwKeyer && caps.hasVoiceKeyer
+                  && caps.hasFullDuplex,
+              "round-trip: Flex regains CWX / DVK / FDX after sim -> Flex");
         check(caps.hasWaveforms,
               "round-trip: Flex regains hasWaveforms after sim -> Flex");
         check(caps.hasMultiClientSessions,
@@ -433,6 +652,28 @@ int main(int argc, char** argv)
         // baseline. A cached flag would show up right here.
         check(caps.hasSupplyVoltageTelemetry,
               "round-trip: Flex regains hasSupplyVoltageTelemetry after sim -> Flex");
+    }
+
+    // ---- Family swaps do not duplicate the connection-edge relay -----------
+    //
+    // setupBackend() ran once for each of Flex -> HL2 -> Sim -> Flex above.
+    // A RadioModel-owned connection installed there survives teardownBackend(),
+    // so one connectionStateChanged edge would fan out once per family visited.
+    // Invoke the signal synchronously to isolate this ownership invariant from
+    // any backend's asynchronous connect lifecycle or capabilitiesChanged signal.
+    //
+    // The TX-power push installed beside the relay has no observable of its own
+    // (it calls IRadioBackend::setTxPower and nothing else), but the two are one
+    // adjacent block in the constructor, so this count stands for both — the
+    // same reasoning the TX-intent check above uses for its three.
+    {
+        QSignalSpy spy(&model, &RadioModel::capabilitiesChanged);
+        const bool invoked = QMetaObject::invokeMethod(
+            &model, "connectionStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, true));
+        check(invoked, "connectionStateChanged can be invoked for the ownership check");
+        check(spy.count() == 1,
+              "family swaps leave exactly one connection-edge capability relay");
     }
 
     // ---- Flex extended DSP is unchanged by the reconciliation -------------
@@ -462,6 +703,61 @@ int main(int argc, char** argv)
               "AU-510 is an extended-DSP platform (the check has teeth)");
         check(!capabilitiesFor(QStringLiteral("FLEX-6700")).hasExtendedDsp(),
               "FLEX-6700 is not (the check has teeth)");
+    }
+
+    // ---- hasLmsNoiseFilters / hasManualNotch: the two newest gates ---------
+    //
+    // Both exist because hasRadioSideDsp was two claims wearing one name — "the
+    // radio runs its own receive DSP" and "the radio runs FLEXRADIO'S PARTICULAR
+    // SET of it". An Icom is the first and not the second, so that one flag lit
+    // up NRL/ANFL/ANFT buttons reaching no register on the radio at all.
+    //
+    // THE TWO FIELDS TAKE OPPOSITE DISCONNECTED DEFAULTS, and that asymmetry is
+    // the thing worth pinning. hasLmsNoiseFilters is PERMISSIVE — the buttons
+    // ship today and must not vanish from an empty window. hasManualNotch is
+    // NOT — MN is a NEW button, and a permissive default would put it on every
+    // Flex on screen before any backend had claimed it. An inverted default is
+    // exactly what a later refactor "tidies" in the wrong direction, and the
+    // failure is silent: a control that appears, wired to nothing.
+    {
+        // The struct's own default, which is what a backend that forgets the
+        // field gets. False for both — absent unless declared.
+        const RadioCapabilities fresh;
+        check(!fresh.hasManualNotch,
+              "RadioCapabilities defaults hasManualNotch to false (absent unless declared)");
+        check(!fresh.hasLmsNoiseFilters,
+              "RadioCapabilities defaults hasLmsNoiseFilters to false (absent unless declared)");
+
+        // Read from each backend's DECLARATION rather than restating it, so a
+        // copy-paste that flips either one reds this suite.
+        FlexBackend flex;
+        AetherSDR::icom::IcomCivBackend icom;
+        const RadioCapabilities flexCaps = flex.capabilities();
+        const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(flexCaps.hasLmsNoiseFilters,
+              "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");
+        check(!icomCaps.hasLmsNoiseFilters,
+              "Icom declares NO hasLmsNoiseFilters (no WDSP LMS/FFT register exists)");
+
+        check(!flexCaps.hasManualNotch,
+              "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
+        check(icomCaps.hasManualNotch,
+              "Icom declares hasManualNotch (16 48 enable, 14 0D position, 16 57 width)");
+
+        // The gates themselves, through the SAME expression the UI applies, so
+        // these assert behaviour rather than paraphrase it.
+        //
+        // Disconnected: the LMS row stays (permissive, it ships), the MN button
+        // does not (not permissive, it is new).
+        check(uiWouldShow(/*connected=*/false, /*declared=*/false),
+              "disconnected: a permissive gate shows (hasLmsNoiseFilters rule)");
+        RadioModel disconnected;
+        check(disconnected.hasLmsNoiseFilters(),
+              "disconnected: hasLmsNoiseFilters() is permissive — the shipping row stays");
+        check(!disconnected.hasManualNotch(),
+              "disconnected: hasManualNotch() is NOT permissive — no MN button on an "
+              "empty window");
     }
 
     if (g_failures == 0)

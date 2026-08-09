@@ -586,7 +586,10 @@ void HidEncoderManager::poll()
 {
     if (!m_device || !m_parser) return;
 
-    // Read all pending reports
+    // Read all pending reports. reportSize() is the write bound into m_buf and
+    // is deliberately not clamped here — the "<= 64" invariant is stated and
+    // argued at HidDeviceParser::reportSize(); do not add a silent std::min
+    // without reading it.
     while (true) {
         int res = hid_read(m_device, m_buf, m_parser->reportSize());
         if (res < 0) {

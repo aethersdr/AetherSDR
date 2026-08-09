@@ -10,6 +10,7 @@
 // out of the way across owner re-assertion, and never disappear entirely while
 // its condition holds.
 #include "gui/PanadapterMessageOverlay.h"
+#include "gui/SpectrumRhiFailureState.h"
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -21,6 +22,7 @@
 
 using AetherSDR::PanadapterMessageOverlay;
 using AetherSDR::PanadapterOverlayMessage;
+using AetherSDR::SpectrumRhiFailureState;
 
 namespace {
 
@@ -88,6 +90,20 @@ QVariantMap settledMessage(const PanadapterMessageOverlay& overlay,
         }
     }
     return previous;
+}
+
+bool waitForMessageRemoval(const PanadapterMessageOverlay& overlay,
+                           const QString& id)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (findMessage(overlay, id).isEmpty()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The card is never dismissible, so the owner stays the only thing that can
@@ -291,6 +307,47 @@ void testNonCollapsibleCardRejectsCollapse()
           "an unknown id is refused");
 }
 
+void testRhiFailureStateAndWarningContract()
+{
+    SpectrumRhiFailureState state;
+    check(!state.failed(), "QRhi failure state starts clear");
+    check(state.report(QStringLiteral("boom")),
+          "the first QRhi failure is accepted");
+    check(!state.report(QStringLiteral("later failure")),
+          "a repeated QRhi failure is deduplicated");
+    check(state.reason() == QStringLiteral("boom"),
+          "the first QRhi failure reason remains authoritative");
+    check(state.rendererDescription() == QStringLiteral("QRhi failed: boom"),
+          "renderer diagnostics expose the latched failure");
+
+    PanadapterMessageOverlay overlay;
+    overlay.resize(900, 500);
+    overlay.upsertMessage(state.warningMessage(
+        QStringLiteral("Spectrum renderer unavailable"),
+        QStringLiteral("boom")));
+
+    const QVariantMap message =
+        findMessage(overlay, QStringLiteral("rhi.render-failed"));
+    check(!message.isEmpty(), "the QRhi failure warning is present");
+    check(message.value(QStringLiteral("timeoutMs")).toInt() == 0,
+          "the QRhi failure warning is persistent");
+    check(!message.value(QStringLiteral("dismissible")).toBool(),
+          "the QRhi failure warning is not dismissible");
+    check(message.value(QStringLiteral("collapsible")).toBool(),
+          "the QRhi failure warning is collapsible");
+    check(message.value(QStringLiteral("tone")).toString()
+              == QStringLiteral("warning"),
+          "the QRhi failure warning uses warning tone");
+
+    check(state.clear(), "QRhi recovery clears the latched failure");
+    overlay.removeMessage(QStringLiteral("rhi.render-failed"));
+    check(!state.failed() && state.reason().isEmpty(),
+          "QRhi recovery clears the diagnostic state");
+    check(waitForMessageRemoval(overlay, QStringLiteral("rhi.render-failed")),
+          "QRhi recovery removes the warning");
+    check(!state.clear(), "clearing an already-clear failure is idempotent");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -307,6 +364,7 @@ int main(int argc, char** argv)
     testExpandRestoresTheFullCard();
     testCollapsedCardStillPaints();
     testNonCollapsibleCardRejectsCollapse();
+    testRhiFailureStateAndWarningContract();
     if (failures == 0) {
         std::puts("Panadapter message overlay tests passed");
     }

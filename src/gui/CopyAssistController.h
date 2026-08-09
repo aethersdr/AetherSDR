@@ -28,6 +28,50 @@ enum class AsrBackendKind {
     SherpaOnnx, // sherpa-onnx offline model (a user-picked model directory)
 };
 
+// Per-engine state for a queued speaker-embedder load. Download/verification
+// intent belongs to the controller; this state is discarded when its AsrEngine
+// is replaced so a late completion can never leave the next engine muted.
+class SpeakerLoadLifecycle {
+public:
+    void resetForEngineReplacement()
+    {
+        m_loadingPath.clear();
+        m_loadedPath.clear();
+        m_pending = false;
+    }
+
+    void begin(const QString& path)
+    {
+        m_loadingPath = path;
+        m_pending = true;
+    }
+
+    bool complete(const QString& path, bool loaded)
+    {
+        if (!m_pending || path != m_loadingPath) {
+            return false;
+        }
+        m_pending = false;
+        if (loaded) {
+            m_loadedPath = path;
+        } else {
+            // The worker clears its previous embedder on failure, so this
+            // cache must not claim that an older path is still reusable.
+            m_loadedPath.clear();
+        }
+        return true;
+    }
+
+    bool isPending() const { return m_pending; }
+    bool isPending(const QString& path) const { return m_pending && m_loadingPath == path; }
+    bool isLoaded(const QString& path) const { return m_loadedPath == path; }
+
+private:
+    QString m_loadingPath;
+    QString m_loadedPath;
+    bool m_pending = false;
+};
+
 // Wires the Copy Assist panel to the ASR subsystem (RFC #4333, Phase 5). Owns
 // the AsrEngine, the model download manager, and the audio tap, and translates
 // panel intent into the enable → (download model) → load → tap-on flow, routing
@@ -58,7 +102,14 @@ private slots:
 
 private:
     void startGpuDiscovery();
-    void applyGpuDevices(const std::vector<AsrGpuDevice>& gpus);
+    // By value: reconcileAfterGpuFallback() passes m_gpuDevices back in, and
+    // the first thing this function does is reassign that member — a
+    // reference parameter would alias it.
+    void applyGpuDevices(std::vector<AsrGpuDevice> gpus);
+    // Reconcile after a GPU failed and was latched: relabel the device, move
+    // the resolution off it, walk back an auto-raised GPU-only tier, reload
+    // the model into the rebuilt engine, and say so in the panel status.
+    void reconcileAfterGpuFallback();
     void buildEngine();  // (re)create the engine+tap for the current backend
     void applyTuning();  // push saved VAD tuning into the engine
     void requestEnable(); // defer local Whisper until async GPU discovery finishes
@@ -74,8 +125,15 @@ private:
     void onVadModelReady(const QString& path); // cached/downloaded → persist + rebuild
     void promptSpeakerModel();   // pick + persist a custom speaker-embedding .onnx
     void ensureSpeakerModel();   // use the cached model, else auto-download it
-    void onSpeakerModelReady(const QString& path); // cached/downloaded → persist + rebuild
-    void rebuildEngine();  // rebuild the engine so the worker picks up a model change
+    void onSpeakerModelReady(const QString& path); // cached/downloaded → queue worker load
+    void queueSpeakerModelLoad(const QString& path);
+    void onSpeakerModelLoaded(const QString& path, bool loaded);
+    void replaySpeakerConfiguration();
+    // Put the panel back on its steady-state text after a speaker-model step
+    // left a transient "Preparing…"/"Downloading…" message on screen, replaying
+    // the frequency marker the skipped ready() body owed the log.
+    void restoreListeningStatus();
+    void rebuildEngine();  // rebuild only for backend/VAD/GPU changes
     static AsrModelTier sileroVadTier();       // default downloadable Silero VAD model
     static AsrModelTier speakerEmbedderTier(); // default downloadable speaker model
     void writeFreqMarkerIfNeeded(); // log a "=== <freq> MHz ===" line on start/retune/day-roll
@@ -97,15 +155,32 @@ private:
     AsrAudioTap* m_tap = nullptr;
     bool m_constructed = false; // true after the initial buildEngine (guards restore)
     bool m_useGpuDefaultIfAvailable = false; // cleared by any explicit tier choice
+    // True while m_tierId is the GPU-default tier because device resolution
+    // auto-raised it (not an operator choice). What licenses the walk-back to
+    // the base tier when resolution later falls off the GPU: by then
+    // m_useGpuDefaultIfAvailable is already consumed, so it alone cannot tell
+    // an auto-raised Turbo from an explicitly chosen one.
+    bool m_gpuDefaultTierActive = false;
+    // Fallback explanation parked for the rebuilt engine's ready() handler —
+    // set when reconcileAfterGpuFallback() reloads the model, so the reload's
+    // "Listening…" does not overwrite the reason the decode moved.
+    QString m_gpuFallbackNotice;
     bool m_gpuDiscoveryPending = true;
     bool m_enableAfterGpuDiscovery = false;
+    bool m_gpuDeviceExplicit = false; // the operator picked this device themselves
     int m_gpuDevice = 0; // resolved default or explicit setting; -1 forces CPU
+    // Last device list from discovery, kept so a runtime GPU failure can be
+    // reconciled into the selectors without re-running (and re-probing) it.
+    std::vector<AsrGpuDevice> m_gpuDevices;
     QString m_tierId;
     QString m_customModelPath; // user-picked local model (for the "Custom model…" tier)
     QString m_sherpaModelDir;  // user-picked sherpa-onnx model directory
     double m_currentFreqMhz = 0.0;  // active-slice frequency, for the log marker
     QString m_lastFreqMarkerKey;    // (dated-file|freq) last marked — dedups markers
     bool m_enabled = false;
+    bool m_defaultSpeakerRequestPending = false;
+    QString m_desiredSpeakerModelPath;
+    SpeakerLoadLifecycle m_speakerLoad;
     AsrBackendKind m_backend = AsrBackendKind::Whisper; // active inference backend
 };
 

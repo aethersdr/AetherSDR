@@ -14,11 +14,12 @@ namespace AetherSDR {
 // constitution Principle V. The temporary flat key from PR #3321 is migrated
 // so testers of the PR branch keep their selected behavior.
 //
-// ACOM's own manual connection settings (ManualIp/ManualPort/SerialPort/
-// ConnectionMode) use the generic per-device accessors below, nested under
-// obj["Acom"] — ACOM has never shipped with flat keys in a released build,
-// so there's no legacy data to migrate; new installs write directly into the
-// nested shape. TGXL/PGXL/Antenna Genius/ShackSwitch still use their
+// The manual connection settings (ManualIp/ManualPort/SerialPort/
+// ConnectionMode) of the ACOM S-series and the SPE Expert amplifiers use the
+// generic per-device accessors below, nested under obj["Acom"] and
+// obj["SpeExpert"] — neither has ever shipped with flat keys in a released
+// build, so there's no legacy data to migrate; new installs write directly
+// into the nested shape. TGXL/PGXL/Antenna Genius/ShackSwitch still use their
 // original flat AppSettings keys directly (not through this class) —
 // migrating those is legitimate follow-up work, scoped to its own PR rather
 // than bundled with the ACOM feature that motivated adding these accessors.
@@ -45,10 +46,10 @@ public:
 
     // Generic per-device connection settings — e.g. device "Acom", field
     // "ManualIp" reads/writes obj["Acom"]["ManualIp"] within the shared
-    // "Peripherals" root object. Currently only ACOM uses these (see the
-    // class comment above); kept generic by device/field name rather than
-    // ACOM-specific so a future migration of the other peripheral rows can
-    // reuse the same accessors instead of re-inventing them.
+    // "Peripherals" root object. Used by the ACOM and SPE Expert rows so far
+    // (see the class comment above); kept generic by device/field name rather
+    // than ACOM-specific so a future migration of the other peripheral rows
+    // can reuse the same accessors instead of re-inventing them.
     static QString deviceString(const QString& device, const QString& field,
                                 const QString& def = QString())
     {

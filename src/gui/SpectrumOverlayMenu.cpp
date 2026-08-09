@@ -205,9 +205,23 @@ static bool isLoopSelectableRxAntenna(const QString& token)
 static constexpr int BAND_BTN_W = 48;
 static constexpr int BAND_BTN_H = 26;
 
-static const QString kPanelStyle =
-    "QWidget { background: rgba(15, 15, 26, 220); "
-    "border: 1px solid #304050; border-radius: 3px; }";
+// Scoped to the widget's own objectName rather than a bare "QWidget { … }"
+// selector — an unscoped type selector cascades into Qt's tooltip QLabel for
+// any descendant of the styled widget, stripping the tooltip's frame (#4440,
+// #4444). Takes the widget and sets both the object name and the style in one
+// call so the two can't drift apart (a typo in one used to silently un-style
+// the panel with no compile error). Routed through ThemeManager so the border
+// stays theme-aware, matching the band and display panels rather than the
+// literal #304050 the un-scoped rule inherited.
+static void applyPanelStyle(QWidget* panel, const QString& objectName)
+{
+    panel->setObjectName(objectName);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        panel,
+        QStringLiteral("QWidget#%1 { background: rgba(15, 15, 26, 220); "
+                       "border: 1px solid {{color.background.2}}; border-radius: 3px; }")
+            .arg(objectName));
+}
 
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; "
@@ -404,8 +418,7 @@ void SpectrumOverlayMenu::setMemories(const QMap<int, MemoryEntry>& memories)
 void SpectrumOverlayMenu::buildBandPanel()
 {
     m_bandPanel = new QWidget(parentWidget());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget { background: rgba(15, 15, 26, 220); "
-                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
+    applyPanelStyle(m_bandPanel, QStringLiteral("bandPanel"));
     m_bandPanel->hide();
 
     auto* grid = new QGridLayout(m_bandPanel);
@@ -469,7 +482,7 @@ void SpectrumOverlayMenu::buildBandPanel()
 void SpectrumOverlayMenu::buildAntPanel()
 {
     m_antPanel = new QWidget(parentWidget());
-    m_antPanel->setStyleSheet(kPanelStyle);
+    applyPanelStyle(m_antPanel, QStringLiteral("antPanel"));
     m_antPanel->hide();
 
     auto* vbox = new QVBoxLayout(m_antPanel);
@@ -533,7 +546,8 @@ void SpectrumOverlayMenu::buildAntPanel()
         "border: 1px solid #0090e0; }"
         "QPushButton:hover { border: 1px solid #0090e0; }";
     m_loopRow = new QWidget(m_antPanel);
-    m_loopRow->setStyleSheet("QWidget { background: transparent; border: none; }");
+    m_loopRow->setObjectName(QStringLiteral("loopRow"));
+    m_loopRow->setStyleSheet("QWidget#loopRow { background: transparent; border: none; }");
     auto* loopRow = new QHBoxLayout(m_loopRow);
     loopRow->setContentsMargins(0, 0, 0, 0);
     loopRow->setSpacing(4);
@@ -617,7 +631,7 @@ void SpectrumOverlayMenu::buildAntPanel()
             QSignalBlocker sb(m_rfGainSlider);
             m_rfGainSlider->setValue(snapped);
         }
-        m_rfGainLabel->setText(QString("%1 dB").arg(snapped));
+        m_rfGainLabel->setText(QString("%1%2").arg(snapped).arg(m_rfGainUnitSuffix));
         // Only emit when the snapped value actually differs from the last
         // emitted one. Mouse drags within a single step fire valueChanged
         // with many unsnapped values that all round to the same snapped
@@ -629,6 +643,98 @@ void SpectrumOverlayMenu::buildAntPanel()
             if ((!m_radioModel || m_panId.isEmpty()) && m_slice)
                 m_slice->setRfGain(static_cast<float>(snapped));
         }
+    });
+
+    // Discrete front-end stages — the preamp and the attenuator, one row each,
+    // in the same label + control shape as RX ANT and RF Gain above. Both rows
+    // are hidden entirely on a radio that publishes no positions for them,
+    // which is every family except Icom today.
+    //
+    // The BUTTON CARRIES ONLY THE POSITION ("P.AMP2", "20 dB", "OFF"); what
+    // control it is belongs to the label. Putting both in the button gave
+    // "PRE: P.AMP2" in a 56 px cell inside a fixed 180 px panel, which clipped
+    // to "PRE: P.A" — a control naming a state the operator cannot read.
+    const QString kFrontEndBtnStyle =
+        "QPushButton { background: {{color.background.1}}; "
+        "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+        "color: {{color.text.secondary}}; font-size: 11px; padding: 1px 4px; }"
+        "QPushButton:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:checked { background: {{color.accent.dim}}; "
+        "border-color: {{color.accent.bright}}; color: {{color.text.primary}}; }";
+
+    // CLICK ADVANCES ONE POSITION, and the button does not own the result: it
+    // emits the request and repaints from whatever the radio reports back. A
+    // checkable QPushButton would otherwise show the position the operator
+    // asked for even when the radio refused it — which an IC-705 does for
+    // P.AMP2 and for the attenuator above 50 MHz.
+    const auto makeFrontEndRow = [&](const QString& labelText, const QString& objectName,
+                                     const QString& a11yName,
+                                     QPushButton** btnOut) -> QWidget* {
+        auto* rowWidget = new QWidget;
+        // NO BOX AROUND THE ROW. kPanelStyle sets "QWidget { border: 1px solid
+        // ...; background: ... }" on the ANT panel, and Qt descendant-matches a
+        // bare type selector onto every child QWidget — so a row that is a real
+        // widget draws the panel's own frame around itself. The rows above are
+        // bare QHBoxLayouts added straight to the panel's vbox and have no
+        // container to catch it; these two need containers so each can hide
+        // independently, and therefore have to opt out explicitly.
+        rowWidget->setStyleSheet(
+            QStringLiteral("QWidget { border: none; background: transparent; }"));
+        auto* row = new QHBoxLayout(rowWidget);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+        auto* label = new QLabel(labelText);
+        label->setStyleSheet(kLabelStyle);
+        label->setFixedWidth(kLabelW);
+        row->addWidget(label);
+        auto* btn = new QPushButton(QStringLiteral("OFF"));
+        btn->setObjectName(objectName);
+        btn->setAccessibleName(a11yName);
+        btn->setCheckable(true);
+        btn->setFixedHeight(22);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, kFrontEndBtnStyle);
+        row->addWidget(btn, 1);
+        rowWidget->setVisible(false);
+        vbox->addWidget(rowWidget);
+        *btnOut = btn;
+        return rowWidget;
+    };
+
+    m_preampRow = makeFrontEndRow(QStringLiteral("Preamp:"),
+                                  QStringLiteral("panPreampBtn"),
+                                  tr("Receive preamp"), &m_preampBtn);
+    m_attenuatorRow = makeFrontEndRow(QStringLiteral("Atten:"),
+                                      QStringLiteral("panAttenuatorBtn"),
+                                      tr("Receive attenuator"), &m_attenuatorBtn);
+
+    // CLICK ADVANCES ONE POSITION, and refreshFrontEndButtons is the SOLE owner
+    // of what the button then shows.
+    //
+    // This used to emit the request and then restore the button to its
+    // pre-click checked state, on the theory that the radio's echo would set
+    // the real one. Two things were wrong with that. The echo does not exist —
+    // an IC-705 answers a set with a bare FB and never reports the new value —
+    // and the restore ran AFTER the emit, which is synchronous all the way to
+    // the model and back, so even once the backend began publishing its own
+    // adopted value this line overwrote it. The control cycled OFF -> P.AMP1
+    // and then stuck there.
+    //
+    // So: emit, then repaint from the model. If the radio refuses the request
+    // (no P.AMP2 above 50 MHz, no attenuator there at all) its next
+    // unsolicited report corrects the model and this repaints again.
+    const auto cycle = [this](const QStringList& labels, int current, auto&& emitStep) {
+        if (labels.size() < 2)
+            return;
+        emitStep((current + 1) % labels.size());
+        refreshFrontEndButtons();
+    };
+    connect(m_preampBtn, &QPushButton::clicked, this, [this, cycle] {
+        cycle(m_preampLabels, m_preampStep,
+              [this](int step) { emit preampStepChanged(step); });
+    });
+    connect(m_attenuatorBtn, &QPushButton::clicked, this, [this, cycle] {
+        cycle(m_attenuatorLabels, m_attenuatorStep,
+              [this](int step) { emit attenuatorStepChanged(step); });
     });
 
     // WNB row: toggle button + level slider
@@ -1006,7 +1112,8 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
         m_updatingFromModel = true;
         QSignalBlocker sb(m_rfGainSlider);
         m_rfGainSlider->setValue(static_cast<int>(gain));
-        m_rfGainLabel->setText(QString("%1 dB").arg(static_cast<int>(gain)));
+        m_rfGainLabel->setText(
+            QString("%1%2").arg(static_cast<int>(gain)).arg(m_rfGainUnitSuffix));
         m_updatingFromModel = false;
     });
 
@@ -1030,7 +1137,12 @@ void SpectrumOverlayMenu::syncAntPanel()
         QSignalBlocker sb(m_rfGainSlider);
         m_rfGainSlider->setValue(gain);
     }
-    m_rfGainLabel->setText(QString("%1 dB").arg(gain));
+    // THE UNIT, not a hardcoded " dB". This is the site that undid the other
+    // three: setRfGainRange had already published "%" and setRfGain had
+    // rendered it, and then syncAntPanel — which runs on every antenna and
+    // slice sync — repainted the same number with a decibel suffix the radio
+    // never claimed.
+    m_rfGainLabel->setText(QString("%1%2").arg(gain).arg(m_rfGainUnitSuffix));
     m_updatingFromModel = false;
     updateLoopButtonVisibility();
 }
@@ -1040,7 +1152,7 @@ void SpectrumOverlayMenu::syncAntPanel()
 void SpectrumOverlayMenu::buildDaxPanel()
 {
     m_daxPanel = new QWidget(parentWidget());
-    m_daxPanel->setStyleSheet(kPanelStyle);
+    applyPanelStyle(m_daxPanel, QStringLiteral("daxPanel"));
     m_daxPanel->hide();
 
     auto* vb = new QVBoxLayout(m_daxPanel);
@@ -1243,15 +1355,22 @@ void SpectrumOverlayMenu::updateLayout()
     m_toggleBtn->move(pad, pad);
 
     int y = pad + BTN_H + gap;
-    for (auto* btn : m_menuBtns) {
-        btn->setVisible(m_expanded);
-        if (m_expanded) {
+    int shownBtns = 0;
+    for (int idx = 0; idx < m_menuBtns.size(); ++idx) {
+        auto* btn = m_menuBtns[idx];
+        // A button the radio cannot back stays hidden even when expanded, and
+        // the ones below it close the gap — a blank slot would read as a
+        // rendering fault rather than an absent feature.
+        const bool available = (idx != kBtnAddTnf) || m_notchesSupported;
+        btn->setVisible(m_expanded && available);
+        if (m_expanded && available) {
             btn->move(pad, y);
             y += BTN_H + gap;
+            ++shownBtns;
         }
     }
 
-    int totalH = m_expanded ? (pad + BTN_H + gap + m_menuBtns.size() * (BTN_H + gap))
+    int totalH = m_expanded ? (pad + BTN_H + gap + shownBtns * (BTN_H + gap))
                             : (pad + BTN_H + pad);
     setFixedSize(pad + BTN_W + pad, totalH);
 }
@@ -1915,6 +2034,31 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         emit dssGainChanged(v);
     });
 
+    // ── 3D span — how far the near rows overhang the plot edges ───────────
+    // Caps how much of the radio's offscreen spectrum the surface may use to
+    // close the empty wedges beside it. 100 spends everything available, so a
+    // source that ships no overhang is unaffected at any setting.
+    makeRow("3D Span:", 0, 100, 100, m_dssRowSpanSlider, m_dssRowSpanLabel,
+            &m_dssRowSpanTitle);
+    if (m_dssRowSpanSlider) {
+        m_dssRowSpanSlider->setObjectName("dssRowSpanSlider");
+        m_dssRowSpanSlider->setAccessibleName(tr("3D Span"));
+        m_dssRowSpanSlider->setAccessibleDescription(
+            tr("How far the nearest 3D traces overhang the plot edges, using "
+               "spectrum from outside the panadapter. 0 keeps the classic "
+               "narrowing trapezoid."));
+        // Tooltip text lives in setDssRowSpanSupported() so the enabled and
+        // unavailable wordings cannot drift apart.
+        m_dssRowSpanSupported = false;
+        setDssRowSpanSupported(true);
+    }
+    connect(m_dssRowSpanSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (m_dssRowSpanLabel) {
+            m_dssRowSpanLabel->setText(QString::number(v));
+        }
+        emit dssRowSpanChanged(v);
+    });
+
     makeHeader("SYSTEM");
 
     // ── Render GPU (multi-GPU systems only) ───────────────────────────────
@@ -2136,7 +2280,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                int renderMode,
                                                int dssFloorDepth,
                                                int dssGain,
-                                               const QColor& lineColor)
+                                               const QColor& lineColor,
+                                               int dssRowSpan)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -2212,6 +2357,40 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
         m_dssGainSlider->setValue(dssGain);
         if (m_dssGainLabel) m_dssGainLabel->setText(QString::number(dssGain));
     }
+    if (m_dssRowSpanSlider) {
+        QSignalBlocker bs(m_dssRowSpanSlider);
+        m_dssRowSpanSlider->setValue(dssRowSpan);
+        if (m_dssRowSpanLabel) {
+            m_dssRowSpanLabel->setText(QString::number(dssRowSpan));
+        }
+    }
+}
+
+void SpectrumOverlayMenu::setDssRowSpanSupported(bool supported)
+{
+    if (!m_dssRowSpanSlider || m_dssRowSpanSupported == supported) {
+        return;
+    }
+    m_dssRowSpanSupported = supported;
+    m_dssRowSpanSlider->setEnabled(supported);
+    if (m_dssRowSpanLabel) {
+        m_dssRowSpanLabel->setEnabled(supported);
+    }
+    if (m_dssRowSpanTitle) {
+        m_dssRowSpanTitle->setEnabled(supported);
+    }
+    m_dssRowSpanSlider->setToolTip(supported
+        ? QStringLiteral(
+              "3D surface width: how far the nearest traces overhang the plot "
+              "edges,\nusing spectrum the radio sends from outside the "
+              "panadapter.\nHigher = the empty wedges beside the surface close "
+              "from the front;\n0 = the classic narrowing trapezoid. Limited "
+              "by how much\noffscreen spectrum the source actually provides.")
+        : QStringLiteral(
+              "Unavailable: the 3D view is on the CPU fallback, which always "
+              "draws\nthe narrowing trapezoid. The GPU mesh path this control "
+              "drives\nneeds float (RGBA16F) textures, which this system's "
+              "graphics\ndriver does not report."));
 }
 
 void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
@@ -2499,6 +2678,17 @@ void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
     }
 }
 
+void SpectrumOverlayMenu::setNotchesSupported(bool supported)
+{
+    if (m_notchesSupported == supported)
+        return;
+    m_notchesSupported = supported;
+    // Through the layout rather than a bare setVisible: the layout loop assigns
+    // every button's position and visibility, so a direct hide here would be
+    // undone by the next relayout and the button would flicker back.
+    updateLayout();
+}
+
 void SpectrumOverlayMenu::setDaxStreamsAvailable(bool available)
 {
     // The button lives in the menu row and the panel is a popup off it, so both
@@ -2531,22 +2721,99 @@ void SpectrumOverlayMenu::setRfGain(int gain)
 {
     QSignalBlocker b(m_rfGainSlider);
     m_rfGainSlider->setValue(gain);
-    m_rfGainLabel->setText(QString("%1 dB").arg(gain));
+    m_rfGainLabel->setText(QString("%1%2").arg(gain).arg(m_rfGainUnitSuffix));
     m_lastEmittedRfGain = gain;  // keep emit-dedupe in sync with external updates
 }
 
-void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step)
+void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step,
+                                         const QString& unitSuffix)
 {
     if (!m_rfGainSlider) return;
+    m_rfGainUnitSuffix = unitSuffix;
     QSignalBlocker b(m_rfGainSlider);
     m_rfGainSlider->setRange(low, high);
     m_rfGainSlider->setSingleStep(step);
     m_rfGainSlider->setPageStep(step);
     m_rfGainSlider->setTickInterval(step);
+    // The unit comes from the backend, so the tooltip cannot hardcode "dB"
+    // either — it said "dB" over a control that was three preamp positions.
+    const QString unitWord = unitSuffix.trimmed().isEmpty()
+        ? QStringLiteral("step") : unitSuffix.trimmed();
     m_rfGainSlider->setToolTip(
-        QString("RF Gain: %1 to %2%3 dB (%4 dB steps)\n"
-                "Step size is determined by radio hardware.")
-            .arg(low).arg(high > 0 ? "+" : "").arg(high).arg(step));
+        QString("RF Gain: %1%2 to %3%4%2 (%5%2 steps)\n"
+                "Range and step are reported by the radio.")
+            .arg(low).arg(unitWord).arg(high > 0 ? "+" : "").arg(high).arg(step));
+    // Re-render the readout in the new unit, or the number keeps the previous
+    // radio's suffix until the operator next moves the slider.
+    if (m_rfGainLabel) {
+        m_rfGainLabel->setText(
+            QString("%1%2").arg(m_rfGainSlider->value()).arg(m_rfGainUnitSuffix));
+    }
+}
+
+// ── Discrete receive front-end stages ────────────────────────────────────────
+//
+// Cycling buttons, not sliders. These are named positions with no numeric
+// relationship — "OFF / P.AMP1 / P.AMP2" is not a scale, and a slider over it
+// invites the reading that P.AMP2 is twice P.AMP1. The button shows where the
+// control IS and clicking advances one position, wrapping at the end.
+void SpectrumOverlayMenu::setPreampLabels(const QStringList& labels)
+{
+    m_preampLabels = labels;
+    if (m_preampStep >= labels.size())
+        m_preampStep = 0;
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::setPreampStep(int step)
+{
+    m_preampStep = std::clamp(step, 0, std::max(0, static_cast<int>(m_preampLabels.size()) - 1));
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::setAttenuatorLabels(const QStringList& labels)
+{
+    m_attenuatorLabels = labels;
+    if (m_attenuatorStep >= labels.size())
+        m_attenuatorStep = 0;
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::setAttenuatorStep(int step)
+{
+    m_attenuatorStep =
+        std::clamp(step, 0, std::max(0, static_cast<int>(m_attenuatorLabels.size()) - 1));
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::refreshFrontEndButtons()
+{
+    if (!m_preampRow || !m_attenuatorRow)
+        return;
+
+    // A one-entry list is not a control. A radio that reports only "OFF" has
+    // nothing to switch between, and a button that can never change is worse
+    // than no button at all.
+    const auto apply = [](QWidget* row, QPushButton* btn, const QStringList& labels,
+                          int step, const QString& what) {
+        const bool present = labels.size() > 1;
+        row->setVisible(present);
+        if (!present)
+            return;
+        const QString position = labels.at(std::clamp(step, 0, static_cast<int>(labels.size()) - 1));
+        btn->setText(position);
+        // Lit when it is doing something. Position 0 is the off position by the
+        // convention the backend publishes its label list in.
+        QSignalBlocker b(btn);
+        btn->setChecked(step > 0);
+        btn->setToolTip(QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
+                            .arg(what, position, labels.join(" / ")));
+    };
+
+    apply(m_preampRow, m_preampBtn, m_preampLabels, m_preampStep,
+          QStringLiteral("preamp"));
+    apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
+          QStringLiteral("attenuator"));
 }
 
 void SpectrumOverlayMenu::setLoopState(bool loopA, bool loopB)
@@ -2648,8 +2915,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_bandPanel = new QWidget(parentWidget());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget { background: rgba(15, 15, 26, 220); "
-                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
+    applyPanelStyle(m_bandPanel, QStringLiteral("bandPanel"));
     m_bandPanel->hide();
     m_bandPanel->installEventFilter(this);
 
@@ -2816,8 +3082,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_xvtrPanel = new QWidget(parentWidget());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_xvtrPanel, "QWidget { background: rgba(15, 15, 26, 220); "
-                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
+    applyPanelStyle(m_xvtrPanel, QStringLiteral("xvtrPanel"));
     m_xvtrPanel->hide();
     m_xvtrPanel->installEventFilter(this);
     m_xvtrPanelVisible = false;

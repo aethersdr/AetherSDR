@@ -94,6 +94,17 @@ RNNOISE_EXPORT void rnnoise_destroy(DenoiseState *st);
 RNNOISE_EXPORT float rnnoise_process_frame(DenoiseState *st, float *out, const float *in);
 
 /**
+ * Denoise a frame while retaining a fixed portion of the original spectrum.
+ *
+ * dry_mix is clamped to [0, 1]. Both paths share RNNoise's synthesis and
+ * overlap-add stage, avoiding phase error from an external waveform blend.
+ */
+RNNOISE_EXPORT float rnnoise_process_frame_with_dry_mix(DenoiseState *st,
+                                                        float *out,
+                                                        const float *in,
+                                                        float dry_mix);
+
+/**
  * Load a model from a memory buffer
  *
  * It must be deallocated with rnnoise_model_free() and the buffer must remain

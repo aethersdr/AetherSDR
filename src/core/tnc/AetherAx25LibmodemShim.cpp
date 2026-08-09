@@ -2,6 +2,7 @@
 
 #include "core/LogManager.h"
 #include "core/tnc/Ax25FrameFormatter.h"
+#include "core/tnc/Ax25LinkTiming.h"
 
 #include "bitstream.h"
 #include "demodulator.h"
@@ -79,10 +80,15 @@ constexpr int kDuplicateSuppressSeconds = 2;
 // keeps its long preamble, while VHF 1200 uses a shorter one because at 1200
 // baud each flag is 4x quicker (80 flags = 533 ms vs a far more typical ~0.43 s
 // here), trimming dead air and slot time without starving the receiver. Tune
-// kVhf1200TxPreambleFlags if a transverter's T/R switching needs more lead-in.
-constexpr int kTxPreambleFlags = 80;        // HF 300: ~2.13 s of flags
-constexpr int kVhf1200TxPreambleFlags = 64; // VHF 1200: ~0.43 s of flags
-constexpr int kTxPostambleFlags = 8;
+// kAx25Vhf1200PreambleFlags if a transverter's T/R switching needs more lead-in.
+//
+// These live in Ax25LinkTiming.h, not here, because the link-layer airtime
+// model has to read the same numbers the modulator transmits — T1 is derived
+// from them. If the two ever drifted apart, T1 would silently stop matching
+// reality, which is exactly the class of bug that broke HF connected mode.
+constexpr int kTxPreambleFlags = ax25::kAx25Hf300PreambleFlags;        // HF 300: ~2.13 s
+constexpr int kVhf1200TxPreambleFlags = ax25::kAx25Vhf1200PreambleFlags; // VHF: ~0.43 s
+constexpr int kTxPostambleFlags = ax25::kAx25TxPostambleFlags;
 constexpr int kTxVitaPacketFrames = 128;
 constexpr double kTxAfskAmplitude = 0.35;
 // Phase diversity compensates for 300 baud HF timing drift until the shim grows
@@ -265,7 +271,7 @@ bool initTxResult(const Ax25DemodConfig& cfg, Ax25TransmitResult& result)
     result.polarity = cfg.polarity;
     result.markHz = cfg.markHz;
     result.spaceHz = cfg.spaceHz;
-    result.preambleFlags = txPreambleFlagsForProfile(cfg.profile);
+    result.preambleFlags = ax25EffectiveTxPreambleFlags(cfg);
     result.postambleFlags = kTxPostambleFlags;
     result.vitaPacketFrames = kTxVitaPacketFrames;
 
@@ -1168,10 +1174,39 @@ int ax25DemodLaneCount(const Ax25DemodConfig& cfg)
     return layout.wantA ? layout.aSlicers : 0;
 }
 
+int ax25TxPreambleFlags(Ax25ModemProfile profile)
+{
+    return txPreambleFlagsForProfile(profile);
+}
+
+int ax25TxPostambleFlags()
+{
+    return kTxPostambleFlags;
+}
+
+int ax25EffectiveTxPreambleFlags(const Ax25DemodConfig& cfg)
+{
+    return cfg.txPreambleFlags > 0 ? cfg.txPreambleFlags
+                                   : txPreambleFlagsForProfile(cfg.profile);
+}
+
+ax25::LinkTimingProfile ax25LinkTimingForConfig(const Ax25DemodConfig& cfg,
+                                                int localTxOverheadMs)
+{
+    ax25::LinkTimingProfile profile = ax25::LinkTimingProfile::forBaud(cfg.baud);
+    profile.preambleFlags = ax25EffectiveTxPreambleFlags(cfg);
+    profile.postambleFlags = ax25TxPostambleFlags();
+    if (localTxOverheadMs > 0)
+        profile.localTxOverheadMs = localTxOverheadMs;
+    return profile;
+}
+
 QString ax25DemodDescription(const Ax25DemodConfig& cfg)
 {
     const int lanes = ax25DemodLaneCount(cfg);
-    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6, %7 lane%8")
+    const int preamble = ax25EffectiveTxPreambleFlags(cfg);
+    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6, %7 lane%8, "
+                          "TXD %9 flags (%10 ms)%11")
         .arg(ax25ModemProfileName(cfg.profile))
         .arg(cfg.sampleRate)
         .arg(cfg.baud)
@@ -1181,7 +1216,10 @@ QString ax25DemodDescription(const Ax25DemodConfig& cfg)
              ? QStringLiteral("Normal")
              : QStringLiteral("Inverted"))
         .arg(lanes)
-        .arg(lanes == 1 ? QString() : QStringLiteral("s"));
+        .arg(lanes == 1 ? QString() : QStringLiteral("s"))
+        .arg(preamble)
+        .arg(cfg.baud > 0 ? preamble * 8 * 1000 / cfg.baud : 0)
+        .arg(cfg.txPreambleFlags > 0 ? QStringLiteral(" [override]") : QString());
 }
 
 Ax25TransmitResult ax25BuildTransmitAudio(

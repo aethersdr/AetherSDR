@@ -1,14 +1,13 @@
 #include "TestSettingsProfile.h"
+#include "TestEventLoop.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QHash>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
-#include <QThread>
 
 #include <cstdio>
 #include <functional>
@@ -29,14 +28,15 @@ void check(bool condition, const char* description)
 
 bool waitFor(const std::function<bool()>& predicate, int timeoutMs)
 {
-    QElapsedTimer timer;
-    timer.start();
-    while (!predicate() && timer.elapsed() < timeoutMs) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-        QThread::msleep(5);
-    }
+    const bool ok = AetherTest::waitFor(predicate, timeoutMs);
+    // Trailing drain preserved from the pre-#4699 helper, for the same reason as
+    // tci_automation_test's: AetherTest::waitFor() returns as soon as its
+    // predicate holds, and the registration state asserted here settles an event
+    // hop after the condition waited on. No failure was observed without it in
+    // 45 runs, unlike the tci case — it is kept because it is the identical
+    // semantic change, not because this test was seen to need it.
     QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-    return predicate();
+    return ok;
 }
 
 int commandCount(const QStringList& commands, const QString& prefix)

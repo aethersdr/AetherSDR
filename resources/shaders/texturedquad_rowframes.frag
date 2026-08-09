@@ -14,13 +14,17 @@ layout(std140, binding = 0) uniform Uniforms {
     float rowFrequencyFrames;
     float scrollSampleOffsetUnit;
     float texelHeightUnit;
-    float padding6;
+    float waterfallRows;
     float padding7;
 };
 
-vec4 sampleWaterfallRow(float rowIndex, float unit)
+vec4 sampleWaterfallSourceAge(float sourceAge, float unit, float rows)
 {
-    float rowY = fract((rowIndex + 0.5) * unit);
+    // The source age is logical waterfall history, not a physical ring row.
+    // Clamp it before applying the write-row origin so the cubic kernel cannot
+    // alias the opposite end of the ring at either history boundary.
+    float clampedAge = clamp(sourceAge, 0.0, rows - 1.0);
+    float rowY = fract(rowOffset + (clampedAge + 0.5) * unit);
     vec4 rowFrame = texture(rowFrequencyFrame, vec2(0.5, rowY));
     if (rowFrame.y <= 0.0) {
         return vec4(0.0, 0.0, 0.0, 1.0);
@@ -54,12 +58,12 @@ void main()
     // rasterized. Reconstruct four adjacent rows independently so each sample
     // is remapped through its own frame while the vertical motion remains
     // phase-stable instead of alternating sharp/blurred.
-    float physicalY = fract(
-        v_uv.y + rowOffset + scrollSampleOffsetUnit);
     float unit = max(texelHeightUnit, 0.000001);
-    float texel = physicalY / unit - 0.5;
-    float base = floor(texel);
-    float f = fract(texel);
+    float rows = max(waterfallRows, 1.0);
+    float logicalTexel =
+        (v_uv.y + scrollSampleOffsetUnit) / unit - 0.5;
+    float base = floor(logicalTexel);
+    float f = fract(logicalTexel);
     float f2 = f * f;
     float f3 = f2 * f;
     float w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
@@ -67,8 +71,8 @@ void main()
     float w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
     float w3 = f3 / 6.0;
     fragColor =
-          sampleWaterfallRow(base - 1.0, unit) * w0
-        + sampleWaterfallRow(base,       unit) * w1
-        + sampleWaterfallRow(base + 1.0, unit) * w2
-        + sampleWaterfallRow(base + 2.0, unit) * w3;
+          sampleWaterfallSourceAge(base - 1.0, unit, rows) * w0
+        + sampleWaterfallSourceAge(base,       unit, rows) * w1
+        + sampleWaterfallSourceAge(base + 1.0, unit, rows) * w2
+        + sampleWaterfallSourceAge(base + 2.0, unit, rows) * w3;
 }

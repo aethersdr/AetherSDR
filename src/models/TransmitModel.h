@@ -250,6 +250,13 @@ public:
     // through them would echo our own state as a fresh command and, with the
     // strip on the other end, oscillate. Returns true when something changed.
     bool applySpeechProcessorState(bool on, int level);
+    // Adopt a mic selection the OPERATOR did not choose — a radio whose input
+    // this client cannot select forces the source, and the model must agree
+    // with what the UI is showing. Like applySpeechProcessorState this updates
+    // state WITHOUT emitting commandReady, because pushing a forced value back
+    // out as operator intent is how a capability turns into a command nobody
+    // issued. Returns true when something changed.
+    bool applyMicSelectionState(const QString& input);
     void setDax(bool on);
     void setSbMonitor(bool on);
     void setMonGainSb(int gain);
@@ -320,6 +327,11 @@ signals:
     // (Principle II). Distinct from txFilterCutoffChanged, which also fires when
     // a Flex's own status moves the value.
     void txFilterCommandIssued(int lowHz, int highHz);
+    // The operator moved the MIC slider. OPERATOR INTENT ONLY, for exactly the
+    // reason txFilterCommandIssued carries above: applyStatus() must never emit
+    // this, or a Flex's own `transmit set miclevel=` echo would be handed
+    // straight back to the seam as a fresh command.
+    void micLevelCommandIssued(int level);
     // The operator moved PROC or its NOR/DX/DX+ level. OPERATOR INTENT ONLY,
     // for the same reason as txFilterCommandIssued — and here the distinction is
     // what protects the operator's own work: the client compressor these drive is
@@ -329,6 +341,13 @@ signals:
     // transition and overwrite the settings the operator had just dialled in
     // there. applySpeechProcessorState() never emits this.
     void speechProcessorCommandIssued(bool on, int level);
+    // VOX and the ATU, for the same reason the speech processor has one: the
+    // wire text above IS the command on a Flex and reaches nothing anywhere
+    // else, so a non-Flex backend needs the intent as a signal. Emitted from
+    // the set* / atu* methods only, never from applyStatus() — echoing a status
+    // back at the radio as a command is how a control starts fighting itself.
+    void voxCommandIssued(bool on, int level, int delayMs);
+    void atuCommandIssued(bool start);
     // Fires only when cwPitch actually changes. Use this instead of
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).

@@ -5,6 +5,8 @@
 #include "core/Resampler.h"
 
 #include <QLoggingCategory>
+#include <QRegularExpression>
+#include <QStringList>
 #include <QThread>
 
 #include <algorithm>
@@ -23,16 +25,109 @@ constexpr int kResampleBlock = 4096; // max samples per r8brain process() call
 // resampler's group delay small (important for live copy and for prompt segment
 // close-out).
 constexpr double kResampleTransBand = 10.0;
+
+// Segment-overlap de-dup (RFC #4821, Approach A). A cap-forced segment carries a
+// little trailing audio into the next one, so the next decode re-transcribes the
+// tail of the previous segment as its own leading words. We strip that repeated
+// prefix at the text level — backend-agnostic, no whisper-param change, and it
+// keeps the byte-safe segment text (no per-token UTF-8 reconstruction).
+
+// Normalize a word for boundary comparison: drop leading/trailing non-alnum
+// (punctuation whisper may add on one side of the cut but not the other) and
+// lowercase, so "fox." and "Fox" match across the boundary.
+QString normWord(const QString& w)
+{
+    int a = 0;
+    int b = static_cast<int>(w.size());
+    while (a < b && !w.at(a).isLetterOrNumber()) ++a;
+    while (b > a && !w.at(b - 1).isLetterOrNumber()) --b;
+    return w.mid(a, b - a).toLower();
+}
+
+// Hard ceiling on the compared window regardless of overlapMs — a coincidental
+// long repeat must never swallow genuine new text.
+constexpr int kMaxOverlapWords = 12;
+// Rough shortest-plausible word length; overlapMs / this + a margin bounds how
+// many leading words the carried window could actually duplicate. Keeping the
+// strip near the real overlap (rather than the unconstrained longest match)
+// limits over-stripping genuine repeated speech at the boundary (Approach A is
+// deliberately lossy only at the margins — see RFC #4821).
+constexpr int kMinWordMs = 200;
+
+// Strip from `next` the longest run of leading words that duplicates the tail of
+// `prev` (word-level, normalized); return the remaining text. `overlapMs` is the
+// configured carry window — the comparison is bounded to about that many words.
+// No match → `next` unchanged.
+QString stripOverlapWords(const QString& prev, const QString& next, int overlapMs)
+{
+    static const QRegularExpression ws(QStringLiteral("\\s+"));
+    const QStringList prevWords = prev.split(ws, Qt::SkipEmptyParts);
+    const QStringList nextWords = next.split(ws, Qt::SkipEmptyParts);
+    // Bound the window by the carry duration (words the overlap could hold),
+    // then by the hard ceiling and the two token counts.
+    const int overlapWordBudget = overlapMs > 0 ? overlapMs / kMinWordMs + 1 : 0;
+    const int cap = std::min({overlapWordBudget, kMaxOverlapWords,
+                              static_cast<int>(prevWords.size()),
+                              static_cast<int>(nextWords.size())});
+    // Pre-normalize only the tokens in range: prev's last `cap`, next's first `cap`.
+    std::vector<QString> prevTail;
+    std::vector<QString> nextHead;
+    prevTail.reserve(cap);
+    nextHead.reserve(cap);
+    for (int i = 0; i < cap; ++i) {
+        prevTail.push_back(normWord(prevWords.at(prevWords.size() - cap + i)));
+        nextHead.push_back(normWord(nextWords.at(i)));
+    }
+    int best = 0;
+    for (int k = 1; k <= cap; ++k) {
+        bool match = true;
+        for (int j = 0; j < k; ++j) {
+            const QString& p = prevTail.at(cap - k + j);
+            const QString& n = nextHead.at(j);
+            // A punctuation-only token normalizes to "" — never let "" == ""
+            // count as a boundary-word match (it isn't a real repeated word).
+            if (p.isEmpty() || n.isEmpty() || p != n) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            best = k; // keep the longest k that fully matches
+        }
+    }
+    if (best == 0) {
+        return next;
+    }
+    // Return the ORIGINAL text sliced at the best-th word, not a rejoin of the
+    // split tokens. split("\\s+")+join(' ') would collapse internal whitespace
+    // runs, flatten tabs/non-breaking spaces, and drop whisper's leading space —
+    // but only on segments that happened to match, so de-dup'd continuations
+    // would be formatted differently from untouched ones (return next; above).
+    // Find where the best-th word starts and slice there (robust to a leading
+    // space; best == nextWords.size() slices to "" — a fully-overlapped segment).
+    static const QRegularExpression word(QStringLiteral("\\S+"));
+    QRegularExpressionMatchIterator it = word.globalMatch(next);
+    qsizetype offset = next.size();
+    for (int i = 0; it.hasNext(); ++i) {
+        const QRegularExpressionMatch m = it.next();
+        if (i == best) {
+            offset = m.capturedStart();
+            break;
+        }
+    }
+    return next.mid(offset);
+}
 } // namespace
 
 // ---- AsrWorker -------------------------------------------------------------
 
-AsrWorker::AsrWorker(AsrBackendFactory factory, AsrSegmenter::Config segConfig)
+AsrWorker::AsrWorker(AsrBackendFactory factory, AsrSegmenter::Config segConfig,
+                     AsrSpeakerEmbedderFactory speakerEmbedderFactory)
     : m_factory(std::move(factory))
+    , m_speakerEmbedderFactory(std::move(speakerEmbedderFactory))
     , m_segmenter(segConfig)
     , m_vadModelPath(segConfig.vadModelPath)
     , m_clusterer(segConfig.speakerThreshold)
-    , m_speakerModelPath(segConfig.speakerModelPath)
 {
 }
 
@@ -45,9 +140,19 @@ AsrWorker::~AsrWorker()
 
 void AsrWorker::init()
 {
+    // ~AsrEngine() joins this thread, so every stage that can run long is a
+    // stage the GUI thread may end up waiting on. A stage already in flight
+    // still has to finish, but one that has not started must not begin after
+    // shutdown was requested — that is what bounds the join (#4737).
+    if (m_shuttingDown.load(std::memory_order_relaxed)) {
+        return;
+    }
     m_backend = m_factory ? m_factory() : nullptr;
     if (m_backend == nullptr) {
         emit errorOccurred(QStringLiteral("ASR backend could not be created."));
+    }
+    if (m_shuttingDown.load(std::memory_order_relaxed)) {
+        return;
     }
 
     // Build the learned VAD on the worker thread (the ONNX session must live
@@ -65,18 +170,9 @@ void AsrWorker::init()
         }
     }
 
-    // Speaker-embedding model for per-utterance A/B/C labeling (worker thread).
-    if (!m_speakerModelPath.empty()) {
-        auto embedder = std::make_unique<SpeakerEmbedder>();
-        if (embedder->load(m_speakerModelPath)) {
-            m_embedder = std::move(embedder);
-            qCInfo(lcAsrEngine, "ASR: speaker embedder loaded from %s",
-                   m_speakerModelPath.c_str());
-        } else {
-            qCWarning(lcAsrEngine, "ASR: speaker embedder load failed (%s) — no labeling",
-                      m_speakerModelPath.c_str());
-        }
-    }
+    // No speaker embedder is built here: it is a runtime property loaded via
+    // loadSpeakerModel() so the operator's labeling toggle never rebuilds the
+    // engine (#4737). AsrEngine::setSpeakerModelPath() is its only entry point.
 }
 
 void AsrWorker::loadModel(const QString& modelPath)
@@ -90,10 +186,62 @@ void AsrWorker::loadModel(const QString& modelPath)
         m_warnedNoModel = false;
         m_segmenter.reset();
         m_clusterer.reset();
+        m_prevSegmentText.clear();
         emit loaded();
     } else {
         emit loadFailed(error);
     }
+}
+
+void AsrWorker::loadSpeakerModel(const QString& modelPath)
+{
+    if (modelPath.isEmpty()) {
+        return;
+    }
+    if (m_shuttingDown.load(std::memory_order_relaxed)) {
+        // Building the ~24 MB ECAPA session here would be time the destructor's
+        // join has to wait out. Report the request as unfulfilled instead; the
+        // engine is going away, so nothing is left to observe it. NOT gated on
+        // m_cancelPending — that flag is also set whenever the tap is disabled,
+        // which is exactly when a speaker load is queued.
+        emit speakerModelLoaded(modelPath, false);
+        return;
+    }
+
+    std::unique_ptr<SpeakerEmbedder> embedder;
+    if (m_speakerEmbedderFactory) {
+        embedder = m_speakerEmbedderFactory(modelPath);
+    } else {
+        auto candidate = std::make_unique<SpeakerEmbedder>();
+        if (candidate->load(modelPath.toStdString())) {
+            embedder = std::move(candidate);
+        }
+    }
+
+    if (embedder) {
+        m_embedder = std::move(embedder);
+        m_speakerModelPath = modelPath.toStdString();
+        m_clusterer.reset();
+        qCInfo(lcAsrEngine, "ASR: speaker embedder loaded from %s",
+               m_speakerModelPath.c_str());
+        emit speakerModelLoaded(modelPath, true);
+    } else {
+        // A replacement that fails must not keep assigning labels through the
+        // previous model. Dropping the embedder is what guarantees that —
+        // m_speakerLabelingEnabled stays the operator's intent and is left
+        // alone, so the two never disagree about who owns which fact.
+        m_embedder.reset();
+        m_clusterer.reset();
+        m_speakerModelPath.clear();
+        qCWarning(lcAsrEngine, "ASR: speaker embedder load failed (%s) — no labeling",
+                  qPrintable(modelPath));
+        emit speakerModelLoaded(modelPath, false);
+    }
+}
+
+void AsrWorker::setSpeakerLabelingEnabled(bool on)
+{
+    m_speakerLabelingEnabled = on;
 }
 
 std::vector<float> AsrWorker::toSixteenK(const QVector<float>& monoSamples, int sampleRate)
@@ -151,7 +299,7 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    std::vector<std::vector<float>> segments =
+    std::vector<AsrSegmenter::ClosedSegment> segments =
         m_segmenter.feed(pcm16k.data(), static_cast<int>(pcm16k.size()));
     if (segments.empty()) {
         return;
@@ -165,23 +313,51 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    for (std::vector<float>& seg : segments) {
+    for (AsrSegmenter::ClosedSegment& seg : segments) {
         QString error;
-        const AsrTranscript result = m_backend->transcribe(seg, &error);
+        const AsrTranscript result = m_backend->transcribe(seg.samples, &error);
         if (!error.isEmpty()) {
             emit errorOccurred(error);
+            // A failed decode yields no tail — same as an empty one below: drop
+            // the reference so the next continuation doesn't de-dup against a
+            // stale, pre-failure segment.
+            m_prevSegmentText.clear();
             continue;
         }
         if (result.text.isEmpty()) {
+            // Nothing decoded. Clear the tail so the NEXT continuation (whose
+            // carried audio overlaps THIS segment, not the one before it) doesn't
+            // de-dup against a two-segments-old tail — m_prevSegmentText must
+            // always mirror the immediately-preceding segment.
+            m_prevSegmentText.clear();
             continue;
         }
-        // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
-        int speaker = -1;
-        if (m_embedder) {
-            speaker = m_clusterer.assign(
-                m_embedder->embed(seg.data(), static_cast<int>(seg.size())));
+        // Segment overlap (RFC #4821): when this segment was seeded with audio
+        // carried across the previous cap-forced close, its leading words repeat
+        // that segment's tail — strip them so nothing is emitted twice.
+        QString emitText = result.text;
+        if (seg.continuesPrevious && !m_prevSegmentText.isEmpty()) {
+            // Use the window captured when THIS segment closed, not the live
+            // slider — a mid-backlog slider move must not re-scope a queued strip.
+            emitText = stripOverlapWords(m_prevSegmentText, result.text, seg.overlapMs);
         }
-        emit segmentText(result.text, result.confidence, speaker);
+        m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
+        if (emitText.isEmpty()) {
+            continue; // the whole segment was overlap (rare) — nothing new to emit
+        }
+        // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
+        // Known limitation (RFC #4821): for a continuation segment this embeds the
+        // whole buffer, including the carried overlap prefix that also fed the
+        // previous segment's embedding — a small same-speaker weighting bias
+        // (never a different voice), only material when speaker labeling AND
+        // overlap are both on with a small decode buffer. Not corrected here; a
+        // fix would thread the carried-sample count through to skip the prefix.
+        int speaker = -1;
+        if (m_speakerLabelingEnabled && m_embedder) {
+            speaker = m_clusterer.assign(
+                m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
+        }
+        emit segmentText(emitText, result.confidence, speaker);
     }
     }();
 
@@ -203,6 +379,11 @@ void AsrWorker::setHangoverMs(int ms)
     m_segmenter.setHangoverMs(ms);
 }
 
+void AsrWorker::setOverlapMs(int ms)
+{
+    m_segmenter.setOverlapMs(ms);
+}
+
 void AsrWorker::setSpeakerThreshold(float t)
 {
     m_clusterer.setThreshold(t);
@@ -212,6 +393,7 @@ void AsrWorker::reset()
 {
     m_segmenter.reset();
     m_clusterer.reset(); // new session/frequency → relabel speakers from A
+    m_prevSegmentText.clear(); // a Clear/retune must not de-dup against stale text
     m_resampler.reset();
     m_resamplerSrcRate = 0;
 }
@@ -224,16 +406,18 @@ AsrEngine::AsrEngine(AsrBackendFactory factory, QObject* parent)
 }
 
 AsrEngine::AsrEngine(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,
-                     QObject* parent)
+                     QObject* parent, AsrSpeakerEmbedderFactory speakerEmbedderFactory)
     : QObject(parent)
 {
-    startThread(std::move(factory), segConfig);
+    startThread(std::move(factory), segConfig, std::move(speakerEmbedderFactory));
 }
 
-void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig)
+void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,
+                            AsrSpeakerEmbedderFactory speakerEmbedderFactory)
 {
     m_thread = new QThread(this);
-    m_worker = new AsrWorker(std::move(factory), segConfig);
+    m_worker = new AsrWorker(std::move(factory), segConfig,
+                             std::move(speakerEmbedderFactory));
     m_worker->moveToThread(m_thread);
 
     // Worker lifecycle: create the backend once the thread is running. The
@@ -244,10 +428,14 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
 
     // Engine -> worker (queued across threads).
     connect(this, &AsrEngine::requestLoad, m_worker, &AsrWorker::loadModel);
+    connect(this, &AsrEngine::requestLoadSpeakerModel, m_worker, &AsrWorker::loadSpeakerModel);
+    connect(this, &AsrEngine::requestSetSpeakerLabelingEnabled,
+            m_worker, &AsrWorker::setSpeakerLabelingEnabled);
     connect(this, &AsrEngine::requestProcess, m_worker, &AsrWorker::processAudio);
     connect(this, &AsrEngine::requestSetMaxSegmentMs, m_worker, &AsrWorker::setMaxSegmentMs);
     connect(this, &AsrEngine::requestSetSpeechRms, m_worker, &AsrWorker::setSpeechRms);
     connect(this, &AsrEngine::requestSetHangoverMs, m_worker, &AsrWorker::setHangoverMs);
+    connect(this, &AsrEngine::requestSetOverlapMs, m_worker, &AsrWorker::setOverlapMs);
     connect(this, &AsrEngine::requestSetSpeakerThreshold, m_worker, &AsrWorker::setSpeakerThreshold);
     connect(this, &AsrEngine::requestReset, m_worker, &AsrWorker::reset);
 
@@ -260,7 +448,20 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
         m_ready = false;
         emit loadFailed(err);
     });
-    connect(m_worker, &AsrWorker::segmentText, this, &AsrEngine::finalText);
+    // Forwarded verbatim: a failed load does NOT clear m_speakerLabelingEnabled.
+    // That flag is the operator's intent and only setSpeakerLabelingEnabled()
+    // writes it; the worker having dropped its embedder is what guarantees no
+    // labels are produced. Deciding what a failure means for the UI (status,
+    // un-checking the box) belongs to the controller, which owns that intent.
+    connect(m_worker, &AsrWorker::speakerModelLoaded, this,
+            &AsrEngine::speakerModelLoaded);
+    connect(m_worker, &AsrWorker::segmentText, this,
+            [this](const QString& text, float confidence, int speaker) {
+                // A queued worker toggle can be behind an in-flight decode. Mask
+                // its late result on the main side so the latest UI intent never
+                // appends a stale [A]/[B] label.
+                emit finalText(text, confidence, m_speakerLabelingEnabled ? speaker : -1);
+            });
     connect(m_worker, &AsrWorker::processedMs, this, [this](double ms) {
         m_processedMs += ms;
         updateBacklog();
@@ -283,6 +484,11 @@ AsrEngine::~AsrEngine()
             // whisper decode, or a remote HTTP round-trip up to its own
             // timeout) — quit()+wait() below still waits for that one.
             m_worker->setCancelPending(true);
+            // Separate from the cancel flag above, which is also raised every
+            // time the audio tap is disabled: this one is set only here, so
+            // init()/loadSpeakerModel() can skip a stage that has not started
+            // without ever refusing a legitimate load (#4737).
+            m_worker->requestShutdown();
         }
         m_thread->quit();
         m_thread->wait();
@@ -319,6 +525,19 @@ void AsrEngine::setModelPath(const QString& modelPath)
     emit requestLoad(modelPath);
 }
 
+void AsrEngine::setSpeakerModelPath(const QString& modelPath)
+{
+    if (!modelPath.isEmpty()) {
+        emit requestLoadSpeakerModel(modelPath);
+    }
+}
+
+void AsrEngine::setSpeakerLabelingEnabled(bool on)
+{
+    m_speakerLabelingEnabled = on;
+    emit requestSetSpeakerLabelingEnabled(on);
+}
+
 void AsrEngine::pushAudio(const QVector<float>& monoSamples, int sampleRate)
 {
     if (!m_enabled || monoSamples.isEmpty()) {
@@ -353,6 +572,11 @@ void AsrEngine::setSpeechRms(float rms)
 void AsrEngine::setSilenceDurationMs(int ms)
 {
     emit requestSetHangoverMs(ms);
+}
+
+void AsrEngine::setOverlapMs(int ms)
+{
+    emit requestSetOverlapMs(ms);
 }
 
 void AsrEngine::setSpeakerThreshold(float threshold)

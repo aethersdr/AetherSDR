@@ -1,15 +1,21 @@
 // Unit tests for fractional-octave smoothing on ClientEqCurveWidget.
 //
-// The smoothing function is exposed as a free static method so this
-// harness doesn't need a QApplication / live widget.
+// The smoothing function is exposed as a free static method, and the
+// cache assertions render a real widget through Qt's offscreen platform.
 
+#include "core/ClientEq.h"
 #include "gui/ClientEqCurveWidget.h"
 
+#include <QApplication>
+#include <QImage>
+#include <QPainter>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <vector>
 
 using AetherSDR::ClientEqCurveWidget;
+using AetherSDR::ClientEq;
 
 namespace {
 
@@ -29,6 +35,18 @@ bool nearlyEq(float a, float b, float tol = 0.01f)
 // 1025-bin (kFftSize/2 + 1 for kFftSize=2048) is the production size.
 constexpr int kBins = 1025;
 constexpr double kSampleRate = 24000.0;
+
+class DerivedEqCanvas final : public ClientEqCurveWidget {
+public:
+    using ClientEqCurveWidget::ClientEqCurveWidget;
+};
+
+void testDerivedCanvasIdentifiesAsBase()
+{
+    DerivedEqCanvas canvas;
+    report("derived EQ canvas inherits ClientEqCurveWidget",
+           canvas.inherits("AetherSDR::ClientEqCurveWidget"));
+}
 
 void testOffReturnsInputUnchanged()
 {
@@ -185,10 +203,163 @@ void testDbFloorPreserved()
     report("dB floor preserved on silent input", ok);
 }
 
+QImage renderWidget(ClientEqCurveWidget& widget)
+{
+    const QSize pixelSize(qRound(widget.width() * widget.devicePixelRatioF()),
+                          qRound(widget.height() * widget.devicePixelRatioF()));
+    QImage image(pixelSize,
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(widget.devicePixelRatioF());
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    widget.render(&painter);
+    return image;
+}
+
+bool imageIsNonblank(const QImage& image)
+{
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (image.pixelColor(x, y).alpha() != 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool imagesMatch(const QImage& first, const QImage& second)
+{
+    return first.size() == second.size()
+        && first.format() == second.format()
+        && first.sizeInBytes() == second.sizeInBytes()
+        && std::memcmp(first.constBits(), second.constBits(),
+                       static_cast<size_t>(first.sizeInBytes())) == 0;
+}
+
+qulonglong counter(const QVariantMap& stats, const char* key)
+{
+    return stats.value(QString::fromLatin1(key)).toULongLong();
+}
+
+void testPaintCaches()
+{
+    ClientEq eq;
+    eq.prepare(48000.0);
+    eq.setEnabled(true);
+    eq.setActiveBandCount(1);
+    ClientEq::BandParams band;
+    band.freqHz = 1200.0f;
+    band.gainDb = 4.0f;
+    band.q = 1.2f;
+    eq.setBand(0, band);
+
+    ClientEqCurveWidget widget;
+    widget.resize(480, 180);
+    widget.setEq(&eq);
+    widget.setReferenceCurvePreset(QStringLiteral("Heil DX"));
+    widget.setSelectedBand(0);
+    std::vector<float> fft(kBins, -65.0f);
+    fft[100] = -12.0f;
+    widget.setFftBinsDb(fft, kSampleRate);
+    const QImage firstImage = renderWidget(widget);
+    const QImage identicalImage = renderWidget(widget);
+    const QVariantMap first = widget.eqstatsSnapshot(false);
+    const qulonglong firstBackground = counter(first, "backgroundCacheRebuildCount");
+    const qulonglong firstResponse = counter(first, "responseCacheRebuildCount");
+    report("first paint builds background cache", firstBackground == 1);
+    report("first paint builds response cache", firstResponse == 1);
+    report("cached widget render remains nonblank", imageIsNonblank(firstImage));
+    report("identical cached composition is pixel-stable",
+           imagesMatch(firstImage, identicalImage));
+    const qreal dpr = first.value(QStringLiteral("dpr")).toReal();
+    const qulonglong expectedCacheBytes = static_cast<qulonglong>(qRound(widget.width() * dpr))
+        * static_cast<qulonglong>(qRound(widget.height() * dpr)) * 4ULL;
+    report("high-DPI cache preserves device pixels",
+           dpr >= 2.0 && counter(first, "backgroundCacheBytes") == expectedCacheBytes
+           && counter(first, "responseCacheBytes") == expectedCacheBytes);
+
+    for (int frame = 0; frame < 4; ++frame) {
+        fft[100 + frame] = -12.0f;
+        widget.setFftBinsDb(fft, kSampleRate);
+        (void)renderWidget(widget);
+    }
+    const QVariantMap fftOnly = widget.eqstatsSnapshot(false);
+    report("FFT-only paints reuse background cache",
+           counter(fftOnly, "backgroundCacheRebuildCount") == firstBackground);
+    report("FFT-only paints reuse response cache",
+           counter(fftOnly, "responseCacheRebuildCount") == firstResponse);
+    report("FFT-only cache hits are counted",
+           counter(fftOnly, "backgroundCacheHits") >= 4
+           && counter(fftOnly, "responseCacheHits") >= 4);
+
+    widget.setFilterCutoffs(200, 2800);
+    (void)renderWidget(widget);
+    const QVariantMap cutoffs = widget.eqstatsSnapshot(false);
+    report("filter cutoff rebuilds background only",
+           counter(cutoffs, "backgroundCacheRebuildCount") == firstBackground + 1
+           && counter(cutoffs, "responseCacheRebuildCount") == firstResponse);
+
+    widget.setReferenceCurvePreset(QStringLiteral("AT&T 1959"));
+    (void)renderWidget(widget);
+    const QVariantMap reference = widget.eqstatsSnapshot(false);
+    report("reference curve rebuilds response cache",
+           counter(reference, "responseCacheRebuildCount")
+           == counter(cutoffs, "responseCacheRebuildCount") + 1);
+
+    widget.setSelectedBand(-1);
+    (void)renderWidget(widget);
+    const QVariantMap selection = widget.eqstatsSnapshot(false);
+    report("band selection rebuilds response cache",
+           counter(selection, "responseCacheRebuildCount")
+           == counter(reference, "responseCacheRebuildCount") + 1);
+
+    widget.setShowFilledRegions(false);
+    (void)renderWidget(widget);
+    const QVariantMap filled = widget.eqstatsSnapshot(false);
+    report("filled-region toggle rebuilds response cache",
+           counter(filled, "responseCacheRebuildCount")
+           == counter(selection, "responseCacheRebuildCount") + 1);
+
+    band.gainDb = -3.0f;
+    eq.setBand(0, band);
+    widget.update();  // ClientEq has no QObject signal; callers may do this.
+    (void)renderWidget(widget);
+    const QVariantMap changedBand = widget.eqstatsSnapshot(false);
+    report("ClientEq band mutation rebuilds response cache",
+           counter(changedBand, "responseCacheRebuildCount")
+           == counter(filled, "responseCacheRebuildCount") + 1);
+
+    QFont changedFont = widget.font();
+    changedFont.setPointSize(13);
+    widget.setFont(changedFont);
+    (void)renderWidget(widget);
+    const QVariantMap changedFontStats = widget.eqstatsSnapshot(false);
+    report("font change rebuilds both text-bearing caches",
+           counter(changedFontStats, "backgroundCacheRebuildCount")
+           == counter(changedBand, "backgroundCacheRebuildCount") + 1
+           && counter(changedFontStats, "responseCacheRebuildCount")
+           == counter(changedBand, "responseCacheRebuildCount") + 1);
+
+    widget.resize(640, 220);
+    const QImage resizedImage = renderWidget(widget);
+    const QVariantMap resized = widget.eqstatsSnapshot(false);
+    report("resize rebuilds both caches",
+           counter(resized, "backgroundCacheRebuildCount")
+           == counter(changedFontStats, "backgroundCacheRebuildCount") + 1
+           && counter(resized, "responseCacheRebuildCount")
+           == counter(changedFontStats, "responseCacheRebuildCount") + 1);
+    report("resized widget render remains nonblank", imageIsNonblank(resizedImage));
+}
+
 }  // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
+    qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
+    qputenv("QT_SCALE_FACTOR", QByteArrayLiteral("2"));
+    QApplication app(argc, argv);
+    testDerivedCanvasIdentifiesAsBase();
     testOffReturnsInputUnchanged();
     testFlatInputStaysFlat();
     testImpulseSpreads();
@@ -197,6 +368,7 @@ int main()
     testEmptyInputHandled();
     testIdempotentForOff();
     testDbFloorPreserved();
+    testPaintCaches();
 
     if (g_failed == 0) {
         std::printf("\nAll EQ smoothing tests passed.\n");
