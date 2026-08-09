@@ -226,13 +226,19 @@ static void applyPanelStyle(QWidget* panel, const QString& objectName)
 
 // The same object-name scoping for the bare containers INSIDE a panel: rows
 // that group a label with its control so the pair can be shown or hidden as a
-// unit, and the Display panel's scroll viewport and content widget. Being real
-// QWidgets rather than layouts, they have to declare that they paint nothing —
-// and they have to declare it scoped, because an unscoped "QWidget { … }"
-// opt-out makes the container a cascade source in its own right, pushing its
-// rule onto its children and onto their tooltip labels, which is exactly what
-// the panel scoping above exists to stop. No ThemeManager here: the rule names
-// no token, so there is nothing to re-resolve on a theme change.
+// unit, and the Display panel's scroll area, viewport and content widget. Being
+// real QWidgets rather than layouts, they have to declare that they paint
+// nothing — and they have to declare it scoped, because an unscoped
+// "QWidget { … }" opt-out makes the container a cascade source in its own
+// right, pushing its rule onto its children and onto their tooltip labels,
+// which is exactly what the panel scoping above exists to stop. No ThemeManager
+// here: the rule names no token, so there is nothing to re-resolve on a theme
+// change.
+//
+// The selector is QWidget# even for the QScrollArea: a type selector matches
+// subclasses, and the object name already pins the rule to exactly one widget,
+// so spelling the concrete class would narrow nothing — it would only keep that
+// one site out of this helper and back on a hand-rolled literal.
 static void applyTransparentStyle(QWidget* widget, const QString& objectName)
 {
     widget->setObjectName(objectName);
@@ -690,11 +696,14 @@ void SpectrumOverlayMenu::buildAntPanel()
         auto* rowWidget = new QWidget;
         // NO BOX AROUND THE ROW. The rows above are bare QHBoxLayouts added
         // straight to the panel's vbox; these two need real containers so each
-        // can hide independently, which is exactly what makes them a surface
-        // the panel's frame can land on. Scoped to the row's own name for the
-        // reason applyTransparentStyle documents — the opt-out this replaced
-        // was itself unscoped, so it cancelled the panel's box by broadcasting
-        // a rule at every descendant, tooltip labels included.
+        // can hide independently, which is what made them a surface the ANT
+        // panel's frame landed on while that sheet was an unscoped
+        // "QWidget { … }". It is QWidget#antPanel now and reaches nothing below
+        // itself, so this rule no longer cancels a live cascade — it keeps the
+        // row inert if the panel is ever un-scoped again. Scoped to the row's
+        // own name for the reason applyTransparentStyle documents: the opt-out
+        // this replaced was itself unscoped, so it cancelled the panel's box by
+        // broadcasting a rule at every descendant, tooltip labels included.
         applyTransparentStyle(rowWidget, objectName + QStringLiteral("Row"));
         auto* row = new QHBoxLayout(rowWidget);
         row->setContentsMargins(0, 0, 0, 0);
@@ -1409,15 +1418,13 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     auto* panelLayout = new QVBoxLayout(m_displayPanel);
     panelLayout->setContentsMargins(1, 1, 1, 1);  // keep the 1px panel border visible
     m_displayScroll = new QScrollArea;
-    m_displayScroll->setObjectName(QStringLiteral("displayPanelScroll"));
+    applyTransparentStyle(m_displayScroll, QStringLiteral("displayPanelScroll"));
     m_displayScroll->verticalScrollBar()->setObjectName(
         QStringLiteral("displayPanelScrollBar"));
     m_displayScroll->setWidgetResizable(true);
     m_displayScroll->setFrameShape(QFrame::NoFrame);
     m_displayScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_displayScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_displayScroll->setStyleSheet(
-        "QScrollArea#displayPanelScroll { background: transparent; border: none; }");
     applyTransparentStyle(m_displayScroll->viewport(),
                           QStringLiteral("displayPanelViewport"));
     auto* displayContent = new QWidget;
@@ -1537,19 +1544,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     makeHeader("PANADAPTER");
     {
         auto* toggleRow = new QWidget;
-        toggleRow->setObjectName(QStringLiteral("displayPanelToggleRow"));
-        toggleRow->setStyleSheet(
-            "QWidget#displayPanelToggleRow { border: none; background: transparent; }");
+        applyTransparentStyle(toggleRow, QStringLiteral("displayPanelToggleRow"));
         auto* toggleLayout = new QHBoxLayout(toggleRow);
         toggleLayout->setContentsMargins(0, 2, 0, 2);
         toggleLayout->setSpacing(3);
 
         // Use the shared btnStyle so Heat Map / Grid / Wt Avg get the same
         // 1 px frame (blue unchecked, green checked) as the FFT Floor "Auto"
-        // button and the other row-end action buttons.  The toggleRow
-        // QWidget container itself is borderless (see setStyleSheet above)
-        // so the panel's cascading frame doesn't draw a box around the
-        // whole row.
+        // button and the other row-end action buttons. The toggleRow container
+        // declares itself borderless above for the same reason the Ant panel's
+        // front-end rows do — a real widget inside a panel is a surface a
+        // cascading panel frame can land on. #4440 scoped this panel, so
+        // nothing cascades here today and the rule is defensive.
         auto makeToggle = [&](const QString& text, QPushButton*& btn, bool checked = false) {
             btn = new QPushButton(text);
             btn->setCheckable(true);
