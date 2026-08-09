@@ -232,4 +232,7 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build -j22
 ```
 
 It SKIPS cleanly when no simulator is running, so it is safe in CI and on a
-machine connected to real hardware.
+machine connected to real hardware — and the skip is honest rather than silent:
+it exits 77, and `SKIP_RETURN_CODE` on the `add_test` makes ctest report
+`***Skipped`. A run that measured nothing cannot be mistaken for one that keyed
+and passed.

@@ -3031,7 +3031,9 @@ confirming it (§7, and the wrong-sideband account in §14.6).
   a different state. The test now defaults to loopback, refuses to key anything
   whose discovery MAC is not hpsdrsim's synthetic `AA:BB:CC:DD:xx:FF`, asserts
   the analytic sign, and anchors the receive end on the simulator's own scene
-  tones first (§14.6).
+  tones first (§14.6). Its skip paths exit 77 with `SKIP_RETURN_CODE` set, so the
+  ordinary machine — no simulator running — reports `Skipped` rather than a
+  `Passed` that measured nothing.
 - **The link-budget ceiling is derived, not measured.** 70% of 100BASE-T is a
   working figure. Where the drop counter actually starts moving is still a
   number nobody has written down, and it is the one that would justify or move

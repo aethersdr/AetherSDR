@@ -14,7 +14,9 @@
 // trust a hardcoded LAN address to BE the simulator; findSimulator() below
 // checks the responder's identity instead, and the default host is loopback.
 // If nothing answers, the test SKIPS rather than fails, so a machine without the
-// simulator running does not get a spurious red.
+// simulator running does not get a spurious red — exiting 77, which the
+// SKIP_RETURN_CODE on its add_test turns into an honest ctest "Skipped" rather
+// than a "Passed" that measured nothing.
 //
 // WHICH SIDE OF CENTRE A TONE LANDS ON. The loop conjugates TWICE. Hl2TxDsp
 // conjugates the modulator output for the wire (the HPSDR wire has the opposite
@@ -72,6 +74,12 @@ static void spin(int ms)
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
 }
+
+// ctest's skip convention, declared as SKIP_RETURN_CODE on the add_test. Exiting
+// 0 on a skip is what let this test read as Passed to every automated consumer
+// while having measured nothing — and with the loopback default below, the
+// no-simulator case is the ordinary one, not the exception.
+constexpr int kSkipExit = 77;
 
 enum class Probe { NoReply, NotSimulator, Simulator };
 
@@ -178,7 +186,7 @@ int main(int argc, char** argv)
             "hl2_tx_loopback_test: SKIPPED — nothing answering discovery at %s. "
             "Start hpsdrsim (-hermeslite2 -P1), or set AETHER_HL2_SIM_HOST.\n",
             qPrintable(simHost));
-        return 0;
+        return kSkipExit;
     case Probe::NotSimulator:
         // Deliberately a SKIP and not a failure: the responder is somebody's
         // radio or another board, and the correct outcome is to leave it alone,
@@ -190,7 +198,7 @@ int main(int argc, char** argv)
             "run against anything that might be a real radio.\n",
             qPrintable(simHost), reply.mac[0], reply.mac[1], reply.mac[2],
             reply.mac[3], reply.mac[4], reply.mac[5]);
-        return 0;
+        return kSkipExit;
     case Probe::Simulator:
         break;
     }

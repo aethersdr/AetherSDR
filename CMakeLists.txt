@@ -5028,6 +5028,12 @@ add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
 target_include_directories(hl2_tx_loopback_test PRIVATE src)
 target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+# This test is a no-op without an hpsdrsim answering discovery, which is the
+# normal state of every machine that has not deliberately started one. Without
+# this property that no-op reports as Passed, which is indistinguishable from a
+# run that actually keyed and measured — the exact silent-green this test was
+# fixed to stop. Same convention as crdv_quarantined_test above.
+set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
