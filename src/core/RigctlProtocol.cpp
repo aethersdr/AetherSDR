@@ -2059,9 +2059,9 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
         const double mhz = slice->frequency() + slice->stepHz() / 1e6;
         // Validate before queueing: tuneSliceForCat's bool is unobservable across
         // the queued invocation, so a rejected target would otherwise be dropped
-        // while we answered RPRT 0 (a false success). A multi-step UP can overflow
-        // to an absurd frequency, so use the same plausibility predicate the seam
-        // does. Mirrors set_freq/set_split_freq.
+        // while we answered RPRT 0 (a false success). A step from a frequency
+        // already near the plausibility bound could land out of range, so apply
+        // the same predicate the seam does. Mirrors set_freq/set_split_freq.
         if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
@@ -2071,8 +2071,9 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
     }
     if (op == "DOWN") {
         const double mhz = slice->frequency() - slice->stepHz() / 1e6;
-        // A multi-step DOWN can underflow past 0; reject here (see UP above) rather
-        // than acknowledge a tune tuneSliceForCat will silently drop.
+        // A step DOWN from near the band bottom can underflow toward/past 0;
+        // reject here (see UP above) rather than acknowledge a tune tuneSliceForCat
+        // will silently drop.
         if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {

@@ -4613,11 +4613,13 @@ bool RadioModel::isPlausibleCatTuneMhz(double mhz)
 
 bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
 {
-    // This mutates SliceModel, which lives on this model's (GUI) thread. Every
-    // caller must reach here on that thread: SmartCAT/CatPort calls it directly
-    // (it runs on the GUI thread), while rigctld marshals through a queued
-    // invocation delivered on the GUI thread. Assert the precondition so a future
-    // off-thread caller is caught in debug rather than silently racing SliceModel.
+    // This mutates SliceModel, which lives on this model's (GUI) thread. The
+    // GUI-thread invariant is upheld by construction at both call sites — not by
+    // the assert below (which is a no-op in release): SmartCAT/CatPort calls this
+    // directly and already runs on the GUI thread, while rigctld only ever reaches
+    // here inside a QueuedConnection invocation delivered on the GUI thread. The
+    // assert is a debug-only backstop that catches a future off-thread caller
+    // before it can silently race SliceModel, rather than the guarantee itself.
     Q_ASSERT(QThread::currentThread() == thread());
     if (!slice) {
         return false;
