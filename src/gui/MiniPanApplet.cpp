@@ -4,13 +4,11 @@
 #include "core/MiniPanSettings.h"
 
 #include <QVBoxLayout>
-#include <QLabel>
 #include <QShowEvent>
 #include <QHideEvent>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QActionGroup>
-#include <QFont>
 
 #include <algorithm>
 
@@ -25,19 +23,12 @@ MiniPanApplet::MiniPanApplet(QWidget* parent)
         tr("Narrow-span scope centred on the active VFO. "
            "Right-click to choose ±5 or ±10 kHz."));
 
+    // The scope fills the tile. The frequency readout is drawn INSIDE it, on
+    // the same row as the ±span labels — it used to be a QLabel above the
+    // scope, and that row was dead space above an already-short trace.
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(6, 4, 6, 6);
-    layout->setSpacing(2);
-
-    m_freqLabel = new QLabel(this);
-    m_freqLabel->setObjectName("miniPanFreq");
-    QFont f = m_freqLabel->font();
-    f.setPointSize(18);
-    f.setBold(true);
-    m_freqLabel->setFont(f);
-    m_freqLabel->setAlignment(Qt::AlignHCenter);
-    m_freqLabel->setAccessibleName(tr("Mini-pan centre frequency"));
-    layout->addWidget(m_freqLabel);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(0);
 
     m_scope = new MiniPanScope(this);
     m_scope->setObjectName("miniPanScope");
@@ -48,8 +39,6 @@ MiniPanApplet::MiniPanApplet(QWidget* parent)
     // be one of the two spans the menu offers.
     m_spanKHz = MiniPanSettings::spanKHz();
     m_scope->setSpanKHz(m_spanKHz);
-
-    refreshHeader();
 }
 
 QSize MiniPanApplet::sizeHint() const
@@ -63,7 +52,7 @@ QSize MiniPanApplet::sizeHint() const
 void MiniPanApplet::setCenterMhz(double mhz)
 {
     m_centerMhz = mhz;
-    refreshHeader();
+    if (m_scope) m_scope->setCenterMhz(mhz);
 }
 
 void MiniPanApplet::setSpanKHz(double kHz)
@@ -84,13 +73,6 @@ void MiniPanApplet::applySpanKHz(double kHz, bool persistAndEmit)
         MiniPanSettings::setSpanKHz(kHz);
         emit spanChanged(kHz);   // the next frame re-slices to the new window
     }
-}
-
-void MiniPanApplet::refreshHeader()
-{
-    m_freqLabel->setText(m_centerMhz > 0.0
-                             ? QString::number(m_centerMhz, 'f', 6)
-                             : QStringLiteral("—.———"));
 }
 
 void MiniPanApplet::contextMenuEvent(QContextMenuEvent* e)

@@ -18,6 +18,7 @@
 #include <QWidget>
 #include <QVector>
 #include <QColor>
+#include <QString>
 
 namespace AetherSDR {
 
@@ -34,6 +35,13 @@ public:
     void setDbmRange(float minDbm, float maxDbm);
     // Total visible span in kHz (e.g. 10.0 for a ±5 kHz view).
     void setSpanKHz(double kHz);
+    // Centre (VFO) frequency for the readout drawn in the top row, between the
+    // ±span labels. 0 renders the placeholder. Drawn here rather than in a
+    // QLabel above the scope so the trace gets the full height of the tile.
+    void setCenterMhz(double mhz);
+    // The readout exactly as drawn — for tests and automation, which have no
+    // QLabel to read now.
+    QString readoutText() const;
     // Passband band as Hz offsets from centre (e.g. USB 100..2800). lo>=hi hides it.
     void setPassbandHz(int lowHz, int highHz);
     // Mirror the source pan's FFT trace appearance (FFT Line / FFT Fill).
@@ -52,6 +60,7 @@ protected:
 
 private:
     QVector<float> m_bins;
+    double m_centerMhz{0.0};
     float  m_minDbm{-130.0f};
     float  m_maxDbm{-40.0f};
     double m_spanKHz{10.0};

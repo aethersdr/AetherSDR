@@ -85,14 +85,26 @@ void testAppletBasics()
     report("embeds as a child widget, not a detached window",
            !child->isWindow() && child->parentWidget() == &host);
 
-    auto* label = a.findChild<QLabel*>("miniPanFreq");
+    // The readout is drawn inside the scope's top row, not a QLabel above it —
+    // that row was dead space above an already-short trace.
+    report("no separate readout label above the scope",
+           a.findChild<QLabel*>("miniPanFreq") == nullptr);
     a.setCenterMhz(14.074);
     report("frequency readout follows setCenterMhz",
-           label && label->text() == "14.074000",
-           label ? label->text().toStdString() : "no label");
+           a.scope()->readoutText() == "14.074000",
+           a.scope()->readoutText().toStdString());
     a.setCenterMhz(0.0);
     report("no active slice → placeholder readout",
-           label && label->text() == QString::fromUtf8("—.———"));
+           a.scope()->readoutText() == QString::fromUtf8("—.———"));
+
+    // The scope must own the whole tile now.
+    a.resize(260, 150);
+    a.show();
+    report("scope fills the tile (no dead row)",
+           a.scope()->height() >= a.height() - 10,
+           std::to_string(a.scope()->height()) + " of "
+               + std::to_string(a.height()));
+    a.hide();
 }
 
 // The applet's visibility IS the feature's on/off switch — MainWindow starts and

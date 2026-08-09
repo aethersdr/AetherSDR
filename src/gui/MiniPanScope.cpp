@@ -10,6 +10,7 @@
 #include <QLinearGradient>
 #include <QPolygonF>
 #include <QFont>
+#include <QFontMetricsF>
 #include <QStringList>
 #include <algorithm>
 #include <cmath>
@@ -103,6 +104,19 @@ void MiniPanScope::setSpanKHz(double kHz)
 {
     m_spanKHz = kHz > 0.0 ? kHz : m_spanKHz;
     update();
+}
+
+void MiniPanScope::setCenterMhz(double mhz)
+{
+    if (qFuzzyCompare(m_centerMhz, mhz)) return;
+    m_centerMhz = mhz;
+    update();
+}
+
+QString MiniPanScope::readoutText() const
+{
+    return m_centerMhz > 0.0 ? QString::number(m_centerMhz, 'f', 6)
+                             : QStringLiteral("—.———");
 }
 
 void MiniPanScope::setPassbandHz(int lowHz, int highHz)
@@ -249,16 +263,42 @@ void MiniPanScope::paintEvent(QPaintEvent*)
         }
     }
 
-    // ±span corner labels (K4 style).
-    QFont f = p.font();
-    f.setPointSizeF(9.0);
-    p.setFont(f);
-    p.setPen(tm.color(this, QStringLiteral("color.text.secondary")));
+    // Top row: ±span labels in the corners, VFO readout centred between them.
+    // One row rather than a QLabel above the scope — that label's row was pure
+    // dead space, and the trace is what the operator is looking at.
+    QFont spanFont = p.font();
+    spanFont.setPointSizeF(9.0);
+    QFont freqFont = p.font();
+    freqFont.setPointSizeF(12.0);
+    freqFont.setBold(true);
+
+    const QFontMetricsF spanFm(spanFont);
+    const QFontMetricsF freqFm(freqFont);
+    const double rowH = std::max(spanFm.height(), freqFm.height()) + 2.0;
+
     const QString half = QString::number(m_spanKHz / 2.0, 'f', 1);
-    p.drawText(QRectF(4, 2, w / 2 - 6, 16), Qt::AlignLeft  | Qt::AlignVCenter,
-               "-" + half + " kHz");
-    p.drawText(QRectF(w / 2 + 2, 2, w / 2 - 6, 16), Qt::AlignRight | Qt::AlignVCenter,
-               half + " kHz");
+    const QString spanLo = "-" + half + " kHz";
+    const QString spanHi = half + " kHz";
+    const QString freq = readoutText();
+
+    // The readout is the important one: if the tile is too narrow to hold all
+    // three without collision, the span labels drop rather than overlap it.
+    const double spanW = std::max(spanFm.horizontalAdvance(spanLo),
+                                  spanFm.horizontalAdvance(spanHi));
+    const bool showSpanLabels = (w - freqFm.horizontalAdvance(freq)) / 2.0
+                                > spanW + 6.0;
+
+    if (showSpanLabels) {
+        p.setFont(spanFont);
+        p.setPen(tm.color(this, QStringLiteral("color.text.secondary")));
+        p.drawText(QRectF(4, 1, w / 2 - 6, rowH),
+                   Qt::AlignLeft | Qt::AlignVCenter, spanLo);
+        p.drawText(QRectF(w / 2 + 2, 1, w / 2 - 6, rowH),
+                   Qt::AlignRight | Qt::AlignVCenter, spanHi);
+    }
+    p.setFont(freqFont);
+    p.setPen(tm.color(this, QStringLiteral("color.text.primary")));
+    p.drawText(QRectF(0, 1, w, rowH), Qt::AlignHCenter | Qt::AlignVCenter, freq);
 }
 
 } // namespace AetherSDR

@@ -31,8 +31,6 @@
 
 #include <QWidget>
 
-class QLabel;
-
 namespace AetherSDR {
 
 class MiniPanScope;
@@ -66,10 +64,8 @@ protected:
     void contextMenuEvent(QContextMenuEvent* e) override;   // ±5/±10 kHz
 
 private:
-    void refreshHeader();
     void applySpanKHz(double kHz, bool persistAndEmit);
 
-    QLabel*       m_freqLabel{nullptr};
     MiniPanScope* m_scope{nullptr};
 
     double  m_centerMhz{0.0};
