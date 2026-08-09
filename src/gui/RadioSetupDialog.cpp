@@ -2834,6 +2834,23 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
         gvb->addWidget(warmup);
     }
 
+    // The calibration is stored against the radio's own identity (its MAC), and
+    // that identity does not exist until a radio has been connected this
+    // session. Hl2Backend refuses to persist without one — an empty radio_id is
+    // the family-wide default row, which every other HL2 would then inherit
+    // (AGENTS.md) — and the `freqcal` bridge verb returns an error for the same
+    // reason. The page has to say so as well, or the operator trims, watches the
+    // readout move, and finds nothing was saved. m_calibrationReseed below
+    // disables the controls alongside this label.
+    auto* noRadioLbl = new QLabel(
+        "Connect the radio first. The calibration belongs to one physical radio, "
+        "and there is no radio identity to store it against yet.");
+    themed(noRadioLbl, QStringLiteral(
+        "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"));
+    noRadioLbl->setWordWrap(true);
+    noRadioLbl->setVisible(false);
+    gvb->addWidget(noRadioLbl);
+
     auto* grid = new QGridLayout;
     grid->setSpacing(6);
     // Keep the controls next to their labels instead of letting the value
@@ -2984,20 +3001,6 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     connect(ppbSpin, &QSpinBox::valueChanged, this, [apply](int v) { apply(v); });
     connect(resetBtn, &QPushButton::clicked, this, [apply] { apply(0); });
 
-    // Re-seed from the store whenever the dialog is shown or the connected
-    // radio changes. The page is built once per process and the dialog is a
-    // persistent singleton, so without this the spinbox would keep the value it
-    // read at first build — and the next Trim press would commit that number to
-    // whichever radio is connected now.
-    QPointer<QSpinBox> spinGuard(ppbSpin);
-    m_calibrationReseed = [this, spinGuard, refreshReadout] {
-        if (!spinGuard)
-            return;
-        QSignalBlocker blocker(spinGuard);
-        spinGuard->setValue(Hl2FreqCal::loadPpb(m_model->settingsScope()));
-        refreshReadout();
-    };
-
     // ── Trim ─────────────────────────────────────────────────────────────────
     //
     // Steps are labelled in Hz-at-10-MHz because that is the unit an operator
@@ -3039,18 +3042,25 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     ++row;
 
     // Applied live while held (the beat note has to move under the operator's
-    // hand), persisted once on release.
-    connect(downBtn, &QPushButton::clicked, this, [apply, ppbSpin, stepCombo] {
-        apply(ppbSpin->value() - stepCombo->currentData().toInt(), /*persist=*/false);
-    });
-    connect(upBtn, &QPushButton::clicked, this, [apply, ppbSpin, stepCombo] {
-        apply(ppbSpin->value() + stepCombo->currentData().toInt(), /*persist=*/false);
-    });
-    for (QPushButton* b : {downBtn, upBtn}) {
-        connect(b, &QPushButton::released, this, [apply, ppbSpin] {
-            apply(ppbSpin->value());
-        });
-    }
+    // hand), persisted exactly once when the button is let go.
+    //
+    // isDown() is the discriminator, and it has to be read inside clicked() —
+    // not inside released(). Qt's auto-repeat emits released(), clicked() and
+    // pressed() on EVERY tick (that repeated clicked() is what drives the trim
+    // in the first place) and leaves the button DOWN throughout; only the real
+    // mouseReleaseEvent path clears down, via QAbstractButtonPrivate::click(),
+    // before emitting. Committing from released() would therefore persist ~8x a
+    // second while held — and store the value from one step ago, because
+    // released() is emitted before the clicked() that applies the step.
+    // Measured (Qt 6.11, tests/hl2_trim_autorepeat_test.cpp pins it): five ticks
+    // of released/clicked/pressed with down=1, then released/clicked with down=0
+    // on the physical release.
+    auto trim = [apply, ppbSpin, stepCombo](QPushButton* b, int sign) {
+        apply(ppbSpin->value() + sign * stepCombo->currentData().toInt(),
+              /*persist=*/!b->isDown());
+    };
+    connect(downBtn, &QPushButton::clicked, this, [trim, downBtn] { trim(downBtn, -1); });
+    connect(upBtn, &QPushButton::clicked, this, [trim, upBtn] { trim(upBtn, +1); });
 
     gvb->addLayout(grid);
 
@@ -3127,7 +3137,37 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
         trackSlice(s);
         refreshReadout();
     });
-    refreshReadout();
+
+    // Re-seed from the store, and re-check that there is a radio to store
+    // against, whenever the dialog is shown or the connected radio changes. The
+    // page is built once per process and the dialog is a persistent singleton,
+    // so without this the spinbox would keep the value it read at first build —
+    // and the next Trim press would commit that number to whichever radio is
+    // connected now.
+    QPointer<QSpinBox> spinGuard(ppbSpin);
+    QPointer<QLabel> noRadioGuard(noRadioLbl);
+    const QList<QPointer<QWidget>> calControls{
+        refCombo, customEdit, ppbSpin, resetBtn, downBtn, upBtn, stepCombo, calBtn};
+    m_calibrationReseed = [this, spinGuard, noRadioGuard, calControls, refreshReadout] {
+        if (!spinGuard)
+            return;
+        {
+            QSignalBlocker blocker(spinGuard);
+            spinGuard->setValue(Hl2FreqCal::loadPpb(m_model->settingsScope()));
+        }
+        // No identity, no write — the backend and the bridge verb both refuse in
+        // this state, so leaving the controls live would be a UI that reports
+        // success while nothing persists.
+        const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
+        for (const QPointer<QWidget>& w : calControls) {
+            if (w)
+                w->setEnabled(haveRadio);
+        }
+        if (noRadioGuard)
+            noRadioGuard->setVisible(!haveRadio);
+        refreshReadout();
+    };
+    m_calibrationReseed();
 
     vbox->addStretch(1);
     return page;

@@ -1339,6 +1339,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
     c.hostFrequencyCalibration = true;
+    // Declared because invokeExtension() now implements it (freqcal.get / .set /
+    // .set_live). This field is the handshake a client pre-checks before issuing
+    // an extension call, so leaving it empty while the verbs work would report
+    // the opposite of the truth.
+    c.extensionNamespaces << QStringLiteral("hl2");
     // No on-radio configuration store. The HL2 holds no state across a
     // connection beyond its registers — everything the operator can change
     // lives in this application, so there is nothing for a profile to name.

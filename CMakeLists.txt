@@ -3197,7 +3197,6 @@ target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
 
-# HL2 backend — IRadioBackend seam contract against a capped fake HL2.
 # HL2 manual frequency calibration — simulates the gateware's own NCO arithmetic
 # (radio.v freqcomp/M2/M3) on a deliberately wrong master clock, so the
 # correction is checked against the hardware's behaviour rather than against its
@@ -3207,6 +3206,18 @@ target_include_directories(hl2_freq_cal_test PRIVATE src)
 target_link_libraries(hl2_freq_cal_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_freq_cal_test COMMAND hl2_freq_cal_test)
 
+# Calibration page Trim buttons — applied live while held, persisted exactly
+# once on release. Pins the Qt auto-repeat property the split rests on (every
+# repeat tick emits released()/clicked() with the button still DOWN), so a
+# regression shows up as one failing assertion rather than as a settings file
+# written eight times a second. Widgets only — no project sources.
+add_executable(hl2_trim_autorepeat_test tests/hl2_trim_autorepeat_test.cpp)
+target_link_libraries(hl2_trim_autorepeat_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
+add_test(NAME hl2_trim_autorepeat_test COMMAND hl2_trim_autorepeat_test)
+set_tests_properties(hl2_trim_autorepeat_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# HL2 backend — IRadioBackend seam contract against a capped fake HL2.
 add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)
 target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

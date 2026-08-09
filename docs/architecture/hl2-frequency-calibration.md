@@ -1,6 +1,7 @@
 # HL2 manual frequency calibration — design note
 
-Status: proposal. Branch `feat/hl2-freq-calibration`.
+Status: implemented. `Hl2FreqCal`, the Calibration page in `RadioSetupDialog`,
+and the `freqcal` bridge verb.
 
 The Hermes-Lite 2 tunes off a free-running crystal oscillator. Nothing in the
 radio can be told about its own error, so every correction has to happen on this
@@ -274,21 +275,31 @@ can zero-beat, but it costs nothing and keeps a GPSDO-derived number exact.
 
 ### Persistence
 
-One key in the existing `Hl2Settings` JSON object (Constitution Principle V —
-one nested object under the `Hl2` root, defaulted in one place):
+**Keyed per radio (MAC), not globally.** The number describes one physical
+crystal. An operator with two HL2s must not have the second one's calibration
+silently applied to the first. That rules out `Hl2Settings` — its `Hl2` root
+object is one document for the family — so the value is a **radio-scoped feature
+document** (RFC #4603), the same mechanism `Hl2Discovery` uses for per-radio
+nicknames:
 
-```cpp
-// Frequency error of this radio's master oscillator, in parts per billion,
-// such that the true clock is 76.8 MHz × (1 + ppb/1e9). Positive = clock fast
-// = signals appear LOW before correction. Zero = uncalibrated.
-static int freqErrorPpb();
-static void setFreqErrorPpb(int ppb);
+```
+radio_settings (family='hl2', radio_id=<MAC>, feature='Calibration')
+    { "freqErrorPpb": <int> }        # Hl2FreqCal::kFeature / kFieldPpb
 ```
 
-**Key it per radio (MAC/serial), not globally.** The number describes one
-physical crystal. An operator with two HL2s must not have the second one's
-calibration silently applied to the first. `Hl2Discovery` already keys
-per-radio nicknames by `(family, serial)`; follow that.
+`Hl2FreqCal::loadPpb()` / `savePpb()` are the only readers and writers. Two
+consequences that are load-bearing rather than incidental:
+
+- **0 ppb removes the document** instead of storing a zero, so "reset" means
+  never-calibrated rather than a row that reads the same but would shadow a
+  future family-wide default.
+- **An empty `radio_id` is never written.** `RadioSettingsScope` falls back
+  exact-radio → family-wide on read, so a row stored with no identity would be
+  inherited by every HL2 that has none of its own — precisely the contamination
+  the per-MAC key exists to prevent. `Hl2Backend::applyFreqCalPpb()` refuses and
+  warns, `AutomationServer::doFreqCal()` returns an error, and the Calibration
+  page disables its controls with an explanatory line. All three refuse rather
+  than reporting a success nothing persisted.
 
 ---
 
@@ -312,12 +323,32 @@ per-radio nicknames by `(family, serial)`; follow that.
 
 ## 7. Automation bridge verbs
 
-Per the standing rule that new features come with automation coverage:
+Per the standing rule that new features come with automation coverage. One verb
+with sub-actions rather than four top-level verbs, matching how `tune`, `gps`
+and `waveform` are already registered:
 
-- `hl2_freq_cal_get` → `{ppb, effective_clock_hz, source: manual|cl1|none}`
-- `hl2_freq_cal_set {ppb}` — set and persist
-- `hl2_freq_cal_from_vfo {reference_hz}` — exercise the primary UI path headlessly
-- `hl2_freq_cal_reset`
+```
+freqcal                        → {"ppb":0,"ppm":0,"effectiveClockHz":76800000}
+freqcal set -178               # set and persist
+freqcal from_vfo 10.0          # derive ppb from the active slice (MHz reference)
+freqcal reset
+```
+
+Gated on `RadioCapabilities::hostFrequencyCalibration`, so it refuses on a radio
+that calibrates its own reference rather than storing a number nothing applies.
+The mutating actions also refuse before the first connect, for the §5 reason.
+A change takes effect immediately — every RX NCO, every DSP shift and the TX
+oscillator are re-pushed — so a script can calibrate and tune without a
+reconnect.
+
+Internally these route to the backend's `hl2` extension namespace
+(`freqcal.get` / `freqcal.set` / `freqcal.set_live`) through
+`RadioModel::invokeBackendExtension`, and `Hl2Backend` declares `"hl2"` in
+`capabilities().extensionNamespaces` so the capability handshake reports the
+namespace it actually implements. `freqcal.set_live` applies and re-pushes
+without touching the settings store —
+it exists for the Calibration page's auto-repeating Trim buttons, which commit
+once when the button is let go.
 
 The test that matters is not "does the setting round-trip" — it is that a
 commanded frequency reaches the wire scaled. Assert on the bytes in the `0x02`
