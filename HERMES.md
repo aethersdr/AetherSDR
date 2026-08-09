@@ -249,8 +249,10 @@ to satisfy by accident: a blocker whose corner has crept up into the audio band
 removes the pedestal just as thoroughly while eating the bass out of every mode,
 and every DC measurement stays green through it. So it checks a 60 Hz vs 400 Hz
 modulation ratio through the real chain, the closed-form `|H(f)|` at three audio
-rates, and the unconfigured bypass. It is one of the few HL2 tests in the
-per-PR CI gate; the rest of the suite runs weekly under the sanitizers job.
+rates, and the unconfigured bypass. That thoroughness is also what keeps it off
+the per-PR CI gate: eight scenarios of 4 s audio through the real WDSP chain is
+~190 s, so it runs weekly under the sanitizers job with the rest of the HL2
+suite rather than on every pull request.
 
 **Why on `Hl2RxDsp` and not on `WdspChannel`.** The root cause is `amd`'s
 envelope detector, which belongs to WDSP, so a blocker on `WdspChannel`'s own RX
