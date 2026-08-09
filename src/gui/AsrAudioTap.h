@@ -68,6 +68,9 @@ private:
     bool m_enabled = false;
     AsrTapPolicy m_policy;
     QElapsedTimer m_clock;   // monotonic source for the policy's release window
+    // Latch so a block toMono() cannot decode warns once per enable rather
+    // than once per audio block. Cleared in setEnabled(true).
+    bool m_warnedUndecodable = false;
 };
 
 } // namespace AetherSDR

@@ -4,9 +4,12 @@
 #include "core/AudioEngine.h"
 
 #include <QByteArray>
+#include <QLoggingCategory>
 #include <QVector>
 
 namespace AetherSDR {
+
+Q_LOGGING_CATEGORY(lcAsrTap, "aether.asr.tap")
 
 AsrAudioTap::AsrAudioTap(AudioEngine* audio, AsrEngine* asr, QObject* parent)
     : QObject(parent)
@@ -31,6 +34,7 @@ void AsrAudioTap::setEnabled(bool on)
         // the release window before anything was transcribed.
         m_policy.reset();
         m_clock.start();
+        m_warnedUndecodable = false;
         if (m_audio != nullptr) {
             // Queued so the audio-thread emit lands on this (main) thread; the
             // heavy resample+inference then happens on the ASR worker thread.
@@ -64,9 +68,28 @@ void AsrAudioTap::onRxAudio(const QString& source,
     // channels comes straight off the signal (#4489) instead of being
     // assumed here — a future mono RX source is then a one-line change at
     // AudioEngine's emit site, and toMono() rejects a caller that gets it
-    // wrong instead of silently mis-decoding.
+    // wrong (and says so below) instead of silently mis-decoding.
     const QVector<float> mono = AsrTapPolicy::toMono(pcmFloat, channels);
     if (mono.isEmpty()) {
+        // Rejecting a block toMono() cannot decode is right, but it is also
+        // invisible: Copy Assist simply produces nothing, which looks exactly
+        // like a model that failed to load or a tap that never connected. The
+        // guard exists to catch a FUTURE emit site stating the wrong channel
+        // count, so the one person who needs this message is the one who has
+        // no reason to suspect this code at all — say it out loud.
+        //
+        // Once per enable, not per block: this runs on every audio block
+        // (~5 ms apart on a Flex LAN stream), and a mis-stated channel count
+        // is permanent for a given emit site, so the first block says
+        // everything the log needs. setEnabled() clears the latch so a later
+        // session reports again.
+        if (!m_warnedUndecodable) {
+            m_warnedUndecodable = true;
+            qCWarning(lcAsrTap) << "dropping undecodable RX audio from" << source
+                                << "id" << sourceId << "- bytes" << pcmFloat.size()
+                                << "channels" << channels
+                                << "(expected 1 or 2, a whole number of frames)";
+        }
         return;
     }
     m_asr->pushAudio(mono, sampleRate);
