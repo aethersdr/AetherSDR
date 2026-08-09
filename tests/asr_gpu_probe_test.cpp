@@ -146,6 +146,62 @@ int main()
         std::printf("[ok] #4502 session failure latch (one-way, idempotent, CPU exempt)\n");
     }
 
+    // GPU-default tier reconciliation: raising to the GPU default must require
+    // a usable GPU, and an AUTO-raised GPU default must walk back to the base
+    // default when resolution falls off the GPU — running the heaviest tier
+    // on CPU is the "backlog climbing, no text" symptom the load-time
+    // fallback arm produced (#4767 review; the drill that verified the PR ran
+    // the probe-throw arm, where the tier was never raised, so only a pinned
+    // contract catches this). An explicit operator choice is never touched.
+    {
+        const QString turbo = QStringLiteral("large-v3-turbo");
+        const QString base = QStringLiteral("base.en");
+        const QString small = QStringLiteral("small.en");
+
+        // Startup on a usable GPU: raise, and remember it was automatic.
+        AsrTierResolution r = asrReconcileDefaultTier(base, true, false, true, turbo, base);
+        if (r.tierId != turbo || !r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] usable GPU + default wanted did not raise "
+                                 "to the GPU tier (#4767)\n");
+            return 1;
+        }
+        // Load-time fallback (the want-flag is already consumed by then): an
+        // auto-raised Turbo must walk back once resolution is CPU. This is
+        // the regression the review found — the arm where the raise had
+        // already happened and only the walk-back can undo it.
+        r = asrReconcileDefaultTier(turbo, false, true, false, turbo, base);
+        if (r.tierId != base || r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] auto-raised GPU tier survived a CPU "
+                                 "resolution - Turbo keeps running on CPU (#4767)\n");
+            return 1;
+        }
+        // Explicitly chosen Turbo (never auto-raised) on CPU: untouched.
+        r = asrReconcileDefaultTier(turbo, false, false, false, turbo, base);
+        if (r.tierId != turbo || r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] an explicit Turbo choice was walked back "
+                                 "(#4767)\n");
+            return 1;
+        }
+        // Explicit non-default tier while a usable GPU resolves: untouched.
+        r = asrReconcileDefaultTier(small, false, false, true, turbo, base);
+        if (r.tierId != small) {
+            std::fprintf(stderr, "[FAIL] an explicit tier was overridden by the "
+                                 "GPU default (#4767)\n");
+            return 1;
+        }
+        // Auto-raised Turbo re-resolved onto ANOTHER usable GPU: stays raised,
+        // stays automatic (a later CPU fallback must still walk it back).
+        r = asrReconcileDefaultTier(turbo, false, true, true, turbo, base);
+        if (r.tierId != turbo || !r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] auto-raised GPU tier did not survive a "
+                                 "move to another usable GPU (#4767)\n");
+            return 1;
+        }
+        std::printf("[ok] #4767 GPU-default tier reconciliation "
+                    "(raise gated on usable GPU, auto-raise walks back, "
+                    "explicit choices untouched)\n");
+    }
+
     QElapsedTimer timer;
 
 #ifdef Q_OS_MACOS

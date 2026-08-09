@@ -74,6 +74,44 @@ int asrResolveDefaultGpuIndex(const std::vector<AsrGpuDevice>& devices);
 void asrMarkGpuDeviceFailed(int index);
 bool asrGpuDeviceFailed(int index);
 
+// After compute-device resolution, which model tier should be running. The
+// GPU-default tier is heavy enough that it only makes sense on a usable GPU:
+//  - raise to it only while the GPU default is wanted (no explicit operator
+//    model choice yet) AND resolution landed on a usable GPU;
+//  - walk it back to the base default when it is selected only because an
+//    earlier resolution auto-raised it (`gpuDefaultActive`) and resolution has
+//    since fallen off the GPU — the heaviest model cannot keep up on CPU,
+//    which is the "backlog climbing, no text" shape of #4502;
+//  - never touch a tier the operator picked explicitly.
+// Returns the tier to run plus the updated auto-raise state. Header-inline and
+// whisper-free for the same reason as asrLanguageOrDefault below: unit
+// testable without linking the vendored library.
+struct AsrTierResolution {
+    QString tierId;
+    bool gpuDefaultActive = false;
+};
+
+inline AsrTierResolution asrReconcileDefaultTier(const QString& currentTier,
+                                                 bool wantGpuDefault,
+                                                 bool gpuDefaultActive,
+                                                 bool resolvedGpuUsable,
+                                                 const QString& gpuDefaultTier,
+                                                 const QString& baseDefaultTier)
+{
+    if (resolvedGpuUsable) {
+        if (wantGpuDefault) {
+            return {gpuDefaultTier, true};
+        }
+        return {currentTier, gpuDefaultActive};
+    }
+    if (gpuDefaultActive && currentTier == gpuDefaultTier) {
+        return {baseDefaultTier, false};
+    }
+    // Off the GPU the auto-raise state is meaningless — drop it so a stale
+    // flag can never walk back a tier the operator has since chosen.
+    return {currentTier, false};
+}
+
 // A selectable transcription language: `code` is the ISO code passed to the
 // backend (e.g. "en", "es"); `name` is the English display name ("English").
 struct AsrLanguage {

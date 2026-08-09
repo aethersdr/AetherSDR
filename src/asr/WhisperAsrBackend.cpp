@@ -163,10 +163,29 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         // ggml-vulkan's instance state is sticky per process — a second GPU
         // attempt re-enters the half-built state (the fail-then-crash pattern
         // of #4502). Retry once on CPU, which never touches the GPU backend.
+        //
+        // Only blame the GPU when the model itself is sound: an empty or
+        // unreadable file yields the same null context, and latching the
+        // device for that reports broken hardware for a bad download — and
+        // costs the GPU until restart, since the latch is one-way. The latch
+        // itself stays wide (`failure` is empty in exactly the dangerous
+        // case: whisper's internal catch swallows the vk::SystemError and
+        // returns null, so there is no discriminator on the exception side),
+        // and it stays BEFORE the CPU retry so a retry that fails for its own
+        // reasons — say, out of memory — cannot leave a poisoned device
+        // unlatched.
+        const QFileInfo modelInfo(modelPath);
+        const bool modelPlausible = modelInfo.isReadable() && modelInfo.size() > 0;
         qCWarning(lcAsrWhisper) << "GPU model load failed"
                                 << (failure.isEmpty() ? QStringLiteral("(null context)") : failure)
                                 << "- retrying on CPU";
-        asrMarkGpuDeviceFailed(m_gpuDevice);
+        if (modelPlausible) {
+            asrMarkGpuDeviceFailed(m_gpuDevice);
+        } else {
+            qCWarning(lcAsrWhisper)
+                << "model file is empty or unreadable - not latching device"
+                << m_gpuDevice << "; the file is the fault, not the GPU";
+        }
         cparams.use_gpu = false;
         cparams.gpu_device = 0;
         m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
@@ -195,6 +214,20 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     if (m_ctx == nullptr) {
         if (error != nullptr) {
             *error = QStringLiteral("no model loaded");
+        }
+        return {};
+    }
+    if (m_ctxOnGpu && asrGpuDeviceFailed(m_gpuDevice)) {
+        // The device this context lives on has been latched since the load —
+        // decoding on it again is exactly the second attempt the session
+        // contract forbids (#4502), and without this guard it stays possible
+        // in the window between the latch and the queued engine rebuild that
+        // retires this context. Refuse instead; the error keeps nudging the
+        // GUI's rebuild path, whose reconcile entry guard makes repeats
+        // harmless.
+        if (error != nullptr) {
+            *error = QStringLiteral("GPU device is latched out after a failure; "
+                                    "decode refused until the engine rebuilds off it");
         }
         return {};
     }
@@ -329,6 +362,11 @@ std::set<int>& asrFailedGpuDevices()
 // contiguous F32 soft-max, an F16 mat-mul, and a flash-attention op (whisper
 // enables flash attention unconditionally) — rather than by reading
 // backend-internal device properties, so one probe serves every GPU backend.
+// The op shapes model the decode of the vendored whisper.cpp (1.9.1 at this
+// writing): head dim 64, F16 K/V, unconditional flash attention. They are a
+// prediction, not a contract — a whisper.cpp bump that changes any of that
+// quietly changes what this probe should be asking, so re-derive the shapes
+// whenever the vendored copy moves.
 // supports_op only consults device properties: nothing is compiled or allocated
 // (no_alloc context, freed before returning).
 //
@@ -346,6 +384,13 @@ bool asrDeviceUsableForDecode(ggml_backend_dev_t dev)
     if (ctx == nullptr) {
         return false;
     }
+    // supports_op can throw on a hostile Vulkan stack — that path is caught
+    // (and latched) by the caller, so the context must free on it too, not
+    // only on the straight-line return.
+    struct CtxFree {
+        ggml_context* c;
+        ~CtxFree() { ggml_free(c); }
+    } ctxFree{ctx};
     ggml_tensor* act = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
     ggml_tensor* softMax = ggml_soft_max(ctx, act);
     ggml_tensor* weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 64, 64);
@@ -356,11 +401,9 @@ bool asrDeviceUsableForDecode(ggml_backend_dev_t dev)
     ggml_tensor* v = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 64, 4, 8);
     ggml_tensor* flashAttn =
         ggml_flash_attn_ext(ctx, q, k, v, nullptr, 1.0f, 0.0f, 0.0f);
-    const bool usable = ggml_backend_dev_supports_op(dev, softMax)
+    return ggml_backend_dev_supports_op(dev, softMax)
         && ggml_backend_dev_supports_op(dev, mulMat)
         && ggml_backend_dev_supports_op(dev, flashAttn);
-    ggml_free(ctx);
-    return usable;
 }
 
 } // namespace

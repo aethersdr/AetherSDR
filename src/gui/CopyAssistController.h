@@ -58,10 +58,13 @@ private slots:
 
 private:
     void startGpuDiscovery();
-    void applyGpuDevices(const std::vector<AsrGpuDevice>& gpus);
-    // Reconcile the selectors after a GPU model load failed and the backend
-    // silently continued on CPU: relabel the device, move the selection off it,
-    // drop a GPU-only tier, and say so in the panel status.
+    // By value: reconcileAfterGpuFallback() passes m_gpuDevices back in, and
+    // the first thing this function does is reassign that member — a
+    // reference parameter would alias it.
+    void applyGpuDevices(std::vector<AsrGpuDevice> gpus);
+    // Reconcile after a GPU failed and was latched: relabel the device, move
+    // the resolution off it, walk back an auto-raised GPU-only tier, reload
+    // the model into the rebuilt engine, and say so in the panel status.
     void reconcileAfterGpuFallback();
     void buildEngine();  // (re)create the engine+tap for the current backend
     void applyTuning();  // push saved VAD tuning into the engine
@@ -101,6 +104,16 @@ private:
     AsrAudioTap* m_tap = nullptr;
     bool m_constructed = false; // true after the initial buildEngine (guards restore)
     bool m_useGpuDefaultIfAvailable = false; // cleared by any explicit tier choice
+    // True while m_tierId is the GPU-default tier because device resolution
+    // auto-raised it (not an operator choice). What licenses the walk-back to
+    // the base tier when resolution later falls off the GPU: by then
+    // m_useGpuDefaultIfAvailable is already consumed, so it alone cannot tell
+    // an auto-raised Turbo from an explicitly chosen one.
+    bool m_gpuDefaultTierActive = false;
+    // Fallback explanation parked for the rebuilt engine's ready() handler —
+    // set when reconcileAfterGpuFallback() reloads the model, so the reload's
+    // "Listening…" does not overwrite the reason the decode moved.
+    QString m_gpuFallbackNotice;
     bool m_gpuDiscoveryPending = true;
     bool m_enableAfterGpuDiscovery = false;
     bool m_gpuDeviceExplicit = false; // the operator picked this device themselves
