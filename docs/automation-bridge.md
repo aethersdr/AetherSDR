@@ -1273,6 +1273,46 @@ re-poll `get slices`.
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
 
+### `notch`
+
+Manual notch filters — a Flex TNF, or the WDSP null that stands in for one on a
+radio with no DSP of its own (HL2). All actions are RX/config; none keys the
+transmitter.
+
+Driven through `TnfModel`'s operator setters, so the intent reaches
+`IRadioBackend`'s notch verbs and not just the model. Notch **ids are assigned
+by the backend** — a Flex mints them in the radio, a host-DSP backend in this
+process — so `add` cannot tell you the id it created. Re-poll `notch list`.
+
+```json
+→ {"cmd":"notch","action":"list"}
+← {"ok":true,"notch":"list","enabled":true,"maxNotchFilters":1024,
+   "minWidthHz":50,"hasDepth":false,"notches":[]}
+
+→ {"cmd":"notch","action":"add","value":"7.041"}
+← {"ok":true,"notch":"add","freqMhz":7.041,"notches":[{"id":1,"freqMhz":7.041,"widthHz":100,…}]}
+
+→ {"cmd":"notch","action":"set","value":"1 width=200"}
+← {"ok":true,"notch":"set","id":1,"notches":[{"id":1,"freqMhz":7.041,"widthHz":200,…}]}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `list` | — | every notch the model holds, plus the radio's declared `maxNotchFilters`, `minWidthHz` and `hasDepth`. **Report the capabilities alongside the list deliberately:** an empty list on a radio that cannot notch is indistinguishable from a notch that was placed and silently dropped, and only `maxNotchFilters` tells the two apart |
+| `add` | `<freqMhz> [widthHz]` | place a notch at an absolute RF frequency. The width comes from the model's create default, and a Flex assigns its own regardless — so a width passed here is validated and echoed as `requestedWidthHz`, NOT honoured. The width in `notches` is the one the notch actually got; use `set … width=` to resize. Async on Flex (the radio assigns the id) — re-poll `list` |
+| `set` | `<id> [freq=<mhz>] [width=<hz>] [depth=<1-3>]` | move, resize, or re-depth an existing notch. Each key is applied as its own delta, in the order given — the seam accepts a combined centre+width delta but no caller builds one yet, so a two-key call costs two filter-mask rebuilds. `depth` is Flex-only — a WDSP notch is a full null, and `hasDepth` in `list` says which you have |
+| `remove` | `<id>` | remove a notch. Removal is optimistic in the model, so `list` reflects it immediately |
+| `enable` | `0` / `1` | the global notch bypass (`tnf_enabled` on a Flex). Individual notches keep their own state underneath |
+
+**Proving a notch actually works, not just that it was accepted.** `list` shows
+model state, which is populated optimistically — it will happily report a notch
+that never reached the DSP. To prove the null exists, park a notch on a real
+carrier and measure through the audio path: `capture_audio` with the notch
+disabled, then enabled, and compare. On a host-DSP backend also check the
+**width** you read back against `minWidthHz`: WDSP widens a too-narrow notch
+without reporting it, so a notch can be real, audible, and four times wider than
+the one drawn on screen.
+
 ### `gps`
 
 Inject a disconnected-only GPS report through `RadioModel::applyGpsChanges`,
@@ -2699,6 +2739,89 @@ non-`-120` `rmsDbfs` means audio is arriving, and `rejectBadFcs` climbing while
 `framesAccepted` does not means the decoder is finding structure and losing it
 to bit errors.
 
+### `controls`
+
+The CI-V control and meter registry, joined against what is actually wired.
+**Icom only** — other families answer "no control registry".
+
+This exists because a half-wired control is indistinguishable from a working one
+by inspection. The RF-gain slider drove the *preamp* for weeks; three filter
+buttons reached one filter in AM and one in CW; the ADC-overflow meter was
+polled, answered, and silently dropped every reply. Each was found by an operator
+noticing a wrong number, one control at a time. This verb answers for all of them
+at once.
+
+**`controls map`** — every CI-V message the backend names, with its wire address,
+raw and seam ranges, the seam verb it maps to, the UI control that drives it, and
+what it has actually done this session. Read-only; works with no radio attached.
+
+```json
+→ {"cmd":"controls","args":"map"}
+← {"ok":true,"controls":"map","result":[
+   {"id":"_diagnostics","framesObserved":591,"controlsSeen":26,"controlsSent":2},
+   {"id":"rf.gain","civ":"14 02","plane":"pan","encoding":"level255",
+    "wiring":"both","rawRange":"0..255","neutralRange":"0..100 %",
+    "seamVerb":"setPanRfGain","uiTarget":"panRfGainSlider","readAtConnect":true,
+    "sentThisSession":true,"seenThisSession":true,"gap":"",
+    "note":"PERCENT, not dB — the register has no published decibel mapping."},
+   {"id":"af.gain","civ":"14 01","wiring":"decode-only","seamVerb":"",
+    "uiTarget":"sliceAudioGainSlider",
+    "gap":"readable but not settable — no seam verb reaches this register"}]}
+```
+
+`wiring` is the declared state — `both`, `send-only`, `decode-only` or
+`declared-only` (a constant with no call sites at all). `gap` names the problem
+in words when there is one, so a caller can sort by it. `sentThisSession` and
+`seenThisSession` are *observed*, not declared: a row claiming `both` that has
+never been seen after a full connect is the interesting case. The
+`_diagnostics` row separates "the radio is silent" from "the registry matches
+nothing" — without it an all-false `seen` column is ambiguous.
+
+**`controls meters`** — the 0x15 meter registry with each meter's scale, poll
+interval, and **how long ago it last produced a reading**.
+
+```json
+→ {"cmd":"controls","args":"meters"}
+← {"ok":true,"result":[
+   {"id":"SLC:LEVEL","civ":"15 02","unit":"dBm","range":"-140..-10",
+    "pollMs":100,"when":"rx-only","visible":true,"ageMs":142,"status":"LIVE"},
+   {"id":"RAD:OVF","civ":"15 07","unit":"Percent","range":"0..1",
+    "pollMs":500,"when":"rx-only","visible":true,"ageMs":-1,
+    "status":"NEVER FED — defined and no reading has ever arrived"}]}
+```
+
+Age is the point. A meter that is defined and never fed renders as a real
+instrument reading a quiet band, which is worse than a missing one; a definition
+alone proves nothing. `IDLE` distinguishes a transmit-only meter that is
+correctly quiet while receiving from one that is broken.
+
+**`controls scrub [id|plane]`** — the linkage check. Drives every settable
+control through its seam verb **at its current value**, then looks for the frame
+on the wire. Nothing on the radio moves.
+
+```json
+→ {"cmd":"controls","args":"scrub"}
+← {"ok":true,"result":{"checked":25,"linked":17,"broken":0,"notTested":8,
+   "rows":[{"id":"rf.gain","civ":"14 02","seamVerb":"setPanRfGain",
+            "reachedWire":true,"status":"LINKED",
+            "verdict":"the seam verb put this command on the wire"},
+           {"id":"rit.offset","civ":"21 00","status":"NOT-TESTED",
+            "verdict":"no safe way to re-assert this without changing the
+                       operator's setting — not a fault, not a pass"}]}}
+```
+
+Three outcomes, not two. `NOT-TESTED` is a real state — a control the scrub
+could not drive without changing the operator's setting — and collapsing it into
+either pass or fail would misreport it.
+
+The scrub clears the enable-dedupe sentinels first: NR, NB and both notches
+suppress an enable that matches what was last sent, which is correct in normal
+use and would otherwise swallow exactly the frame being tested. It re-sends the
+same value, so the radio still does not move.
+
+**PTT, the antenna tuner and power-off are never scrubbed.** Two of them transmit
+and the third powers the radio off over a link that cannot power it back on.
+
 ### `link`
 
 Connected-mode AX.25: the terminal (calling side) and the Personal Mailbox
@@ -3018,7 +3141,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 61 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 64 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3041,15 +3164,17 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `hitTest` | `hittest` | hitTest <target> [x y] — read-only widget-owner probe |
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
-| `get` | — | get <model> [selector] [property] — live model snapshot |
+| `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
 | `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
 | `disconnect` | — | disconnect from the radio |
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
+| `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters |
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
+| `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
@@ -3070,6 +3195,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <send <hex>\|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated) |
+| `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

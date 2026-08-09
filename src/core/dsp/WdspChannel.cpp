@@ -385,10 +385,155 @@ bool WdspChannel::setShift(double shiftHz) noexcept
         // Running the stage at 0 Hz costs a pointless rotate per sample, so
         // switch it off when there is no offset to apply.
         SetRXAShiftRun(m_channelId, shiftHz != 0.0 ? 1 : 0);
+        m_shiftHz = shiftHz;
+        // The notch database tracks the shift separately and WDSP never links
+        // the two itself. Both reference clients set them together (Thetis
+        // radio.cs RXOsc sets SetRXAShiftFreq and RXANBPSetShiftFrequency on
+        // the same line); setting only the first leaves every notch offset by
+        // the shift, which stays invisible until someone tunes off centre.
+        applyNotchShift();
     }
-    m_shiftHz = shiftHz;
     endControlOperation();
     return true;
+}
+
+void WdspChannel::applyNotchShift() noexcept
+{
+    // Caller holds g_setupMutex.
+    //
+    // The SAME value the shift stage got, not a negation of it. Thetis sets
+    // both on one line from one variable (radio.cs RXOsc) for the same reason:
+    // the notch database is not a second opinion about the shift, it is the
+    // copy the filter-mask rebuild reads.
+    RXANBPSetShiftFrequency(m_channelId, m_shiftHz);
+}
+
+bool WdspChannel::addNotch(int index, double centerHz, double widthHz,
+                           bool active) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !std::isfinite(centerHz) || !std::isfinite(widthHz) || widthHz <= 0.0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPAddNotch(m_channelId, index, centerHz, widthHz,
+                                active ? 1 : 0);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::editNotch(int index, double centerHz, double widthHz,
+                            bool active) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !std::isfinite(centerHz) || !std::isfinite(widthHz) || widthHz <= 0.0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPEditNotch(m_channelId, index, centerHz, widthHz,
+                                 active ? 1 : 0);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::removeNotch(int index) noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0
+        || !beginControlOperation()) {
+        return false;
+    }
+    int result = -1;
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        result = RXANBPDeleteNotch(m_channelId, index);
+    }
+    endControlOperation();
+    return result == 0;
+}
+
+bool WdspChannel::setNotchesEnabled(bool on) noexcept
+{
+    if (m_config.direction != Direction::Receive || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXANBPSetNotchesRun(m_channelId, on ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setNotchTuneFrequency(double tuneHz) noexcept
+{
+    if (m_config.direction != Direction::Receive || !std::isfinite(tuneHz)
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXANBPSetTuneFrequency(m_channelId, tuneHz);
+    }
+    endControlOperation();
+    return true;
+}
+
+int WdspChannel::notchCount() const noexcept
+{
+    if (m_config.direction != Direction::Receive)
+        return 0;
+    // RXANBPGetNumNotches takes the channel's own csDSP, so it is safe against
+    // the DSP thread — but not against close() on another thread, which frees
+    // the NOTCHDB under g_setupMutex. Every other accessor on this class either
+    // goes through beginControlOperation() or takes that lock; these two are
+    // read-only and cheap, so the lock is all they need to match the contract.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
+        return 0;
+    int count = 0;
+    RXANBPGetNumNotches(m_channelId, &count);
+    return count;
+}
+
+bool WdspChannel::notchAt(int index, double* centerHz, double* widthHz,
+                          bool* active) const noexcept
+{
+    if (m_config.direction != Direction::Receive || index < 0)
+        return false;
+    // See notchCount() — same interlock, same reason.
+    const std::scoped_lock setupLock(g_setupMutex);
+    if (!m_open)
+        return false;
+    double center = 0.0;
+    double width = 0.0;
+    int isActive = 0;
+    if (RXANBPGetNotch(m_channelId, index, &center, &width, &isActive) != 0)
+        return false;
+    if (centerHz != nullptr) *centerHz = center;
+    if (widthHz != nullptr) *widthHz = width;
+    if (active != nullptr) *active = isActive != 0;
+    return true;
+}
+
+double WdspChannel::minimumNotchWidthHz() const noexcept
+{
+    // WDSP's own min_notch_width() (nbp.c) for the window type RXA.c creates the
+    // stage with (wintype 0). Mirrored here rather than exposed from WDSP
+    // because the value is needed to *offer* widths, before any notch exists.
+    if (m_config.direction != Direction::Receive || m_config.filterTaps <= 0
+        || m_config.dspSampleRate <= 0) {
+        return 0.0;
+    }
+    return 1600.0 / (static_cast<double>(m_config.filterTaps) / 256.0)
+           * (static_cast<double>(m_config.dspSampleRate) / 48000.0);
 }
 
 double WdspChannel::meter(Meter which) const noexcept

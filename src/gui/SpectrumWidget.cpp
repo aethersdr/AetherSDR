@@ -9912,29 +9912,49 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             }
             menu.addAction("Remove TNF", this, [this, hitTnf]{ emit tnfRemoveRequested(hitTnf); });
             auto* widthMenu = menu.addMenu("Width");
+            // Only the presets the radio can actually produce. On a host-DSP
+            // notch the floor is real — WDSP widens anything narrower without
+            // saying so — so offering 50 Hz against a 200 Hz floor would put
+            // three menu entries on screen that all give the same notch.
             for (int w : {50, 100, 200, 500}) {
+                if (w < m_notchMinWidthHz || w > m_notchMaxWidthHz)
+                    continue;
                 QAction* action = widthMenu->addAction(QString("%1 Hz").arg(w), this,
                     [this, hitTnf, w]{ emit tnfWidthRequested(hitTnf, w); });
                 action->setCheckable(true);
                 action->setChecked(tnf && tnf->widthHz == w);
             }
-            auto* depthMenu = menu.addMenu("Depth");
-            const int currentDepth = tnf ? tnf->depthDb : 1;
-            for (const auto& option : std::initializer_list<std::pair<const char*, int>>{
-                     {"Normal", 1}, {"Deep", 2}, {"Very Deep", 3}}) {
-                QAction* action = depthMenu->addAction(option.first, this,
-                    [this, hitTnf, depth = option.second]{ emit tnfDepthRequested(hitTnf, depth); });
-                action->setCheckable(true);
-                action->setChecked(currentDepth == option.second);
+            // Depth is a Flex TNF concept. A host-DSP notch is a full null with
+            // no depth parameter, so the submenu is omitted rather than left
+            // offering three settings that behave identically.
+            if (m_notchHasDepth) {
+                auto* depthMenu = menu.addMenu("Depth");
+                const int currentDepth = tnf ? tnf->depthDb : 1;
+                for (const auto& option : std::initializer_list<std::pair<const char*, int>>{
+                         {"Normal", 1}, {"Deep", 2}, {"Very Deep", 3}}) {
+                    QAction* action = depthMenu->addAction(option.first, this,
+                        [this, hitTnf, depth = option.second]{ emit tnfDepthRequested(hitTnf, depth); });
+                    action->setCheckable(true);
+                    action->setChecked(currentDepth == option.second);
+                }
             }
-            menu.addSeparator();
-            bool isPerm = false;
-            for (const auto& t : m_tnfMarkers)
-                if (t.id == hitTnf) { isPerm = t.permanent; break; }
-            if (isPerm)
-                menu.addAction("Make Temporary", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, false); });
-            else
-                menu.addAction("Make Permanent", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, true); });
+            // "Permanent" means the RADIO keeps the notch across a power cycle,
+            // so it needs a radio with somewhere to keep it — which an HL2, with
+            // no configuration store at all, does not have.
+            //
+            // Gated on the same flag as depth because both are radio-OWNED notch
+            // attributes and today no family has one without the other. Split
+            // them into their own capability the moment one does.
+            if (m_notchHasDepth) {
+                menu.addSeparator();
+                bool isPerm = false;
+                for (const auto& t : m_tnfMarkers)
+                    if (t.id == hitTnf) { isPerm = t.permanent; break; }
+                if (isPerm)
+                    menu.addAction("Make Temporary", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, false); });
+                else
+                    menu.addAction("Make Permanent", this, [this, hitTnf]{ emit tnfPermanentRequested(hitTnf, true); });
+            }
         }
         // General area context menu
         else {
@@ -9947,8 +9967,12 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             const QString freqStr = QString::number(snappedMhz, 'f', 6);
             menu.addAction(QString("Add Spot at %1 MHz...").arg(freqStr), this,
                 [this, snappedMhz]{ showAddSpotDialog(snappedMhz); });
-            menu.addAction(QString("Add TNF at %1 MHz").arg(freqStr), this,
-                [this, freqMhz]{ emit tnfCreateRequested(freqMhz); });
+            // Absent, not disabled, on a radio with no notch engine — and
+            // absent once the radio is full rather than silently doing nothing.
+            if (m_maxNotchFilters > 0 && m_tnfMarkers.size() < m_maxNotchFilters) {
+                menu.addAction(QString("Add TNF at %1 MHz").arg(freqStr), this,
+                    [this, freqMhz]{ emit tnfCreateRequested(freqMhz); });
+            }
             menu.addAction(QString("Add Slice at %1 MHz").arg(freqStr), this,
                 [this, snappedMhz]{ emit sliceCreateRequested(snappedMhz); });
         }
@@ -10436,9 +10460,14 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double newFreq = xToMhz(mx);
         const int dy = static_cast<int>(ev->position().y()) - m_tnfDragStartPos.y();
         const double widthScale = std::pow(2.0, static_cast<double>(-dy) / 48.0);
+        // Clamped to what the radio can actually produce, not to a fixed 10 Hz.
+        // A host-DSP notch has a real floor set by its filter length and it
+        // WIDENS a narrower request silently, so letting the drag go below it
+        // would draw a notch narrower than the one being heard — the overlay
+        // and the audio would disagree, with nothing on screen to say why.
         const int newWidthHz = std::clamp(
             static_cast<int>(std::lround(static_cast<double>(m_dragTnfOrigWidthHz) * widthScale)),
-            10, 12000);
+            m_notchMinWidthHz, m_notchMaxWidthHz);
         for (auto& t : m_tnfMarkers) {
             if (t.id == m_draggingTnfId) {
                 t.freqMhz = newFreq;
@@ -15634,6 +15663,19 @@ void SpectrumWidget::clearSwrSweepPoints()
     m_swrSweepCurrentFreqMhz = -1.0;
     m_swrSweepSourceLabel.clear();
     markOverlayDirty();
+}
+
+void SpectrumWidget::setNotchCapabilities(int maxNotches, bool hasDepth,
+                                          int minWidthHz, int maxWidthHz)
+{
+    m_maxNotchFilters = std::max(0, maxNotches);
+    m_notchHasDepth = hasDepth;
+    // Guard the ordering rather than trusting it: these come from a backend,
+    // and an inverted pair would make std::clamp in the drag path undefined.
+    if (minWidthHz > 0 && maxWidthHz > minWidthHz) {
+        m_notchMinWidthHz = minWidthHz;
+        m_notchMaxWidthHz = maxWidthHz;
+    }
 }
 
 void SpectrumWidget::setTnfGlobalEnabled(bool on)

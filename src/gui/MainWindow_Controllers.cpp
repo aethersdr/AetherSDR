@@ -2072,8 +2072,11 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
 
+    // Through the model, not sendCommand: the raw string only ever reached a
+    // Flex, so this MIDI binding silently did nothing on any other radio.
     reg("global.tnfEnable", "TNF Global", "Global", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.sendCommand(QString("radio set tnf_enabled=%1").arg(v > 0.5f ? 1 : 0)); });
+        [this](float v) { m_radioModel.tnfModel().requestGlobalTnfEnabled(v > 0.5f); },
+        [this]() -> float { return m_radioModel.tnfModel().globalEnabled() ? 1 : 0; });
 
     // Helper — reuse keyboard-shortcut handlers so MIDI bindings don't
     // duplicate any logic.  Each MIDI Trigger/Toggle that mirrors a

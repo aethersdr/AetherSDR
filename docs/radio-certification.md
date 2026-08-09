@@ -52,6 +52,80 @@ Hermes-Lite 2 can physically produce it.
 | `RAD:+13.8A` | Volts | **no** | — | HL2 reports no supply voltage | — |
 | `AMP:*`, `TGXL:*` | — | **no** | — | external amp / tuner only | — |
 
+### Icom (IC-705) — measured with `controls meters`, radio idle on 20 m
+
+Ages are from one live run; the point is the STATUS column, not the numbers.
+
+| source:name | CI-V | unit | range | poll | Status |
+|---|---|---|---|---|---|
+| `SLC:LEVEL` | `15 02` | dBm | −140…−10 | 100 ms | **LIVE** (150 ms) |
+| `RAD:+13.8A` | `15 15` | Volts | 0…16 | 1000 ms | **LIVE** (801 ms) |
+| `RAD:OVF` | `15 07` | Percent | 0…1 | 500 ms | **LIVE** (67 ms) — was `NEVER FED`; see the one-byte decode above |
+| `TX:FWDPWR` | `15 11` | Watts | 0…12 | 200 ms | LIVE when keyed; reads 0 with no modulation |
+| `TX:SWR` | `15 12` | SWR | 1…6.4 | 200 ms | IDLE (transmit-only) |
+| `TX:ALC` | `15 13` | Percent | 0…100 | 200 ms | IDLE (transmit-only) |
+| `TX:COMPPEAK` | `15 14` | dB | 0…25.5 | 200 ms | IDLE (transmit-only) |
+| `RAD:PACURRENT` | `15 16` | Amps | 0…4 | 500 ms | IDLE (transmit-only) |
+
+### Certified by effect, 2026-08-06 (IC-705, 7.200 MHz LSB, 10 W dummy load)
+
+**Every transmit meter, against live voice — and the whole host transmit path
+with them.** The stimulus was an operator speaking into a Bluetooth headset
+paired to **the Mac running AetherSDR**, selected as AetherSDR's TX input. The
+radio's own microphone was not involved at any point, and the audio travelled
+the full host chain:
+
+    BT headset -> macOS input -> AetherSDR TX capture -> TX DSP -> submitTxAudio
+                -> Icom LPCM UDP audio stream -> WLAN modulator -> RF
+
+`MOD Input` was `WLAN voice / WLAN data` throughout, which is what that path
+requires: the radio modulates from the network because the network is where the
+audio came from.
+
+**Confirmed on an unrelated receiver.** A Kenwood TH-D75 sitting beside the
+IC-705 heard the transmission off air. That matters more than every internal
+measurement above put together — this document's closing section says a
+self-check "demodulates our own transmission, which is a different path from the
+panadapter but still our own code. Two errors in the same direction agree." A
+separate radio from a different manufacturer shares none of that code and can
+agree with none of those errors. It is the strongest evidence available without
+a lab, and it was one HT on a desk.
+
+| meter | stimulus | observed | verdict |
+|---|---|---|---|
+| `TX:FWDPWR` | voice | 0 -> 2 -> **5 W** -> 1 -> 0, tracking syllables | **CERTIFIED** — and the unit contract with it: 5 W arrived as 5 W, not as `10^(5/10)/1000` |
+| `TX:SWR` | voice into a dummy load | **1.0**, steady | **CERTIFIED** — a flat load reads flat, which is the one SWR value that can be checked against a known answer |
+| `TX:ALC` | voice | 0 -> 73 -> 96 -> **98 %** -> 67 | **CERTIFIED** — tracks the envelope |
+| `TX:COMPPEAK` | voice, PROC on | **8.9 dB** | **CERTIFIED** — reads zero with the compressor off |
+| `RAD:PACURRENT` | voice | 0.25 -> **1.40 A** | **CERTIFIED** — the PA draws under modulation |
+| `RAD:+13.8A` | voice | 7.98 -> **7.58 V** | **CERTIFIED** — the supply sags under PA load and recovers |
+
+All six were `IDLE` and unproven before this. Keying alone is **not** the
+stimulus: an earlier run keyed with no modulation and read `FWDPWR 0 W`,
+`ALC 0 %`, `SWR null` while the PA drew 0.43 A — proof that the radio was
+transmitting and nothing more. **Voice is the stimulus**; a carrier would
+certify power and SWR but leaves ALC and COMPPEAK unexercised, because neither
+means anything without an envelope.
+
+> **This certifies the HOST TRANSMIT PATH, not just the meters.** Five watts of
+> RF from a voice spoken into a Mac audio device is an end-to-end proof of the
+> capture, the TX DSP chain, the encoder, the UDP audio stream and the radio's
+> modulator — every stage between a microphone and an antenna.
+>
+> **Do not diagnose this path with `opusTxPacing`.** An earlier run read
+> `opusTxPacing.packetsSent: 0` and concluded the transmit path was dead. That
+> counter belongs to the AudioEngine's **Opus** transport (KiwiSDR / WebSocket).
+> An Icom negotiates `Lpcm1ch16` and carries it on its own UDP audio stream, so
+> the counter was never going to move no matter how well transmit was working.
+> Reading a neighbouring subsystem's counter and believing it is the same class
+> of error as trusting a meter that is defined but never fed.
+
+The remaining rows have **not** been certified by effect —
+they are correctly quiet while receiving, which is a different statement from
+working. Certifying them needs a keyed run, and Appendix C of the Icom design
+doc records a live unit-contract defect on `TX:FWDPWR` and `TX:ALC` that a
+keyed `radiocert meters` pass will have to resolve first.
+
 ### Non-meter telemetry that still needs surfacing
 
 | Signal | HL2 source | Why it matters |
@@ -60,6 +134,86 @@ Hermes-Lite 2 can physically produce it.
 | ADC clip count | discovery `0x1B[1:0]` | saturating counter — "did we clip at all recently" |
 | TX IQ FIFO depth | RADDR `0x00` | the oracle calls it the most important number in the protocol |
 | TX inhibit | `0x00[25]`, **active low** | the radio refusing to key, distinct from us not asking |
+
+---
+
+## Certifying a whole radio at once — the control registry
+
+The tables in this document are hand-maintained, and hand-maintained tables go
+stale silently. The Icom bring-up produced a second instrument that does not:
+`IcomControls.h` declares every CI-V message the backend names, and the bridge's
+`controls` verb reports it joined against what the running backend has actually
+observed. Three things it does that a table cannot:
+
+**It separates four wiring states, not two.** `both`, `send-only`,
+`decode-only`, `declared-only`. A control that is read but never written and one
+that is written but never read are different bugs with different symptoms — the
+first is a dead slider, the second is a control that opens at *our* default on a
+radio set to something else — and "not working" hides both. Seven Icom constants
+turned out to be `declared-only`: named in the codec, reached by nothing.
+
+**It separates declared from observed.** Every row carries `sentThisSession` and
+`seenThisSession`. A row claiming `both` that has never been seen after a full
+connect is the interesting case, and it is the one no document can report.
+
+**It answers for all of them at once.** `controls scrub` drives every settable
+control through its seam verb *at its current value* and looks for the frame on
+the wire. Nothing on the radio moves. On the IC-705 that is 25 controls in one
+call: 17 linked, 0 broken, 8 that cannot be re-asserted without changing an
+operator setting.
+
+Three design choices in the scrub are worth copying into any backend that grows
+one:
+
+- **Three outcomes, not two.** `NOT-TESTED` is a real state — a control the
+  harness could not drive safely — and collapsing it into pass or fail
+  misreports it. Eight of the IC-705's rows land there and none of them is a
+  fault.
+- **Defeat the dedupe first.** NR, NB and both notches suppress an enable that
+  matches the last one sent. Correct in normal use; fatal to a linkage check,
+  because re-asserting the current value is exactly what the dedupe swallows.
+  Clearing the sentinel makes the verb send the same value it would have sent
+  anyway, so the radio still does not move and the frame becomes observable.
+- **Never scrub what transmits.** PTT, the antenna tuner and power-off are
+  excluded outright. A scrub that has to be supervised is a scrub nobody runs.
+
+### Meters: age is the certification, not the definition
+
+Rule 2 at the top of this document says a meter that is defined and never fed is
+worse than a missing one. `controls meters` is that rule made runnable: it
+reports every meter's scale, its poll interval, and **how long ago it last
+produced a reading**, with four statuses —
+
+| Status | Means |
+|---|---|
+| `LIVE` | a reading arrived within a few poll intervals |
+| `STALE` | far older than its own interval — it was working and stopped |
+| `IDLE` | transmit-only and correctly quiet while receiving |
+| `NEVER FED` | defined, and no reading has *ever* arrived |
+
+The distinction between `IDLE` and `NEVER FED` is the whole point. Both read as
+"no value" on a gauge, and only one is a bug.
+
+It found one on its first run. `RAD:OVF` reported `NEVER FED` while `civ trace`
+plainly showed `15 07` replies arriving twice a second: **the ADC-overflow reply
+is one byte, not the two-byte BCD level every other `15 xx` uses**, so
+`decodeLevel` rejected it before `markAnswered`, the poller re-asked on the
+in-flight timeout forever, and the indicator that tells an operator they are
+clipping the converter never moved once. A definition-based audit would have
+passed it — the meter was defined, mapped, polled and published.
+
+### What the harness still cannot tell you
+
+- **That the radio obeyed.** The scrub proves an intent reached the wire and the
+  radio acknowledged it. An `FB` means "understood", not "applied" — an IC-705
+  answers `FB` to a P.AMP2 request above 50 MHz that it then ignores.
+- **That the value is right.** A control can be linked, in range, and scaled
+  wrongly. `14 02` published as decibels instead of percent would still scrub
+  green; only reading the unit against the model's guide catches that.
+- **That the UI reaches the seam.** `uiTarget` is a claim about which widget
+  drives a control, and nothing checks it. Driving the widget and watching the
+  wire — which is what the bridge's `invoke` plus `civ trace` do together — is
+  still a per-control test.
 
 ---
 

@@ -87,17 +87,49 @@ void IcomStream::beginHandshake()
 {
     if (!m_socket)
         return;
-    sendRawTwice(buildAreYouThere(m_localSid));
 
-    // The handshake has no explicit failure packet — a radio that is off, busy
-    // with another client, or has Network Control disabled simply says nothing.
-    // So the only way to report it is a deadline.
-    QTimer::singleShot(3000, this, [this] {
-        if (!m_ready)
-            emit failed(QStringLiteral(
-                "no answer from the radio — check Network control is ON, the "
-                "user/password are set, and no other client holds the session"));
-    });
+    // RETRY, DO NOT JUST WAIT.
+    //
+    // This used to send AreYouThere twice and then sit on a 3 s deadline. Over
+    // WiFi that is one shot: the pair goes out together, and if the radio is
+    // mid-wake, momentarily off-channel, or still tearing down a session an
+    // earlier client left behind, both are lost and the connect fails with a
+    // message about Network Control that is simply wrong. It was the single
+    // most common failure during bring-up and every time the fix was "try
+    // again", which is exactly what a client should be doing for the operator.
+    //
+    // A second apart, because the failure being covered is a radio that is busy
+    // for a moment rather than a lossy link — retrying faster than the radio
+    // can answer just adds sessions for it to sort out.
+    m_handshakeAttempts = 0;
+    if (!m_handshakeTimer) {
+        m_handshakeTimer = new QTimer(this);
+        m_handshakeTimer->setInterval(kHandshakeRetryMs);
+        connect(m_handshakeTimer, &QTimer::timeout, this, [this] {
+            if (m_ready) {
+                m_handshakeTimer->stop();
+                return;
+            }
+            if (++m_handshakeAttempts >= kHandshakeAttempts) {
+                m_handshakeTimer->stop();
+                // The handshake has no explicit failure packet — a radio that is
+                // off, busy with another client, or has Network Control disabled
+                // simply says nothing. A deadline is the only way to report it,
+                // and now it is a deadline the radio has been asked repeatedly
+                // to beat.
+                emit failed(QStringLiteral(
+                    "no answer from the radio after %1 attempts — check Network "
+                    "control is ON, the user/password are set, and no other "
+                    "client holds the session").arg(kHandshakeAttempts));
+                return;
+            }
+            qCInfo(lcIcomStream) << "no IAmHere yet — retrying AreYouThere, attempt"
+                                 << (m_handshakeAttempts + 1) << "of" << kHandshakeAttempts;
+            sendRawTwice(buildAreYouThere(m_localSid));
+        });
+    }
+    sendRawTwice(buildAreYouThere(m_localSid));
+    m_handshakeTimer->start();
 }
 
 void IcomStream::stop()
@@ -266,12 +298,27 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
     if (!m_ready) {
         if (isIAmReady(pkt)) {
             m_ready = true;
+            if (m_handshakeTimer)
+                m_handshakeTimer->stop();
             qCInfo(lcIcomStream) << int(m_config.role) << "handshake complete on local port"
                                  << m_boundPort;
 
-            m_idleTimer = new QTimer(this);
-            connect(m_idleTimer, &QTimer::timeout, this, &IcomStream::onIdleTick);
-            m_idleTimer->start(kIdleIntervalMs);
+            // NO PERIODIC IDLES ON THE AUDIO STREAM.
+            //
+            // kappanhang is explicit about this — "this stream does not use
+            // periodic pkt0 idle packets" — and it matters more than it looks.
+            // Our idles are TRACKED: each consumes a sequence number and enters
+            // the replay buffer, so the radio can ask for any of them back. On
+            // the audio stream that is 10 extra tracked packets a second layered
+            // on top of 100 audio packets a second, competing for the same
+            // airtime and the same sequence space as the audio it is meant to be
+            // keeping alive. The pkt7 ping below is what actually holds the
+            // stream open.
+            if (m_config.role != Role::Audio) {
+                m_idleTimer = new QTimer(this);
+                connect(m_idleTimer, &QTimer::timeout, this, &IcomStream::onIdleTick);
+                m_idleTimer->start(kIdleIntervalMs);
+            }
 
             m_pingTimer = new QTimer(this);
             connect(m_pingTimer, &QTimer::timeout, this, &IcomStream::onPingTick);

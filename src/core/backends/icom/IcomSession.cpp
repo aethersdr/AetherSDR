@@ -1,5 +1,7 @@
 #include "core/backends/icom/IcomSession.h"
 
+#include <QDateTime>
+
 #include <QLoggingCategory>
 #include <QThread>
 #include <QTimer>
@@ -158,6 +160,9 @@ void IcomSession::stop()
         }
     }
     m_authOk = false;
+    m_lastAuthOkMs = 0;
+    m_renewUnacked = false;
+    m_renewRetries = 0;
     m_haveRadioId = false;
     m_streamsRequested = false;
     m_connected = false;
@@ -245,13 +250,23 @@ void IcomSession::onControlPayload(const QByteArray& packet)
                        << "requestreply =" << pkt[0x14] << "requesttype =" << pkt[0x15];
         if (isAuthAccepted(pkt)) {
             m_authOk = true;
+            // THE ACK, which is what makes a renewal verifiable. Before this
+            // the renewal was fire-and-forget: one datagram every 45 s, no
+            // check, and a lost one killed the session 15 s later with no
+            // disconnect packet and no error anywhere.
+            m_lastAuthOkMs = QDateTime::currentMSecsSinceEpoch();
+            m_renewUnacked = false;
+            m_renewRetries = 0;
             if (!m_tokenTimer) {
                 // Renew comfortably inside the 60 s contract. Missing it stops
                 // the media streams with NO disconnect packet and no error —
                 // the operator sees audio simply stop.
                 m_tokenTimer = new QTimer(this);
                 connect(m_tokenTimer, &QTimer::timeout, this, &IcomSession::onTokenRenew);
-                m_tokenTimer->start(kTokenRenewEarlyMs);
+                // Fires far more often than it renews: the same tick polices
+                // an outstanding renewal, so a lost one is resent in seconds
+                // rather than waiting out the next full interval.
+                m_tokenTimer->start(kTokenAckGraceMs);
             }
             requestStreamsIfReady();
         }
@@ -361,14 +376,100 @@ void IcomSession::requestStreamsIfReady()
 
 void IcomSession::openMediaStreams()
 {
+    // THE RATE INVARIANT, CHECKED WHERE IT IS ACTUALLY DECIDED.
+    //
+    // IcomProtocol.h's static_assert reads kAudioRateHz, a compile-time
+    // constant, while the rate that reaches the wire is this runtime field. So
+    // that assert cannot catch the failure its own comment describes: setting
+    // sampleRateHz to 16000 still yields 1920-byte frames, still 60 ms of audio
+    // per frame, and still the silent zero-power transmit that cost a live
+    // session to find. The build stays green the whole way.
+    //
+    // Clamped rather than refused: a wrong rate here is a transmitter that
+    // keys and radiates nothing, which is far worse than ignoring a request
+    // the packetiser cannot honour. When the low-bandwidth work lands it must
+    // re-derive the 1364/556 split, and this is the guard that will make that
+    // requirement impossible to skip.
+    if (m_params.sampleRateHz != kAudioRateHz) {
+        qCWarning(lcIcom) << "audio sample rate" << m_params.sampleRateHz
+                          << "Hz cannot be honoured — the packet split is sized for"
+                          << kAudioRateHz << "Hz; clamping. Changing the rate "
+                             "requires re-deriving kAudioSplitLarge/Small.";
+        m_params.sampleRateHz = kAudioRateHz;
+    }
+
     m_serial->beginHandshake();
     m_audio->beginHandshake();
 }
 
+// The token ticker, and the renewal watchdog — one timer doing both.
+//
+// THE FAILURE THIS EXISTS FOR. The radio honours a session for 60 s and then
+// stops, silently: no disconnect packet, no error, and the UDP transport keeps
+// running because idle keepalives are not token-gated. So `isConnected()` stays
+// true, link statistics keep climbing, and CI-V is simply dead. It reads as a
+// radio that stopped talking rather than as a session that expired.
+//
+// A single renewal 15 s before expiry was one UDP datagram between us and that.
+// On a 2.4 GHz link with 14.7% TX retries and power-save latency reaching
+// 300 ms, losing it is routine. So: renew three times inside the contract, and
+// treat an unacknowledged renewal as something to resend rather than something
+// to hope about.
 void IcomSession::onTokenRenew()
 {
     if (!m_control || !m_control->isReady())
         return;
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastAuthOkMs <= 0)
+        m_lastAuthOkMs = now;
+
+    const qint64 sinceAck = now - m_lastAuthOkMs;
+
+    // Nothing has been acknowledged for most of the contract. Report it while
+    // it is still true — a session that dies here used to be discovered minutes
+    // later as "the meters stopped".
+    if (sinceAck > kTokenDeadMs) {
+        fail(QStringLiteral(
+                 "the radio stopped renewing our session token (no acknowledgement "
+                 "for %1 s). The link is up but the session has expired — this is "
+                 "usually a lossy or power-saving WiFi path to the radio.")
+                 .arg(sinceAck / 1000));
+        return;
+    }
+
+    // A renewal is outstanding: resend it rather than waiting for the next
+    // interval, because the next interval may be past the expiry.
+    if (m_renewUnacked) {
+        if (m_renewRetries < kTokenRenewMaxRetries) {
+            ++m_renewRetries;
+            qCWarning(lcIcom) << "token renewal unacknowledged after"
+                              << kTokenAckGraceMs << "ms — resend" << m_renewRetries
+                              << "of" << kTokenRenewMaxRetries;
+            m_control->sendTracked(buildAuth(m_control->localSessionId(),
+                                             m_control->remoteSessionId(),
+                                             m_innerSeq++, m_authId, AuthKind::Renew));
+            return;
+        }
+        // RELEASE THE LATCH. Retries are exhausted for THIS renewal, but the
+        // token is alive until kTokenDeadMs — so falling through to the cadence
+        // below starts a fresh one with a fresh budget, which is effectively
+        // continuous retry up to the dead-session deadline.
+        //
+        // Leaving it latched meant nothing was ever sent again: the cadence
+        // branch could not run, and the session coasted into a guaranteed
+        // teardown. A 10 s outage at t=20 s would lose the four resends and
+        // then sit silent from t=30 s to the fail() at t=50 s — a full
+        // disconnect for an outage that had been over for twenty seconds.
+        m_renewUnacked = false;
+        m_renewRetries = 0;
+    }
+
+    // Otherwise renew on the normal cadence.
+    if (sinceAck < kTokenRenewEarlyMs)
+        return;
+    m_renewUnacked = true;
+    m_renewRetries = 0;
     m_control->sendTracked(buildAuth(m_control->localSessionId(), m_control->remoteSessionId(),
                                      m_innerSeq++, m_authId, AuthKind::Renew));
 }

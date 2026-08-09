@@ -6,9 +6,11 @@
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
 #include "core/NetworkPathResolver.h"
+#include "ComboStyle.h"   // shared themed combo look (painted arrow)
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -267,19 +269,28 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     const QString editStyle =
         "QLineEdit { border: 1px solid #304050; border-radius: 4px; padding: 4px 6px; "
         "background: #09111b; color: #d7e4f2; }";
-    const QString comboStyle =
-        "QComboBox { border: 1px solid #304050; border-radius: 4px; padding: 0; "
-        "background: #09111b; color: #d7e4f2; }"
-        "QComboBox::drop-down { width: 24px; border-left: 1px solid #304050; }"
-        "QComboBox::down-arrow { image: none; width: 0; height: 0; margin-right: 6px; "
-        "border-left: 4px solid transparent; border-right: 4px solid transparent; "
-        "border-top: 5px solid #8aa8c0; }"
-        "QComboBox QLineEdit { border: none; padding: 4px 6px; "
-        "background: #09111b; color: #d7e4f2; }"
-        "QComboBox QAbstractItemView { background: #09111b; color: #d7e4f2; "
-        "selection-background-color: #1a3046; border: 1px solid #304050; }";
+    // THE SHARED COMBO STYLE, not a hand-rolled one.
+    //
+    // This dialog used to carry its own: raw hex instead of theme tokens, and a
+    // down-arrow built from the CSS zero-size-plus-borders triangle trick, which
+    // Qt renders on macOS as a filled blob rather than an arrow. Meanwhile every
+    // other combo in the app already used ComboStyle.h, which paints a real
+    // arrow and follows the theme — so the one dialog a new operator sees first
+    // was the one that looked wrong.
+    //
+    // The override is the field HEIGHT's business: these rows are 30 px, where
+    // the compact applet combos the shared template was shaped for are 22 px, so
+    // the text needs a bigger inset to sit off the frame. `padding: 0` was what
+    // made it hug the border in the first place.
+    const QString comboExtraRules =
+        "QComboBox { padding: 4px 8px; }"
+        // Pin the drop-down to the BORDER box. Without this it inherits the
+        // padding above and floats inward, detached from the frame's right edge.
+        "QComboBox::drop-down { subcontrol-origin: border;"
+        " subcontrol-position: top right; width: 22px; border: none; }";
+
     // The Icom credential fields are bare QLineEdits, not combo boxes, so they
-    // do not inherit comboStyle's palette. Without this they render as white
+    // inherit none of the combo styling above. Without this they render as white
     // boxes on a dark panel — the same widget, two different looks, in one row.
     //
     // TOKENS, and applied through ThemeManager rather than setStyleSheet(). The
@@ -288,9 +299,11 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // already have canonical tokens, so hardcoding them here would have meant
     // two credential fields that stop following the theme the moment anyone
     // changes it.
+    // 8 px to match the combos above, so the four fields in this column start
+    // their text at the same x. They did not before: the combos had none at all.
     const QString lineEditStyle =
-        "QLineEdit { border: 1px solid {{color.background.2}}; border-radius: 4px; "
-        "padding: 4px 6px; background: {{color.background.0}}; "
+        "QLineEdit { border: 1px solid {{color.background.2}}; border-radius: 2px; "
+        "padding: 4px 8px; background: {{color.background.1}}; "
         "color: {{color.text.primary}}; }"
         "QLineEdit:focus { border-color: {{color.accent.bright}}; }";
     const QString modeCardStyle =
@@ -641,6 +654,15 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
 
     constexpr int kManualLabelWidth = 96;
     constexpr int kManualFieldHeight = 30;
+    // Every row's label, so the column can be squared up once they all exist.
+    //
+    // setMinimumWidth() alone did NOT give a column. With a Fixed size policy Qt
+    // caps a widget at its own sizeHint, so a label narrower than the minimum
+    // sat at 96 while "Icom password:" — which is wider than 96 — sat at its own
+    // hint, and the four fields started at three different x positions. The
+    // width has to come from the WIDEST label, and that is not known until the
+    // last row is added.
+    QList<QLabel*> manualRowLabels;
     // Returns the row CONTAINER so a caller can hide the label and the field
     // together. Takes QWidget* rather than QComboBox* because the Icom
     // credential fields are QLineEdits; both calls below it are QWidget methods.
@@ -650,9 +672,10 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(12);
         auto* label = new QLabel(labelText, rowWidget);
-        label->setMinimumWidth(kManualLabelWidth);
         label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        label->setMinimumHeight(kManualFieldHeight);
+        manualRowLabels.append(label);
         field->setMinimumHeight(kManualFieldHeight);
         field->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         row->addWidget(label);
@@ -671,7 +694,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualRadioTypeCombo->setAccessibleName(tr("Radio type"));
     m_manualRadioTypeCombo->setAccessibleDescription(
         tr("Which radio family to look for at the address below"));
-    m_manualRadioTypeCombo->setStyleSheet(comboStyle);
+    AetherSDR::applyComboStyle(m_manualRadioTypeCombo, comboExtraRules);
     m_manualRadioTypeCombo->addItem(tr("FlexRadio"), QString::fromLatin1(kFamilyFlex));
     m_manualRadioTypeCombo->addItem(tr("Hermes-Lite 2"), QString::fromLatin1(kFamilyHl2));
     m_manualRadioTypeCombo->addItem(tr("Icom (network)"), QString::fromLatin1(kFamilyIcom));
@@ -685,7 +708,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualIpCombo->setEditable(true);
     m_manualIpCombo->setInsertPolicy(QComboBox::NoInsert);
     m_manualIpCombo->setMaxVisibleItems(kMaxRecentManualIps);
-    m_manualIpCombo->setStyleSheet(comboStyle);
+    AetherSDR::applyComboStyle(m_manualIpCombo, comboExtraRules);
     m_manualIpEdit = m_manualIpCombo->lineEdit();
     m_manualIpEdit->setObjectName(QStringLiteral("connectionManualIp"));
     m_manualIpEdit->setAccessibleName(tr("Radio IP address"));
@@ -693,7 +716,12 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         tr("IP address or host name for a routed or VPN radio connection"));
     m_manualIpEdit->setClearButtonEnabled(true);
     m_manualIpEdit->setPlaceholderText("Example: 10.0.0.25");
-    m_manualIpEdit->setMinimumHeight(26);
+    // NO HEIGHT ON THE EDITOR. The combo around it is 30 px with 4 px of
+    // vertical padding, which leaves a 22 px content box; a 26 px minimum on
+    // the editor overflows that box and Qt resolves it downward, so the
+    // address sat visibly below the centre of its own field — and below the
+    // Radio type text in the row above it. The row's height is the combo's
+    // to set (addManualRow does), and the editor fills what it is given.
     addManualRow(QStringLiteral("Radio IP:"), m_manualIpCombo);
 
     // Icom credentials. Hidden for every other family — see
@@ -742,6 +770,18 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualIcomCivEdit->setPlaceholderText(tr("auto (e.g. A2 for IC-9700)"));
     ThemeManager::instance().applyStyleSheet(m_manualIcomCivEdit, lineEditStyle);
     m_manualIcomCivRow = addManualRow(QStringLiteral("Icom CI-V:"), m_manualIcomCivEdit);
+
+    // One column, set from the widest label. Rows that are hidden for a family
+    // still count: the Icom rows appear and disappear as the operator changes
+    // radio type, and a column that resized with them would move the Radio type
+    // and Radio IP fields sideways every time.
+    {
+        int labelColumnWidth = kManualLabelWidth;
+        for (QLabel* label : manualRowLabels)
+            labelColumnWidth = std::max(labelColumnWidth, label->sizeHint().width());
+        for (QLabel* label : manualRowLabels)
+            label->setFixedWidth(labelColumnWidth);
+    }
 
     manualGroupLayout->addLayout(manualForm);
 
@@ -949,8 +989,26 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
             this, &ConnectionPanel::onManualConnectClicked);
     connect(m_manualIpEdit, &QLineEdit::returnPressed,
             this, &ConnectionPanel::onManualConnectClicked);
+    // Enter connects from the credential fields too. Without this the Icom path
+    // was the one family where the keyboard could not finish the job: the
+    // operator types the address, tabs to user and password — the two fields
+    // only an Icom shows — and Enter did nothing, because only the address
+    // field was wired. Typing a password and pressing Enter is what everyone
+    // does; it should not be the one gesture that requires the mouse.
+    connect(m_manualIcomUserEdit, &QLineEdit::returnPressed,
+            this, &ConnectionPanel::onManualConnectClicked);
+    connect(m_manualIcomPassEdit, &QLineEdit::returnPressed,
+            this, &ConnectionPanel::onManualConnectClicked);
     connect(m_manualIpEdit, &QLineEdit::textChanged,
             this, &ConnectionPanel::onManualIpChanged);
+    // The address was CHOSEN, not typed — restore its remembered radio type.
+    // `activated` fires only for a pick out of the popup, which is exactly the
+    // gesture the per-address family restore was written for; the keystroke
+    // path deliberately does not carry it (see applySavedSourceSelection).
+    connect(m_manualIpCombo, &QComboBox::activated, this, [this](int) {
+        applySavedSourceSelection(m_manualIpEdit->text().trimmed(),
+                                  /*restoreFamily=*/true);
+    });
     connect(m_manualRadioTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this](int) {
                 auto& settings = AppSettings::instance();
@@ -1177,8 +1235,37 @@ QPoint ConnectionPanel::constrainedFrameTopLeft(
         qMax(availableGeometry.top(), qMin(preferredFrameTopLeft.y(), maxY)));
 }
 
+void ConnectionPanel::clearPendingIcomCredentials()
+{
+    m_pendingIcomPassword.clear();
+    m_pendingIcomHost.clear();
+}
+
 void ConnectionPanel::setConnected(bool connected)
 {
+    // THE ONE MOMENT THE CREDENTIALS ARE PROVEN. Everything staged by
+    // probeRadio() is written here and nowhere else, so a wrong password is
+    // forgotten rather than persisted over a working one.
+    // SCOPED TO THE FAMILY THAT WAS STAGED FOR. A bare "connected" is not
+    // proof that THIS password was proven: stage an Icom attempt, have it fail
+    // without driving a disconnected edge (the panel is already disconnected,
+    // so a state-change-only caller emits nothing), then connect to a Flex, and
+    // the unproven Icom password would be written over a working keychain entry
+    // — the exact failure the staging exists to prevent, one step removed. The
+    // clears at every other connect path are the belt to this brace.
+    if (connected && !m_pendingIcomPassword.isEmpty()
+        && currentManualFamily() == QLatin1String(kFamilyIcom)) {
+        IcomCredentials::save(m_pendingIcomPassword);
+        if (!m_pendingIcomHost.isEmpty())
+            IcomSettings::setLastHost(m_pendingIcomHost);
+    }
+    if (!connected || !m_pendingIcomPassword.isEmpty()) {
+        // Cleared on BOTH edges: a failed attempt must not commit on the next
+        // unrelated connect, and a committed one must not commit twice.
+        m_pendingIcomPassword.clear();
+        m_pendingIcomHost.clear();
+    }
+
     m_connected = connected;
     m_disconnectBtn->setVisible(connected);
     updateActionState();
@@ -1709,6 +1796,8 @@ void ConnectionPanel::onLocalConnectClicked()
         settings.save();
     }
 
+    // A staged Icom credential belongs to the attempt it was staged for.
+    clearPendingIcomCredentials();
     emit connectRequested(info);
 }
 
@@ -1856,7 +1945,7 @@ void ConnectionPanel::refreshManualSourceOptions(const RadioBindSettings* select
     updateManualAdvancedVisibility();
 }
 
-void ConnectionPanel::applySavedSourceSelection(const QString& ip)
+void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreFamily)
 {
     const QString trimmedIp = ip.trimmed();
     m_manualProfileIp = trimmedIp;
@@ -1880,7 +1969,13 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip)
     // Restore the radio type this address was last reached with, so picking a
     // recent HL2 address out of the dropdown does not silently probe it as a
     // Flex (and time out on TCP/4992).
-    setManualFamily(familyFromProfile(profile));
+    //
+    // ONLY when the address was CHOSEN, never while it is being typed — see the
+    // parameter's note in the header. The bind settings below are restored on
+    // both paths: they are not a control the operator is looking at, and an
+    // address's VPN source path is a property of the address either way.
+    if (restoreFamily)
+        setManualFamily(familyFromProfile(profile));
 
     RadioBindSettings settings = bindSettingsFromProfile(profile);
     if (settings.mode == RadioBindMode::Explicit) {
@@ -2097,7 +2192,7 @@ void ConnectionPanel::onManualIpChanged(const QString& ip)
     const QString trimmed = ip.trimmed();
     m_manualConnectPending = false;
     if (trimmed != m_manualProfileIp)
-        applySavedSourceSelection(trimmed);
+        applySavedSourceSelection(trimmed, /*restoreFamily=*/false);
     setManualMessage(QString());
     updateActionState();
 }
@@ -2125,11 +2220,16 @@ void ConnectionPanel::probeRadio(const QString& ip)
     if (trimmedIp.isEmpty())
         return;
 
+    // NOT the family, on either branch. By the time we are probing, the Radio
+    // type combo says what the operator wants spoken at this address — whether
+    // they picked it themselves or `activated` restored it when they chose the
+    // address. Letting the saved profile win here would overrule a deliberate
+    // change made after the address was entered.
     if (m_manualIpEdit->text().trimmed() != trimmedIp) {
         m_manualIpEdit->setText(trimmedIp);
-        applySavedSourceSelection(trimmedIp);
+        applySavedSourceSelection(trimmedIp, /*restoreFamily=*/false);
     } else if (m_manualProfileIp != trimmedIp) {
-        applySavedSourceSelection(trimmedIp);
+        applySavedSourceSelection(trimmedIp, /*restoreFamily=*/false);
     }
 
     bool staleSelection = false;
@@ -2187,8 +2287,6 @@ void ConnectionPanel::probeRadio(const QString& ip)
         }
 
         IcomSettings::setUsername(user);
-        IcomSettings::setLastHost(trimmedIp);
-
         // Hex, with or without an 0x prefix or a trailing h — the radio's own
         // menu writes it as "A2h", so accept what the operator is looking at.
         // An unparseable or out-of-range entry is IGNORED rather than clamped:
@@ -2231,10 +2329,24 @@ void ConnectionPanel::probeRadio(const QString& ip)
                 }
             }
         }
-        // Keychain for the password, never the settings file — and the save
-        // primes the session cache synchronously, so the connect below cannot
-        // race the keyring write.
-        IcomCredentials::save(pass);
+
+        // NOT setLastHost, and NOT save(), until the radio has actually
+        // accepted us.
+        //
+        // Both used to run here, before the connect was even attempted. One
+        // mistyped password therefore replaced a working keychain entry with a
+        // broken one — permanently, with no way to recover it — and the
+        // last-host setting was overwritten with an address that never
+        // answered. The operator's only symptom is that the NEXT connect fails
+        // for a reason they did not cause.
+        //
+        // The session cache is still primed immediately, because the connect
+        // below reads it synchronously and must not race a keyring write. What
+        // is deferred is the DURABLE copy: onIcomConnectSucceeded() commits it
+        // once the radio has answered. See setConnected().
+        IcomCredentials::setSessionPassword(pass);
+        m_pendingIcomHost = trimmedIp;
+        m_pendingIcomPassword = pass;
 
         // RESOLVE FIRST. QHostAddress parses NUMERIC addresses only — given a
         // host name it yields a null address SILENTLY, and the connect then
@@ -2482,6 +2594,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
             saveLowBandwidthPreference(m_lowBwCheck->isChecked());
             setManualMessage(
                 QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
+            // A staged Icom credential belongs to the attempt it was staged for.
+            clearPendingIcomCredentials();
             emit connectRequested(info);
             return Hl2ProbeResult::Answered;
         }
@@ -2627,6 +2741,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                 saveLowBandwidthPreference(m_lowBwCheck->isChecked());
                 setManualMessage(
                     QStringLiteral("Found a radio at %1. Connecting now…").arg(trimmedIp));
+                // A staged Icom credential belongs to the attempt it was staged for.
+                clearPendingIcomCredentials();
                 m_manualConnectPending = false;
                 emit connectRequested(info);
             } else {

@@ -1,6 +1,7 @@
 #include "core/backends/icom/CivCodec.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 
@@ -82,6 +83,11 @@ std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
     case cmd::kSetting:
     case cmd::kControl:
     case cmd::kScope:
+    // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
+    // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
+    // reply parsed with the subcommand sitting in the payload, so the decode
+    // could not tell an enable from an offset and dropped all three.
+    case cmd::kTuneOffset:
         f.hasSub = true;
         f.sub    = frame[bodyBegin];
         f.data.assign(frame.begin() + bodyBegin + 1, frame.begin() + bodyEnd);
@@ -301,17 +307,122 @@ std::string modeToNeutral(CivMode mode, bool dataMode)
     return {};
 }
 
-int filterForWidthHz(int widthHz) noexcept
+namespace {
+
+// The three filter slots per mode class, WIDEST FIRST — FIL1, FIL2, FIL3, the
+// order the radio numbers them in. From the IC-705's own defaults, transcribed
+// from hamlib rigs/icom/ic7300.c (RIG_MODEL_IC705).
+//
+// A mode class, not a mode: LSB and USB share one ladder, and so do the data
+// modes that ride on SSB. DV and WFM have no selectable filters at all, so they
+// are absent and fall through to the SSB ladder rather than being given three
+// buttons that do nothing.
+struct FilterLadder {
+    int fil1;
+    int fil2;
+    int fil3;
+};
+
+std::string upperMode(const std::string& mode)
 {
-    // The IC-705's SSB defaults: FIL1 3.0 kHz, FIL2 2.4 kHz, FIL3 1.8 kHz.
-    //
-    // The operator can redefine these in the SET menu and there is no command
-    // to read the redefinition back, so this is best-effort. The consequence is
-    // load-bearing: the passband the UI shows must come from what the radio
-    // REPORTS after the change, never from the width we asked for.
-    if (widthHz >= 2700) return 1;
-    if (widthHz >= 2100) return 2;
+    std::string u = mode;
+    for (char& c : u)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return u;
+}
+
+FilterLadder ladderFor(const std::string& mode)
+{
+    const std::string u = upperMode(mode);
+    if (u == "CW" || u == "CWU" || u == "CWL")
+        return {1200, 500, 250};
+    if (u == "RTTY" || u == "RTTYR")
+        return {2400, 500, 250};
+    // SAM belongs here, and its absence was the visible bug: it fell through to
+    // the SSB ladder, so a broadcast station in synchronous AM was received
+    // through a 2.4 kHz filter and sounded like a bad SSB signal.
+    if (u == "AM" || u == "SAM")
+        return {9000, 6000, 3000};
+    if (u == "FM" || u == "NFM" || u == "DFM")
+        return {15000, 10000, 7000};
+    if (u == "WFM")
+        return {200000, 200000, 200000};   // one fixed filter; see filterWidthsForMode
+    return {3000, 2400, 1800};             // SSB, DIGL/DIGU and everything else
+}
+
+// Is the mode single-sideband — i.e. does its passband sit entirely on one side
+// of the carrier, or straddle it?
+bool isSingleSideband(const std::string& mode)
+{
+    const std::string u = upperMode(mode);
+    return u == "LSB" || u == "USB" || u == "DIGL" || u == "DIGU"
+        || u == "RTTY" || u == "RTTYR";
+}
+
+bool isLowerSideband(const std::string& mode)
+{
+    const std::string u = upperMode(mode);
+    return u == "LSB" || u == "DIGL" || u == "RTTY" || u == "RTTYR";
+}
+
+}  // namespace
+
+int filterForWidthHz(const std::string& mode, int widthHz) noexcept
+{
+    // NEAREST WITHIN THIS MODE'S LADDER, not a fixed threshold ladder. The old
+    // form compared against the SSB numbers whatever the mode, so in AM every
+    // width was >= 2700 and landed on FIL1, and in CW every width was < 2100 and
+    // landed on FIL3 — three buttons, one filter, in both directions.
+    const FilterLadder l = ladderFor(mode);
+    const int d1 = std::abs(widthHz - l.fil1);
+    const int d2 = std::abs(widthHz - l.fil2);
+    const int d3 = std::abs(widthHz - l.fil3);
+    if (d1 <= d2 && d1 <= d3) return 1;
+    if (d2 <= d3) return 2;
     return 3;
+}
+
+std::vector<int> filterWidthsForMode(const std::string& mode)
+{
+    const FilterLadder l = ladderFor(mode);
+    // WFM has ONE filter. Publishing it three times would give the operator
+    // three identical buttons, which reads as two of them being broken.
+    if (l.fil1 == l.fil2 && l.fil2 == l.fil3)
+        return {l.fil1};
+
+    // NARROWEST FIRST, which is the OPPOSITE of the radio's own FIL numbering.
+    //
+    // FIL1 is the widest slot on an Icom, so returning the ladder in FIL order
+    // put 3.0k / 2.4k / 1.8k on screen — reading wide-to-narrow, while every
+    // other filter row in AetherSDR (filterPresetsFor) runs narrow-to-wide.
+    // The buttons looked reversed because against the rest of the app they
+    // were. The FIL mapping is unaffected: filterForWidthHz picks the nearest
+    // width in this mode's ladder and does not care what order it is listed in.
+    return {l.fil3, l.fil2, l.fil1};
+}
+
+std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter)
+{
+    const FilterLadder l = ladderFor(mode);
+    const int width = filter == 1 ? l.fil1 : filter == 2 ? l.fil2 : l.fil3;
+
+    // CW is symmetric about the PITCH, not the carrier — the radio centres its
+    // filter on the tone, and the slice frequency already is the tone.
+    const std::string u = upperMode(mode);
+    if (u == "CW" || u == "CWU" || u == "CWL")
+        return {-width / 2, width / 2};
+
+    if (!isSingleSideband(mode))
+        return {-width / 2, width / 2};   // AM, SAM, FM, WFM straddle the carrier
+
+    // A sideband passband starts just off the carrier rather than at it: the
+    // radio's own low edge is 300 Hz in voice and 150 Hz in the data modes,
+    // and reporting 0 there would draw the filter overlapping the carrier line.
+    const int low = (u == "DIGL" || u == "DIGU" || u == "RTTY" || u == "RTTYR")
+                        ? 150 : 300;
+    const int high = low + width;
+    return isLowerSideband(mode) ? std::pair<int, int>{-high, -low}
+                                 : std::pair<int, int>{low, high};
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +467,39 @@ std::vector<std::uint8_t> cmdSetFunction(std::uint8_t to, std::uint8_t which, in
 {
     const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(value)};
     return buildFrameSub(to, cmd::kFunction, which, body);
+}
+
+std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db)
+{
+    // BCD, not binary: 20 dB goes on the wire as 0x20. A plain cast would send
+    // 0x14, which is not a value the radio's attenuator table has.
+    const int v = std::clamp(db, 0, 99);
+    const std::array<std::uint8_t, 1> body{
+        static_cast<std::uint8_t>(((v / 10) << 4) | (v % 10))};
+    return buildFrame(to, cmd::kAttenuator, body);
+}
+
+std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kAttenuator);
+}
+
+std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)
+{
+    return buildFrameSub(to, cmd::kTuneOffset, sub);
+}
+
+std::vector<std::uint8_t> cmdSetTuner(std::uint8_t to, std::uint8_t value)
+{
+    // 00 off, 01 on, 02 START A MATCHING CYCLE. The third is not a tune
+    // carrier — see control::kTuner — and it is the only one that keys.
+    const std::array<std::uint8_t, 1> body{value};
+    return buildFrameSub(to, cmd::kControl, control::kTuner, body);
+}
+
+std::vector<std::uint8_t> cmdReadTuner(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kControl, control::kTuner);
 }
 
 std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit)

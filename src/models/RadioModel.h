@@ -331,6 +331,24 @@ public:
     // Says nothing about the CLIENT-side modules (NR2/NR4/MNR/BNR/DFNR/RN2),
     // which run on this host and work on any family.
     bool hasRadioSideDsp() const;
+    // The two NARROWER claims under it — see the capability struct.
+    //
+    // hasLmsNoiseFilters() keeps hasRadioSideDsp()'s permissive rule: NRL,
+    // ANFL and ANFT existed before the flag did, and hiding them on a
+    // Flex the moment it disconnects would be a regression rather than an
+    // honesty gain.
+    //
+    // hasManualNotch() does NOT, and that asymmetry is the point. MN is a
+    // new button; a permissive default would show it on every radio in
+    // the window before a backend reports, including the Flexes that
+    // notch with TNFs instead and will never claim it.
+    bool hasLmsNoiseFilters() const;
+    bool hasManualNotch() const;
+    // The filter widths the radio declares, widest first, or an EMPTY list
+    // when it declares none. Empty is the permissive answer here — it means
+    // "use the operator's own presets", which is what every radio without a
+    // fixed IF ladder wants and what a disconnected app should show.
+    QList<int> radioFilterWidthsHz() const;
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.
@@ -768,9 +786,24 @@ public:
     // deferred or could not be dispatched. Callers that also advance view
     // state optimistically must gate that on the return value, or they will
     // re-create the black-waterfall divergence.
+    //
+    // THE INTENT IS THE CALLER'S TO STATE, not something to infer here. On a
+    // backend whose scope window is slaved to the VFO (every networked Icom)
+    // Drag means RETUNE, so "which caller is this" decides whether the radio
+    // moves. Inferring it from whether a bandwidth came along classifies every
+    // centre-only writer — pan-follow, reveal, band change, the WFM recentre —
+    // as a drag, and reveal in particular asks for a DELIBERATELY OFFSET centre
+    // (settle distance from the edge), which would tune the radio most of a
+    // half-span off the signal the operator just clicked.
+    //
+    // Range is the default because it is the one that cannot move a radio: a
+    // slaved-scope backend refuses it and re-asserts its own geometry. Only the
+    // two genuine "the operator moved the window" sites pass Drag.
     bool requestPanCenter(const QString& panId,
                           double centerMhz,
-                          double bandwidthMhz = -1.0);
+                          double bandwidthMhz = -1.0,
+                          IRadioBackend::PanCenterIntent intent =
+                              IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
     // The operator's Display→FFT FPS / Display→Waterfall Rate intent.
     //
@@ -807,6 +840,12 @@ public:
     // menu belongs to one panadapter and must drive that one, not whichever
     // happens to be active when the slider moves.
     void setPanRfGainFor(const QString& panId, int gain);
+    // Discrete receive front-end stages — `step` indexes the label list the
+    // backend published for that pan (PanadapterModel::preampLabels /
+    // attenuatorLabels). Seam-only; see the .cpp for why there is no Flex
+    // wire-text fallback.
+    void setPanPreampFor(const QString& panId, int step);
+    void setPanAttenuatorFor(const QString& panId, int step);
 
     // Display controls — FFT (display pan set)
     void setPanAverage(int frames);
@@ -1096,6 +1135,18 @@ public:
     {
         return RadioSettingsScope(m_family, serial());
     }
+
+    // Fire a vendor-extension verb at the connected backend (IRadioBackend
+    // §"vendor-extension"). Generic on purpose: the model stays free of any one
+    // family's verb vocabulary, exactly as it does for the tuner and amp
+    // intents it already routes this way. requestId 0 means no reply is
+    // expected; a caller that wants one connects to the backend's
+    // extensionResult/extensionError and correlates its own id.
+    //
+    // A no-op when nothing is connected, rather than a crash or a queued call
+    // that lands on the next radio.
+    void invokeBackendExtension(const QString& ns, const QString& verb,
+                                quint64 requestId = 0, const QVariant& arg = {});
     // True when the radio speaks the SmartSDR text-command plane — the only
     // family where sendCmd() reaches anything and a command has a response to
     // await. Every other backend takes typed intents through the IRadioBackend
@@ -1208,9 +1259,15 @@ private:
     // makes a re-entrant request converge (last wire write == last model
     // write) instead of diverging. bandwidthMhz <= 0 means center-only;
     // centerMhz as NaN means bandwidth-only.
+    // intent is forwarded to the seam untouched — see requestPanCenter(). A
+    // write replayed out of the profile-load queue is Range by construction:
+    // the queue stores geometry, not who asked for it, and Range is the value
+    // that cannot move a radio.
     bool dispatchPanCenterBandwidth(const QString& panId,
                                     double centerMhz,
-                                    double bandwidthMhz);
+                                    double bandwidthMhz,
+                                    IRadioBackend::PanCenterIntent intent =
+                                        IRadioBackend::PanCenterIntent::Range);
     // No model write: band-stack state arrives via radio status.
     bool dispatchPanBand(const QString& panId, const QString& bandKey);
     // Schedules the deferred-pan-write replay for when the hold lifts. Armed by
