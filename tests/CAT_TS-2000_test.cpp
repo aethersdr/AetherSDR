@@ -720,12 +720,12 @@ void section11(CatClient& c, Runner& r)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY, RT, RG, RC, RD, RU, XT)
+// Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY [--cw], RT, RG, RC, RD, RU, XT)
 // ═════════════════════════════════════════════════════════════════════════════
 
 void section12(CatClient& c, Runner& r, bool doCw)
 {
-    r.section(QStringLiteral("Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY, RT, RG, XT)"));
+    r.section(QStringLiteral("Section 12 — Tier-2 Commands (AG, GT, PC, NB, KS, PT, KY [--cw], RT, RG, XT)"));
 
     // ── AG: VFO A audio gain (0-100, 3-digit) ──────────────────────────────
     QString origAg = c.query(QStringLiteral("AG"));
