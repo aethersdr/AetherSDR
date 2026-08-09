@@ -115,6 +115,17 @@ void AsrSegmenter::closeSegment(std::vector<ClosedSegment>& out, bool forceCap)
         // instead of starting from silence, and mark it (with the window size in
         // force now) so the worker de-dups the repeated leading words against the
         // right budget. m_inSpeech stays true.
+        //
+        // The carry counts toward m_speechSamples deliberately, reversing the
+        // hazard note in #4821's triage (maintainer-ruled on the RFC before this
+        // landed). Not counting it would mean a continuation carrying less than
+        // minSpeechMs of NEW speech never qualifies — and the second half of the
+        // word split at the cap is exactly that case, so the floor would discard
+        // the fragment this whole feature exists to recover. The price is the
+        // documented Approach-A margin: if the speaker stops immediately after
+        // the cap, the continuation clears the floor on carried audio alone and
+        // emits one decode that is entirely the previous tail, recovered only
+        // when the worker's de-dup strips it back to empty.
         m_speechSamples = static_cast<int>(carry.size());
         m_pendingContinues = true;
         m_pendingOverlapMs = carryMs;

@@ -62,6 +62,23 @@ more options. It floats over the app and can stay open while you operate.
   splits), lower = looser (fewer, merged speakers). RF caveats: narrowband/noise
   and propagation drift can split or merge a voice, so expect to tune it.
   Requires an ONNX-Runtime-enabled build.
+- **Boundary overlap** (slider, 0–2000 ms; **0 = Off, the default**) — recovers a
+  word chopped in half by the **Buffer** cap. A long "over" that never pauses is
+  force-closed at the buffer limit, and that cut can land mid-word; because each
+  segment is decoded on its own, the straddling word comes out mangled or
+  missing. With overlap set, the last N ms of a *cap-forced* segment are carried
+  into the front of the next one so the word is decoded whole, and the repeated
+  boundary words are then stripped from the transcript. Applied live, no model
+  reload, and it works on every backend (whisper, sherpa-onnx, remote).
+  - Costs a little extra decoding — the carried audio is transcribed twice — so
+    the practical setting is a few hundred ms, not the maximum. The carry is
+    internally capped at half the Buffer, so no combination of the two sliders
+    can run away.
+  - Only fires on a **buffer-cap** close. A normal close on a silence gap has no
+    split word to recover, and is left alone.
+  - The de-duplication is word-based, so it does nothing for languages whisper
+    transcribes without spaces (Chinese, Japanese, Thai) — on those, leave it
+    Off or expect the overlapping words to appear twice.
 
 ### Tuning (the control row)
 

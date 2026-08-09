@@ -69,6 +69,10 @@ AsrBackendFactory factory(bool loadOk)
     return [loadOk] { return std::unique_ptr<IAsrBackend>(new FakeBackend(loadOk)); };
 }
 
+// A scripted line equal to this reports a decode FAILURE instead of text — the
+// error out-param path, which is distinct from an empty decode (RFC #4821).
+const QString kScriptedFailure = QStringLiteral("!fail");
+
 // Returns a scripted phrase per successive transcribe() call (the last phrase
 // repeats once the script runs out). Lets the segment-overlap de-dup test drive
 // deterministic boundary words across consecutive segments (RFC #4821).
@@ -81,13 +85,19 @@ public:
         return true;
     }
     bool isLoaded() const override { return m_loaded; }
-    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString* error) override
     {
         if (pcm.empty() || m_lines.empty()) {
             return {};
         }
         const QString text = m_next < m_lines.size() ? m_lines[m_next] : m_lines.back();
         ++m_next;
+        if (text == kScriptedFailure) {
+            if (error != nullptr) {
+                *error = QStringLiteral("scripted decode failure");
+            }
+            return {};
+        }
         return AsrTranscript{text, 0.9f};
     }
     void unload() override { m_loaded = false; }
@@ -322,6 +332,123 @@ int main(int argc, char** argv)
                    "overlap empty-continuation: first segment whole");
             expect(textSpy.at(1).at(0).toString() == QStringLiteral("charlie hotel india"),
                    "overlap empty-continuation: word after an empty decode is not stripped");
+        }
+    }
+
+    // ---- Segment overlap: a FAILED continuation clears the de-dup tail ------
+    // The error out-param path, not the empty-text one: a backend that reports a
+    // decode failure also leaves no tail, so the reference must be dropped for
+    // exactly the same reason. Without the clear, the 3rd segment would de-dup
+    // against the 1st — two segments back — and lose a genuine leading word.
+    // Mutation check: delete the m_prevSegmentText.clear() on the error path and
+    // this case emits "hotel india" instead.
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo charlie"),
+            kScriptedFailure,                       // decode error (clears the tail)
+            QStringLiteral("charlie hotel india"),  // leading "charlie" must NOT be stripped
+            QStringLiteral("india juliet kilo"),
+            QStringLiteral("kilo lima mike"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap failed-continuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy errSpy(&engine, &AsrEngine::error);
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap failed-continuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(errSpy.count() >= 1, "overlap failed-continuation: the decode failure is reported");
+        expect(textSpy.count() >= 2, "overlap failed-continuation: >=2 non-empty emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(0).at(0).toString() == QStringLiteral("alpha bravo charlie"),
+                   "overlap failed-continuation: first segment whole");
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("charlie hotel india"),
+                   "overlap failed-continuation: word after a failed decode is not stripped");
+        }
+    }
+
+    // ---- Segment overlap: a punctuation-only token is not a boundary match ---
+    // normWord() strips edge punctuation, so a token that is ALL punctuation
+    // normalizes to "". Two such tokens must not compare equal — "" == "" is not
+    // a repeated word, and treating it as one silently eats the continuation's
+    // real first token. Mutation check: drop the isEmpty() guards from the
+    // comparison and this case emits "delta echo".
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("alpha bravo ..."),
+            QStringLiteral("... delta echo"), // the "..." must survive, not match
+            QStringLiteral("echo foxtrot golf"),
+            QStringLiteral("golf hotel india"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap punctuation: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100);
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap punctuation: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap punctuation: >=2 emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("... delta echo"),
+                   "overlap punctuation: a punctuation-only token is not a boundary match");
+        }
+    }
+
+    // ---- Segment overlap: the strip is bounded by the carried window ---------
+    // The de-dup must not strip the longest match it can find — only about as
+    // many words as the carried audio could actually hold (overlapWordBudget).
+    // Here the boundary is a genuine triple repeat ("one one one" | "one one one
+    // two") but only 100 ms was carried, so exactly ONE word may go; the other
+    // two are real speech the operator said. Mutation check: remove
+    // overlapWordBudget from the cap (or pass a live/large overlapMs instead of
+    // the value captured at close time) and this case emits "two".
+    {
+        const std::vector<QString> lines = {
+            QStringLiteral("bravo one one one"),
+            QStringLiteral("one one one two"), // only the first "one" is overlap
+            QStringLiteral("two three four"),
+            QStringLiteral("four five six"),
+        };
+        AsrEngine engine(scriptedFactory(lines));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "overlap budget: engine ready");
+
+        engine.setEnabled(true);
+        engine.setDecodeBufferMs(300);
+        engine.setOverlapMs(100); // 100 ms -> a one-word budget
+
+        QSignalSpy textSpy(&engine, &AsrEngine::finalText);
+        engine.pushAudio(tone(1000), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);
+        expect(textSpy.wait(5000), "overlap budget: first finalText emitted");
+        while (textSpy.wait(500)) {
+            // drain
+        }
+        expect(textSpy.count() >= 2, "overlap budget: >=2 emissions");
+        if (textSpy.count() >= 2) {
+            expect(textSpy.at(1).at(0).toString() == QStringLiteral("one one two"),
+                   "overlap budget: the strip is bounded by the carried window, "
+                   "not the longest match");
         }
     }
 
