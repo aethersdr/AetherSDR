@@ -1059,7 +1059,12 @@ void TitleBar::setHeadphoneMuted(bool muted)
 {
     QSignalBlocker b(m_headphoneBtn);
     m_headphoneBtn->setChecked(muted);
-    m_headphoneBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x8E\xA7");  // 🔇 / 🎧
+    // Explicit, not redundant (#4722): the blocker above suppresses `toggled`,
+    // which is what normally swaps the mark, so without this the button's
+    // checked state and its mark disagree. Was a setText() of a 🔇/🎧 emoji
+    // before the bar's marks became painter-drawn icons; the contract is
+    // unchanged, only what carries it.
+    applyAudioIcon(m_headphoneBtn, AudioIcon::Headphone, muted);
 }
 
 void TitleBar::setMasterVolume(int pct)
@@ -1483,7 +1488,10 @@ void TitleBar::setMinimalMode(bool on)
     // Hide non-essential controls so status badges fit in the narrow strip.
     if (m_menuBar) m_menuBar->setVisible(!on);
     if (m_brand) m_brand->setVisible(!on);
-    if (m_radioTabs) m_radioTabs->setVisible(!on);
+    // The radio strip stays, compacted to the active tab: its dot is the
+    // radio-link indicator now, and minimal mode is exactly when an operator
+    // has nothing else on screen that would show them a dropped link.
+    if (m_radioTabs) m_radioTabs->setCompactMode(on);
     m_pcBtn->setVisible(!on);
     m_speakerBtn->setVisible(!on);
     m_headphoneBtn->setVisible(!on);
