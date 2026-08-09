@@ -4331,7 +4331,8 @@ QString describePanWrites(const AetherSDR::PanWrites& writes)
 
 bool RadioModel::requestPanCenter(const QString& panId,
                                   double centerMhz,
-                                  double bandwidthMhz)
+                                  double bandwidthMhz,
+                                  IRadioBackend::PanCenterIntent intent)
 {
     if (panId.isEmpty()) {
         return false;
@@ -4425,7 +4426,7 @@ bool RadioModel::requestPanCenter(const QString& panId,
     if (wantsBandwidth) {
         m_pendingProfileLoadPanWrites.supersedeBandwidth(panId);
     }
-    return dispatchPanCenterBandwidth(panId, centerMhz, bandwidthMhz);
+    return dispatchPanCenterBandwidth(panId, centerMhz, bandwidthMhz, intent);
 }
 
 RadioModel::DataLiveness RadioModel::dataLiveness() const
@@ -4572,7 +4573,8 @@ double RadioModel::effectivePanBandwidthMhz(const QString& panId) const
 
 bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
                                             double centerMhz,
-                                            double bandwidthMhz)
+                                            double bandwidthMhz,
+                                            IRadioBackend::PanCenterIntent intent)
 {
     const bool hasCenter = !std::isnan(centerMhz);
     const bool hasBandwidth = bandwidthMhz > 0.0;
@@ -4625,15 +4627,17 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     // panCenterBandwidthChanged, which drives the model.
     if (!m_flexBackend && m_backend) {
         if (hasCenter) {
-            // A centre that arrives WITHOUT a bandwidth is a drag; one that
-            // arrives with a bandwidth rode along with a zoom. The distinction
-            // is load-bearing on a backend whose scope window is slaved to the
-            // VFO — see IRadioBackend::PanCenterIntent — and it is free here
-            // because the two callers already reach this function differently.
-            m_backend->setPanCenter(
-                backendPanIdFor(panId), centerMhz * 1.0e6,
-                hasBandwidth ? IRadioBackend::PanCenterIntent::Range
-                             : IRadioBackend::PanCenterIntent::Drag);
+            // THE CALLER'S INTENT, FORWARDED — not "did a bandwidth come with
+            // it". That inference read every centre-only writer as a drag, and
+            // most of them are not: pan-follow, reveal, the band-change
+            // recentre and the WFM recentre all send a centre alone. Reveal is
+            // the one that bites, because the centre it sends is DELIBERATELY
+            // OFFSET from the frequency in question (settle distance in from
+            // the edge) — so on a backend where Drag means retune, clicking a
+            // signal near the pan edge tuned the radio most of a half-span past
+            // it. See IRadioBackend::PanCenterIntent and requestPanCenter().
+            m_backend->setPanCenter(backendPanIdFor(panId), centerMhz * 1.0e6,
+                                    intent);
         }
         // Bandwidth goes through the seam for the same reason center does. This
         // used to fall straight into the model write below, which is why zooming

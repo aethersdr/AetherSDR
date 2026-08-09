@@ -3475,7 +3475,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // aligned with the wire command (TCI dds: follows this center) — and
         // during a profile load it defers rather than letting sendCmd drop it
         // silently (#4142).
-        m_radioModel.requestPanCenter(applet->panId(), center);
+        //
+        // DRAG: this is the operator moving the window itself, which on a
+        // backend whose scope is slaved to the VFO is a retune and nothing
+        // else. Every other centre-only caller in this file is a follow,
+        // reveal or recentre and takes the default (Range) — see
+        // RadioModel::requestPanCenter().
+        m_radioModel.requestPanCenter(applet->panId(), center, -1.0,
+                                      IRadioBackend::PanCenterIntent::Drag);
     });
     // Band/Segment Zoom toggle off the pan's radio-authoritative model state
     // (togglePanZoomModeForPan) — shared with the keyboard/MIDI shortcuts
@@ -4394,7 +4401,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                     // (#4142). The SpectrumWidget owns its own view during an
                     // edge-pan drag, so the gesture still tracks the cursor;
                     // the radio catches up when the deferred center flushes.
-                    m_radioModel.requestPanCenter(pan->panId(), centerMhz);
+                    //
+                    // DRAG: the gesture this whole block exists for. On a
+                    // slaved-scope backend it is the one centre write that is
+                    // MEANT to move the radio — see
+                    // RadioModel::requestPanCenter().
+                    m_radioModel.requestPanCenter(
+                        pan->panId(), centerMhz, -1.0,
+                        IRadioBackend::PanCenterIntent::Drag);
                 }
             }
         }

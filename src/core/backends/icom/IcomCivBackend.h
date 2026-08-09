@@ -150,8 +150,12 @@ private:
     void publishScopeDbmRange();
     // The neutral mode string for whatever CivMode the radio is in, or an
     // empty string for a mode with no neutral equivalent (D-STAR).
-    // Everything that needs a filter ladder or a passband needs this.
+    // Everything that reports a mode to the models needs this.
     QString currentNeutralMode() const;
+    // The mode name the FILTER LADDER is keyed on. Differs from the neutral one
+    // only where a radio mode has no neutral equivalent but does have its own
+    // IF widths — RTTY today. See the definition.
+    QString currentLadderMode() const;
     void publishMeterDefs();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void applyScopeStartup();
@@ -328,6 +332,13 @@ private:
     // half-wired state the table exists to expose.
     QSet<QString> m_controlsSent;
     QSet<QString> m_controlsSeen;
+    // Rows whose scrub mirror holds a REAL value — the radio answered for it,
+    // or we commanded it. Deliberately NOT m_controlsSent, which controlScrub()
+    // clears per row to detect the wire and so cannot carry "we set this
+    // earlier". Without this set the scrub re-asserts a construction default as
+    // if it were the operator's setting; see the guard at the top of
+    // scrubDrive().
+    QSet<QString> m_controlsValueKnown;
     // Every inbound non-sweep frame, matched or not. Distinguishes a silent
     // radio from a registry that matches nothing.
     quint64 m_framesObserved = 0;

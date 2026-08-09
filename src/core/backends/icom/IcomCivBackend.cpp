@@ -152,7 +152,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
         {
         // std::vector<int> from the codec (which stays Qt-free) into the
         // QList the capability struct carries.
-        const auto widths = filterWidthsForMode(currentNeutralMode().toStdString());
+        const auto widths = filterWidthsForMode(currentLadderMode().toStdString());
         c.rxFilterWidthsHz = QList<int>(widths.begin(), widths.end());
     }
 
@@ -205,6 +205,26 @@ void IcomCivBackend::publishScopeDbmRange()
 QString IcomCivBackend::currentNeutralMode() const
 {
     return QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
+}
+
+// THE MODE THE FILTER LADDER IS KEYED ON, which is not always the neutral one.
+//
+// AetherSDR has no RTTY neutral mode, so modeToNeutral collapses RTTY/RTTY-R to
+// DIGL/DIGU — correct for the slice's mode indicator and wrong for the filter
+// ladder, because an IC-705 in RTTY runs 2.4k/500/250 where SSB runs
+// 3.0k/2.4k/1.8k. Feeding the collapsed name to CivCodec's ladder made its RTTY
+// row unreachable and published the SSB widths on a radio in RTTY: the button
+// labelled "1.8k" selected FIL3, which is 250 Hz there, and the passband drawn
+// over the waterfall was seven times the one actually in circuit. The operator
+// can only get here from the radio's own front panel, which is exactly the case
+// this backend's connect-time adoption exists to respect.
+QString IcomCivBackend::currentLadderMode() const
+{
+    if (m_mode == CivMode::Rtty)
+        return QStringLiteral("RTTY");
+    if (m_mode == CivMode::RttyR)
+        return QStringLiteral("RTTYR");
+    return currentNeutralMode();
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +298,16 @@ void IcomCivBackend::disconnectRadio()
     // read it back, so "unknown" is the only honest starting point — carrying
     // the last session's belief would suppress the first command that matters.
     m_nrEnableSent = m_nbEnableSent = m_anfEnableSent = m_mnEnableSent = -1;
+    // Same reasoning, applied to every OTHER control: the scrub mirrors are
+    // stale the moment the session ends, so a scrub run after a reconnect that
+    // dropped a read must report NOT-TESTED rather than re-asserting the
+    // previous session's belief. The two observation sets are cleared with it
+    // so `controls map`'s seenThisSession/sentThisSession columns mean what
+    // they say across a reconnect.
+    m_controlsValueKnown.clear();
+    m_controlsSeen.clear();
+    m_controlsSent.clear();
+    m_framesObserved = 0;
     m_tuning = false;
     if (m_connected) {
         m_connected = false;
@@ -698,7 +728,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // The passband travels WITH the mode, in the same delta, because the
         // radio will never send one. Applied after the mode by SliceModel's own
         // ordering, which is what stops a narrow CW window surviving into DIGU.
-        const auto [low, high] = passbandForModeAndFilter(neutral.toStdString(), m_filter);
+        const auto [low, high] =
+            passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
         s.filterLow  = low;
         s.filterHigh = high;
         emit sliceChanged(sliceId(), s);
@@ -715,6 +746,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
     // unsolicited whenever the operator turns a knob on the radio — the same
     // decode serves both, which is what keeps the UI honest while someone is
     // standing at the rig.
+    //
+    // EVERY DECODE ALSO ADOPTS INTO THE SCRUB MIRROR. The "last intent per
+    // control" block in the header is what `controls.scrub` re-asserts, and it
+    // was written ONLY by the setters — so on a session where the operator had
+    // touched nothing, the mirrors still held their construction defaults and a
+    // scrub documented as leaving the radio untouched drove RF gain to 0 (a
+    // deaf receiver), AF gain to 0, the preamp and attenuator off and AGC to
+    // MID, then reported every one of those rows LINKED because the intent did
+    // reach the wire. Same shape as the noise-reduction bug fixed earlier on
+    // this branch, on a dozen sibling rows. The header's own claim — "a radio
+    // that disagrees corrects these through the ordinary decode path" — is what
+    // these assignments make true.
     case cmd::kLevel: {
         if (!frame.hasSub)
             return;
@@ -731,23 +774,27 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         }
         case level::kMicGain: {
+            m_micGainPercent = pct;
             TransmitDelta t; t.micLevel = pct;
             emit transmitChanged(t);
             return;
         }
         case level::kCompLevel: {
             // The radio's 0..10 compressor mapped back onto NOR/DX/DX+.
+            m_compLevelPercent = pct;
             TransmitDelta t;
             t.speechProcLevel = pct;
             emit transmitChanged(t);
             return;
         }
         case level::kAf: {
+            m_afGainPercent = pct;
             SliceDelta d; d.audioGain = pct;
             emit sliceChanged(sliceId(), d);
             return;
         }
         case level::kSquelch: {
+            m_squelchPercent = pct;
             SliceDelta d;
             d.squelchLevel = pct;
             // NO SEPARATE ENABLE on this radio — the threshold IS the control,
@@ -757,21 +804,25 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         }
         case level::kNrLevel: {
+            m_nrLevelPercent = pct;
             SliceDelta d; d.nrLevel = pct;
             emit sliceChanged(sliceId(), d);
             return;
         }
         case level::kNbLevel: {
+            m_nbLevelPercent = pct;
             SliceDelta d; d.nbLevel = pct;
             emit sliceChanged(sliceId(), d);
             return;
         }
         case level::kNotchPos: {
+            m_notchPosPercent = pct;
             SliceDelta d; d.mnLevel = pct;
             emit sliceChanged(sliceId(), d);
             return;
         }
         case level::kRf: {
+            m_rfGainPercent = pct;
             emit panRfGainChanged(panId(), pct);
             return;
         }
@@ -820,6 +871,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             // the monitor button opened at OUR default on a radio that may have
             // had it on.
             m_monitorSent = v ? 1 : 0;
+            m_monitorOn = (v != 0);
             TransmitDelta t; t.sbMonitor = (v != 0);
             emit transmitChanged(t);
             return;
@@ -834,6 +886,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         }
         case func::kCompressor: {
+            m_compEnable = (v != 0);
             TransmitDelta t; t.speechProcEnable = (v != 0);
             emit transmitChanged(t);
             return;
@@ -844,6 +897,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             d.agcMode = v == 1 ? QStringLiteral("fast")
                       : v == 3 ? QStringLiteral("slow")
                                : QStringLiteral("med");
+            m_agcMode = *d.agcMode;
             emit sliceChanged(sliceId(), d);
             return;
         }
@@ -851,7 +905,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             // The PREAMP control, not the RF-gain slider. It used to publish
             // into SliceDelta::rfGain, which is what made a three-position
             // switch look like a gain reading.
-            emit panPreampChanged(panId(), std::clamp(v, 0, 2));
+            m_preampStep = std::clamp(v, 0, 2);
+            emit panPreampChanged(panId(), m_preampStep);
             return;
         }
         default:
@@ -878,6 +933,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                 break;
             }
         }
+        m_attenStep = reported;
         emit panAttenuatorChanged(panId(), reported);
         return;
     }
@@ -1206,14 +1262,26 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
         // which is how a broadcast station ended up being received through a
         // 2.4 kHz window with the UI insisting it was in synchronous AM.
         // Re-assert what the radio is ACTUALLY in.
+        //
+        // QUEUED, for the same reason the refused pan centre is (see
+        // setPanCenter). SliceModel::setMode has already written the refused
+        // mode into its own field and calls us from modeChangeRequested — and
+        // it emits modeChanged(mode) on the line AFTER that signal returns. A
+        // direct emit here is applied and then immediately announced away: the
+        // model ends up holding AM while the last modeChanged the UI saw said
+        // SAM, so the indicator still lies. Deferring one event-loop turn puts
+        // the correction after that announcement.
         const QString actual = QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
         if (!actual.isEmpty()) {
-            SliceDelta d;
-            d.mode = actual;
-            const auto [lo, hi] = passbandForModeAndFilter(actual.toStdString(), m_filter);
-            d.filterLow  = lo;
-            d.filterHigh = hi;
-            emit sliceChanged(sliceId(), d);
+            const auto [lo, hi] =
+                passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
+            QMetaObject::invokeMethod(this, [this, actual, lo, hi] {
+                SliceDelta d;
+                d.mode = actual;
+                d.filterLow  = lo;
+                d.filterHigh = hi;
+                emit sliceChanged(sliceId(), d);
+            }, Qt::QueuedConnection);
         }
         return;
     }
@@ -1259,7 +1327,9 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
     // can only SNAP. What the radio actually took comes back on its own mode
     // report — we must not echo the requested width as if it were applied.
     const int width = std::abs(highHz - lowHz);
-    const QString neutral = currentNeutralMode();
+    // The LADDER mode, not the neutral one: the two differ in RTTY, where the
+    // radio's own widths are 2.4k/500/250 — see currentLadderMode().
+    const QString neutral = currentLadderMode();
     // MODE-AWARE. Snapping against the SSB thresholds whatever the mode put
     // every AM width on FIL1 and every CW width on FIL3 — three buttons and one
     // filter, in both directions.
@@ -1712,8 +1782,10 @@ static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
 void IcomCivBackend::noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub)
 {
     forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
-        m_controlsSent.insert(QString::fromUtf8(c.id.data(),
-                                                static_cast<int>(c.id.size())));
+        const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
+        m_controlsSent.insert(id);
+        // We commanded it, so the mirror holds a real value from here on.
+        m_controlsValueKnown.insert(id);
     });
 }
 
@@ -1722,8 +1794,14 @@ void IcomCivBackend::noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool ha
     ++m_framesObserved;
     m_lastInboundCivAtMs = QDateTime::currentMSecsSinceEpoch();
     forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
-        m_controlsSeen.insert(QString::fromUtf8(c.id.data(),
-                                                static_cast<int>(c.id.size())));
+        const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
+        m_controlsSeen.insert(id);
+        // The radio answered for this row, so the decode above adopted its
+        // value into the scrub mirror. This is the OTHER half of "we know what
+        // this control is set to" — the half that does not require the operator
+        // to have touched it. Only sendCiv-issued connect reads reach here;
+        // they are the reads whose answers populate the mirrors.
+        m_controlsValueKnown.insert(id);
     });
 }
 
@@ -1952,6 +2030,21 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     const QString pan = panId();
     const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
 
+    // A MIRROR NOBODY HAS ESTABLISHED IS NOT A CURRENT VALUE.
+    //
+    // Generalises the rule the nr/nb/anf/notch sentinels state one control at a
+    // time. Until either the radio has answered for this row or we have
+    // commanded it, the mirror holds a construction default — 0 % for every
+    // gain, "off" for every switch — and re-asserting it is not a no-op, it is
+    // a silent write of that default. A scrub documented as leaving the radio
+    // untouched would deafen the receiver and report the row LINKED, because
+    // the intent did reach the wire. NOT-TESTED is the honest outcome and the
+    // scrub already has that state; the connect-time read burst establishes
+    // every row here in the normal case, so this only fires when a read was
+    // lost — which on the lossy link this backend exists for is one datagram.
+    if (!m_controlsValueKnown.contains(id))
+        return false;
+
     if (id == QLatin1String("rf.gain"))  { setPanRfGain(pan, m_rfGainPercent); return true; }
     if (id == QLatin1String("preamp"))   { setPanPreamp(pan, m_preampStep); return true; }
     if (id == QLatin1String("atten"))    { setPanAttenuator(pan, m_attenStep); return true; }
@@ -2049,6 +2142,16 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     if (id == QLatin1String("mode") || id == QLatin1String("filter")) {
         const QString m = currentNeutralMode();
         if (m.isEmpty())
+            return false;
+        // ONLY IF THE NAME ROUND-TRIPS. The neutral vocabulary is smaller than
+        // the radio's: RTTY and RTTY-R both come back as DIGL/DIGU, so
+        // re-asserting the neutral name on a radio in RTTY would command it to
+        // LSB-D — a scrub documented as leaving the radio untouched changing
+        // the operating mode. Where the round trip is lossy there is no way to
+        // re-assert what the radio is in, which is what NOT-TESTED means.
+        bool data = false;
+        const auto civ = modeFromNeutral(m.toStdString(), data);
+        if (!civ || *civ != m_mode || data != m_dataMode)
             return false;
         setSliceMode(slice, m);
         return true;

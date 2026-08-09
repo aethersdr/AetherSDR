@@ -485,6 +485,112 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- controls scrub: RE-ASSERT, never re-default -----------------------
+    //
+    // `controls scrub` is documented as leaving the radio untouched: it drives
+    // every settable control AT ITS CURRENT VALUE and watches the wire, so the
+    // question is "does this intent reach a register", not "does the radio
+    // obey". That contract has exactly two ways to break, and both are silent —
+    // the scrub reports the row LINKED either way, because the frame did reach
+    // the wire. The radio is simply left somewhere else afterwards.
+    {
+        radio.clearCivLog();
+        const QVariantMap res = backend.controlScrub(QString());
+        QTest::qWait(200);
+        const auto& sent = radio.civCommands();
+
+        check(!res.contains(QStringLiteral("error")), "the scrub runs on a live session");
+
+        // 1. THE MIRROR MUST HOLD THE RADIO'S VALUE, NOT OUR DEFAULT.
+        //
+        // The scrub re-asserts from the backend's "last intent per control"
+        // mirrors, and those were written only by the SETTERS — so on a session
+        // where the operator had touched nothing, they still held their
+        // construction defaults. The fake radio runs RF gain at 100 %; a scrub
+        // reading a default mirror would have driven it to 0 and handed the
+        // operator a deaf receiver, then called the row LINKED.
+        auto rfGain = std::find_if(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kLevel && f.hasSub && f.sub == level::kRf;
+        });
+        check(rfGain != sent.end(), "the scrub drives RF gain");
+        if (rfGain != sent.end()) {
+            const auto raw = decodeLevel(rfGain->data);
+            check(raw.has_value() && *raw >= 250,
+                  "and re-asserts the RADIO's 100%, not the mirror's construction "
+                  "default of 0 — which would have deafened the receiver and "
+                  "reported the row LINKED");
+        }
+        auto af = std::find_if(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kLevel && f.hasSub && f.sub == level::kAf;
+        });
+        check(af != sent.end(), "the scrub drives AF gain");
+        if (af != sent.end()) {
+            const auto raw = decodeLevel(af->data);
+            check(raw.has_value() && std::abs(*raw - 128) <= 2,
+                  "at the radio's own ~50%, adopted through the ordinary decode "
+                  "path rather than invented here");
+        }
+
+        // 2. A VALUE NOBODY ESTABLISHED IS NOT A CURRENT VALUE.
+        //
+        // The fake IC-705 deliberately does not answer the attenuator read —
+        // one lost datagram on the lossy link this backend exists for looks
+        // exactly the same. Re-asserting an unestablished mirror sends
+        // "attenuator OFF" to an operator who may have it engaged. NOT-TESTED
+        // is the honest third outcome, and the scrub already has that state;
+        // this is the nr/nb/anf/notch sentinel rule, generalised.
+        const bool touchedAtten = std::any_of(sent.begin(), sent.end(),
+                                              [](const CivFrame& f) {
+            return f.cmd == cmd::kAttenuator;
+        });
+        check(!touchedAtten,
+              "a control the radio never reported is NOT driven — re-asserting an "
+              "unestablished mirror would switch the operator's attenuator off");
+
+        QString attenStatus;
+        for (const QVariant& row : res.value(QStringLiteral("rows")).toList()) {
+            const QVariantMap m = row.toMap();
+            if (m.value(QStringLiteral("id")).toString() == QLatin1String("atten"))
+                attenStatus = m.value(QStringLiteral("status")).toString();
+        }
+        check(attenStatus == QLatin1String("NOT-TESTED"),
+              "and it is REPORTED as NOT-TESTED rather than LINKED, so the check "
+              "does not claim coverage it does not have");
+
+        // 3. PTT, the ATU and power-off are never scrubbed (Principle VI).
+        const bool keyed = std::any_of(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kControl && f.hasSub
+                && (f.sub == control::kPtt || f.sub == control::kTuner);
+        });
+        check(!keyed, "and the scrub never touches PTT or the antenna tuner");
+    }
+
+    // ---- a refused mode correction must SURVIVE the caller ------------------
+    //
+    // SAM has no IC-705 equivalent, so the backend refuses it and re-asserts
+    // what the radio is actually in — otherwise the mode indicator reads SAM
+    // over an AM demodulator. The correction has to be QUEUED: SliceModel calls
+    // us from modeChangeRequested and emits modeChanged(requestedMode) on the
+    // line after that signal returns, so a direct emit here is applied and then
+    // announced away, leaving the indicator lying exactly as it did before.
+    {
+        int corrections = 0;
+        QString correctedMode;
+        auto conn = QObject::connect(&backend, &IRadioBackend::sliceChanged, &app,
+                                     [&](int, const SliceDelta& d) {
+            if (d.mode) { ++corrections; correctedMode = *d.mode; }
+        });
+        backend.setSliceMode(0, QStringLiteral("SAM"));
+        check(corrections == 0,
+              "a refused mode emits NOTHING synchronously — a direct emit is "
+              "overwritten by the caller's own modeChanged on the next line");
+        QTest::qWait(50);
+        check(corrections == 1 && !correctedMode.isEmpty(),
+              "and the correction arrives on the next event-loop turn, naming the "
+              "mode the radio is really in");
+        QObject::disconnect(conn);
+    }
+
     // ---- health -----------------------------------------------------------
     {
         const auto h = backend.healthSnapshot();

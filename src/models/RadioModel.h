@@ -786,9 +786,24 @@ public:
     // deferred or could not be dispatched. Callers that also advance view
     // state optimistically must gate that on the return value, or they will
     // re-create the black-waterfall divergence.
+    //
+    // THE INTENT IS THE CALLER'S TO STATE, not something to infer here. On a
+    // backend whose scope window is slaved to the VFO (every networked Icom)
+    // Drag means RETUNE, so "which caller is this" decides whether the radio
+    // moves. Inferring it from whether a bandwidth came along classifies every
+    // centre-only writer — pan-follow, reveal, band change, the WFM recentre —
+    // as a drag, and reveal in particular asks for a DELIBERATELY OFFSET centre
+    // (settle distance from the edge), which would tune the radio most of a
+    // half-span off the signal the operator just clicked.
+    //
+    // Range is the default because it is the one that cannot move a radio: a
+    // slaved-scope backend refuses it and re-asserts its own geometry. Only the
+    // two genuine "the operator moved the window" sites pass Drag.
     bool requestPanCenter(const QString& panId,
                           double centerMhz,
-                          double bandwidthMhz = -1.0);
+                          double bandwidthMhz = -1.0,
+                          IRadioBackend::PanCenterIntent intent =
+                              IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
     // The operator's Display→FFT FPS / Display→Waterfall Rate intent.
     //
@@ -1232,9 +1247,15 @@ private:
     // makes a re-entrant request converge (last wire write == last model
     // write) instead of diverging. bandwidthMhz <= 0 means center-only;
     // centerMhz as NaN means bandwidth-only.
+    // intent is forwarded to the seam untouched — see requestPanCenter(). A
+    // write replayed out of the profile-load queue is Range by construction:
+    // the queue stores geometry, not who asked for it, and Range is the value
+    // that cannot move a radio.
     bool dispatchPanCenterBandwidth(const QString& panId,
                                     double centerMhz,
-                                    double bandwidthMhz);
+                                    double bandwidthMhz,
+                                    IRadioBackend::PanCenterIntent intent =
+                                        IRadioBackend::PanCenterIntent::Range);
     // No model write: band-stack state arrives via radio status.
     bool dispatchPanBand(const QString& panId, const QString& bandKey);
     // Schedules the deferred-pan-write replay for when the hold lifts. Armed by
