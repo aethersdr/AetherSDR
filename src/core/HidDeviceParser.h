@@ -29,8 +29,8 @@ public:
     // ⚠ KEEP THIS <= 64. It is not just a description of the device: it is
     // passed straight to hid_read() as the length bound on a write into
     // HidEncoderManager::m_buf, which is a fixed uint8_t[64]. A parser that
-    // returns more than 64 overflows that buffer on the first report it
-    // receives, and nothing between here and there will catch it.
+    // returns more than 64 overflows that buffer as soon as the device sends a
+    // report that long, and nothing between here and there will catch it.
     //
     // Every parser below satisfies this, but TMate2 returns exactly 64, so
     // there is no headroom left. If a new device genuinely needs a larger
