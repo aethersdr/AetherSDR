@@ -301,6 +301,14 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
 
     std::vector<AsrSegmenter::ClosedSegment> segments =
         m_segmenter.feed(pcm16k.data(), static_cast<int>(pcm16k.size()));
+
+    // A real pause (long idle silence) flushes any carried ASR context so a
+    // noisy/garbled prior can't keep conditioning later utterances and never
+    // recover. Checked every feed (fires during the gap, not just on a segment).
+    if (m_segmenter.consumeLongGap() && m_backend != nullptr) {
+        m_backend->resetContext();
+    }
+
     if (segments.empty()) {
         return;
     }
@@ -389,9 +397,31 @@ void AsrWorker::setSpeakerThreshold(float t)
     m_clusterer.setThreshold(t);
 }
 
+void AsrWorker::setContextCarryEnabled(bool on)
+{
+    if (m_backend) {
+        m_backend->setContextCarryEnabled(on);
+    }
+}
+
+void AsrWorker::clearContext()
+{
+    // Explicit flush (the panel's Clear button): drop the carried prompt so the
+    // next utterance starts clean, matching the cleared display.
+    if (m_backend) {
+        m_backend->resetContext();
+    }
+}
+
 void AsrWorker::reset()
 {
     m_segmenter.reset();
+    // A retune/clear is a new context — don't prime the next decode with the
+    // previous QSO's carried prompt (retune is the one boundary where the
+    // operator has explicitly signalled a fresh start). Mirrors clearContext().
+    if (m_backend) {
+        m_backend->resetContext();
+    }
     m_clusterer.reset(); // new session/frequency → relabel speakers from A
     m_prevSegmentText.clear(); // a Clear/retune must not de-dup against stale text
     m_resampler.reset();
@@ -437,6 +467,8 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(this, &AsrEngine::requestSetHangoverMs, m_worker, &AsrWorker::setHangoverMs);
     connect(this, &AsrEngine::requestSetOverlapMs, m_worker, &AsrWorker::setOverlapMs);
     connect(this, &AsrEngine::requestSetSpeakerThreshold, m_worker, &AsrWorker::setSpeakerThreshold);
+    connect(this, &AsrEngine::requestSetContextCarryEnabled, m_worker, &AsrWorker::setContextCarryEnabled);
+    connect(this, &AsrEngine::requestClearContext, m_worker, &AsrWorker::clearContext);
     connect(this, &AsrEngine::requestReset, m_worker, &AsrWorker::reset);
 
     // Worker -> engine (queued back to the main thread).
@@ -582,6 +614,16 @@ void AsrEngine::setOverlapMs(int ms)
 void AsrEngine::setSpeakerThreshold(float threshold)
 {
     emit requestSetSpeakerThreshold(threshold);
+}
+
+void AsrEngine::clearContext()
+{
+    emit requestClearContext();
+}
+
+void AsrEngine::setContextCarryEnabled(bool on)
+{
+    emit requestSetContextCarryEnabled(on);
 }
 
 void AsrEngine::reset()

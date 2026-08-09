@@ -81,6 +81,13 @@ public:
     // boundary isn't lost. 0 = off (the default). Opt-in.
     void setBoundaryOverlapMs(int ms);
     int boundaryOverlapMs() const;
+    // Context-carry (RFC #4818): opt-in, off by default. See
+    // AsrEngine::setContextCarryEnabled for what it does.
+    void setContextCarryEnabled(bool on);
+    // Enable/disable the checkbox itself: context-carry is whisper-only, so the
+    // controller greys it out on the sherpa-onnx / remote tiers where the backend
+    // can't honor it.
+    void setContextCarryAvailable(bool available);
 
 signals:
     void tierChanged(const QString& tierId);
@@ -94,6 +101,7 @@ signals:
     void browseSpeakerModelRequested();
     void speakerThresholdChanged(int percent);
     void boundaryOverlapChanged(int ms);
+    void contextCarryToggled(bool on);
 
 private:
     QComboBox* m_tier = nullptr;
@@ -114,6 +122,7 @@ private:
     QLabel* m_spkThresholdValue = nullptr;
     QSlider* m_overlap = nullptr;
     QLabel* m_overlapValue = nullptr;
+    QCheckBox* m_contextCarry = nullptr;
 };
 
 } // namespace AetherSDR

@@ -27,6 +27,15 @@ public:
     bool isLoaded() const override { return m_ctx != nullptr; }
     AsrTranscript transcribe(const std::vector<float>& pcm16k, QString* error) override;
     void unload() override;
+    // Opt-in (RFC #4818): see IAsrBackend::setContextCarryEnabled. The
+    // carried text is passed as an explicit decode prompt (whisper's
+    // initial_prompt), and only a segment whose confidence clears the gate (see
+    // .cpp) is stored as the next call's prompt, so a garbled decode can't poison
+    // it.
+    void setContextCarryEnabled(bool on) override;
+    // Drop the carried prompt so the next decode starts clean (long silence gap
+    // or explicit Clear). See IAsrBackend::resetContext.
+    void resetContext() override;
 
 private:
     whisper_context* m_ctx = nullptr;
@@ -37,6 +46,11 @@ private:
     // load(), so a decode-time throw never latches a device that was not
     // involved.
     bool m_ctxOnGpu = false;
+    bool m_contextCarryEnabled = false;
+    // The last confident segment's text, carried forward as the next decode's
+    // explicit prompt when context-carry is on. Empty = start clean (right after
+    // load(), a reset, or while no segment has cleared the confidence gate).
+    QString m_carriedPrompt;
 };
 
 // A selectable GPU: `index` is the value to pass as gpuDevice (its position among

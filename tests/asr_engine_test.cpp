@@ -10,11 +10,13 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QSignalSpy>
 #include <QThread>
 #include <QTimer>
 #include <QVector>
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -145,6 +147,55 @@ private:
 AsrBackendFactory slowFactory(int delayMs)
 {
     return [delayMs] { return std::unique_ptr<IAsrBackend>(new SlowBackend(delayMs)); };
+}
+
+// Records the context-carry control calls so the engine's wiring can be checked
+// from the test thread. Counters are atomic (the backend lives on the worker).
+class ContextFake : public IAsrBackend {
+public:
+    bool load(const QString&, QString*) override { m_loaded = true; return true; }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    {
+        if (pcm.empty()) {
+            return {};
+        }
+        return AsrTranscript{QStringLiteral("OVER"), 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+    void setContextCarryEnabled(bool on) override { carryEnabled.store(on); }
+    void resetContext() override { resets.fetch_add(1); }
+
+    std::atomic<bool> carryEnabled{false};
+    std::atomic<int> resets{0};
+
+private:
+    bool m_loaded = false;
+};
+
+// Factory that also publishes the constructed backend pointer so the test can
+// read its counters. The engine owns the instance; the sink is a non-owning view
+// valid until the engine is destroyed.
+AsrBackendFactory contextFactory(std::atomic<ContextFake*>* sink)
+{
+    return [sink] {
+        auto* b = new ContextFake();
+        sink->store(b, std::memory_order_release);
+        return std::unique_ptr<IAsrBackend>(b);
+    };
+}
+
+// Spin the event loop until pred() holds or the timeout elapses.
+template <typename Pred>
+bool waitUntil(Pred pred, int timeoutMs)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!pred() && t.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(5);
+    }
+    return pred();
 }
 
 // Deterministic stand-in for building the ~24 MB ECAPA session: the sleep is
@@ -620,6 +671,40 @@ int main(int argc, char** argv)
         // may complete — the rest of the backlog must be dropped.
         expect(textSpy.count() <= 1,
                "disabling drops the backlog instead of transcribing all of it");
+    }
+
+    // ---- Context-carry control reaches the backend (RFC #4818) ------------
+    // The engine must marshal setContextCarryEnabled() to the backend, flush its
+    // context on a long idle-silence gap, and flush again on clearContext()
+    // (the Copy Assist Clear button). Verified via a fake that counts the calls.
+    {
+        std::atomic<ContextFake*> sink{nullptr};
+        AsrEngine engine(contextFactory(&sink));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "context test: engine ready");
+        expect(waitUntil([&] { return sink.load() != nullptr; }, 2000),
+               "fake backend was constructed on the worker");
+        ContextFake* backend = sink.load();
+
+        engine.setEnabled(true);
+        engine.setContextCarryEnabled(true);
+        expect(waitUntil([&] { return backend->carryEnabled.load(); }, 2000),
+               "setContextCarryEnabled reaches the backend");
+
+        // A real pause (idle silence past longGapMs = 2500) flushes the context.
+        const int resetsBeforeGap = backend->resets.load();
+        engine.pushAudio(tone(400), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);   // hangover closes the utterance
+        engine.pushAudio(silence(3000), kSrcRate);  // > 2500 ms idle -> long gap
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeGap; }, 5000),
+               "a long silence gap flushes the carried context");
+
+        // The Clear button flushes it too.
+        const int resetsBeforeClear = backend->resets.load();
+        engine.clearContext();
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeClear; }, 5000),
+               "clearContext() flushes the carried context");
     }
 
     // ---- Load failure surfaces loadFailed(), not ready() ------------------

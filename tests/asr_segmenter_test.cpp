@@ -259,6 +259,43 @@ int main()
         expect(out.size() >= 2, "overlap: overlap >= cap still splits into segments");
     }
 
+    // Long idle-gap detection (context-carry recovery, RFC #4818): a run of idle
+    // silence at least Config::longGapMs long latches consumeLongGap() exactly
+    // once, and re-arms after speech resumes. Default longGapMs is 2500.
+    {
+        AsrSegmenter seg; // default longGapMs = 2500
+        std::vector<float> lead;
+        appendTone(lead, 300);      // an utterance so we're past the initial state
+        appendSilence(lead, 400);   // hangover closes it; idle gap starts after
+        seg.feed(lead.data(), static_cast<int>(lead.size()));
+        expect(!seg.consumeLongGap(), "no long gap yet after a short pause");
+
+        std::vector<float> gap;
+        appendSilence(gap, 2600);   // > 2500 ms of idle silence
+        seg.feed(gap.data(), static_cast<int>(gap.size()));
+        expect(seg.consumeLongGap(), "idle silence past longGapMs latches a long gap");
+        expect(!seg.consumeLongGap(), "consumeLongGap is a one-shot (cleared on read)");
+
+        // Speech re-arms it: another long idle gap fires again.
+        std::vector<float> more;
+        appendTone(more, 300);
+        appendSilence(more, 400);
+        appendSilence(more, 2600);
+        seg.feed(more.data(), static_cast<int>(more.size()));
+        expect(seg.consumeLongGap(), "long gap re-arms after speech resumes");
+    }
+
+    // longGapMs = 0 disables the detector entirely.
+    {
+        AsrSegmenter::Config cfg;
+        cfg.longGapMs = 0;
+        AsrSegmenter seg(cfg);
+        std::vector<float> audio;
+        appendSilence(audio, 5000); // long silence, but detection is off
+        seg.feed(audio.data(), static_cast<int>(audio.size()));
+        expect(!seg.consumeLongGap(), "longGapMs = 0 never reports a gap");
+    }
+
     std::printf(g_failures == 0 ? "\nASR segmenter: ALL PASS\n"
                                 : "\nASR segmenter: %d FAILURE(S)\n",
                 g_failures);
