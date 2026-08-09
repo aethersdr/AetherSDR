@@ -18,6 +18,14 @@ Design + decision record: RFC **#4333** (accepted). Engine: **whisper.cpp**
   of the audio you're hearing streams into the panel.
 - Text is **color-coded by recognition confidence**: green (high) → yellow →
   orange → red (low), mirroring the CW decoder.
+- **Context** (header toggle, off by default) — carries context across segment
+  boundaries: each decode is conditioned on the *previous confident segment's*
+  own text (via whisper's `initial_prompt`), for continuity of names, callsigns,
+  and topic. Applied live (no model reload) so it can be A/B'd on the fly. It's
+  self-protecting: a low-confidence decode is **not** carried (so a garbled over
+  can't poison the next), and a real pause, **Clear**, or a retune starts fresh.
+  Whisper-only — greyed out on the sherpa-onnx and remote backends, which don't
+  implement it.
 - Hiding the panel (the status-bar **ASR** toggle / leaving voice mode) turns
   ASR off.
 - The status line shows a **`Queue: N s`** backlog — seconds of received audio not

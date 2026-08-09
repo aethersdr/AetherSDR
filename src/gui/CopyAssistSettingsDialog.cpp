@@ -190,16 +190,6 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     ovRow->addWidget(m_overlapValue);
     form->addRow(tr("Boundary overlap:"), ovRow);
 
-    // Context-carry (RFC #4818): opt-in, off by default; applies live (no engine
-    // rebuild) so the effect can be A/B'd on the fly.
-    m_contextCarry = new QCheckBox(tr("Carry context across segments"), this);
-    m_contextCarry->setToolTip(tr("Condition each decode on the previous confident segment's own "
-                                  "text, for continuity across segment boundaries. Gated internally "
-                                  "by that segment's confidence, so a garbled decode doesn't poison "
-                                  "the next one; a pause or Clear starts fresh."));
-    connect(m_contextCarry, &QCheckBox::toggled, this, &CopyAssistSettingsDialog::contextCarryToggled);
-    form->addRow(m_contextCarry);
-
     root->addLayout(form);
     root->addStretch(1); // headroom for further options added here later
 }
@@ -379,24 +369,6 @@ void CopyAssistSettingsDialog::setBoundaryOverlapMs(int ms)
 int CopyAssistSettingsDialog::boundaryOverlapMs() const
 {
     return m_overlap->value();
-}
-
-void CopyAssistSettingsDialog::setContextCarryEnabled(bool on)
-{
-    m_contextCarry->setChecked(on);
-}
-
-void CopyAssistSettingsDialog::setContextCarryAvailable(bool available)
-{
-    // Whisper-only: greyed out (but its persisted checked state preserved) on
-    // backends that inherit IAsrBackend's no-op context hooks.
-    m_contextCarry->setEnabled(available);
-    m_contextCarry->setToolTip(available
-        ? tr("Condition each decode on the previous confident segment's own "
-             "text, for continuity across segment boundaries. Gated internally "
-             "by that segment's confidence, so a garbled decode doesn't poison "
-             "the next one; a pause or Clear starts fresh.")
-        : tr("Context-carry is available only with the on-device whisper model."));
 }
 
 } // namespace AetherSDR
