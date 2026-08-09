@@ -217,6 +217,23 @@ jobs:
       - name: Test Ulanzi dial mappings and wheel-action registry drift
         run: ctest --test-dir build -R "ulanzi_mapping_migration_test" --output-on-failure
 
+      # tci_protocol_test joins the gate for the same reason as the steps
+      # above: it pins defects nothing else in the tree can see. TCI's
+      # malformed-input class (#4345, #4523) is *specifically* the kind that
+      # stays invisible — the malformed command lands on a plausible value and
+      # broadcasts a well-formed notification, so every other assertion in the
+      # suite, and every client watching the wire, sees a normal change. There
+      # is no crash and no log line to notice. Three instances have now shipped
+      # that way, and the only thing that would have caught any of them is this
+      # test running before the merge rather than on the weekly sanitizers job.
+      #
+      # It is parser arithmetic plus one in-process demo-backend connection —
+      # no widgets, no sockets, no wall clock — and it runs in ~0.2 s against a
+      # target the Build step already linked. The one event-loop wait polls to
+      # a deadline, so a loaded runner makes it slower rather than red.
+      - name: Test TCI protocol parsing and malformed-input rejection
+        run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
+
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted
