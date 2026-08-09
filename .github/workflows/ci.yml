@@ -45,10 +45,7 @@ jobs:
       # entry. An oversized cap multiplies what each of those costs against the
       # repo's 10 GB ceiling and risks LRU-evicting the Qt / FFTW / DeepFilterNet
       # entries the other jobs depend on. (check-macos runs at 500M, but on a
-      # lighter configuration — no ENABLE_NVIDIA_AFX. The second liquid-dsp
-      # build tree this job used to configure is gone as of the step removal
-      # below, so the two configurations are closer now than this cap assumes;
-      # 1000M is left as measured headroom rather than re-tuned blind.)
+      # lighter configuration — no ENABLE_NVIDIA_AFX.)
       CCACHE_MAXSIZE: 1000M
 
     steps:
@@ -193,19 +190,33 @@ jobs:
       # needs a measurement first. #4774 added it here on the "milliseconds
       # against an already-linked target" rationale every other step above
       # earns its slot with, but that rationale was never measured: the step
-      # runs 188-190 s, dead flat across runs, because the test pushes ~30 s of
-      # 48 kHz audio through WDSP across eight scenarios (4 s each, plus a
-      # three-rate loop) and blockForOutput makes that wall-clock-free but not
-      # cheap. Against a warm-ccache Build of ~310-470 s it was the second most
-      # expensive step in the job and inflated the whole thing by 40-60%.
+      # ran 188-190 s here, dead flat across runs. That is NOT the test's own
+      # work, and the flatness is the tell: the same binary runs in 2.5 s with
+      # a warm FFTW wisdom cache and 178 s with a cold one (measured locally,
+      # RelWithDebInfo, by pointing XDG_CACHE_HOME at an empty dir). The cost
+      # is WDSP's first OpenChannel measuring FFTW PATIENT plans, which
+      # WdspChannel::open() caches to $XDG_CACHE_HOME/aethersdr/wdsp-fftw-wisdom
+      # — and a CI container starts without that file every single run. Six
+      # 4 s bursts of 48 kHz audio through the real chain is the 2.5 s part.
       #
-      # The coverage is not lost: the weekly sanitizers job runs the full ctest
-      # suite unfiltered, which is also where the rest of the HL2 suite
+      # So the slot is recoverable, and cheaply: cache wdsp-fftw-wisdom the way
+      # ccache is cached above (or prime it in the CI image) and this step is
+      # ~3 s, not 190. Anything else that opens a WDSP channel on this gate
+      # pays the same 190 s once until that lands, so it is worth doing before
+      # the next WDSP test wants a slot rather than after.
+      #
+      # Until then coverage sits on the weekly sanitizers job, which runs the
+      # full ctest suite unfiltered — the same place the rest of the HL2 suite
       # (hl2_backend_test and friends, tens of seconds apiece against timers
-      # and sockets) lives. If the AM/SAM pedestal class of defect needs to be
-      # caught before merge rather than weekly, shorten the test first — one
-      # audio rate and a shorter burst would buy back most of the 190 s — and
-      # bring it back with the new number stated here.
+      # and sockets) already lives. Read that as a weaker backstop than it
+      # sounds: sanitizers.yml has concluded failure on every run since
+      # 2026-06-08, its TSan entry has run zero tests since 2026-07-13
+      # (#4360), and ASan failures append to a sticky issue that is already
+      # open — so a reintroduced pedestal arrives as one more comment on a red
+      # job rather than as a new signal. hl2_am_dcblock_test has also never
+      # actually run there (it landed 2026-08-05, after the last weekly run),
+      # and CMakeLists sets no TIMEOUT for it against ctest's 1500 s default
+      # at -O0 + ASan.
 
       # ulanzi_mapping_migration_test was on this gate (added by #4834) and is
       # not any more. Unlike hl2_am_dcblock_test above it was not costing
@@ -237,30 +248,12 @@ jobs:
       - name: Test TCI protocol parsing and malformed-input rejection
         run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
 
-      # The vendored liquid-dsp opt-in build is no longer verified here. #4146
-      # turned liquid-dsp off by default, so the main Build above does not
-      # compile the snapshot, and this step was the only thing that did: it
-      # configured a SECOND project tree (build-liquid, -DENABLE_LIQUID_DSP=ON)
-      # and built the liquid-static target. That is the coverage being given
-      # up, and unlike the two steps above it is not picked up weekly — the
-      # sanitizers job builds the default configuration, where liquid-dsp is
-      # off. Nothing in CI compiles the vendored snapshot now, so a bitrotted
-      # vendor tree will surface on the first consumer to turn the flag on
-      # rather than on the PR that rots it.
-      #
-      # If it comes back, keep the full project configure: it exercises the
-      # main CMakeLists ENABLE_LIQUID_DSP gating, not just the third_party
-      # compile. Don't narrow it to an isolated third_party/liquid-dsp
-      # configure. Measured cost was 10 s warm, 24 s on the coldest run
-      # sampled.
-
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
       # without anyone noticing, because nothing made the hit rate visible.
       # A "Hits 0" line here means the launcher was dropped — read it before
       # believing any wall-clock claim about this job. Runs last so it covers
-      # the main build (it also covered the liquid-dsp verification, until
-      # that step was removed above).
+      # the main build.
       - name: ccache stats
         if: always()
         run: ccache --show-stats
