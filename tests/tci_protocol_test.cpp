@@ -647,6 +647,210 @@ bool testModulationEndToEndRejectsUnknownName()
     return true;
 }
 
+// #4867: the sharpest form of the malformed-argument class. Every verb that
+// takes a trx used to do `int trx = args[0].toInt();` unchecked, and
+// sliceForTrx() resolves positionally — so a malformed trx did not fail to
+// resolve, it resolved to slice 0 and the command landed on the WRONG SLICE,
+// broadcasting a notification naming slice 0 as though the client had asked
+// for it. This is the assertion none of the three previous fixes in this
+// class (#4345, #4523's two) ever made, which is why the class survived them.
+bool testMalformedTrxDoesNotLandOnSliceZero()
+{
+    constexpr int kSettleTries = 100;   // × 50 ms = 5 s ceiling; see above
+    RadioModel model;
+    model.connectToRadio(demoInfo());
+    for (int i = 0; i < kSettleTries && !model.isConnected(); ++i)
+        spin(50);
+    if (!check(model.isConnected(), "precondition: connected to the demo backend")) {
+        return false;
+    }
+    for (int i = 0; i < kSettleTries && model.slices().isEmpty(); ++i)
+        spin(50);
+    SliceModel* slice = model.slices().value(0);
+    if (!check(slice != nullptr, "precondition: the demo backend announced a slice")) {
+        return false;
+    }
+
+    TciProtocol protocol(&model);
+
+    // Positive control first, so "the fix refuses everything" cannot pass as
+    // success: a well-formed trx still reaches slice 0.
+    slice->setAudioMute(false);
+    protocol.handleCommand(QStringLiteral("mute:0,true"));
+    QCoreApplication::processEvents();
+    if (!check(slice->audioMute() && !protocol.pendingNotification().isEmpty(),
+            "a well-formed trx must still apply to the addressed slice")) {
+        return false;
+    }
+
+    // Each of these used to become trx=0 and mutate slice 0 while emitting a
+    // well-formed "…:0,…;" notification — indistinguishable, on the wire,
+    // from the client having addressed slice 0 deliberately.
+    struct Case { const char* cmd; const char* what; };
+    static const Case kCases[] = {
+        { "mute:abc,false",            "mute with a non-numeric trx" },
+        { "mute:,false",               "mute with an empty trx" },
+        { "mute:0x1,false",            "mute with a hex trx" },
+        { "rx_mute:zz,false",          "rx_mute with a non-numeric trx" },
+    };
+    for (const auto& c : kCases) {
+        slice->setAudioMute(true);
+        QCoreApplication::processEvents();
+        protocol.handleCommand(QString::fromLatin1(c.cmd));
+        QCoreApplication::processEvents();
+        if (!check(slice->audioMute(),
+                qPrintable(QStringLiteral("%1 must not unmute slice 0")
+                               .arg(QString::fromLatin1(c.what))))) {
+            return false;
+        }
+        if (!check(protocol.pendingNotification().isEmpty(),
+                qPrintable(QStringLiteral("%1 must not notify other clients")
+                               .arg(QString::fromLatin1(c.what))))) {
+            return false;
+        }
+    }
+
+    // A per-slice verb with NO trx at all must not answer for slice 0 either.
+    // This is the argument-missing half of the helper's contract, as distinct
+    // from the argument-present-but-unparseable half above: without it, a
+    // helper that treated an out-of-range index as "0" would pass every other
+    // assertion in this file. (Verified by mutation: it does.)
+    if (!check(protocol.handleCommand(QStringLiteral("mute")).isEmpty(),
+            "bare \"mute\" must not answer for slice 0")) {
+        return false;
+    }
+    if (!check(protocol.handleCommand(QStringLiteral("rx_volume")).isEmpty(),
+            "bare \"rx_volume\" must not answer for slice 0")) {
+        return false;
+    }
+
+    // Same defect on a different verb and a different observable: a malformed
+    // trx must not reach setMode() on slice 0 either.
+    slice->setMode(QStringLiteral("USB"));
+    QCoreApplication::processEvents();
+    protocol.handleCommand(QStringLiteral("modulation:abc,lsb"));
+    QCoreApplication::processEvents();
+    if (!check(slice->mode() == QStringLiteral("USB"),
+            "a malformed trx must not change slice 0's mode")) {
+        return false;
+    }
+
+    // And on the filter pair, where the old behaviour was a zero-width filter:
+    // the malformed VALUE arguments must be rejected too, not just the trx.
+    // Both edges are checked, so rejecting only the first would still fail.
+    for (const auto& cmd : { QStringLiteral("rx_filter_band:0,abc,2800"),
+                             QStringLiteral("rx_filter_band:0,100,abc"),
+                             QStringLiteral("rx_filter_band:0,,2800") }) {
+        const int lowBefore = slice->filterLow();
+        const int highBefore = slice->filterHigh();
+        protocol.handleCommand(cmd);
+        QCoreApplication::processEvents();
+        if (!check(slice->filterLow() == lowBefore
+                       && slice->filterHigh() == highBefore,
+                qPrintable(QStringLiteral("\"%1\" must not collapse the passband")
+                               .arg(cmd)))) {
+            return false;
+        }
+        if (!check(protocol.pendingNotification().isEmpty(),
+                qPrintable(QStringLiteral("\"%1\" must not notify other clients")
+                               .arg(cmd)))) {
+            return false;
+        }
+    }
+
+    // The remaining per-slice value arguments, each of which used to land on
+    // 0 — a legitimate value in every one of these ranges, which is exactly
+    // what made the defect undetectable downstream.
+    protocol.handleCommand(QStringLiteral("agc_gain:0,40"));
+    QCoreApplication::processEvents();
+    if (!check(!protocol.pendingNotification().isEmpty(),
+            "a well-formed agc_gain SET must still take effect")) {
+        return false;
+    }
+    for (const auto& cmd : { QStringLiteral("agc_gain:0,abc"),
+                             QStringLiteral("agc_gain:0,"),
+                             QStringLiteral("sql_level:0,abc"),
+                             QStringLiteral("rx_balance:0,abc"),
+                             QStringLiteral("rx_volume:0,abc"),
+                             QStringLiteral("rx_nb_param:0,0,abc"),
+                             QStringLiteral("rit_offset:0,abc"),
+                             QStringLiteral("xit_offset:0,abc") }) {
+        protocol.handleCommand(cmd);
+        QCoreApplication::processEvents();
+        if (!check(protocol.pendingNotification().isEmpty(),
+                qPrintable(QStringLiteral("\"%1\" must not notify other clients")
+                               .arg(cmd)))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// #4867: the value-argument half of the class, on the verbs that need no
+// slice. Each of these used to turn unparseable input into 0 and broadcast
+// it as a well-formed change.
+bool testMalformedValueArgsAreDropped()
+{
+    TciProtocol protocol(nullptr);
+
+    // The two-argument shape is not decoration: handleCommand derives
+    // GET-vs-SET purely from argument count (`isSet = args.size() >= 2`), so
+    // a one-argument `cw_macros_delay:250` is a READ and never reaches the
+    // SET path at all. These global verbs then read args[0] as the value —
+    // an off-by-one against the trx-prefixed shape that cmdMicLevel and
+    // cmdVolume handle with `args[args.size() == 1 ? 0 : 1]`. That index
+    // quirk is a separate defect from this one and is deliberately NOT
+    // changed here; the tests below drive the shape the code actually has,
+    // so they keep passing when it is fixed on its own terms.
+    protocol.handleCommand(QStringLiteral("cw_macros_delay:250,0"));
+    if (!check(protocol.pendingNotification()
+                   == QStringLiteral("cw_macros_delay:250;"),
+            "a well-formed cw_macros_delay SET must still take effect")) {
+        return false;
+    }
+
+    static const char* kMalformed[] = {
+        "cw_macros_delay:,0",       // the reported shape: empty argument
+        "cw_macros_delay:abc,0",
+        "cw_keyer_speed:abc,0",
+        "cw_macros_speed:abc,0",
+    };
+    for (const char* cmd : kMalformed) {
+        protocol.handleCommand(QString::fromLatin1(cmd));
+        if (!check(protocol.pendingNotification().isEmpty(),
+                qPrintable(QStringLiteral("\"%1\" must not notify other clients")
+                               .arg(QString::fromLatin1(cmd))))) {
+            return false;
+        }
+    }
+
+    // cw_macros_delay keeps its value across commands (it is a static), so a
+    // dropped malformed SET must leave the last good one in place rather than
+    // silently resetting it to 0 — which is what the unchecked toInt() did.
+    const QString readBack =
+        protocol.handleCommand(QStringLiteral("cw_macros_delay"));
+    if (!check(readBack == QStringLiteral("cw_macros_delay:250;"),
+            "a dropped cw_macros_delay SET must not have clobbered the stored value")) {
+        return false;
+    }
+
+    // iq_samplerate is the deliberate exception to the drop-on-malformed
+    // posture: #3913 made it REPLY to a rejection because a blocked skimmer
+    // would otherwise hang, so an unparseable rate must report the rate still
+    // in force rather than returning nothing.
+    const QString rateReply =
+        protocol.handleCommand(QStringLiteral("iq_samplerate:abc"));
+    if (!check(rateReply == QStringLiteral("iq_samplerate:48000;"),
+            "an unparseable iq_samplerate must report the rate still in force")) {
+        return false;
+    }
+    if (!check(protocol.pendingNotification().isEmpty(),
+            "a rejected iq_samplerate must not notify other clients")) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -708,7 +912,9 @@ int main(int argc, char** argv)
         || !testVolumeMalformedInputIsDropped()
         || !testTxGainMalformedInputIsDropped()
         || !testTciToSmartSdrReportsUnrecognisedNames()
-        || !testModulationEndToEndRejectsUnknownName()) {
+        || !testModulationEndToEndRejectsUnknownName()
+        || !testMalformedValueArgsAreDropped()
+        || !testMalformedTrxDoesNotLandOnSliceZero()) {
         return 1;
     }
 
