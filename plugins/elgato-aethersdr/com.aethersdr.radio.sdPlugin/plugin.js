@@ -895,14 +895,16 @@ for (const band of BAND_ORDER) {
 }
 
 // Mode actions. Values must be names TciProtocol::tciToSmartSDR knows —
-// anything else resolves to its "USB" default rather than being rejected, so a
-// typo keys the wrong mode silently instead of doing nothing.
+// as of #4523, anything else is rejected by the server (dropped, no reply,
+// no notification) rather than silently substituted with USB, so a typo
+// here now does nothing instead of keying the wrong mode.
 // There is no FT8 entry: FT8 is not a modulation, it is an operating
-// convention on DIGU. The old `mode-ft8` action sent "ft8", which is not in
-// the map and so hit the USB default — it keyed SSB. Mapping it to DIGU fixed
-// that but made it a byte-for-byte duplicate of the DIGU action (verified on
-// air: both emit `modulation:<trx>,digu` and the same `rx_filter_band 0,3000`),
-// so the action was dropped rather than shipped twice under two names.
+// convention on DIGU. Before #4523 the old `mode-ft8` action's "ft8" wasn't
+// in the map and silently keyed SSB via the USB fallback; mapping it to DIGU
+// fixed that but made it a byte-for-byte duplicate of the DIGU action
+// (verified on air: both emit `modulation:<trx>,digu` and the same
+// `rx_filter_band 0,3000`), so the action was dropped rather than shipped
+// twice under two names.
 const MODES = {
     usb: "usb",   lsb: "lsb",   cw: "cw",     cwr: "cwr",
     am: "am",     sam: "sam",   fm: "fm",     nfm: "nfm",

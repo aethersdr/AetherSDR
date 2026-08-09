@@ -1,8 +1,17 @@
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/RadioDiscovery.h"
 #include "core/TciProtocol.h"
 #include "core/TciRoutingState.h"
+#include "core/backends/sim/SimBackend.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QEventLoop>
+#include <QHostAddress>
 #include <QString>
+#include <QTimer>
 
 #include <cstdio>
 
@@ -389,6 +398,15 @@ bool testVolumeMalformedInputIsDropped()
         return false;
     }
 
+    // The non-spec percent form (val >= 1.0) is load-bearing: AetherSDR's own
+    // bundled Stream Deck plugin sends "volume:79", not a dB value (#4523).
+    // Pinned here so a future tightening of this parser can't drop it silently.
+    protocol.handleCommand(QStringLiteral("volume:79"));
+    if (!check(protocol.pendingMasterVolume() == 79,
+            "the legacy percent form must still be accepted as a percentage")) {
+        return false;
+    }
+
     // The bug's exact repro: colon, nothing after it.
     protocol.handleCommand(QStringLiteral("volume:"));
     if (!check(protocol.pendingMasterVolume() == -1,
@@ -439,9 +457,9 @@ bool testTciToSmartSdrReportsUnrecognisedNames()
             "an unrecognised modulation name must report !ok rather than silently mapping to USB")) {
         return false;
     }
-    // The fallback return value is still "USB" for callers (like the GET/echo
-    // path) that need *some* valid SmartSDR mode unconditionally — only a
-    // SET-path caller is expected to check ok and reject.
+    // The fallback return value is still "USB" for source compatibility —
+    // there is currently no caller that relies on it (tciToSmartSDR has one
+    // call site, cmdModulation's SET path, and it checks ok).
     if (!check(unknown == QStringLiteral("USB"),
             "the fallback return value contract is unchanged for callers that don't check ok")) {
         return false;
@@ -457,11 +475,95 @@ bool testTciToSmartSdrReportsUnrecognisedNames()
     return true;
 }
 
+static void spin(int ms)
+{
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+// The demo entry exactly as ConnectionPanel::addDemoRadio() builds it (see
+// radiomodel_audio_mute_test.cpp).
+static RadioInfo demoInfo()
+{
+    RadioInfo i;
+    i.name    = QStringLiteral("FLEX-6700");
+    i.model   = SimBackend::demoModelName();
+    i.serial  = SimBackend::demoSerial();
+    i.family  = SimBackend::familyName();
+    i.address = QHostAddress(QHostAddress::LocalHost);   // synthetic; never dialed
+    i.port    = 4992;
+    return i;
+}
+
+// #4523/#4848: the branch this PR actually adds is cmdModulation's
+// `if (!modOk) return {};` — testTciToSmartSdrReportsUnrecognisedNames above
+// exercises the helper it calls, but a modelless TciProtocol(nullptr) can't
+// reach cmdModulation's SET path at all: sliceForTrx()'s resolvers both
+// require model->isConnected(), which the disconnected-only
+// automationApplySliceFixture() fixture cannot satisfy. Driving this through
+// the in-process demo backend gets a real connected model with a real slice,
+// per the pattern in radiomodel_audio_mute_test.cpp / demo_backend_swap_test.cpp.
+bool testModulationEndToEndRejectsUnknownName()
+{
+    RadioModel model;
+    model.connectToRadio(demoInfo());
+    for (int i = 0; i < 40 && !model.isConnected(); ++i)
+        spin(50);
+    if (!check(model.isConnected(), "precondition: connected to the demo backend")) {
+        return false;
+    }
+    SliceModel* slice = nullptr;
+    for (int i = 0; i < 40 && model.slices().isEmpty(); ++i)
+        spin(50);
+    slice = model.slices().value(0);
+    if (!check(slice != nullptr, "precondition: the demo backend announced a slice")) {
+        return false;
+    }
+
+    TciProtocol protocol(&model);
+
+    // Sanity: a recognised name still takes effect end to end, so the fix
+    // isn't refusing every SET. setMode() is invoked via a queued
+    // QMetaObject::invokeMethod, so events must be processed before reading
+    // the result back.
+    slice->setMode(QStringLiteral("USB"));
+    protocol.handleCommand(QStringLiteral("modulation:0,digu"));
+    QCoreApplication::processEvents();
+    if (!check(slice->mode() == QStringLiteral("DIGU")
+                   && !protocol.pendingNotification().isEmpty(),
+            "a recognised modulation name must still take effect end to end")) {
+        return false;
+    }
+
+    // The issue's exact repro, driven end to end: an unrecognised name on a
+    // real SET must not reach setMode() and must not notify.
+    protocol.handleCommand(QStringLiteral("modulation:0,ft8"));
+    QCoreApplication::processEvents();
+    if (!check(slice->mode() == QStringLiteral("DIGU"),
+            "an unrecognised modulation name must not change the slice's mode")) {
+        return false;
+    }
+    if (!check(protocol.pendingNotification().isEmpty(),
+            "an unrecognised modulation name must not notify other clients")) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
+    // Must be constructed before QCoreApplication (see TestSettingsProfile.h)
+    // — only testModulationEndToEndRejectsUnknownName needs it (it constructs
+    // a real RadioModel, which touches AppSettings), but every other test in
+    // this file runs against a modelless TciProtocol(nullptr) and is
+    // unaffected by an isolated settings profile being active.
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-tci-protocol-test"));
     QCoreApplication app(argc, argv);
+    AetherSDR::AppSettings::instance().load();
+
     TciProtocol protocol(nullptr);
 
     const QString response = protocol.handleCommand(
@@ -508,7 +610,8 @@ int main(int argc, char** argv)
         || !testWsjtxRoutingContracts()
         || !testDeferredCommands() || !testDriveWireContract()
         || !testVolumeMalformedInputIsDropped()
-        || !testTciToSmartSdrReportsUnrecognisedNames()) {
+        || !testTciToSmartSdrReportsUnrecognisedNames()
+        || !testModulationEndToEndRejectsUnknownName()) {
         return 1;
     }
 
