@@ -129,6 +129,13 @@ public:
     void setLinkIndicator(const QColor& overrideColor, bool alarm);
     void pulseLink(const QColor& beatColor = QColor());
 
+    // Minimal mode: show the active tab only and drop the "+".  The strip has
+    // to survive there rather than being hidden — since the heartbeat lamp was
+    // folded into the active tab's dot, hiding the strip would take the
+    // radio-link indicator with it, and minimal mode is precisely when an
+    // operator has nothing else on screen to notice a dropped link with.
+    void setCompactMode(bool on);
+
     // Open the discovered-radios popover programmatically (the automation
     // bridge and the keyboard both need a non-mouse entry point).
     void showDiscoveryPopover();
@@ -164,6 +171,7 @@ private:
     QColor               m_beatColor;
     bool                 m_alarm{false};
     bool                 m_alarmVisible{true};
+    bool                 m_compact{false};
 };
 
 } // namespace AetherSDR

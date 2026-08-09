@@ -584,9 +584,29 @@ void RadioTabBar::rebuild()
 void RadioTabBar::applyActiveState()
 {
     for (RadioTab* tab : std::as_const(m_tabs)) {
-        tab->setChecked(tab->entry().id == m_activeId);
+        const bool isActive = tab->entry().id == m_activeId;
+        tab->setChecked(isActive);
+        // In compact (minimal) mode only the active tab is shown.  With no
+        // active radio nothing is shown, which is correct: there is no link to
+        // report on.
+        tab->setVisible(!m_compact || isActive);
+    }
+    if (m_addButton) {
+        m_addButton->setVisible(!m_compact);
     }
     applyLinkVisuals();
+}
+
+void RadioTabBar::setCompactMode(bool on)
+{
+    if (m_compact == on) {
+        return;
+    }
+    m_compact = on;
+    if (on && isDiscoveryPopoverVisible()) {
+        m_popover->close();   // the "+" it belongs to is about to disappear
+    }
+    applyActiveState();
 }
 
 bool RadioTabBar::isDiscoveryPopoverVisible() const

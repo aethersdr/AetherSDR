@@ -30,12 +30,17 @@ class WindowCaptionButtons;
 // mark, the radio tabs, and the audio cluster; there is no second in-app title
 // strip on any platform.
 //
-// Chrome differs by platform but the bar does not:
-//   * macOS  — a frameless NSWindow with Qt-drawn traffic-light controls and
-//              an AppKit visual-effect material behind this bar.
-//   * Windows — Qt::FramelessWindowHint plus a WM_NCCALCSIZE'd frame; the caption
-//              buttons at the right are ours (design 1e).
-//   * Linux  — same custom chrome, chip-style controls at the left (design 1b).
+// The window is frameless on every platform, so the controls are always ours;
+// only their shape and which side they sit on differ:
+//   * macOS   — traffic lights at the left, 12 px on a 20 px pitch. NOT the real
+//               NSWindow buttons: keeping the native title bar and painting into
+//               it was tried and abandoned (gui/mac/WindowChrome.h has the
+//               account). That file now only restores the corners, shadow and
+//               native edge resize a borderless NSWindow gives up.
+//   * Windows — Qt::FramelessWindowHint plus a WM_NCCALCSIZE'd frame; 46 px
+//               caption buttons at the right, answering HTMAXBUTTON so Snap
+//               Layouts opens on hover.
+//   * Linux   — chip-style controls at the left.
 class TitleBar : public QWidget {
     Q_OBJECT
 
