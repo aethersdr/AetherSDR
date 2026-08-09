@@ -255,9 +255,23 @@ void testHeatMapAndGrid()
            scope.grab().toImage() == solidGrid);
 
     scope.setShowGrid(false);
-    report("Grid off changes the render", scope.grab().toImage() != solidGrid);
+    const QImage noGrid = scope.grab().toImage();
+    report("Grid off changes the render", noGrid != solidGrid);
     scope.setShowGrid(true);
     report("Grid on restores it", scope.grab().toImage() == solidGrid);
+
+    // The rules must sit on dB values, not fixed fractions of the height —
+    // that is what makes them mean the same thing as the main pan's. Changing
+    // the dBm window by a non-integer number of steps has to move them.
+    scope.setDbmRange(-117.0f, -37.0f);   // same 80 dB span, shifted by 3 dB
+    scope.updateSpectrum(bins);
+    const QImage shifted = scope.grab().toImage();
+    scope.setShowGrid(false);
+    scope.updateSpectrum(bins);
+    const QImage shiftedNoGrid = scope.grab().toImage();
+    report("grid lines are dB-aligned, not fixed fractions",
+           shifted != shiftedNoGrid);
+    scope.setShowGrid(true);
 }
 
 // The whole mini-pan data path: cut a narrow window out of a main-pan frame.

@@ -66,7 +66,7 @@ pan's Display settings rather than its own:
 | FFT Fill (colour, alpha) | mirrored from the source pan's `SpectrumWidget` |
 | FFT Floor + FFT Scale | mirrored from the widget's `refLevel()` / `dynamicRange()` |
 | Heat Map | mirrored; the ramp itself is shared (`gui/FftHeatMap.h`) |
-| Grid | mirrored |
+| Grid | mirrored — same token, dotted pen and dB ladder (`gui/SpectrumGrid.h`) |
 
 The first two need no code at all — re-slicing the same pan's frames carries
 them. The rest are pulled per frame in `feedMiniPanFromPanFrame` rather than
@@ -85,9 +85,18 @@ for a pan with no applet in the stack.
 The scope does **no** local auto-scaling — a second opinion on the noise floor
 would disagree with the main pan about how tall a signal is.
 
-The heat-map ramp lives in `gui/FftHeatMap.h`, shared with `SpectrumWidget`
-rather than copied: two definitions would mean the same signal rendering in two
-different colours at two zoom levels.
+The heat-map ramp (`gui/FftHeatMap.h`) and the dB grid ladder
+(`gui/SpectrumGrid.h`) are shared with `SpectrumWidget` rather than copied: two
+definitions would mean the same signal rendering in two different colours, and
+the two views ruling at different dB values, at two zoom levels.
+
+The mini-pan draws no VERTICAL grid rules. The main pan's frequency spacing is
+chosen for its own span, so inside a 10 kHz window it yields one line or none —
+and the centre hairline already marks the only frequency of interest.
+
+Both grids now read `color.spectrum.grid`. The main pan previously drew with
+`color.background.1` while *declaring* `color.spectrum.grid` in its token list,
+so the token named for the job was the one nothing used.
 
 Only the chrome the main pan has no equivalent of — the passband band, the
 centre hairline, the ±span labels, the grid — stays on theme tokens.

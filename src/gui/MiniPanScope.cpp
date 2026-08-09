@@ -1,6 +1,7 @@
 #include "gui/MiniPanScope.h"
 
 #include "gui/FftHeatMap.h"
+#include "gui/SpectrumGrid.h"
 
 #include "core/ThemeManager.h"
 
@@ -11,6 +12,7 @@
 #include <QFont>
 #include <QStringList>
 #include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -20,7 +22,6 @@ namespace {
 // while the TRACE mirrors the source pan's own FFT Line/Fill settings. Tokens
 // carry the hue; no literal colours (the colour ratchet).
 constexpr int kPassbandAlpha = 90;
-constexpr int kGridAlpha     = 46;
 constexpr int kHairlineAlpha = 120;
 } // namespace
 
@@ -139,11 +140,26 @@ void MiniPanScope::paintEvent(QPaintEvent*)
                    tinted("color.slice.a", kPassbandAlpha));
     }
 
-    // Faint dB grid — mirrors the main pan's Grid toggle.
+    // dB grid — same token, same dotted pen and the same dB ladder as
+    // SpectrumWidget::drawGrid, so a rule means the same level in both views.
+    // The lines used to sit at fixed quarters of the height, which looked
+    // similar and meant nothing.
+    //
+    // No VERTICAL rules: the main pan's frequency spacing is chosen for its own
+    // span (tens of kHz and up), so inside a 10 kHz window it yields one line or
+    // none. The centre hairline already marks the only frequency of interest.
     if (m_showGrid) {
-        p.setPen(tinted("color.spectrum.grid", kGridAlpha));
-        for (int i = 1; i < 4; ++i)
-            p.drawLine(QPointF(0, h * i / 4.0), QPointF(w, h * i / 4.0));
+        const float range = m_maxDbm - m_minDbm;
+        if (range > 0.0f) {
+            const float step = SpectrumGrid::dbStep(range);
+            const float first = std::ceil(m_minDbm / step) * step;
+            p.setPen(QPen(tm.color(this, QStringLiteral("color.spectrum.grid")),
+                          1, Qt::DotLine));
+            for (float dbm = first; dbm <= m_maxDbm; dbm += step) {
+                const double y = (m_maxDbm - dbm) / range * h;
+                p.drawLine(QPointF(0, y), QPointF(w, y));
+            }
+        }
     }
 
     // Centre hairline.

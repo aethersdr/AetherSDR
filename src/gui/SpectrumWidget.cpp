@@ -1,5 +1,6 @@
 #include "SpectrumWidget.h"
 #include "gui/FftHeatMap.h"
+#include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
 #include "DssSupplementalCoverage.h"
@@ -15304,17 +15305,13 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
     const int w = r.width();
     const int h = r.height();
 
-    // Horizontal dB grid lines — adaptive step matching the dBm scale strip
-    float rawDbStep = m_dynamicRange / 5.0f;
-    float dbStep;
-    if      (rawDbStep >= 20.0f) dbStep = 20.0f;
-    else if (rawDbStep >= 10.0f) dbStep = 10.0f;
-    else if (rawDbStep >= 5.0f)  dbStep = 5.0f;
-    else                          dbStep = 2.0f;
+    // Horizontal dB grid lines — adaptive step matching the dBm scale strip.
+    // Shared with the mini-pan so both views rule at the same dB values.
+    const float dbStep = AetherSDR::SpectrumGrid::dbStep(m_dynamicRange);
 
     const float bottomDbm = m_refLevel - m_dynamicRange;
     const float firstDb = std::ceil(bottomDbm / dbStep) * dbStep;
-    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1, Qt::DotLine));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.spectrum.grid"), 1, Qt::DotLine));
     for (float dbm = firstDb; dbm <= m_refLevel; dbm += dbStep) {
         const float frac = (m_refLevel - dbm) / m_dynamicRange;
         const int y = r.top() + static_cast<int>(frac * h);
@@ -15327,7 +15324,7 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
     const double gridStep = effectiveGridStepMhz(w);
     const double firstLine = std::ceil(startMhz / gridStep) * gridStep;
 
-    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1, Qt::DotLine));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.spectrum.grid"), 1, Qt::DotLine));
     for (double f = firstLine; f <= endMhz; f += gridStep)
         p.drawLine(mhzToX(f), r.top(), mhzToX(f), r.bottom());
 }
