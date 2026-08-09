@@ -310,8 +310,8 @@ one interface. An `IRadioBackend` implementation owns, per radio family:
 families demodulate and compute FFTs on the hardware — that backend is mostly
 a protocol decoder. Others deliver raw IQ and expect the client to do the work
 — that backend owns an engine-side DSP chain (demodulation, AGC, S-meter,
-panadapter FFT; the building blocks — liquid-dsp, FFTW, the `WfmDsp` pattern —
-are already in the tree). Either way the models and frames above the interface
+panadapter FFT; the building blocks — FFTW, the `WfmDsp` pattern — are already
+in the tree). Either way the models and frames above the interface
 are identical, so no client can tell the difference. This is also why the
 backend seam belongs in the *engine*: DSP-heavy backends make the §8 topology
 (engine at the shack, thin clients remote) the natural deployment for radio

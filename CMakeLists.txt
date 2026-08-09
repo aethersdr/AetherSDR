@@ -25,7 +25,6 @@ option(USE_SYSTEM_ZLIB         "Use system zlib"         OFF)
 option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
-option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
 option(USE_SYSTEM_LIBWHISPER   "Use system libwhisper"   OFF)
 
 # Build features options
@@ -38,7 +37,6 @@ option(REQUIRE_KEYCHAIN "Fail if Qt6Keychain is not found (use for release build
 option(REQUIRE_ASR_ONNX "Fail if ONNX Runtime is not found (Silero VAD + speaker labeling + signal classifier; use for release builds)" OFF)
 option(REQUIRE_ASR_GPU "Fail if no ASR GPU backend (Vulkan/Metal) is enabled (use for release builds)" OFF)
 option(REQUIRE_ASR_SHERPA "Fail if sherpa-onnx is not found (non-whisper ASR backend; use for release builds)" OFF)
-option(ENABLE_LIQUID_DSP "Build with liquid-dsp toolkit support" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(ENABLE_DSTAR "Build the local D-STAR waveform helper (vendored smartsdr-dsp/ThumbDV)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
@@ -1198,84 +1196,6 @@ else()
 endif()
 message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
 
-# Bundled liquid-dsp (MIT) — comprehensive DSP toolkit covering modems
-# (PSK/QAM/FSK/GMSK/OFDM), FEC (Hamming/Golay/RS/convolutional), adaptive
-# filters (LMS/RLS), AGC, NCO, polyphase resampling, and equalizers.
-# Vendored proactively under #3043 as foundation infrastructure for future
-# digital-mode work (e.g. native FT8/FT4 — #85 Phase 4 — or PSK31 / RTTY).
-#
-# Linux + macOS only — liquid-dsp upstream targets GCC/Clang/MinGW; its
-# include/liquid.h:473 uses C99 `float _Complex` typedefs which the MSVC C
-# compiler doesn't accept (syntax error: identifier 'liquid_float_complex').
-# Upstream has no first-class MSVC support and patching the header for
-# `_Fcomplex`/`_Dcomplex` would be invasive against future upstream syncs.
-# Tracked as a follow-up; today the Windows build skips this vendor and
-# any future consumer that needs liquid-dsp on Windows needs to land MSVC
-# support first.
-#
-# Built via the upstream CMakeLists.txt with examples / tests / benchmarks /
-# sandbox / docs disabled to keep the build slim. FFTW lookup is disabled
-# (FIND_FFTW=OFF) so liquid-dsp uses its own internal FFT — wiring it to our
-# bundled third_party/fftw3 can be a follow-up if a future consumer wants
-# FFTW-accelerated transforms.
-#
-# Disabled by default on every platform because no AetherSDR module currently
-# consumes liquid-dsp symbols. Opt-in non-MSVC builds link liquid-static; the
-# static linker then extracts only symbols used by a future consumer.
-#
-# USE_SYSTEM_LIQUID_DSP only takes effect once liquid-dsp itself is enabled, so
-# warn if a packager set it without ENABLE_LIQUID_DSP rather than silently
-# ignoring it (#4146 review).
-if(USE_SYSTEM_LIQUID_DSP AND NOT ENABLE_LIQUID_DSP)
-    message(WARNING
-        "USE_SYSTEM_LIQUID_DSP=ON has no effect without ENABLE_LIQUID_DSP=ON — "
-        "liquid-dsp is off by default. Pass -DENABLE_LIQUID_DSP=ON to build "
-        "against it.")
-endif()
-
-if(ENABLE_LIQUID_DSP AND MSVC)
-    message(FATAL_ERROR
-        "ENABLE_LIQUID_DSP is not supported with MSVC because liquid-dsp's "
-        "public headers use C99 _Complex types")
-endif()
-
-if(ENABLE_LIQUID_DSP AND NOT USE_SYSTEM_LIQUID_DSP)
-    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
-    set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
-    set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
-    set(BUILD_DOC OFF CACHE BOOL "" FORCE)
-    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
-    set(FIND_FFTW OFF CACHE BOOL "" FORCE)
-    set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
-# liquid-dsp's cmake_minimum_required(VERSION 3.10) puts its option() calls
-# under CMP0077 OLD behavior — option() with that policy does NOT honor a
-# same-name *normal* variable. We must use CACHE BOOL FORCE so the override
-# takes effect. Without this, BUILD_SHARED_LIBS stays at the option's ON
-# default. Linux silently ships both libliquid.so and libliquid.a (different
-# extensions); the OUTPUT_NAME `liquid` at upstream CMakeLists.txt:444
-# renames the STATIC target's archive to drop the -static suffix.
-#
-# Cache pollution is undone with unset(CACHE) after add_subdirectory so
-# this doesn't leak into the rest of the project's BUILD_SHARED_LIBS
-# semantics.
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/liquid-dsp EXCLUDE_FROM_ALL)
-    unset(BUILD_SHARED_LIBS CACHE)
-# Suppress warnings from vendored code (same pattern as other third_party
-# integrations — we don't want -Werror surfaces on code we don't own).
-    if(TARGET liquid-static)
-        target_compile_options(liquid-static PRIVATE -w)
-    endif()
-endif()
-
-if(ENABLE_LIQUID_DSP AND USE_SYSTEM_LIQUID_DSP)
-    find_package(PkgConfig REQUIRED)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(liquid-dsp REQUIRED IMPORTED_TARGET liquid-dsp)
-    endif()
-endif()
-
 set(DFNR_RESOURCES "")
 if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
     if(EXISTS "${DFNR_MODEL}")
@@ -2268,14 +2188,6 @@ target_link_libraries(AetherSDR PRIVATE
     qgeoview           # gui/map only
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
-
-if(ENABLE_LIQUID_DSP)
-    if(USE_SYSTEM_LIQUID_DSP)
-        target_link_libraries(aethercore PRIVATE PkgConfig::liquid-dsp)
-    else()
-        target_link_libraries(aethercore PRIVATE liquid-static)
-    endif()
-endif()
 
 if(Qt6SerialPort_FOUND)
     # PUBLIC: gui (MainWindow.cpp, RadioSetupDialog.cpp) uses QSerialPort and

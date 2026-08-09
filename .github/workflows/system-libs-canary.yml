@@ -106,7 +106,6 @@ jobs:
             libasound2-dev \
             zlib1g-dev \
             libmosquitto-dev \
-            libliquid-dev \
             libwhisper-dev
 
       # ccache IS safe here, despite the intuition that a canary wants a
@@ -139,7 +138,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF \
+          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 

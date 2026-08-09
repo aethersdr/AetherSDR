@@ -75,8 +75,7 @@ Consequences:
   legacy files; drops to Widgets-free once the step-1 relocations/splits
   land). Effectively the *entire* third-party pile: zlib, mspack,
   mosquitto+OpenSSL, opus/RADE, fftw3(+f), specbleach, DFNR, rnnoise,
-  ggmorse, liquid-dsp, rtmidi+alsa, hidapi, portaudio, pipewire, modem
-  libs.
+  ggmorse, rtmidi+alsa, hidapi, portaudio, pipewire, modem libs.
 - **AetherSDR exe:** just qgeoview, Qt6::GuiPrivate/ShaderTools (QRhi),
   dl — everything else arrives transitively. The exe surface is tiny,
   which is exactly what the RFC wants.
