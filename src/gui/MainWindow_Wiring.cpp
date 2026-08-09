@@ -5906,11 +5906,12 @@ void MainWindow::wireMeters()
         const auto& spec = AetherSDR::Spe::modelSpec(s.id);
 
         // The power gauge rescales with the selected LOW/MID/HIGH level,
-        // exactly like the amplifier's own bar display — thresholds are the
-        // hardware-validated nominal−50 / nominal / nominal+100 shape.
+        // exactly like the amplifier's own bar display. The whole axis comes
+        // from the protocol layer's model table (Spe::levelGaugeRange) rather
+        // than being re-derived here, so a corrected model row moves the bar.
         // setPowerRange no-ops when the level hasn't changed.
-        const float nom = AetherSDR::Spe::levelNominalW(spec, s.powerLevel);
-        spe->setPowerRange(nom, nom - 50.0f, nom + 100.0f);
+        const auto range = AetherSDR::Spe::levelGaugeRange(spec, s.powerLevel);
+        spe->setPowerRange(range.nominalW, range.warnW, range.maxW);
 
         spe->setForwardPower(s.outputPowerW);
         spe->setSwrAnt(s.swrAnt);

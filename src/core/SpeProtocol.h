@@ -236,12 +236,26 @@ const ModelSpec& modelSpec(const QString& id);
 QStringList modelIds();
 
 // Rated output for the currently selected power level (Status::powerLevel).
-// H (or an unknown letter) is the model's full nominalPowerW. The gauge
-// thresholds derive from this with the hardware-validated 1.5K-FA shape:
-// yellow from nominal−50 W, red from nominal, ceiling at nominal+100 W —
-// so the bar rescales as the operator cycles LOW/MID/HIGH, exactly like
-// the amplifier's own display does.
+// H (or an unknown letter) is the model's full nominalPowerW.
 float levelNominalW(const ModelSpec& spec, QChar level);
+
+// The complete power-gauge axis for that level, so the bar rescales as the
+// operator cycles LOW/MID/HIGH exactly like the amplifier's own display.
+//
+// At HIGH this returns the model row's own three figures verbatim — the
+// table is the single source of truth, so correcting a row (the design note
+// §5 invites an owner to verify the 1.3K-FA/2K-FA numbers against real
+// hardware) actually moves the bar instead of being silently overridden by
+// a duplicate derivation in the GUI wiring. LOW/MID have no tabulated
+// warn/max, so they take the hardware-validated 1.5K-FA shape: yellow from
+// nominal−50 W, red from nominal, ceiling at nominal+100 W — which is
+// exactly what the tabulated HIGH rows encode too.
+struct GaugeRange {
+    float nominalW{0};  // gauge red threshold
+    float warnW{0};     // gauge yellow zone start
+    float maxW{0};      // gauge ceiling
+};
+GaugeRange levelGaugeRange(const ModelSpec& spec, QChar level);
 
 }  // namespace Spe
 }  // namespace AetherSDR

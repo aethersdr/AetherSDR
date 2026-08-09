@@ -242,6 +242,38 @@ int main()
     report("an unknown level letter falls back to the full HIGH scale",
            levelNominalW(s15, u'?') == 1500.0f);
 
+    // The GUI wiring takes the whole axis from levelGaugeRange(), so the model
+    // table is the only place the HIGH thresholds live. Asserted against the
+    // spec's own fields rather than against literals: that is what makes an
+    // edit to modelTable() reach the bar instead of being silently overridden
+    // by a duplicate derivation in MainWindow_Wiring (PR #4531 review).
+    for (const QString& id : modelIds()) {
+        const auto& spec = modelSpec(id);
+        const auto high = levelGaugeRange(spec, u'H');
+        report(qPrintable(QStringLiteral("%1: the HIGH gauge axis is the model row verbatim")
+                              .arg(spec.displayName)),
+               high.nominalW == spec.nominalPowerW && high.warnW == spec.warnPowerW
+                   && high.maxW == spec.maxPowerW);
+        // ...and the tabulated rows themselves follow the hardware-validated
+        // shape the LOW/MID levels derive, so the family stays coherent.
+        report(qPrintable(QStringLiteral("%1: the tabulated HIGH row follows nominal-50/+100")
+                              .arg(spec.displayName)),
+               spec.warnPowerW == spec.nominalPowerW - 50.0f
+                   && spec.maxPowerW == spec.nominalPowerW + 100.0f);
+    }
+    {
+        const auto low = levelGaugeRange(s15, u'L');
+        const auto mid = levelGaugeRange(s15, u'M');
+        report("1.5K-FA LOW axis is 450/500/600 (the reference app's own bar)",
+               low.warnW == 450.0f && low.nominalW == 500.0f && low.maxW == 600.0f);
+        report("1.5K-FA MID axis is 950/1000/1100",
+               mid.warnW == 950.0f && mid.nominalW == 1000.0f && mid.maxW == 1100.0f);
+        const auto unknown = levelGaugeRange(s15, u'?');
+        report("an unknown level letter takes the full HIGH axis",
+               unknown.nominalW == 1500.0f && unknown.warnW == 1450.0f
+                   && unknown.maxW == 1600.0f);
+    }
+
     // ── RFC 2217 power-ON framing (design note §4) — literal byte
     //    sequences per RFC 2217's COM-PORT-OPTION subnegotiation.
     report("WILL COM-PORT-OPTION is IAC WILL 0x2C",

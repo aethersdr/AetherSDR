@@ -425,6 +425,15 @@ void SpeApplet::setSource(const QString& text)
 void SpeApplet::setResponding(bool responding)
 {
     m_responding = responding;
+    // Blank the readings, not just the buttons. Over ser2net — the topology
+    // this integration is built around — the TCP link outlives the amplifier
+    // being switched off, so this is the ONLY signal that arrives: without
+    // the reset the panel keeps rendering the last poll's supply voltage,
+    // heatsink temperature, band/antenna/level and alarm banner as though
+    // they were live, which is worse than showing nothing. The pill going
+    // neutral and the keys greying out are too quiet to carry that alone.
+    if (!responding)
+        clearTelemetry();
     updateCommandsEnabled();
     applyModePill();
 }
@@ -443,43 +452,51 @@ void SpeApplet::updateCommandsEnabled()
     m_onBtn->setEnabled(m_connected);
 }
 
+void SpeApplet::clearTelemetry()
+{
+    setFaultText(QString());
+    m_bandLabel->hide();
+    m_antLabel->hide();
+    m_inputLabel->hide();
+    m_bandDirty = m_antDirty = m_inputDirty = false;
+    m_inputPort = 0;
+    m_levelName.clear();
+    m_pwrLevelBtn->setText(QStringLiteral("PWR"));
+    m_supplyVolts = 0.0f;
+    m_supplyAmps = 0.0f;
+    m_diagDirty = false;
+    m_voltLabel->setText("V  — V");
+    m_currLabel->setText("I  — A");
+    m_tempDirty = false;
+    m_tempLabel->setText("TEMP  —");
+    m_operate = false;
+    m_transmitting = false;
+    m_fwdWatts = 0.0f;
+    m_swrAntVal = 1.0f;
+    m_swrAtuVal = 1.0f;
+    // Clear the forward-power peak hold too — a stale peak would
+    // otherwise survive into the next session (same fix AcomApplet
+    // carries in its setConnected).
+    m_peakFwd = 0.0f;
+    if (m_peakTimer) m_peakTimer->stop();
+    m_pwrGauge->setValueImmediate(0.0f);
+    m_pwrGauge->clearPeak();
+    m_swrAntGauge->setValueImmediate(1.0f);
+    m_swrAtuGauge->setValueImmediate(1.0f);
+    updateValueLabels();
+}
+
 void SpeApplet::setConnected(bool connected)
 {
     m_connected = connected;
     if (!connected) {
         m_responding = false;
-        setFaultText(QString());
+        // Transport-level identity goes too, which the responding path keeps:
+        // a silent amplifier is still reached over a known link, and is still
+        // the model it identified as.
         m_sourceLabel->setText(QStringLiteral("● —"));
         m_modelLabel->clear();
-        m_bandLabel->hide();
-        m_antLabel->hide();
-        m_inputLabel->hide();
-        m_bandDirty = m_antDirty = m_inputDirty = false;
-        m_inputPort = 0;
-        m_levelName.clear();
-        m_pwrLevelBtn->setText(QStringLiteral("PWR"));
-        m_supplyVolts = 0.0f;
-        m_supplyAmps = 0.0f;
-        m_diagDirty = false;
-        m_voltLabel->setText("V  — V");
-        m_currLabel->setText("I  — A");
-        m_tempDirty = false;
-        m_tempLabel->setText("TEMP  —");
-        m_operate = false;
-        m_transmitting = false;
-        m_fwdWatts = 0.0f;
-        m_swrAntVal = 1.0f;
-        m_swrAtuVal = 1.0f;
-        // Clear the forward-power peak hold too — a stale peak would
-        // otherwise survive into the next session (same fix AcomApplet
-        // carries in its setConnected).
-        m_peakFwd = 0.0f;
-        if (m_peakTimer) m_peakTimer->stop();
-        m_pwrGauge->setValueImmediate(0.0f);
-        m_pwrGauge->clearPeak();
-        m_swrAntGauge->setValueImmediate(1.0f);
-        m_swrAtuGauge->setValueImmediate(1.0f);
-        updateValueLabels();
+        clearTelemetry();
     }
     updateCommandsEnabled();
     applyModePill();

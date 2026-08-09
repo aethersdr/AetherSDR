@@ -191,6 +191,14 @@ nominal+100 W (LOW 500, MID 1000, HIGH = model nominal for the 1.3K/1.5K;
 LOW 1000, MID 1500 derived for the 2K-FA). The 1.5K-FA level thresholds are
 hardware-validated; the rest follow the same shape.
 
+The whole axis comes from `Spe::levelGaugeRange()`, and at HIGH it is the
+table row above **verbatim** — the GUI wiring never re-derives it. That is
+deliberate: an owner correcting the 1.3K-FA or 2K-FA numbers, as invited
+above, would otherwise be editing a table that nothing on screen reads.
+LOW and MID have no tabulated thresholds, so they take the derived shape.
+`spe_protocol_test` pins both halves, asserting the HIGH axis against the
+table's own fields rather than against literals.
+
 SWR gauges are fixed 1.0–3.0 regardless of model — a ratio needs no
 per-model scaling (same convention as AcomApplet).
 
@@ -206,8 +214,15 @@ distinguishes:
   unplug). Applet hides, auto-reconnect arms.
 - **respondingChanged(false)** — the transport is up but 30 consecutive
   polls (~3 s) went unanswered. The applet stays visible but greys its pill
-  to "—" and disables the command buttons (which would otherwise silently
-  do nothing). Polling continues; the first reply flips it back.
+  to "—", disables the command buttons (which would otherwise silently do
+  nothing), and **blanks every reading** — gauges, supply V/I, heatsink
+  temperature, band/antenna/level, and the alarm banner all go back to their
+  not-yet-known state. Only the source label and the identified model
+  survive, because those are still true. The reset is the point: over
+  ser2net this is the *only* signal that arrives when an operator switches
+  the amplifier off, and a panel frozen at the last poll's plausible-looking
+  numbers reads as live telemetry. Polling continues; the first reply
+  repopulates everything.
 
 ---
 

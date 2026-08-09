@@ -91,6 +91,11 @@ private:
     void updateValueLabels();  // 10 Hz throttled label text refresh
     void updateCommandsEnabled();
     void applyModePill();
+    // Blanks every reading back to its not-yet-known state. Shared by the
+    // disconnect path and the stopped-answering path — both mean "what is on
+    // screen is no longer telemetry", and a frozen-but-plausible panel is the
+    // worse failure of the two.
+    void clearTelemetry();
 
     HGauge* m_pwrGauge{nullptr};
     HGauge* m_swrAntGauge{nullptr};

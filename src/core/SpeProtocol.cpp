@@ -339,5 +339,32 @@ float levelNominalW(const ModelSpec& spec, QChar level)
     }
 }
 
+namespace {
+
+// The gauge shape carried from the field-proven 1.5K-FA control application:
+// yellow from nominal−50 W, ceiling at nominal+100 W. Applied to the LOW/MID
+// nominals, which have no tabulated thresholds of their own; every model
+// row's HIGH figures already encode the same shape.
+constexpr float kWarnMarginW    = 50.0f;
+constexpr float kCeilingMarginW = 100.0f;
+
+GaugeRange derivedRange(float nominalW)
+{
+    return {nominalW, nominalW - kWarnMarginW, nominalW + kCeilingMarginW};
+}
+
+}  // namespace
+
+GaugeRange levelGaugeRange(const ModelSpec& spec, QChar level)
+{
+    switch (level.unicode()) {
+        case u'L': return derivedRange(spec.lowNominalW);
+        case u'M': return derivedRange(spec.midNominalW);
+        // H, or unknown — the model row's own figures, verbatim, so an edit
+        // to modelTable() reaches the bar.
+        default:   return {spec.nominalPowerW, spec.warnPowerW, spec.maxPowerW};
+    }
+}
+
 }  // namespace Spe
 }  // namespace AetherSDR

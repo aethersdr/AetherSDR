@@ -5,12 +5,6 @@
   "split": "",
   "confidence": "high"
  },
- "core/SpeConnection.h": {
-  "tag": "peripheral(spe)",
-  "note": "Direct serial/ser2net client for the SPE Expert amplifier line (1.5K-FA primary target, protocol shared across 1.3K-FA/2K-FA) — a standalone USB/RS-232 accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/spe-expert-amplifier-design.md.",
-  "split": "",
-  "confidence": "high"
- },
  "core/AdaptiveFilterEngine.h": {
   "tag": "universal",
   "note": "GUI-thread adaptive RX passband coordinator over SliceModel/spectrum frames; canonical radio state, no vendor ties.",
@@ -524,6 +518,12 @@
  "core/SmartLinkClient.h": {
   "tag": "vendor(flex)",
   "note": "SmartLink WAN client: FlexRadio Auth0 login + TLS to smartlink.flexradio.com, WAN radio list/hole-punch.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SpeConnection.h": {
+  "tag": "peripheral(spe)",
+  "note": "Direct serial/ser2net client for the SPE Expert amplifier line (1.5K-FA primary target, protocol shared across 1.3K-FA/2K-FA) — a standalone USB/RS-232 accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/spe-expert-amplifier-design.md.",
   "split": "",
   "confidence": "high"
  },
