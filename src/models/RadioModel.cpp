@@ -1890,7 +1890,15 @@ RadioModel::RadioModel(QObject* parent)
     // on any non-Flex radio while still being offered.
     connect(&m_tnfModel, &TnfModel::notchCreateRequested, this,
             [this](double centerHz, double widthHz){
-        if (m_backend)
+        // Connected only, and create is the one that needs saying so. The notch
+        // controls stay live while disconnected (a capability is a fact about
+        // the radio, not about the link), but the BACKEND survives a disconnect
+        // — so on a host-DSP backend a create here would mint an id and report a
+        // marker the operator can see, against a receiver set that no longer
+        // exists. The next connect then wipes the backend's record and leaves
+        // that marker on the panadapter with nothing behind it: the mirror image
+        // of the state-outliving-the-session bug, arriving from the other side.
+        if (m_backend && isConnected())
             m_backend->createNotch(centerHz, widthHz);
     });
     connect(&m_tnfModel, &TnfModel::notchChangeRequested, this,

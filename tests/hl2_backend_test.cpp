@@ -103,6 +103,9 @@ int main(int argc, char** argv)
 
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
+    // QSignalSpy stores a notchChanged argument by metatype, so the notch
+    // session-scope case below reads an empty QVariant without this.
+    qRegisterMetaType<NotchDelta>();
 
     // The backend RESTORES the operator's remembered span at connect, so the
     // default-span assertion below depends on persisted state. The isolated
@@ -641,6 +644,91 @@ int main(int argc, char** argv)
 
         tuner.disconnectRadio();
         spin(50);
+    }
+
+    // ---- notch records are SESSION state, and ids are never recycled (#4780) --
+    //
+    // The half of the notch lifecycle that lives ABOVE Hl2RxDsp, and the one
+    // hl2_notch_seed_test cannot reach: that test pins seeding as idempotent
+    // against a single DSP chain, and never disconnects, so deleting
+    // m_notches.clear() from connectRadio() leaves it green.
+    //
+    // What that line prevents: RadioModel::onDisconnected() empties TnfModel,
+    // but a same-family reconnect rebuilds no backend, so records kept here
+    // would be replayed into the fresh WDSP chains by seedNotches() with
+    // nothing on screen naming them — nulls in the audio at frequencies the UI
+    // does not mention, and no id to remove them by. Asserted through the seam
+    // rather than by reaching into m_notches: a record that survived is a
+    // record still addressable, so setNotch/removeNotch on last session's id
+    // would report back.
+    {
+        QUdpSocket radio4;
+        check(radio4.bind(QHostAddress::LocalHost, 0), "fourth fake radio binds");
+        std::uint32_t seq4 = 0;
+        QObject::connect(&radio4, &QUdpSocket::readyRead, &radio4, [&] {
+            while (radio4.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = radio4.receiveDatagram();
+                if (seq4 < kCap)
+                    radio4.writeDatagram(fakeEp6(seq4++), dg.senderAddress(),
+                                         dg.senderPort());
+            }
+        });
+
+        Hl2Backend notcher;
+        QSignalSpy notchedSpy(&notcher, &IRadioBackend::notchChanged);
+        QSignalSpy unnotchedSpy(&notcher, &IRadioBackend::notchRemoved);
+        QSignalSpy notchConnected(&notcher, &IRadioBackend::connected);
+        RadioConnectRequest nr;
+        nr.host = QStringLiteral("127.0.0.1");
+        nr.port = radio4.localPort();
+        notcher.connectRadio(nr);
+        AetherSDR::test::awaitDspBuild("hl2_backend_test",
+                                      [&] { return notchConnected.count() >= 1; });
+        spin(300);
+        check(notchConnected.count() >= 1, "notch-session backend came up");
+
+        // Placed against a live chain, so the id the backend mints is the one a
+        // real session would carry.
+        notcher.createNotch(7'041'000.0, 200.0);
+        check(notchedSpy.count() == 1, "createNotch reports the id the backend minted");
+        const int firstId = notchedSpy.isEmpty() ? -1 : notchedSpy.first().at(0).toInt();
+
+        notcher.disconnectRadio();
+        spin(150);
+        seq4 = 0;               // let the same fake answer a second session
+        notcher.connectRadio(nr);
+        // Awaited rather than merely spun past. The second session opens its own
+        // WDSP chains on the I/O thread; leaving that build in flight would put
+        // the planner under whatever assertion runs next, which then fails for a
+        // reason it does not name.
+        AetherSDR::test::awaitDspBuild("hl2_backend_test",
+                                      [&] { return notchConnected.count() >= 2; });
+        spin(200);
+        check(notchConnected.count() >= 2, "the notch-session backend reconnected");
+
+        notchedSpy.clear();
+        unnotchedSpy.clear();
+        NotchDelta move;
+        move.centerHz = 7'042'000.0;
+        notcher.setNotch(firstId, move);
+        check(notchedSpy.isEmpty(),
+              "a notch from the previous session is still editable after reconnect");
+        notcher.removeNotch(firstId);
+        check(unnotchedSpy.isEmpty(),
+              "a notch from the previous session is still removable after reconnect");
+
+        // And the counter deliberately does NOT reset with the records: a
+        // recycled id would let a stale reference address a different notch.
+        notchedSpy.clear();
+        notcher.createNotch(7'050'000.0, 200.0);
+        check(notchedSpy.count() == 1, "the new session can still place a notch");
+        if (!notchedSpy.isEmpty()) {
+            check(notchedSpy.first().at(0).toInt() > firstId,
+                  "the new session handed out an id the old one already used");
+        }
+
+        notcher.disconnectRadio();
+        spin(100);
     }
 
     // ---- F4 (#4448): a connect to a radio that never answers must surface a

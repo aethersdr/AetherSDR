@@ -106,10 +106,17 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     // the channel knows where it is tuned is placed against a tune frequency of
     // zero and rebuilt at a wildly wrong offset.
     m_channel->setNotchTuneFrequency(m_notchTuneHz);
-    for (std::size_t index = 0; index < m_notches.size(); ++index) {
-        const Notch& notch = m_notches[index];
-        m_channel->addNotch(static_cast<int>(index), notch.centerHz,
-                            notch.widthHz, notch.active);
+    // Replayed THROUGH addNotch() rather than straight at the channel, so the
+    // rebuild lands under the same WDSP-first rule the live path uses: a notch
+    // the fresh channel refuses drops out of the mirror too, instead of leaving
+    // a phantom that every later index is measured from. It also stops at the
+    // first refusal, because an index that skips one is an index that addresses
+    // the wrong notch.
+    std::vector<Notch> pending;
+    pending.swap(m_notches);
+    for (std::size_t index = 0; index < pending.size(); ++index) {
+        const Notch& notch = pending[index];
+        addNotch(static_cast<int>(index), notch.centerHz, notch.widthHz, notch.active);
     }
     m_channel->setNotchesEnabled(m_notchesEnabled);
     return true;
@@ -183,11 +190,16 @@ void Hl2RxDsp::clearNotches()
 {
     // Delete from the top down so each removal is the last index — WDSP closes
     // the gap on every delete, exactly as removeNotch() relies on.
+    //
+    // And drop each mirror entry only once WDSP has let go of it, for the reason
+    // addNotch() gives: a mirror that empties while the database does not would
+    // put every index one notch out — and the caller this exists for is seeding,
+    // which would then stack a second copy on top of the set it meant to replace.
     for (int index = static_cast<int>(m_notches.size()) - 1; index >= 0; --index) {
-        if (m_channel)
-            m_channel->removeNotch(index);
+        if (m_channel && !m_channel->removeNotch(index))
+            return;
+        m_notches.pop_back();
     }
-    m_notches.clear();
 }
 
 void Hl2RxDsp::editNotch(int index, double centerHz, double widthHz, bool active)

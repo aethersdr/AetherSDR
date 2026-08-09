@@ -1299,7 +1299,7 @@ process — so `add` cannot tell you the id it created. Re-poll `notch list`.
 | `action` | `value` | effect |
 |---|---|---|
 | `list` | — | every notch the model holds, plus the radio's declared `maxNotchFilters`, `minWidthHz` and `hasDepth`. **Report the capabilities alongside the list deliberately:** an empty list on a radio that cannot notch is indistinguishable from a notch that was placed and silently dropped, and only `maxNotchFilters` tells the two apart |
-| `add` | `<freqMhz>` | place a notch at an absolute RF frequency. The width comes from the model's create default; pass it and it is echoed but not honoured. Async on Flex (the radio assigns the id) — re-poll `list` |
+| `add` | `<freqMhz> [widthHz]` | place a notch at an absolute RF frequency. The width comes from the model's create default, and a Flex assigns its own regardless — so a width passed here is validated and echoed as `requestedWidthHz`, NOT honoured. The width in `notches` is the one the notch actually got; use `set … width=` to resize. Async on Flex (the radio assigns the id) — re-poll `list` |
 | `set` | `<id> [freq=<mhz>] [width=<hz>] [depth=<1-3>]` | move, resize, or re-depth an existing notch. Each key is applied as its own delta, in the order given — the seam accepts a combined centre+width delta but no caller builds one yet, so a two-key call costs two filter-mask rebuilds. `depth` is Flex-only — a WDSP notch is a full null, and `hasDepth` in `list` says which you have |
 | `remove` | `<id>` | remove a notch. Removal is optimistic in the model, so `list` reflects it immediately |
 | `enable` | `0` / `1` | the global notch bypass (`tnf_enabled` on a Flex). Individual notches keep their own state underneath |

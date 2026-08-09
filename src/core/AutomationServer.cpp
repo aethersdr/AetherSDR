@@ -5927,10 +5927,13 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
     return err(QStringLiteral("unknown txtest action: ") + action + QStringLiteral(" (twotone|off)"));
 }
 
-// ── ATU control (#3646) ─────────────────────────────────────────────────────
-// `atu bypass` takes the tuner out of circuit (no TX), so meter readings see
-// the raw load instead of a recalled antenna match — essential before TX meter
-// measurements. `atu start` runs a tune cycle (keys TX → gated by ALLOW_TX).
+// ── Manual notch filters (#4780) ────────────────────────────────────────────
+// A Flex TNF, or the WDSP null that stands in for one on a radio with no DSP of
+// its own. Everything goes through TnfModel's operator setters so the intent
+// reaches IRadioBackend rather than stopping at the model, and `list` reports
+// the radio's declared capabilities beside the notches: an empty list on a
+// radio that cannot notch is otherwise indistinguishable from a notch that was
+// placed and silently dropped.
 QJsonObject AutomationServer::doNotch(const QString& action, const QString& arg)
 {
     if (!m_radioModel)
@@ -5975,14 +5978,27 @@ QJsonObject AutomationServer::doNotch(const QString& action, const QString& arg)
         const double freqMhz = parts.at(0).toDouble(&ok);
         if (!ok || freqMhz <= 0.0)
             return err(QStringLiteral("notch add: bad frequency: ") + parts.at(0));
-        // The width argument is accepted but the model owns the create width —
-        // see TnfModel::createTnf. Reported back so a caller can see it was not
-        // honoured rather than assuming it was.
+        // The width argument is accepted but the model owns the create width
+        // (TnfModel::createTnf), and a Flex assigns its own regardless. Echoed
+        // back as `requestedWidthHz` so a caller reads it as a request that was
+        // not honoured rather than assuming the notch is that wide — `notches`
+        // in the same reply carries the width it actually got. Still validated:
+        // silently swallowing a typo would be the worse half of both readings.
+        double requestedWidthHz = 0.0;
+        if (parts.size() > 1) {
+            bool widthOk = false;
+            requestedWidthHz = parts.at(1).toDouble(&widthOk);
+            if (!widthOk || requestedWidthHz <= 0.0)
+                return err(QStringLiteral("notch add: bad width: ") + parts.at(1));
+        }
         tnf.createTnf(freqMhz);
-        return QJsonObject{{QStringLiteral("ok"), true},
-                           {QStringLiteral("notch"), QStringLiteral("add")},
-                           {QStringLiteral("freqMhz"), freqMhz},
-                           {QStringLiteral("notches"), snapshot()}};
+        QJsonObject reply{{QStringLiteral("ok"), true},
+                          {QStringLiteral("notch"), QStringLiteral("add")},
+                          {QStringLiteral("freqMhz"), freqMhz},
+                          {QStringLiteral("notches"), snapshot()}};
+        if (requestedWidthHz > 0.0)
+            reply.insert(QStringLiteral("requestedWidthHz"), requestedWidthHz);
+        return reply;
     }
 
     if (action == QLatin1String("set")) {
@@ -6065,6 +6081,10 @@ QJsonObject AutomationServer::doNotch(const QString& action, const QString& arg)
                + QStringLiteral(" (list|add|set|remove|enable)"));
 }
 
+// ── ATU control (#3646) ─────────────────────────────────────────────────────
+// `atu bypass` takes the tuner out of circuit (no TX), so meter readings see
+// the raw load instead of a recalled antenna match — essential before TX meter
+// measurements. `atu start` runs a tune cycle (keys TX → gated by ALLOW_TX).
 QJsonObject AutomationServer::doAtu(const QString& action)
 {
     if (!m_radioModel)

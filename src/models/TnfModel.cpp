@@ -172,6 +172,18 @@ void TnfModel::requestGlobalTnfEnabled(bool on)
 void TnfModel::clear()
 {
     m_tnfs.clear();
+    // The global bypass is session state too, and it has to be reset for the
+    // same reason the notches are: Hl2Backend::connectRadio() puts its own
+    // m_notchesEnabled back to true, and nothing on a host-DSP backend echoes
+    // the flag back the way a Flex's `tnf_enabled` status does. Left alone, an
+    // operator who switched notches off before disconnecting would reconnect to
+    // a toggle reading OFF over a DSP that is notching — and the first notch
+    // they place would be audible with the control that governs it saying it
+    // cannot be. A Flex re-reports the real value at connect either way.
+    if (!m_globalEnabled) {
+        m_globalEnabled = true;
+        emit globalEnabledChanged(m_globalEnabled);
+    }
 }
 
 } // namespace AetherSDR
