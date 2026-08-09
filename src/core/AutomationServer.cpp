@@ -14,6 +14,7 @@
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
+#include "core/backends/hl2/Hl2FreqCal.h"  // freqcal() verb — manual frequency calibration
 #include "core/MeterSurfaces.h"
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
 #include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
@@ -2988,6 +2989,16 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doTune(a.value, a.id);
             });
 
+        // Help stays ONE literal: gen_bridge_docs.py's _ADD_RE captures a single
+        // quoted string for the help field, so a split string loses everything
+        // after the first half in the generated verb table.
+        add("freqcal", {},
+            "freqcal [get|set <ppb>|from_vfo <reference_mhz>|reset] — manual frequency calibration (radios that cannot calibrate themselves)",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doFreqCal(a.action, a.value);
+            });
+
         add("targettune", {},
             "targettune <mhz> — absolute tune through band-stack preselection",
             parseValueOnly,
@@ -3212,6 +3223,16 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doCiv(a.action, a.value);
+            });
+
+        add("controls", {},
+            "controls <map|meters|scrub [id|plane]> — the CI-V control and meter "
+            "registry joined "
+            "against what is actually wired, and a linkage check that drives every "
+            "settable control without moving any of them (Icom)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doControls(a.action, a.value);
             });
 
         add("radiocert", {},
@@ -6584,6 +6605,101 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
                        {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
 }
 
+// ── Manual frequency calibration (HL2) ───────────────────────────
+// get / set <ppb> / from_vfo <reference_mhz> / reset. Only reachable on
+// radios whose host owns the correction (RadioCapabilities::
+// hostFrequencyCalibration).
+QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& value)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (!m_radioModel->backendCapabilities().hostFrequencyCalibration) {
+        // Refuse rather than store. On a radio that calibrates itself there is
+        // nothing to apply this to, and a bridge test that "passed" against a
+        // stored-but-inert number would be testing nothing.
+        return err(QStringLiteral("freqcal: this radio calibrates its own reference"));
+    }
+
+    const RadioSettingsScope scope = m_radioModel->settingsScope();
+    auto report = [&scope](const QString& what) {
+        const int ppb = Hl2FreqCal::loadPpb(scope);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("freqcal"), what},
+            {QStringLiteral("ppb"), ppb},
+            {QStringLiteral("ppm"), ppb / 1000.0},
+            {QStringLiteral("effectiveClockHz"), Hl2FreqCal::effectiveClockHz(ppb)},
+        };
+    };
+
+    const QString verb = action.isEmpty() ? QStringLiteral("get") : action.toLower();
+
+    if (verb == QLatin1String("get"))
+        return report(QStringLiteral("get"));
+
+    // Mutating verbs need a radio identity. With an empty radioId the write
+    // would land on the family-wide default row and be inherited by every other
+    // radio of this family, so refuse rather than return ok:true against a
+    // number that contaminated the wrong radios (AGENTS.md).
+    if (verb != QLatin1String("get") && scope.radioId().isEmpty()) {
+        return err(QStringLiteral("freqcal: no radio identity yet — connect the radio "
+                                  "before calibrating"));
+    }
+
+    auto applyPpb = [this](int ppb) {
+        m_radioModel->invokeBackendExtension(QStringLiteral("hl2"),
+                                             QStringLiteral("freqcal.set"), 0,
+                                             QVariant(ppb));
+    };
+
+    if (verb == QLatin1String("reset")) {
+        applyPpb(0);
+        return report(QStringLiteral("reset"));
+    }
+
+    if (verb == QLatin1String("set")) {
+        bool ok = false;
+        const int ppb = value.trimmed().toInt(&ok);
+        if (!ok)
+            return err(QStringLiteral("freqcal set requires an integer ppb value"));
+        if (ppb != Hl2FreqCal::clampPpb(ppb)) {
+            return err(QStringLiteral("freqcal set: %1 ppb is outside +/-%2 ppb")
+                           .arg(ppb).arg(Hl2FreqCal::kMaxPpb));
+        }
+        applyPpb(ppb);
+        return report(QStringLiteral("set"));
+    }
+
+    if (verb == QLatin1String("from_vfo")) {
+        bool ok = false;
+        const double refMhz = value.trimmed().toDouble(&ok);
+        if (!ok || !(refMhz > 0.0))
+            return err(QStringLiteral("freqcal from_vfo requires a reference in MHz"));
+        double dialledHz = 0.0;
+        for (SliceModel* s : m_radioModel->slices()) {
+            if (s && s->isActive()) { dialledHz = s->frequency() * 1.0e6; break; }
+        }
+        if (!(dialledHz > 0.0))
+            return err(QStringLiteral("freqcal from_vfo: no active slice to read"));
+        const int ppb = Hl2FreqCal::ppbFromZeroBeat(refMhz * 1.0e6, dialledHz);
+        // Same refusal the UI makes: a clamped result means the capture was of
+        // the wrong signal, and committing it would move every band.
+        if (ppb == Hl2FreqCal::kMinPpb || ppb == Hl2FreqCal::kMaxPpb) {
+            return err(QStringLiteral("freqcal from_vfo: %1 MHz against a %2 MHz "
+                                      "reference is more than 50 ppm — wrong signal?")
+                           .arg(dialledHz / 1.0e6, 0, 'f', 6).arg(refMhz, 0, 'f', 6));
+        }
+        applyPpb(ppb);
+        QJsonObject o = report(QStringLiteral("from_vfo"));
+        o.insert(QStringLiteral("referenceMhz"), refMhz);
+        o.insert(QStringLiteral("dialledMhz"), dialledHz / 1.0e6);
+        return o;
+    }
+
+    return err(QStringLiteral("freqcal: unknown action '%1' (get|set|from_vfo|reset)")
+                   .arg(action));
+}
+
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
 // Set a slice's frequency (MHz). The most fundamental control the VfoWidget
 // couldn't expose (it's custom-painted). Honors the slice lock guard. An
@@ -6802,6 +6918,89 @@ QJsonObject AutomationServer::doLiveness()
         out.insert(QStringLiteral("publishedButRenderedNowhere"),
                    QJsonArray::fromStringList(publishedNowhere));
     }
+    return out;
+}
+
+// `controls map` / `controls scrub` — the CI-V control registry.
+//
+// WHY THIS IS A VERB AND NOT A DOCUMENT. A hand-written table of "what is wired"
+// is wrong the moment someone edits a switch statement, and the bring-up proved
+// nobody notices: an RF-gain slider drove the preamp for weeks with a doc that
+// said otherwise. This reads the registry the backend compiles against and joins
+// it with what that backend has actually seen on the wire this session, so the
+// answer cannot drift from the code.
+//
+// `map` is read-only and works with no radio attached. `scrub` needs a radio and
+// re-asserts each control at its current value — nothing on the radio moves, and
+// PTT, the antenna tuner and power-off are excluded outright.
+QJsonObject AutomationServer::doControls(const QString& action, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    IRadioBackend* backend = m_radioModel->backend();
+    if (!backend)
+        return err(QStringLiteral("no backend available"));
+
+    const QString a = action.trimmed().toLower();
+    if (a != QLatin1String("map") && a != QLatin1String("scrub")
+        && a != QLatin1String("meters"))
+        return err(QStringLiteral("controls requires an action (map|meters|scrub)"));
+
+    // NOT TX-GATED, and that is deliberate rather than an oversight — worth
+    // saying because `civ send` a few dozen lines down IS gated on m_txAllowed,
+    // and the next person to read the two side by side will otherwise assume
+    // one of them is wrong.
+    //
+    // `civ send` is gated because it is a raw frame: it can carry 1C 00 and key
+    // the transmitter, and nothing here can tell that from a tuning command.
+    // `scrub` cannot, by construction. It never sends a raw frame — it drives
+    // named seam verbs — and ptt, tuner and power are excluded from the walk
+    // outright (see controlScrub's kNeverScrub). Everything it does send is the
+    // control's CURRENT value, so the transmit-plane rows it does touch
+    // (tx.power, mic.gain, monitor, vox, comp) re-assert what the radio is
+    // already set to without keying anything.
+    //
+    // `map` and `meters` are read-only and would be fine under any rule.
+    //
+    // Same synchronous-extension contract doCiv documents: a backend that does
+    // not answer leaves `answered` false and is reported as unsupported rather
+    // than as an empty success.
+    bool answered = false;
+    bool failed = false;
+    QVariant payload;
+    QString failure;
+    const quint64 rid = ++m_extensionRequestId;
+    auto okConn = connect(backend, &IRadioBackend::extensionResult, this,
+                          [&](quint64 id, const QVariant& v) {
+        if (id != rid) return;
+        answered = true;
+        payload = v;
+    }, Qt::DirectConnection);
+    auto errConn = connect(backend, &IRadioBackend::extensionError, this,
+                           [&](quint64 id, const QString& msg) {
+        if (id != rid) return;
+        answered = true;
+        failed = true;
+        failure = msg;
+    }, Qt::DirectConnection);
+
+    backend->invokeExtension(QStringLiteral("icom"),
+                             a == QLatin1String("map")    ? QStringLiteral("controls.map")
+                             : a == QLatin1String("meters") ? QStringLiteral("controls.meters")
+                                                            : QStringLiteral("controls.scrub"),
+                             rid, arg.trimmed());
+    disconnect(okConn);
+    disconnect(errConn);
+
+    if (!answered) {
+        return err(QStringLiteral(
+            "this backend has no control registry — `controls` is Icom-only today"));
+    }
+    if (failed)
+        return err(failure);
+
+    QJsonObject out{{QStringLiteral("ok"), true}, {QStringLiteral("controls"), a}};
+    out.insert(QStringLiteral("result"), QJsonValue::fromVariant(payload));
     return out;
 }
 

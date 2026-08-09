@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 188 touchpoint headers (158 core, 30 models) — 142/188 tagged, 0/188 converted.
+**Totals:** 190 touchpoint headers (160 core, 30 models) — 142/190 tagged, 0/190 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -54,6 +54,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/DvkWavTransfer.h` | 2 | vendor(flex) — DVK WAV upload/download via SmartSDR 'dvk' verbs + ad-hoc TCP port streaming; FlexLib 5MB limit baked in | unconverted |
 | `core/DxClusterClient.h` | 3 | universal — Telnet DX cluster spot client (Spider/AR/CC); emits radio-agnostic DxSpot on canonical freq state. | unconverted |
 | `core/DxccColorProvider.h` | 2 | universal — DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature | unconverted |
+| `core/EibiClient.h` | 3 | — | unconverted |
 | `core/FirmwareStager.h` | 1 | vendor(flex) — Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload — pure Flex | unconverted |
 | `core/FirmwareUploader.h` | 1 | vendor(flex) — SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 — pure Flex protocol | unconverted |
 | `core/FlexControlManager.h` | 2 | ui-support — FlexControl USB knob serial driver (VID 0x2192) — a desktop input-surface driver, the same class as HidEncoderManager (RC-28/TMate)/UlanziDialBackend/SerialPortController, all ui-support. Flex-branded hardware but client-side input, not radio-family wire; NOT behind the radio seam (reclassified from vendor(flex), #4089). | unconverted |
@@ -153,6 +154,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/hl2/Hl2Backend.h` | 1 | — | unconverted |
 | `core/backends/hl2/Hl2Discovery.h` | 3 | — | unconverted |
 | `core/backends/hl2/Hl2EmergencyStop.h` | 1 | — | unconverted |
+| `core/backends/hl2/Hl2FreqCal.h` | 1 | — | unconverted |
 | `core/backends/hl2/MetisProtocol.h` | 1 | — | unconverted |
 | `core/backends/icom/IcomCredentials.h` | 1 | — | unconverted |
 | `core/backends/icom/IcomSettings.h` | 1 | — | unconverted |
@@ -169,7 +171,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/AetherClockModel.h` | 2 | — | unconverted |
 | `models/AntennaGeniusModel.h` | 4 | peripheral(4o3a) — 4O3A Antenna Genius switch client — standalone accessory with its own UDP-broadcast discovery (port 9007) + direct TCP; connects by device IP/port independent of the radio, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
 | `models/BandDefs.h` | 4 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
-| `models/BandPlanManager.h` | 7 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
+| `models/BandPlanManager.h` | 8 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 5 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
 | `models/CwxModel.h` | 1 | universal — CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name. | unconverted |
 | `models/DStarModel.h` | 1 | — | unconverted |

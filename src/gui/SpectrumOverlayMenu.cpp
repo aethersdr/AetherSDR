@@ -617,7 +617,7 @@ void SpectrumOverlayMenu::buildAntPanel()
             QSignalBlocker sb(m_rfGainSlider);
             m_rfGainSlider->setValue(snapped);
         }
-        m_rfGainLabel->setText(QString("%1 dB").arg(snapped));
+        m_rfGainLabel->setText(QString("%1%2").arg(snapped).arg(m_rfGainUnitSuffix));
         // Only emit when the snapped value actually differs from the last
         // emitted one. Mouse drags within a single step fire valueChanged
         // with many unsnapped values that all round to the same snapped
@@ -629,6 +629,98 @@ void SpectrumOverlayMenu::buildAntPanel()
             if ((!m_radioModel || m_panId.isEmpty()) && m_slice)
                 m_slice->setRfGain(static_cast<float>(snapped));
         }
+    });
+
+    // Discrete front-end stages — the preamp and the attenuator, one row each,
+    // in the same label + control shape as RX ANT and RF Gain above. Both rows
+    // are hidden entirely on a radio that publishes no positions for them,
+    // which is every family except Icom today.
+    //
+    // The BUTTON CARRIES ONLY THE POSITION ("P.AMP2", "20 dB", "OFF"); what
+    // control it is belongs to the label. Putting both in the button gave
+    // "PRE: P.AMP2" in a 56 px cell inside a fixed 180 px panel, which clipped
+    // to "PRE: P.A" — a control naming a state the operator cannot read.
+    const QString kFrontEndBtnStyle =
+        "QPushButton { background: {{color.background.1}}; "
+        "border: 1px solid {{color.background.2}}; border-radius: 3px; "
+        "color: {{color.text.secondary}}; font-size: 11px; padding: 1px 4px; }"
+        "QPushButton:hover { border-color: {{color.accent.bright}}; }"
+        "QPushButton:checked { background: {{color.accent.dim}}; "
+        "border-color: {{color.accent.bright}}; color: {{color.text.primary}}; }";
+
+    // CLICK ADVANCES ONE POSITION, and the button does not own the result: it
+    // emits the request and repaints from whatever the radio reports back. A
+    // checkable QPushButton would otherwise show the position the operator
+    // asked for even when the radio refused it — which an IC-705 does for
+    // P.AMP2 and for the attenuator above 50 MHz.
+    const auto makeFrontEndRow = [&](const QString& labelText, const QString& objectName,
+                                     const QString& a11yName,
+                                     QPushButton** btnOut) -> QWidget* {
+        auto* rowWidget = new QWidget;
+        // NO BOX AROUND THE ROW. kPanelStyle sets "QWidget { border: 1px solid
+        // ...; background: ... }" on the ANT panel, and Qt descendant-matches a
+        // bare type selector onto every child QWidget — so a row that is a real
+        // widget draws the panel's own frame around itself. The rows above are
+        // bare QHBoxLayouts added straight to the panel's vbox and have no
+        // container to catch it; these two need containers so each can hide
+        // independently, and therefore have to opt out explicitly.
+        rowWidget->setStyleSheet(
+            QStringLiteral("QWidget { border: none; background: transparent; }"));
+        auto* row = new QHBoxLayout(rowWidget);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(4);
+        auto* label = new QLabel(labelText);
+        label->setStyleSheet(kLabelStyle);
+        label->setFixedWidth(kLabelW);
+        row->addWidget(label);
+        auto* btn = new QPushButton(QStringLiteral("OFF"));
+        btn->setObjectName(objectName);
+        btn->setAccessibleName(a11yName);
+        btn->setCheckable(true);
+        btn->setFixedHeight(22);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, kFrontEndBtnStyle);
+        row->addWidget(btn, 1);
+        rowWidget->setVisible(false);
+        vbox->addWidget(rowWidget);
+        *btnOut = btn;
+        return rowWidget;
+    };
+
+    m_preampRow = makeFrontEndRow(QStringLiteral("Preamp:"),
+                                  QStringLiteral("panPreampBtn"),
+                                  tr("Receive preamp"), &m_preampBtn);
+    m_attenuatorRow = makeFrontEndRow(QStringLiteral("Atten:"),
+                                      QStringLiteral("panAttenuatorBtn"),
+                                      tr("Receive attenuator"), &m_attenuatorBtn);
+
+    // CLICK ADVANCES ONE POSITION, and refreshFrontEndButtons is the SOLE owner
+    // of what the button then shows.
+    //
+    // This used to emit the request and then restore the button to its
+    // pre-click checked state, on the theory that the radio's echo would set
+    // the real one. Two things were wrong with that. The echo does not exist —
+    // an IC-705 answers a set with a bare FB and never reports the new value —
+    // and the restore ran AFTER the emit, which is synchronous all the way to
+    // the model and back, so even once the backend began publishing its own
+    // adopted value this line overwrote it. The control cycled OFF -> P.AMP1
+    // and then stuck there.
+    //
+    // So: emit, then repaint from the model. If the radio refuses the request
+    // (no P.AMP2 above 50 MHz, no attenuator there at all) its next
+    // unsolicited report corrects the model and this repaints again.
+    const auto cycle = [this](const QStringList& labels, int current, auto&& emitStep) {
+        if (labels.size() < 2)
+            return;
+        emitStep((current + 1) % labels.size());
+        refreshFrontEndButtons();
+    };
+    connect(m_preampBtn, &QPushButton::clicked, this, [this, cycle] {
+        cycle(m_preampLabels, m_preampStep,
+              [this](int step) { emit preampStepChanged(step); });
+    });
+    connect(m_attenuatorBtn, &QPushButton::clicked, this, [this, cycle] {
+        cycle(m_attenuatorLabels, m_attenuatorStep,
+              [this](int step) { emit attenuatorStepChanged(step); });
     });
 
     // WNB row: toggle button + level slider
@@ -1006,7 +1098,8 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
         m_updatingFromModel = true;
         QSignalBlocker sb(m_rfGainSlider);
         m_rfGainSlider->setValue(static_cast<int>(gain));
-        m_rfGainLabel->setText(QString("%1 dB").arg(static_cast<int>(gain)));
+        m_rfGainLabel->setText(
+            QString("%1%2").arg(static_cast<int>(gain)).arg(m_rfGainUnitSuffix));
         m_updatingFromModel = false;
     });
 
@@ -1030,7 +1123,12 @@ void SpectrumOverlayMenu::syncAntPanel()
         QSignalBlocker sb(m_rfGainSlider);
         m_rfGainSlider->setValue(gain);
     }
-    m_rfGainLabel->setText(QString("%1 dB").arg(gain));
+    // THE UNIT, not a hardcoded " dB". This is the site that undid the other
+    // three: setRfGainRange had already published "%" and setRfGain had
+    // rendered it, and then syncAntPanel — which runs on every antenna and
+    // slice sync — repainted the same number with a decibel suffix the radio
+    // never claimed.
+    m_rfGainLabel->setText(QString("%1%2").arg(gain).arg(m_rfGainUnitSuffix));
     m_updatingFromModel = false;
     updateLoopButtonVisibility();
 }
@@ -2591,22 +2689,99 @@ void SpectrumOverlayMenu::setRfGain(int gain)
 {
     QSignalBlocker b(m_rfGainSlider);
     m_rfGainSlider->setValue(gain);
-    m_rfGainLabel->setText(QString("%1 dB").arg(gain));
+    m_rfGainLabel->setText(QString("%1%2").arg(gain).arg(m_rfGainUnitSuffix));
     m_lastEmittedRfGain = gain;  // keep emit-dedupe in sync with external updates
 }
 
-void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step)
+void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step,
+                                         const QString& unitSuffix)
 {
     if (!m_rfGainSlider) return;
+    m_rfGainUnitSuffix = unitSuffix;
     QSignalBlocker b(m_rfGainSlider);
     m_rfGainSlider->setRange(low, high);
     m_rfGainSlider->setSingleStep(step);
     m_rfGainSlider->setPageStep(step);
     m_rfGainSlider->setTickInterval(step);
+    // The unit comes from the backend, so the tooltip cannot hardcode "dB"
+    // either — it said "dB" over a control that was three preamp positions.
+    const QString unitWord = unitSuffix.trimmed().isEmpty()
+        ? QStringLiteral("step") : unitSuffix.trimmed();
     m_rfGainSlider->setToolTip(
-        QString("RF Gain: %1 to %2%3 dB (%4 dB steps)\n"
-                "Step size is determined by radio hardware.")
-            .arg(low).arg(high > 0 ? "+" : "").arg(high).arg(step));
+        QString("RF Gain: %1%2 to %3%4%2 (%5%2 steps)\n"
+                "Range and step are reported by the radio.")
+            .arg(low).arg(unitWord).arg(high > 0 ? "+" : "").arg(high).arg(step));
+    // Re-render the readout in the new unit, or the number keeps the previous
+    // radio's suffix until the operator next moves the slider.
+    if (m_rfGainLabel) {
+        m_rfGainLabel->setText(
+            QString("%1%2").arg(m_rfGainSlider->value()).arg(m_rfGainUnitSuffix));
+    }
+}
+
+// ── Discrete receive front-end stages ────────────────────────────────────────
+//
+// Cycling buttons, not sliders. These are named positions with no numeric
+// relationship — "OFF / P.AMP1 / P.AMP2" is not a scale, and a slider over it
+// invites the reading that P.AMP2 is twice P.AMP1. The button shows where the
+// control IS and clicking advances one position, wrapping at the end.
+void SpectrumOverlayMenu::setPreampLabels(const QStringList& labels)
+{
+    m_preampLabels = labels;
+    if (m_preampStep >= labels.size())
+        m_preampStep = 0;
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::setPreampStep(int step)
+{
+    m_preampStep = std::clamp(step, 0, std::max(0, static_cast<int>(m_preampLabels.size()) - 1));
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::setAttenuatorLabels(const QStringList& labels)
+{
+    m_attenuatorLabels = labels;
+    if (m_attenuatorStep >= labels.size())
+        m_attenuatorStep = 0;
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::setAttenuatorStep(int step)
+{
+    m_attenuatorStep =
+        std::clamp(step, 0, std::max(0, static_cast<int>(m_attenuatorLabels.size()) - 1));
+    refreshFrontEndButtons();
+}
+
+void SpectrumOverlayMenu::refreshFrontEndButtons()
+{
+    if (!m_preampRow || !m_attenuatorRow)
+        return;
+
+    // A one-entry list is not a control. A radio that reports only "OFF" has
+    // nothing to switch between, and a button that can never change is worse
+    // than no button at all.
+    const auto apply = [](QWidget* row, QPushButton* btn, const QStringList& labels,
+                          int step, const QString& what) {
+        const bool present = labels.size() > 1;
+        row->setVisible(present);
+        if (!present)
+            return;
+        const QString position = labels.at(std::clamp(step, 0, static_cast<int>(labels.size()) - 1));
+        btn->setText(position);
+        // Lit when it is doing something. Position 0 is the off position by the
+        // convention the backend publishes its label list in.
+        QSignalBlocker b(btn);
+        btn->setChecked(step > 0);
+        btn->setToolTip(QStringLiteral("Receive %1 — %2.\nClick to step through: %3")
+                            .arg(what, position, labels.join(" / ")));
+    };
+
+    apply(m_preampRow, m_preampBtn, m_preampLabels, m_preampStep,
+          QStringLiteral("preamp"));
+    apply(m_attenuatorRow, m_attenuatorBtn, m_attenuatorLabels, m_attenuatorStep,
+          QStringLiteral("attenuator"));
 }
 
 void SpectrumOverlayMenu::setLoopState(bool loopA, bool loopB)

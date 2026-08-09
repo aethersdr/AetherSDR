@@ -123,7 +123,30 @@ public:
     // owns a DDC moves the NCO. Without this the UI can pan the view locally
     // while the data keeps arriving from the old window, and the waterfall
     // (which carries its own frequency extent) drifts off the display.
-    virtual void setPanCenter(const QString& panId, double hz) = 0;
+    //
+    // WHY THE CENTRE CARRIES AN INTENT. On a radio whose scope window is slaved
+    // to the operating frequency — every networked Icom in centre mode — moving
+    // the window IS retuning, and the two callers of this verb want opposite
+    // things from that. A DRAG is the operator asking to look somewhere else
+    // and expecting the trace to follow the mouse. A ZOOM sends the centre only
+    // because centre and bandwidth must travel together, and must not walk the
+    // VFO across the band one click at a time. A backend that cannot tell them
+    // apart has to choose which caller to break; every backend whose window is
+    // genuinely independent of the VFO ignores this and treats both alike.
+    enum class PanCenterIntent {
+        Drag,   // the operator dragged the spectrum or waterfall
+        Range,  // the centre rode along with a bandwidth/zoom change
+    };
+    // NO DEFAULT, deliberately. A default here is not merely redundant with the
+    // pure-virtual-plus-override pair that catches implementations: it is a
+    // hazard at CALL sites. A new caller that forgets the intent would silently
+    // get Range, which on a backend whose scope window is slaved to the VFO
+    // means the drag is refused and re-asserted — the precise bug this
+    // parameter was added to fix, arriving with nothing to notice it by.
+    // Making every caller state what it means is the whole value of the
+    // parameter, and there is exactly one caller.
+    virtual void setPanCenter(const QString& panId, double hz,
+                              PanCenterIntent intent) = 0;
 
     // Change the panadapter's SPAN — how much spectrum the window covers.
     //
@@ -173,6 +196,24 @@ public:
     {
         Q_UNUSED(panId);
         Q_UNUSED(gainDb);
+    }
+
+    // The discrete front-end stages above. `step` indexes the label list the
+    // backend published; a backend clamps rather than refuses, exactly as
+    // setPanRfGain does.
+    //
+    // Default no-op AND no capability flag: the empty label list a backend
+    // publishes by default already hides the control, so a family without these
+    // stages needs no declaration and cannot be asked for one.
+    virtual void setPanPreamp(const QString& panId, int step)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(step);
+    }
+    virtual void setPanAttenuator(const QString& panId, int step)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(step);
     }
 
     // How often the operator wants panadapter frames, in frames per second.
@@ -321,6 +362,34 @@ public:
         Q_UNUSED(level);
     }
 
+    // VOX — the enable, the trigger threshold and the hang time.
+    //
+    // Three together for the same reason the speech processor's two are: they
+    // are one control to the operator and separate registers on the radio, and
+    // a backend receives all of them so it can decide how to spend them. An
+    // IC-705 has 16 46 for the enable and 14 16 / 14 17 for level and delay; a
+    // radio with fewer ignores what it does not have.
+    //
+    // Default no-op: a Flex takes VOX as text from TransmitModel.
+    virtual void setVox(bool on, int level, int delayMs)
+    {
+        Q_UNUSED(on); Q_UNUSED(level); Q_UNUSED(delayMs);
+    }
+
+    // The ANTENNA TUNER, and NOT setTune().
+    //
+    // These are two different things that both say "tune", and conflating them
+    // is how an operator ends up running a matching cycle on an ATU that may
+    // not be attached. setTune() emits a steady carrier for adjusting an
+    // external amplifier; this runs the radio's own matching cycle.
+    //
+    // `start` true begins a cycle, false bypasses. What the tuner then did
+    // comes back on transmitChanged's ATU fields.
+    //
+    // KEYS THE TRANSMITTER on a radio with a real ATU, so it sits behind the
+    // same TX gate as every other keying intent.
+    virtual void setAtu(bool start) { Q_UNUSED(start); }
+
     // Receive and transmit incremental tuning. Hz relative to the VFO.
     //
     // Two enables and one offset, because that is the shape every radio that
@@ -350,6 +419,22 @@ public:
     virtual void setSliceAutoNotch(int sliceId, bool on)
     {
         Q_UNUSED(sliceId); Q_UNUSED(on);
+    }
+    // The radio's single operator-placed notch — capabilities().hasManualNotch.
+    //
+    // `position` is 0..100 across the receive passband, NOT a frequency. That is
+    // the shape the register has: an IC-705 takes 14 0D as 0000..0255 spanning
+    // whatever the current filter is, so the notch moves with the passband and
+    // an absolute frequency would have to be re-derived on every filter change.
+    // A backend whose notch IS frequency-placed converts here, where it knows
+    // its own passband, rather than making every caller do it.
+    //
+    // Enable and position travel together for the same reason the noise verbs
+    // do: turning the notch on without placing it puts it wherever the radio
+    // last left it, which is not where the operator's slider is.
+    virtual void setSliceManualNotch(int sliceId, bool on, int position)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(position);
     }
     virtual void setSliceSquelch(int sliceId, bool on, int level)
     {
@@ -710,7 +795,37 @@ signals:
     //
     // A backend that doesn't know simply never emits this and the model keeps
     // its existing defaults, so this is additive for Flex.
-    void panRfGainInfoChanged(const QString& panId, int low, int high, int step);
+    // `unitSuffix` is what the readout appends to the number — " dB" for a real
+    // gain register, "%" for a radio whose RF gain is an opaque 0..255 scale
+    // with no published dB mapping. Defaulted so every existing emitter is
+    // unchanged, and so a backend that stays silent still reads as dB.
+    //
+    // It exists because the readout used to hardcode " dB" while the Icom
+    // backend was pointing this slider at a THREE-POSITION PREAMP: the operator
+    // saw "0 dB / 1 dB / 2 dB" for what the radio calls OFF / P.AMP1 / P.AMP2,
+    // and none of those numbers was a decibel of anything.
+    void panRfGainInfoChanged(const QString& panId, int low, int high, int step,
+                              const QString& unitSuffix = QStringLiteral(" dB"));
+
+    // DISCRETE receive front-end stages, which a continuous gain slider cannot
+    // represent honestly: a preamp with named positions, and a stepped
+    // attenuator. Both are "which position", never "how much".
+    //
+    // `labels` names every position in order, and its SIZE is the control's
+    // range — {"OFF", "P.AMP1", "P.AMP2"} is a three-position preamp addressed
+    // as 0, 1, 2. An EMPTY list means the radio has no such stage and the
+    // control does not appear; that is the default for every backend, so this
+    // is additive.
+    //
+    // Names, not numbers, because the numbers are not physical. An IC-705's
+    // preamp positions have no published gain figures and its attenuator has
+    // exactly one step (20 dB, HF and 50 MHz only) — so a slider reading
+    // "0/1/2" or "0-1" invents a scale the radio does not have. What the
+    // hardware took comes back on panPreampChanged / panAttenuatorChanged.
+    void panPreampInfoChanged(const QString& panId, const QStringList& labels);
+    void panPreampChanged(const QString& panId, int step);
+    void panAttenuatorInfoChanged(const QString& panId, const QStringList& labels);
+    void panAttenuatorChanged(const QString& panId, int step);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

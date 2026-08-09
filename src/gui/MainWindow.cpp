@@ -444,6 +444,59 @@ QString statusBarVersionText(const QString& label, const QString& version)
     return QStringLiteral("%1 %2").arg(label, version);
 }
 
+// Does the model string already say who made the radio?
+//
+// "FLEX-8400M" does; "IC-705" does not, and neither does "705". The test is
+// whether the model STARTS WITH the manufacturer's leading word once both are
+// reduced to letters and digits — a containment test anywhere in the string
+// would match coincidences, and comparing the whole brand would fail the case
+// this exists for ("flexradio" vs "flex8400m").
+//
+// Returns false for an empty manufacturer, so a backend that reports none gets
+// no brand row rather than a blank one.
+bool modelStringCarriesManufacturer(const QString& model, const QString& manufacturer)
+{
+    const auto reduce = [](const QString& s) {
+        QString out;
+        for (const QChar c : s) {
+            if (c.isLetterOrNumber()) {
+                out.append(c.toLower());
+            }
+        }
+        return out;
+    };
+
+    const QString make = reduce(manufacturer);
+    if (make.isEmpty()) {
+        return true;   // nothing to show — treat as "already carried"
+    }
+
+    // The manufacturer's leading WORD, which is what a model string actually
+    // repeats. A word ends at a non-letter or at a lower->upper case boundary,
+    // so "FlexRadio" -> "flex" (which "FLEX-8400M" does start with, while
+    // "flexradio" would not), "Hermes-Lite" -> "hermes", "Icom" -> "icom".
+    QString leadingWord;
+    bool previousWasLower = false;
+    for (const QChar c : manufacturer) {
+        if (!c.isLetter()) {
+            if (!leadingWord.isEmpty()) {
+                break;
+            }
+            continue;
+        }
+        if (previousWasLower && c.isUpper()) {
+            break;
+        }
+        previousWasLower = c.isLower();
+        leadingWord.append(c.toLower());
+    }
+    if (leadingWord.isEmpty()) {
+        leadingWord = make;
+    }
+
+    return reduce(model).startsWith(leadingWord);
+}
+
 QString vfoFrequencyText(double mhz)
 {
     const long long hz = static_cast<long long>(std::round(mhz * 1e6));
@@ -1765,6 +1818,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_radioVersionLabel && !m_radioModel.version().isEmpty())
             m_radioVersionLabel->setText(statusBarVersionText(
                 m_radioModel.versionLabel(), m_radioModel.version()));
+        refreshRadioIdentityLabels();
         // The station/nickname label is set once in onConnectionStateChanged, but
         // the nickname can land afterwards via a radio-status delta — for a real
         // radio the async "info" reply corrects it, and for the demo SimBackend
@@ -4942,12 +4996,25 @@ void MainWindow::buildUI()
 
     addSep();
 
-    // Radio model (top) + version (bottom) stacked
+    // Manufacturer (top) + radio model (middle) + version (bottom) stacked.
+    //
+    // THREE SLOTS, NEVER THREE ROWS. The status bar is a fixed 46 px and a 12 px
+    // label needs ~16, so a third visible row does not fit — which is fine,
+    // because no radio fills all three. A Flex's model string carries its own
+    // brand ("FLEX-8400M"), so the make row is hidden and the stack reads
+    // model + version exactly as before; an Icom reports "IC-705" and no
+    // firmware version at all, so it reads make + model. Each label is hidden
+    // when it has nothing to say, so the stack is always two rows tall.
     auto* radioStack = new QWidget;
     auto* radioVbox = new QVBoxLayout(radioStack);
     radioVbox->setContentsMargins(0, 0, 0, 0);
     radioVbox->setSpacing(0);
     radioVbox->setAlignment(Qt::AlignVCenter);
+    m_radioMakeLabel = new QLabel("");
+    applyStatusBarCompactLabelStyle(m_radioMakeLabel, QStringLiteral("{{color.text.secondary}}"));
+    m_radioMakeLabel->setAlignment(Qt::AlignCenter);
+    m_radioMakeLabel->setVisible(false);
+    radioVbox->addWidget(m_radioMakeLabel);
     m_radioInfoLabel = new QLabel("");
     applyStatusBarCompactLabelStyle(m_radioInfoLabel, QStringLiteral("{{color.text.secondary}}"));
     m_radioInfoLabel->setAlignment(Qt::AlignCenter);
@@ -5541,6 +5608,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_radioInfoLabel->setText(m_radioModel.model());
         m_radioVersionLabel->setText(statusBarVersionText(
             m_radioModel.versionLabel(), m_radioModel.version()));
+        refreshRadioIdentityLabels();
         setStatusBarStationText(m_stationLabel, m_radioModel.nickname());
         updateStatusBarMinimumWidth();
         m_connStatusLabel->setText("Connected");
@@ -5844,6 +5912,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_connStatusLabel->setText(terminalConnectionFailure ? "Error" : "Disconnected");
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");
+        m_radioManufacturer.clear();
+        refreshRadioIdentityLabels();
         setStatusBarStationText(m_stationLabel, QStringLiteral("N0CALL"));
         updateStatusBarMinimumWidth();
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_tnfIndicator, "QLabel { color: {{color.background.2}}; font-weight: bold; font-size: 24px; }");
@@ -6541,10 +6611,42 @@ void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
     menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
 }
 
+// Repaint the make / model / version stack from whatever is currently known.
+//
+// One owner for all three labels, because their inputs arrive on different
+// signals: the model and version come with infoChanged, the manufacturer with
+// capabilitiesChanged, and either can land first. Each label hides when it has
+// nothing to say — see the stack's construction for why the third row must
+// never be visible at the same time as the other two.
+void MainWindow::refreshRadioIdentityLabels()
+{
+    if (!m_radioInfoLabel || !m_radioVersionLabel || !m_radioMakeLabel) {
+        return;
+    }
+
+    const QString model = m_radioInfoLabel->text();
+    const bool showMake = !m_radioManufacturer.isEmpty()
+                          && !model.isEmpty()
+                          && !modelStringCarriesManufacturer(model, m_radioManufacturer);
+    m_radioMakeLabel->setText(showMake ? m_radioManufacturer : QString());
+    m_radioMakeLabel->setVisible(showMake);
+    m_radioInfoLabel->setVisible(!model.isEmpty());
+    m_radioVersionLabel->setVisible(!m_radioVersionLabel->text().isEmpty());
+    updateStatusBarMinimumWidth();
+}
+
 void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps)
 {
     // See the header for why every flag is `!connected || caps.x` and why each
     // surface gets exactly one owning call.
+
+    // ── Status-bar identity: who made the radio ───────────────────────────
+    // NOT `!connected || caps.manufacturer` — the permissive-on-disconnect rule
+    // is for controls that would look broken when greyed out with no radio
+    // attached. A brand name is a fact about a connected radio, so it clears
+    // with the rest of the identity block.
+    m_radioManufacturer = connected ? caps.manufacturer : QString();
+    refreshRadioIdentityLabels();
 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
@@ -6634,6 +6736,17 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // Both accessors apply their own permissive rule for the disconnected case,
     // which is why neither reads off `caps` here.
     const bool radioSideDsp = m_radioModel.hasRadioSideDsp();
+    // The two NARROWER claims under it, read straight off `caps`.
+    //
+    // No permissive-on-disconnect rule for either, and they differ on which way
+    // that falls. hasLmsNoiseFilters follows radioSideDsp's own accessor
+    // upstream — with no radio attached radioSideDsp is already permissive, so
+    // taking caps here would hide NRL/ANFL/ANFT on the disconnect edge of a
+    // Flex session; it therefore only narrows while CONNECTED. hasManualNotch
+    // is the reverse: MN is a new button that must not appear on a radio that
+    // has not claimed it, disconnected included.
+    const bool lmsNoiseFilters = !connected || caps.hasLmsNoiseFilters;
+    const bool manualNotch = connected && caps.hasManualNotch;
 
     if (m_panStack) {
         for (auto* applet : m_panStack->allApplets()) {
@@ -6644,6 +6757,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             for (auto* vfo : sw->findChildren<VfoWidget*>()) {
                 vfo->setHasExtendedDsp(extendedDsp);
                 vfo->setHasRadioSideDsp(radioSideDsp);
+                vfo->setHasLmsNoiseFilters(lmsNoiseFilters);
+                vfo->setHasManualNotch(manualNotch);
+                // The VFO's filter grid and the RX applet's are two views of one
+                // radio; only the applet was being told what the hardware has.
+                vfo->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
+                                                    : QList<int>{});
             }
             // WNB lives in the pan's overlay menu, not the VFO.
             applyRadioSideDspToPanDisplay(sw);

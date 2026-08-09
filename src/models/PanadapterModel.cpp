@@ -65,12 +65,49 @@ bool PanadapterModel::ownedByClient(quint32 handle) const
     return m_ownerHandle == 0 || m_ownerHandle == handle;
 }
 
-void PanadapterModel::setRfGainInfo(int low, int high, int step)
+void PanadapterModel::setRfGainInfo(int low, int high, int step,
+                                    const QString& unitSuffix)
 {
     m_rfGainLow = low;
     m_rfGainHigh = high;
     m_rfGainStep = step;
-    emit rfGainInfoChanged(low, high, step);
+    m_rfGainUnitSuffix = unitSuffix;
+    emit rfGainInfoChanged(low, high, step, unitSuffix);
+}
+
+// Change-gated, all four. The Icom backend republishes its front-end
+// description on every reconnect and the labels are identical each time; an
+// ungated emit would rebuild the buttons for no reason.
+void PanadapterModel::setPreampLabels(const QStringList& labels)
+{
+    if (labels == m_preampLabels)
+        return;
+    m_preampLabels = labels;
+    emit preampLabelsChanged(m_preampLabels);
+}
+
+void PanadapterModel::setPreampStep(int step)
+{
+    if (step == m_preampStep)
+        return;
+    m_preampStep = step;
+    emit preampStepChanged(m_preampStep);
+}
+
+void PanadapterModel::setAttenuatorLabels(const QStringList& labels)
+{
+    if (labels == m_attenuatorLabels)
+        return;
+    m_attenuatorLabels = labels;
+    emit attenuatorLabelsChanged(m_attenuatorLabels);
+}
+
+void PanadapterModel::setAttenuatorStep(int step)
+{
+    if (step == m_attenuatorStep)
+        return;
+    m_attenuatorStep = step;
+    emit attenuatorStepChanged(m_attenuatorStep);
 }
 
 bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)

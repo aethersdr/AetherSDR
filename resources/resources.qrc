@@ -8,6 +8,7 @@
              The demo radio's Voice channel loops this so NR/notch have real speech
              to preserve and ASR (Copy Assist) has real words. No copyright. ~457 KB. -->
         <file alias="demo_voice.wav">demo_voice.wav</file>
+        <file alias="dist.dx_community.json">dist.dx_community.json</file>
     </qresource>
     <qresource prefix="/bandplans">
         <file alias="arrl-us.json">bandplans/arrl-us.json</file>

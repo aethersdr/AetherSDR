@@ -389,11 +389,13 @@ void TransmitModel::setTransmitting(bool tx)
 void TransmitModel::atuStart()
 {
     emit commandReady("atu start");
+    emit atuCommandIssued(true);
 }
 
 void TransmitModel::atuBypass()
 {
     emit commandReady("atu bypass");
+    emit atuCommandIssued(false);
 }
 
 void TransmitModel::setAtuMemories(bool on)
@@ -562,6 +564,7 @@ void TransmitModel::setVoxEnable(bool on)
     m_voxEnable = on;  // optimistic update — radio may not echo
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_enable=%1").arg(on ? 1 : 0));
+    emit voxCommandIssued(on, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setVoxLevel(int level)
@@ -570,6 +573,7 @@ void TransmitModel::setVoxLevel(int level)
     m_voxLevel = level;
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_level=%1").arg(level));
+    emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setVoxDelay(int delay)
@@ -578,6 +582,7 @@ void TransmitModel::setVoxDelay(int delay)
     m_voxDelay = delay;
     emit phoneStateChanged();
     emit commandReady(QString("transmit set vox_delay=%1").arg(delay));
+    emit voxCommandIssued(m_voxEnable, m_voxLevel, m_voxDelay);
 }
 
 void TransmitModel::setMicBoost(bool on)

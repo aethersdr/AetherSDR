@@ -1566,6 +1566,41 @@ void MainWindow::wirePanLifecycle()
             applet->spectrumWidget()->setRfGain(gain);
             applet->spectrumWidget()->overlayMenu()->setRfGain(gain);
         });
+        // Discrete front-end stages. Model -> menu for the description and the
+        // current position; menu -> model for the operator's request. The menu
+        // never sets its own state from a click — see the cycle lambda there.
+        connect(pan, &PanadapterModel::preampLabelsChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setPreampLabels);
+        connect(pan, &PanadapterModel::preampStepChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setPreampStep);
+        connect(pan, &PanadapterModel::attenuatorLabelsChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setAttenuatorLabels);
+        connect(pan, &PanadapterModel::attenuatorStepChanged,
+                applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::setAttenuatorStep);
+        connect(applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::preampStepChanged,
+                this, [this, panId = pan->panId()](int step) {
+            m_radioModel.setPanPreampFor(panId, step);
+        });
+        connect(applet->spectrumWidget()->overlayMenu(),
+                &SpectrumOverlayMenu::attenuatorStepChanged,
+                this, [this, panId = pan->panId()](int step) {
+            m_radioModel.setPanAttenuatorFor(panId, step);
+        });
+        // Seed from whatever the model already holds: this wiring can run after
+        // the backend has published, and a control built empty would stay empty
+        // until the operator moved something on the radio.
+        applet->spectrumWidget()->overlayMenu()->setRfGainRange(
+            pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
+            pan->rfGainUnitSuffix());
+        applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
+        applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
+        applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
+        applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and

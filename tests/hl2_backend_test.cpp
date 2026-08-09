@@ -165,7 +165,14 @@ int main(int argc, char** argv)
     check(caps.canTransmit, "canTransmit is true for an interactive run");
     check(caps.maxSlices == 1, "one slice");
     check(caps.sampleRatesHz.contains(48000) && caps.sampleRatesHz.contains(384000), "sample rates");
-    check(caps.extensionNamespaces.isEmpty(), "no extension namespaces advertised");
+    // "hl2" since manual frequency calibration landed (freqcal.get / .set /
+    // .set_live). This field is the handshake a client pre-checks before it
+    // issues invokeExtension(), so it has to name every namespace the backend
+    // actually answers — an empty list here while the verbs work would report
+    // the opposite of the truth. The unknown-verb path is still an error; see
+    // the invokeExtension case below.
+    check(caps.extensionNamespaces == QVector<QString>{QStringLiteral("hl2")},
+          "advertises the hl2 extension namespace");
 
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
     QSignalSpy disconnectedSpy(&backend, &IRadioBackend::disconnected);

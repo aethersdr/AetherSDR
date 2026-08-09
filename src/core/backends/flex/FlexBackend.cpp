@@ -131,6 +131,7 @@ RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
     caps.family = QStringLiteral("flex");
+    caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
@@ -142,6 +143,12 @@ RadioCapabilities FlexBackend::capabilities() const
     // refined from live radio status in a later touchpoint conversion.
     caps.maxPanadapters = mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
+    // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
+    // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
+    caps.hasLmsNoiseFilters = true;
+    // A Flex notches with TNFs, which are pinned to absolute frequencies and
+    // are a different instrument. No single in-passband manual notch.
+    caps.hasManualNotch = false;
 
     // Every current FlexRadio transmits; RX-only WAN/observer nuance is layered
     // in later. Sample rates and TX power range are refined as their touchpoints
@@ -149,6 +156,11 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canTransmit = true;
     caps.hasTuner = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
+    // The radio owns its reference and its own calibration ("radio set cal_freq",
+    // "radio pll_start", freq_error_ppb) — that surface is the Frequency Offset
+    // group on the Receive page, and it is NOT this flag. False here means "the
+    // client does not apply a frequency scalar", which is correct for a Flex.
+    caps.hostFrequencyCalibration = false;
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
     caps.hasSelectableMicInputs = true;
@@ -275,7 +287,9 @@ void FlexBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(thresholdDb));
 }
 
-void FlexBackend::setPanCenter(const QString& panId, double hz)
+// Intent ignored: a Flex panadapter's window is genuinely independent of the
+// slice, so a drag and a zoom mean the same thing here.
+void FlexBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
 {
     // Flex owns the pan; this is the same write RadioModel already makes on the
     // Flex path, expressed through the seam so a non-Flex backend can implement

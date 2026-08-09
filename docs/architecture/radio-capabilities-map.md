@@ -37,18 +37,21 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 |---|:--:|:--:|:--:|---|---|
 | `family` | `"flex"` | `"hl2"` | `"sim"` | `MainWindow::rfGainSettingsKey` | Scopes the persisted RF-gain key per family |
 | `model` | from provider | `"Hermes-Lite 2"` | `"AetherSDR Demo"` | `FlexBackend::capabilities` | Key into the ModelCapabilities table |
+| `manufacturer` | `"FlexRadio"` | `"Hermes-Lite"` | `"AetherSDR"` | `MainWindow::refreshRadioIdentityLabels` | Status-bar make row ABOVE the model, shown only when the model string does not already carry the brand (`FLEX-8400M` does, `IC-705` does not). Display only — nothing branches on it. Icom: `"Icom"` |
 | `tuningMinHz` / `tuningMaxHz` | — (0/0) | 0.1–38.4 MHz | — (0/0) | `MainWindow_Wiring.cpp`, `applyTuningRangeToOverlayMenu` | Refuses band buttons the receiver cannot reach. 0/0 means unconstrained |
 | `canTransmit` | ✅ | `m_txAllowed` | ❌ | `RadioModel::setTransmit`, MOX/TUNE key guards | **TX safety gate.** Fail-closed: false denies any keying intent |
 | `hostModulates` | — (❌) | ✅ | — (❌) | `TciServer`, `MainWindow_Session` | Mic source collapses to PC; PC-audio lock. **Not the same question as `takesTxAudioOverSeam`** — see below |
 | `takesTxAudioOverSeam` | ❌ | ✅ | ❌ | `MainWindow_Session` (capture, TX stream, PC-audio lock), `AudioEngine::setHostModulation`, `RadioModel::ensureDaxTxStream` | Whether transmit audio leaves through `submitTxAudio` rather than a DAX/VITA-49 stream. Icom: ✅ |
 | `hasSelectableMicInputs` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneCwApplet::setSelectableMicInputs` | The MIC/BAL/LINE/ACC/PC list. False collapses it to PC and adopts that into TransmitModel. Icom: ❌ (the radio picks its own input) |
-| `rxFilterWidthsHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `RxApplet::setRadioFilterWidths` | The RX filter widths a radio can actually reach. **Empty = continuous or unknown**, and the operator's configurable list stays in force. Icom: `{1800, 2400, 3000}` — three fixed IF filters |
+| `rxFilterWidthsHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `RxApplet::setRadioFilterWidths` **and** `VfoWidget::setRadioFilterWidths` | The RX filter widths a radio can actually reach, **widest first**. **Empty = continuous or unknown**, and the operator's configurable list stays in force. Icom: three fixed IF filters whose widths **change with the mode** (SSB 3.0/2.4/1.8k, CW 1.2k/500/250, AM+SAM 9/6/3k, FM 15/10/7k, WFM one filter), so `IcomCivBackend` republishes capabilities on every mode change. Both filter surfaces read it — the VFO grid did not, which is how the two disagreed about what the radio could do |
 | `canReboot` | ✅ | ❌ | — (❌) | `RadioSetupDialog` | Enables the Reboot button |
 | `hasTuner` | ✅ | ❌ | ❌ | `TransmitModel::setHasTuner` → `TxApplet` | ATU / MEM dimming |
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
 | `hasProfiles` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PROF applet, Profiles menu, Profile Manager, Import/Export |
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
 | `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
+| `hasLmsNoiseFilters` | ✅ | ❌ | ❌ | `RadioModel::hasLmsNoiseFilters()` → `VfoWidget::setHasLmsNoiseFilters` | NRL / ANFL / ANFT alone — the WDSP LMS/FFT family, a THIRD tier under `hasRadioSideDsp`. Icom: ❌ (it has NR, NB and both notches, and no register these three could reach). Keeps `hasRadioSideDsp`'s permissive-on-disconnect rule |
+| `hasManualNotch` | ❌ | ❌ | ❌ | `RadioModel::hasManualNotch()` → `VfoWidget::setHasManualNotch` | The MN button and the shared level slider re-targeted to notch POSITION. Icom: ✅ (`16 48` enable, `14 0D` position, `16 57` width). **Not** permissive on disconnect — a new button must not appear on a radio that has not claimed it. Distinct from the TNFs, which are pinned to absolute frequencies, and from the auto notch, which finds its own tone |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar CWX indicator, the CWX panel and its F1-F12 arming, plus every other `cwx` entry point — see below |
 | `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
@@ -56,9 +59,10 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar |
+| `hostFrequencyCalibration` | ❌ | ✅ | ❌ | `RadioSetupDialog` (Calibration page), `AutomationServer::doFreqCal` | Shows the Calibration page and enables the `freqcal` bridge verb. Means "**the client** owns the frequency-error correction", not "this radio has an error" — every radio does. Flex is ❌ because it calibrates itself (`radio set cal_freq` / `pll_start`), and that surface stays in the Frequency Offset group on the Receive page. HL2 is ✅ because its 76.8 MHz NCO scale is a `localparam` in the bitstream (`radio.v` M2) and no register in the HPSDR map accepts a correction — see `docs/architecture/hl2-frequency-calibration.md` |
 | `persistsMemories` | ✅ | ❌ | ❌ | `LocalMemoryBank` engagement (#4590) | host-side memory bank vs radio-side slots — the bank's ONE shared document lives at `radio_settings (local, '', MemoryBank)` since RFC #4603 PR 6, covered by settings backup/export; legacy `memories.json` is a frozen import source |
 | `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
-| `extensionNamespaces` | `["flex"]` | — | — | `invokeExtension` pre-check | Amp / tuner operate/bypass/autotune verbs |
+| `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | `invokeExtension` pre-check | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page |
 
 `MainWindow::applyCapabilitiesToUi()` is the single fan-out for UI visibility. It
 is bound to `RadioModel::capabilitiesChanged`, which fires on both connection
@@ -87,6 +91,29 @@ modulation at all, while TCI's transmit path asked for a DAX stream and failed
 with "this radio has no command plane". Everything about the AUDIO now keys off
 the second flag; `hostModulates` keeps only the questions that are genuinely
 about the modulator.
+
+### `hasRadioSideDsp` is three claims, not one
+
+It began as one flag meaning "the radio runs its own receive DSP", and grew a
+second meaning nobody wrote down: "the radio runs *FlexRadio's particular set*
+of it". Those came apart the moment a second radio-side family arrived.
+
+An IC-705 is emphatically the first and not the second. It has noise reduction
+(`16 40`), a noise blanker (`16 22`), an auto notch (`16 41`) and a manual notch
+(`16 48`) — and nothing resembling NRL, ANFL or ANFT, which are WDSP LMS/FFT
+filters. Declaring `hasRadioSideDsp` on it therefore lit up three buttons whose
+intents reach no register on that radio: the HERMES §17 shape, where the control
+moves, the setting persists and the audio never changes.
+
+So the claim is now tiered, and each tier has its own disconnected rule:
+
+| Flag | Means | Disconnected |
+|---|---|---|
+| `hasRadioSideDsp` | the radio runs its own RX DSP at all | permissive (assume present) |
+| `hasLmsNoiseFilters` | ...and it has the WDSP LMS/FFT family | permissive — NRL/ANFL/ANFT predate the flag, and hiding them on a Flex the moment it disconnects would be a regression, not an honesty gain |
+| `hasManualNotch` | it has one operator-placed in-passband notch | **not** permissive — MN is a new button, and a permissive default would show it on every radio in the window before a backend reports, including the Flexes that notch with TNFs instead |
+
+`hasExtendedDsp` is a fourth, orthogonal tier (the 8000-series NRS/RNN/NRF).
 
 ### What `hasRadioSideDsp` must never hide
 
