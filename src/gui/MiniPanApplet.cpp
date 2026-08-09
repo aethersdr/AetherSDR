@@ -7,7 +7,6 @@
 #include <QLabel>
 #include <QShowEvent>
 #include <QHideEvent>
-#include <QResizeEvent>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QActionGroup>
@@ -45,16 +44,10 @@ MiniPanApplet::MiniPanApplet(QWidget* parent)
     m_scope->setDbmRange(-130.0f, -40.0f);
     layout->addWidget(m_scope, 1);
 
-    // MiniPanSettings owns the validation, so a hand-edited value can never
-    // reach "display pan set … bandwidth=".
+    // MiniPanSettings owns the validation, so a hand-edited value can only ever
+    // be one of the two spans the menu offers.
     m_spanKHz = MiniPanSettings::spanKHz();
     m_scope->setSpanKHz(m_spanKHz);
-
-    // Debounce resize → one scopeResized() so MainWindow re-pushes xpixels once,
-    // not once per intermediate step as the panel or float window is dragged.
-    m_xpixTimer.setSingleShot(true);
-    m_xpixTimer.setInterval(150);
-    connect(&m_xpixTimer, &QTimer::timeout, this, [this]() { emit scopeResized(); });
 
     refreshHeader();
 }
@@ -62,8 +55,8 @@ MiniPanApplet::MiniPanApplet(QWidget* parent)
 QSize MiniPanApplet::sizeHint() const
 {
     // 260 is the applet panel's fixed width — also the width it has in Minimal
-    // Mode. At a 10 kHz span that is ~38 Hz/bin, still several times finer than
-    // a typical main pan, so the narrow view is worth having even undocked.
+    // Mode. The trace is resampled to the scope's width, so the useful detail
+    // is set by the MAIN pan's bin width, not by this number.
     return {260, 150};
 }
 
@@ -89,7 +82,7 @@ void MiniPanApplet::applySpanKHz(double kHz, bool persistAndEmit)
     if (m_scope) m_scope->setSpanKHz(kHz);
     if (persistAndEmit) {
         MiniPanSettings::setSpanKHz(kHz);
-        emit spanChanged(kHz);   // MainWindow re-pushes the radio pan bandwidth
+        emit spanChanged(kHz);   // the next frame re-slices to the new window
     }
 }
 
@@ -125,26 +118,19 @@ void MiniPanApplet::contextMenuEvent(QContextMenuEvent* e)
 // ── Feed lifecycle ────────────────────────────────────────────────────────────
 // show/hide is the one hook that catches every way this applet can come and go:
 // the tray toggle, the container's close button, a float, a dock, and the
-// panel-wide layout apply. MainWindow creates the dedicated radio pan on true
-// and frees it on false, so a hidden mini-pan never holds a pan slot.
+// panel-wide layout apply. MainWindow starts consuming pan frames on true and
+// stops on false — nothing radio-side is created or destroyed either way.
 
 void MiniPanApplet::showEvent(QShowEvent* e)
 {
     QWidget::showEvent(e);
     emit feedWanted(true);
-    m_xpixTimer.start();   // the scope has a real width now — push it
 }
 
 void MiniPanApplet::hideEvent(QHideEvent* e)
 {
     QWidget::hideEvent(e);
     emit feedWanted(false);
-}
-
-void MiniPanApplet::resizeEvent(QResizeEvent* e)
-{
-    QWidget::resizeEvent(e);
-    m_xpixTimer.start();   // → scopeResized() (debounced)
 }
 
 } // namespace AetherSDR

@@ -1232,97 +1232,42 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, &MainWindow::onSpectrumReadyForAdaptiveFilter);
 
-    // ── Mini-pan — feed its scope from the dedicated narrow pan's stream ──
+    // ── Mini-pan — a VIEW of the pan the active slice already lives on ───────
+    // No dedicated pan, no slice: the applet re-slices this frame down to its
+    // +/-5 or +/-10 kHz window. Gated on the applet being visible so a hidden
+    // tile costs nothing per frame.
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady, this,
             [this](quint32 streamId, const QVector<float>& bins, qint64) {
-        auto* applet = miniPanApplet();
-        if (!applet || !m_miniPanFeedWanted) return;
-        const QString id = m_radioModel.miniPanId();
-        if (id.isEmpty()) return;
-        if (auto* pan = m_radioModel.panadapter(id);
-            pan && pan->panStreamId() == streamId) {
-            applet->scope()->updateSpectrum(bins);
-        }
-    });
-    // Create/recreate the mini-pan's pan whenever we (re)connect and it's wanted —
-    // covers "opened while disconnected then connected". NOTE this cannot carry a
-    // soft reconnect on its own: stageSessionModelsForReconnect() empties the pan
-    // map before connectionStateChanged(true) is emitted, so ensureMiniPanFeed
-    // bails on its "no pan yet" guard. The panadapterReclaimed hook below is the
-    // one that covers reconnect. (#4566)
-    connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
-            [this](bool connected) {
-        if (connected) ensureMiniPanFeed();
-    });
-    // Once the pan actually exists (async create resolved, or re-adopted across a
-    // reconnect reclaim), push our real scope width and centre it on the VFO —
-    // both no-op at create time because miniPanId() is still empty then.
-    connect(&m_radioModel, &RadioModel::miniPanReady, this,
-            [this](const QString&) {
-        auto* applet = miniPanApplet();
-        if (!applet || !m_miniPanFeedWanted) return;
-        refreshMiniPanFollow();
-        pushMiniPanXpixels();
-        // The span the scope draws must be the span the RADIO settled on, not
-        // the one we asked for: it clamps to min_bw/max_bw server-side, and a
-        // scope drawing its own labels over a clamped span is wrong by the
-        // clamp ratio. Re-push the selection, then follow the echo. (#4562)
-        m_radioModel.setMiniPanBandwidth(applet->spanMhz());
-        if (auto* pan = m_radioModel.panadapter(m_radioModel.miniPanId())) {
-            connect(pan, &PanadapterModel::infoChanged, this, [this, pan]() {
-                if (auto* a = miniPanApplet(); a && pan->bandwidthMhz() > 0.0)
-                    a->scope()->setSpanKHz(pan->bandwidthMhz() * 1000.0);
-            }, Qt::UniqueConnection);
-        }
-    });
-    // A soft reconnect returns our pans through the RECLAIM path, which never
-    // emits panadapterAdded — without this the mini-pan was never re-established
-    // and the window sat on a frozen trace. Idempotent: if the radio kept the
-    // mini-pan it was re-adopted (miniPanId() non-empty) and this is a no-op; if
-    // the radio dropped it, this recreates it exactly once. (#4566)
-    connect(&m_radioModel, &RadioModel::panadapterReclaimed, this,
-            [this](PanadapterModel*) { ensureMiniPanFeed(); });
-    // The radio refused the pan (slot limit, or a create error). Do not leave a
-    // permanently blank scope docked in the panel with its tray button lit
-    // (plan §7).
-    connect(&m_radioModel, &RadioModel::panadapterLimitReached, this,
-            [this](int, const QString&) {
-        if (m_miniPanFeedWanted && miniPanApplet()
-            && m_radioModel.miniPanId().isEmpty())
-            miniPanCreateFailed();
-    });
-    // Debounced re-centre of the dedicated pan while tuning (plan §5).
-    m_miniPanCenterTimer.setSingleShot(true);
-    m_miniPanCenterTimer.setInterval(75);
-    connect(&m_miniPanCenterTimer, &QTimer::timeout, this, [this]() {
-        m_radioModel.setMiniPanCenter(m_miniPanPendingCenterMhz);
+        if (!m_miniPanFeedWanted || !miniPanApplet()) return;
+        auto* s = activeSlice();
+        if (!s) return;
+        // The slice's OWN pan, not the active pan -- with several pans open the
+        // followed slice may not live on the one the main stack has focused,
+        // and re-slicing the wrong pan would show a window at the right offset
+        // in the wrong part of the band.
+        auto* pan = m_radioModel.panadapter(s->panId());
+        if (!pan || pan->panStreamId() != streamId) return;
+        feedMiniPanFromPanFrame(pan, bins);
     });
 
     // ── Mini-pan applet intents ──────────────────────────────────────────────
-    // The applet's visibility IS the feature's on/off switch: shown by the tray
+    // The applet's visibility is the feature's on/off switch: shown by the tray
     // button (the only entry point that exists in Minimal Mode), by a float, or
     // by a layout apply; hidden by the tray button or the container's close.
-    // Binding the radio-side pan to it means a hidden mini-pan never holds a pan
-    // slot, and there is no second persisted "open" flag to drift out of sync
-    // with the container framework's own visibility state. (#4562)
+    // Nothing radio-side is created or freed -- it only starts and stops
+    // consuming frames the main pan is already sending.
     if (auto* mini = miniPanApplet()) {
         connect(mini, &MiniPanApplet::feedWanted, this, [this](bool wanted) {
             if (wanted == m_miniPanFeedWanted) return;
             m_miniPanFeedWanted = wanted;
-            if (wanted) {
-                refreshMiniPanFollow();   // centre on the active VFO
-                ensureMiniPanFeed();      // create the pan if connected
-            } else {
-                teardownMiniPanFeed();    // free the radio-side pan
-            }
+            if (wanted) refreshMiniPanFollow();   // bind readout/passband to the VFO
+            else        teardownMiniPanFeed();    // unbind + blank the trace
         });
-        // Debounced resize → re-push the pan's xpixels from the scope width.
-        connect(mini, &MiniPanApplet::scopeResized, this,
-                [this]() { pushMiniPanXpixels(); });
-        // ±5/±10 kHz change → re-push the radio pan bandwidth.
-        connect(mini, &MiniPanApplet::spanChanged, this, [this](double kHz) {
-            m_radioModel.setMiniPanBandwidth(kHz / 1000.0);
-        });
+        // Span change is purely a display decision now -- the next frame is
+        // re-sliced to the new window. Repaint the labels immediately rather
+        // than waiting for it.
+        connect(mini, &MiniPanApplet::spanChanged, this,
+                [this](double) { refreshMiniPanFollow(); });
     }
 
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
@@ -1513,21 +1458,6 @@ void MainWindow::wirePanLifecycle()
         // During layout application, applyLayout/createPansSequentially handles
         // applet creation and wiring — don't duplicate here.
         if (m_applyingLayout) return;
-
-        // A real pan just appeared — the mini-pan's prerequisite. Create the
-        // mini-pan now if it was opened before the main pan existed (open-at-
-        // startup restore, where connect fires first). Idempotent; the mini-pan
-        // itself never reaches here (it does not emit panadapterAdded).
-        ensureMiniPanFeed();
-
-        // The mini-pan's dedicated pan renders in the Mini-Pan applet,
-        // never the main stack. Building a main-stack applet for it would also
-        // auto-create a slice on it and make it the active pan — exactly what the
-        // mini-pan must avoid. Leave it out of the stack entirely.
-        if (!m_radioModel.miniPanId().isEmpty()
-            && pan->panId() == m_radioModel.miniPanId()) {
-            return;
-        }
 
         // Skip if this pan already has an applet
         if (m_panStack->panadapter(pan->panId())) {

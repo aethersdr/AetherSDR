@@ -34,6 +34,7 @@
 #include "PanadapterStack.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
+#include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
@@ -3540,16 +3541,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
             slice->setExternalReceiveAudioReplacementMute(false, restoreMute);
         }
     }
-
-    // Same event-loop reasoning as the sockets above, and the same failure mode
-    // as the orphaned D-STAR helper: the mini-pan's dedicated pan is radio-side
-    // state that only teardownMiniPanFeed() frees, and that runs on the applet
-    // being hidden — never on quit. Without this the pan SURVIVES on the radio,
-    // and the next session's connect replay hands it back as an ordinary client
-    // pan that gets a main-stack applet. Quitting with the mini-pan open grew
-    // the pan count by one every launch and burned a pan slot each time.
-    // Sent here while the connection is still open. (#4562)
-    m_radioModel.removeMiniPan();
 
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
@@ -7347,38 +7338,19 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 }
 
 // ── Mini-pan glue ─────────────────────────────────────────────────────────────
-// The mini-pan applet is pure presentation; MainWindow owns its dedicated radio
-// pan, feeds its scope, and drives its centre/passband from the followed VFO.
-// The applet's own show/hide drives m_miniPanFeedWanted, so the radio-side pan
-// exists exactly while the applet is on screen — no pan slot held by a hidden
-// tile, and no View-menu entry point (unreachable in Minimal Mode). (#4562)
+// The mini-pan applet is pure presentation, and it is a VIEW — it creates no
+// radio objects at all. It re-slices the FFT bins of the pan the active slice
+// already lives on down to a +/-5 or +/-10 kHz window around that slice.
+//
+// That is the whole architecture: no dedicated pan (no slot consumed, nothing
+// to leak on quit, no reconnect zombie, no active-pan hijack) and no slice
+// (the FLEX auto-creates one on every pan create, which is where the phantom
+// slice came from). Resolution is the main pan's bin width, so it tracks
+// whatever the operator has the main pan zoomed to. (#4562)
 
 MiniPanApplet* MainWindow::miniPanApplet() const
 {
     return m_appletPanel ? m_appletPanel->miniPanApplet() : nullptr;
-}
-
-void MainWindow::ensureMiniPanFeed()
-{
-    // The single create chokepoint — safe to call when the applet is shown, from
-    // a connect event, and when the main pan appears, in any order. Idempotent.
-    auto* applet = miniPanApplet();
-    if (!m_miniPanFeedWanted || !applet) return;
-    if (!m_radioModel.isConnected()) return;         // create once connected
-    if (!m_radioModel.miniPanId().isEmpty()) return; // already have the pan
-    if (m_radioModel.miniPanCreating()) return;      // a create is already in flight
-    // Wait for the main pan: the mini-pan must be created AFTER it (the model's
-    // maxPanadapters and the mini-pan ownership-claim both rely on the main pan
-    // already existing). On a restore-visible-at-startup, connect fires before
-    // the main pan is added — panadapterAdded re-invokes us once it is.
-    if (m_radioModel.panadapters().isEmpty()) return;
-    const double c = activeSlice() ? activeSlice()->frequency() : 0.0;
-    m_radioModel.createMiniPan(c, applet->spanMhz());   // ±5/±10 kHz per the applet
-    // Bind the readout/passband now so the applet is live even if the create is
-    // still in flight. The xpixels push is NOT done here — createMiniPan is
-    // async and miniPanId() is still empty, so it would no-op; miniPanReady
-    // does it (for a fresh create and for a reconnect reclaim alike).
-    refreshMiniPanFollow();
 }
 
 void MainWindow::refreshMiniPanFollow()
@@ -7392,17 +7364,17 @@ void MainWindow::refreshMiniPanFollow()
     if (!s) {
         applet->setCenterMhz(0.0);
         applet->setPassbandHz(0, 0);
+        applet->scope()->updateSpectrum(QVector<float>{});
         return;
     }
-    // Live centre: update the readout immediately (it is local and free), but
-    // DEBOUNCE the radio push — a tuning knob emits frequencyChanged per step,
-    // and one "display pan set … center=" per step floods the CAT link (plan
-    // §5). The readout stays instant; only the pan re-centre coalesces.
+    // Everything here is local: the readout and the passband shading are drawn
+    // from model state, and the trace is re-sliced from bins the main pan is
+    // already streaming. Nothing is sent to the radio, so tuning needs no
+    // debounce -- the old "display pan set ... center=" push is gone with the
+    // dedicated pan.
     m_miniPanFreqConn = connect(s, &SliceModel::frequencyChanged, this,
                                 [this](double mhz) {
         if (auto* a = miniPanApplet()) a->setCenterMhz(mhz);
-        m_miniPanPendingCenterMhz = mhz;
-        m_miniPanCenterTimer.start();
     });
     m_miniPanFiltConn = connect(s, &SliceModel::filterChanged, this,
                                 [this]() {
@@ -7411,10 +7383,6 @@ void MainWindow::refreshMiniPanFollow()
                 a->setPassbandHz(cur->filterLow(), cur->filterHigh());
     });
     applet->setCenterMhz(s->frequency());
-    // Re-binding is a discrete event (slice switch, pan (re)create), not a
-    // tuning stream — push it straight through rather than through the timer.
-    m_miniPanCenterTimer.stop();
-    m_radioModel.setMiniPanCenter(s->frequency());
     applet->setPassbandHz(s->filterLow(), s->filterHigh());
 }
 
@@ -7422,31 +7390,34 @@ void MainWindow::teardownMiniPanFeed()
 {
     disconnect(m_miniPanFreqConn);
     disconnect(m_miniPanFiltConn);
-    m_miniPanCenterTimer.stop();   // don't re-centre a pan we just removed
-    m_radioModel.removeMiniPan();
     if (auto* a = miniPanApplet())
         a->scope()->updateSpectrum(QVector<float>{});
 }
 
-void MainWindow::pushMiniPanXpixels()
+// Re-slice one main-pan FFT frame down to the mini-pan's window. The mapping
+// itself lives in MiniPanReslice.h so it can be unit-tested without a radio.
+void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
+                                         const QVector<float>& bins)
 {
     auto* applet = miniPanApplet();
-    if (!applet) return;
-    if (auto* sc = applet->scope())
-        m_radioModel.setMiniPanPixels(sc->width(), sc->height());
-}
+    if (!applet || !pan || bins.size() < 2) return;
+    auto* s = activeSlice();
+    if (!s) return;
 
-void MainWindow::miniPanCreateFailed()
-{
-    // The radio refused the pan (no free slot, or a create error). Hide the
-    // applet rather than leaving a permanently blank scope docked in the panel
-    // (plan §7 — the toggle must not stay on). Hiding routes through the
-    // applet's own hideEvent, so the tray button, the container's visibility and
-    // m_miniPanFeedWanted all end up consistent without a second code path.
-    if (auto* a = miniPanApplet())
-        a->hide();
-    statusBar()->showMessage(
-        tr("No panadapter slot free for the Mini-Pan"), 4000);
+    const double panBw = pan->bandwidthMhz();
+    if (panBw <= 0.0) return;
+
+    const double span = applet->spanMhz();
+    // Floor for samples outside the pan: the frame's own minimum, so the gap
+    // sits at the bottom of the auto-scaled view instead of inventing a level.
+    const float floorDbm = *std::min_element(bins.cbegin(), bins.cend());
+
+    applet->scope()->updateSpectrum(
+        AetherSDR::MiniPan::resliceWindow(
+            bins,
+            pan->centerMhz() - panBw / 2.0, panBw,
+            s->frequency() - span / 2.0, span,
+            AetherSDR::MiniPan::kResliceOutputBins, floorDbm));
 }
 
 void MainWindow::updateFilterLimitsForMode(const QString& mode)
@@ -9600,15 +9571,8 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
     }
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     bool processedFrame = false;
-    const QString miniPanId = m_radioModel.miniPanId();
     for (auto* pan : m_radioModel.panadapters()) {
         if (pan->panStreamId() != streamId) continue;
-        // The mini-pan is display-only and has no SpectrumWidget in the stack.
-        // rebuildSHistoryForPan — the ONLY pruner — early-returns without one,
-        // so every frame appended here would be retained forever, on top of
-        // running detection, the spectrogram buffer and CNN classification for
-        // a pan nothing renders markers on. (#4562 review)
-        if (!miniPanId.isEmpty() && pan->panId() == miniPanId) continue;
         processedFrame = true;
 
         const QString panId = pan->panId();

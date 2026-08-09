@@ -586,14 +586,7 @@ public:
     double panCenterMhz() const;
     double panBandwidthMhz() const;
     QString panId() const { return m_activePanId; }
-    // Single chokepoint for the active-pan invariant: the mini-pan is an owned
-    // display-only pan and must NEVER be the active pan (else it hijacks
-    // active-targeted commands, pan-follows-VFO, and gets a phantom slice on
-    // tune). Route ALL active-pan assignments through here.
-    void setActivePanId(const QString& id) {
-        if (!id.isEmpty() && id == m_miniPanId) return;
-        m_activePanId = id;
-    }
+    void setActivePanId(const QString& id) { m_activePanId = id; }
     PanadapterModel* activePanadapter() const;
     PanadapterModel* panadapter(const QString& panId) const;
     // Addressed pan, else active — the pan-addressing policy for the aetherd RFC
@@ -696,27 +689,6 @@ public:
     void addSliceOnPan(const QString& panId, double freqMhz); // Create slice on specific pan/frequency
     void createPanadapter();   // Create a new independent panadapter
     void removePanadapter(const QString& panId);
-
-    // Mini-pan: a dedicated narrow display-only pan for the K4-style mini-pan
-    // window. Owned but never active (see setActivePanId). createMiniPan is async
-    // — it emits miniPanReady(panId) once the radio assigns the id. A generation
-    // counter guards the create→reply window against an interleaved removeMiniPan
-    // so a late reply can't leak an orphan pan. The pan SURVIVES a soft
-    // reconnect radio-side, so the identity is staged and re-adopted in the
-    // reclaim branch rather than dropped (#4566); miniPanReady fires again on
-    // that reclaim, so consumers re-bind without a second create.
-    void createMiniPan(double centerMhz, double spanMhz);
-    void removeMiniPan();
-    void setMiniPanCenter(double centerMhz);
-    // Clamped to the pan's radio-reported min_bw/max_bw (Principle II): asking
-    // for a span the radio refuses makes it clamp server-side while the scope
-    // keeps drawing its own labels, so the whole view is off by the clamp ratio.
-    void setMiniPanBandwidth(double spanMhz);
-    // Re-push the FFT grid from the scope's live widget size. Bin width is
-    // span/xpixels, so this is what makes the mini-pan finer than the main pan.
-    void setMiniPanPixels(int xPixels, int yPixels);
-    QString miniPanId() const { return m_miniPanId; }
-    bool miniPanCreating() const { return m_miniPanPending; }   // a create is in flight
     void setPanBandwidth(double bandwidthMhz);
     void setPanCenter(double centerMhz);
     void setPanDbmRange(float minDbm, float maxDbm);
@@ -939,8 +911,6 @@ signals:
     void panBandDispatchFailed(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
     void panadapterLimitReached(int limit, const QString& model);
-    // The mini-pan's dedicated pan has been created and assigned an id.
-    void miniPanReady(const QString& panId);
     // Emitted when the radio rejects a slice create command (e.g. limit reached across
     // all Multi-Flex clients — our local slice count may be below maxSlices()).
     void sliceCreateFailed(int limit, const QString& model);
@@ -1234,13 +1204,6 @@ private:
     quint32 sendCmd(const QString& command, ResponseCallback cb = nullptr);
     quint32 clientHandle() const;
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
-    // First owned pan eligible to be active (excludes the mini-pan). Empty if none.
-    QString firstActiveEligiblePan() const;
-    // Requested mini-pan span clamped to the pan's radio-reported limits.
-    double clampMiniPanSpan(double spanMhz) const;
-    // Announce every pan whose panadapterAdded was held back while a mini-pan
-    // create was in flight — all except the mini-pan itself.
-    void flushDeferredPanAnnouncements();
     void updateStreamFilters();
     void handleGpsStatus(const QString& rawBody);
     void emitOtherClientsChanged();
@@ -1507,19 +1470,6 @@ private:
     mutable QString m_antennaAliasRadioKey;
     mutable QMap<QString, QString> m_antennaAliases;
 
-    QString m_miniPanId;      // dedicated mini-pan pan; never the active pan
-    // The same id while the pan is staged for a reconnect reclaim — the radio
-    // keeps the pan across a soft reconnect, so the identity has to survive
-    // with it or the guards go dead (#4566). Cleared wherever the staged pans
-    // die: pan ids collide across radios, so it must never reach another one.
-    QString m_staleMiniPanId;
-    int     m_miniPanGen{0};   // invalidates in-flight createMiniPan on remove
-    bool    m_miniPanPending{false};  // a "display panafall create" of ours is in flight
-    // Pans that appeared while that create was in flight, held back until the
-    // reply says which id is ours. Guessing positionally instead stole whatever
-    // pan happened to arrive first — a leftover pan in the connect replay,
-    // another client's, a profile load — and left it applet-less. (#4562)
-    QStringList m_deferredPanAnnouncements;
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
     QMap<QString, PanadapterModel*> m_stalePanadapters;  // previous session, kept alive for UI reuse
     // #3977: eviction bookkeeping, all cleared on disconnect (handles are

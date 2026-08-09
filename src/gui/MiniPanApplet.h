@@ -16,19 +16,20 @@
 // persistence, and close==hide are all ContainerWidget/FloatingContainerWindow
 // behaviour, driven from the standard ContainerTitleBar.
 //
+// The mini-pan is a VIEW, not a radio object: it creates no panadapter and no
+// slice. MainWindow re-slices the FFT frames the active slice's pan is already
+// streaming down to this window's +/-5 or +/-10 kHz, and drives centre/passband
+// from the followed VFO through the setters below. So the applet costs a radio
+// nothing to open — no pan slot, nothing to leak, no phantom slice.
+//
 // This widget holds NO radio/slice references (so it links into a light
-// offscreen test). MainWindow owns the data glue: it creates the dedicated
-// narrow pan (RadioModel::createMiniPan), feeds MiniPanScope via
-// panFeedSpectrumReady, and drives centre/passband from the followed VFO by
-// calling the setters below. The applet reports three intents back up:
-// feedWanted() (shown/hidden — the radio-side pan follows it), scopeResized()
-// (debounced — MainWindow re-pushes the pan's xpixels) and spanChanged().
+// offscreen test). It reports two intents back up: feedWanted() (shown/hidden)
+// and spanChanged().
 //
 // The only genuinely feature-owned setting left is the ±5/±10 kHz span, in
 // core/MiniPanSettings.h (Constitution Principle V).
 
 #include <QWidget>
-#include <QTimer>
 
 class QLabel;
 
@@ -50,20 +51,18 @@ public:
 
     MiniPanScope* scope() const { return m_scope; }
     double spanKHz() const { return m_spanKHz; }
-    double spanMhz() const { return m_spanKHz / 1000.0; }   // for the radio pan bandwidth
+    double spanMhz() const { return m_spanKHz / 1000.0; }   // width of the re-sliced window
 
 signals:
     // Shown or hidden — by the tray button, a float, a dock, or the container's
-    // close button alike. MainWindow creates/frees the radio-side pan on this,
-    // so a hidden applet never holds a pan slot.
+    // close button alike. MainWindow starts/stops consuming pan frames on this,
+    // so a hidden applet costs nothing per frame.
     void feedWanted(bool wanted);
-    void scopeResized();          // debounced — MainWindow re-pushes xpixels
-    void spanChanged(double kHz); // user picked ±5/±10 kHz — MainWindow re-pushes bandwidth
+    void spanChanged(double kHz); // user picked ±5/±10 kHz — next frame re-slices
 
 protected:
     void showEvent(QShowEvent* e) override;
     void hideEvent(QHideEvent* e) override;
-    void resizeEvent(QResizeEvent* e) override;
     void contextMenuEvent(QContextMenuEvent* e) override;   // ±5/±10 kHz
 
 private:
@@ -75,7 +74,6 @@ private:
 
     double  m_centerMhz{0.0};
     double  m_spanKHz{10.0};   // ±5 kHz default (10 kHz total span)
-    QTimer  m_xpixTimer;
 };
 
 } // namespace AetherSDR

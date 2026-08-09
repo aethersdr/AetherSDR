@@ -1,7 +1,8 @@
 // Offscreen tests for the mini-pan applet.
 //
-// Covers MiniPanScope's render API, MiniPanApplet's feed lifecycle (show/hide
-// is what creates and frees the radio-side pan, so it has to be exact), and the
+// Covers the re-slice mapping that IS the feature (the mini-pan creates no
+// radio objects — it cuts a narrow window out of the main pan's frames),
+// MiniPanScope's render API, MiniPanApplet's feed lifecycle, and the
 // Constitution Principle V single-object span persistence.
 //
 // What is deliberately NOT here: geometry, float/dock, always-on-top and
@@ -15,6 +16,7 @@
 #include "core/AppSettings.h"
 #include "core/MiniPanSettings.h"
 #include "gui/MiniPanApplet.h"
+#include "gui/MiniPanReslice.h"
 #include "gui/MiniPanScope.h"
 
 #include <QApplication>
@@ -23,6 +25,8 @@
 #include <QLabel>
 #include <QSignalSpy>
 #include <QVector>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -90,9 +94,9 @@ void testAppletBasics()
            label && label->text() == QString::fromUtf8("—.———"));
 }
 
-// The applet's visibility IS the feature's on/off switch — MainWindow creates
-// and frees the dedicated radio pan on this signal, so a stuck or duplicated
-// edge means either a leaked pan slot or a dead scope.
+// The applet's visibility IS the feature's on/off switch — MainWindow starts and
+// stops consuming pan frames on this signal, so a stuck or duplicated edge means
+// either a dead scope or per-frame work for a tile nobody is looking at.
 void testFeedLifecycle()
 {
     MiniPanApplet a;
@@ -126,16 +130,15 @@ void testSpanPersistence()
         report("spanMhz() reflects setSpanKHz(10)",
                qFuzzyCompare(a.spanMhz(), 0.010));
     }
-    // setSpanKHz() is the MainWindow-driven path (radio echo) — it must NOT
-    // persist or re-emit, or the radio's own clamp would overwrite the
-    // operator's choice in the store.
+    // setSpanKHz() is the MainWindow-driven path — it must NOT persist or
+    // re-emit, or a programmatic update would overwrite the operator's choice.
     report("radio-driven setSpanKHz did not overwrite the stored span",
            qFuzzyCompare(MiniPanSettings::spanKHz(),
                          MiniPanSettings::kSpanWideKHz),
            std::to_string(MiniPanSettings::spanKHz()));
 
-    // A hand-edited out-of-range span is rejected by the settings validator,
-    // so it can never reach "display pan set … bandwidth=".
+    // A hand-edited out-of-range span is rejected by the settings validator, so
+    // the scope can only ever be asked for a span the menu offers.
     {
         QJsonObject o;
         o["spanKHz"] = 7.0;
@@ -174,6 +177,63 @@ void testConfigIsOneObject()
     AppSettings::instance().remove(kMiniPanRootKey);
 }
 
+// The whole mini-pan data path: cut a narrow window out of a main-pan frame.
+// No radio object is created, so this mapping is the feature.
+void testReslice()
+{
+    using AetherSDR::MiniPan::resliceWindow;
+
+    // Main pan: 200 kHz wide centred on 14.100, 2800 bins (a real xpixels).
+    const double panBw = 0.200, panLo = 14.100 - panBw / 2.0;
+    const int    n = 2800;
+    QVector<float> bins(n, -120.0f);
+    // A single spike on one source bin. Derive that bin's exact frequency
+    // rather than assuming a round number — the bin grid is quantised, so a
+    // spike "at 14.100" actually sits a fraction of a bin off it, and an
+    // assertion against the round number would be testing the quantisation
+    // rather than the mapping.
+    const int    spikeIdx = n / 2;
+    const double spikeMhz = panLo + (panBw * spikeIdx) / (n - 1);
+    bins[spikeIdx] = -40.0f;
+
+    // ±5 kHz window centred on the spike: it must come back dead centre.
+    const double span = 0.010;
+    constexpr int kOut = 512;
+    auto out = resliceWindow(bins, panLo, panBw, spikeMhz - span / 2.0, span,
+                             kOut, -140.0f);
+    report("reslice returns the requested width", out.size() == kOut,
+           std::to_string(out.size()));
+
+    // An off-by-one here puts a signal at a frequency it is not on, which is
+    // the one thing a tuning aid must never do. The centre falls between the
+    // two middle samples, so either is correct.
+    const int peak = static_cast<int>(
+        std::max_element(out.cbegin(), out.cend()) - out.cbegin());
+    const int mid = (kOut - 1) / 2;
+    report("signal at the VFO lands at the centre of the window",
+           peak == mid || peak == mid + 1, std::to_string(peak));
+
+    // A window sitting entirely outside the pan is floor, not smeared edge data.
+    auto off = resliceWindow(bins, panLo, panBw, 21.000, span, 512, -140.0f);
+    const bool allFloor = std::all_of(off.cbegin(), off.cend(),
+                                      [](float v) { return v == -140.0f; });
+    report("window outside the pan reads as floor, not clamped edge", allFloor);
+
+    // Half-overlapping window: the half inside carries data, the half outside
+    // is floor — proving we pad rather than stretch.
+    auto edge = resliceWindow(bins, panLo, panBw, panLo - span / 2.0, span,
+                              512, -140.0f);
+    report("window straddling the pan edge pads the outside half",
+           edge.first() == -140.0f && edge.last() > -140.0f);
+
+    // Degenerate inputs must not crash or return garbage.
+    report("empty source returns empty",
+           resliceWindow(QVector<float>{}, panLo, panBw, 14.1, span, 512,
+                         -140.0f).isEmpty());
+    report("zero-bandwidth pan returns empty",
+           resliceWindow(bins, panLo, 0.0, 14.1, span, 512, -140.0f).isEmpty());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -182,6 +242,7 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
 
     testScopeApi();
+    testReslice();
     testAppletBasics();
     testFeedLifecycle();
     testSpanPersistence();
