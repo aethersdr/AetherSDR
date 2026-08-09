@@ -183,10 +183,16 @@ int main(int argc, char** argv)
                  "stored unrecognized rotary action is not a known wheel action");
     ok &= expect(!UlanziDialMappings::isKnownWheelAction(QStringLiteral("NotAnAction")),
                  "'NotAnAction' is not a known wheel action");
-    ok &= expect(UlanziDialMappings::isKnownWheelAction(QStringLiteral("WheelFrequency")),
-                 "'WheelFrequency' is a known wheel action");
-    ok &= expect(UlanziDialMappings::isKnownWheelAction(QStringLiteral("WheelVolume")),
-                 "'WheelVolume' is a known wheel action");
+    const QStringList& known = UlanziDialMappings::knownWheelActions();
+    ok &= expect(known.size() == 18, "knownWheelActions registry contains exactly 18 dispatch actions");
+    bool allKnown = true;
+    for (const QString& action : known) {
+        if (!UlanziDialMappings::isKnownWheelAction(action)) {
+            allKnown = false;
+            break;
+        }
+    }
+    ok &= expect(allKnown, "every action in knownWheelActions registry is recognized by isKnownWheelAction");
 
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;
