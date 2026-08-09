@@ -2,6 +2,8 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QSet>
+#include <QVariantMap>
 #include <QString>
 #include <QVariantList>
 
@@ -12,6 +14,7 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomMeters.h"
+#include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/IcomScope.h"
 #include "core/backends/icom/IcomSession.h"
@@ -69,9 +72,12 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    void setPanCenter(const QString& panId, double hz) override;
+    void setPanCenter(const QString& panId, double hz,
+                      PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanRfGain(const QString& panId, int gainDb) override;
+    void setPanPreamp(const QString& panId, int step) override;
+    void setPanAttenuator(const QString& panId, int step) override;
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
@@ -81,7 +87,11 @@ public:
     void setSliceNoiseReduction(int sliceId, bool on, int level) override;
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setSliceAutoNotch(int sliceId, bool on) override;
+    void setSliceManualNotch(int sliceId, bool on, int position) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
+    void setSliceAudioGain(int sliceId, int gainPercent) override;
+    void setVox(bool on, int level, int delayMs) override;
+    void setAtu(bool start) override;
     void setRitEnabled(bool on) override;
     void setXitEnabled(bool on) override;
     void setRitOffset(int hz) override;
@@ -91,6 +101,27 @@ public:
 
     // ---- diagnostics ----
     [[nodiscard]] HealthSnapshot healthSnapshot() const override;
+
+    // ---- the control registry, as the bridge sees it ----------------------
+    //
+    // controlMap() is the DECLARED truth: IcomControls.h joined with what this
+    // backend can observe about itself — whether a control was read at connect,
+    // whether its reply has been seen, and whether anything has been sent to it
+    // this session. Cheap, read-only, and safe with no radio attached.
+    //
+    // controlScrub() is the CHECK. For every settable control it drives the seam
+    // and looks for the frame on the wire, so "we believe this is wired" becomes
+    // "this reached the radio and it answered". `filter` narrows it to one id or
+    // one plane; empty scrubs everything safe.
+    //
+    // NEITHER KEYS THE TRANSMITTER. The scrub deliberately excludes ptt, tuner
+    // and power: two of them transmit and the third cannot be undone over WiFi.
+    [[nodiscard]] QVariantList controlMap() const;
+    [[nodiscard]] QVariantList meterMap() const;
+    [[nodiscard]] QVariantMap controlScrub(const QString& filter);
+    // Returns false when the row cannot be re-asserted safely — the scrub's
+    // third outcome, distinct from linked and from broken.
+    bool scrubDrive(const icom::ControlSpec& spec);
     [[nodiscard]] LinkStats linkStats() const override;
 
     // Which meters the UI is currently showing. Metering shares the CI-V stream
@@ -117,6 +148,14 @@ private:
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.
     void publishScopeDbmRange();
+    // The neutral mode string for whatever CivMode the radio is in, or an
+    // empty string for a mode with no neutral equivalent (D-STAR).
+    // Everything that reports a mode to the models needs this.
+    QString currentNeutralMode() const;
+    // The mode name the FILTER LADDER is keyed on. Differs from the neutral one
+    // only where a radio mode has no neutral equivalent but does have its own
+    // IF widths — RTTY today. See the definition.
+    QString currentLadderMode() const;
     void publishMeterDefs();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void applyScopeStartup();
@@ -145,7 +184,18 @@ private:
     // ratio.
     std::unique_ptr<Resampler> m_txResampler;
     int m_txResamplerFromHz = 0;
+    int m_txResamplerToHz = 0;
+    // The DEFAULT audio rate, not the only one. 48 kHz 16-bit mono LPCM is
+    // 768 kbps in each direction — about 1.5 Mbps of uncompressed UDP for a
+    // duplex session, which saturates a marginal 2.4 GHz link and starves the
+    // CI-V stream sharing it. `m_audioRateHz` is what the session actually
+    // negotiated; everything that resamples must use that, not this.
     static constexpr int kRadioAudioRateHz  = 48000;
+    // What a low-bandwidth session asks for. SSB is a 3 kHz passband and FT8 is
+    // a single tone, so 16 kHz costs nothing audible and is a THIRD of the
+    // traffic. Not lower: 8 kHz starts to audibly dull SSB.
+    static constexpr int kLowBandwidthAudioRateHz = 16000;
+    int m_audioRateHz = kRadioAudioRateHz;
     static constexpr int kEngineAudioRateHz = 24000;
 
     QTimer* m_meterTimer = nullptr;
@@ -182,6 +232,44 @@ private:
     int m_nrEnableSent = -1;
     int m_nbEnableSent = -1;
     int m_anfEnableSent = -1;
+    int m_mnEnableSent = -1;
+
+    // Which of the three IF filter slots the radio is in (1 = FIL1, the
+    // widest). Decoded from the SECOND byte of the mode reply, which this
+    // backend used to discard — it is the only way to know, because an
+    // IC-705 cannot report a passband in Hz. Kept across mode changes so
+    // visiting another mode does not silently reset a narrow filter.
+    int m_filter = 1;
+
+    // LAST INTENT PER CONTROL — what we most recently asked the radio for, in
+    // the seam's own units. Not a cache of the radio's state: it is what
+    // `controls.scrub` re-asserts, so a linkage check can drive every control
+    // without moving any of them. A radio that disagrees corrects these through
+    // the ordinary decode path.
+    int     m_rfGainPercent = 0;
+    int     m_preampStep = 0;
+    int     m_attenStep = 0;
+    int     m_nrLevelPercent = 0;
+    int     m_nbLevelPercent = 0;
+    int     m_notchPosPercent = 50;
+    int     m_squelchPercent = 0;
+    int     m_micGainPercent = 0;
+    int     m_compLevelPercent = 0;
+    bool    m_compEnable = false;
+    bool    m_monitorOn = false;
+    QString m_agcMode = QStringLiteral("med");
+    int     m_afGainPercent = 0;
+    bool    m_voxOn = false;
+    int     m_voxLevelPercent = 0;
+    int     m_voxDelayMs = 0;
+    // -1 = unknown, 0 = off, 1 = on. The dedupe pattern m_nrEnableSent
+    // documents: a set is answered with a bare FB, so re-sending an
+    // unchanged enable is pure traffic on a stream metering already shares.
+    int     m_voxEnableSent = -1;
+    int     m_monitorSent = -1;
+    bool    m_ritOn = false;
+    bool    m_xitOn = false;
+    int     m_ritOffsetHz = 0;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //
@@ -237,6 +325,37 @@ private:
     [[nodiscard]] QVariantList civTrace(bool includeRoutine) const;
     std::deque<CivTraceEntry> m_civTrace;
     static constexpr std::size_t kCivTraceMax = 200;
+
+    // Which control ids this session has actually SENT and RECEIVED, keyed by
+    // the registry's id. Observed truth rather than declared: a row the table
+    // claims is wired but that has never been seen on the wire is exactly the
+    // half-wired state the table exists to expose.
+    QSet<QString> m_controlsSent;
+    QSet<QString> m_controlsSeen;
+    // Rows whose scrub mirror holds a REAL value — the radio answered for it,
+    // or we commanded it. Deliberately NOT m_controlsSent, which controlScrub()
+    // clears per row to detect the wire and so cannot carry "we set this
+    // earlier". Without this set the scrub re-asserts a construction default as
+    // if it were the operator's setting; see the guard at the top of
+    // scrubDrive().
+    QSet<QString> m_controlsValueKnown;
+    // Every inbound non-sweep frame, matched or not. Distinguishes a silent
+    // radio from a registry that matches nothing.
+    quint64 m_framesObserved = 0;
+
+    // CI-V stall detection. The transport can be healthy while the command
+    // plane is dead — see onLinkTick — so these track the command plane alone.
+    qint64  m_lastInboundCivAtMs = 0;
+    QString m_lastOutboundCiv;      // the last frame we sent, as hex
+    qint64  m_lastOutboundCivAtMs = 0;
+    bool    m_civStallReported = false;
+    // Long enough that a quiet moment is not an alarm — the slowest poll here is
+    // 1 s and a user-command guard can defer it — short enough that an operator
+    // has not yet had time to wonder why the S-meter stopped.
+    static constexpr qint64 kCivStallMs = 5000;
+    // Note the id for a frame we are about to send or have just decoded.
+    void noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
+    void noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     LinkStats m_link;
 };
 

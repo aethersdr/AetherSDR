@@ -59,7 +59,11 @@ inline QString comboArrowPath()
 // time.  The arrow URL is arg()ed in by the caller because it depends on
 // the active theme's text.secondary colour (cached PNG path varies per
 // theme).
-inline QString comboStyleTemplate()
+// `extraRules` is appended verbatim, so a caller can override the base rules for
+// its own context — a taller field wants more padding than the compact applet
+// combos this was shaped for. Token placeholders work there too; the whole
+// string is resolved together.
+inline QString comboStyleTemplate(const QString& extraRules = QString())
 {
     return QStringLiteral(
         "QComboBox { background: {{color.background.1}};"
@@ -76,8 +80,15 @@ inline QString comboStyleTemplate()
         "QComboBox::down-arrow { image: url(%1); width: 8px; height: 6px; }"
         "QComboBox QAbstractItemView { background: {{color.background.1}};"
         " color: {{color.text.primary}};"
-        " selection-background-color: {{color.accent}}; }")
-        .arg(detail::comboArrowPath());
+        " selection-background-color: {{color.accent}}; }"
+        // An EDITABLE combo puts a real QLineEdit inside itself, and without a
+        // rule it keeps the platform's own frame and background — a white box
+        // inside a dark combo. Neutralised here rather than per caller, because
+        // every editable combo has this problem and none of them wants it.
+        "QComboBox QLineEdit { border: none; padding: 0; margin: 0;"
+        " background: transparent; color: {{color.text.primary}}; }")
+        .arg(detail::comboArrowPath())
+        + extraRules;
 }
 
 // Apply the themed style to a combo box.  Routes through
@@ -90,20 +101,21 @@ inline QString comboStyleTemplate()
 // keep the stale arrow URL.  The double-apply is wasteful but small; a
 // Phase 5 follow-up could introduce a "computed token" mechanism to
 // avoid the duplicate apply if combos become a hot path.
-inline void applyComboStyle(QComboBox* combo)
+inline void applyComboStyle(QComboBox* combo, const QString& extraRules = QString())
 {
     if (!combo) return;
 
-    ThemeManager::instance().applyStyleSheet(combo, comboStyleTemplate());
+    ThemeManager::instance().applyStyleSheet(combo, comboStyleTemplate(extraRules));
 
     // QPointer guards against the combo being destroyed before the theme
     // change fires.  The combo is also the receiver-context for the
     // connection so Qt cleans up the lambda when the combo dies.
     QPointer<QComboBox> guard(combo);
     QObject::connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
-                     combo, [guard]() {
+                     combo, [guard, extraRules]() {
         if (guard) {
-            ThemeManager::instance().applyStyleSheet(guard, comboStyleTemplate());
+            ThemeManager::instance().applyStyleSheet(guard,
+                                                     comboStyleTemplate(extraRules));
         }
     });
 }

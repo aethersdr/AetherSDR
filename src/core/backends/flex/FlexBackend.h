@@ -63,7 +63,12 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    void setPanCenter(const QString& panId, double hz) override;
+    void setPanCenter(const QString& panId, double hz,
+                      PanCenterIntent intent) override;
+    void createNotch(double centerHz, double widthHz) override;
+    void setNotch(int notchId, const AetherSDR::NotchDelta& delta) override;
+    void removeNotch(int notchId) override;
+    void setNotchesEnabled(bool on) override;
     void sendSliceWaveformCommand(int sliceId, const QString& command);
     void setKeying(bool key) override;
     void invokeExtension(const QString& ns, const QString& verb,

@@ -129,7 +129,7 @@ static void testMonoCollapse()
     // over before the tap moved. Asymmetric channels prove it is an average and
     // not a channel pick.
     const QByteArray in = stereoBlock({{1.0f, 0.0f}, {-0.5f, -0.5f}, {0.25f, 0.75f}});
-    const QVector<float> mono = AsrTapPolicy::toMono(in);
+    const QVector<float> mono = AsrTapPolicy::toMono(in, 2);
 
     check(mono.size() == 3, "one mono sample per stereo frame");
     if (mono.size() != 3) return;
@@ -146,7 +146,7 @@ static void testMonoCollapseGuardsAgainstNonFiniteAndClipping()
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
     const QByteArray in = stereoBlock({{nan, 0.0f}, {inf, inf}, {5.0f, 5.0f}, {-9.0f, -9.0f}});
-    const QVector<float> mono = AsrTapPolicy::toMono(in);
+    const QVector<float> mono = AsrTapPolicy::toMono(in, 2);
 
     check(mono.size() == 4, "non-finite input still yields one sample per frame");
     if (mono.size() != 4) return;
@@ -158,11 +158,55 @@ static void testMonoCollapseGuardsAgainstNonFiniteAndClipping()
 
 static void testMonoCollapseEdgeCases()
 {
-    check(AsrTapPolicy::toMono(QByteArray()).isEmpty(),
+    check(AsrTapPolicy::toMono(QByteArray(), 2).isEmpty(),
           "an empty block produces no samples");
     // Shorter than one float: must not read past the end.
-    check(AsrTapPolicy::toMono(QByteArray(3, '\0')).isEmpty(),
+    check(AsrTapPolicy::toMono(QByteArray(3, '\0'), 2).isEmpty(),
           "a sub-sample block produces no samples");
+}
+
+// #4489: the caller states the channel count instead of toMono() inferring it
+// from the byte count's parity. A genuinely mono block with an even sample
+// count used to be misread as stereo and averaged pairwise — silent
+// corruption, not a crash, which is why it needed a caller-supplied count
+// rather than a better heuristic.
+static void testMonoPassthroughForMonoChannelCount()
+{
+    QByteArray in(4 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* f = reinterpret_cast<float*>(in.data());
+    f[0] = 1.0f; f[1] = -1.0f; f[2] = 0.25f; f[3] = -0.25f;
+
+    const QVector<float> mono = AsrTapPolicy::toMono(in, 1);
+    check(mono.size() == 4, "mono in, mono out — one sample per float, none paired off");
+    if (mono.size() != 4) return;
+    check(std::fabs(mono[0] - 1.0f) < 1e-6f && std::fabs(mono[1] + 1.0f) < 1e-6f,
+          "mono samples pass through individually rather than being averaged in pairs");
+}
+
+// A block that is not a whole number of frames for the stated channel count is
+// malformed. The old parity heuristic would have silently reinterpreted it
+// (an odd stereo block read as mono); the fix rejects it instead.
+static void testMalformedLengthIsRejectedNotReinterpreted()
+{
+    // 3 floats claimed as stereo: not a whole number of stereo frames.
+    QByteArray in(3 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* f = reinterpret_cast<float*>(in.data());
+    f[0] = 1.0f; f[1] = 1.0f; f[2] = 1.0f;
+    check(AsrTapPolicy::toMono(in, 2).isEmpty(),
+          "an odd-length block claimed as stereo is rejected, not read as mono");
+
+    check(AsrTapPolicy::toMono(in, 0).isEmpty(), "a zero channel count is rejected");
+    check(AsrTapPolicy::toMono(in, 3).isEmpty(),
+          "an unsupported channel count is rejected rather than guessed at");
+
+    // A byte count that isn't a whole number of floats truncates on the way
+    // to totalFloats, so it can pass the frame check on a shorter, silently
+    // wrong count. 9 bytes claimed as stereo would truncate to 2 floats (one
+    // frame, accepted) with the trailing byte dropped without a word — this
+    // must be caught before the frame check ever sees it.
+    QByteArray partial(9, '\0');
+    check(AsrTapPolicy::toMono(partial, 2).isEmpty(),
+          "a byte count that isn't a whole number of floats is rejected, not truncated");
 }
 
 // The property the whole change exists to protect: EVERY sample handed to the
@@ -185,7 +229,7 @@ static void testNoSamplesAreDropped()
     int delivered = 0;
     for (int n = 0; n < 10; ++n) {
         if (p.accepts(QStringLiteral("flex"), QString(), 0)) {
-            delivered += AsrTapPolicy::toMono(packet).size();
+            delivered += AsrTapPolicy::toMono(packet, 2).size();
         }
     }
     check(delivered == 10 * kFramesPerPacket,
@@ -205,6 +249,8 @@ int main(int argc, char** argv)
     AetherSDR::testMonoCollapse();
     AetherSDR::testMonoCollapseGuardsAgainstNonFiniteAndClipping();
     AetherSDR::testMonoCollapseEdgeCases();
+    AetherSDR::testMonoPassthroughForMonoChannelCount();
+    AetherSDR::testMalformedLengthIsRejectedNotReinterpreted();
     AetherSDR::testNoSamplesAreDropped();
 
     if (AetherSDR::g_failures == 0)

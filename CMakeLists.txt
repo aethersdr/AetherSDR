@@ -619,6 +619,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
+    src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
     src/core/backends/icom/CivCodec.cpp      # IcomCIV Phase 1 (CI-V command plane, transport-free)
     src/core/backends/icom/IcomStream.cpp    # IcomCIV Phase 0 (one UDP stream + ARQ)
@@ -627,6 +628,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomAudio.cpp     # IcomCIV Phase 3 (codecs + the 1364/556 split)
     src/core/backends/icom/IcomMeters.cpp    # IcomCIV Phase 4 (calibration + poll scheduler)
     src/core/backends/icom/IcomModels.cpp    # IcomCIV Phase 5 (per-model capability table)
+    src/core/backends/icom/IcomControls.cpp  # the CI-V control registry (controls.map / controls.scrub)
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
@@ -724,6 +726,8 @@ set(CORE_SOURCES
     src/core/PgxlConnection.cpp
     src/core/AcomProtocol.cpp
     src/core/AcomConnection.cpp
+    src/core/SpeProtocol.cpp
+    src/core/SpeConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -932,6 +936,7 @@ set(GUI_SOURCES
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
+    src/gui/SpeApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -3198,6 +3203,31 @@ target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
 
+add_executable(hl2_notch_seed_test tests/hl2_notch_seed_test.cpp)
+target_include_directories(hl2_notch_seed_test PRIVATE src)
+target_link_libraries(hl2_notch_seed_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_notch_seed_test COMMAND hl2_notch_seed_test)
+
+# HL2 manual frequency calibration — simulates the gateware's own NCO arithmetic
+# (radio.v freqcomp/M2/M3) on a deliberately wrong master clock, so the
+# correction is checked against the hardware's behaviour rather than against its
+# own algebra. Also pins the sign convention and the wire command banks.
+add_executable(hl2_freq_cal_test tests/hl2_freq_cal_test.cpp)
+target_include_directories(hl2_freq_cal_test PRIVATE src)
+target_link_libraries(hl2_freq_cal_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_freq_cal_test COMMAND hl2_freq_cal_test)
+
+# Calibration page Trim buttons — applied live while held, persisted exactly
+# once on release. Pins the Qt auto-repeat property the split rests on (every
+# repeat tick emits released()/clicked() with the button still DOWN), so a
+# regression shows up as one failing assertion rather than as a settings file
+# written eight times a second. Widgets only — no project sources.
+add_executable(hl2_trim_autorepeat_test tests/hl2_trim_autorepeat_test.cpp)
+target_link_libraries(hl2_trim_autorepeat_test PRIVATE Qt6::Core Qt6::Widgets Qt6::Test)
+add_test(NAME hl2_trim_autorepeat_test COMMAND hl2_trim_autorepeat_test)
+set_tests_properties(hl2_trim_autorepeat_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # HL2 backend — IRadioBackend seam contract against a capped fake HL2.
 add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)
@@ -3817,6 +3847,17 @@ target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_test)
 
+qt_add_resources(KIWISDR_DX_SPOTS_TEST_RESOURCES resources/resources.qrc)
+add_executable(kiwisdr_dx_spots_test
+    tests/kiwisdr_dx_spots_test.cpp
+    src/models/BandPlanManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    ${KIWISDR_DX_SPOTS_TEST_RESOURCES}
+)
+target_include_directories(kiwisdr_dx_spots_test PRIVATE src tests)
+target_link_libraries(kiwisdr_dx_spots_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME kiwisdr_dx_spots_test COMMAND kiwisdr_dx_spots_test)
+
 add_executable(biquad_test
     tests/biquad_test.cpp
     src/core/Biquad.cpp
@@ -4178,6 +4219,14 @@ add_executable(acom_protocol_test
 target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
+
+add_executable(spe_protocol_test
+    tests/spe_protocol_test.cpp
+    src/core/SpeProtocol.cpp
+)
+target_include_directories(spe_protocol_test PRIVATE src)
+target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
+add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
@@ -4687,6 +4736,7 @@ add_executable(cw_sidetone_test
 )
 target_include_directories(cw_sidetone_test PRIVATE src)
 target_link_libraries(cw_sidetone_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
@@ -5049,6 +5099,12 @@ add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
 target_include_directories(hl2_tx_loopback_test PRIVATE src)
 target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+# This test is a no-op without an hpsdrsim answering discovery, which is the
+# normal state of every machine that has not deliberately started one. Without
+# this property that no-op reports as Passed, which is indistinguishable from a
+# run that actually keyed and measured — the exact silent-green this test was
+# fixed to stop. Same convention as crdv_quarantined_test above.
+set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
@@ -5644,6 +5700,11 @@ add_executable(ulanzi_mapping_migration_test
     ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ulanzi_mapping_migration_test PRIVATE src tests)
+# The drift assertion parses the wheel-action else-if chain out of
+# MainWindow_Controllers.cpp at run time, so it needs to find the source tree
+# from wherever ctest runs it.
+target_compile_definitions(ulanzi_mapping_migration_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(ulanzi_mapping_migration_test PRIVATE Qt6::Core)
 add_test(NAME ulanzi_mapping_migration_test COMMAND ulanzi_mapping_migration_test)
 
@@ -5963,6 +6024,7 @@ set(AETHER_SETTINGS_CONSUMERS
     qso_recorder_slice_lifetime_test
     qso_recorder_pc_audio_guard_test
     band_plan_license_filter_test
+    kiwisdr_dx_spots_test
     passive_spots_policy_test
     digital_voice_waveform_process_test
     dstar_model_test

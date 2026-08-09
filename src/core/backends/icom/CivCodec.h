@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 // CI-V — the Icom command plane.
@@ -177,6 +178,11 @@ inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceive
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
 inline constexpr std::uint8_t kControl      = 0x1C;   // PTT, tuner, XFC
 inline constexpr std::uint8_t kScope        = 0x27;
+// The attenuator, and it is NOT sub-addressed like 0x14/0x16 — the single
+// data byte IS the setting, in BCD dB. The IC-705 takes 00 (off) and 20
+// (20 dB, HF and 50 MHz only); other models publish other steps, which is
+// why the backend advertises the positions rather than assuming them.
+inline constexpr std::uint8_t kAttenuator  = 0x11;
 // RIT / dTX. Icom calls transmit incremental tuning "dTX"; the operator-facing
 // name everywhere else is XIT, and they are the same control.
 inline constexpr std::uint8_t kTuneOffset   = 0x21;
@@ -193,6 +199,15 @@ inline constexpr std::uint8_t kMicGain   = 0x0B;
 inline constexpr std::uint8_t kKeySpeed  = 0x0C;
 inline constexpr std::uint8_t kCompLevel = 0x0E;
 inline constexpr std::uint8_t kNbLevel   = 0x12;
+// The manual notch's POSITION within the passband, 0000..0255 — not a
+// frequency, and not a depth. It moves with the filter, which is why the
+// seam carries this as a percentage rather than Hz.
+inline constexpr std::uint8_t kNotchPos  = 0x0D;
+// VOX gain — the trigger threshold. NOT the delay: the guide puts VOX DELAY in
+// the SET menu at 1A 05 0359 (00..20), and 14 17 is the ANTI-vox gain, which is
+// a different control again.
+inline constexpr std::uint8_t kVoxGain   = 0x16;
+inline constexpr std::uint8_t kAntiVox   = 0x17;
 inline constexpr std::uint8_t kMonitor   = 0x15;
 }  // namespace level
 
@@ -218,6 +233,10 @@ inline constexpr std::uint8_t kCompressor    = 0x44;
 inline constexpr std::uint8_t kMonitorFn     = 0x45;
 inline constexpr std::uint8_t kVox           = 0x46;
 inline constexpr std::uint8_t kManualNotch   = 0x48;
+// 00 wide, 01 mid, 02 narrow. Read at connect and left alone otherwise —
+// no seam verb carries a notch width, and overwriting the operator's own
+// choice would be worse than not offering it.
+inline constexpr std::uint8_t kManualNotchWidth = 0x57;
 inline constexpr std::uint8_t kBreakIn       = 0x47;   // 00 off, 01 semi, 02 full
 inline constexpr std::uint8_t kDialLock      = 0x50;
 }  // namespace func
@@ -234,6 +253,7 @@ namespace setting {
 inline constexpr int kDataOffModInput = 118;   // SSB/CW/AM/FM — "DATA OFF MOD"
 inline constexpr int kDataModInput    = 119;   // data modes    — "DATA MOD"
 inline constexpr int kWlanModLevel    = 117;
+inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
 
 // 1A 05 values for the two above.
 inline constexpr std::uint8_t kModMic     = 0x00;
@@ -318,7 +338,33 @@ enum class CivMode : std::uint8_t {
 // in the SET menu and we have no way to read the redefinition back. So this is
 // a best-effort mapping, and the honest consequence is that the passband the
 // UI shows must come from what the radio reports, never from what we asked for.
-[[nodiscard]] int filterForWidthHz(int widthHz) noexcept;
+//
+// MODE-DEPENDENT, and that is the whole point. The radio has three filter slots
+// and what each one MEANS changes with the mode: FIL1 is 3.0 kHz in SSB, 1.2 kHz
+// in CW, 9 kHz in AM and 15 kHz in FM. Snapping every mode against the SSB
+// thresholds — which this used to do — put every AM width on FIL1 and every CW
+// width on FIL3, so the operator had three buttons and one filter.
+//
+// Ladders from the IC-705's own defaults (hamlib rigs/icom/ic7300.c,
+// RIG_MODEL_IC705). The operator can redefine them in the SET menu and there is
+// no command to read the redefinition back, so this stays best-effort — and the
+// consequence is load-bearing: the passband the UI shows must come from what the
+// radio REPORTS after the change, never from the width we asked for.
+[[nodiscard]] int filterForWidthHz(const std::string& mode, int widthHz) noexcept;
+
+// The widths that mode's filter slots hold, NARROWEST FIRST — deliberately the
+// reverse of the radio's own FIL1/FIL2/FIL3 numbering, in which FIL1 is the
+// widest. Published as RadioCapabilities::rxFilterWidthsHz so the filter buttons
+// offer what the hardware actually has instead of a Flex-shaped eight, and in
+// the same narrow-to-wide order as every other filter row in the app.
+[[nodiscard]] std::vector<int> filterWidthsForMode(const std::string& mode);
+
+// The passband that filter gives in that mode, in Hz relative to the carrier,
+// sign carrying the sideband (SliceModel's convention). The backend needs this
+// because an IC-705's IF filters cannot be read back as Hz — nothing else in
+// the chain can fill the window in.
+[[nodiscard]] std::pair<int, int> passbandForModeAndFilter(const std::string& mode,
+                                                          int filter);
 
 // ---------------------------------------------------------------------------
 // Command builders
@@ -338,6 +384,15 @@ enum class CivMode : std::uint8_t {
 [[nodiscard]] std::vector<std::uint8_t> cmdSetFunction(std::uint8_t to, std::uint8_t which,
                                                         int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit);
+// Attenuator. `db` is the dB figure the radio prints (0 or 20 on an
+// IC-705), encoded as one BCD byte. The read form carries no payload.
+[[nodiscard]] std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
+// RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
+// `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetTuner(std::uint8_t to, std::uint8_t value);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTuner(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadId(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeOnOff(std::uint8_t to, bool on);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeDataOutput(std::uint8_t to, bool on);

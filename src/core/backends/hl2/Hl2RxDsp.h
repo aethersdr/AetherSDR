@@ -32,6 +32,21 @@ public:
     // HL2 IQ rate and the audio rate — see the note in configure().
     static constexpr int kWdspDspSampleRateHz = 48000;
 
+    // RX filter length. This is also the manual-notch resolution: WDSP's
+    // narrowest notch is 1600 / (taps/256) Hz at kWdspDspSampleRateHz, and it
+    // WIDENS a narrower request instead of rejecting it. 8192 taps buys a 50 Hz
+    // floor (pihpsdr's value); WDSP's own default of 2048 would floor it at
+    // 200 Hz, wide enough to swallow a CW signal next to the carrier being
+    // notched. Keep kMinNotchWidthHz in step if this changes — the UI offers
+    // widths from it.
+    static constexpr int kRxFilterTaps = 8192;
+    static constexpr double kMinNotchWidthHz =
+        1600.0 / (static_cast<double>(kRxFilterTaps) / 256.0)
+        * (static_cast<double>(kWdspDspSampleRateHz) / 48000.0);
+    static_assert(kMinNotchWidthHz <= 50.0,
+                  "RX filter taps no longer allow a 50 Hz notch; the width "
+                  "presets in the TNF menu assume one.");
+
     struct Config {
         int inputSampleRateHz = 48000;   // HL2 IQ sample rate
         // Demodulated-audio rate. 24 kHz because that is AudioEngine's native
@@ -91,6 +106,35 @@ public:
     // fps <= 0 removes the cap. The rate is applied on a wall clock, so it
     // holds across a sample-rate change without needing to be recomputed.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
+
+    // ── Manual notch filters ──────────────────────────────────────────────
+    //
+    // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
+    // notch ids onto it — this class just does as it is told, in the order it
+    // is told, so the two stay in step across every receiver.
+    //
+    // Centres are ABSOLUTE RF Hz. setNotchTuneFrequency() must follow the NCO,
+    // or the notches stay where the NCO used to be.
+    //
+    // The set is MIRRORED here as well as in WDSP, because reconfigure()
+    // destroys the notch database along with the channel. Without the copy, an
+    // operator's notches vanish on a sample-rate change — the same reason the
+    // shift is kept.
+    Q_INVOKABLE void addNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void editNotch(int index, double centerHz, double widthHz, bool active);
+    Q_INVOKABLE void removeNotch(int index);
+    // Empty both the mirror and WDSP's database. This is what makes seeding
+    // IDEMPOTENT: Hl2Backend::seedNotches() clears before it replays, so a
+    // second seed against a chain that already holds the set replaces it
+    // instead of appending a duplicate of every notch.
+    Q_INVOKABLE void clearNotches();
+    Q_INVOKABLE void setNotchesEnabled(bool on);
+    Q_INVOKABLE void setNotchTuneFrequency(double tuneHz);
+
+    // Mirror size, and WDSP's own count. These must agree — the positional
+    // index map depends on it — so both are exposed for the test that pins it.
+    [[nodiscard]] int notchCount() const;
+    [[nodiscard]] int wdspNotchCount() const;
 
     // Mute the DEMODULATOR while transmitting.
     //
@@ -221,6 +265,19 @@ private:
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
     Config m_config;
+
+    // Notch set, mirrored so reconfigure() can replay it — see the note on
+    // addNotch(). Index in this vector IS the WDSP notch index; keeping them
+    // identical is the entire trick, and it works because every mutation here
+    // performs the same insert/erase WDSP performs.
+    struct Notch {
+        double centerHz = 0.0;
+        double widthHz = 0.0;
+        bool active = true;
+    };
+    std::vector<Notch> m_notches;
+    bool m_notchesEnabled = true;
+    double m_notchTuneHz = 0.0;
 
     bool m_audioMuted = false;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on

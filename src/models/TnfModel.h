@@ -3,6 +3,8 @@
 #include <QObject>
 #include <QMap>
 
+#include "core/backends/NotchDelta.h"
+
 namespace AetherSDR {
 
 struct TnfEntry {
@@ -25,7 +27,13 @@ public:
     bool globalEnabled() const { return m_globalEnabled; }
 
     // ── Status parsing (called from RadioModel) ─────────────────────────
+    // The Flex path: raw `tnf <id> …` status keys off the command plane.
     void applyTnfStatus(int id, const QMap<QString, QString>& kvs);
+    // The typed path, for a backend whose notches live in this process and are
+    // reported through IRadioBackend::notchChanged rather than as wire text.
+    // Creates the entry if the id is new, which is how an HL2 notch first
+    // appears — the backend mints the id, exactly as a Flex radio does.
+    void applyNotchDelta(int id, const NotchDelta& delta);
     void removeTnf(int id);
     void applyGlobalEnabled(bool on);
 
@@ -44,7 +52,21 @@ signals:
     void tnfChanged(int id);
     void tnfRemoved(int id);
     void globalEnabledChanged(bool on);
-    void commandReady(const QString& cmd);
+
+    // Typed intents, routed by RadioModel to IRadioBackend. These replaced a
+    // commandReady(QString) that emitted SmartSDR `tnf …` text: it meant the
+    // notch controls only ever did anything on a Flex, while the buttons behind
+    // them were live on every radio. FlexBackend now builds those same strings,
+    // so the wire is unchanged and a host-DSP backend can implement the same
+    // intents in software.
+    //
+    // Note the ASYMMETRY with the other request signals: no id on create,
+    // because the id is the backend's to assign (a Flex mints it in the radio).
+    // The new notch arrives back through applyTnfStatus/applyNotchDelta.
+    void notchCreateRequested(double centerHz, double widthHz);
+    void notchChangeRequested(int id, const NotchDelta& delta);
+    void notchRemoveRequested(int id);
+    void notchesEnabledRequested(bool on);
 
 private:
     QMap<int, TnfEntry> m_tnfs;

@@ -59,7 +59,8 @@ public:
     // them and echoes the slice state back so the UI reflects what the operator
     // set (Principle II — the radio is authoritative about its own state).
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    void setPanCenter(const QString& panId, double hz) override;
+    void setPanCenter(const QString& panId, double hz,
+                      PanCenterIntent intent) override;
     void setKeying(bool key) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;

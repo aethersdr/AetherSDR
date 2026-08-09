@@ -1057,9 +1057,10 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("tnf_toggle", "TNF Global Toggle", "DSP",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
+            // Through the model rather than a raw command string, so the
+            // shortcut reaches a host-DSP notch as well as a Flex TNF.
             const bool wasOn = m_radioModel.tnfModel().globalEnabled();
-            m_radioModel.sendCommand(
-                QString("radio set tnf_enabled=%1").arg(wasOn ? 0 : 1));
+            m_radioModel.tnfModel().requestGlobalTnfEnabled(!wasOn);
         });
     m_shortcutManager.registerAction("nr_cycle", "NR Cycle (Off/NR/NR2/NR4/DFNR)", "DSP",
         QKeySequence(), [this]() {
@@ -1218,8 +1219,7 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("segment_zoom", "Segment Zoom", "Display",
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/true); });
     // Keyboard step uses kPanZoomFactor per press; rotary dials use a finer
-    // per-detent factor (kRotaryPanZoomFactor in MainWindow_Controllers.cpp).
-    static constexpr double kPanZoomFactor = 1.5;
+    // per-detent factor (kRotaryPanZoomFactor in MainWindowHelpers.h).
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
         QKeySequence(Qt::Key_Equal), [this]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
     m_shortcutManager.registerAction("pan_zoom_out", "Panadapter Zoom Out", "Display",

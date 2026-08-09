@@ -84,6 +84,10 @@ public:
     bool    nrfOn()       const { return m_nrf; }
     bool    anflOn()      const { return m_anfl; }
     bool    anftOn()      const { return m_anft; }
+    // The radio's own single in-passband notch (RadioCapabilities::
+    // hasManualNotch). mnLevel() is a POSITION, 0..100 across the passband,
+    // not a frequency and not a depth.
+    bool    mnOn()        const { return m_mn; }
     bool    apfOn()       const { return m_apf; }
     int     apfLevel()    const { return m_apfLevel; }
     int     nbLevel()     const { return m_nbLevel; }
@@ -93,6 +97,7 @@ public:
     int     nrsLevel()    const { return m_nrsLevel; }
     int     nrfLevel()    const { return m_nrfLevel; }
     int     anflLevel()   const { return m_anflLevel; }
+    int     mnLevel()     const { return m_mnLevel; }
     QString agcMode()      const { return m_agcMode; }
     QString flexAgcMode()  const { return m_agcMode; }
     QString receiveAgcMode() const { return m_externalReceiveAudioReplacement
@@ -254,6 +259,7 @@ public:
     void setNrf(bool on);
     void setAnfl(bool on);
     void setAnft(bool on);
+    void setMn(bool on);
     void setApf(bool on);
     void setApfLevel(int v);
     void setNbLevel(int v);
@@ -263,6 +269,7 @@ public:
     void setNrsLevel(int v);
     void setNrfLevel(int v);
     void setAnflLevel(int v);
+    void setMnLevel(int v);
     void setAgcMode(const QString& mode);
     void setAgcThreshold(int value);
     void setAgcOffLevel(int value);
@@ -347,6 +354,9 @@ signals:
     void noiseReductionCommandIssued(bool on, int level);
     void noiseBlankerCommandIssued(bool on, int level);
     void autoNotchCommandIssued(bool on);
+    // Enable and position together — see IRadioBackend::setSliceManualNotch
+    // for why turning the notch on without placing it is not enough.
+    void manualNotchCommandIssued(bool on, int position);
     void squelchCommandIssued(bool on, int level);
     // Receive and transmit incremental tuning.
     void ritCommandIssued(bool on, int hz);
@@ -404,6 +414,7 @@ signals:
     void nrfChanged(bool on);
     void anflChanged(bool on);
     void anftChanged(bool on);
+    void mnChanged(bool on);
     void apfChanged(bool on);
     void apfLevelChanged(int v);
     void nbLevelChanged(int v);
@@ -413,6 +424,7 @@ signals:
     void nrsLevelChanged(int v);
     void nrfLevelChanged(int v);
     void anflLevelChanged(int v);
+    void mnLevelChanged(int v);
     void agcModeChanged(const QString& mode);
     void agcThresholdChanged(int value);
     void agcOffLevelChanged(int value);
@@ -535,6 +547,7 @@ private:
     bool    m_nrf{false};
     bool    m_anfl{false};
     bool    m_anft{false};
+    bool    m_mn{false};
     bool    m_apf{false};
     int     m_apfLevel{50};
     int     m_nbLevel{50};
@@ -544,6 +557,9 @@ private:
     int     m_nrsLevel{50};
     int     m_nrfLevel{50};
     int     m_anflLevel{50};
+    // Mid-passband, so a notch enabled before the slider is touched lands
+    // somewhere the operator can see and drag, not at an edge.
+    int     m_mnLevel{50};
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
     int     m_agcOffLevel{10};

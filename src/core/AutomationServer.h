@@ -615,10 +615,19 @@ private:
     // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
     // RX/config only; none of these key the transmitter.
     QJsonObject doSlice(const QString& action, const QString& arg);
+    // Manual notch filters (a Flex TNF, or the WDSP null that stands in for one
+    // on a radio with no DSP). `list` reports what the radio actually holds,
+    // which is what makes the feature provable: a notch that was placed but not
+    // applied looks identical to one that worked until you read it back.
+    QJsonObject doNotch(const QString& action, const QString& arg);
     // Disconnected-only GPS status fixtures for the 6000-series
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
     QJsonObject doTune(const QString& value, const QString& id);
+    // Manual frequency calibration. Gated on
+    // RadioCapabilities::hostFrequencyCalibration, so it refuses on a radio that
+    // calibrates itself rather than silently storing a number nothing applies.
+    QJsonObject doFreqCal(const QString& action, const QString& value);
     QJsonObject doTargetTune(const QString& value);
     QJsonObject doMemory(const QString& action, const QString& arg);
     // Demo fault injection (RFC #4288 #4): route a fault to backend->
@@ -626,6 +635,11 @@ private:
     QJsonObject doSimFault(const QString& fault, const QString& arg);
     // Raw CI-V inject + frame trace. Icom-only; other backends report it as
     // unimplemented rather than silently succeeding.
+    // The CI-V control registry: `map` reports every command the backend
+    // names joined with whether it is wired and whether it has been seen on
+    // the wire; `scrub` drives every settable control at its current value
+    // and reports which ones actually reached the radio.
+    QJsonObject doControls(const QString& action, const QString& arg);
     QJsonObject doCiv(const QString& action, const QString& arg);
     // Data-arrival ages plus the meter producer->consumer join.
     QJsonObject doLiveness();

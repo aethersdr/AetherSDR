@@ -426,6 +426,8 @@ public:
     void setBandPlanFontSize(int pt) { m_bandPlanFontSize = pt; update(); }
     void setBandPlanShowSpots(bool on) { m_bandPlanShowSpots = on; update(); }
     bool bandPlanShowSpots() const { return m_bandPlanShowSpots; }
+    void setKiwiDxSpotsEnabled(bool on) { m_showKiwiDxSpots = on; markOverlayDirty(); update(); }
+    bool showKiwiDxSpots() const { return m_showKiwiDxSpots; }
     void setBandPlanManager(class BandPlanManager* mgr);
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
     void setShowCursorFreq(bool on) { m_showCursorFreq = on; markOverlayDirty(); }
@@ -654,6 +656,17 @@ public:
     };
     void setTnfMarkers(const QVector<TnfMarker>& markers);
     void setTnfGlobalEnabled(bool on);
+    // What the connected radio can do with notches, from RadioCapabilities.
+    //
+    // maxNotches 0 removes the add-notch entries entirely — the control used to
+    // be offered on every backend while only a Flex did anything with it.
+    // hasDepth gates the depth and permanence submenus, which are radio-owned
+    // attributes a host-DSP null does not have. The width bounds clamp both the
+    // preset list and the vertical drag-resize, because a host-DSP notch has a
+    // real minimum width that WDSP enforces SILENTLY: ask for less and the
+    // overlay draws a narrower notch than the operator is hearing.
+    void setNotchCapabilities(int maxNotches, bool hasDepth,
+                              int minWidthHz, int maxWidthHz);
 
     struct SpotMarker {
         int    index;
@@ -749,6 +762,8 @@ signals:
     void offScreenSliceCenterRequested(int sliceId);
     // Emitted when the user requests an absolute jump in the panadapter area.
     void frequencyClicked(double mhz);
+    // Emitted when user clicks on a KiwiSDR DX Community spot marker.
+    void kiwiSpotClicked(double freqMhz, const QString& mode, int loOffsetHz, int hiOffsetHz);
     // Emitted when the user makes an incremental tuning gesture such as
     // wheel tuning or VFO drag.
     void incrementalTuneRequested(double mhz);
@@ -1799,6 +1814,7 @@ private:
     WaterfallBlankerFrameBundle m_wfLastGoodFrames;
     int  m_bandPlanFontSize{6};  // 0 = off
     bool m_bandPlanShowSpots{true};
+    bool m_showKiwiDxSpots{false};
     BandPlanManager* m_bandPlanMgr{nullptr};
     bool m_singleClickTune{false};
     QPoint m_clickPressPos;        // for single-click-to-tune drag threshold
@@ -1862,6 +1878,13 @@ private:
 
     // ── TNF markers ────────────────────────────────────────────────────
     QVector<TnfMarker> m_tnfMarkers;
+    // Permissive defaults: a disconnected session keeps the notch controls it
+    // has always had rather than having them appear on connect. A connected
+    // backend narrows them — see setNotchCapabilities.
+    int  m_maxNotchFilters{1000};
+    bool m_notchHasDepth{true};
+    int  m_notchMinWidthHz{10};
+    int  m_notchMaxWidthHz{12000};
     bool m_tnfGlobalEnabled{true};
     QVector<SpotMarker> m_spotMarkers;
     QVector<SwrSweepPoint> m_swrSweepPoints;

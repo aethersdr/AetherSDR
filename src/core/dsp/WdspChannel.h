@@ -122,6 +122,67 @@ public:
     // without moving the NCO, which is what keeps the panadapter still while
     // the operator tunes. 0 disables the stage. Receive channels only.
     bool setShift(double shiftHz) noexcept;
+
+    // ── Manual notch filters ──────────────────────────────────────────────
+    //
+    // The host-side equivalent of a Flex TNF. On a direct-sampling radio this
+    // is the only notch that exists — the HL2 protocol carries no DSP at all,
+    // so a notch either happens in WDSP or nowhere (HL2 oracle addendum 3 §B4).
+    //
+    // Centres and the tune frequency are ABSOLUTE RF Hz. WDSP subtracts the
+    // tune frequency internally when it rebuilds the filter mask, which is what
+    // makes a notch track the interferer instead of the audio pitch: tune away
+    // and the notch stays on the carrier. Callers therefore set the notch tune
+    // frequency on every NCO change; nothing else does it for them.
+    //
+    // No sign correction, on a conjugated input or otherwise. The notch centres
+    // share an axis with the passband bounds — calc_nbp() feeds flow/fhigh and
+    // fcenter into make_nbp() together — so whatever inversion applies to one
+    // applies to the other. On the HL2 that means the two documented flips (a
+    // wire that is the conjugate of the analytic signal, and an RXA that
+    // selects the opposite sign to its passband bounds) cancel here exactly as
+    // they cancel for the demodulator; see the handedness note in
+    // Hl2RxDsp::onIqBlock. Negating anything here would UNDO a working
+    // cancellation and put every notch on its own mirror image.
+    //
+    // `index` is a POSITIONAL handle into a dense array, not a stable id.
+    // addNotch() inserts at `index` and shifts everything above it up;
+    // removeNotch() closes the gap and shifts everything above it down. A
+    // caller holding stable ids of its own must remap after every removal or it
+    // will silently edit a different notch than it meant to.
+    //
+    // Receive channels only — a TX channel has no notch database. All of these
+    // are control-path operations guarded exactly like setMode(), so they must
+    // not be called from the processIq() callback.
+    //
+    // reconfigure() DESTROYS the notch database, because it closes and reopens
+    // the channel and the database belongs to the channel. A caller that keeps
+    // notches across a sample-rate or block-size change has to re-add them
+    // afterwards, the same way it re-applies the shift.
+    bool addNotch(int index, double centerHz, double widthHz, bool active) noexcept;
+    bool editNotch(int index, double centerHz, double widthHz, bool active) noexcept;
+    bool removeNotch(int index) noexcept;
+    // Global run flag for the whole database — the equivalent of a Flex
+    // tnf_enabled. Individual notches keep their own `active` flag under it.
+    bool setNotchesEnabled(bool on) noexcept;
+    // The tuned (NCO) frequency notch centres are measured against.
+    bool setNotchTuneFrequency(double tuneHz) noexcept;
+    [[nodiscard]] int notchCount() const noexcept;
+    // Reads back what WDSP actually stored at `index`. The width is the width
+    // as REQUESTED, not as applied — WDSP keeps the request and widens it when
+    // it builds the mask, so this cannot be used to discover that a notch was
+    // silently widened. Compare against minimumNotchWidthHz() for that.
+    [[nodiscard]] bool notchAt(int index, double* centerHz, double* widthHz,
+                               bool* active) const noexcept;
+    // The narrowest notch this channel can actually produce, in Hz.
+    //
+    // Worth checking before offering a width to the operator, because WDSP
+    // enforces this floor SILENTLY: the stage runs with auto-increment on, so a
+    // narrower request is widened rather than refused, and the only evidence is
+    // that the notch eats more of the band than the UI is drawing. The floor is
+    // a function of filter length — 200 Hz at 2048 taps, 50 Hz at 8192 — so it
+    // moves when Config::filterTaps does.
+    [[nodiscard]] double minimumNotchWidthHz() const noexcept;
     // WDSP meter readout in dBFS-relative units. Meter is the RXA meter type
     // (0 = S peak, 1 = S average, 2 = ADC peak, 3 = ADC average, 4 = AGC gain).
     // Read-only and cheap — safe to call from a timer. Returns a large negative
@@ -149,6 +210,11 @@ private:
 
     static bool validateConfig(const Config& config, std::string* error) noexcept;
     static int wdspMode(Mode mode) noexcept;
+    // Pushes the NBP stage's copy of the shift. WDSP keeps the shift stage and
+    // the notch database's idea of the shift as two unrelated values, so a
+    // caller that sets one without the other gets notches that sit exactly one
+    // shift away from where they were placed.
+    void applyNotchShift() noexcept;
     static std::size_t computeOutputBlockSize(const Config& config) noexcept;
 
     void open() noexcept;

@@ -264,6 +264,191 @@ bool runReconfigurationTest()
                    "processing after reconfiguration allocated memory");
 }
 
+// WDSP notch handles are POSITIONAL, and the whole stable-id mapping in
+// Hl2Backend is built on exactly how they shift. Pin that behaviour here rather
+// than inferring it from nbp.c, so a WDSP refresh that changes it fails loudly.
+bool runNotchIndexTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.blockForOutput = true;
+
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, error.c_str())) {
+        return false;
+    }
+
+    const double tuneHz = 7'000'000.0;
+    if (!require(channel->setNotchTuneFrequency(tuneHz),
+                 "could not set the notch tune frequency") ||
+        !require(channel->notchCount() == 0,
+                 "a fresh channel reported existing notches")) {
+        return false;
+    }
+
+    // Append three, then confirm they read back in the order they went in.
+    for (int index = 0; index < 3; ++index) {
+        if (!require(channel->addNotch(index, tuneHz + 1000.0 * (index + 1),
+                                       400.0, true),
+                     "could not add a notch")) {
+            return false;
+        }
+    }
+    if (!require(channel->notchCount() == 3, "notch count did not reach 3")) {
+        return false;
+    }
+
+    // Deleting the middle notch must close the gap: what was index 2 becomes
+    // index 1. A caller holding stable ids has to remap here or it edits the
+    // wrong notch — this is the exact behaviour Hl2Backend::notchIndexFor()
+    // and the ordered m_notches vector exist to absorb.
+    if (!require(channel->removeNotch(1), "could not remove the middle notch") ||
+        !require(channel->notchCount() == 2, "notch count did not fall to 2")) {
+        return false;
+    }
+    double center = 0.0;
+    double width = 0.0;
+    bool active = false;
+    if (!require(channel->notchAt(0, &center, &width, &active),
+                 "could not read notch 0 back") ||
+        !require(std::abs(center - (tuneHz + 1000.0)) < 1.0,
+                 "notch 0 moved when a later notch was deleted") ||
+        !require(channel->notchAt(1, &center, &width, &active),
+                 "could not read notch 1 back") ||
+        !require(std::abs(center - (tuneHz + 3000.0)) < 1.0,
+                 "deleting a notch did not shift the ones above it down")) {
+        return false;
+    }
+
+    // Centres round-trip as ABSOLUTE Hz, unmodified. If a sign correction ever
+    // creeps back into WdspChannel, this is what catches it.
+    if (!require(channel->editNotch(0, tuneHz - 1500.0, 250.0, false),
+                 "could not edit a notch") ||
+        !require(channel->notchAt(0, &center, &width, &active),
+                 "could not read an edited notch back") ||
+        !require(std::abs(center - (tuneHz - 1500.0)) < 1.0,
+                 "an edited notch centre did not round-trip") ||
+        !require(std::abs(width - 250.0) < 1.0,
+                 "an edited notch width did not round-trip") ||
+        !require(!active, "an edited notch kept the wrong active flag")) {
+        return false;
+    }
+
+    // Out-of-range handles are refused rather than silently clamped.
+    if (!require(!channel->removeNotch(9), "removing a nonexistent notch succeeded") ||
+        !require(!channel->editNotch(9, tuneHz, 200.0, true),
+                 "editing a nonexistent notch succeeded") ||
+        !require(!channel->notchAt(9, &center, &width, &active),
+                 "reading a nonexistent notch succeeded")) {
+        return false;
+    }
+
+    // The documented width floor, which the UI's width presets are built on.
+    if (!require(std::abs(channel->minimumNotchWidthHz() - 200.0) < 1.0,
+                 "the 2048-tap minimum notch width is no longer 200 Hz")) {
+        return false;
+    }
+    return require(channel->setNotchesEnabled(false) &&
+                       channel->setNotchesEnabled(true),
+                   "could not toggle the global notch run flag");
+}
+
+// The functional half: a notch parked on a tone must actually remove it, and a
+// notch parked on that tone's MIRROR must not. Index bookkeeping can be right
+// while the audio is untouched, and an inverted axis passes every API check.
+bool runNotchAttenuationTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.inputSampleRate = 48000;
+    config.dspSampleRate = 48000;
+    config.outputSampleRate = 48000;
+    config.mode = WdspChannel::Mode::Usb;
+    config.filterLowHz = 150.0;
+    config.filterHighHz = 3000.0;
+    // AGC off with a fixed gain: an AGC would claw the level back after the
+    // notch and mask exactly the attenuation being measured.
+    config.agcMode = 0;
+    config.agcFixedGainDb = 0.0;
+    config.blockForOutput = true;
+    // The tap count HL2 actually runs (Hl2RxDsp::kRxFilterTaps), so the null is
+    // measured in the configuration the operator hears rather than in WDSP's
+    // 2048 default — which is also the one whose 200 Hz notch floor this PR
+    // exists to get away from.
+    config.filterTaps = 8192;
+
+    const double tuneHz = 7'000'000.0;
+    // The tone's audio pitch, and therefore the RF frequency it corresponds to.
+    // Negative baseband because RXA as configured passes the opposite sign to
+    // its passband bounds (see Hl2RxDsp::onIqBlock) — this is the geometry the
+    // HL2 actually runs in, so the notch has to work in it.
+    const double toneBasebandHz = -1500.0;
+    const double toneRfHz = tuneHz + 1500.0;
+
+    const auto measure = [&](double notchRfHz) -> double {
+        std::string error;
+        std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+        if (!channel) {
+            return -1.0;
+        }
+        if (!channel->setNotchTuneFrequency(tuneHz)) {
+            return -1.0;
+        }
+        if (notchRfHz != 0.0) {
+            if (!channel->addNotch(0, notchRfHz, 400.0, true) ||
+                !channel->setNotchesEnabled(true)) {
+                return -1.0;
+            }
+        }
+        std::vector<float> inputI(config.inputBlockSize);
+        std::vector<float> inputQ(config.inputBlockSize);
+        std::vector<float> outputLeft(channel->outputBlockSize());
+        std::vector<float> outputRight(channel->outputBlockSize());
+        double energy = 0.0;
+        // Discard the first blocks: the channel's mute ramp and the filter's
+        // own group delay both suppress output that has nothing to do with the
+        // notch, and 8192-tap masks take a while to fill.
+        constexpr std::size_t kSettleBlocks = 40;
+        constexpr std::size_t kTotalBlocks = 80;
+        for (std::size_t block = 0; block < kTotalBlocks; ++block) {
+            fillComplexTone(inputI, inputQ, config.inputSampleRate,
+                            toneBasebandHz, block * config.inputBlockSize);
+            if (channel->processIq(inputI, inputQ, outputLeft, outputRight) !=
+                WdspChannel::ProcessResult::Ok) {
+                return -1.0;
+            }
+            if (block >= kSettleBlocks) {
+                energy += rms(outputLeft);
+            }
+        }
+        return energy;
+    };
+
+    const double unnotched = measure(0.0);
+    const double notched = measure(toneRfHz);
+    // The mirror image: as far below the tuned frequency as the tone is above.
+    // A notch here must leave the tone alone. If this attenuates instead of the
+    // one above, the notch axis is inverted — the failure an API-only test
+    // cannot see, because both notches are equally well-formed.
+    const double mirrorNotched = measure(tuneHz - 1500.0);
+
+    if (!require(unnotched > 0.0 && notched >= 0.0 && mirrorNotched >= 0.0,
+                 "notch attenuation measurement failed to run")) {
+        return false;
+    }
+    if (!require(unnotched > 1.0e-4, "the unnotched tone produced no audio")) {
+        return false;
+    }
+    return require(notched < unnotched * 0.25,
+                   "a notch on the tone did not attenuate it") &&
+           require(mirrorNotched > unnotched * 0.75,
+                   "a notch on the tone's mirror image attenuated the tone — "
+                   "the notch frequency axis is inverted");
+}
+
 bool runLifecycleTest()
 {
     const uint64_t baseline = WdspChannel::outstandingAllocationsForTest();
@@ -355,6 +540,8 @@ int main()
         !runLeakChecked("underrun test", runUnderrunTest) ||
         !runLeakChecked("reconfiguration test", runReconfigurationTest) ||
         !runLeakChecked("wisdom export test", runWisdomExportTest) ||
+        !runLeakChecked("notch index test", runNotchIndexTest) ||
+        !runLeakChecked("notch attenuation test", runNotchAttenuationTest) ||
         !require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,
                  "WDSP test suite left allocations outstanding")) {
         return 1;

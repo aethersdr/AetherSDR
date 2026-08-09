@@ -168,6 +168,13 @@ public:
     // A reply arrived. Clears the in-flight mark and starts the next interval.
     void markAnswered(MeterId id, std::int64_t nowMs);
 
+    // WHEN a reply last arrived, or 0 if one never has. The poller already knows
+    // this — markAnswered is called on every reading — and it is the one fact
+    // that separates a meter that works from one that is merely defined. A
+    // defined-but-never-fed meter renders as a real instrument reading a quiet
+    // band, which is worse than a missing one.
+    [[nodiscard]] std::int64_t lastReadingAtMs(MeterId id) const;
+
     // A user-initiated command just went out. Metering stays quiet for a short
     // guard so the command is not stuck behind a queue of polls.
     void noteUserCommand(std::int64_t nowMs) noexcept { m_quietUntilMs = nowMs + kUserGuardMs; }
@@ -186,6 +193,7 @@ private:
         bool inFlight = false;
         std::int64_t nextDueMs = 0;
         std::int64_t sentAtMs = 0;
+        std::int64_t answeredAtMs = 0;
     };
     [[nodiscard]] State& stateFor(MeterId id);
     [[nodiscard]] const State& stateFor(MeterId id) const;

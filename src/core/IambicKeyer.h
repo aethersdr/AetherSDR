@@ -93,7 +93,7 @@ private:
     enum class Element : int { Dit = 1, Dah = 2 };
 
     void workerLoop();
-    int  unitMs() const noexcept;          // 1200 / WPM, clamped
+    std::chrono::nanoseconds unitNs() const noexcept;  // 1.2e9 ns / WPM, clamped
     Element nextElementChoice(bool ditWanted, bool dahWanted, Element justSent) const noexcept;
     void emitKeyDown(bool down);
     void emitPaddleEvent(bool dit, bool dah);
@@ -114,9 +114,11 @@ private:
     bool                    m_paddleStateDirty{false};
 
     // Iambic mode B "memory" bits — set when the opposite paddle is
-    // pressed mid-element, cleared when consumed.
-    bool                    m_ditMemory{false};
-    bool                    m_dahMemory{false};
+    // pressed mid-element, cleared when consumed.  Atomic because the
+    // worker's between-element checks read them without holding m_mu
+    // while the latch sites store under it (#4809 review find).
+    std::atomic<bool>       m_ditMemory{false};
+    std::atomic<bool>       m_dahMemory{false};
 
     std::atomic<int>        m_mode{static_cast<int>(Mode::IambicB)};
     std::atomic<int>        m_wpm{20};

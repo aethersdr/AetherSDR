@@ -1340,7 +1340,7 @@ int MainWindow::injectMidiVfoCcForAutomation(int value)
 
 void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 {
-    if (steps == 0)
+    if (steps == 0 || !UlanziDialMappings::isKnownWheelAction(actionId))
         return;
 
     if (actionId == "WheelFrequency") {
@@ -1477,8 +1477,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         }
     } else if (actionId == "PanadapterZoom") {
         // Rotary dial uses a finer per-detent factor (kRotaryPanZoomFactor vs
-        // keyboard kPanZoomFactor in MainWindow_Shortcuts.cpp) for smooth spins.
-        static constexpr double kRotaryPanZoomFactor = 1.25;
+        // keyboard kPanZoomFactor in MainWindowHelpers.h) for smooth spins.
         const double baseFactor = steps > 0 ? (1.0 / kRotaryPanZoomFactor) : kRotaryPanZoomFactor;
         const double factor = std::pow(baseFactor, std::abs(steps));
         zoomActivePanadapter(factor);
@@ -2072,8 +2071,11 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
 
+    // Through the model, not sendCommand: the raw string only ever reached a
+    // Flex, so this MIDI binding silently did nothing on any other radio.
     reg("global.tnfEnable", "TNF Global", "Global", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.sendCommand(QString("radio set tnf_enabled=%1").arg(v > 0.5f ? 1 : 0)); });
+        [this](float v) { m_radioModel.tnfModel().requestGlobalTnfEnabled(v > 0.5f); },
+        [this]() -> float { return m_radioModel.tnfModel().globalEnabled() ? 1 : 0; });
 
     // Helper — reuse keyboard-shortcut handlers so MIDI bindings don't
     // duplicate any logic.  Each MIDI Trigger/Toggle that mirrors a

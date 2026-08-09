@@ -1,4 +1,5 @@
 #include "AcomApplet.h"
+#include "AmpAppletStyles.h"
 #include "HGauge.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
@@ -84,22 +85,16 @@ QLabel* makeValueLabel(QWidget* parent)
     return lbl;
 }
 
+// Pill appearance is the amplifier family's shared vocabulary
+// (AmpAppletStyles.h); only the Mode -> state mapping is ACOM's own.
 QString modePillStyle(Acom::Mode mode)
 {
     using Acom::Mode;
     switch (mode) {
-        case Mode::OperateTx:
-            return "QLabel { background: #3a1418; color: #ff8080; border: 1px solid #ff4d4d; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
-        case Mode::OperateRx:
-            return "QLabel { background: #0f2a1c; color: #6be899; border: 1px solid #4dd87a; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
-        case Mode::Standby:
-            return "QLabel { background: #12222e; color: #7fc4dc; border: 1px solid #2a5a70; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
-        default:
-            return "QLabel { background: #1c222a; color: #6b7684; border: 1px solid #303a44; "
-                   "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }";
+        case Mode::OperateTx: return ampPillStyle(AmpPillState::OperateTx);
+        case Mode::OperateRx: return ampPillStyle(AmpPillState::OperateRx);
+        case Mode::Standby:   return ampPillStyle(AmpPillState::Standby);
+        default:              return ampPillStyle(AmpPillState::Neutral);
     }
 }
 
@@ -389,21 +384,8 @@ void AcomApplet::setSource(const QString& text)
 }
 
 namespace {
-QString activeBtnStyle(const QString& bg, const QString& border)
-{
-    return QStringLiteral(
-        "QPushButton { background: %1; border: 1px solid %2; border-radius: 3px; "
-        "color: {{color.text.primary}}; font-size: 10px; font-weight: bold; } "
-        "QPushButton:hover { background: %1; }").arg(bg, border);
-}
-
-QString neutralBtnStyle()
-{
-    return QStringLiteral(
-        "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }");
-}
+// activeBtnStyle/neutralBtnStyle moved to the family-shared
+// AmpAppletStyles.h (used by SpeApplet too).
 }  // namespace
 
 void AcomApplet::setMode(Acom::Mode mode)
@@ -418,11 +400,11 @@ void AcomApplet::setMode(Acom::Mode mode)
 
     auto& theme = AetherSDR::ThemeManager::instance();
     theme.applyStyleSheet(m_standbyBtn,
-        isStandby ? activeBtnStyle("#12222e", "#2a5a70") : neutralBtnStyle());
+        isStandby ? ampActiveBtnStyle("#12222e", "#2a5a70") : ampNeutralBtnStyle());
     theme.applyStyleSheet(m_operateBtn,
-        isOperate ? activeBtnStyle("#006030", "#008040") : neutralBtnStyle());
+        isOperate ? ampOperateActiveBtnStyle() : ampNeutralBtnStyle());
     theme.applyStyleSheet(m_offBtn,
-        isOff ? activeBtnStyle("#3a2a2a", "#5a3a3a") : neutralBtnStyle());
+        isOff ? ampActiveBtnStyle("#3a2a2a", "#5a3a3a") : ampNeutralBtnStyle());
 }
 
 void AcomApplet::setFaultText(const QString& text)

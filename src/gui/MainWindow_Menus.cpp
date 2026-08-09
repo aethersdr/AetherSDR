@@ -117,7 +117,7 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn);
+                              m_kiwiSdrManager, &m_acomConn, &m_speConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     });
@@ -315,7 +315,7 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn);
+                              m_kiwiSdrManager, &m_acomConn, &m_speConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)
@@ -405,6 +405,7 @@ void MainWindow::buildMenuBar()
                 sw->setSpotBgColor(bgColor);
                 sw->setSpotBgOpacity(bgOpacity);
                 sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
+                sw->setKiwiDxSpotsEnabled(s.value("ShowKiwiDxSpots", "False").toString() == "True");
                 sw->setSHistorySnapToStep(
                     s.value("SHistorySnapToStep", "False").toString() == "True");
             }

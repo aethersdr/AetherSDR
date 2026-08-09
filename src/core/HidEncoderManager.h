@@ -184,6 +184,11 @@ private:
 
     QTimer* m_pollTimer{nullptr};
     QTimer* m_hotplugTimer{nullptr};
+
+    // Input report scratch. This 64 is the other end of the invariant written
+    // up at HidDeviceParser::reportSize(): poll() hands that value to
+    // hid_read() as the write bound into here, unclamped. Changing this size
+    // means auditing every parser's reportSize() in the same change.
     uint8_t m_buf[64]{};
 
     static constexpr int POLL_INTERVAL_MS = 5;

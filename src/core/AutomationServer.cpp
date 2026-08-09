@@ -14,6 +14,7 @@
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
+#include "core/backends/hl2/Hl2FreqCal.h"  // freqcal() verb — manual frequency calibration
 #include "core/MeterSurfaces.h"
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
 #include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
@@ -2958,6 +2959,18 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doSlice(a.action, a.value);
             });
 
+        add("notch", {},
+            "notch <list|add|set|remove|enable> [args] — manual notch filters "
+            "(add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; "
+            "remove <id>; enable <0|1>)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.action.isEmpty())
+                    return err(QStringLiteral(
+                        "notch requires an action (list|add|set|remove|enable)"));
+                return s.doNotch(a.action, a.value);
+            });
+
         add("gps", {},
             "gps <fixture|clearfixture> [6000|8000] — disconnected GPS test data",
             parseActionRest,
@@ -2986,6 +2999,16 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 if (a.value.isEmpty())
                     return err(QStringLiteral("tune requires a frequency in MHz"));
                 return s.doTune(a.value, a.id);
+            });
+
+        // Help stays ONE literal: gen_bridge_docs.py's _ADD_RE captures a single
+        // quoted string for the help field, so a split string loses everything
+        // after the first half in the generated verb table.
+        add("freqcal", {},
+            "freqcal [get|set <ppb>|from_vfo <reference_mhz>|reset] — manual frequency calibration (radios that cannot calibrate themselves)",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doFreqCal(a.action, a.value);
             });
 
         add("targettune", {},
@@ -3212,6 +3235,16 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doCiv(a.action, a.value);
+            });
+
+        add("controls", {},
+            "controls <map|meters|scrub [id|plane]> — the CI-V control and meter "
+            "registry joined "
+            "against what is actually wired, and a linkage check that drives every "
+            "settable control without moving any of them (Icom)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doControls(a.action, a.value);
             });
 
         add("radiocert", {},
@@ -5915,6 +5948,160 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
     return err(QStringLiteral("unknown txtest action: ") + action + QStringLiteral(" (twotone|off)"));
 }
 
+// ── Manual notch filters (#4780) ────────────────────────────────────────────
+// A Flex TNF, or the WDSP null that stands in for one on a radio with no DSP of
+// its own. Everything goes through TnfModel's operator setters so the intent
+// reaches IRadioBackend rather than stopping at the model, and `list` reports
+// the radio's declared capabilities beside the notches: an empty list on a
+// radio that cannot notch is otherwise indistinguishable from a notch that was
+// placed and silently dropped.
+QJsonObject AutomationServer::doNotch(const QString& action, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    auto& tnf = m_radioModel->tnfModel();
+
+    const auto snapshot = [&tnf]() {
+        QJsonArray notches;
+        for (const auto& entry : tnf.tnfs()) {
+            notches.append(QJsonObject{
+                {QStringLiteral("id"), entry.id},
+                {QStringLiteral("freqMhz"), entry.freqMhz},
+                {QStringLiteral("widthHz"), entry.widthHz},
+                {QStringLiteral("depth"), entry.depthDb},
+                {QStringLiteral("permanent"), entry.permanent},
+            });
+        }
+        return notches;
+    };
+
+    if (action == QLatin1String("list")) {
+        const RadioCapabilities caps = m_radioModel->backendCapabilities();
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("notch"), QStringLiteral("list")},
+            {QStringLiteral("enabled"), tnf.globalEnabled()},
+            // Reported alongside the notches so a test can tell "the radio
+            // cannot notch" apart from "the notch was dropped" — the two look
+            // identical from an empty list.
+            {QStringLiteral("maxNotchFilters"), caps.maxNotchFilters},
+            {QStringLiteral("minWidthHz"), caps.notchMinWidthHz},
+            {QStringLiteral("hasDepth"), caps.notchHasDepth},
+            {QStringLiteral("notches"), snapshot()},
+        };
+    }
+
+    if (action == QLatin1String("add")) {
+        const QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral("notch add requires a frequency in MHz"));
+        bool ok = false;
+        const double freqMhz = parts.at(0).toDouble(&ok);
+        if (!ok || freqMhz <= 0.0)
+            return err(QStringLiteral("notch add: bad frequency: ") + parts.at(0));
+        // The width argument is accepted but the model owns the create width
+        // (TnfModel::createTnf), and a Flex assigns its own regardless. Echoed
+        // back as `requestedWidthHz` so a caller reads it as a request that was
+        // not honoured rather than assuming the notch is that wide — `notches`
+        // in the same reply carries the width it actually got. Still validated:
+        // silently swallowing a typo would be the worse half of both readings.
+        double requestedWidthHz = 0.0;
+        if (parts.size() > 1) {
+            bool widthOk = false;
+            requestedWidthHz = parts.at(1).toDouble(&widthOk);
+            if (!widthOk || requestedWidthHz <= 0.0)
+                return err(QStringLiteral("notch add: bad width: ") + parts.at(1));
+        }
+        tnf.createTnf(freqMhz);
+        QJsonObject reply{{QStringLiteral("ok"), true},
+                          {QStringLiteral("notch"), QStringLiteral("add")},
+                          {QStringLiteral("freqMhz"), freqMhz},
+                          {QStringLiteral("notches"), snapshot()}};
+        if (requestedWidthHz > 0.0)
+            reply.insert(QStringLiteral("requestedWidthHz"), requestedWidthHz);
+        return reply;
+    }
+
+    if (action == QLatin1String("set")) {
+        const QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral("notch set requires an id"));
+        bool ok = false;
+        const int id = parts.at(0).toInt(&ok);
+        if (!ok)
+            return err(QStringLiteral("notch set: bad id: ") + parts.at(0));
+        if (tnf.tnf(id) == nullptr)
+            return err(QStringLiteral("notch set: no notch with id ") + parts.at(0));
+        bool touched = false;
+        for (int i = 1; i < parts.size(); ++i) {
+            const QString& token = parts.at(i);
+            const int eq = token.indexOf(QLatin1Char('='));
+            if (eq <= 0)
+                return err(QStringLiteral("notch set: expected key=value, got ") + token);
+            const QString key = token.left(eq);
+            const QString value = token.mid(eq + 1);
+            bool valueOk = false;
+            if (key == QLatin1String("freq")) {
+                const double mhz = value.toDouble(&valueOk);
+                if (!valueOk)
+                    return err(QStringLiteral("notch set: bad freq: ") + value);
+                tnf.setTnfFreq(id, mhz);
+                touched = true;
+            } else if (key == QLatin1String("width")) {
+                const int hz = value.toInt(&valueOk);
+                if (!valueOk)
+                    return err(QStringLiteral("notch set: bad width: ") + value);
+                tnf.setTnfWidth(id, hz);
+                touched = true;
+            } else if (key == QLatin1String("depth")) {
+                const int depth = value.toInt(&valueOk);
+                if (!valueOk)
+                    return err(QStringLiteral("notch set: bad depth: ") + value);
+                tnf.setTnfDepth(id, depth);
+                touched = true;
+            } else {
+                return err(QStringLiteral("notch set: unknown key: ") + key
+                           + QStringLiteral(" (freq|width|depth)"));
+            }
+        }
+        if (!touched)
+            return err(QStringLiteral("notch set requires at least one of "
+                                      "freq=<mhz> width=<hz> depth=<1-3>"));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("notch"), QStringLiteral("set")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("notches"), snapshot()}};
+    }
+
+    if (action == QLatin1String("remove")) {
+        bool ok = false;
+        const int id = arg.trimmed().toInt(&ok);
+        if (!ok)
+            return err(QStringLiteral("notch remove requires an id"));
+        if (tnf.tnf(id) == nullptr)
+            return err(QStringLiteral("notch remove: no notch with id ") + arg.trimmed());
+        tnf.requestRemoveTnf(id);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("notch"), QStringLiteral("remove")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("notches"), snapshot()}};
+    }
+
+    if (action == QLatin1String("enable")) {
+        const QString value = arg.trimmed();
+        if (value.isEmpty())
+            return err(QStringLiteral("notch enable requires 0 or 1"));
+        const bool on = parseBool(value);
+        tnf.requestGlobalTnfEnabled(on);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("notch"), QStringLiteral("enable")},
+                           {QStringLiteral("enabled"), tnf.globalEnabled()}};
+    }
+
+    return err(QStringLiteral("unknown notch action: ") + action
+               + QStringLiteral(" (list|add|set|remove|enable)"));
+}
+
 // ── ATU control (#3646) ─────────────────────────────────────────────────────
 // `atu bypass` takes the tuner out of circuit (no TX), so meter readings see
 // the raw load instead of a recalled antenna match — essential before TX meter
@@ -6584,6 +6771,101 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
                        {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
 }
 
+// ── Manual frequency calibration (HL2) ───────────────────────────
+// get / set <ppb> / from_vfo <reference_mhz> / reset. Only reachable on
+// radios whose host owns the correction (RadioCapabilities::
+// hostFrequencyCalibration).
+QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& value)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (!m_radioModel->backendCapabilities().hostFrequencyCalibration) {
+        // Refuse rather than store. On a radio that calibrates itself there is
+        // nothing to apply this to, and a bridge test that "passed" against a
+        // stored-but-inert number would be testing nothing.
+        return err(QStringLiteral("freqcal: this radio calibrates its own reference"));
+    }
+
+    const RadioSettingsScope scope = m_radioModel->settingsScope();
+    auto report = [&scope](const QString& what) {
+        const int ppb = Hl2FreqCal::loadPpb(scope);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("freqcal"), what},
+            {QStringLiteral("ppb"), ppb},
+            {QStringLiteral("ppm"), ppb / 1000.0},
+            {QStringLiteral("effectiveClockHz"), Hl2FreqCal::effectiveClockHz(ppb)},
+        };
+    };
+
+    const QString verb = action.isEmpty() ? QStringLiteral("get") : action.toLower();
+
+    if (verb == QLatin1String("get"))
+        return report(QStringLiteral("get"));
+
+    // Mutating verbs need a radio identity. With an empty radioId the write
+    // would land on the family-wide default row and be inherited by every other
+    // radio of this family, so refuse rather than return ok:true against a
+    // number that contaminated the wrong radios (AGENTS.md).
+    if (verb != QLatin1String("get") && scope.radioId().isEmpty()) {
+        return err(QStringLiteral("freqcal: no radio identity yet — connect the radio "
+                                  "before calibrating"));
+    }
+
+    auto applyPpb = [this](int ppb) {
+        m_radioModel->invokeBackendExtension(QStringLiteral("hl2"),
+                                             QStringLiteral("freqcal.set"), 0,
+                                             QVariant(ppb));
+    };
+
+    if (verb == QLatin1String("reset")) {
+        applyPpb(0);
+        return report(QStringLiteral("reset"));
+    }
+
+    if (verb == QLatin1String("set")) {
+        bool ok = false;
+        const int ppb = value.trimmed().toInt(&ok);
+        if (!ok)
+            return err(QStringLiteral("freqcal set requires an integer ppb value"));
+        if (ppb != Hl2FreqCal::clampPpb(ppb)) {
+            return err(QStringLiteral("freqcal set: %1 ppb is outside +/-%2 ppb")
+                           .arg(ppb).arg(Hl2FreqCal::kMaxPpb));
+        }
+        applyPpb(ppb);
+        return report(QStringLiteral("set"));
+    }
+
+    if (verb == QLatin1String("from_vfo")) {
+        bool ok = false;
+        const double refMhz = value.trimmed().toDouble(&ok);
+        if (!ok || !(refMhz > 0.0))
+            return err(QStringLiteral("freqcal from_vfo requires a reference in MHz"));
+        double dialledHz = 0.0;
+        for (SliceModel* s : m_radioModel->slices()) {
+            if (s && s->isActive()) { dialledHz = s->frequency() * 1.0e6; break; }
+        }
+        if (!(dialledHz > 0.0))
+            return err(QStringLiteral("freqcal from_vfo: no active slice to read"));
+        const int ppb = Hl2FreqCal::ppbFromZeroBeat(refMhz * 1.0e6, dialledHz);
+        // Same refusal the UI makes: a clamped result means the capture was of
+        // the wrong signal, and committing it would move every band.
+        if (ppb == Hl2FreqCal::kMinPpb || ppb == Hl2FreqCal::kMaxPpb) {
+            return err(QStringLiteral("freqcal from_vfo: %1 MHz against a %2 MHz "
+                                      "reference is more than 50 ppm — wrong signal?")
+                           .arg(dialledHz / 1.0e6, 0, 'f', 6).arg(refMhz, 0, 'f', 6));
+        }
+        applyPpb(ppb);
+        QJsonObject o = report(QStringLiteral("from_vfo"));
+        o.insert(QStringLiteral("referenceMhz"), refMhz);
+        o.insert(QStringLiteral("dialledMhz"), dialledHz / 1.0e6);
+        return o;
+    }
+
+    return err(QStringLiteral("freqcal: unknown action '%1' (get|set|from_vfo|reset)")
+                   .arg(action));
+}
+
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
 // Set a slice's frequency (MHz). The most fundamental control the VfoWidget
 // couldn't expose (it's custom-painted). Honors the slice lock guard. An
@@ -6802,6 +7084,89 @@ QJsonObject AutomationServer::doLiveness()
         out.insert(QStringLiteral("publishedButRenderedNowhere"),
                    QJsonArray::fromStringList(publishedNowhere));
     }
+    return out;
+}
+
+// `controls map` / `controls scrub` — the CI-V control registry.
+//
+// WHY THIS IS A VERB AND NOT A DOCUMENT. A hand-written table of "what is wired"
+// is wrong the moment someone edits a switch statement, and the bring-up proved
+// nobody notices: an RF-gain slider drove the preamp for weeks with a doc that
+// said otherwise. This reads the registry the backend compiles against and joins
+// it with what that backend has actually seen on the wire this session, so the
+// answer cannot drift from the code.
+//
+// `map` is read-only and works with no radio attached. `scrub` needs a radio and
+// re-asserts each control at its current value — nothing on the radio moves, and
+// PTT, the antenna tuner and power-off are excluded outright.
+QJsonObject AutomationServer::doControls(const QString& action, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    IRadioBackend* backend = m_radioModel->backend();
+    if (!backend)
+        return err(QStringLiteral("no backend available"));
+
+    const QString a = action.trimmed().toLower();
+    if (a != QLatin1String("map") && a != QLatin1String("scrub")
+        && a != QLatin1String("meters"))
+        return err(QStringLiteral("controls requires an action (map|meters|scrub)"));
+
+    // NOT TX-GATED, and that is deliberate rather than an oversight — worth
+    // saying because `civ send` a few dozen lines down IS gated on m_txAllowed,
+    // and the next person to read the two side by side will otherwise assume
+    // one of them is wrong.
+    //
+    // `civ send` is gated because it is a raw frame: it can carry 1C 00 and key
+    // the transmitter, and nothing here can tell that from a tuning command.
+    // `scrub` cannot, by construction. It never sends a raw frame — it drives
+    // named seam verbs — and ptt, tuner and power are excluded from the walk
+    // outright (see controlScrub's kNeverScrub). Everything it does send is the
+    // control's CURRENT value, so the transmit-plane rows it does touch
+    // (tx.power, mic.gain, monitor, vox, comp) re-assert what the radio is
+    // already set to without keying anything.
+    //
+    // `map` and `meters` are read-only and would be fine under any rule.
+    //
+    // Same synchronous-extension contract doCiv documents: a backend that does
+    // not answer leaves `answered` false and is reported as unsupported rather
+    // than as an empty success.
+    bool answered = false;
+    bool failed = false;
+    QVariant payload;
+    QString failure;
+    const quint64 rid = ++m_extensionRequestId;
+    auto okConn = connect(backend, &IRadioBackend::extensionResult, this,
+                          [&](quint64 id, const QVariant& v) {
+        if (id != rid) return;
+        answered = true;
+        payload = v;
+    }, Qt::DirectConnection);
+    auto errConn = connect(backend, &IRadioBackend::extensionError, this,
+                           [&](quint64 id, const QString& msg) {
+        if (id != rid) return;
+        answered = true;
+        failed = true;
+        failure = msg;
+    }, Qt::DirectConnection);
+
+    backend->invokeExtension(QStringLiteral("icom"),
+                             a == QLatin1String("map")    ? QStringLiteral("controls.map")
+                             : a == QLatin1String("meters") ? QStringLiteral("controls.meters")
+                                                            : QStringLiteral("controls.scrub"),
+                             rid, arg.trimmed());
+    disconnect(okConn);
+    disconnect(errConn);
+
+    if (!answered) {
+        return err(QStringLiteral(
+            "this backend has no control registry — `controls` is Icom-only today"));
+    }
+    if (failed)
+        return err(failure);
+
+    QJsonObject out{{QStringLiteral("ok"), true}, {QStringLiteral("controls"), a}};
+    out.insert(QStringLiteral("result"), QJsonValue::fromVariant(payload));
     return out;
 }
 

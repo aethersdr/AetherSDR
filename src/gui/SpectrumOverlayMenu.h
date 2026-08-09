@@ -96,6 +96,12 @@ public:
     // backend without DAX simply does not have, so on an HL2 they were live
     // controls wired to nothing.
     void setDaxStreamsAvailable(bool available);
+    // Whether the connected radio can hold manual notches at all
+    // (RadioCapabilities::maxNotchFilters). False HIDES the +TNF button rather
+    // than disabling it: the control shipped live on every backend while the
+    // commands behind it only meant anything to a Flex, so on any other radio
+    // it was a button that did nothing.
+    void setNotchesSupported(bool supported);
     // Whether the RADIO computes a per-tile waterfall black level
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack). False removes HW from
     // the Black Level button's cycle and moves off it if it was selected —
@@ -103,7 +109,15 @@ public:
     void setRadioSideAutoBlackAvailable(bool available);
     void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
-    void setRfGainRange(int low, int high, int step);
+    void setRfGainRange(int low, int high, int step,
+                       const QString& unitSuffix = QStringLiteral(" dB"));
+    // Discrete receive front-end stages. An EMPTY label list hides the
+    // control — a radio with no preamp or no attenuator shows neither an
+    // empty button nor a disabled one.
+    void setPreampLabels(const QStringList& labels);
+    void setPreampStep(int step);
+    void setAttenuatorLabels(const QStringList& labels);
+    void setAttenuatorStep(int step);
     void setLoopState(bool loopA, bool loopB);
     void syncNoiseFloorPosition(int pos);
     void syncDssFloorDepth(int dB);
@@ -208,6 +222,9 @@ signals:
     void wnbLevelChanged(int level);
     // Emitted when RF gain slider changes (panadapter-level).
     void rfGainChanged(int gain);
+    // Step index into the label list this menu was given, never a dB value.
+    void preampStepChanged(int step);
+    void attenuatorStepChanged(int step);
     // customLowMhz/customHighMhz bound the sweep when the operator has ticked
     // "Limit range" (else both 0 = sweep the full band). The values are clamped
     // to the in-region band edges receiver-side, so they can only ever narrow
@@ -290,6 +307,9 @@ private:
     QVector<QPair<QPointer<QPushButton>, double>> m_bandBtnFreqs;
     double m_tuningMinMhz{0.0};
     double m_tuningMaxMhz{0.0};
+    // True until a connected backend says otherwise, so a disconnected session
+    // keeps the button rather than having it appear on connect.
+    bool m_notchesSupported{true};
     void applyTuningRangeToBandButtons();
 
     // Cached state for band-panel rebuilds — setXvtrBands() and
@@ -309,6 +329,24 @@ private:
     QPushButton* m_loopBBtn{nullptr};
     QSlider*     m_rfGainSlider{nullptr};
     QLabel*      m_rfGainLabel{nullptr};
+    // What the RF-gain readout appends. " dB" on a radio with a real gain
+    // register, "%" on one whose gain is an opaque scale.
+    QString      m_rfGainUnitSuffix{QStringLiteral(" dB")};
+    void refreshFrontEndButtons();
+    // ONE ROW EACH, and each hides on its own. They were a single "Front end:"
+    // row with both buttons side by side, which does not fit: the ANT panel is
+    // a fixed 180 px with a 48 px label column, so "Front end:" was clipped and
+    // "PRE: P.AMP2" in the 56 px that left was unreadable. Two rows in the same
+    // label+control shape as RX ANT and RF Gain above them cost one row of
+    // height and make both legible.
+    QWidget*     m_preampRow{nullptr};
+    QWidget*     m_attenuatorRow{nullptr};
+    QPushButton* m_preampBtn{nullptr};
+    QPushButton* m_attenuatorBtn{nullptr};
+    QStringList  m_preampLabels;
+    QStringList  m_attenuatorLabels;
+    int          m_preampStep{0};
+    int          m_attenuatorStep{0};
     QWidget*     m_wnbRow{nullptr};   // container for the whole WNB row
     QPushButton* m_wnbBtn{nullptr};
     QSlider*     m_wnbSlider{nullptr};

@@ -14,6 +14,8 @@
 
 #include "core/AutomationBridgeSettings.h"
 #include "core/LogManager.h"
+#include "core/RadioSettingsScope.h"
+#include "core/backends/hl2/Hl2FreqCal.h"
 #include "core/backends/hl2/Hl2Settings.h"
 
 #include <QByteArray>
@@ -852,10 +854,14 @@ bool Hl2Backend::createPanadapter()
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
-            Q_ARG(std::uint32_t, static_cast<std::uint32_t>(r.ncoHz < 0 ? 0 : r.ncoHz)));
+            Q_ARG(std::uint32_t, ncoCommandHz(r.ncoHz)));
     }
     QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
-        Q_ARG(double, r.sliceFreqHz - r.ncoHz));
+        Q_ARG(double, dspShiftHz(r.sliceFreqHz, r.ncoHz)));
+    // Notches are radio-wide, so a receiver that appears after them has to be
+    // brought up to date. Otherwise adding a second panadapter gives you one
+    // receiver with the interferer notched out and one without.
+    seedNotches(r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -991,8 +997,7 @@ bool Hl2Backend::removePanadapter(const QString& panId)
             if (const Receiver* sr = rx(s.ddcIndex)) {
                 QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
                     Q_ARG(int, s.ddcIndex),
-                    Q_ARG(std::uint32_t,
-                          static_cast<std::uint32_t>(sr->ncoHz < 0 ? 0 : sr->ncoHz)));
+                    Q_ARG(std::uint32_t, ncoCommandHz(sr->ncoHz)));
             }
         }
     }
@@ -1297,6 +1302,7 @@ RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
     c.family = QStringLiteral("hl2");
+    c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
@@ -1334,6 +1340,20 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasTuner = false;
     c.hasAmplifier = false;
     c.hasExtendedDsp = false;
+    // Both moot while hasRadioSideDsp is false — the host runs every filter
+    // this radio has — but stated rather than defaulted, per the struct's
+    // "a backend that omits one silently declares it absent" rule.
+    c.hasLmsNoiseFilters = false;
+    c.hasManualNotch = false;
+    // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
+    // HPSDR map can be told the crystal's real error — so the correction is ours
+    // or it does not happen. See Hl2FreqCal for the derivation.
+    c.hostFrequencyCalibration = true;
+    // Declared because invokeExtension() now implements it (freqcal.get / .set /
+    // .set_live). This field is the handshake a client pre-checks before issuing
+    // an extension call, so leaving it empty while the verbs work would report
+    // the opposite of the truth.
+    c.extensionNamespaces << QStringLiteral("hl2");
     // No on-radio configuration store. The HL2 holds no state across a
     // connection beyond its registers — everything the operator can change
     // lives in this application, so there is nothing for a profile to name.
@@ -1365,6 +1385,25 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
+    // Manual notches, and the one piece of DSP on this radio that is NOT absent
+    // just because hasRadioSideDsp is false. The notch runs in WDSP on this
+    // host, which is the whole point: the HL2 sends raw IQ, so a notch either
+    // happens here or nowhere (oracle addendum 3 §B4).
+    //
+    // The ceiling is WDSP's own notch database size (RXA.c creates it with room
+    // for 1024), not a guess. Each active notch inside the passband adds a
+    // sub-band to the multi-bandpass mask, so the practical limit is taste
+    // rather than capacity.
+    c.maxNotchFilters = 1024;
+    // A WDSP notched bandpass is a full null. There is no depth parameter to
+    // map three Flex depths onto, so the depth submenu is hidden rather than
+    // offering three settings that behave identically.
+    c.notchHasDepth = false;
+    // Set by the RX filter length and enforced silently — see Hl2RxDsp's
+    // kMinNotchWidthHz. Reported so the UI's width choices match what the
+    // operator will actually hear.
+    c.notchMinWidthHz = Hl2RxDsp::kMinNotchWidthHz;
+    c.notchMaxWidthHz = 6000.0;
     c.hasGpsLocation = false;           // no GNSS receiver on the board
     // The HL2 declares PATEMP but no "+13.8A": PA temperature is a real reading
     // from this radio, the supply rail is not reported at all. Only the volts
@@ -1421,6 +1460,34 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // A new connect re-derives the passband from the mode; a mid-session linkUp
     // (EP6 silence then resume) does not. See m_passbandDerivedThisConnect.
     m_passbandDerivedThisConnect = false;
+
+    // This radio's manual frequency calibration, FIRST — before any frequency is
+    // computed below, because the seed at mp.rxFrequencyHz is a commanded value
+    // and would otherwise go out uncorrected. The operator would hear the first
+    // moments of every session on the uncalibrated frequency and watch it jump
+    // when they next touched the dial.
+    //
+    // Keyed by the radio's MAC: the calibration describes one physical crystal,
+    // so a second HL2 must not inherit the first one's number. An empty serial
+    // (a hand-built connect request with no identity) yields the family-wide
+    // row, which is empty by default — i.e. uncalibrated, not someone else's.
+    m_radioSerial = request.serial;
+    m_freqCalPpb = Hl2FreqCal::loadPpb(
+        RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
+    m_freqCalScale = Hl2FreqCal::scaleForPpb(m_freqCalPpb);
+    if (m_freqCalPpb != 0)
+        qCInfo(lcHl2) << "HL2: frequency calibration" << m_freqCalPpb << "ppb"
+                      << "— effective clock"
+                      << Hl2FreqCal::effectiveClockHz(m_freqCalPpb) << "Hz";
+
+    // Notches are SESSION state, and the same call is true on both sides of the
+    // seam: RadioModel::onDisconnected() calls m_tnfModel.clear(), and a
+    // same-family reconnect rebuilds no backend, so anything kept here would be
+    // replayed into WDSP by seedNotches() with nothing on screen naming it —
+    // audible nulls with no marker to right-click and no id to remove them by.
+    // m_nextNotchId deliberately keeps counting: an id is never reused.
+    m_notches.clear();
+    m_notchesEnabled = true;
 
     // The span the operator last chose, snapped to a rate we can actually run
     // and to the current low-bandwidth ceiling. Applied BEFORE the explicit
@@ -1530,7 +1597,10 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.host = host;
     mp.port = request.port ? request.port : kMetisPort;
     mp.sampleRate = sampleRateEnum(m_sampleRateHz);
-    mp.rxFrequencyHz = static_cast<std::uint32_t>(startFreqHz < 0 ? 0 : startFreqHz);
+    // COMMANDED, not true-RF: this seeds MetisClient's initial RX and TX
+    // command banks, which are register contents. Everything else in this
+    // function keeps startFreqHz in the true-RF domain.
+    mp.rxFrequencyHz = ncoCommandHz(startFreqHz);
     mp.lnaGainDb = m_lnaGainDb;
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
@@ -1971,7 +2041,12 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
             // is the whole reason the receivers can sit on different bands.
             QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
                 Q_ARG(int, ddc),
-                Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz < 0 ? 0 : hz)));
+                Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+        // Notch centres are measured from the NCO, so moving it without saying
+        // so leaves every notch parked at its old RF frequency — the operator
+        // tunes across the band and the notches follow them, which is precisely
+        // the behaviour a TRACKING notch exists to avoid.
+        pushNotchTune(*r);
     }
 
     // Shift by the slice's offset from the NCO, with the SAME sign.
@@ -1984,7 +2059,7 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // why the stage looked correct only in LSB.)
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
-            Q_ARG(double, r->sliceFreqHz - r->ncoHz));
+            Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
 
     // The TX NCO is a SEPARATE register (addr 0x01) from the RX DDC and does not
     // follow the receiver. Without this the transmit oscillator keeps whatever
@@ -2246,7 +2321,194 @@ void Hl2Backend::setTxSlice(int sliceId)
     emitSliceState(ddc);
 }
 
-void Hl2Backend::setPanCenter(const QString& panId, double hz)
+// ── Manual notch filters ────────────────────────────────────────────────────
+//
+// The HL2 has no DSP of its own, so these are WDSP notches running on this
+// host — but from above the seam they behave exactly like a Flex TNF: placed at
+// an absolute RF frequency, and they stay on the interferer while the operator
+// tunes. That equivalence is the whole point of doing it here rather than
+// inventing a second, HL2-shaped notch concept.
+//
+// Every mutation is applied to EVERY receiver. A notch is a fact about the
+// band, not about one slice, and a second receiver looking at the same carrier
+// should not still hear it.
+
+int Hl2Backend::notchIndexFor(int notchId) const
+{
+    for (std::size_t index = 0; index < m_notches.size(); ++index) {
+        if (m_notches[index].id == notchId)
+            return static_cast<int>(index);
+    }
+    return -1;
+}
+
+void Hl2Backend::pushNotchTune(const Receiver& r)
+{
+    // The TRUE NCO frequency, not ncoCommandHz(). Deliberate, and worth the
+    // arithmetic because the obvious "fix" is worse.
+    //
+    // WDSP takes a notch's baseband position as fcenter - (tunefreq + shift),
+    // and the shift is in the COMMANDED domain (dspShiftHz is
+    // sliceTrue * scale - ncoCommand). Notch centres, meanwhile, arrive from the
+    // panadapter in TRUE RF Hz. Mixing the two leaves a residual of
+    // e * (fcenter - ncoTrue), where e is the calibration error: at the ±50 ppm
+    // clamp and the far edge of a 384 kHz span that is under 10 Hz, and on a
+    // real crystal it is a fraction of a Hz — against a notch floor of 50 Hz.
+    //
+    // Handing WDSP ncoCommandHz() instead would make the offset sliceTrue*scale
+    // and leave a residual of e * fcenter — the full dial frequency rather than
+    // the offset from it, so ~7 Hz at 7 MHz and 50 ppm instead of a fraction of
+    // one. Getting it exactly right means scaling the notch centres too, which
+    // buys a correction smaller than the notch is wide.
+    if (r.dsp)
+        QMetaObject::invokeMethod(r.dsp, "setNotchTuneFrequency", Qt::QueuedConnection,
+            Q_ARG(double, r.ncoHz));
+}
+
+void Hl2Backend::seedNotches(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Tune frequency before the notches: the centres are absolute, so a notch
+    // placed against a tune frequency of zero lands ~7 MHz away from where it
+    // was asked for.
+    pushNotchTune(r);
+    // REPLACE, never append. pushInitialState() calls this on every linkUp, and
+    // MetisClient re-emits linkUp after an EP6 silence timeout without any new
+    // connectRadio() — the receivers and their Hl2RxDsp objects survive that,
+    // so a seed that only added would give every notch a second copy in WDSP
+    // while m_notches still held one. The positional index the whole stable-id
+    // mapping rests on would then address the wrong notch, and the duplicate
+    // would keep notching a frequency with no UI entry to remove it. Clearing
+    // first makes seeding idempotent wherever it is called from, which is the
+    // property this path needs — a once-per-connect guard would fix the linkUp
+    // case and leave the non-idempotency one refactor away from returning.
+    QMetaObject::invokeMethod(r.dsp, "clearNotches", Qt::QueuedConnection);
+    for (std::size_t index = 0; index < m_notches.size(); ++index) {
+        const NotchRecord& notch = m_notches[index];
+        QMetaObject::invokeMethod(r.dsp, "addNotch", Qt::QueuedConnection,
+            Q_ARG(int, static_cast<int>(index)), Q_ARG(double, notch.centerHz),
+            Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
+    }
+    QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
+        Q_ARG(bool, m_notchesEnabled));
+}
+
+void Hl2Backend::createNotch(double centerHz, double widthHz)
+{
+    if (centerHz <= 0.0 || !std::isfinite(centerHz) || !std::isfinite(widthHz))
+        return;
+    if (static_cast<int>(m_notches.size()) >= capabilities().maxNotchFilters)
+        return;
+    // Clamped to what the RX chain can actually produce, and reported back at
+    // the clamped value — so the panadapter draws the notch the operator is
+    // hearing rather than the one they asked for. WDSP would widen it silently.
+    const double width = std::max(widthHz, Hl2RxDsp::kMinNotchWidthHz);
+
+    NotchRecord notch;
+    notch.id = m_nextNotchId++;
+    notch.centerHz = centerHz;
+    notch.widthHz = width;
+    notch.active = true;
+    // Append, so the new notch's WDSP index is the old size on every receiver.
+    const int index = static_cast<int>(m_notches.size());
+    m_notches.push_back(notch);
+
+    for (const Receiver& r : m_rx) {
+        if (!r.dsp)
+            continue;
+        // Re-assert the axis before every placement rather than trusting that
+        // some earlier setup path did it. It is one cheap queued call that WDSP
+        // no-ops when unchanged, and the failure it prevents is silent: a notch
+        // measured from a stale tune frequency lands outside the passband and
+        // is dropped without an error, while still reading back as present.
+        pushNotchTune(r);
+        QMetaObject::invokeMethod(r.dsp, "addNotch", Qt::QueuedConnection,
+            Q_ARG(int, index), Q_ARG(double, notch.centerHz),
+            Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
+    }
+
+    // The id is minted HERE, so nothing above knows about this notch until it
+    // is told. Same contract as a Flex, where the radio assigns the id and
+    // reports it back as status.
+    AetherSDR::NotchDelta delta;
+    delta.centerHz = notch.centerHz;
+    delta.widthHz = notch.widthHz;
+    delta.active = notch.active;
+    emit notchChanged(notch.id, delta);
+}
+
+void Hl2Backend::setNotch(int notchId, const AetherSDR::NotchDelta& delta)
+{
+    const int index = notchIndexFor(notchId);
+    if (index < 0)
+        return;
+    NotchRecord& notch = m_notches[static_cast<std::size_t>(index)];
+
+    // depth and permanent are deliberately ignored rather than approximated.
+    // A WDSP notch is a full null with no depth, and there is nowhere in an HL2
+    // for a "permanent" notch to persist — capabilities().notchHasDepth is
+    // false so the UI never offers the first, and the second is a Flex concept
+    // the seam simply carries past us.
+    if (delta.centerHz && std::isfinite(*delta.centerHz))
+        notch.centerHz = *delta.centerHz;
+    if (delta.widthHz && std::isfinite(*delta.widthHz))
+        notch.widthHz = std::max(*delta.widthHz, Hl2RxDsp::kMinNotchWidthHz);
+    if (delta.active)
+        notch.active = *delta.active;
+
+    // A combined centre+width delta lands as ONE edit here, which matters in a
+    // way it does not on a Flex: each edit rebuilds the whole multi-bandpass
+    // filter mask, and a panadapter drag delivers these ~30 times a second.
+    // Nothing builds that combined delta yet — SpectrumWidget emits move and
+    // width separately — so a diagonal drag still pays for two rebuilds. See
+    // NotchDelta.h.
+    for (const Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "editNotch", Qt::QueuedConnection,
+                Q_ARG(int, index), Q_ARG(double, notch.centerHz),
+                Q_ARG(double, notch.widthHz), Q_ARG(bool, notch.active));
+    }
+
+    // Echo the APPLIED values, which may differ from what was asked (width
+    // clamping). Reporting the request instead would let the overlay drift away
+    // from the audio a little more with every drag.
+    AetherSDR::NotchDelta applied;
+    applied.centerHz = notch.centerHz;
+    applied.widthHz = notch.widthHz;
+    applied.active = notch.active;
+    emit notchChanged(notch.id, applied);
+}
+
+void Hl2Backend::removeNotch(int notchId)
+{
+    const int index = notchIndexFor(notchId);
+    if (index < 0)
+        return;
+    // Erase here and in WDSP by the SAME index, which is what keeps position
+    // and identity in step: both sides close the gap, so every surviving
+    // notch's index shifts down by one on both sides at once.
+    m_notches.erase(m_notches.begin() + index);
+    for (const Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "removeNotch", Qt::QueuedConnection,
+                Q_ARG(int, index));
+    }
+    emit notchRemoved(notchId);
+}
+
+void Hl2Backend::setNotchesEnabled(bool on)
+{
+    m_notchesEnabled = on;
+    for (const Receiver& r : m_rx) {
+        if (r.dsp)
+            QMetaObject::invokeMethod(r.dsp, "setNotchesEnabled", Qt::QueuedConnection,
+                Q_ARG(bool, on));
+    }
+}
+
+// Intent ignored — the HL2's DDC window is independent of any slice.
+void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
 {
     // Moving the window means moving the DDC. The slice does NOT move with it —
     // that is the point of keeping the two separate — so its offset from the new
@@ -2266,10 +2528,13 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz)
     if (m_metis)
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
-            Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz)));
+            Q_ARG(std::uint32_t, ncoCommandHz(hz)));
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
-            Q_ARG(double, r->sliceFreqHz - r->ncoHz));
+            Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
+    // The NCO moved, so the notch axis has to move with it. See the note at the
+    // matching site in setSliceFrequency.
+    pushNotchTune(*r);
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");
@@ -2674,8 +2939,79 @@ void Hl2Backend::setTxFrequency(double hz)
 {
     if (!m_metis || hz <= 0.0)
         return;
+    // Scaled like every RX NCO, and for a reason worth stating: the gateware
+    // derives BOTH oscillators from one freqcomp (radio.v assigns tx_phase0 and
+    // rx_phase[] from the same value), so a calibration that corrected receive
+    // and not transmit would put the operator's signal where they used to hear
+    // themselves — off frequency by the full error, on the air.
+    //
+    // TX is single-stage: there is no software shift behind this the way there
+    // is on receive, so the 1 Hz register granularity is the floor here. At
+    // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
     QMetaObject::invokeMethod(m_metis, "setTxFrequencyHz", Qt::QueuedConnection,
-        Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz)));
+        Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+}
+
+std::uint32_t Hl2Backend::ncoCommandHz(double trueHz) const noexcept
+{
+    return Hl2FreqCal::ncoCommandHz(trueHz, m_freqCalScale);
+}
+
+double Hl2Backend::dspShiftHz(double sliceTrueHz, double ncoTrueHz) const noexcept
+{
+    return Hl2FreqCal::dspShiftHz(sliceTrueHz, ncoCommandHz(ncoTrueHz),
+                                  m_freqCalScale);
+}
+
+void Hl2Backend::repushAllFrequencies()
+{
+    if (!m_metis)
+        return;
+    for (const auto& s : m_ids.all()) {
+        const Receiver* r = rx(s.ddcIndex);
+        if (!r)
+            continue;
+        QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
+            Q_ARG(int, s.ddcIndex),
+            Q_ARG(std::uint32_t, ncoCommandHz(r->ncoHz)));
+        if (r->dsp)
+            QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
+                Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
+    }
+    // The transmit oscillator does not follow a receiver on its own — it is a
+    // separate register that only setTxFrequency() writes. Omitting it here
+    // would leave transmit on the OLD calibration until the next tune, which is
+    // exactly the window an operator calibrating before a contest would key in.
+    if (const Receiver* txRx = rx(m_txDdc); txRx && txRx->sliceFreqHz > 0.0)
+        setTxFrequency(txRx->sliceFreqHz);
+}
+
+void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
+{
+    const int clamped = Hl2FreqCal::clampPpb(ppb);
+    if (persist) {
+        // Never write an empty radio_id row (AGENTS.md): RadioSettingsScope
+        // falls back exact-radio → family-wide on read, so a row written with no
+        // identity is silently adopted by every HL2 that has none of its own —
+        // exactly the contamination the per-MAC key exists to prevent.
+        // m_radioSerial is only assigned in connectRadio(), so this is reachable
+        // before the first connect and from a hand-built connect request.
+        if (m_radioSerial.isEmpty()) {
+            qCWarning(lcHl2) << "HL2: not persisting frequency calibration —"
+                             << "no radio identity yet; applying for this session only";
+        } else {
+            Hl2FreqCal::savePpb(RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial),
+                                clamped);
+        }
+    }
+    if (clamped == m_freqCalPpb)
+        return;                       // no-op: do not churn every NCO for nothing
+    m_freqCalPpb = clamped;
+    m_freqCalScale = Hl2FreqCal::scaleForPpb(clamped);
+    qCInfo(lcHl2) << "HL2: frequency calibration" << clamped << "ppb"
+                  << "— effective clock"
+                  << Hl2FreqCal::effectiveClockHz(clamped) << "Hz";
+    repushAllFrequencies();
 }
 
 void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
@@ -2992,10 +3328,44 @@ void Hl2Backend::setTxDriveLevel(int level)
         Q_ARG(int, level));
 }
 
-void Hl2Backend::invokeExtension(const QString& /*ns*/, const QString& /*verb*/, quint64 requestId,
-                                 const QVariant& /*arg*/)
+void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
+                                 const QVariant& arg)
 {
-    // No HL2 extension verbs yet; honor the async contract without hanging.
+    if (ns == QLatin1String("hl2")) {
+        // Manual frequency calibration. Completes LOCALLY — unlike the Flex
+        // tuner/amp verbs this namespace is modelled on, there is no device
+        // round trip to await: the correction is a host-side scalar and the
+        // radio is never asked about it. So the reply is emitted synchronously
+        // rather than fabricated later.
+        if (verb == QLatin1String("freqcal.set")) {
+            applyFreqCalPpb(arg.toInt(), /*persist=*/true);
+            if (requestId != 0)
+                emit extensionResult(requestId, QVariant(m_freqCalPpb));
+            return;
+        }
+        // Live trim: apply and re-push, but do NOT touch the settings store.
+        // Trim auto-repeats at 120 ms and AppSettings::save() is a full
+        // non-atomic file write, so persisting every repeat would hammer the
+        // store eight times a second. The UI commits once on button release.
+        if (verb == QLatin1String("freqcal.set_live")) {
+            applyFreqCalPpb(arg.toInt(), /*persist=*/false);
+            if (requestId != 0)
+                emit extensionResult(requestId, QVariant(m_freqCalPpb));
+            return;
+        }
+        if (verb == QLatin1String("freqcal.get")) {
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("ppb"), m_freqCalPpb},
+                    {QStringLiteral("effectiveClockHz"),
+                     Hl2FreqCal::effectiveClockHz(m_freqCalPpb)},
+                    {QStringLiteral("scale"), m_freqCalScale},
+                });
+            }
+            return;
+        }
+    }
+    // No other HL2 extension verbs; honor the async contract without hanging.
     if (requestId != 0)
         emit extensionError(requestId, QStringLiteral("hl2: no extension verbs implemented"));
 }
@@ -3603,6 +3973,13 @@ void Hl2Backend::pushInitialState()
             Q_ARG(double, static_cast<double>(r.filterHighHz)));
         QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
             Q_ARG(bool, false));
+        // The notch axis, which is measured from the NCO and defaults to ZERO.
+        // Miss this and a notch is placed ~10 MHz outside the passband, where
+        // WDSP finds no notch to apply and simply builds an unnotched filter —
+        // no error, no notch, and a `notch list` that reports it as present.
+        // createPanadapter() seeded the receivers it creates; the ones built at
+        // connect need it too, which is the whole set on a normal session.
+        seedNotches(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);
