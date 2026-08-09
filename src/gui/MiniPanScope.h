@@ -41,6 +41,11 @@ public:
     // which is what an un-mirrored scope (no source widget) renders with.
     void setTraceAppearance(const QColor& lineColor, const QColor& fillColor,
                             float fillAlpha, float lineWidth);
+    // Mirror Heat Map: colour the trace by intensity (the shared ramp in
+    // gui/FftHeatMap.h) instead of the flat FFT Line/Fill colours.
+    void setHeatMap(bool on);
+    // Mirror Grid: the horizontal dB rules.
+    void setShowGrid(bool on);
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -58,6 +63,8 @@ private:
     QColor m_fillColor;
     float  m_fillAlpha{0.70f};
     float  m_lineWidth{1.2f};
+    bool   m_heatMap{false};
+    bool   m_showGrid{true};
 };
 
 } // namespace AetherSDR

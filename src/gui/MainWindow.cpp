@@ -7422,14 +7422,23 @@ void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
     // properties ("display pan set … average=", requestPanDisplayRates), so
     // re-slicing this pan's frames already carries them.
     auto* scope = applet->scope();
-    // The dBm window covers the operator's FFT Scale (the dBm strip) AND the
-    // FFT Floor slider — the floor control works by moving this window, and the
-    // radio echoes the result back into the model. Principle II: take it from
-    // the radio-authoritative model, not from the widget's own copy.
-    scope->setDbmRange(pan->minDbm(), pan->maxDbm());
     if (auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr) {
+        // The vertical window is the WIDGET's refLevel/dynamicRange, not the
+        // pan's min_dbm/max_dbm. FFT Floor slides refLevel client-side
+        // (applyNoiseFloorAutoAdjust) and only pushes a damped, thresholded
+        // min_dbm/max_dbm to the radio afterwards — so mirroring the model
+        // tracked the radio's lagging echo instead of the scale the main pan is
+        // actually drawing with, and the floor slider appeared to do nothing
+        // here. refLevel is the top of the display; the range hangs below it.
+        scope->setDbmRange(sw->refLevel() - sw->dynamicRange(), sw->refLevel());
         scope->setTraceAppearance(sw->fftLineColor(), sw->fftFillColor(),
                                   sw->fftFillAlpha(), sw->fftLineWidth());
+        scope->setHeatMap(sw->fftHeatMap());
+        scope->setShowGrid(sw->showGrid());
+    } else {
+        // No applet for this pan (it is not in the main stack): fall back to the
+        // radio-reported range, which is the best available answer.
+        scope->setDbmRange(pan->minDbm(), pan->maxDbm());
     }
 
     scope->updateSpectrum(

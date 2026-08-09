@@ -232,6 +232,34 @@ void testTraceAppearanceMirrors()
            scope.grab().toImage() == themed);
 }
 
+// Heat Map and Grid mirror the main pan's toggles.
+void testHeatMapAndGrid()
+{
+    MiniPanScope scope;
+    scope.resize(300, 160);
+    scope.setDbmRange(-120.0f, -40.0f);
+    QVector<float> bins(64, -100.0f);
+    bins[32] = -55.0f;
+    scope.updateSpectrum(bins);
+
+    scope.setHeatMap(false);
+    scope.setShowGrid(true);
+    const QImage solidGrid = scope.grab().toImage();
+
+    scope.setHeatMap(true);
+    const QImage heat = scope.grab().toImage();
+    report("Heat Map changes the trace rendering", solidGrid != heat);
+
+    scope.setHeatMap(false);
+    report("Heat Map off restores the solid trace",
+           scope.grab().toImage() == solidGrid);
+
+    scope.setShowGrid(false);
+    report("Grid off changes the render", scope.grab().toImage() != solidGrid);
+    scope.setShowGrid(true);
+    report("Grid on restores it", scope.grab().toImage() == solidGrid);
+}
+
 // The whole mini-pan data path: cut a narrow window out of a main-pan frame.
 // No radio object is created, so this mapping is the feature.
 void testReslice()
@@ -299,6 +327,7 @@ int main(int argc, char** argv)
     testScopeApi();
     testDbmWindowIsAuthoritative();
     testTraceAppearanceMirrors();
+    testHeatMapAndGrid();
     testReslice();
     testAppletBasics();
     testFeedLifecycle();

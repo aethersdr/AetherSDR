@@ -1,9 +1,13 @@
 #include "gui/MiniPanScope.h"
 
+#include "gui/FftHeatMap.h"
+
 #include "core/ThemeManager.h"
 
 #include <QPainter>
 #include <QPainterPath>
+#include <QLinearGradient>
+#include <QPolygonF>
 #include <QFont>
 #include <QStringList>
 #include <algorithm>
@@ -80,6 +84,20 @@ void MiniPanScope::setTraceAppearance(const QColor& lineColor,
     update();
 }
 
+void MiniPanScope::setHeatMap(bool on)
+{
+    if (m_heatMap == on) return;         // mirrored per frame — no-op repaints add up
+    m_heatMap = on;
+    update();
+}
+
+void MiniPanScope::setShowGrid(bool on)
+{
+    if (m_showGrid == on) return;
+    m_showGrid = on;
+    update();
+}
+
 void MiniPanScope::setSpanKHz(double kHz)
 {
     m_spanKHz = kHz > 0.0 ? kHz : m_spanKHz;
@@ -121,10 +139,12 @@ void MiniPanScope::paintEvent(QPaintEvent*)
                    tinted("color.slice.a", kPassbandAlpha));
     }
 
-    // Faint dB grid.
-    p.setPen(tinted("color.spectrum.grid", kGridAlpha));
-    for (int i = 1; i < 4; ++i)
-        p.drawLine(QPointF(0, h * i / 4.0), QPointF(w, h * i / 4.0));
+    // Faint dB grid — mirrors the main pan's Grid toggle.
+    if (m_showGrid) {
+        p.setPen(tinted("color.spectrum.grid", kGridAlpha));
+        for (int i = 1; i < 4; ++i)
+            p.drawLine(QPointF(0, h * i / 4.0), QPointF(w, h * i / 4.0));
+    }
 
     // Centre hairline.
     p.setPen(tinted("color.accent", kHairlineAlpha));
@@ -142,27 +162,75 @@ void MiniPanScope::paintEvent(QPaintEvent*)
             const double t = (hiDbm - dbm) / span;   // 0 at top (max), 1 at bottom
             return std::clamp(t, 0.0, 1.0) * h;
         };
-        QPainterPath line;
-        for (int i = 0; i < n; ++i) {
-            const double x = (double(i) / (n - 1)) * w;
-            const double y = yOf(m_bins[i]);
-            if (i == 0) line.moveTo(x, y);
-            else        line.lineTo(x, y);
+        const float alpha = std::clamp(m_fillAlpha, 0.0f, 1.0f);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        if (m_heatMap) {
+            // Per-column trapezoid with a vertical gradient from the intensity
+            // colour down to the shared base — the same construction the main
+            // pan uses, so a signal reads the same colour in both views.
+            for (int i = 0; i < n - 1; ++i) {
+                const double x0 = (double(i) / (n - 1)) * w;
+                const double x1 = (double(i + 1) / (n - 1)) * w;
+                const double y0 = yOf(m_bins[i]);
+                const double y1 = yOf(m_bins[i + 1]);
+                // t: 0 at the top of the dBm window (noise floor end), 1 strong.
+                const float t = 1.0f - static_cast<float>(
+                    std::clamp(((y0 + y1) * 0.5) / (h > 0 ? h : 1), 0.0, 1.0));
+                QColor top = FftHeatMap::heatColor(t);
+                top.setAlphaF(alpha * FftHeatMap::kTopAlphaScale);
+                QLinearGradient grad(0, std::min(y0, y1), 0, h);
+                grad.setColorAt(0.0, top);
+                grad.setColorAt(1.0, FftHeatMap::gradientBase(alpha));
+                p.setPen(Qt::NoPen);
+                p.setBrush(grad);
+                QPolygonF col;
+                col << QPointF(x0, y0) << QPointF(x1, y1)
+                    << QPointF(x1, h)  << QPointF(x0, h);
+                p.drawPolygon(col);
+            }
+            if (m_lineWidth > 0.0f) {
+                QPen pen;
+                pen.setCosmetic(true);
+                pen.setWidthF(m_lineWidth);
+                pen.setCapStyle(Qt::RoundCap);
+                for (int i = 0; i < n - 1; ++i) {
+                    const double x0 = (double(i) / (n - 1)) * w;
+                    const double x1 = (double(i + 1) / (n - 1)) * w;
+                    const double y0 = yOf(m_bins[i]);
+                    const double y1 = yOf(m_bins[i + 1]);
+                    const float t = 1.0f - static_cast<float>(
+                        std::clamp(((y0 + y1) * 0.5) / (h > 0 ? h : 1), 0.0, 1.0));
+                    pen.setColor(FftHeatMap::heatColor(t));
+                    p.setPen(pen);
+                    p.drawLine(QPointF(x0, y0), QPointF(x1, y1));
+                }
+            }
+        } else {
+            QPainterPath line;
+            for (int i = 0; i < n; ++i) {
+                const double x = (double(i) / (n - 1)) * w;
+                const double y = yOf(m_bins[i]);
+                if (i == 0) line.moveTo(x, y);
+                else        line.lineTo(x, y);
+            }
+            QPainterPath fill = line;
+            fill.lineTo(w, h);
+            fill.lineTo(0, h);
+            fill.closeSubpath();
+            // Mirrored colours win; the theme token is the fallback for a scope
+            // with no source pan (nothing to mirror yet).
+            const QColor themeTrace =
+                tm.color(this, QStringLiteral("color.spectrum.trace"));
+            QColor fillC = m_fillColor.isValid() ? m_fillColor : themeTrace;
+            fillC.setAlphaF(alpha);
+            p.fillPath(fill, fillC);
+            if (m_lineWidth > 0.0f) {
+                p.setPen(QPen(m_lineColor.isValid() ? m_lineColor : themeTrace,
+                              m_lineWidth));
+                p.drawPath(line);
+            }
         }
-        QPainterPath fill = line;
-        fill.lineTo(w, h);
-        fill.lineTo(0, h);
-        fill.closeSubpath();
-        // Mirrored colours win; the theme token is the fallback for a scope with
-        // no source pan (nothing to mirror yet).
-        const QColor themeTrace =
-            tm.color(this, QStringLiteral("color.spectrum.trace"));
-        QColor fillC = m_fillColor.isValid() ? m_fillColor : themeTrace;
-        fillC.setAlphaF(std::clamp(m_fillAlpha, 0.0f, 1.0f));
-        p.fillPath(fill, fillC);
-        p.setPen(QPen(m_lineColor.isValid() ? m_lineColor : themeTrace,
-                      m_lineWidth));
-        p.drawPath(line);
     }
 
     // ±span corner labels (K4 style).

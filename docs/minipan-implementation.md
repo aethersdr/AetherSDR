@@ -64,8 +64,9 @@ pan's Display settings rather than its own:
 | FFT FPS | radio-side (`requestPanDisplayRates`) — frames arrive at that rate |
 | FFT Line (colour, width) | mirrored from the source pan's `SpectrumWidget` |
 | FFT Fill (colour, alpha) | mirrored from the source pan's `SpectrumWidget` |
-| FFT Floor | the floor slider moves the pan's dBm window, so it arrives with the scale |
-| FFT Scale (dBm strip) | mirrored from `PanadapterModel::minDbm()/maxDbm()` |
+| FFT Floor + FFT Scale | mirrored from the widget's `refLevel()` / `dynamicRange()` |
+| Heat Map | mirrored; the ramp itself is shared (`gui/FftHeatMap.h`) |
+| Grid | mirrored |
 
 The first two need no code at all — re-slicing the same pan's frames carries
 them. The rest are pulled per frame in `feedMiniPanFromPanFrame` rather than
@@ -73,10 +74,20 @@ wired signal-by-signal: the reads are plain members, the scope's setters are
 change-gated, and pulling cannot drift out of sync or miss a control nobody
 remembered to connect.
 
-The dBm window comes from the radio-authoritative `PanadapterModel`, not the
-widget's copy (Principle II). The scope does **no** local auto-scaling — a
-second opinion on the noise floor would disagree with the main pan about how
-tall a signal is and would ignore the operator's FFT Floor entirely.
+The vertical window is the **widget's** `refLevel()` / `dynamicRange()`, not
+the pan's `min_dbm`/`max_dbm`. FFT Floor slides `refLevel` client-side
+(`applyNoiseFloorAutoAdjust`) and only pushes a damped, thresholded dBm range
+to the radio afterwards — so mirroring the model tracks a lagging echo rather
+than the scale the main pan is drawing with, and the floor slider appears to do
+nothing in the mini-pan. `PanadapterModel::minDbm()/maxDbm()` is the fallback
+for a pan with no applet in the stack.
+
+The scope does **no** local auto-scaling — a second opinion on the noise floor
+would disagree with the main pan about how tall a signal is.
+
+The heat-map ramp lives in `gui/FftHeatMap.h`, shared with `SpectrumWidget`
+rather than copied: two definitions would mean the same signal rendering in two
+different colours at two zoom levels.
 
 Only the chrome the main pan has no equivalent of — the passband band, the
 centre hairline, the ±span labels, the grid — stays on theme tokens.
