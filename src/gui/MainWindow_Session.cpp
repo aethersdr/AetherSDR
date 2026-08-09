@@ -1740,6 +1740,18 @@ void MainWindow::wirePanLifecycle()
             this, [repushPanDimensions](const QString&) { repushPanDimensions(); });
 #endif
 
+    // The previous session died floating a panadapter, so this one came up
+    // docked rather than replaying the crash (#4617). Say so — otherwise the
+    // pop-out silently fails to return and looks like a second bug.
+    connect(m_panStack, &PanadapterStack::floatingRestoreAbandoned,
+            this, [this](const QString& abandonedPanIds) {
+        statusBar()->showMessage(
+            tr("Panadapter %1 was popped out when AetherSDR last closed "
+               "unexpectedly — it has been restored docked. Pop it out again "
+               "to retry.").arg(abandonedPanIds),
+            15000);
+    });
+
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
         clearKiwiSdrPanDisplaySourceOverride(panId);

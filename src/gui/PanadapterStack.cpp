@@ -1,10 +1,12 @@
 #include "PanadapterStack.h"
 #include "BandStackPanel.h"
+#include "FloatingRestorePolicy.h"
 #include "PanFloatingWindow.h"
 #include "PanadapterApplet.h"
 #include "PanadapterRenderScheduler.h"
 #include "SpectrumWidget.h"
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
 
 #include <QHBoxLayout>
 #include <QLayout>
@@ -86,6 +88,62 @@ PanadapterStack::PanadapterStack(QWidget* parent)
     m_splitter->setHandleWidth(3);
     m_splitter->setChildrenCollapsible(false);
     hbox->addWidget(m_splitter, 1);
+
+    // Crash-loop guard (#4617). Evaluated here, at construction, and nowhere
+    // else: this is the last point at which the marker on disk can only have
+    // been written by a *previous* process. Deferring the check to
+    // restoreFloatingState() would race a pop-out performed during this
+    // session's own settle window and throw away a layout that never crashed.
+    auto& settings = AppSettings::instance();
+    const QString savedIds = settings.value(kFloatingPanIdsKey, "").toString();
+    const bool restorePending =
+        settings.value(kFloatingRestorePendingKey, false).toBool();
+    switch (evaluateFloatingRestore(!savedIds.isEmpty(), restorePending)) {
+    case FloatingRestoreAction::DropSavedIds:
+        qCWarning(lcGui)
+            << "PanadapterStack: the previous session did not survive floating"
+            << savedIds
+            << "— starting docked and forgetting the saved float state (#4617)";
+        m_floatingRestoreAbandonedIds = savedIds;
+        settings.setValue(kFloatingPanIdsKey, QString());
+        settings.setValue(kFloatingRestorePendingKey, false);
+        settings.save();
+        break;
+    case FloatingRestoreAction::ClearStaleMarker:
+        settings.setValue(kFloatingRestorePendingKey, false);
+        settings.save();
+        break;
+    case FloatingRestoreAction::Replay:
+        break;
+    }
+}
+
+void PanadapterStack::armFloatingRestoreMarker()
+{
+    // Caller commits this with the pan ID in one settings write, so the marker
+    // can never reach disk later than the ID it protects.
+    AppSettings::instance().setValue(kFloatingRestorePendingKey, true);
+
+    if (!m_floatingRestoreSettleTimer) {
+        m_floatingRestoreSettleTimer = new QTimer(this);
+        m_floatingRestoreSettleTimer->setSingleShot(true);
+        m_floatingRestoreSettleTimer->setInterval(kFloatingRestoreSettleMs);
+        connect(m_floatingRestoreSettleTimer, &QTimer::timeout,
+                this, &PanadapterStack::clearFloatingRestoreMarker);
+    }
+    // Restart rather than start: a restore that replays several pans settles
+    // once, after the last of them has held up.
+    m_floatingRestoreSettleTimer->start();
+}
+
+void PanadapterStack::clearFloatingRestoreMarker()
+{
+    auto& settings = AppSettings::instance();
+    if (!settings.value(kFloatingRestorePendingKey, false).toBool()) {
+        return;
+    }
+    settings.setValue(kFloatingRestorePendingKey, false);
+    settings.save();
 }
 
 void PanadapterStack::setBandStackVisible(bool visible)
@@ -814,6 +872,13 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     fw->restoreWindowGeometry();
     fw->show();
     fw->raise();
+    // Everything from here to the first frame in the new window — the deferred
+    // GPU reset, the show, and the resize it triggers — is the code that has
+    // taken the process down on marginal D3D11 drivers (#4319/#4091). Arm the
+    // marker first so saveFloatingState()'s save() commits it in the same
+    // transaction as the pan ID: if we die below, the next launch sees both
+    // and starts docked instead of replaying straight back into it (#4617).
+    armFloatingRestoreMarker();
     saveFloatingState();
     emit panFloated(panId);
 
@@ -929,6 +994,10 @@ void PanadapterStack::prepareShutdown()
 
     setShuttingDown(true);
     saveFloatingState();
+    // Reaching an orderly shutdown proves the floats held up, even if the
+    // settle timer has not fired yet. Without this, quitting inside the settle
+    // window would cost the user their pop-out on the next launch (#4617).
+    clearFloatingRestoreMarker();
 
     // Explicitly delete floating windows rather than calling close().
     // close() without WA_DeleteOnClose only hides the window, leaving it alive
@@ -975,7 +1044,7 @@ void PanadapterStack::saveFloatingState() const
 {
     QStringList ids;
     const QString saved =
-        AppSettings::instance().value("FloatingPanIds", "").toString();
+        AppSettings::instance().value(kFloatingPanIdsKey, "").toString();
     for (const QString& id : saved.split(',', Qt::SkipEmptyParts)) {
         if (!m_seenPanIds.contains(id) && !ids.contains(id)) {
             ids << id;
@@ -986,15 +1055,24 @@ void PanadapterStack::saveFloatingState() const
             ids << id;
         }
     }
-    AppSettings::instance().setValue("FloatingPanIds", ids.join(','));
+    AppSettings::instance().setValue(kFloatingPanIdsKey, ids.join(','));
     AppSettings::instance().save();
 }
 
 void PanadapterStack::restoreFloatingState()
 {
+    // The constructor already dropped the saved IDs if the previous session
+    // died floating them; report that here, where a window is listening.
+    if (!m_floatingRestoreAbandonedIds.isEmpty()) {
+        emit floatingRestoreAbandoned(m_floatingRestoreAbandonedIds);
+        m_floatingRestoreAbandonedIds.clear();
+    }
+
     const QString saved =
-        AppSettings::instance().value("FloatingPanIds", "").toString();
+        AppSettings::instance().value(kFloatingPanIdsKey, "").toString();
     if (saved.isEmpty()) return;
+    // Each floatPanadapter() re-arms the crash-loop marker, so the replay is
+    // covered by the same guard as an interactive pop-out.
     for (const QString& id : saved.split(',', Qt::SkipEmptyParts)) {
         if (m_pans.contains(id) && !m_floatingWindows.contains(id)) {
             floatPanadapter(id);
