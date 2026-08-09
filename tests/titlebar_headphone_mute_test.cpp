@@ -5,10 +5,10 @@
 // invisible, which is why they get a test rather than a comment:
 //
 //   1. setHeadphoneMuted() runs under a QSignalBlocker, so the `toggled`
-//      lambda in the constructor -- which is what normally swaps the glyph --
-//      does NOT run. The explicit setText() in the setter is therefore
+//      lambda in the constructor -- which is what normally swaps the mark --
+//      does NOT run. The explicit repaint in the setter is therefore
 //      required, not redundant: drop it and the button's checked state and its
-//      glyph disagree with each other.
+//      mark disagree with each other.
 //   2. That same blocker is what stops the reconcile from re-emitting
 //      headphoneMuteChanged and echoing the radio's own status back at it as a
 //      fresh command -- the Constitution Principle II feedback loop ("the
@@ -24,6 +24,7 @@
 #include "gui/TitleBar.h"
 
 #include <QApplication>
+#include <QImage>
 #include <QPushButton>
 
 #include <cstdio>
@@ -36,8 +37,16 @@ static void check(bool ok, const char* what)
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
 }
 
-static const char* kMuted   = "\xF0\x9F\x94\x87";  // 🔇
-static const char* kUnmuted = "\xF0\x9F\x8E\xA7";  // 🎧
+// The mute mark used to be a 🔇 / 🎧 emoji set with setText(), and this test
+// compared those bytes. The unified title bar replaced both with painter-drawn
+// thin-line icons -- emoji render in the platform's own colour and weight and
+// cannot follow the theme. The contract this test exists for is unchanged; the
+// assertions now read the rendered icon instead of the label text, which is
+// also stronger, since it survives the next change of mark.
+static QImage markOf(QPushButton* b)
+{
+    return b->icon().pixmap(QSize(20, 20)).toImage();
+}
 
 // The button is private; the automation bridge finds it the same way.
 static QPushButton* headphoneButton(TitleBar& bar)
@@ -73,16 +82,16 @@ int main(int argc, char** argv)
                      [&](bool m) { ++emitted; lastEmitted = m; });
 
     check(!hp->isChecked(), "precondition: starts unmuted");
-    check(hp->text() == QString::fromUtf8(kUnmuted),
-          "precondition: starts on the headphone glyph");
+    const QImage unmutedMark = markOf(hp);
+    check(!unmutedMark.isNull(), "precondition: the headphone mark is drawn");
 
     // Command leg -- an operator click is still a request to the radio, and is
     // reported exactly once.
     hp->click();
     check(emitted == 1 && lastEmitted,
           "clicking the button emits headphoneMuteChanged(true) once");
-    check(hp->text() == QString::fromUtf8(kMuted),
-          "clicking swaps the glyph to muted");
+    const QImage mutedMark = markOf(hp);
+    check(mutedMark != unmutedMark, "clicking swaps the mark to muted");
 
     // Truth leg -- reconciling from radio status moves the control WITHOUT
     // emitting. If this ever emits, the radio's status echo becomes a fresh
@@ -92,21 +101,20 @@ int main(int argc, char** argv)
     check(emitted == 0,
           "setHeadphoneMuted() emits nothing -- reconcile is not a command");
     check(!hp->isChecked(), "setHeadphoneMuted(false) unchecks the button");
-    check(hp->text() == QString::fromUtf8(kUnmuted),
-          "setHeadphoneMuted(false) restores the headphone glyph "
-          "(the explicit setText, since the blocker suppressed toggled)");
+    check(markOf(hp) == unmutedMark,
+          "setHeadphoneMuted(false) restores the headphone mark "
+          "(the explicit repaint, since the blocker suppressed toggled)");
 
     bar.setHeadphoneMuted(true);
     check(emitted == 0, "setHeadphoneMuted(true) also emits nothing");
     check(hp->isChecked(), "setHeadphoneMuted(true) checks the button");
-    check(hp->text() == QString::fromUtf8(kMuted),
-          "setHeadphoneMuted(true) shows the muted glyph");
+    check(markOf(hp) == mutedMark,
+          "setHeadphoneMuted(true) shows the muted mark");
 
     // A repeated status echo -- Flex re-sends `audio` on every mixer change --
     // must not thrash the control.
     bar.setHeadphoneMuted(true);
-    check(emitted == 0 && hp->isChecked() &&
-          hp->text() == QString::fromUtf8(kMuted),
+    check(emitted == 0 && hp->isChecked() && markOf(hp) == mutedMark,
           "a repeated reconcile to the same value is a no-op");
 
     if (g_failures == 0)
