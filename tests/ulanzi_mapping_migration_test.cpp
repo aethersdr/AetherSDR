@@ -16,8 +16,10 @@
 #include "core/UlanziDialMappings.h"
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QStringList>
 
 #include <iostream>
@@ -193,6 +195,51 @@ int main(int argc, char** argv)
         }
     }
     ok &= expect(allKnown, "every action in knownWheelActions registry is recognized by isKnownWheelAction");
+
+    // ── drift detection: assert every actionId handled by applyFlexControlWheelAction is registered ─
+    auto extractDispatchActions = []() -> QStringList {
+        QStringList candidates = {
+            QStringLiteral("src/gui/MainWindow_Controllers.cpp"),
+            QStringLiteral("../src/gui/MainWindow_Controllers.cpp"),
+            QStringLiteral("../../src/gui/MainWindow_Controllers.cpp")
+        };
+        QFile file;
+        for (const QString& cand : candidates) {
+            file.setFileName(cand);
+            if (file.exists()) break;
+        }
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+            return {};
+        const QString content = QString::fromUtf8(file.readAll());
+        file.close();
+
+        const int start = content.indexOf(QStringLiteral("applyFlexControlWheelAction("));
+        if (start < 0) return {};
+        const int end = content.indexOf(QStringLiteral("QJsonObject MainWindow::buildControlDevicesSnapshot"), start);
+        const QString fnBody = end > start ? content.mid(start, end - start) : content.mid(start, 2500);
+
+        static const QRegularExpression rx(QStringLiteral("actionId\\s*==\\s*\"([^\"]+)\""));
+        QRegularExpressionMatchIterator it = rx.globalMatch(fnBody);
+        QStringList list;
+        while (it.hasNext()) {
+            list.append(it.next().captured(1));
+        }
+        return list;
+    };
+
+    const QStringList dispatchActions = extractDispatchActions();
+    ok &= expect(!dispatchActions.isEmpty(),
+                 "extracted dispatch action IDs from MainWindow_Controllers.cpp applyFlexControlWheelAction");
+    bool allDispatchRegistered = true;
+    for (const QString& act : dispatchActions) {
+        if (!UlanziDialMappings::isKnownWheelAction(act)) {
+            std::cout << "[FAIL] Action '" << act.toStdString()
+                      << "' in applyFlexControlWheelAction is missing from UlanziDialMappings::knownWheelActions()\n";
+            allDispatchRegistered = false;
+        }
+    }
+    ok &= expect(allDispatchRegistered,
+                 "every actionId handled in applyFlexControlWheelAction is registered in UlanziDialMappings::knownWheelActions()");
 
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;
