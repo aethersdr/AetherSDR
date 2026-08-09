@@ -3928,8 +3928,12 @@ void MainWindow::showConnectionDialog()
     // should not fire on platforms that never had this bug, or when the
     // dialog is merely raised while already open (windowHandle() is also
     // still null before the very first show, making this a no-op there too).
-    if (QGuiApplication::platformName() == QLatin1String("xcb")
-        && !m_connPanel->isVisible()) {
+    // Skipping the already-visible case does mean this cannot rescue a window
+    // that is *already* wedged — the exact state in which isVisible() lies —
+    // but it never has to: from here on every re-show maps a window the
+    // compositor has not seen before, so that state stops being reachable.
+    const bool isXcb = QGuiApplication::platformName() == QLatin1String("xcb");
+    if (isXcb && !m_connPanel->isVisible()) {
         if (QWindow* win = m_connPanel->windowHandle()) {
             win->destroy();
         }
@@ -3963,21 +3967,28 @@ void MainWindow::showConnectionDialog()
     m_connPanel->move(frameTopLeft);
     m_connPanel->show();
 
-    // Deferred to a clean event-loop turn — not fired synchronously from
-    // whatever real input event got us here. Two call sites reach this
-    // function from inside a live X11 input/grab context: the station
-    // label's double-click (still inside the eventFilter's event dispatch)
-    // and the "Connect to Radio..." menu action (still inside the QMenu
-    // popup's own grab teardown). raise()/activateWindow() called
-    // synchronously there can race that context under the xcb platform.
-    // Mirrors the identical class of fix already applied to
-    // automation-driven button clicks in AutomationServer.cpp
-    // (menu/dialog-popup re-entrancy).
-    QTimer::singleShot(0, m_connPanel, [this]() {
-        if (!m_connPanel) return;
+    const auto raiseAndActivate = [this] {
         m_connPanel->raise();
         m_connPanel->activateWindow();
-    });
+    };
+    // Under xcb, deferred to a clean event-loop turn rather than fired
+    // synchronously from whatever real input event got us here. Two call
+    // sites reach this function from inside a live X11 input/grab context:
+    // the station label's double-click (still inside the eventFilter's event
+    // dispatch) and the "Connect to Radio..." menu action (still inside the
+    // QMenu popup's own grab teardown). raise()/activateWindow() called
+    // synchronously there can race that context. Mirrors the identical class
+    // of fix already applied to automation-driven button clicks in
+    // AutomationServer.cpp (menu/dialog-popup re-entrancy). The grab being
+    // raced is X11's, so this is scoped to xcb for the same reason the window
+    // recreation above is: every other platform keeps the synchronous
+    // activation it has always had. m_connPanel is the timer's context
+    // object, so the callback is dropped if the panel is destroyed first.
+    if (isXcb) {
+        QTimer::singleShot(0, m_connPanel, raiseAndActivate);
+    } else {
+        raiseAndActivate();
+    }
 }
 
 void MainWindow::hideConnectionDialog()
