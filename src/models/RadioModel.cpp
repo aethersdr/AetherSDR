@@ -459,6 +459,15 @@ void RadioModel::flushPendingOperatingState()
     persistOperatingState(true);
 }
 
+void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
+                                        quint64 requestId, const QVariant& arg)
+{
+    if (!m_backend) {
+        return;
+    }
+    m_backend->invokeExtension(ns, verb, requestId, arg);
+}
+
 void RadioModel::handRestoredStateToBackend(const QString& serial)
 {
     if (!m_backend) {

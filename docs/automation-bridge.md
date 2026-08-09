@@ -3133,6 +3133,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
+| `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |

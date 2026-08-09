@@ -199,6 +199,45 @@ private:
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
 
+    // ---- manual frequency calibration (Hl2FreqCal) ----
+    //
+    // EVERY frequency that leaves for the radio goes through these two. That is
+    // the point of them: the correction is a single scalar (see Hl2FreqCal for
+    // why), so it needs exactly one entry point per direction, and a write site
+    // that bypasses them leaves a receiver tuned somewhere other than the rest
+    // of the radio believes — with nothing to indicate it, because no NCO
+    // register can be read back.
+    //
+    // Receiver::sliceFreqHz and ncoHz stay in the TRUE-RF domain. Only the
+    // values handed to the wire and to the DSP are scaled, so the panadapter
+    // axis, the band-filter decisions and every emitted state keep reading in
+    // real frequency.
+
+    // NCO register value (0x01 TX, 0x02+ RX) for a true-RF frequency.
+    [[nodiscard]] std::uint32_t ncoCommandHz(double trueHz) const noexcept;
+    // DSP shift that puts sliceTrueHz at baseband, given the true-RF NCO. Rounds
+    // the NCO command first and computes the shift against that rounded value,
+    // so the register's 1 Hz quantisation cancels instead of leaking into audio.
+    [[nodiscard]] double dspShiftHz(double sliceTrueHz, double ncoTrueHz) const noexcept;
+    // Re-send every NCO (RX banks + TX) from the receivers' unchanged true-RF
+    // state. Called when the calibration changes mid-session, so the operator
+    // hears the correction move while they are nulling a beat note rather than
+    // on their next tune.
+    void repushAllFrequencies();
+    // Clamp, persist, adopt, re-push — the single path for a calibration change
+    // whoever asked for it (setup dialog, automation bridge, connect).
+    void applyFreqCalPpb(int ppb, bool persist);
+
+    // The operator's calibration for THIS radio and the derived scale applied to
+    // every commanded frequency. 0 / 1.0 is "uncalibrated" — the behaviour every
+    // build before this one had.
+    int m_freqCalPpb = 0;
+    double m_freqCalScale = 1.0;
+    // Identity of the connected radio (its MAC, from the connect request), so
+    // the calibration loads and stores per radio rather than globally: it
+    // describes one physical crystal. Empty until connectRadio().
+    QString m_radioSerial;
+
     // ---- per-receiver state ----
     //
     // One of these per running DDC. Everything here is genuinely independent

@@ -1135,6 +1135,18 @@ public:
     {
         return RadioSettingsScope(m_family, serial());
     }
+
+    // Fire a vendor-extension verb at the connected backend (IRadioBackend
+    // §"vendor-extension"). Generic on purpose: the model stays free of any one
+    // family's verb vocabulary, exactly as it does for the tuner and amp
+    // intents it already routes this way. requestId 0 means no reply is
+    // expected; a caller that wants one connects to the backend's
+    // extensionResult/extensionError and correlates its own id.
+    //
+    // A no-op when nothing is connected, rather than a crash or a queued call
+    // that lands on the next radio.
+    void invokeBackendExtension(const QString& ns, const QString& verb,
+                                quint64 requestId = 0, const QVariant& arg = {});
     // True when the radio speaks the SmartSDR text-command plane — the only
     // family where sendCmd() reaches anything and a command has a response to
     // await. Every other backend takes typed intents through the IRadioBackend

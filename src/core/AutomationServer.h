@@ -619,6 +619,10 @@ private:
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
     QJsonObject doTune(const QString& value, const QString& id);
+    // Manual frequency calibration. Gated on
+    // RadioCapabilities::hostFrequencyCalibration, so it refuses on a radio that
+    // calibrates itself rather than silently storing a number nothing applies.
+    QJsonObject doFreqCal(const QString& action, const QString& value);
     QJsonObject doTargetTune(const QString& value);
     QJsonObject doMemory(const QString& action, const QString& arg);
     // Demo fault injection (RFC #4288 #4): route a fault to backend->

@@ -14,6 +14,7 @@
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
+#include "core/backends/hl2/Hl2FreqCal.h"  // freqcal() verb — manual frequency calibration
 #include "core/MeterSurfaces.h"
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
 #include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
@@ -2986,6 +2987,16 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 if (a.value.isEmpty())
                     return err(QStringLiteral("tune requires a frequency in MHz"));
                 return s.doTune(a.value, a.id);
+            });
+
+        // Help stays ONE literal: gen_bridge_docs.py's _ADD_RE captures a single
+        // quoted string for the help field, so a split string loses everything
+        // after the first half in the generated verb table.
+        add("freqcal", {},
+            "freqcal [get|set <ppb>|from_vfo <reference_mhz>|reset] — manual frequency calibration (radios that cannot calibrate themselves)",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doFreqCal(a.action, a.value);
             });
 
         add("targettune", {},
@@ -6592,6 +6603,101 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
                        {QStringLiteral("gps"), QStringLiteral("fixture")},
                        {QStringLiteral("profile"), profile},
                        {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
+}
+
+// ── Manual frequency calibration (HL2) ───────────────────────────
+// get / set <ppb> / from_vfo <reference_mhz> / reset. Only reachable on
+// radios whose host owns the correction (RadioCapabilities::
+// hostFrequencyCalibration).
+QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& value)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (!m_radioModel->backendCapabilities().hostFrequencyCalibration) {
+        // Refuse rather than store. On a radio that calibrates itself there is
+        // nothing to apply this to, and a bridge test that "passed" against a
+        // stored-but-inert number would be testing nothing.
+        return err(QStringLiteral("freqcal: this radio calibrates its own reference"));
+    }
+
+    const RadioSettingsScope scope = m_radioModel->settingsScope();
+    auto report = [&scope](const QString& what) {
+        const int ppb = Hl2FreqCal::loadPpb(scope);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("freqcal"), what},
+            {QStringLiteral("ppb"), ppb},
+            {QStringLiteral("ppm"), ppb / 1000.0},
+            {QStringLiteral("effectiveClockHz"), Hl2FreqCal::effectiveClockHz(ppb)},
+        };
+    };
+
+    const QString verb = action.isEmpty() ? QStringLiteral("get") : action.toLower();
+
+    if (verb == QLatin1String("get"))
+        return report(QStringLiteral("get"));
+
+    // Mutating verbs need a radio identity. With an empty radioId the write
+    // would land on the family-wide default row and be inherited by every other
+    // radio of this family, so refuse rather than return ok:true against a
+    // number that contaminated the wrong radios (AGENTS.md).
+    if (verb != QLatin1String("get") && scope.radioId().isEmpty()) {
+        return err(QStringLiteral("freqcal: no radio identity yet — connect the radio "
+                                  "before calibrating"));
+    }
+
+    auto applyPpb = [this](int ppb) {
+        m_radioModel->invokeBackendExtension(QStringLiteral("hl2"),
+                                             QStringLiteral("freqcal.set"), 0,
+                                             QVariant(ppb));
+    };
+
+    if (verb == QLatin1String("reset")) {
+        applyPpb(0);
+        return report(QStringLiteral("reset"));
+    }
+
+    if (verb == QLatin1String("set")) {
+        bool ok = false;
+        const int ppb = value.trimmed().toInt(&ok);
+        if (!ok)
+            return err(QStringLiteral("freqcal set requires an integer ppb value"));
+        if (ppb != Hl2FreqCal::clampPpb(ppb)) {
+            return err(QStringLiteral("freqcal set: %1 ppb is outside +/-%2 ppb")
+                           .arg(ppb).arg(Hl2FreqCal::kMaxPpb));
+        }
+        applyPpb(ppb);
+        return report(QStringLiteral("set"));
+    }
+
+    if (verb == QLatin1String("from_vfo")) {
+        bool ok = false;
+        const double refMhz = value.trimmed().toDouble(&ok);
+        if (!ok || !(refMhz > 0.0))
+            return err(QStringLiteral("freqcal from_vfo requires a reference in MHz"));
+        double dialledHz = 0.0;
+        for (SliceModel* s : m_radioModel->slices()) {
+            if (s && s->isActive()) { dialledHz = s->frequency() * 1.0e6; break; }
+        }
+        if (!(dialledHz > 0.0))
+            return err(QStringLiteral("freqcal from_vfo: no active slice to read"));
+        const int ppb = Hl2FreqCal::ppbFromZeroBeat(refMhz * 1.0e6, dialledHz);
+        // Same refusal the UI makes: a clamped result means the capture was of
+        // the wrong signal, and committing it would move every band.
+        if (ppb == Hl2FreqCal::kMinPpb || ppb == Hl2FreqCal::kMaxPpb) {
+            return err(QStringLiteral("freqcal from_vfo: %1 MHz against a %2 MHz "
+                                      "reference is more than 50 ppm — wrong signal?")
+                           .arg(dialledHz / 1.0e6, 0, 'f', 6).arg(refMhz, 0, 'f', 6));
+        }
+        applyPpb(ppb);
+        QJsonObject o = report(QStringLiteral("from_vfo"));
+        o.insert(QStringLiteral("referenceMhz"), refMhz);
+        o.insert(QStringLiteral("dialledMhz"), dialledHz / 1.0e6);
+        return o;
+    }
+
+    return err(QStringLiteral("freqcal: unknown action '%1' (get|set|from_vfo|reset)")
+                   .arg(action));
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────

@@ -156,6 +156,11 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canTransmit = true;
     caps.hasTuner = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
+    // The radio owns its reference and its own calibration ("radio set cal_freq",
+    // "radio pll_start", freq_error_ppb) — that surface is the Frequency Offset
+    // group on the Receive page, and it is NOT this flag. False here means "the
+    // client does not apply a frequency scalar", which is correct for a Flex.
+    caps.hostFrequencyCalibration = false;
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
     caps.hasSelectableMicInputs = true;
