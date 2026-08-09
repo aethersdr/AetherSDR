@@ -1244,19 +1244,55 @@ void MainWindow::wirePanLifecycle()
         }
     });
     // Create/recreate the mini-pan's pan whenever we (re)connect and it's wanted —
-    // covers "opened while disconnected then connected" and reconnect.
+    // covers "opened while disconnected then connected". NOTE this cannot carry a
+    // soft reconnect on its own: stageSessionModelsForReconnect() empties the pan
+    // map before connectionStateChanged(true) is emitted, so ensureMiniPanFeed
+    // bails on its "no pan yet" guard. The panadapterReclaimed hook below is the
+    // one that covers reconnect. (#4566)
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](bool connected) {
         if (connected) ensureMiniPanFeed();
     });
-    // Once the pan actually exists (async create resolved), push our real scope
-    // width and centre it on the VFO — pushMiniPanXpixels/refreshMiniPanFollow at
-    // create-time no-op because miniPanId() is still empty then.
+    // Once the pan actually exists (async create resolved, or re-adopted across a
+    // reconnect reclaim), push our real scope width and centre it on the VFO —
+    // both no-op at create time because miniPanId() is still empty then.
     connect(&m_radioModel, &RadioModel::miniPanReady, this,
             [this](const QString&) {
         if (!m_miniPan || !m_miniPanFeedWanted) return;
         refreshMiniPanFollow();
         pushMiniPanXpixels();
+        // The span the scope draws must be the span the RADIO settled on, not
+        // the one we asked for: it clamps to min_bw/max_bw server-side, and a
+        // scope drawing its own labels over a clamped span is wrong by the
+        // clamp ratio. Re-push the selection, then follow the echo. (#4562)
+        m_radioModel.setMiniPanBandwidth(m_miniPan->spanMhz());
+        if (auto* pan = m_radioModel.panadapter(m_radioModel.miniPanId())) {
+            connect(pan, &PanadapterModel::infoChanged, this, [this, pan]() {
+                if (m_miniPan && pan->bandwidthMhz() > 0.0)
+                    m_miniPan->scope()->setSpanKHz(pan->bandwidthMhz() * 1000.0);
+            }, Qt::UniqueConnection);
+        }
+    });
+    // A soft reconnect returns our pans through the RECLAIM path, which never
+    // emits panadapterAdded — without this the mini-pan was never re-established
+    // and the window sat on a frozen trace. Idempotent: if the radio kept the
+    // mini-pan it was re-adopted (miniPanId() non-empty) and this is a no-op; if
+    // the radio dropped it, this recreates it exactly once. (#4566)
+    connect(&m_radioModel, &RadioModel::panadapterReclaimed, this,
+            [this](PanadapterModel*) { ensureMiniPanFeed(); });
+    // The radio refused the pan (slot limit, or a create error). Do not leave a
+    // checked menu item and a dead window that reopens dead next launch — close
+    // it and clear the persisted open-state (plan §7).
+    connect(&m_radioModel, &RadioModel::panadapterLimitReached, this,
+            [this](int, const QString&) {
+        if (m_miniPanFeedWanted && m_miniPan && m_radioModel.miniPanId().isEmpty())
+            miniPanCreateFailed();
+    });
+    // Debounced re-centre of the dedicated pan while tuning (plan §5).
+    m_miniPanCenterTimer.setSingleShot(true);
+    m_miniPanCenterTimer.setInterval(75);
+    connect(&m_miniPanCenterTimer, &QTimer::timeout, this, [this]() {
+        m_radioModel.setMiniPanCenter(m_miniPanPendingCenterMhz);
     });
 
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,

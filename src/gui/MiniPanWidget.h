@@ -14,6 +14,9 @@
 // centre/passband from the followed VFO by calling the setters below. The window
 // reports its own two intents back up: closedByUser() (X button) and scopeResized()
 // (debounced — MainWindow re-pushes the pan's xpixels from scope()->width()).
+//
+// Persistence lives in core/MiniPanSettings.h — ONE nested "MiniPan" object,
+// never flat AppSettings keys (Constitution Principle V).
 
 #include <QWidget>
 #include <QString>
@@ -42,12 +45,8 @@ public:
     void setPassbandHz(int lowHz, int highHz);
 
     MiniPanScope* scope() const { return m_scope; }
+    double spanKHz() const { return m_spanKHz; }
     double spanMhz() const { return m_spanKHz / 1000.0; }   // for the radio pan bandwidth
-
-    static constexpr auto kGeometryKey   = "MiniPanGeometry";
-    static constexpr auto kOpenKey       = "MiniPanOpen";
-    static constexpr auto kBandwidthKey  = "MiniPanSpanKHz";      // client-side display span
-    static constexpr auto kAlwaysTopKey  = "MiniPanAlwaysOnTop";
 
 signals:
     void closedByUser();          // window hidden via its close button (menu should uncheck)

@@ -9,20 +9,29 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/MiniPanSettings.h"
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanWidget.h"
 
 #include <QApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QSignalSpy>
 #include <QVector>
 #include <cstdio>
+#include <string>
 
 using namespace AetherSDR;
 
 namespace {
 
 int g_failed = 0;
+
+// The single AppSettings key the whole feature config lives under
+// (Constitution Principle V) — mirrored from MiniPanSettings.cpp so the test
+// asserts against the stored shape, not just the accessors.
+const char* const kMiniPanRootKey = "MiniPan";
 
 void report(const char* name, bool ok, const std::string& detail = {})
 {
@@ -78,23 +87,20 @@ void testCloseIsHide()
            !w.isVisible() && !closed);
     report("closedByUser emitted once", spy.count() == 1,
            std::to_string(spy.count()));
-    report("MiniPanOpen persisted False on close",
-           AppSettings::instance().value(MiniPanWidget::kOpenKey).toString()
-               == "False");
+    report("open state persisted false on close", !MiniPanSettings::open());
 }
 
 void testGeometryPersistence()
 {
-    AppSettings::instance().remove(MiniPanWidget::kGeometryKey);
+    AppSettings::instance().remove(kMiniPanRootKey);
     {
         MiniPanWidget w;
         w.show();
         w.setGeometry(120, 90, 360, 220);
         w.close();                          // flushes geometry to settings
     }
-    const QByteArray saved = QByteArray::fromBase64(
-        AppSettings::instance().value(MiniPanWidget::kGeometryKey, "")
-            .toByteArray());
+    const QByteArray saved =
+        QByteArray::fromBase64(MiniPanSettings::geometryBase64());
     report("geometry persisted on close", !saved.isEmpty());
 
     MiniPanWidget w2;
@@ -106,24 +112,62 @@ void testGeometryPersistence()
 
 void testSpanPersistence()
 {
-    AppSettings::instance().setValue(MiniPanWidget::kBandwidthKey, 20.0);
+    MiniPanSettings::setSpanKHz(MiniPanSettings::kSpanWideKHz);
     {
         MiniPanWidget w;
         report("restores ±10 kHz span (20 kHz) from settings",
                qFuzzyCompare(w.spanMhz(), 0.020),
                std::to_string(w.spanMhz()));
-        w.setSpanKHz(10.0);
+        w.setSpanKHz(MiniPanSettings::kSpanNarrowKHz);
         report("spanMhz() reflects setSpanKHz(10)",
                qFuzzyCompare(w.spanMhz(), 0.010));
     }
-    // A bogus persisted value falls back to the ±5 kHz default.
-    AppSettings::instance().setValue(MiniPanWidget::kBandwidthKey, 7.0);
+    // A hand-edited out-of-range span is rejected by the settings validator,
+    // so it can never reach "display pan set … bandwidth=".
     {
+        QJsonObject o;
+        o["spanKHz"] = 7.0;
+        AppSettings::instance().setValue(
+            kMiniPanRootKey,
+            QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+        AppSettings::instance().save();
         MiniPanWidget w;
         report("invalid persisted span falls back to ±5 kHz",
                qFuzzyCompare(w.spanMhz(), 0.010));
     }
-    AppSettings::instance().remove(MiniPanWidget::kBandwidthKey);
+    AppSettings::instance().remove(kMiniPanRootKey);
+}
+
+// Principle V: the whole feature config is ONE nested object under ONE key —
+// a regression here means someone re-introduced flat keys.
+void testConfigIsOneObject()
+{
+    AppSettings::instance().remove(kMiniPanRootKey);
+    MiniPanSettings::setSpanKHz(MiniPanSettings::kSpanWideKHz);
+    MiniPanSettings::setAlwaysOnTop(true);
+    MiniPanSettings::setOpen(true);
+    MiniPanSettings::setGeometryBase64("Zm9v");
+
+    const QJsonObject o = QJsonDocument::fromJson(
+        AppSettings::instance().value(kMiniPanRootKey, QString{})
+            .toString().toUtf8()).object();
+    report("all four fields live in the one MiniPan object",
+           o.contains("spanKHz") && o.contains("alwaysOnTop")
+               && o.contains("open") && o.contains("geometryBase64"),
+           QJsonDocument(o).toJson(QJsonDocument::Compact).toStdString());
+    report("round-trips through the object",
+           MiniPanSettings::alwaysOnTop() && MiniPanSettings::open()
+               && qFuzzyCompare(MiniPanSettings::spanKHz(),
+                                MiniPanSettings::kSpanWideKHz));
+
+    // No legacy flat key is written any more.
+    for (const char* legacy : {"MiniPanGeometry", "MiniPanOpen",
+                               "MiniPanSpanKHz", "MiniPanAlwaysOnTop"}) {
+        report((std::string("no flat key ") + legacy).c_str(),
+               AppSettings::instance().value(legacy, QString{})
+                   .toString().isEmpty());
+    }
+    AppSettings::instance().remove(kMiniPanRootKey);
 }
 
 void testFramelessToggle()
@@ -149,6 +193,7 @@ int main(int argc, char** argv)
     testCloseIsHide();
     testGeometryPersistence();
     testSpanPersistence();
+    testConfigIsOneObject();
     testFramelessToggle();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);

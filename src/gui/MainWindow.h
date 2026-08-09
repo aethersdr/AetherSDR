@@ -443,6 +443,7 @@ private:
     void refreshMiniPanFollow();   // rebind centre/passband to the active slice
     void teardownMiniPanFeed();    // remove the dedicated pan + clear the trace
     void pushMiniPanXpixels();     // re-push xpixels from the scope's width
+    void miniPanCreateFailed();    // pan-limit / create refusal → close the window cleanly
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
@@ -1192,6 +1193,10 @@ private:
     QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
     QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
     bool m_miniPanFeedWanted{false};              // window open intent (survives disconnect)
+    // Coalesces "display pan set … center=" while the operator spins the tuning
+    // knob — frequencyChanged fires per step and the radio does not need them all.
+    QTimer  m_miniPanCenterTimer;
+    double  m_miniPanPendingCenterMhz{0.0};
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
     QPointer<PanadapterApplet> m_cwDecoderApplet;
     QPointer<PanadapterApplet> m_rttyDecoderApplet;

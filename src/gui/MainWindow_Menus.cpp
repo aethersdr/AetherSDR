@@ -50,6 +50,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "gui/MiniPanWidget.h"
+#include "core/MiniPanSettings.h"
 
 #include <QActionGroup>
 #include <QColor>
@@ -981,12 +982,12 @@ void MainWindow::buildMenuBar()
 
     // Mini-Pan — detachable K4-style narrow scope. A single long-lived window;
     // toggling off (or its close button) hides it, preserving geometry/state.
-    auto* miniPanAct = viewMenu->addAction("Mini-Pan");
+    auto* miniPanAct = viewMenu->addAction(tr("Mini-Pan"));
     miniPanAct->setCheckable(true);
     miniPanAct->setToolTip(
-        "A small ±5/±10 kHz scope centered on the active VFO, in its own\n"
-        "floating window — usable alongside contest logging software and\n"
-        "when the main panadapter is hidden in Minimal Mode.");
+        tr("A small ±5/±10 kHz scope centered on the active VFO, in its own\n"
+           "floating window — usable alongside contest logging software and\n"
+           "when the main panadapter is hidden in Minimal Mode."));
     connect(miniPanAct, &QAction::toggled, this, [this, miniPanAct](bool on) {
         if (on) {
             if (!m_miniPan) {
@@ -1016,18 +1017,17 @@ void MainWindow::buildMenuBar()
             m_miniPan->activateWindow();
             refreshMiniPanFollow();                   // centre on the active VFO
             ensureMiniPanFeed();                      // create the pan if connected
-            AppSettings::instance().setValue("MiniPanOpen", "True");
+            MiniPanSettings::setOpen(true);
         } else {
             m_miniPanFeedWanted = false;
             teardownMiniPanFeed();                    // free the radio-side pan
             if (m_miniPan) m_miniPan->hide();
-            AppSettings::instance().setValue("MiniPanOpen", "False");
+            MiniPanSettings::setOpen(false);
         }
-        AppSettings::instance().save();
     });
     // Reopen at startup if it was open last session (deferred so initial layout
     // settles first — matches the applet-panel-float restore).
-    if (AppSettings::instance().value("MiniPanOpen", "False").toString() == "True") {
+    if (MiniPanSettings::open()) {
         QTimer::singleShot(0, this, [miniPanAct]() { miniPanAct->setChecked(true); });
     }
 

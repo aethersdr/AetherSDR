@@ -5,6 +5,7 @@
 #include "gui/FramelessResizer.h"
 #include "gui/Theme.h"
 #include "core/AppSettings.h"
+#include "core/MiniPanSettings.h"
 
 #include <QVBoxLayout>
 #include <QLabel>
@@ -23,8 +24,12 @@ namespace AetherSDR {
 MiniPanWidget::MiniPanWidget(QWidget* parent)
     : QWidget(parent, Qt::Window)
 {
-    setWindowTitle("Mini-Pan");
+    setWindowTitle(tr("Mini-Pan"));
     setObjectName("miniPanWindow");   // addressable for automation/tests
+    setAccessibleName(tr("Mini-pan"));
+    setAccessibleDescription(
+        tr("Floating narrow-span scope centred on the active VFO. "
+           "Right-click for span and always-on-top."));
 
     const bool frameless =
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
@@ -35,8 +40,11 @@ MiniPanWidget::MiniPanWidget(QWidget* parent)
     setAttribute(Qt::WA_DeleteOnClose, false);   // close == hide; single long-lived instance
     setAttribute(Qt::WA_QuitOnClose, false);
     setAttribute(Qt::WA_StyledBackground, true);
+    // The app template already paints the window background and body text from
+    // color.background.0 / color.text.primary and re-themes live; a second
+    // setStyleSheet() here would REPLACE it (one stylesheet per widget) and
+    // hardcode a colour the theme cannot reach. (#4562 review)
     applyAppTheme(this);
-    setStyleSheet("QWidget#miniPanWindow { background: #0a162c; }");
     setMinimumSize(240, 140);
     resize(340, 200);
 
@@ -59,8 +67,8 @@ MiniPanWidget::MiniPanWidget(QWidget* parent)
     f.setPointSize(20);
     f.setBold(true);
     m_freqLabel->setFont(f);
-    m_freqLabel->setStyleSheet("color: #e0e0e0;");
     m_freqLabel->setAlignment(Qt::AlignHCenter);
+    m_freqLabel->setAccessibleName(tr("Mini-pan centre frequency"));
     bodyLayout->addWidget(m_freqLabel);
 
     m_scope = new MiniPanScope(body);
@@ -69,9 +77,9 @@ MiniPanWidget::MiniPanWidget(QWidget* parent)
     bodyLayout->addWidget(m_scope, 1);
 
     // Restore the client-side display span (±5/±10 kHz) — no emit at construction;
-    // MainWindow reads spanMhz() when it creates the pan.
-    m_spanKHz = AppSettings::instance().value(kBandwidthKey, 10.0).toDouble();
-    if (m_spanKHz != 10.0 && m_spanKHz != 20.0) m_spanKHz = 10.0;
+    // MainWindow reads spanMhz() when it creates the pan. MiniPanSettings owns
+    // the validation, so a hand-edited value can't reach the radio.
+    m_spanKHz = MiniPanSettings::spanKHz();
     m_scope->setSpanKHz(m_spanKHz);
 
     m_layout->addWidget(body, 1);
@@ -90,7 +98,7 @@ MiniPanWidget::MiniPanWidget(QWidget* parent)
     FramelessResizer::install(this);
 
     // Restore always-on-top (useful floating over contest-logging software).
-    if (AppSettings::instance().value(kAlwaysTopKey, "False").toString() == "True")
+    if (MiniPanSettings::alwaysOnTop())
         setAlwaysOnTop(true);
 
     refreshHeader();
@@ -112,8 +120,7 @@ void MiniPanWidget::applySpanKHz(double kHz, bool persistAndEmit)
     m_spanKHz = kHz;
     if (m_scope) m_scope->setSpanKHz(kHz);
     if (persistAndEmit) {
-        AppSettings::instance().setValue(kBandwidthKey, kHz);
-        AppSettings::instance().save();
+        MiniPanSettings::setSpanKHz(kHz);
         emit spanChanged(kHz);   // MainWindow re-pushes the radio pan bandwidth
     }
 }
@@ -133,17 +140,16 @@ void MiniPanWidget::contextMenuEvent(QContextMenuEvent* e)
             applySpanKHz(kHz, /*persistAndEmit=*/true);
         });
     };
-    addSpan("±5 kHz", 10.0);    // ±5 kHz → 10 kHz span
-    addSpan("±10 kHz", 20.0);   // ±10 kHz → 20 kHz span
+    addSpan(tr("±5 kHz"),  MiniPanSettings::kSpanNarrowKHz);   // 10 kHz span
+    addSpan(tr("±10 kHz"), MiniPanSettings::kSpanWideKHz);      // 20 kHz span
 
     menu.addSeparator();
-    QAction* top = menu.addAction("Always on Top");
+    QAction* top = menu.addAction(tr("Always on Top"));
     top->setCheckable(true);
     top->setChecked(m_alwaysOnTop);
     connect(top, &QAction::toggled, this, [this](bool on) {
         setAlwaysOnTop(on);
-        AppSettings::instance().setValue(kAlwaysTopKey, on ? "True" : "False");
-        AppSettings::instance().save();
+        MiniPanSettings::setAlwaysOnTop(on);
     });
 
     menu.exec(e->globalPos());
@@ -190,7 +196,7 @@ void MiniPanWidget::setAlwaysOnTop(bool on)
 
 void MiniPanWidget::saveGeometryToSettings() const
 {
-    AppSettings::instance().setValue(kGeometryKey, saveGeometry().toBase64());
+    MiniPanSettings::setGeometryBase64(saveGeometry().toBase64());
 }
 
 void MiniPanWidget::showEvent(QShowEvent* e)
@@ -198,8 +204,8 @@ void MiniPanWidget::showEvent(QShowEvent* e)
     QWidget::showEvent(e);
     if (!m_geometryRestored) {
         m_geometryRestored = true;
-        const QByteArray geom = QByteArray::fromBase64(
-            AppSettings::instance().value(kGeometryKey, "").toByteArray());
+        const QByteArray geom =
+            QByteArray::fromBase64(MiniPanSettings::geometryBase64());
         if (!geom.isEmpty()) {
             m_restoring = true;
             restoreGeometry(geom);
@@ -229,8 +235,7 @@ void MiniPanWidget::closeEvent(QCloseEvent* e)
     // closedByUser. Geometry/open-state persist for the next session.
     m_saveTimer.stop();
     saveGeometryToSettings();
-    AppSettings::instance().setValue(kOpenKey, "False");
-    AppSettings::instance().save();
+    MiniPanSettings::setOpen(false);
     e->ignore();
     hide();
     emit closedByUser();

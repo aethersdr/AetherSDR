@@ -3959,21 +3959,37 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
             m_miniPanPending = false;      // disarm — else the next user pan is hijacked
             return;
         }
+        // The pending flag is a positional claim ("the next new pan is ours"),
+        // so any OTHER pan that appeared inside the create round trip (the user
+        // hitting Add Panadapter, a profile apply) can have taken it. The reply
+        // is authoritative: hand the mis-claimed pan back to the UI — otherwise
+        // it stays applet-less and slice-less forever — and adopt the real id.
+        if (!m_miniPanId.isEmpty() && m_miniPanId != panId) {
+            const QString misclaimed = m_miniPanId;
+            qCWarning(lcProtocol) << "RadioModel::createMiniPan: pending claim took"
+                                  << misclaimed << "but the radio gave us" << panId
+                                  << "— releasing the mis-claimed pan";
+            m_miniPanId = panId;           // set BEFORE announcing, so the guards see it
+            if (auto* wrong = m_panadapters.value(misclaimed, nullptr)) {
+                if (m_activePanId.isEmpty())
+                    setActivePanId(misclaimed);
+                emit panadapterAdded(wrong);
+            }
+        }
         m_miniPanId = panId;               // authoritative id from the create reply
         m_miniPanPending = false;          // claim resolved (status-first path already did)
         ensureOwnedPanadapter(panId);      // owned — but setActivePanId refuses it
-        QTimer::singleShot(200, this, [this, panId, gen, centerMhz, spanMhz]() {
-            if (gen != m_miniPanGen || m_miniPanId != panId) return;
-            // Initial FFT grid so bins flow before the window pushes its real
-            // width; the mini-pan window re-pushes xpixels from its scope size.
-            sendCmd(QString("display pan set %1 xpixels=400 ypixels=200").arg(panId));
-            sendCmd(QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(panId));
-            sendCmd(QString("display pan set %1 bandwidth=%2")
-                        .arg(panId).arg(spanMhz, 0, 'f', 6));
-            sendCmd(QString("display pan set %1 center=%2")
-                        .arg(panId).arg(centerMhz, 0, 'f', 6));
-        });
+        // Configure synchronously, in dependency order, while the id is known.
+        // These used to run behind a 200 ms timer, which fired AFTER the
+        // miniPanReady consumers had already pushed the live VFO centre and the
+        // real scope width — clobbering both with the create-time centre and a
+        // placeholder 400x200 grid that steady state never corrected. (#4562)
+        sendCmd(QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(panId));
+        setMiniPanBandwidth(spanMhz);      // clamped to the pan's reported min_bw
+        setMiniPanCenter(centerMhz);
         qCDebug(lcProtocol) << "RadioModel::createMiniPan: id" << panId;
+        // Consumers push the real xpixels/ypixels and re-centre on the live VFO
+        // here; nothing after this point may overwrite what they send.
         emit miniPanReady(panId);
     });
 }
@@ -3995,11 +4011,38 @@ void RadioModel::setMiniPanCenter(double centerMhz)
                     .arg(m_miniPanId).arg(centerMhz, 0, 'f', 6));
 }
 
+double RadioModel::clampMiniPanSpan(double spanMhz) const
+{
+    // Clamp to the span limits the RADIO reported for this pan (Principle II —
+    // the radio is authoritative on what it will accept). Asking for a span
+    // below min_bw makes the radio clamp server-side while the scope keeps
+    // drawing its own labels, so the trace, hairline and passband are all
+    // wrong by the clamp ratio. The FLEX-6500 reports min_bw = 4.92 kHz, so
+    // ±5 kHz clears it — but bandwidthLimitsKnown() is false until the first
+    // status arrives, and other models report higher floors.
+    const PanadapterModel* pan = m_panadapters.value(m_miniPanId, nullptr);
+    if (!pan || !pan->bandwidthLimitsKnown())
+        return spanMhz;
+    return std::clamp(spanMhz, pan->minBandwidthMhz(), pan->maxBandwidthMhz());
+}
+
 void RadioModel::setMiniPanBandwidth(double spanMhz)
 {
     if (m_miniPanId.isEmpty()) return;
+    const double clamped = clampMiniPanSpan(spanMhz);
+    if (clamped != spanMhz) {
+        qCDebug(lcProtocol) << "RadioModel::setMiniPanBandwidth: requested" << spanMhz
+                            << "MHz clamped to the pan's reported limits →" << clamped;
+    }
     sendCommand(QString("display pan set %1 bandwidth=%2")
-                    .arg(m_miniPanId).arg(spanMhz, 0, 'f', 6));
+                    .arg(m_miniPanId).arg(clamped, 0, 'f', 6));
+}
+
+void RadioModel::setMiniPanPixels(int xPixels, int yPixels)
+{
+    if (m_miniPanId.isEmpty() || xPixels <= 0 || yPixels <= 0) return;
+    sendCommand(QString("display pan set %1 xpixels=%2 ypixels=%3")
+                    .arg(m_miniPanId).arg(xPixels).arg(yPixels));
 }
 
 // ── Pan accessor implementations ──────────────────────────────────────────────
@@ -4921,7 +4964,15 @@ void RadioModel::stageSessionModelsForReconnect()
         }
     }
     m_panadapters.clear();
-    m_miniPanId.clear();   // mini-pan is ephemeral; gone with the connection
+    // The mini-pan is NOT ephemeral radio-side: nothing sends "display pan
+    // remove" on a soft reconnect, so the radio replays it like any other
+    // client pan and the reclaim branch re-materialises it. Carry the identity
+    // across the stage/reclaim boundary — dropping it left all three guards
+    // (active-pan, panadapterAdded suppression, auto-slice removal) comparing
+    // against an empty string, so the mini-pan came back as a normal zombie pan
+    // that could take the active slot and spawn a phantom slice. (#4566)
+    m_staleMiniPanId = m_miniPanId;
+    m_miniPanId.clear();
     ++m_miniPanGen;        // invalidate any in-flight createMiniPan reply
     m_miniPanPending = false;
 
@@ -4983,6 +5034,10 @@ void RadioModel::pruneStaleSessionModels(quint64 generation)
 
     const QMap<QString, PanadapterModel*> stalePans = m_stalePanadapters;
     m_stalePanadapters.clear();
+    // The staged mini-pan id dies with the pans it identified. It must never
+    // outlive them: pan ids collide across radios by construction, so a leaked
+    // id would silently mark some other radio's pan as display-only. (#4566)
+    m_staleMiniPanId.clear();
     for (auto it = stalePans.cbegin(); it != stalePans.cend(); ++it) {
         if (!it.value()) {
             continue;
@@ -5006,7 +5061,10 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     }
     const QMap<QString, PanadapterModel*> livePans = m_panadapters;
     m_panadapters.clear();
-    m_miniPanId.clear();   // mini-pan is ephemeral; gone with the connection
+    // A family switch is a different radio: the mini-pan does not survive it,
+    // and neither may its id (see pruneStaleSessionModels). (#4566)
+    m_miniPanId.clear();
+    m_staleMiniPanId.clear();
     ++m_miniPanGen;        // invalidate any in-flight createMiniPan reply
     m_miniPanPending = false;
     for (auto it = livePans.cbegin(); it != livePans.cend(); ++it) {
@@ -7584,6 +7642,20 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
         pan = it.value();
         m_stalePanadapters.erase(it);
         reclaimed = true;
+        // Re-adopt the mini-pan identity BEFORE the setActivePanId() below —
+        // that chokepoint's guard compares against m_miniPanId, so a reclaim
+        // that ran with it empty would hand the active slot to a display-only
+        // pan (and, on the next tune, a phantom slice). (#4566)
+        if (!m_staleMiniPanId.isEmpty() && normalizedPanId == m_staleMiniPanId) {
+            m_miniPanId = normalizedPanId;
+            m_staleMiniPanId.clear();
+            qCDebug(lcProtocol) << "RadioModel: re-adopted mini-pan" << normalizedPanId
+                                << "across reconnect";
+            // Belt and braces: if anything upstream of the chokepoint had
+            // already parked the active slot on it, hand it back now.
+            if (m_activePanId == normalizedPanId)
+                m_activePanId = firstActiveEligiblePan();
+        }
         // #3977: the stale pan still records the handle of the session we are
         // superseding. If that connection is somehow still alive radio-side
         // (half-open TCP, zombie process), its auto-floor tracker will keep
@@ -7666,11 +7738,26 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
 
     qCDebug(lcProtocol) << "RadioModel:" << (reclaimed ? "reclaimed" : "claimed")
                         << "panadapter" << normalizedPanId;
-    if (reclaimed) {
+    const bool isMiniPan = !m_miniPanId.isEmpty() && normalizedPanId == m_miniPanId;
+    if (isMiniPan) {
+        // The mini-pan is a display-only pan — never announce it as a UI pan
+        // (neither added nor reclaimed), so it gets no main-stack applet, no
+        // auto-slice, and no TCI wiring.
+        //
+        // On a RECLAIM, miniPanReady is its announcement: it re-binds the
+        // window's centre/passband and re-pushes xpixels WITHOUT a second
+        // "display panafall create". Without it, an all-reclaim reconnect never
+        // re-ran ensureMiniPanFeed at all (reclaims emit panadapterReclaimed,
+        // not panadapterAdded) and the window sat on a frozen trace. (#4566)
+        //
+        // On a fresh CREATE the announcement belongs to createMiniPan, which
+        // emits it only after min_dbm/bandwidth/center are on the wire — so
+        // consumers' xpixels and live-VFO pushes are never overwritten.
+        if (reclaimed)
+            emit miniPanReady(normalizedPanId);
+    } else if (reclaimed) {
         emit panadapterReclaimed(pan);
-    } else if (normalizedPanId != m_miniPanId) {
-        // The mini-pan is a display-only pan — never announce it as a UI pan, so
-        // it gets no main-stack applet, no auto-slice, and no TCI wiring.
+    } else {
         emit panadapterAdded(pan);
     }
 

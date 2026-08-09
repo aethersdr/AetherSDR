@@ -7355,8 +7355,11 @@ void MainWindow::ensureMiniPanFeed()
     if (m_radioModel.panadapters().isEmpty()) return;
     const double c = activeSlice() ? activeSlice()->frequency() : 0.0;
     m_radioModel.createMiniPan(c, m_miniPan->spanMhz());   // ±5/±10 kHz per the window
+    // Bind the readout/passband now so the window is live even if the create is
+    // still in flight. The xpixels push is NOT done here — createMiniPan is
+    // async and miniPanId() is still empty, so it would no-op; miniPanReady
+    // does it (for a fresh create and for a reconnect reclaim alike).
     refreshMiniPanFollow();
-    pushMiniPanXpixels();
 }
 
 void MainWindow::refreshMiniPanFollow()
@@ -7371,13 +7374,15 @@ void MainWindow::refreshMiniPanFollow()
         m_miniPan->setPassbandHz(0, 0);
         return;
     }
-    // Live centre: update the readout, and re-centre the radio pan (no-op until
-    // the pan exists). The mini-pan owns its centre — it is exempt from the
-    // global Pan-Follows-VFO logic, which only moves the active pan.
+    // Live centre: update the readout immediately (it is local and free), but
+    // DEBOUNCE the radio push — a tuning knob emits frequencyChanged per step,
+    // and one "display pan set … center=" per step floods the CAT link (plan
+    // §5). The readout stays instant; only the pan re-centre coalesces.
     m_miniPanFreqConn = connect(s, &SliceModel::frequencyChanged, this,
                                 [this](double mhz) {
         if (m_miniPan) m_miniPan->setCenterMhz(mhz);
-        m_radioModel.setMiniPanCenter(mhz);
+        m_miniPanPendingCenterMhz = mhz;
+        m_miniPanCenterTimer.start();
     });
     m_miniPanFiltConn = connect(s, &SliceModel::filterChanged, this,
                                 [this]() {
@@ -7385,6 +7390,9 @@ void MainWindow::refreshMiniPanFollow()
             m_miniPan->setPassbandHz(cur->filterLow(), cur->filterHigh());
     });
     m_miniPan->setCenterMhz(s->frequency());
+    // Re-binding is a discrete event (slice switch, pan (re)create), not a
+    // tuning stream — push it straight through rather than through the timer.
+    m_miniPanCenterTimer.stop();
     m_radioModel.setMiniPanCenter(s->frequency());
     m_miniPan->setPassbandHz(s->filterLow(), s->filterHigh());
 }
@@ -7393,6 +7401,7 @@ void MainWindow::teardownMiniPanFeed()
 {
     disconnect(m_miniPanFreqConn);
     disconnect(m_miniPanFiltConn);
+    m_miniPanCenterTimer.stop();   // don't re-centre a pan we just removed
     m_radioModel.removeMiniPan();
     if (m_miniPan) m_miniPan->scope()->updateSpectrum(QVector<float>{});
 }
@@ -7400,14 +7409,22 @@ void MainWindow::teardownMiniPanFeed()
 void MainWindow::pushMiniPanXpixels()
 {
     if (!m_miniPan) return;
-    const QString id = m_radioModel.miniPanId();
-    if (id.isEmpty()) return;
     auto* sc = m_miniPan->scope();
-    if (sc && sc->width() > 0 && sc->height() > 0) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 xpixels=%2 ypixels=%3")
-                .arg(id).arg(sc->width()).arg(sc->height()));
-    }
+    if (sc)
+        m_radioModel.setMiniPanPixels(sc->width(), sc->height());
+}
+
+void MainWindow::miniPanCreateFailed()
+{
+    if (!m_miniPan) return;
+    // The radio refused the pan (no free slot, or a create error). Close the
+    // window through its own X-button path — that unchecks the View-menu item,
+    // tears the feed down and persists MiniPan open=false. Leaving it up would
+    // park a permanently blank scope on screen that reopens blank next launch
+    // (plan §7: "leave the View toggle unchecked").
+    m_miniPan->close();
+    statusBar()->showMessage(
+        tr("No panadapter slot free for the Mini-Pan"), 4000);
 }
 
 void MainWindow::updateFilterLimitsForMode(const QString& mode)
@@ -9563,8 +9580,15 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
     }
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     bool processedFrame = false;
+    const QString miniPanId = m_radioModel.miniPanId();
     for (auto* pan : m_radioModel.panadapters()) {
         if (pan->panStreamId() != streamId) continue;
+        // The mini-pan is display-only and has no SpectrumWidget in the stack.
+        // rebuildSHistoryForPan — the ONLY pruner — early-returns without one,
+        // so every frame appended here would be retained forever, on top of
+        // running detection, the spectrogram buffer and CNN classification for
+        // a pan nothing renders markers on. (#4562 review)
+        if (!miniPanId.isEmpty() && pan->panId() == miniPanId) continue;
         processedFrame = true;
 
         const QString panId = pan->panId();

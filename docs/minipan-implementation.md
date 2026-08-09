@@ -1,6 +1,8 @@
 # Implementation Plan — K4-Style Mini-Pan (narrow bandwidth scope)
 
-Status: draft for review. Target: AetherSDR.
+Status: implemented — this is the design record for the mini-pan as shipped.
+The open questions at the end are answered above (spike results, §4, §9.0);
+they are kept as the trail of what was decided and why, not as live work.
 
 ---
 
@@ -327,7 +329,8 @@ Use `git ship` (AGENTS.md) to batch-ship; branch off `main`, PR with auto-squash
 - `src/gui/MiniPanWidget.{h,cpp}`
 - (maybe) `src/gui/MiniPanTitleBar.{h,cpp}` if a custom dock/close bar is needed
 - tests under `tests/` (offscreen widget test + data-source test)
-- `docs/…` short feature note; CHANGELOG entry
+- `docs/…` short feature note (NOT a `CHANGELOG.md` entry — that file is
+  release-prep only, and every PR that touches it conflicts with every other)
 
 **Modified:**
 - `src/models/RadioModel.{h,cpp}` — `createMiniPan`, mini-pan id member, cleanup

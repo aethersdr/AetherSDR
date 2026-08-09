@@ -604,6 +604,7 @@ set(CORE_SOURCES
     src/core/WwvbDecoder.cpp
     src/core/AetherClockEngine.cpp
     src/core/AetherClockSettings.cpp
+    src/core/MiniPanSettings.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
@@ -5206,13 +5207,18 @@ add_executable(mini_pan_widget_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     ${AETHER_SETTINGS_SOURCES}
+    src/core/MiniPanSettings.cpp
     src/core/ThemeManager.cpp
+    # ThemeManager.cpp calls seedGeneratedDefaults(), which lives ONLY in the
+    # generated seed TU — every other ThemeManager consumer in this file pairs
+    # the two, and omitting it is a link error, not a compile one.
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
 target_include_directories(mini_pan_widget_test PRIVATE src)
 target_link_libraries(mini_pan_widget_test PRIVATE
-    Qt6::Core Qt6::Widgets Qt6::Test
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
 )
 set_target_properties(mini_pan_widget_test PROPERTIES AUTOMOC ON)
 add_test(NAME mini_pan_widget_test COMMAND mini_pan_widget_test)

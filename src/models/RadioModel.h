@@ -701,11 +701,20 @@ public:
     // window. Owned but never active (see setActivePanId). createMiniPan is async
     // — it emits miniPanReady(panId) once the radio assigns the id. A generation
     // counter guards the create→reply window against an interleaved removeMiniPan
-    // so a late reply can't leak an orphan pan.
+    // so a late reply can't leak an orphan pan. The pan SURVIVES a soft
+    // reconnect radio-side, so the identity is staged and re-adopted in the
+    // reclaim branch rather than dropped (#4566); miniPanReady fires again on
+    // that reclaim, so consumers re-bind without a second create.
     void createMiniPan(double centerMhz, double spanMhz);
     void removeMiniPan();
     void setMiniPanCenter(double centerMhz);
+    // Clamped to the pan's radio-reported min_bw/max_bw (Principle II): asking
+    // for a span the radio refuses makes it clamp server-side while the scope
+    // keeps drawing its own labels, so the whole view is off by the clamp ratio.
     void setMiniPanBandwidth(double spanMhz);
+    // Re-push the FFT grid from the scope's live widget size. Bin width is
+    // span/xpixels, so this is what makes the mini-pan finer than the main pan.
+    void setMiniPanPixels(int xPixels, int yPixels);
     QString miniPanId() const { return m_miniPanId; }
     bool miniPanCreating() const { return m_miniPanPending; }   // a create is in flight
     void setPanBandwidth(double bandwidthMhz);
@@ -1227,6 +1236,8 @@ private:
     PanadapterModel* ensureOwnedPanadapter(const QString& panId);
     // First owned pan eligible to be active (excludes the mini-pan). Empty if none.
     QString firstActiveEligiblePan() const;
+    // Requested mini-pan span clamped to the pan's radio-reported limits.
+    double clampMiniPanSpan(double spanMhz) const;
     void updateStreamFilters();
     void handleGpsStatus(const QString& rawBody);
     void emitOtherClientsChanged();
@@ -1494,6 +1505,11 @@ private:
     mutable QMap<QString, QString> m_antennaAliases;
 
     QString m_miniPanId;      // dedicated mini-pan pan; never the active pan
+    // The same id while the pan is staged for a reconnect reclaim — the radio
+    // keeps the pan across a soft reconnect, so the identity has to survive
+    // with it or the guards go dead (#4566). Cleared wherever the staged pans
+    // die: pan ids collide across radios, so it must never reach another one.
+    QString m_staleMiniPanId;
     int     m_miniPanGen{0};   // invalidates in-flight createMiniPan on remove
     bool    m_miniPanPending{false};  // next newly-created pan is the mini-pan
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
