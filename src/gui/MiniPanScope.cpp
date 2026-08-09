@@ -47,6 +47,7 @@ MiniPanScope::MiniPanScope(QWidget* parent)
         "color.slice.a",
         "color.accent",
         "color.text.secondary",
+        "color.text.primary",
     });
     connect(&tm, &ThemeManager::themeChanged, this,
             qOverload<>(&QWidget::update));

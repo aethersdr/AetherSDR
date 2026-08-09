@@ -1281,6 +1281,11 @@ void MainWindow::wirePanLifecycle()
     // tile costs nothing per frame.
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady, this,
             [this](quint32 streamId, const QVector<float>& bins, qint64) {
+        // Same guard the other consumers of this signal open with:
+        // preparePanadapterUiForShutdown() only disconnects the raw
+        // PanadapterStream, so RadioModel-re-emitted frames still arrive after
+        // the widgets have been prepared for teardown.
+        if (m_shuttingDown || !m_panStack) return;
         if (!m_miniPanFeedWanted || !miniPanApplet()) return;
         auto* s = activeSlice();
         if (!s) return;
@@ -1311,6 +1316,19 @@ void MainWindow::wirePanLifecycle()
         // than waiting for it.
         connect(mini, &MiniPanApplet::spanChanged, this,
                 [this](double) { refreshMiniPanFollow(); });
+
+        // The show edge may ALREADY have been spent. A mini-pan restored as
+        // FLOATING is shown by ContainerManager::restoreState() during
+        // buildUI(), which runs before this wiring: measured on an offscreen
+        // restore, showEvent fired with receivers=0 and this connect ran 17 ms
+        // later with the applet already visible — so no further showEvent was
+        // ever coming, and the float sat on a blank trace for the whole
+        // session. That is the feature's headline use case. Seed from the
+        // current state rather than waiting for an edge that has passed.
+        if (mini->isVisible() && !m_miniPanFeedWanted) {
+            m_miniPanFeedWanted = true;
+            refreshMiniPanFollow();
+        }
     }
 
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
