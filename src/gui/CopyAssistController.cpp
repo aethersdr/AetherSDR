@@ -365,6 +365,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_models, &AsrModelManager::failed, this, [this](const QString& err) {
         m_panel->setBusy(false);
+        m_gpuFallbackNotice.clear(); // the fallback reload never got a model
         m_panel->setStatus(tr("Model download failed: %1").arg(err));
         m_panel->setAsrEnabled(false);
     });
@@ -466,10 +467,14 @@ void CopyAssistController::startGpuDiscovery()
 
 void CopyAssistController::reconcileAfterGpuFallback()
 {
-    // Reached from the event loop, so re-check the condition the caller saw:
-    // between queueing and running, the operator may have picked another device
-    // or an earlier fallback may already have reconciled this one.
-    if (m_gpuDevice < 0 || !asrGpuDeviceFailed(m_gpuDevice)) {
+    // Reached from the event loop, so re-check every condition the caller saw:
+    // between queueing and running, the operator may have picked another device,
+    // switched to a backend that has no GPU of its own (remote/sherpa), or an
+    // earlier fallback may already have reconciled this one. Without the backend
+    // check a stale queued reconcile would stamp a GPU notice over the status of
+    // a backend the GPU has nothing to do with.
+    if (m_backend != AsrBackendKind::Whisper || m_gpuDevice < 0
+        || !asrGpuDeviceFailed(m_gpuDevice)) {
         return;
     }
 
@@ -757,9 +762,6 @@ void CopyAssistController::onTierChanged(const QString& tierId)
         return;
     }
     m_useGpuDefaultIfAvailable = false;
-    // An explicit choice, even of the GPU-default tier itself, must never be
-    // walked back by a later fallback.
-    m_gpuDefaultTierActive = false;
     m_enableAfterGpuDiscovery = false;
 
     if (tierId == QString::fromLatin1(kRemoteTierId)) {
@@ -826,6 +828,14 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     const AsrBackendKind prev = m_backend;
     m_backend = kind;
     m_tierId = tierId;
+    // The tier is now an explicit operator choice — even if it is the GPU-default
+    // tier itself — so a later fallback must never walk it back. Cleared here
+    // rather than at the top of onTierChanged() because the three prompting
+    // branches (remote / custom / sherpa) can still be cancelled, and a cancel
+    // leaves the auto-raised tier in place: clearing the flag early would strand
+    // Large v3 Turbo on CPU after a fallback, the exact regression the flag exists
+    // to prevent. setBackend() is reached only once the change is committed.
+    m_gpuDefaultTierActive = false;
 
     // Language applies to whisper/remote only; sherpa-onnx picks it from the
     // model. Keep the selector's visibility in sync with the active backend.
@@ -876,6 +886,7 @@ void CopyAssistController::beginEnable()
         // catalog download + SHA verification (we don't know its checksum).
         if (m_customModelPath.isEmpty() || !QFileInfo::exists(m_customModelPath)) {
             m_panel->setBusy(false);
+            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
             m_panel->setStatus(tr("Custom model file not found — pick it again."));
             m_panel->setAsrEnabled(false);
             return;
@@ -887,6 +898,7 @@ void CopyAssistController::beginEnable()
         // discovers the bundle's files). No download/verify.
         if (m_sherpaModelDir.isEmpty() || !QDir(m_sherpaModelDir).exists()) {
             m_panel->setBusy(false);
+            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
             m_panel->setStatus(tr("sherpa-onnx model folder not found — pick it again."));
             m_panel->setAsrEnabled(false);
             return;

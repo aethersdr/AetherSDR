@@ -188,6 +188,11 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         }
         cparams.use_gpu = false;
         cparams.gpu_device = 0;
+        // Clear the GPU attempt's message first: initWhisperContext() writes
+        // `failure` only when it catches, so a CPU retry that simply returns
+        // null would otherwise be reported with the GPU's Vulkan exception
+        // text — blaming the driver for, say, a truncated model file.
+        failure.clear();
         m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
     }
     if (m_ctx == nullptr) {
@@ -199,10 +204,14 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         return false;
     }
 
-    // Remember where this context actually lives: after the CPU retry above,
-    // cparams.use_gpu is false even though m_gpuDevice still names the GPU.
-    // transcribe() consults this so a decode-time throw latches the device
-    // only when the GPU was really involved.
+    // Whether a GPU was asked for on the attempt that actually produced this
+    // context: false after the CPU retry above, even though m_gpuDevice still
+    // names the GPU. transcribe() consults it so a decode-time throw latches
+    // the device only when the GPU was in the picture. It records the request,
+    // not proof of placement — whisper falls back to CPU internally if
+    // whisper_backend_init_gpu() yields nothing — so the flag errs toward
+    // latching. That is the safe direction: an over-latch costs a session of
+    // GPU speed, an under-latch costs the process (#4502).
     m_ctxOnGpu = cparams.use_gpu;
 
     qCInfo(lcAsrWhisper) << "Loaded model" << modelPath << "(" << m_threads << "threads )";
