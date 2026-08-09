@@ -793,27 +793,41 @@ bool testMalformedValueArgsAreDropped()
 {
     TciProtocol protocol(nullptr);
 
-    // The two-argument shape is not decoration: handleCommand derives
-    // GET-vs-SET purely from argument count (`isSet = args.size() >= 2`), so
-    // a one-argument `cw_macros_delay:250` is a READ and never reaches the
-    // SET path at all. These global verbs then read args[0] as the value —
-    // an off-by-one against the trx-prefixed shape that cmdMicLevel and
-    // cmdVolume handle with `args[args.size() == 1 ? 0 : 1]`. That index
-    // quirk is a separate defect from this one and is deliberately NOT
-    // changed here; the tests below drive the shape the code actually has,
-    // so they keep passing when it is fixed on its own terms.
-    protocol.handleCommand(QStringLiteral("cw_macros_delay:250,0"));
+    // The GLOBAL verbs re-derive GET/SET from the argument list instead of
+    // trusting the dispatcher's `isSet = (args.size() >= 2)`, which is
+    // computed from the trx-prefixed shape the per-slice verbs use. Both
+    // forms must set: the spec form (one argument, the value) and the legacy
+    // trx-prefixed one (two arguments, value last). Before this change the
+    // first was a READ that discarded the value and the second read the trx
+    // position as the value, so `cw_macros_delay:0,250;` set the delay to 0.
+    protocol.handleCommand(QStringLiteral("cw_macros_delay:250"));
     if (!check(protocol.pendingNotification()
                    == QStringLiteral("cw_macros_delay:250;"),
-            "a well-formed cw_macros_delay SET must still take effect")) {
+            "the spec-form global SET must take effect, not be read as a GET")) {
+        return false;
+    }
+    protocol.handleCommand(QStringLiteral("cw_macros_delay:0,180"));
+    if (!check(protocol.pendingNotification()
+                   == QStringLiteral("cw_macros_delay:180;"),
+            "the legacy trx-prefixed global SET must read the VALUE, not the trx")) {
+        return false;
+    }
+    // Bare — no colon at all — is the read, and must not disturb the value.
+    if (!check(protocol.handleCommand(QStringLiteral("cw_macros_delay"))
+                   == QStringLiteral("cw_macros_delay:180;"),
+            "bare \"cw_macros_delay\" must read back the last value set")) {
         return false;
     }
 
     static const char* kMalformed[] = {
-        "cw_macros_delay:,0",       // the reported shape: empty argument
-        "cw_macros_delay:abc,0",
-        "cw_keyer_speed:abc,0",
-        "cw_macros_speed:abc,0",
+        "cw_macros_delay:",         // the reported shape: colon, nothing after
+        "cw_macros_delay:abc",
+        "cw_macros_delay:0,",       // legacy shape, empty value
+        "cw_macros_delay:0,abc",
+        "cw_keyer_speed:abc",
+        "cw_keyer_speed:0,abc",
+        "cw_macros_speed:abc",
+        "cw_macros_speed:0,abc",
     };
     for (const char* cmd : kMalformed) {
         protocol.handleCommand(QString::fromLatin1(cmd));
@@ -829,7 +843,7 @@ bool testMalformedValueArgsAreDropped()
     // silently resetting it to 0 — which is what the unchecked toInt() did.
     const QString readBack =
         protocol.handleCommand(QStringLiteral("cw_macros_delay"));
-    if (!check(readBack == QStringLiteral("cw_macros_delay:250;"),
+    if (!check(readBack == QStringLiteral("cw_macros_delay:180;"),
             "a dropped cw_macros_delay SET must not have clobbered the stored value")) {
         return false;
     }

@@ -1057,16 +1057,25 @@ QString TciProtocol::cmdRxFilterBand(const QStringList& args, bool isSet)
 
 // ── CW ─────────────────────────────────────────────────────────────────────
 
-QString TciProtocol::cmdCwMacrosSpeed(const QStringList& args, bool isSet)
+// GLOBAL commands (no trx) re-derive GET/SET from the argument list rather
+// than trusting the dispatcher's `isSet`, and read the value from the last
+// argument. handleCommand() computes `isSet = (args.size() >= 2)` from the
+// trx-prefixed shape every per-slice verb uses, which is wrong for a global
+// one: it makes the spec form `cw_macros_speed:25;` a READ that silently
+// discards the value, and leaves the 2-arg form reading the trx position as
+// the value (`cw_macros_speed:0,25;` set the speed to 0). cmdVolume,
+// cmdMicLevel and cmdTxGain already do it this way — these four verbs were
+// simply missed. Found while adding #4867's tests; no bundled plugin sends
+// any of them, so nothing shipped depended on the broken shape.
+QString TciProtocol::cmdCwMacrosSpeed(const QStringList& args, bool /*isSet*/)
 {
-    if (!isSet) {
+    if (args.isEmpty()) {
         int wpm = m_model ? m_model->transmitModel().cwSpeed() : 25;
         return QStringLiteral("cw_macros_speed:%1;").arg(wpm);
     }
 
-    if (args.isEmpty()) return {};
     int wpm = 0;
-    if (!argToInt(args, 0, wpm)) return {};
+    if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
     if (wpm < 5 || wpm > 100) return {};
     QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
     QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
@@ -1679,15 +1688,15 @@ QString TciProtocol::cmdKeyer(const QStringList& args)
     return {};
 }
 
-QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool isSet)
+// Global command — see the note above cmdCwMacrosSpeed.
+QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool /*isSet*/)
 {
-    if (!isSet) {
+    if (args.isEmpty()) {
         int wpm = m_model ? m_model->transmitModel().cwSpeed() : 20;
         return QStringLiteral("cw_keyer_speed:%1;").arg(wpm);
     }
-    if (args.isEmpty()) return {};
     int wpm = 0;
-    if (!argToInt(args, 0, wpm)) return {};
+    if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
     if (wpm < 5 || wpm > 100) return {};
     QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
     QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
@@ -1697,14 +1706,14 @@ QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool isSet)
     return {};
 }
 
-QString TciProtocol::cmdCwMacrosDelay(const QStringList& args, bool isSet)
+// Global command — see the note above cmdCwMacrosSpeed.
+QString TciProtocol::cmdCwMacrosDelay(const QStringList& args, bool /*isSet*/)
 {
     // Delay before CW TX starts (ms). FlexRadio has cw_delay.
     static int delay = 0;
-    if (!isSet)
+    if (args.isEmpty())
         return QStringLiteral("cw_macros_delay:%1;").arg(delay);
-    if (args.isEmpty()) return {};
-    if (!argToInt(args, 0, delay)) return {};
+    if (!argToInt(args, args.size() == 1 ? 0 : 1, delay)) return {};
     if (m_model) {
         QString cmd = QStringLiteral("cw delay %1").arg(delay);
         QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
@@ -1874,16 +1883,16 @@ QString TciProtocol::cmdMonEnable(const QStringList& args, bool isSet)
     return {};
 }
 
-QString TciProtocol::cmdMonVolume(const QStringList& args, bool isSet)
+// Global command — see the note above cmdCwMacrosSpeed.
+QString TciProtocol::cmdMonVolume(const QStringList& args, bool /*isSet*/)
 {
     if (!m_model) return {};
-    if (!isSet) {
+    if (args.isEmpty()) {
         return QStringLiteral("mon_volume:%1;")
                    .arg(m_model->transmitModel().monGainSb());
     }
-    if (args.isEmpty()) return {};
     int vol = 0;
-    if (!argToInt(args, 0, vol)) return {};
+    if (!argToInt(args, args.size() == 1 ? 0 : 1, vol)) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model, vol]() {
         model->transmitModel().setMonGainSb(vol);
     }, Qt::QueuedConnection);
