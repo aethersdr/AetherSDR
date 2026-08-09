@@ -304,12 +304,22 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
 
     // A real pause (long idle silence) flushes any carried ASR context so a
     // noisy/garbled prior can't keep conditioning later utterances and never
-    // recover. Checked every feed (fires during the gap, not just on a segment).
-    if (m_segmenter.consumeLongGap() && m_backend != nullptr) {
-        m_backend->resetContext();
-    }
+    // recover. Consume the one-shot now (it must clear even on a feed that
+    // produced no segment, so a gap spanning several silent buffers isn't held
+    // pending), but apply the flush AFTER decoding this feed's own segments
+    // below: a segment that closed BEFORE the gap should still be decoded with
+    // the previous context — the flush protects only what comes after the pause.
+    //
+    // Caller constraint: this relies on a single feed() never both closing an
+    // utterance and crossing longGapMs of idle silence. AsrAudioTap delivers
+    // chunks far shorter than longGapMs (2.5 s), so a close and a long gap never
+    // share one feed; a much larger buffer would break that and want revisiting.
+    const bool longGap = m_segmenter.consumeLongGap();
 
     if (segments.empty()) {
+        if (longGap && m_backend != nullptr) {
+            m_backend->resetContext();
+        }
         return;
     }
 
@@ -366,6 +376,13 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
                 m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
         }
         emit segmentText(emitText, result.confidence, speaker);
+    }
+
+    // Apply the long-gap flush now, after this feed's own (pre-gap) segments have
+    // been decoded with the context they should have had — so the pause only
+    // affects the next utterance. (Guard kept though m_backend is non-null here.)
+    if (longGap && m_backend != nullptr) {
+        m_backend->resetContext();
     }
     }();
 

@@ -12,6 +12,24 @@ struct whisper_context;
 
 namespace AetherSDR {
 
+// Below this confidence, don't let a segment's text seed the next decode's
+// prompt — a garbled/low-confidence result is more likely to compound into a
+// worse one downstream (a known whisper hallucination-propagation failure mode)
+// than to help continuity. 0.65 aligns with CopyAssistPanel's "yellow" band
+// (colorForConfidence): text the UI paints sub-yellow is exactly what we don't
+// want to carry. Not exposed in the UI — kept deliberately simple.
+inline constexpr float kContextCarryMinConfidence = 0.65f;
+
+// Whether a decoded segment should become the next decode's carried context
+// prompt (RFC #4818). Free + inline so it is unit-testable without a loaded
+// whisper_context: carry only confident, non-empty text — a marginal or empty
+// decode returns false, which the caller honours by leaving the previous prompt
+// in place rather than replacing it with garbage.
+inline bool asrShouldCarryContext(const QString& text, float confidence)
+{
+    return !text.isEmpty() && confidence >= kContextCarryMinConfidence;
+}
+
 // whisper.cpp implementation of IAsrBackend. CPU inference (the vendored ggml
 // is CPU-only for now); language defaults to English but is configurable.
 // Lives entirely on AsrEngine's worker thread.

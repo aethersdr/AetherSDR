@@ -6,6 +6,7 @@
 #include "asr/AsrEngine.h"
 #include "asr/IAsrBackend.h"
 #include "asr/SpeakerEmbedder.h"
+#include "asr/WhisperAsrBackend.h"
 #include "gui/CopyAssistController.h"
 
 #include <QCoreApplication>
@@ -238,6 +239,25 @@ QVector<float> silence(int ms)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    // ---- Context-carry confidence gate (RFC #4818) ------------------------
+    // The gate is the whole recovery story: it decides whether a decode's text
+    // seeds the next decode's prompt. Pinned here as a pure function so the three
+    // cases can't regress silently (an inverted comparison or a 0.0 threshold).
+    {
+        expect(asrShouldCarryContext(QStringLiteral("CQ DE K5PTB"), 0.90f),
+               "gate: confident non-empty text carries");
+        expect(!asrShouldCarryContext(QStringLiteral("garbled"), 0.40f),
+               "gate: sub-threshold confidence does not carry (prev prompt stays)");
+        expect(!asrShouldCarryContext(QString(), 0.99f),
+               "gate: empty text never carries, regardless of confidence");
+        // Boundary: kContextCarryMinConfidence itself carries; just under does not.
+        expect(asrShouldCarryContext(QStringLiteral("x"), kContextCarryMinConfidence),
+               "gate: confidence exactly at the floor carries");
+        expect(!asrShouldCarryContext(QStringLiteral("x"),
+                                      kContextCarryMinConfidence - 0.01f),
+               "gate: just below the floor does not carry");
+    }
 
     // ---- Engine replacement discards only per-engine speaker state --------
     {

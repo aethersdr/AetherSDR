@@ -113,14 +113,6 @@ whisper_context* initWhisperContext(const QByteArray& pathUtf8,
     }
     return nullptr;
 }
-
-// Below this confidence, don't let a segment's text seed the next decode's
-// prompt — a garbled/low-confidence result is more likely to compound into a
-// worse one downstream (a known whisper hallucination-propagation failure mode)
-// than to help continuity. 0.65 aligns with CopyAssistPanel's "yellow" band
-// (colorForConfidence): text the UI paints sub-yellow is exactly what we don't
-// want to carry. Not exposed in the UI — kept deliberately simple.
-constexpr float kContextCarryMinConfidence = 0.65f;
 } // namespace
 
 WhisperAsrBackend::WhisperAsrBackend()
@@ -361,9 +353,13 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     // Only a confident segment becomes the next decode's prompt; a marginal one
     // leaves the last good prompt in place rather than replacing it with garbage.
     // (A real pause or Clear drops it entirely via resetContext().)
-    if (m_contextCarryEnabled && !result.text.isEmpty()
-        && result.confidence >= kContextCarryMinConfidence) {
-        m_carriedPrompt = result.text;
+    if (m_contextCarryEnabled && asrShouldCarryContext(result.text, result.confidence)) {
+        // whisper consumes at most the LAST min(n_max_text_ctx, n_text_ctx/2)-1
+        // ≈ 223 prompt tokens (whisper.cpp max_prompt_ctx), and a decode can echo
+        // initial_prompt back into its own text — so keep only the tail, or an
+        // echo would compound the carried string run over run.
+        constexpr int kMaxCarriedChars = 1000;
+        m_carriedPrompt = result.text.right(kMaxCarriedChars);
     }
 
     return result;
