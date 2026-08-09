@@ -33,6 +33,7 @@ class TunerApplet;
 class AmpApplet;
 class DemoApplet;
 class AcomApplet;
+class SpeApplet;
 class TxApplet;
 class PhoneCwApplet;
 class PhoneApplet;
@@ -98,6 +99,7 @@ public:
     AmpApplet*    ampApplet()     { return m_ampApplet; }
     DemoApplet*   demoApplet()    { return m_demoApplet; }
     AcomApplet*   acomApplet()    { return m_acomApplet; }
+    SpeApplet*    speApplet()     { return m_speApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -163,6 +165,11 @@ public:
     // connection. Independent of setAmpVisible — a station can have both a
     // radio-relayed PGXL and a direct-connected ACOM amplifier at once.
     void setAcomVisible(bool visible);
+
+    // Show/hide the SPE button and applet based on a direct SPE Expert
+    // amplifier connection. Independent of setAmpVisible/setAcomVisible for
+    // the same multi-amplifier-station reason.
+    void setSpeVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
@@ -337,6 +344,8 @@ private:
     QPushButton* m_ampBtn{nullptr};
     AcomApplet*  m_acomApplet{nullptr};
     QPushButton* m_acomBtn{nullptr};
+    SpeApplet*   m_speApplet{nullptr};
+    QPushButton* m_speBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
     PhoneApplet*   m_phoneApplet{nullptr};

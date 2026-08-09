@@ -1,5 +1,6 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2EmergencyStop.h"
+#include "core/LogManager.h"   // lcHl2 — commanded-NCO breadcrumbs
 
 #include <QElapsedTimer>
 #include <QThread>
@@ -367,6 +368,12 @@ void MetisClient::setRxFrequencyHz(int rxIndex, std::uint32_t hz)
         return;   // not a running receiver -- see the header for why not clamped
     if (rxIndex == 0)
         m_params.rxFrequencyHz = hz;
+    // The COMMANDED value, which is the only place it can be observed. Nothing
+    // reads an NCO register back, and above this seam the frequency is still in
+    // the true-RF domain — so without this line a frequency calibration, a
+    // transverter offset or an off-by-one in the bank index is invisible to
+    // everything except a spectrum analyser on the antenna port.
+    qCDebug(lcHl2) << "HL2: RX" << rxIndex << "NCO <-" << hz << "Hz (commanded)";
     m_ccRxFreq[static_cast<std::size_t>(rxIndex)] = ccRxFreq(rxIndex, hz);
     // Send the new NCO value immediately rather than waiting for the rotation.
     // That matters more with several receivers than it did with one: the
@@ -564,6 +571,11 @@ void MetisClient::setMox(bool keyed)
 
 void MetisClient::setTxFrequencyHz(std::uint32_t hz)
 {
+    // Logged for the same reason as the RX banks above, and it matters more
+    // here: the transmit oscillator is written by exactly one caller and never
+    // echoed anywhere, so "did transmit follow" has had no answer short of
+    // keying up and listening.
+    qCDebug(lcHl2) << "HL2: TX NCO <-" << hz << "Hz (commanded)";
     m_ccTxFreq = ccTxFreq(hz);
     m_oneShot.push_back(m_ccTxFreq);
 }

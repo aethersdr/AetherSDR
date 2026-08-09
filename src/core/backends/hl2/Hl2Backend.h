@@ -67,7 +67,8 @@ public:
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setTxSlice(int sliceId) override;
     void setActiveSlice(int sliceId) override;
-    void setPanCenter(const QString& panId, double hz) override;
+    void setPanCenter(const QString& panId, double hz,
+                      PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanRfGain(const QString& panId, int gainDb) override;
 
@@ -81,6 +82,10 @@ public:
     void setPanFrameRate(const QString& panId, int fps) override;
     bool createPanadapter() override;
     bool removePanadapter(const QString& panId) override;
+    void createNotch(double centerHz, double widthHz) override;
+    void setNotch(int notchId, const AetherSDR::NotchDelta& delta) override;
+    void removeNotch(int notchId) override;
+    void setNotchesEnabled(bool on) override;
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
@@ -198,6 +203,45 @@ private:
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
 
+    // ---- manual frequency calibration (Hl2FreqCal) ----
+    //
+    // EVERY frequency that leaves for the radio goes through these two. That is
+    // the point of them: the correction is a single scalar (see Hl2FreqCal for
+    // why), so it needs exactly one entry point per direction, and a write site
+    // that bypasses them leaves a receiver tuned somewhere other than the rest
+    // of the radio believes — with nothing to indicate it, because no NCO
+    // register can be read back.
+    //
+    // Receiver::sliceFreqHz and ncoHz stay in the TRUE-RF domain. Only the
+    // values handed to the wire and to the DSP are scaled, so the panadapter
+    // axis, the band-filter decisions and every emitted state keep reading in
+    // real frequency.
+
+    // NCO register value (0x01 TX, 0x02+ RX) for a true-RF frequency.
+    [[nodiscard]] std::uint32_t ncoCommandHz(double trueHz) const noexcept;
+    // DSP shift that puts sliceTrueHz at baseband, given the true-RF NCO. Rounds
+    // the NCO command first and computes the shift against that rounded value,
+    // so the register's 1 Hz quantisation cancels instead of leaking into audio.
+    [[nodiscard]] double dspShiftHz(double sliceTrueHz, double ncoTrueHz) const noexcept;
+    // Re-send every NCO (RX banks + TX) from the receivers' unchanged true-RF
+    // state. Called when the calibration changes mid-session, so the operator
+    // hears the correction move while they are nulling a beat note rather than
+    // on their next tune.
+    void repushAllFrequencies();
+    // Clamp, persist, adopt, re-push — the single path for a calibration change
+    // whoever asked for it (setup dialog, automation bridge, connect).
+    void applyFreqCalPpb(int ppb, bool persist);
+
+    // The operator's calibration for THIS radio and the derived scale applied to
+    // every commanded frequency. 0 / 1.0 is "uncalibrated" — the behaviour every
+    // build before this one had.
+    int m_freqCalPpb = 0;
+    double m_freqCalScale = 1.0;
+    // Identity of the connected radio (its MAC, from the connect request), so
+    // the calibration loads and stores per radio rather than globally: it
+    // describes one physical crystal. Empty until connectRadio().
+    QString m_radioSerial;
+
     // ---- per-receiver state ----
     //
     // One of these per running DDC. Everything here is genuinely independent
@@ -256,6 +300,41 @@ private:
     // GUI THREAD ONLY. Nothing below the seam may touch this — see m_ioDsps for
     // what the sample path reads instead, and publishIoDsps() for why.
     std::vector<Receiver> m_rx;
+
+    // ── Manual notches ────────────────────────────────────────────────────
+    //
+    // The authoritative notch set, and the thing that reconciles two different
+    // ways of naming a notch. Above the seam a notch has a STABLE id that never
+    // changes; inside WDSP it has a POSITIONAL index that shifts every time an
+    // earlier notch is deleted. Keeping the vector in the same order WDSP keeps
+    // its database means the index is simply the position here, so the mapping
+    // is a lookup rather than a second table that can fall out of step.
+    //
+    // Notches are RADIO-WIDE, not per-receiver: an interferer is a fact about
+    // the band, so every receiver gets the same set applied to it. That also
+    // means a receiver created later has to be seeded (seedNotches).
+    //
+    // GUI thread only, like m_rx.
+    struct NotchRecord {
+        int id = 0;
+        double centerHz = 0.0;
+        double widthHz = 0.0;
+        bool active = true;
+    };
+    std::vector<NotchRecord> m_notches;
+    // Never reused, even after a removal. A recycled id would let a stale
+    // reference from the UI address a different notch than it meant to.
+    int m_nextNotchId = 1;
+    bool m_notchesEnabled = true;
+
+    // Index of `notchId` in m_notches — which IS its WDSP handle — or -1.
+    [[nodiscard]] int notchIndexFor(int notchId) const;
+    // Push the whole notch set + tune frequency into one receiver's chain. Used
+    // when a receiver appears after the notches did.
+    void seedNotches(const Receiver& r);
+    // Re-point one receiver's notch axis at its current NCO. Called wherever
+    // ncoHz changes; without it the notches stay where the NCO used to be.
+    void pushNotchTune(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
     //

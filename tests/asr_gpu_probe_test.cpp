@@ -36,11 +36,13 @@
 #include <QElapsedTimer>
 #include <QtGlobal>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <thread>
+#include <vector>
 
 #ifdef Q_OS_MACOS
 #include <sys/sysctl.h>
@@ -83,6 +85,122 @@ int main()
     }).detach();
 
     ggml_log_set(captureGgmlLog, nullptr);
+
+    // ---- #4502 pure contracts -------------------------------------------------
+    // Host-independent, and run before anything touches ggml so a GPU-less or
+    // hostile-driver machine still exercises them.
+    //
+    // Default resolution: the first usable device wins; no usable device means
+    // CPU (-1). Selecting a device that cannot run the decode is the failure
+    // these pin — it yields wrong output at every tier, and on a driver that
+    // cannot create a device at all it is the crash path of #4502.
+    {
+        const std::vector<AsrGpuDevice> noneUsable = {
+            {0, QStringLiteral("dGPU"), false}, {1, QStringLiteral("iGPU"), false}};
+        const std::vector<AsrGpuDevice> secondUsable = {
+            {0, QStringLiteral("dGPU"), false}, {1, QStringLiteral("iGPU"), true}};
+        const std::vector<AsrGpuDevice> bothUsable = {
+            {0, QStringLiteral("dGPU"), true}, {1, QStringLiteral("iGPU"), true}};
+        if (asrResolveDefaultGpuIndex({}) != -1
+            || asrResolveDefaultGpuIndex(noneUsable) != -1
+            || asrResolveDefaultGpuIndex(secondUsable) != 1
+            || asrResolveDefaultGpuIndex(bothUsable) != 0) {
+            std::fprintf(stderr, "[FAIL] asrResolveDefaultGpuIndex contract broken "
+                                 "(empty/none-usable/second-usable/first-usable) "
+                                 "(#4502)\n");
+            return 1;
+        }
+        std::printf("[ok] #4502 default-resolution contract\n");
+    }
+
+    // Session failure latch: one-way, and it must survive being asked twice.
+    // A device latched here is never handed to whisper again this process —
+    // that is what stops the second device-creation attempt, which is the
+    // attempt that faults below any catchable level (#4502).
+    {
+        // A high index no real enumeration reaches, so latching it cannot
+        // change what the hardware cases below are allowed to resolve to.
+        constexpr int kSyntheticDevice = 4502;
+        if (asrGpuDeviceFailed(kSyntheticDevice)) {
+            std::fprintf(stderr, "[FAIL] latch reports a device failed before "
+                                 "anything marked it (#4502)\n");
+            return 1;
+        }
+        asrMarkGpuDeviceFailed(kSyntheticDevice);
+        if (!asrGpuDeviceFailed(kSyntheticDevice)) {
+            std::fprintf(stderr, "[FAIL] latch did not hold after marking (#4502)\n");
+            return 1;
+        }
+        asrMarkGpuDeviceFailed(kSyntheticDevice); // idempotent
+        if (!asrGpuDeviceFailed(kSyntheticDevice)) {
+            std::fprintf(stderr, "[FAIL] latch cleared on a second mark (#4502)\n");
+            return 1;
+        }
+        // CPU (-1) is the fallback target and must never be latched out.
+        asrMarkGpuDeviceFailed(-1);
+        if (asrGpuDeviceFailed(-1)) {
+            std::fprintf(stderr, "[FAIL] CPU was latched out - the fallback target "
+                                 "must always stay available (#4502)\n");
+            return 1;
+        }
+        std::printf("[ok] #4502 session failure latch (one-way, idempotent, CPU exempt)\n");
+    }
+
+    // GPU-default tier reconciliation: raising to the GPU default must require
+    // a usable GPU, and an AUTO-raised GPU default must walk back to the base
+    // default when resolution falls off the GPU — running the heaviest tier
+    // on CPU is the "backlog climbing, no text" symptom the load-time
+    // fallback arm produced (#4767 review; the drill that verified the PR ran
+    // the probe-throw arm, where the tier was never raised, so only a pinned
+    // contract catches this). An explicit operator choice is never touched.
+    {
+        const QString turbo = QStringLiteral("large-v3-turbo");
+        const QString base = QStringLiteral("base.en");
+        const QString small = QStringLiteral("small.en");
+
+        // Startup on a usable GPU: raise, and remember it was automatic.
+        AsrTierResolution r = asrReconcileDefaultTier(base, true, false, true, turbo, base);
+        if (r.tierId != turbo || !r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] usable GPU + default wanted did not raise "
+                                 "to the GPU tier (#4767)\n");
+            return 1;
+        }
+        // Load-time fallback (the want-flag is already consumed by then): an
+        // auto-raised Turbo must walk back once resolution is CPU. This is
+        // the regression the review found — the arm where the raise had
+        // already happened and only the walk-back can undo it.
+        r = asrReconcileDefaultTier(turbo, false, true, false, turbo, base);
+        if (r.tierId != base || r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] auto-raised GPU tier survived a CPU "
+                                 "resolution - Turbo keeps running on CPU (#4767)\n");
+            return 1;
+        }
+        // Explicitly chosen Turbo (never auto-raised) on CPU: untouched.
+        r = asrReconcileDefaultTier(turbo, false, false, false, turbo, base);
+        if (r.tierId != turbo || r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] an explicit Turbo choice was walked back "
+                                 "(#4767)\n");
+            return 1;
+        }
+        // Explicit non-default tier while a usable GPU resolves: untouched.
+        r = asrReconcileDefaultTier(small, false, false, true, turbo, base);
+        if (r.tierId != small) {
+            std::fprintf(stderr, "[FAIL] an explicit tier was overridden by the "
+                                 "GPU default (#4767)\n");
+            return 1;
+        }
+        // Auto-raised Turbo re-resolved onto ANOTHER usable GPU: stays raised,
+        // stays automatic (a later CPU fallback must still walk it back).
+        r = asrReconcileDefaultTier(turbo, false, true, true, turbo, base);
+        if (r.tierId != turbo || !r.gpuDefaultActive) {
+            std::fprintf(stderr, "[FAIL] auto-raised GPU tier did not survive a "
+                                 "move to another usable GPU (#4767)\n");
+            return 1;
+        }
+        std::printf("[ok] #4767 GPU-default tier reconciliation "
+                    "(raise gated on usable GPU, auto-raise walks back, "
+                    "explicit choices untouched)\n");
+    }
 
     QElapsedTimer timer;
 
@@ -143,8 +261,39 @@ int main()
     std::printf("[ok] full GPU probe returned: %zu device(s) in %lld ms\n",
                 devices.size(), static_cast<long long>(probeMs));
     for (const AsrGpuDevice& d : devices) {
-        std::printf("     device %d: %s\n", d.index, qPrintable(d.name));
+        std::printf("     device %d: %s (usable=%s)\n", d.index, qPrintable(d.name),
+                    d.usable ? "true" : "false");
     }
+
+    // #4502 default-selection contract, on the real enumeration this time: the
+    // resolved default is either CPU (-1) or a device that actually passed the
+    // probe. Never a device we already know cannot run the decode.
+    {
+        const int def = asrResolveDefaultGpuIndex(devices);
+        if (def != -1) {
+            const auto it = std::find_if(devices.begin(), devices.end(),
+                                         [def](const AsrGpuDevice& d) { return d.index == def; });
+            if (it == devices.end() || !it->usable) {
+                std::fprintf(stderr, "[FAIL] default resolved to device %d, which is not "
+                                     "a usable enumerated device (#4502)\n", def);
+                return 1;
+            }
+        }
+        std::printf("[ok] #4502 default resolution on this host: %d\n", def);
+    }
+
+    // A device the probe rejected must also be latched, so a later explicit
+    // pick or a restored preference cannot walk back into it. (A probe that
+    // merely reports unusable without throwing does not latch — that device
+    // was created fine — so this only asserts the implication one way.)
+    for (const AsrGpuDevice& d : devices) {
+        if (asrGpuDeviceFailed(d.index) && d.usable) {
+            std::fprintf(stderr, "[FAIL] device %d is latched as failed but still "
+                                 "reported usable (#4502)\n", d.index);
+            return 1;
+        }
+    }
+    std::printf("[ok] #4502 latched devices are never reported usable\n");
 
 #ifdef Q_OS_MACOS
     // Everything below is about the embedded-metallib load path, which only

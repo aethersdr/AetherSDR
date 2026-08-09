@@ -498,6 +498,163 @@ before `canReboot` becomes true for it. If it does, the feature is
 `setPowerOffMode(Standby)` plus a guarded `18 00` / `18 01` pair, and the
 capability stays per-model.
 
+### Close the gaps `controls map` now names
+
+The registry in `IcomControls.h` and the `controls` bridge verb turned the
+coverage audit below from a document somebody has to maintain into something the
+running backend answers for itself. Three gaps it names are real work, and they
+are listed here rather than fixed in the same breath because each is a different
+size:
+
+**`14 01` AF gain is decode-only.** It is read at connect and decoded into
+`SliceDelta::audioGain`, but `IcomCivBackend` does not override
+`setSliceAudioGain`, so the operator's AF slider moves, persists, and reaches no
+register. The smallest of the three: one override, one `cmdSetLevel`. The reason
+it stayed hidden is exactly the reason the registry exists — a control that is
+half-wired renders identically to one that works.
+
+**`16 45` TX monitor and `16 46` VOX are asked for and thrown away.** Both are in
+the connect-time function read loop, both replies arrive, and the `0x16` decode
+switch has no case for either, so they fall through `default:` and are dropped.
+The monitor button therefore opens at OUR default on a radio that may have the
+monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
+and, for VOX, a seam verb that does not exist yet.
+
+**Seven constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, `1C 02`
+XFC, `27 1E` scope fixed edges. Not all of them should be wired: the notch width
+is deliberately left to the operator's own choice, and the fixed edges are three
+saved presets per band that a pan drag must never overwrite. CW pitch is the one
+that costs something today — it decides where a CW filter sits, so the passband
+drawn in CW assumes the radio's default rather than reading it.
+
+**RIT and XIT are send-only.** `21 00/01/02` are written and never read, so the
+controls open at our defaults rather than the radio's. Unlike the above this is
+a *reconnect* problem, not a dead control: the operator sets RIT, reconnects, and
+the app shows zero on a radio that is still offset.
+
+### Triage a connection hang by its last command
+
+`controls meters` reports each meter's age and `civ trace` reports the last
+frames, and together they diagnosed a stall during this bring-up in about a
+minute: every meter frozen at the same instant, the newest frame a minute old, a
+freshly sent command unanswered — and `isConnected()` still returning true.
+
+The cause there was self-inflicted (repeated hard kills of the app leave an
+IC-705 holding a stale session, and it ignores the next one), but the *shape* is
+what matters: **the session reported healthy while the command plane had been
+dead for 87 seconds.** `IcomSession` already tracks link statistics; what it does
+not do is notice that nothing has come back. See `m_lastInboundAtMs` and the
+`civStall` warning added alongside this — the next hang should say which command
+was in flight when the radio stopped answering, rather than requiring an operator
+to notice the S-meter is not moving.
+
+### Audio transport: what we mirror from kappanhang, and why
+
+The transmit path is modelled on **kappanhang**, not on wfview's remote-client
+model. Both speak the same protocol, but wfview also implements its own SERVER,
+and several of its options only work against that server rather than against a
+radio. Measured against an IC-705:
+
+| Parameter | kappanhang | AetherSDR |
+|---|---|---|
+| sample rate | 48000, fixed | 48000, fixed |
+| sample width | s16 mono | s16 mono |
+| frame duration | 20 ms | 20 ms |
+| frame bytes | **derived** — rate x bytes x duration | **derived** (was a bare `1920`) |
+| packet split | 1364 + 556 | 1364 + 556 |
+| `txbuffer` (0x84) | **300 ms** | **300 ms** (was 200) |
+| RX reorder hold | 100 ms | 100 ms |
+| audio-stream pkt0 idles | **none** | **none** (was 100 ms) |
+| codec | LPCM 1ch 16-bit only | LPCM 1ch 16-bit only |
+
+**The 1364/556 split is MTU fragmentation, not a protocol rule.** wfview chunks
+whatever buffer it is handed into 1364-byte pieces in a loop; the famous pair is
+just what a 1920-byte frame becomes. kappanhang hardcodes the same two offsets.
+Either way the invariant is the frame's **duration**, and the byte count follows
+from the rate and the sample width.
+
+**THE RATE CANNOT MOVE ON ITS OWN.** `kAudioFrameBytes` was the constant 1920,
+which is 20 ms only at 48 kHz s16. Lowering the rate to 16 kHz while leaving it
+alone produced 60 ms frames: the radio's jitter buffer read them as
+discontinuities and discarded every one. Measured — a keyed transmitter, zero
+forward power for a full 20 s, nothing audible on a receiver beside the radio,
+and no trace on the radio's own panadapter, while CI-V stayed healthy at 255 ms
+meter ages. The frame size is now derived and a `static_assert` guards the
+split, so the next attempt fails at build time instead of on the air.
+
+**Opus and ADPCM do not work on this radio.** They are the obvious answer to a
+weak link and they are not available: wfview force-downgrades any codec >= 0x40
+to LPCM16 unless the peer's login response reports connection type `WFVIEW` —
+i.e. another wfview server. kappanhang never implements them at all. The codec
+table in the oracle lists what the protocol FIELD can carry and what wfview's UI
+offers; it is not a statement about the hardware.
+
+That leaves sample rate, sample width (uLaw 8-bit halves it) and nothing else as
+real bandwidth levers on an IC-705 — and every one of them needs the derived
+framing above before it can be offered safely. **`LowBandwidthConnect` therefore
+still does nothing on this family, deliberately.**
+
+#### Confirmed by ear, 2026-08-06
+
+Operator report on the aligned build, IC-705 on 7.200 MHz into a 10 W dummy
+load, monitored on a Kenwood TH-D75 beside the radio:
+
+- **TUNE tone: no break-ups.** This also settles an open question — `setTune`
+  synthesises its carrier into the same transmit audio path, so a clean tune
+  tone is direct evidence that path is healthy rather than merely quiet.
+- **Voice: legible on the Kenwood.** An unrelated receiver again, which is the
+  only check that shares none of our code.
+
+Before the change the same operator saw cutouts of one to two seconds and
+watched the meters bounce through them.
+
+**Which of the three changes did it is NOT established.** Deriving the frame
+size from duration is a NO-OP at 48 kHz s16 — it still computes 1920 — so it
+cannot be responsible; it is correctness insurance for any future rate change,
+not a fix for this. That leaves `txbuffer` 200 -> 300 ms and dropping the tracked
+pkt0 idles from the audio stream, and the two were changed together. If the
+question ever matters, they can be separated: each is a one-line revert.
+
+#### FT8 decodes, 2026-08-06 — the RX transport certified by machine
+
+Operator ran FT8 against the IC-705 on the aligned build and **got decodes**.
+
+This is the strongest evidence the audio work has produced, and stronger than
+the voice check, because a decoder is not a listener being charitable. FT8 is
+unforgiving in exactly the places this transport was suspect:
+
+- **Sample rate must be genuinely 48 kHz**, not approximately. A rate error
+  shifts every decoded tone and misaligns the 15-second window.
+- **Continuity must hold across a full 15 s.** The one-to-two-second cutouts
+  seen before the change would have punched holes through decode windows.
+
+A decode is therefore a per-window assertion that the receive path was coherent
+for fifteen unbroken seconds — a stimulus we could not have built by hand.
+
+**Scope: this certifies RX only.** Transmitting FT8 is a separate claim — the TX
+audio path plus timing accuracy on the keying edge — and is not established by
+a decode. A spot on PSK Reporter would establish it.
+
+### Known-unresolved: transmit meters stop updating
+
+After extended use, `TX:FWDPWR` / `TX:SWR` / `TX:ALC` stop being refreshed while
+the CI-V stream is otherwise healthy — observed at `fwdPowerAgeMs` of 181 s with
+the radio keyed (`transmitting: true`) and the newest CI-V frame 135 ms old.
+
+This is NOT the token stall fixed above, and it is NOT the link: general CI-V
+traffic continues. Suspicion falls on `MeterPoller`'s transmit gating — TxOnly
+meters are only due while `setTransmitting(true)`, which is driven from the
+backend's `m_keyed`, which is itself set from a CHANGE-ONLY decode of the `1C 00`
+poll. A missed edge there would leave the poller believing the radio is
+receiving and silently stop asking for every transmit meter.
+
+**It also invalidates naive measurement.** A stale non-zero `fwdPower` looks
+exactly like healthy transmit. Any harness sampling these must gate on
+`fwdPowerAgeMs` and discard stale samples rather than counting them as good —
+a run that reported "0% zero-power, no outages" turned out to have a median
+sample age of 19.8 seconds.
+
 ---
 
 ## Appendix C — CI-V coverage audit
@@ -505,6 +662,14 @@ capability stays per-model.
 Every meter and switch the IC-705's CI-V guide documents, against what this
 backend maps and what the UI actually consumes. Written after live testing found
 five "broken" meters that were all publishing correctly at the seam.
+
+> **RESOLVED, 2026-08-06.** The two unit-contract defects called out below are
+> fixed and verified in `MeterModel`: `m_fwdPwrUnit` is honoured (`"Watts"`
+> skips the dBm conversion) and `m_swAlcUnit` is honoured (`"Percent"` maps onto
+> the dBFS gauge). The prose is kept because the *shape* of the defect is the
+> lesson, not its instance — a `unit` field that is carried, displayed and then
+> ignored by the consumer that matters. `TX:FWDPWR` and `TX:ALC` are still
+> **uncertified**, which is a different statement: see the certification report.
 
 **The dominant defect is not a missing mapping — it is a UNIT CONTRACT.**
 `MeterModel` interprets a meter by NAME, with a unit it assumes rather than

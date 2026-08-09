@@ -72,6 +72,7 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/SpeConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -363,6 +364,10 @@ private:
     // than tuning it somewhere it hears nothing. A backend that reports no
     // range leaves every band enabled (the Flex behaviour).
     void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    // Push RadioCapabilities' notch fields into one panadapter: the +TNF
+    // button's visibility, the right-click add/remove entries, the depth and
+    // permanence submenus, and the width clamps on drag-resize.
+    void applyNotchCapabilities(SpectrumWidget* sw) const;
 
     // The one place a declared RadioCapabilities flag turns into UI visibility.
     //
@@ -979,6 +984,7 @@ private:
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
+    SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
@@ -1358,8 +1364,17 @@ private:
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
     QLabel* m_fdxIndicator{nullptr};
+    // Manufacturer row above the model. Hidden unless the connected radio
+    // reports a make its own model string does not already carry — see
+    // refreshRadioIdentityLabels().
+    QLabel* m_radioMakeLabel{nullptr};
     QLabel* m_radioInfoLabel{nullptr};
     QLabel* m_radioVersionLabel{nullptr};
+    // Last manufacturer the backend reported. Cached because it arrives on
+    // capabilitiesChanged while the model and version arrive on infoChanged,
+    // and every one of those edges has to repaint the same three labels.
+    QString m_radioManufacturer;
+    void refreshRadioIdentityLabels();
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
     QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)

@@ -103,6 +103,7 @@
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/icom/IcomCivBackend.h"
 
 #include "TestEventLoop.h"
 
@@ -702,6 +703,61 @@ int main(int argc, char** argv)
               "AU-510 is an extended-DSP platform (the check has teeth)");
         check(!capabilitiesFor(QStringLiteral("FLEX-6700")).hasExtendedDsp(),
               "FLEX-6700 is not (the check has teeth)");
+    }
+
+    // ---- hasLmsNoiseFilters / hasManualNotch: the two newest gates ---------
+    //
+    // Both exist because hasRadioSideDsp was two claims wearing one name — "the
+    // radio runs its own receive DSP" and "the radio runs FLEXRADIO'S PARTICULAR
+    // SET of it". An Icom is the first and not the second, so that one flag lit
+    // up NRL/ANFL/ANFT buttons reaching no register on the radio at all.
+    //
+    // THE TWO FIELDS TAKE OPPOSITE DISCONNECTED DEFAULTS, and that asymmetry is
+    // the thing worth pinning. hasLmsNoiseFilters is PERMISSIVE — the buttons
+    // ship today and must not vanish from an empty window. hasManualNotch is
+    // NOT — MN is a NEW button, and a permissive default would put it on every
+    // Flex on screen before any backend had claimed it. An inverted default is
+    // exactly what a later refactor "tidies" in the wrong direction, and the
+    // failure is silent: a control that appears, wired to nothing.
+    {
+        // The struct's own default, which is what a backend that forgets the
+        // field gets. False for both — absent unless declared.
+        const RadioCapabilities fresh;
+        check(!fresh.hasManualNotch,
+              "RadioCapabilities defaults hasManualNotch to false (absent unless declared)");
+        check(!fresh.hasLmsNoiseFilters,
+              "RadioCapabilities defaults hasLmsNoiseFilters to false (absent unless declared)");
+
+        // Read from each backend's DECLARATION rather than restating it, so a
+        // copy-paste that flips either one reds this suite.
+        FlexBackend flex;
+        AetherSDR::icom::IcomCivBackend icom;
+        const RadioCapabilities flexCaps = flex.capabilities();
+        const RadioCapabilities icomCaps = icom.capabilities();
+
+        check(flexCaps.hasLmsNoiseFilters,
+              "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");
+        check(!icomCaps.hasLmsNoiseFilters,
+              "Icom declares NO hasLmsNoiseFilters (no WDSP LMS/FFT register exists)");
+
+        check(!flexCaps.hasManualNotch,
+              "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
+        check(icomCaps.hasManualNotch,
+              "Icom declares hasManualNotch (16 48 enable, 14 0D position, 16 57 width)");
+
+        // The gates themselves, through the SAME expression the UI applies, so
+        // these assert behaviour rather than paraphrase it.
+        //
+        // Disconnected: the LMS row stays (permissive, it ships), the MN button
+        // does not (not permissive, it is new).
+        check(uiWouldShow(/*connected=*/false, /*declared=*/false),
+              "disconnected: a permissive gate shows (hasLmsNoiseFilters rule)");
+        RadioModel disconnected;
+        check(disconnected.hasLmsNoiseFilters(),
+              "disconnected: hasLmsNoiseFilters() is permissive — the shipping row stays");
+        check(!disconnected.hasManualNotch(),
+              "disconnected: hasManualNotch() is NOT permissive — no MN button on an "
+              "empty window");
     }
 
     if (g_failures == 0)

@@ -196,6 +196,29 @@ std::span<const CurvePoint> powerCurveFor(const IcomModel& model)
     return {};
 }
 
+std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
+{
+    // The IC-705's HF ladder. Above 50 MHz the radio collapses to OFF/P.AMP1
+    // and refuses P.AMP2, then reports what it actually did — which is why this
+    // is published once rather than rewritten on every band change under an
+    // operator who may be mid-adjustment.
+    static constexpr std::array<std::string_view, 3> kIc705{"OFF", "P.AMP1", "P.AMP2"};
+    if (model.civAddress == 0xA4)
+        return kIc705;
+    return {};
+}
+
+std::span<const AttenStep> attenStepsFor(const IcomModel& model)
+{
+    // ONE step on the IC-705, and 20 dB is its real figure — nameable in dB
+    // where the preamp positions are not, because the guide publishes it. HF
+    // and 50 MHz only; higher bands ignore the request and report OFF.
+    static constexpr std::array<AttenStep, 2> kIc705{{{"OFF", 0}, {"20 dB", 20}}};
+    if (model.civAddress == 0xA4)
+        return kIc705;
+    return {};
+}
+
 double s9ReferenceFor(std::uint64_t hz) noexcept
 {
     // BAND-dependent, not model-dependent. IARU Region 1: S9 is -73 dBm below

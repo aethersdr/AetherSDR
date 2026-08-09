@@ -155,7 +155,8 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     const QString savedGpu =
         CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QString()).toString();
     if (!savedGpu.isEmpty()) {
-        m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice always wins
+        m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice wins, unless it is known bad
+        m_gpuDeviceExplicit = true;
     }
     m_settings->setCurrentTier(m_tierId);
 
@@ -229,6 +230,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             return;
         }
         m_gpuDevice = index;
+        m_gpuDeviceExplicit = true;
         saveInt("AsrGpuDevice", index);
         if (m_backend != AsrBackendKind::Remote) {
             m_tap->setEnabled(false);
@@ -386,6 +388,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_models, &AsrModelManager::failed, this, [this](const QString& err) {
         m_panel->setBusy(false);
+        m_gpuFallbackNotice.clear(); // the fallback reload never got a model
         m_panel->setStatus(tr("Model download failed: %1").arg(err));
         m_panel->setAsrEnabled(false);
     });
@@ -485,11 +488,69 @@ void CopyAssistController::startGpuDiscovery()
     });
 }
 
-void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus)
+void CopyAssistController::reconcileAfterGpuFallback()
 {
+    // Reached from the event loop, so re-check every condition the caller saw:
+    // between queueing and running, the operator may have picked another device,
+    // switched to a backend that has no GPU of its own (remote/sherpa), or an
+    // earlier fallback may already have reconciled this one. Without the backend
+    // check a stale queued reconcile would stamp a GPU notice over the status of
+    // a backend the GPU has nothing to do with.
+    if (m_backend != AsrBackendKind::Whisper || m_gpuDevice < 0
+        || !asrGpuDeviceFailed(m_gpuDevice)) {
+        return;
+    }
+
+    // Reached queued from either signal: after a load-time fallback (the
+    // backend already retried on CPU and is running) or after a decode-time
+    // failure (the engine is still aimed at the latched device). Relabel the
+    // device and move the resolution off it — applyGpuDevices() rebuilds the
+    // engine when that changes the resolved device, which is what actually
+    // retires a decode-poisoned engine — then say so in the panel.
+    const int failedDevice = m_gpuDevice;
+    for (AsrGpuDevice& d : m_gpuDevices) {
+        if (d.index == failedDevice) {
+            d.usable = false;
+        }
+    }
+    const QString failedName = [&] {
+        for (const AsrGpuDevice& d : m_gpuDevices) {
+            if (d.index == failedDevice) {
+                return d.name;
+            }
+        }
+        return tr("The selected GPU");
+    }();
+
+    // A device known bad must be overridden even when explicitly chosen.
+    m_gpuDeviceExplicit = false;
+    applyGpuDevices(m_gpuDevices);
+
+    const bool onCpu = m_gpuDevice < 0;
+    const QString notice = onCpu
+        ? tr("%1 is unavailable — running on CPU. Transcription will be slower.")
+              .arg(failedName)
+        : tr("%1 is unavailable — switched to another GPU.").arg(failedName);
+
+    // applyGpuDevices() moved the resolution off the latched device, which
+    // rebuilt the engine — model-less, tap off. Left there, the panel looks
+    // live while the pipeline decodes nothing until the operator toggles
+    // Enable. Reload so the fallback ends in a running engine; the notice is
+    // parked for the rebuilt engine's ready() handler, which would otherwise
+    // overwrite it with "Listening…" the moment the reload lands.
+    if (m_enabled && m_backend == AsrBackendKind::Whisper) {
+        m_gpuFallbackNotice = notice;
+        beginEnable();
+    } else {
+        m_panel->setStatus(notice);
+    }
+}
+
+void CopyAssistController::applyGpuDevices(std::vector<AsrGpuDevice> gpus)
+{
+    m_gpuDevices = std::move(gpus);
     const int previousDevice = m_gpuDevice;
     int resolvedDevice = previousDevice;
-    bool persistResolvedDevice = false;
 
     // Adding or clearing combo items changes its current index. Suppress the
     // dialog's outward gpuChanged/tierChanged signals while discovery state is
@@ -499,28 +560,41 @@ void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus
         const QSignalBlocker blocker(m_settings);
         m_settings->clearGpuDevices();
 
-        if (!gpus.empty()) {
-            for (const AsrGpuDevice& gpu : gpus) {
-                m_settings->addGpuDevice(gpu.index, gpu.name);
+        if (!m_gpuDevices.empty()) {
+            for (const AsrGpuDevice& gpu : m_gpuDevices) {
+                // An unusable device stays selectable for diagnostics, but the
+                // combo says why it is not the default — whether it failed the
+                // capability probe or a load attempt this session.
+                m_settings->addGpuDevice(gpu.index,
+                                         gpu.usable ? gpu.name
+                                                    : tr("%1 (unavailable)").arg(gpu.name));
             }
             m_settings->addGpuDevice(-1, tr("CPU")); // explicit force-CPU option
 
-            if (resolvedDevice != -1
-                && (resolvedDevice < 0
-                    || resolvedDevice >= static_cast<int>(gpus.size()))) {
-                resolvedDevice = 0;
-                persistResolvedDevice = true;
+            const bool outOfRange = resolvedDevice != -1
+                && (resolvedDevice < 0 || resolvedDevice >= static_cast<int>(m_gpuDevices.size()));
+            const bool resolvedUnusable = [&] {
+                for (const AsrGpuDevice& g : m_gpuDevices) {
+                    if (g.index == resolvedDevice) {
+                        return !g.usable;
+                    }
+                }
+                return false;
+            }();
+            // Fall back to the first usable device (else CPU) when the choice
+            // was never explicit, has gone out of range, or names a device that
+            // cannot run the decode. A device the operator picked explicitly is
+            // still overridden once it is known-bad — leaving it selected would
+            // re-enter the failure on the next load.
+            // Not persisted: an unusable device can become usable again after a
+            // driver fix or reboot, and writing a computed value over the saved
+            // preference would pin that computation permanently.
+            if (!m_gpuDeviceExplicit || outOfRange || resolvedUnusable) {
+                resolvedDevice = asrResolveDefaultGpuIndex(m_gpuDevices);
             }
             m_settings->setCurrentGpu(resolvedDevice);
             m_settings->setGpuSelectorVisible(true);
             m_settings->setGpuSelectorEnabled(true);
-
-            // Preserve the existing GPU-host default, but only while the
-            // operator has not made an explicit model choice during the probe.
-            if (m_useGpuDefaultIfAvailable) {
-                m_tierId = QStringLiteral("large-v3-turbo");
-                m_settings->setCurrentTier(m_tierId);
-            }
         } else {
             // A failed, timed-out, or CPU-only probe must not trigger the same
             // registry initialization again from Whisper's worker. Force CPU
@@ -530,12 +604,35 @@ void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus
             m_settings->setGpuSelectorEnabled(false);
             m_settings->setGpuSelectorVisible(false);
         }
+
+        // Tier follows the device resolution (asrReconcileDefaultTier): the
+        // GPU-host default is preserved only while the operator has not made
+        // an explicit model choice AND the decode will actually run on a
+        // usable GPU — and an earlier auto-raise is walked back to the base
+        // default the moment resolution falls off the GPU. Without the
+        // walk-back, the load-time fallback arm kept large-v3-turbo running
+        // on CPU: the "backlog climbing, no text" symptom this PR opens with
+        // (#4767 review). An explicitly chosen tier is never changed.
+        const bool resolvedGpuUsable = resolvedDevice >= 0 && [&] {
+            for (const AsrGpuDevice& g : m_gpuDevices) {
+                if (g.index == resolvedDevice) {
+                    return g.usable;
+                }
+            }
+            return false;
+        }();
+        const AsrTierResolution tier = asrReconcileDefaultTier(
+            m_tierId, m_useGpuDefaultIfAvailable, m_gpuDefaultTierActive,
+            resolvedGpuUsable, QStringLiteral("large-v3-turbo"),
+            AsrModelCatalog::defaultTierId());
+        m_gpuDefaultTierActive = tier.gpuDefaultActive;
+        if (tier.tierId != m_tierId) {
+            m_tierId = tier.tierId;
+            m_settings->setCurrentTier(m_tierId);
+        }
     }
 
     m_gpuDevice = resolvedDevice;
-    if (persistResolvedDevice) {
-        saveInt("AsrGpuDevice", resolvedDevice);
-    }
     if (resolvedDevice != previousDevice && m_backend == AsrBackendKind::Whisper) {
         m_tap->setEnabled(false);
         buildEngine();
@@ -591,13 +688,38 @@ void CopyAssistController::buildEngine()
         m_panel->setBusy(false);
         if (m_enabled && !m_speakerLoad.isPending()) {
             m_tap->setEnabled(true);
-            m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
-                                                                   : tr("Listening…"));
+            if (!m_gpuFallbackNotice.isEmpty()) {
+                // This ready() is the reload after a GPU fallback: keep the
+                // explanation on screen instead of a bare "Listening…", so
+                // the operator learns why the decode moved (and why it may
+                // now be slower) rather than seeing business as usual.
+                m_panel->setStatus(m_gpuFallbackNotice);
+                m_gpuFallbackNotice.clear();
+            } else {
+                m_panel->setStatus(m_backend == AsrBackendKind::Remote ? tr("Listening (remote)…")
+                                                                       : tr("Listening…"));
+            }
             writeFreqMarkerIfNeeded(); // "on start": head the log with the frequency
+        }
+        // The model loaded, but the backend may have got there by falling back
+        // to CPU after the chosen GPU failed. The latch is the only signal —
+        // a successful fallback still reports ready() — so ask it, then make
+        // the selectors tell the truth instead of naming a device that is not
+        // running the decode (#4502).
+        //
+        // Queued, not direct: reconciling can change the resolved device, and
+        // that rebuilds the engine — which deletes the AsrEngine whose ready()
+        // emission this lambda is running inside. Deferring to the event loop
+        // lets that emission unwind before its sender is destroyed.
+        if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
+            && asrGpuDeviceFailed(m_gpuDevice)) {
+            QMetaObject::invokeMethod(
+                this, [this] { reconcileAfterGpuFallback(); }, Qt::QueuedConnection);
         }
     });
     connect(m_asr, &AsrEngine::loadFailed, this, [this](const QString& err) {
         m_panel->setBusy(false);
+        m_gpuFallbackNotice.clear(); // failed reload: this message wins instead
         m_panel->setStatus(tr("Model load failed: %1").arg(err));
         m_panel->setAsrEnabled(false);
     });
@@ -611,7 +733,20 @@ void CopyAssistController::buildEngine()
                 m_panel->appendText(labeled, confidence);
                 appendToLogFile(labeled);
             });
-    connect(m_asr, &AsrEngine::error, this, [this](const QString& err) { m_panel->setStatus(err); });
+    connect(m_asr, &AsrEngine::error, this, [this](const QString& err) {
+        m_panel->setStatus(err);
+        // A decode-time GPU failure latches the device in
+        // WhisperAsrBackend::transcribe(); the engine itself is still aimed at
+        // it and would throw again on every utterance. Reconcile off the error
+        // signal exactly as the ready() path does — queued, because the
+        // reconcile rebuilds the engine this handler's sender belongs to. The
+        // entry guard in reconcileAfterGpuFallback() makes repeats harmless.
+        if (m_backend == AsrBackendKind::Whisper && m_gpuDevice >= 0
+            && asrGpuDeviceFailed(m_gpuDevice)) {
+            QMetaObject::invokeMethod(
+                this, [this] { reconcileAfterGpuFallback(); }, Qt::QueuedConnection);
+        }
+    });
     connect(m_asr, &AsrEngine::backlogChanged, m_panel, &CopyAssistPanel::setBacklog);
     connect(m_asr, &AsrEngine::speakerModelLoaded, this,
             &CopyAssistController::onSpeakerModelLoaded);
@@ -636,6 +771,7 @@ void CopyAssistController::onEnableToggled(bool on)
         requestEnable();
     } else {
         m_enableAfterGpuDiscovery = false;
+        m_gpuFallbackNotice.clear(); // a pending fallback reload no longer matters
         m_tap->setEnabled(false);
         m_panel->setBusy(false);
         m_panel->setStatus(tr("Disabled"));
@@ -714,6 +850,14 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     const AsrBackendKind prev = m_backend;
     m_backend = kind;
     m_tierId = tierId;
+    // The tier is now an explicit operator choice — even if it is the GPU-default
+    // tier itself — so a later fallback must never walk it back. Cleared here
+    // rather than at the top of onTierChanged() because the three prompting
+    // branches (remote / custom / sherpa) can still be cancelled, and a cancel
+    // leaves the auto-raised tier in place: clearing the flag early would strand
+    // Large v3 Turbo on CPU after a fallback, the exact regression the flag exists
+    // to prevent. setBackend() is reached only once the change is committed.
+    m_gpuDefaultTierActive = false;
 
     // Language applies to whisper/remote only; sherpa-onnx picks it from the
     // model. Keep the selector's visibility in sync with the active backend.
@@ -773,6 +917,7 @@ void CopyAssistController::beginEnable()
         // catalog download + SHA verification (we don't know its checksum).
         if (m_customModelPath.isEmpty() || !QFileInfo::exists(m_customModelPath)) {
             m_panel->setBusy(false);
+            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
             m_panel->setStatus(tr("Custom model file not found — pick it again."));
             m_panel->setAsrEnabled(false);
             return;
@@ -784,6 +929,7 @@ void CopyAssistController::beginEnable()
         // discovers the bundle's files). No download/verify.
         if (m_sherpaModelDir.isEmpty() || !QDir(m_sherpaModelDir).exists()) {
             m_panel->setBusy(false);
+            m_gpuFallbackNotice.clear(); // no reload will arrive to show it
             m_panel->setStatus(tr("sherpa-onnx model folder not found — pick it again."));
             m_panel->setAsrEnabled(false);
             return;

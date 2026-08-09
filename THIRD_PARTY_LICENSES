@@ -136,6 +136,31 @@ AetherSDR.
   or text incorporated, figures only.
   Publisher: ACOM (manufacturer public documentation)
 
+The SPE Expert amplifier peripheral (see
+docs/architecture/spe-expert-amplifier-design.md) implements SPE's USB/RS-232
+serial protocol — the command/data packet framing (sync run, count,
+checksum), the front-panel keystroke command set, and the 67-character CSV
+Status string with its field tables. These wire-protocol facts were consulted
+clean-room from the manufacturer's own published specification and are
+expressed in original AetherSDR code; no third-party code is incorporated,
+vendored, translated, or linked.
+
+  Application Programmer's Guide — Expert 1.3K-FA / 1.5K-FA / 2K-FA, Rev 1.1
+  (2015-10-15), the primary protocol authority (Principle I).
+  Publisher: SPE s.r.l. (manufacturer public documentation,
+             linear-amplifier.com)
+  Reference: distributed by SPE as a contributor-supplied PDF; no stable
+             public URL, so no URL/access-date/hash triple is recorded here
+             (same treatment as the ACOM spec above)
+
+  The contributing author's own prior control application for the 1.5K-FA
+  (Python, unpublished) served as the real-hardware cross-check: it
+  established that commands need a trailing CR LF in practice, its ~300 ms
+  status poll cadence (this implementation polls faster, at 100 ms), and
+  the 1450/1500/1600 W gauge thresholds carried
+  into SpeProtocol.cpp's modelTable(). Author's own work, contributed under
+  this project's license; no third-party rights involved.
+
 
 1. WDSP 2.00 — engine-side SDR DSP
 ----------------------------------

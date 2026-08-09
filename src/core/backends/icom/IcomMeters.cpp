@@ -241,6 +241,12 @@ void MeterPoller::markAnswered(MeterId id, std::int64_t nowMs)
     // request would let a slow link stack polls back-to-back the moment each
     // reply lands, which is the contention this scheduler exists to avoid.
     s.nextDueMs = nowMs + (spec ? spec->intervalMs : 200);
+    stateFor(id).answeredAtMs = nowMs;
+}
+
+std::int64_t MeterPoller::lastReadingAtMs(MeterId id) const
+{
+    return stateFor(id).answeredAtMs;
 }
 
 void MeterPoller::reset() noexcept

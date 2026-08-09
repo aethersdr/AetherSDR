@@ -290,10 +290,21 @@ jobs:
       - name: Stage MSVC runtime for installer
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\stage-msvc-runtime.ps1 -OutputDir installer-runtime
+          # Copied into deploy\ here rather than in the portable-ZIP step so the
+          # audit below sees the SAME payload all three artifacts ship (portable
+          # ZIP, Inno installer, MSIX all derive from deploy\ + this runtime).
+          Copy-Item -Path installer-runtime\*.dll -Destination deploy\ -Force
+
+      # Hard gate for the missing-runtime class (#4781: vcomp140.dll was never
+      # staged, so the app died at startup on any machine whose system-wide VC++
+      # redistributable had been removed or downgraded by another installer).
+      # Runs before any artifact is built, so a payload that isn't self-contained
+      # never reaches the ZIP, the installer, the MSIX or the release.
+      - name: Verify deploy payload is self-contained
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-deploy-dependencies.ps1 -DeployDir deploy
 
       - name: Create portable ZIP
         run: |
-          # Keep portable ZIP app-local runtime behavior aligned with the installer.
           # Sanitize github.ref_name — release-tag pushes give a slash-free
           # "v26.5.3" but workflow_dispatch on a branch ref like
           # "codex/windows-store-msix" injects slashes that break the
@@ -301,7 +312,6 @@ jobs:
           # character so ad-hoc dispatch runs (e.g. validating new packaging
           # work on a branch) reach the later Inno + MSIX steps instead of
           # exiting 1 at the very first artifact-creation step.
-          Copy-Item -Path installer-runtime\*.dll -Destination deploy\ -Force
           $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'
           Compress-Archive -Path deploy\* -DestinationPath "AetherSDR-$safeRefName-Windows-x64-portable.zip"
 

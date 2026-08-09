@@ -127,6 +127,12 @@ private:
     QString m_deviceName;
     std::uint16_t m_innerSeq = 0;
     bool m_authOk = false;
+    // Token-renewal watchdog. The radio's session lasts 60 s and expires in
+    // silence, so a renewal has to be verified rather than assumed.
+    qint64 m_lastAuthOkMs = 0;   // when the radio last acknowledged an auth
+    bool   m_renewUnacked = false;
+    int    m_renewRetries = 0;
+    static constexpr int kTokenRenewMaxRetries = 4;
     bool m_haveRadioId = false;
     bool m_streamsRequested = false;
     bool m_connected = false;
