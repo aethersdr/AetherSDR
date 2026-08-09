@@ -1570,6 +1570,12 @@ RadioModel::RadioModel(QObject* parent)
             this, &RadioModel::scheduleDStarRuntimeConfiguration);
     connect(&m_transmitModel, &TransmitModel::transmittingChanged,
             this, [this](bool transmitting) {
+        // The meter model's stale watch holds while keyed — a 2 s gap in meter
+        // packets is reachable mid-transmission on a lossy link, and announcing
+        // there would zero the forward-power gauge with the operator on the air.
+        // transmittingChanged rather than moxChanged on purpose: VOX, break-in
+        // and a footswitch are all transmitting too.
+        m_meterModel.setTransmitting(transmitting);
         if (!transmitting) {
             applyPendingDStarRuntimeConfiguration();
         }

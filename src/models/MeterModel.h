@@ -12,6 +12,8 @@
 // model dependency. Re-exported here for the model's existing users.
 #include "core/backends/MeterDef.h"
 
+class QTimer;
+
 namespace AetherSDR {
 
 // Central meter value store.
@@ -150,6 +152,16 @@ public:
     // Test seam: age the TX-meter timestamp so staleness behaviour can be
     // exercised without sleeping through the real window.
     void setLastTxMeterUpdateMsForTest(qint64 ms) { m_lastTxMeterUpdateMs = ms; }
+    // Whether the operator is currently transmitting, from TransmitModel's
+    // transmittingChanged (which covers mox, VOX, break-in and footswitch alike,
+    // not just an explicit MOX press). The stale watch holds while this is true
+    // — see checkTxMeterStaleness for why a mid-transmission gap must not be
+    // announced. A caller that never sets it gets the un-gated behaviour.
+    void setTransmitting(bool tx) { m_transmitting = tx; }
+
+    // Run the stale-watch check immediately instead of waiting for its timer,
+    // so a test can age the stamp above and observe the transition at once.
+    void checkTxMeterStalenessForTest() { checkTxMeterStaleness(); }
     // SWR is gated on ITS OWN timestamp (#4536), so staleness tests must age
     // this one; ageing only the aggregate stamp exercises nothing the SWR
     // gate reads.
@@ -286,6 +298,38 @@ signals:
     void meterUpdated(int index, float value);
 
 private:
+    // THE STALE WATCH.
+    //
+    // Every liveness gate in this class — swrValid, the freshness windows, all
+    // of it — used to be evaluated ONLY on the path where a packet arrives.
+    // That is correct arithmetic resting on an unstated assumption: that
+    // something keeps feeding us. It holds for a STREAMING backend, where meter
+    // packets keep landing while receiving, the gates re-run, and the readings
+    // fall to rest on their own. It is false for a POLLING backend, which
+    // rightly stops asking for transmit-only meters the moment the key drops:
+    // no packet, no emit, and every gate freezes at whatever verdict it last
+    // reached. The gauge holds its final in-transmission reading — with its
+    // tooltip still describing it as current — for the rest of the session.
+    //
+    // A frozen plausible number is worse than a blank one. It survived an
+    // entire transmit certification pass precisely because it looks exactly
+    // like a healthy meter.
+    //
+    // So the model watches its own clock. This does NOT touch the stored values
+    // or their timestamps: "MeterModel keeps LAST-KNOWN values" stays true, and
+    // the accessors keep answering as before. It only announces the crossing,
+    // once, so the reactive consumers get the edge they were always waiting for.
+    void armTxStaleWatch();
+    void checkTxMeterStaleness();
+
+    class QTimer* m_txStaleTimer = nullptr;
+    // True between a transmit-meter sample and the announcement that it went
+    // stale. Guards the edge so the announcement fires once per transmission
+    // rather than on every tick.
+    bool m_txMetersWereLive = false;
+    // Set from TransmitModel; see setTransmitting.
+    bool m_transmitting = false;
+
     float convertRaw(const MeterDef& def, qint16 raw) const;
     void clearCompressionState();
     void recomputeSourceIndexMins();

@@ -615,6 +615,111 @@ void testSwrWithoutForwardPowerBackendIsValid()
            !model.swrIfLive().has_value());
 }
 
+// A POLLING backend stops asking for transmit-only meters the moment the key
+// drops, so nothing feeds the model and every liveness gate freezes at its last
+// verdict. The gauge then holds its final in-transmission reading — tooltip and
+// all — for the rest of the session. A streaming backend never showed this
+// because its packets keep arriving and re-run the gates for free.
+//
+// The model has to notice on its own clock. Note what this must NOT do: the
+// stored values and every timestamp stay exactly as they were, because
+// "MeterModel keeps LAST-KNOWN values" is the documented contract and because
+// refreshing a stamp here would make a stale reading look freshly measured.
+void testTxMetersAnnounceTheirOwnStaleness()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    int   emissions = 0;
+    float lastFwd = -1.0f;
+    float lastSwr = -1.0f;
+    bool  lastValid = true;
+    QObject::connect(&model, &MeterModel::txMetersChanged,
+                     [&](float fwd, float swr, bool valid) {
+        ++emissions; lastFwd = fwd; lastSwr = swr; lastValid = valid;
+    });
+
+    model.updateValues({8, 10}, {rawDb(30.0f), rawDb(2.0f)});
+    const int afterSample = emissions;
+    report("a transmit sample publishes a live reading",
+           afterSample > 0 && lastValid && lastFwd > 0.0f);
+
+    // Still inside the window: the watch must stay quiet rather than
+    // announcing a crossing that has not happened.
+    model.checkTxMeterStalenessForTest();
+    report("no stale announcement while the reading is still live",
+           emissions == afterSample);
+
+    // Now age it past the window, exactly as a radio going back to receive does
+    // by simply not being polled any more.
+    const qint64 aged = QDateTime::currentMSecsSinceEpoch()
+                        - (MeterModel::kTxMeterStaleMs + 500);
+    model.setLastTxMeterUpdateMsForTest(aged);
+    model.setLastSwrUpdateMsForTest(aged);
+    model.checkTxMeterStalenessForTest();
+
+    report("the model announces the stale crossing without being fed",
+           emissions == afterSample + 1);
+    report("and announces it as at-rest and SWR-absent",
+           nearlyEqual(lastFwd, 0.0f) && !lastValid && nearlyEqual(lastSwr, 0.0f));
+
+    // ONCE, not on every tick — a repeating edge is its own bug.
+    const int afterEdge = emissions;
+    model.checkTxMeterStalenessForTest();
+    model.checkTxMeterStalenessForTest();
+    report("the crossing is announced once, not on every tick",
+           emissions == afterEdge);
+
+    // And the timestamps are untouched, so "how old is this" still answers
+    // honestly. This is the assertion that would have caught the first attempt
+    // at this fix, which published zeros from the backend and refreshed the
+    // stamps as a side effect.
+    report("the stale announcement does not refresh the timestamps",
+           model.txMetersUpdatedAtMs() == aged
+               && !model.hasRecentTxMeters(MeterModel::kTxMeterStaleMs));
+}
+
+// A 2 s gap in meter packets is reachable MID-TRANSMISSION on a lossy streaming
+// backend, and announcing there would zero the forward-power gauge and
+// invalidate SWR with the operator still on the air — trading a stuck reading
+// at rest for a wrong reading under load. The stale watch must hold while keyed
+// and fire only once the key drops.
+void testStaleWatchHoldsWhileTransmitting()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    int emissions = 0;
+    bool lastValid = true;
+    float lastFwd = -1.0f;
+    QObject::connect(&model, &MeterModel::txMetersChanged,
+                     [&](float fwd, float, bool valid) {
+        ++emissions; lastFwd = fwd; lastValid = valid;
+    });
+
+    model.setTransmitting(true);
+    model.updateValues({8, 10}, {rawDb(30.0f), rawDb(2.0f)});
+    const int afterSample = emissions;
+
+    // A gap longer than the window, WHILE KEYED. Nothing may be announced.
+    const qint64 aged = QDateTime::currentMSecsSinceEpoch()
+                        - (MeterModel::kTxMeterStaleMs + 500);
+    model.setLastTxMeterUpdateMsForTest(aged);
+    model.setLastSwrUpdateMsForTest(aged);
+    model.checkTxMeterStalenessForTest();
+    report("a mid-transmission gap does NOT zero the gauge",
+           emissions == afterSample);
+
+    // Unkey: now the same staleness is a real at-rest crossing.
+    model.setTransmitting(false);
+    model.checkTxMeterStalenessForTest();
+    report("and the crossing fires once the key drops",
+           emissions == afterSample + 1
+               && nearlyEqual(lastFwd, 0.0f) && !lastValid);
+}
+
 void testSwrIsSuppressedOnceTxMetersGoStale()
 {
     MeterModel model;
@@ -901,6 +1006,8 @@ int main(int argc, char** argv)
     testForwardPowerJustAboveTheThresholdStaysSmoothed();
     testSwrIsLiveWhileTxMetersAreFresh();
     testSwrIsSuppressedOnceTxMetersGoStale();
+    testTxMetersAnnounceTheirOwnStaleness();
+    testStaleWatchHoldsWhileTransmitting();
     testStaleSwrIsNotEmittedToConsumers();
     testSwrWithoutForwardPowerBackendIsValid();
     testStaleSwrIsAlsoSuppressedInMetersForSource();
