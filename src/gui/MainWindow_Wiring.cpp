@@ -5868,10 +5868,14 @@ void MainWindow::wireMeters()
     // When the PGXL is in STANDBY we fall back to the barefoot scale — only the
     // radio's forward power is reaching the meter, so the 2kW arc would make
     // every reading look tiny and useless.
-    // lastMaxW/lastAmpActive skip redundant applies (#4845 review) — infoChanged
-    // fires far more often than the three signals this used to run on alone, and
-    // most of those emissions carry no power-scale-relevant change at all.
-    auto updatePowerScale = [this, lastMaxW = -1, lastAmpActive = false]() mutable {
+    // Redundant-apply skipping (#4845 review) lives in each gauge's own
+    // setPowerScale() now, not here — a lambda-side cache doesn't know about
+    // CrossNeedleMeterApplet's direct test-fixture write to the same widget
+    // (see its "Clear test" action), so it could skip a real update that
+    // needed to overwrite a fixture value still sitting in the widget. Each
+    // widget already owns its displayed state, so that's the only place a
+    // cache can't diverge from what's actually on screen.
+    auto updatePowerScale = [this]() {
         int maxW = m_radioModel.transmitModel().maxPowerLevel();
         // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
         // max_power_level only reports the exciter limit (100W). Use model
@@ -5882,11 +5886,6 @@ void MainWindow::wireMeters()
         }
         const bool ampActive = m_radioModel.amplifier().present()
                             && m_radioModel.amplifier().operate();
-        if (maxW == lastMaxW && ampActive == lastAmpActive) {
-            return;
-        }
-        lastMaxW = maxW;
-        lastAmpActive = ampActive;
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->setMeterPowerScale(maxW, ampActive);
