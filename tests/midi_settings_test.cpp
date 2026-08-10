@@ -121,7 +121,7 @@ int main(int argc, char** argv)
         "rx.tuneKnob", "rx.afGain", "rx.agcThreshold", "tx.rfPower",
         "rx.nrEnable", "global.bandUp", "global.bandDown", "global.masterMute",
         "global.modeUp", "global.panZoomIn", "global.panZoomOut", "rx.stepUp",
-        "tx.atuStart", "cwdit", "cwdah", "cwkey", "cw.ptt",
+        "tx.atuStart", "cwdit", "cwdah", "cwkey", "cw.ptt", "cw.speed",
     };
     const auto validator = [&registry](const QString& id) { return registry.contains(id); };
 
@@ -140,6 +140,7 @@ int main(int argc, char** argv)
         "# Controls\n"
         "C100=freq\n"
         "C103=bwset;active\n"
+        "C110=cwspeed;active\n"
         "C0=\n"
         "# Buttons\n"
         "B20=leftpaddle\n"
@@ -153,7 +154,7 @@ int main(int argc, char** argv)
 
     const auto r1 = settings.importProfile(mapPath, validator);
     ok &= expect(r1.ok(), "map import succeeds");
-    ok &= expect(r1.importedCount == 5, "map import count (freq, paddles, nr, ptt)");
+    ok &= expect(r1.importedCount == 6, "map import count (freq, cwspeed, paddles, nr, ptt)");
     ok &= expect(r1.profileName == "CTR2-Test_v1_0", "map import names profile from file name");
     ok &= expect(r1.skippedUnknownParam.contains("bwset")
                      && r1.skippedUnknownParam.contains("openft8"),
@@ -161,7 +162,7 @@ int main(int argc, char** argv)
     ok &= expect(r1.duplicates == QStringList{"nr"}, "duplicate map function reported by name");
     {
         const auto imported = settings.loadProfile(r1.profileName);
-        ok &= expect(imported.size() == 5, "imported map profile loads from the store");
+        ok &= expect(imported.size() == 6, "imported map profile loads from the store");
         bool foundFreq = false;
         bool foundDit = false;
         for (const auto& b : imported) {
@@ -187,7 +188,7 @@ int main(int argc, char** argv)
         // Native XML round trip: the profile the map import just stored.
         const auto r4 = settings.importProfile(
             configRoot + "/AetherSDR/midi/CTR2-Test_v1_0.xml", validator);
-        ok &= expect(r4.ok() && r4.importedCount == 5, "native XML profile re-imports");
+        ok &= expect(r4.ok() && r4.importedCount == 6, "native XML profile re-imports");
         ok &= expect(r4.profileName == "CTR2-Test_v1_0 (3)", "XML re-import takes the next suffix");
         const auto again = settings.loadProfile(r4.profileName);
         const auto first = settings.loadProfile("CTR2-Test_v1_0");
@@ -221,10 +222,10 @@ int main(int argc, char** argv)
     // Export → Import round trip through the user-facing export path.
     const auto exported = settings.exportProfile(
         fakeHome.path() + "/exported.xml", settings.loadProfile("CTR2-Test_v1_0"));
-    ok &= expect(exported.ok() && exported.exportedCount == 5,
+    ok &= expect(exported.ok() && exported.exportedCount == 6,
                  "export writes the current profile");
     const auto r8 = settings.importProfile(fakeHome.path() + "/exported.xml", validator);
-    ok &= expect(r8.ok() && r8.importedCount == 5, "exported file re-imports cleanly");
+    ok &= expect(r8.ok() && r8.importedCount == 6, "exported file re-imports cleanly");
     const auto exportFail = settings.exportProfile(
         fakeHome.path() + "/no-such-dir/out.xml",
         settings.loadProfile("CTR2-Test_v1_0"));

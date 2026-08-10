@@ -62,9 +62,10 @@ void writeProfileDocument(QXmlStreamWriter& xml, const QVector<MidiBinding>& bin
 //     # LEDs                    (device feedback — not bindings)
 //
 // The function vocabulary is SmartSDR's; this table carries the verified
-// CTR2-MIDI subset. Functions absent here are reported as named skips, so
-// growing coverage is a data change only. relativeCc marks functions whose
-// CC values are relative steps (the VFO knob) rather than absolute levels.
+// CTR2-MIDI + CTR2-Quad vocabulary. Functions absent here are reported as
+// named skips, so growing coverage is a data change only. relativeCc marks
+// functions whose CC values are relative steps (the VFO knob) rather than
+// absolute levels.
 struct MapFunctionEntry {
     const char* function;
     const char* paramId;
@@ -72,23 +73,35 @@ struct MapFunctionEntry {
 };
 
 constexpr MapFunctionEntry kSmartSdrMapFunctions[] = {
-    { "agct",        "rx.agcThreshold",   false },
-    { "atu",         "tx.atuStart",       false },
-    { "banddown",    "global.bandDown",   false },
-    { "bandup",      "global.bandUp",     false },
-    { "freq",        "rx.tuneKnob",       true  },
-    { "leftpaddle",  "cwdit",             false },
-    { "mainmute",    "global.masterMute", false },
-    { "modenext",    "global.modeUp",     false },
-    { "nr",          "rx.nrEnable",       false },
-    { "power",       "tx.rfPower",        false },
-    { "ptt",         "cw.ptt",            false },
-    { "rightpaddle", "cwdah",             false },
-    { "slicevolume", "rx.afGain",         false },
-    { "straightkey", "cwkey",             false },
-    { "tunestep",    "rx.stepUp",         false },
-    { "zoomin",      "global.panZoomIn",  false },
-    { "zoomout",     "global.panZoomOut", false },
+    { "agct",          "rx.agcThreshold",   false },
+    { "anf",           "rx.anfEnable",      false },
+    { "atu",           "tx.atuStart",       false },
+    { "balanceslice",  "rx.audioPan",       false },
+    { "banddown",      "global.bandDown",   false },
+    { "bandup",        "global.bandUp",     false },
+    { "cwspeed",       "cw.speed",          false },
+    { "freq",          "rx.tuneKnob",       true  },
+    { "leftpaddle",    "cwdit",             false },
+    { "mainmute",      "global.masterMute", false },
+    { "micgain",       "phone.micLevel",    false },
+    { "modenext",      "global.modeUp",     false },
+    { "modeprev",      "global.modeDown",   false },
+    { "nb",            "rx.nbEnable",       false },
+    { "nr",            "rx.nrEnable",       false },
+    { "power",         "tx.rfPower",        false },
+    { "ptt",           "cw.ptt",            false },
+    { "rightpaddle",   "cwdah",             false },
+    { "rit",           "rx.ritEnable",      false },
+    { "slicevolume",   "rx.afGain",         false },
+    { "straightkey",   "cwkey",             false },
+    { "togglebandzoom","global.bandZoom",   false },
+    { "tune",          "tx.tune",           false },
+    { "tunestep",      "rx.stepUp",         false },
+    { "tunestepprev",  "rx.stepDown",       false },
+    { "vox",           "phone.voxEnable",   false },
+    { "xit",           "rx.xitEnable",      false },
+    { "zoomin",        "global.panZoomIn",  false },
+    { "zoomout",       "global.panZoomOut", false },
 };
 
 const MapFunctionEntry* findMapFunction(const QString& function)
