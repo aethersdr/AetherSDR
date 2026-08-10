@@ -24,6 +24,12 @@ struct MidiImportResult {
     bool ok() const { return errors.isEmpty(); }
 };
 
+struct MidiExportResult {
+    int exportedCount{0};
+    QString error;
+    bool ok() const { return error.isEmpty(); }
+};
+
 // Dedicated settings file for MIDI controller configuration.
 // Stored at ~/.config/AetherSDR/midi.settings (XML format).
 // Keeps MIDI bindings, device preferences, and profiles separate
@@ -62,6 +68,11 @@ public:
     MidiImportResult importProfile(
         const QString& filePath,
         const std::function<bool(const QString&)>& paramValidator = {});
+
+    // Export bindings as a shareable <MidiProfile> XML — the same document
+    // importProfile() reads back, so Export → Import round-trips.
+    MidiExportResult exportProfile(const QString& filePath,
+                                   const QVector<MidiBinding>& bindings) const;
 
 private:
     MidiSettings() = default;

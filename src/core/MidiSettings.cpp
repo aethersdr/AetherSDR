@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QSet>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
@@ -24,6 +25,27 @@ QString normalizedMidiParamId(const QString& paramId)
     if (paramId == QLatin1String("cw.dah"))
         return QStringLiteral("cwdah");
     return paramId;
+}
+
+// One serializer for the <MidiProfile> document, shared by the store's
+// profile writer and the user-facing export so the two can never drift.
+void writeProfileDocument(QXmlStreamWriter& xml, const QVector<MidiBinding>& bindings)
+{
+    xml.setAutoFormatting(true);
+    xml.writeStartDocument();
+    xml.writeStartElement("MidiProfile");
+    for (const auto& b : bindings) {
+        xml.writeStartElement("Binding");
+        xml.writeAttribute("param", normalizedMidiParamId(b.paramId));
+        xml.writeAttribute("channel", QString::number(b.channel));
+        xml.writeAttribute("type", QString::number(static_cast<int>(b.msgType)));
+        xml.writeAttribute("number", QString::number(b.number));
+        xml.writeAttribute("inverted", b.inverted ? "True" : "False");
+        if (b.relative) xml.writeAttribute("relative", "True");
+        xml.writeEndElement();
+    }
+    xml.writeEndElement();
+    xml.writeEndDocument();
 }
 
 // ── SmartSDR iOS/Mac ".map" import ──────────────────────────────────────────
@@ -420,21 +442,7 @@ void MidiSettings::writeBindingsToXml(const QString& filePath,
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
 
     QXmlStreamWriter xml(&file);
-    xml.setAutoFormatting(true);
-    xml.writeStartDocument();
-    xml.writeStartElement("MidiProfile");
-    for (const auto& b : bindings) {
-        xml.writeStartElement("Binding");
-        xml.writeAttribute("param", normalizedMidiParamId(b.paramId));
-        xml.writeAttribute("channel", QString::number(b.channel));
-        xml.writeAttribute("type", QString::number(static_cast<int>(b.msgType)));
-        xml.writeAttribute("number", QString::number(b.number));
-        xml.writeAttribute("inverted", b.inverted ? "True" : "False");
-        if (b.relative) xml.writeAttribute("relative", "True");
-        xml.writeEndElement();
-    }
-    xml.writeEndElement();
-    xml.writeEndDocument();
+    writeProfileDocument(xml, bindings);
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────
@@ -534,6 +542,48 @@ MidiImportResult MidiSettings::importProfile(
         return result;
     }
     result.profileName = unique;
+    return result;
+}
+
+MidiExportResult MidiSettings::exportProfile(const QString& filePath,
+                                             const QVector<MidiBinding>& bindings) const
+{
+    MidiExportResult result;
+    if (filePath.trimmed().isEmpty()) {
+        result.error = QStringLiteral("No export path was provided.");
+        return result;
+    }
+
+    QByteArray xmlBytes;
+    {
+        QXmlStreamWriter xml(&xmlBytes);
+        writeProfileDocument(xml, bindings);
+    }
+
+    QSaveFile file(filePath);
+    // Some network mounts (SMB, WSL DrvFs) can't create the sidecar temp
+    // file QSaveFile normally uses — fall back to a direct write so export
+    // succeeds where a plain write would (matches ShortcutManager and
+    // KiwiSdrManager).
+    file.setDirectWriteFallback(true);
+    if (!file.open(QIODevice::WriteOnly)) {
+        result.error = QStringLiteral("Couldn't open %1 for writing (%2).")
+                           .arg(QDir::toNativeSeparators(filePath), file.errorString());
+        return result;
+    }
+    if (file.write(xmlBytes) != xmlBytes.size()) {
+        const QString reason = file.errorString();
+        file.cancelWriting();
+        result.error = QStringLiteral("Couldn't write the profile to %1 (%2).")
+                           .arg(QDir::toNativeSeparators(filePath), reason);
+        return result;
+    }
+    if (!file.commit()) {
+        result.error = QStringLiteral("Couldn't save %1 (%2).")
+                           .arg(QDir::toNativeSeparators(filePath), file.errorString());
+        return result;
+    }
+    result.exportedCount = bindings.size();
     return result;
 }
 

@@ -218,6 +218,18 @@ int main(int argc, char** argv)
         writeImportFile("trunc.xml", "<MidiProfile><Binding param=\"x\""), validator);
     ok &= expect(!r7.ok(), "truncated XML fails loudly");
 
+    // Export → Import round trip through the user-facing export path.
+    const auto exported = settings.exportProfile(
+        fakeHome.path() + "/exported.xml", settings.loadProfile("CTR2-Test_v1_0"));
+    ok &= expect(exported.ok() && exported.exportedCount == 5,
+                 "export writes the current profile");
+    const auto r8 = settings.importProfile(fakeHome.path() + "/exported.xml", validator);
+    ok &= expect(r8.ok() && r8.importedCount == 5, "exported file re-imports cleanly");
+    const auto exportFail = settings.exportProfile(
+        fakeHome.path() + "/no-such-dir/out.xml",
+        settings.loadProfile("CTR2-Test_v1_0"));
+    ok &= expect(!exportFail.ok(), "export to an unwritable path reports an error");
+
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();
 
