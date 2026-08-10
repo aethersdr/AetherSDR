@@ -1002,8 +1002,12 @@ set(GUI_SOURCES
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/ClassicLayout.cpp
     src/gui/workspace/WorkspaceCanvas.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
     src/gui/workspace/WorkspaceGeometry.cpp
+    src/gui/workspace/WorkspaceMigration.cpp
+    src/gui/workspace/WorkspaceStore.cpp
     src/gui/ClientCompApplet.cpp
     src/gui/ClientCompCurveWidget.cpp
     src/gui/ClientCompKnob.cpp
@@ -3491,6 +3495,51 @@ target_link_libraries(workspace_canvas_widget_test PRIVATE Qt6::Widgets)
 add_test(NAME workspace_canvas_widget_test COMMAND workspace_canvas_widget_test)
 set_tests_properties(workspace_canvas_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Workspace canvas (RFC #4887) phase 2 — the document schema.  Pure logic: the
+# newer-schema guard that refuses to re-write what a later build wrote, and the
+# boundary validation that repairs what it can and reports every repair.
+add_executable(workspace_document_test
+    tests/workspace_document_test.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_document_test PRIVATE src)
+target_link_libraries(workspace_document_test PRIVATE Qt6::Core)
+add_test(NAME workspace_document_test COMMAND workspace_document_test)
+
+# Workspace canvas (RFC #4887) phase 2 — Classic geometry and the one-way
+# migration off the legacy layout keys, against a real AppSettings in a
+# temporary home.  Pins that every pan layout id tiles the surface exactly, and
+# that migration leaves floating pans and applets alone (RFC decision 1).
+add_executable(workspace_migration_test
+    tests/workspace_migration_test.cpp
+    src/gui/workspace/ClassicLayout.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+    src/gui/workspace/WorkspaceMigration.cpp
+)
+target_include_directories(workspace_migration_test PRIVATE src tests)
+target_link_libraries(workspace_migration_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(workspace_migration_test PROPERTIES AUTOMOC ON)
+add_test(NAME workspace_migration_test COMMAND workspace_migration_test)
+
+# Workspace canvas (RFC #4887) phase 2 — persistence and the auto-commit
+# contract (decision 7): gestures coalesce into one whole-document write, the
+# write is verified against the FILE rather than the settings cache, and a
+# restore replay never writes back what it is reading (#4427).
+add_executable(workspace_store_test
+    tests/workspace_store_test.cpp
+    src/gui/workspace/ClassicLayout.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+    src/gui/workspace/WorkspaceMigration.cpp
+    src/gui/workspace/WorkspaceStore.cpp
+)
+target_include_directories(workspace_store_test PRIVATE src tests)
+target_link_libraries(workspace_store_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(workspace_store_test PROPERTIES AUTOMOC ON)
+add_test(NAME workspace_store_test COMMAND workspace_store_test)
 
 # KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
 add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)
