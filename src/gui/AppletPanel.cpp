@@ -264,6 +264,23 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // an applet inherit applet.<name> → applet → root.
     theme::setContainer(this, QStringLiteral("applet"));
 
+    // The docked panel paints its own background, and must.  MainWindow is
+    // WA_TranslucentBackground, so its paintEvent is the only thing filling
+    // any region the widget tree leaves bare — and Qt excludes native
+    // children (the QRhi panadapter) from that backdrop entirely.  A panel
+    // with no background of its own therefore composites straight through
+    // to the desktop wherever the backdrop doesn't reach.  The FLOATING
+    // panel has always been opaque (its window sets WA_StyledBackground);
+    // this gives the docked panel the same guarantee instead of leaving it
+    // dependent on whatever happens to be painted underneath.
+    setObjectName(QStringLiteral("appletPanel"));
+    setAttribute(Qt::WA_StyledBackground, true);
+    // Scoped to this widget by object name so the rule cannot cascade into
+    // the applets, which own their own surfaces.
+    ThemeManager::instance().applyStyleSheet(
+        this,
+        QStringLiteral("QWidget#appletPanel { background: {{color.background.app}}; }"));
+
     setFixedWidth(260);
 
     auto* root = new QVBoxLayout(this);

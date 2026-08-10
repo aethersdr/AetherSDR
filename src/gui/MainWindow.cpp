@@ -8884,6 +8884,21 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     AppSettings::instance().setValue("AppletPanelDockedLeft", left ? "True" : "False");
     AppSettings::instance().save();
 
+    // Everything above changed geometry and NOTHING invalidated, which is the
+    // whole of the see-through-strip bug: the panel does not resize when it
+    // changes walls, it TRANSLATES, so the panadapter has to slide the same
+    // 260 px the other way.  The strip the pan slides into is covered by the
+    // pan alone, and its swapchain can still be sized for the transient
+    // layout — so that strip is painted by nobody and, under
+    // WA_TranslucentBackground, shows the desktop.  Docking RIGHT never
+    // showed it because there the strip needing new cover is taken by the
+    // applet panel, an ordinary widget that paints correctly; that asymmetry
+    // is why the report was always "panel on the left".
+    if (m_panStack)
+        m_panStack->refreshAfterLayoutShift();
+    if (m_splitter)
+        m_splitter->update();
+
     if (m_titleBar)
         m_titleBar->setAppletDockState(m_appletPanel->isVisible(), left);
 }
@@ -10108,6 +10123,25 @@ void MainWindow::floatAppletPanel()
             .value("AppletPanelFloatGeometry", "").toByteArray());
     if (!geom.isEmpty()) {
         m_appletPanelFloatWindow->restoreGeometry(geom);
+        // restoreGeometry() faithfully restores a MAXIMIZED/FULLSCREEN state
+        // if one was ever captured — and the geometry is re-saved on every
+        // Move/Resize, so a single accidental maximize (double-clicking the
+        // float window's title bar is enough) poisons the setting and every
+        // later pop-out opens the panel full-screen.  A 260 px applet rail
+        // maximized across the display is never what the operator wants, so
+        // the state is dropped on restore and a clean geometry is written
+        // back, healing an already-poisoned config on first use.
+        if (m_appletPanelFloatWindow->isMaximized()
+            || m_appletPanelFloatWindow->isFullScreen()) {
+            m_appletPanelFloatWindow->setWindowState(
+                m_appletPanelFloatWindow->windowState()
+                & ~(Qt::WindowMaximized | Qt::WindowFullScreen));
+            m_appletPanelFloatWindow->resize(320, 720);
+            AppSettings::instance().setValue(
+                "AppletPanelFloatGeometry",
+                m_appletPanelFloatWindow->saveGeometry().toBase64());
+            AppSettings::instance().save();
+        }
     } else {
         m_appletPanelFloatWindow->resize(320, 720);
     }
