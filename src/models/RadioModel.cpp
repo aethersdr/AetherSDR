@@ -1921,6 +1921,24 @@ RadioModel::RadioModel(QObject* parent)
                 m_txAudioGate = false;
                 emit txAudioGateChanged(false);
             }
+            // KEY THROUGH THE SEAM. This arm set m_txRequested and then let the
+            // "xmit N" text fall through to sendCommand(), which is a no-op on a
+            // backend with no Flex command plane: RadioModel logs "no command
+            // plane for this backend, dropping xmit 1" at DEBUG and the radio
+            // never keys. MOX did nothing on a networked Icom, silently, with
+            // the only evidence below the default log level.
+            //
+            // This is the same fix already applied in setTransmit() — see the
+            // "Key through the SEAM, not with a raw Flex command" comment there,
+            // which converted the other caller after IRadioBackend::setKeying
+            // was found to have no callers at all. This path was missed.
+            //
+            // Flex behaviour is unchanged: FlexBackend::setKeying sends the very
+            // same "xmit N" through the same sink, so the text command below is
+            // now redundant for Flex rather than load-bearing.
+            if (m_backend)
+                m_backend->setKeying(tx);
+            publishBackendTransmitEdge(tx);
         }
         if (cmd == "transmit tune 1" || cmd == "atu start") {
             if (transmitStartBlockedByInhibit(QStringLiteral("tune-start"))) {
@@ -1945,6 +1963,23 @@ RadioModel::RadioModel(QObject* parent)
             armInterlockNotification(m_pendingTransmitPreflightSource);
             m_pendingTransmitPreflightSource = TransmitModel::PttSource::Mox;
             applyTuneInhibit();
+        }
+        // TUNE THROUGH THE SEAM TOO, for the same reason as xmit above: on a
+        // backend with no Flex command plane "transmit tune 1" is dropped and
+        // the TUNE button does nothing at all. IRadioBackend::setTune() exists
+        // and is implemented (IcomCivBackend composes a tune carrier from drive
+        // + key, since CI-V has no tune-carrier command), but nothing routed to
+        // it from here.
+        //
+        // Only the tune verbs are diverted; every other transmit command still
+        // goes out as text, and Flex is unaffected because sendCmd() below
+        // continues to carry them.
+        if (cmd == QStringLiteral("transmit tune 1")
+            || cmd == QStringLiteral("transmit tune 0")) {
+            if (m_backend) {
+                const bool on = cmd.endsWith(QLatin1Char('1'));
+                m_backend->setTune(on, m_transmitModel.tunePower());
+            }
         }
         sendCmd(cmd);
     });
