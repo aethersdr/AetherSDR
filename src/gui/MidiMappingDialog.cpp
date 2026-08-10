@@ -310,7 +310,14 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
             QString name = m_profileCombo->currentText().trimmed();
             if (name.isEmpty()) return;
             auto bindings = MidiSettings::instance().loadProfile(name);
-            if (bindings.isEmpty()) return;
+            if (bindings.isEmpty()) {
+                // A missing or empty profile silently doing nothing is the
+                // same failure class the importer refuses — say so instead.
+                FramelessMessageBox::warning(
+                    this, QStringLiteral("Load Profile"),
+                    QStringLiteral("Profile \"%1\" is empty or missing.").arg(name));
+                return;
+            }
             m_manager->clearBindings();
             for (const auto& b : bindings)
                 m_manager->addBinding(b);
@@ -441,7 +448,9 @@ void MidiMappingDialog::importProfileFromFile()
     box.setIcon(informativeLines.isEmpty() ? QMessageBox::Information
                                            : QMessageBox::Warning);
     box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
-    box.setText(QStringLiteral("Imported %1 binding(s) from %2 as profile \"%3\".")
+    box.setText(QStringLiteral(
+                    "Imported %1 binding(s) from %2 as profile \"%3\". "
+                    "Click Load to apply it.")
                     .arg(result.importedCount)
                     .arg(fileName, result.profileName));
     if (!informativeLines.isEmpty())

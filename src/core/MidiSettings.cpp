@@ -34,6 +34,9 @@ void writeProfileDocument(QXmlStreamWriter& xml, const QVector<MidiBinding>& bin
     xml.setAutoFormatting(true);
     xml.writeStartDocument();
     xml.writeStartElement("MidiProfile");
+    // Schema hook for files in circulation, cheap now and painful to
+    // retrofit — the .map's FORMAT_VERSION analogue.
+    xml.writeAttribute("version", "1");
     for (const auto& b : bindings) {
         xml.writeStartElement("Binding");
         xml.writeAttribute("param", normalizedMidiParamId(b.paramId));
