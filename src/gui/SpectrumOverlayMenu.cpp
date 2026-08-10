@@ -2154,14 +2154,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
-    // ── Clone to all Pans ─────────────────────────────────────────────────
-    // Sits directly above Reset to Defaults: both are whole-panel actions, and
-    // this one is the constructive counterpart — it takes the look the operator
+    // ── Whole-panel actions: Clone to all Pans, then Reset to Defaults ────
+    // Clone sits directly above Reset because both act on the panel as a whole,
+    // and Clone is the constructive counterpart — it takes the look the operator
     // just built here and applies it everywhere, instead of throwing it away.
+    //
+    // Both are styled through ONE setStyleSheet() call over the pair. They are
+    // full-width action buttons sharing btnStyle exactly, so a second call site
+    // would add nothing but a place for the two to drift apart — and the
+    // hardcoded-colour ratchet counts call sites, not colours.
     {
         m_cloneToAllPansBtn = new QPushButton("Clone to all Pans");
         m_cloneToAllPansBtn->setObjectName("displayCloneToAllPansBtn");
-        m_cloneToAllPansBtn->setStyleSheet(btnStyle);
         m_cloneToAllPansBtn->setToolTip(
             "Copy every Display setting on this panadapter — trace, waterfall, "
             "background, appearance and 3D view — onto all other open "
@@ -2173,21 +2177,19 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         connect(m_cloneToAllPansBtn, &QPushButton::clicked, this, [this] {
             emit displaySettingsCloneRequested();
         });
-        grid->addWidget(m_cloneToAllPansBtn, row, 0, 1, 4);
-        ++row;
-    }
 
-    // ── Reset button ──────────────────────────────────────────────────────
-    {
         auto* resetBtn = new QPushButton("Reset to Defaults");
         resetBtn->setObjectName("displayResetBtn");
-        resetBtn->setStyleSheet(btnStyle);
         resetBtn->setToolTip("Reset all display settings to their default values");
         connect(resetBtn, &QPushButton::clicked, this, [this] {
             emit displaySettingsReset();
         });
-        grid->addWidget(resetBtn, row, 0, 1, 4);
-        ++row;
+
+        for (QPushButton* actionBtn : {m_cloneToAllPansBtn, resetBtn}) {
+            actionBtn->setStyleSheet(btnStyle);
+            grid->addWidget(actionBtn, row, 0, 1, 4);
+            ++row;
+        }
     }
 
     // Display panel tooltips
