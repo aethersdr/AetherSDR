@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -113,6 +114,109 @@ int main(int argc, char** argv)
                  "preference-only save updates last device");
     ok &= expect(!settings.autoConnect(),
                  "preference-only save updates auto-connect");
+
+    // ── importProfile: native XML + SmartSDR ".map", auto-detected ──────────
+
+    const QSet<QString> registry = {
+        "rx.tuneKnob", "rx.afGain", "rx.agcThreshold", "tx.rfPower",
+        "rx.nrEnable", "global.bandUp", "global.bandDown", "global.masterMute",
+        "global.modeUp", "global.panZoomIn", "global.panZoomOut", "rx.stepUp",
+        "tx.atuStart", "cwdit", "cwdah", "cwkey", "cw.ptt",
+    };
+    const auto validator = [&registry](const QString& id) { return registry.contains(id); };
+
+    const auto writeImportFile = [&fakeHome](const QString& name, const QByteArray& content) {
+        QFile f(fakeHome.path() + "/" + name);
+        if (!f.open(QIODevice::WriteOnly))
+            return QString();
+        f.write(content);
+        f.close();
+        return f.fileName();
+    };
+
+    // Shaped like the vendor CTR2-MIDI file: known + unknown functions, an
+    // unassigned slot, flags, a duplicate function, and an LEDs section.
+    const QByteArray mapContent =
+        "# Controls\n"
+        "C100=freq\n"
+        "C103=bwset;active\n"
+        "C0=\n"
+        "# Buttons\n"
+        "B20=leftpaddle\n"
+        "B21=rightpaddle;active\n"
+        "B13=nr\n"
+        "B4=nr\n"
+        "B53=openft8\n"
+        "B31=ptt\n"
+        "# LEDs\n";
+    const QString mapPath = writeImportFile("CTR2-Test_v1.0.map", mapContent);
+
+    const auto r1 = settings.importProfile(mapPath, validator);
+    ok &= expect(r1.ok(), "map import succeeds");
+    ok &= expect(r1.importedCount == 5, "map import count (freq, paddles, nr, ptt)");
+    ok &= expect(r1.profileName == "CTR2-Test_v1_0", "map import names profile from file name");
+    ok &= expect(r1.skippedUnknownParam.contains("bwset")
+                     && r1.skippedUnknownParam.contains("openft8"),
+                 "unknown map functions are skipped by name");
+    ok &= expect(r1.duplicates == QStringList{"nr"}, "duplicate map function reported by name");
+    {
+        const auto imported = settings.loadProfile(r1.profileName);
+        ok &= expect(imported.size() == 5, "imported map profile loads from the store");
+        bool foundFreq = false;
+        bool foundDit = false;
+        for (const auto& b : imported) {
+            if (b.paramId == "rx.tuneKnob")
+                foundFreq = b.msgType == MidiBinding::CC && b.number == 100
+                            && b.relative && b.channel == -1 && !b.inverted;
+            if (b.paramId == "cwdit")
+                foundDit = b.msgType == MidiBinding::NoteOn && b.number == 20 && !b.relative;
+        }
+        ok &= expect(foundFreq, "freq row becomes a relative CC 100 VFO binding");
+        ok &= expect(foundDit, "leftpaddle row becomes a NoteOn 20 cwdit binding");
+    }
+
+    const auto r2 = settings.importProfile(mapPath, validator);
+    ok &= expect(r2.ok() && r2.profileName == "CTR2-Test_v1_0 (2)",
+                 "a name collision gets a suffix, never an overwrite");
+
+    const auto r3 = settings.importProfile(writeImportFile("garbage.map", "hello world\n"),
+                                           validator);
+    ok &= expect(!r3.ok() && r3.importedCount == 0, "unrecognized content fails loudly");
+
+    {
+        // Native XML round trip: the profile the map import just stored.
+        const auto r4 = settings.importProfile(
+            configRoot + "/AetherSDR/midi/CTR2-Test_v1_0.xml", validator);
+        ok &= expect(r4.ok() && r4.importedCount == 5, "native XML profile re-imports");
+        ok &= expect(r4.profileName == "CTR2-Test_v1_0 (3)", "XML re-import takes the next suffix");
+        const auto again = settings.loadProfile(r4.profileName);
+        const auto first = settings.loadProfile("CTR2-Test_v1_0");
+        bool same = again.size() == first.size();
+        for (int i = 0; same && i < again.size(); ++i)
+            same = sameBinding(again[i], first[i]);
+        ok &= expect(same, "XML round trip preserves every binding field");
+    }
+
+    const auto r5 = settings.importProfile(configRoot + "/AetherSDR/midi.settings", validator);
+    ok &= expect(!r5.ok(), "midi.settings itself is rejected (wrong root element)");
+
+    const auto r6 = settings.importProfile(
+        writeImportFile("mixed.xml",
+                        "<MidiProfile>"
+                        "<Binding param=\"rx.afGain\" channel=\"0\" type=\"9\" number=\"10\"/>"
+                        "<Binding param=\"no.such\" channel=\"0\" type=\"0\" number=\"11\"/>"
+                        "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\" number=\"12\"/>"
+                        "</MidiProfile>\n"),
+        validator);
+    ok &= expect(r6.ok() && r6.importedCount == 1, "XML: the one good row imports");
+    ok &= expect(r6.skippedBadType.size() == 1 && r6.skippedBadType.first().contains("type"),
+                 "XML: out-of-range type is skipped by name");
+    ok &= expect(r6.skippedUnknownParam == QStringList{"no.such"},
+                 "XML: unregistered param is skipped by name");
+
+    const auto r7 = settings.importProfile(
+        writeImportFile("trunc.xml", "<MidiProfile><Binding param=\"x\""), validator);
+    ok &= expect(!r7.ok(), "truncated XML fails loudly");
 
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();

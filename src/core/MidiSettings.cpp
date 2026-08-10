@@ -4,6 +4,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QSet>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 #include <QStandardPaths>
@@ -22,6 +24,248 @@ QString normalizedMidiParamId(const QString& paramId)
     if (paramId == QLatin1String("cw.dah"))
         return QStringLiteral("cwdah");
     return paramId;
+}
+
+// ── SmartSDR iOS/Mac ".map" import ──────────────────────────────────────────
+//
+// The ".map" is the mapping file consumed by the SmartSDR iOS/Mac family's
+// own Import-map tool and published per device by controller vendors
+// (e.g. Lynovation's CTR2 config packages). Plain ASCII, "#"-headed
+// sections, one assignment per line:
+//
+//     # Controls
+//     C100=freq;active          C<CC#> = <function>[;flags]
+//     # Buttons
+//     B20=leftpaddle            B<note#> = <function>[;flags]
+//     # LEDs                    (device feedback — not bindings)
+//
+// The function vocabulary is SmartSDR's; this table carries the verified
+// CTR2-MIDI subset. Functions absent here are reported as named skips, so
+// growing coverage is a data change only. relativeCc marks functions whose
+// CC values are relative steps (the VFO knob) rather than absolute levels.
+struct MapFunctionEntry {
+    const char* function;
+    const char* paramId;
+    bool relativeCc;
+};
+
+constexpr MapFunctionEntry kSmartSdrMapFunctions[] = {
+    { "agct",        "rx.agcThreshold",   false },
+    { "atu",         "tx.atuStart",       false },
+    { "banddown",    "global.bandDown",   false },
+    { "bandup",      "global.bandUp",     false },
+    { "freq",        "rx.tuneKnob",       true  },
+    { "leftpaddle",  "cwdit",             false },
+    { "mainmute",    "global.masterMute", false },
+    { "modenext",    "global.modeUp",     false },
+    { "nr",          "rx.nrEnable",       false },
+    { "power",       "tx.rfPower",        false },
+    { "ptt",         "cw.ptt",            false },
+    { "rightpaddle", "cwdah",             false },
+    { "slicevolume", "rx.afGain",         false },
+    { "straightkey", "cwkey",             false },
+    { "tunestep",    "rx.stepUp",         false },
+    { "zoomin",      "global.panZoomIn",  false },
+    { "zoomout",     "global.panZoomOut", false },
+};
+
+const MapFunctionEntry* findMapFunction(const QString& function)
+{
+    for (const auto& entry : kSmartSdrMapFunctions) {
+        if (function.compare(QLatin1String(entry.function), Qt::CaseInsensitive) == 0)
+            return &entry;
+    }
+    return nullptr;
+}
+
+// Parse a ".map". Structural problems (a line that isn't a section header,
+// an assignment, or blank) are file-level errors — vendor files are
+// machine-generated, so a malformed one is a wrong or corrupt file, not
+// something to import half of. Unknown functions are named skips.
+QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
+                                      const std::function<bool(const QString&)>& paramValidator,
+                                      MidiImportResult& result)
+{
+    QVector<MidiBinding> bindings;
+    QSet<QString> importedParams;
+    bool sawAssignment = false;
+
+    enum class Section { None, Controls, Buttons, Other };
+    Section section = Section::None;
+
+    const QStringList lines = QString::fromUtf8(bytes).split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i) {
+        const QString line = lines.at(i).trimmed();
+        if (line.isEmpty())
+            continue;
+
+        if (line.startsWith(QLatin1Char('#'))) {
+            const QString name = line.mid(1).trimmed().toLower();
+            if (name == QLatin1String("controls"))
+                section = Section::Controls;
+            else if (name == QLatin1String("buttons"))
+                section = Section::Buttons;
+            else
+                section = Section::Other;
+            continue;
+        }
+
+        const int eq = line.indexOf(QLatin1Char('='));
+        if (eq <= 0) {
+            result.errors << QStringLiteral("Line %1: not a section header or assignment: \"%2\"")
+                                 .arg(i + 1).arg(line);
+            continue;
+        }
+
+        const QString key = line.left(eq).trimmed();
+        // Everything after the first ';' is a flag ("active" in vendor
+        // files); flags decorate rows we otherwise fully understand, so
+        // they are ignored.
+        const QString function = line.mid(eq + 1).section(QLatin1Char(';'), 0, 0).trimmed();
+        if (function.isEmpty())
+            continue; // unassigned slot ("C0="): no content to import or report
+
+        sawAssignment = true;
+
+        const QChar kind = key.isEmpty() ? QChar() : key.at(0).toUpper();
+        bool numberOk = false;
+        const int number = key.mid(1).toInt(&numberOk);
+        if ((kind != QLatin1Char('C') && kind != QLatin1Char('B'))
+            || !numberOk || number < 0 || number > 127) {
+            result.errors << QStringLiteral("Line %1: bad assignment key \"%2\"")
+                                 .arg(i + 1).arg(key);
+            continue;
+        }
+
+        if (section == Section::Other) {
+            // e.g. the LEDs section: device feedback, not a binding.
+            result.skippedUnknownParam << function + QStringLiteral(" (not a control/button row)");
+            continue;
+        }
+
+        const MapFunctionEntry* entry = findMapFunction(function);
+        if (!entry) {
+            if (!result.skippedUnknownParam.contains(function))
+                result.skippedUnknownParam << function;
+            continue;
+        }
+
+        const QString paramId = QLatin1String(entry->paramId);
+        if (paramValidator && !paramValidator(paramId)) {
+            result.skippedUnknownParam
+                << function + QStringLiteral(" (param %1 not registered)").arg(paramId);
+            continue;
+        }
+        if (importedParams.contains(paramId)) {
+            result.duplicates << function;
+            continue;
+        }
+
+        MidiBinding b;
+        b.channel = -1; // the .map carries no channel — accept any
+        b.msgType = (kind == QLatin1Char('C')) ? MidiBinding::CC : MidiBinding::NoteOn;
+        b.number = number;
+        b.paramId = paramId;
+        b.inverted = false;
+        b.relative = (b.msgType == MidiBinding::CC) && entry->relativeCc;
+        bindings.append(b);
+        importedParams.insert(paramId);
+    }
+
+    if (!sawAssignment)
+        result.errors << QStringLiteral("File contains no assignments.");
+    if (!result.errors.isEmpty())
+        return {};
+    return bindings;
+}
+
+// Parse native <MidiProfile> XML with the validation the store's own
+// parser never needed: reader errors are surfaced, the root element is
+// required (so importing midi.settings itself is an error, not a
+// surprise), and per-row problems become named skips.
+QVector<MidiBinding> parseProfileXml(const QByteArray& bytes,
+                                     const std::function<bool(const QString&)>& paramValidator,
+                                     MidiImportResult& result)
+{
+    QVector<MidiBinding> bindings;
+    QSet<QString> importedParams;
+    bool sawRoot = false;
+    bool sawBindingElement = false;
+
+    QXmlStreamReader xml(bytes);
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (!xml.isStartElement())
+            continue;
+
+        if (!sawRoot) {
+            sawRoot = true;
+            if (xml.name() != u"MidiProfile") {
+                result.errors << QStringLiteral("Root element is <%1>; expected <MidiProfile>.")
+                                     .arg(xml.name().toString());
+                return {};
+            }
+            continue;
+        }
+        if (xml.name() != u"Binding")
+            continue;
+
+        sawBindingElement = true;
+        const auto attrs = xml.attributes();
+        const QString param = normalizedMidiParamId(attrs.value("param").toString());
+        if (param.isEmpty()) {
+            result.skippedUnknownParam << QStringLiteral("(empty param)");
+            continue;
+        }
+
+        bool typeOk = false;
+        const int type = attrs.value("type").toInt(&typeOk);
+        if (!typeOk || type < MidiBinding::CC || type > MidiBinding::PitchBend) {
+            result.skippedBadType
+                << param + QStringLiteral(" (type \"%1\")").arg(attrs.value("type").toString());
+            continue;
+        }
+        const int channel = attrs.value("channel").toInt();
+        if (channel < -1 || channel > 15) {
+            result.skippedBadType << param + QStringLiteral(" (channel %1)").arg(channel);
+            continue;
+        }
+        const int number = attrs.value("number").toInt();
+        if (type != MidiBinding::PitchBend && (number < 0 || number > 127)) {
+            result.skippedBadType << param + QStringLiteral(" (number %1)").arg(number);
+            continue;
+        }
+
+        if (paramValidator && !paramValidator(param)) {
+            result.skippedUnknownParam << param;
+            continue;
+        }
+        if (importedParams.contains(param)) {
+            result.duplicates << param;
+            continue;
+        }
+
+        MidiBinding b;
+        b.paramId = param;
+        b.channel = channel;
+        b.msgType = static_cast<MidiBinding::MsgType>(type);
+        b.number = number;
+        b.inverted = (attrs.value("inverted") == u"True");
+        b.relative = (attrs.value("relative") == u"True");
+        bindings.append(b);
+        importedParams.insert(param);
+    }
+
+    if (xml.hasError()) {
+        result.errors << QStringLiteral("XML error at line %1: %2")
+                             .arg(xml.lineNumber()).arg(xml.errorString());
+        return {};
+    }
+    if (!sawBindingElement) {
+        result.errors << QStringLiteral("File contains no <Binding> elements.");
+        return {};
+    }
+    return bindings;
 }
 
 } // namespace
@@ -218,6 +462,79 @@ QVector<MidiBinding> MidiSettings::loadProfile(const QString& name) const
 void MidiSettings::deleteProfile(const QString& name)
 {
     QFile::remove(profileDir() + "/" + name + ".xml");
+}
+
+// ── Import ──────────────────────────────────────────────────────────────────
+
+MidiImportResult MidiSettings::importProfile(
+    const QString& filePath,
+    const std::function<bool(const QString&)>& paramValidator)
+{
+    MidiImportResult result;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        result.errors << QStringLiteral("Couldn't open %1 for reading (%2).")
+                             .arg(QDir::toNativeSeparators(filePath),
+                                  file.errorString());
+        return result;
+    }
+    const QByteArray bytes = file.readAll();
+    file.close();
+
+    // Sniff the dialect: native XML leads with '<'; a SmartSDR ".map" leads
+    // with a "#"-headed section. Anything else is not a profile.
+    QVector<MidiBinding> bindings;
+    const QString head = QString::fromUtf8(bytes.left(256)).trimmed();
+    if (head.startsWith(QLatin1Char('<')))
+        bindings = parseProfileXml(bytes, paramValidator, result);
+    else if (head.startsWith(QLatin1Char('#')))
+        bindings = parseSmartSdrMap(bytes, paramValidator, result);
+    else {
+        result.errors << QStringLiteral(
+            "Unrecognized file: expected <MidiProfile> XML or a SmartSDR \"# Controls\" map.");
+        return result;
+    }
+
+    if (!result.ok())
+        return result;
+
+    result.importedCount = bindings.size();
+    if (bindings.isEmpty())
+        return result; // parsed, but every row was a named skip — nothing to store
+
+    // Store name = file base name; never overwrite an existing profile. The
+    // prompt-vs-suffix collision policy is an open maintainer call, and a
+    // suffix is the reversible default. Dots are replaced because the store
+    // round-trips names through QFileInfo::baseName(), which cuts at the
+    // first dot — a dotted name would list, load, and collide wrongly.
+    QString name = QFileInfo(filePath).completeBaseName().trimmed();
+    name.replace(QLatin1Char('.'), QLatin1Char('_'));
+    if (name.isEmpty())
+        name = QStringLiteral("Imported profile");
+    const QStringList existing = availableProfiles();
+    const auto taken = [&existing](const QString& candidate) {
+        for (const auto& p : existing)
+            if (p.compare(candidate, Qt::CaseInsensitive) == 0)
+                return true;
+        return false;
+    };
+    QString unique = name;
+    for (int n = 2; taken(unique); ++n)
+        unique = name + QStringLiteral(" (%1)").arg(n);
+
+    saveProfile(unique, bindings);
+
+    // The write path returns void, so prove the store took it before
+    // reporting success.
+    if (loadProfile(unique).size() != bindings.size()) {
+        result.errors << QStringLiteral("Couldn't write the profile into %1.")
+                             .arg(QDir::toNativeSeparators(profileDir()));
+        result.importedCount = 0;
+        return result;
+    }
+    result.profileName = unique;
+    return result;
 }
 
 } // namespace AetherSDR
