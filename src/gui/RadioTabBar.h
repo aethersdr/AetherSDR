@@ -72,12 +72,19 @@ public:
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
 
+signals:
+    // Double-click is the explicit "switch to this radio" gesture. Single click
+    // stays a selector that routes through the picker, because switching drops
+    // the live session and that must never happen on a stray click.
+    void switchRequested(const QString& id);
+
 protected:
     void paintEvent(QPaintEvent* ev) override;
     void enterEvent(QEnterEvent* ev) override;
     void leaveEvent(QEvent* ev) override;
     void focusInEvent(QFocusEvent* ev) override;
     void focusOutEvent(QFocusEvent* ev) override;
+    void mouseDoubleClickEvent(QMouseEvent* ev) override;
 
 private:
     void refreshAccessibility();
@@ -148,6 +155,13 @@ signals:
     void radioActivated(const QString& id);
     void discoveryPopoverRequested();
     void connectManuallyRequested();
+    // Per-tab context menu. The bar raises intent; MainWindow owns the policy
+    // (what "disconnect" means, whether a delete needs confirming) because it
+    // is the only thing that knows the session state.
+    void radioSwitchRequested(const QString& id);
+    void radioDisconnectRequested(const QString& id);
+    void radioRenameRequested(const QString& id);
+    void radioDeleteRequested(const QString& id);
 
 private:
     void rebuild();

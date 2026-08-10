@@ -1045,6 +1045,7 @@ set(GUI_SOURCES
     src/gui/TitleBar.cpp
     src/gui/BrandMark.cpp
     src/gui/RadioTabBar.cpp
+    src/gui/RadioTabStore.cpp
     src/gui/WindowCaptionButtons.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp

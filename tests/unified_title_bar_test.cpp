@@ -147,13 +147,18 @@ int main(int argc, char** argv)
         check(connectedTab->focusPolicy() != Qt::NoFocus,
               "radio tabs are keyboard-reachable");
 
-        // Status in words, not just in the dot's colour.
+        // Status in words, not just in the dot's colour.  Matched
+        // case-insensitively: the contract is that the state is spelled out,
+        // not how it is capitalised, so relabelling "connected" to "Connected"
+        // is a presentation change and must not read as a regression here.
         check(connectedTab->accessibleDescription().contains(
-                  QLatin1String("connected")),
+                  QLatin1String("connected"), Qt::CaseInsensitive),
               "connected tab spells its state on the rendered status line");
-        check(connectedTab->accessibleName().contains(QLatin1String("connected")),
+        check(connectedTab->accessibleName().contains(QLatin1String("connected"),
+                                                      Qt::CaseInsensitive),
               "connected tab spells its state in its accessible name");
-        check(inUseTab->accessibleDescription().contains(QLatin1String("in use")),
+        check(inUseTab->accessibleDescription().contains(QLatin1String("in use"),
+                                                         Qt::CaseInsensitive),
               "in-use tab spells its state on the rendered status line");
 
         // U+00B7, one code unit — not the two that raw UTF-8 bytes would give.
@@ -178,7 +183,8 @@ int main(int argc, char** argv)
     check(tabWithId(*bar, connected.id) == connectedTab,
           "a status-only change reuses the tab widget");
     if (connectedTab) {
-        check(connectedTab->accessibleName().contains(QLatin1String("available")),
+        check(connectedTab->accessibleName().contains(QLatin1String("available"),
+                                                      Qt::CaseInsensitive),
               "the tab re-announces its new state");
     }
 

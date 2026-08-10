@@ -138,6 +138,12 @@ signals:
     // was chosen.  MainWindow owns what those mean.
     void radioTabActivated(const QString& radioId);
     void connectManuallyRequested();
+    // Explicit per-tab intents: double-click to switch, and the tab's own
+    // context menu.  MainWindow owns the policy for all of them.
+    void radioSwitchRequested(const QString& radioId);
+    void radioDisconnectRequested(const QString& radioId);
+    void radioRenameRequested(const QString& radioId);
+    void radioDeleteRequested(const QString& radioId);
 
 public:
     // Open the feature-request dialog.  Wired from Help → Submit your idea…

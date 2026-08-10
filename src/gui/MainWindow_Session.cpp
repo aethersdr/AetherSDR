@@ -42,6 +42,8 @@
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
+#include "gui/RadioTabStore.h"
+#include "FramelessMessageBox.h"
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "CatControlApplet.h"
@@ -64,6 +66,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QInputDialog>
 #include <QMessageBox>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -185,6 +188,126 @@ void MainWindow::scheduleRadioTabRefresh()
     });
 }
 
+void MainWindow::switchToRadio(const QString& radioId)
+{
+    if (radioId.isEmpty()) {
+        return;
+    }
+    if (m_radioModel.isConnected() && m_radioModel.serial() == radioId) {
+        return;   // already the live session
+    }
+
+    auto connectTo = [this, radioId]() {
+        if (!m_connPanel) return;
+        QString error;
+        // Prefer the serial path: it is the only one that survives DHCP moving
+        // the radio. Fall back to the saved address for families whose tab is
+        // keyed by address (HL2) or that were reached off-discovery.
+        bool ok = m_connPanel->automationConnectLocalSerial(radioId, &error);
+        if (!ok) {
+            for (const SavedRadio& saved : RadioTabStore::load()) {
+                if (saved.id != radioId || saved.address.isEmpty()) continue;
+                // Family is what routes the connect to the right backend, so an
+                // Icom or HL2 tab reconnects through its own path rather than
+                // being probed as a Flex.
+                ok = m_connPanel->automationConnectByIp(saved.address,
+                                                        saved.family, &error);
+                break;
+            }
+        }
+        if (!ok) {
+            statusBar()->showMessage(
+                error.isEmpty() ? tr("Could not connect to that radio")
+                                : tr("Could not connect: %1").arg(error), 5000);
+            showConnectionDialog();
+        }
+    };
+
+    if (!m_radioModel.isConnected()) {
+        connectTo();
+        return;
+    }
+
+    // Sequenced, never simultaneous: two backends must not hold the audio and
+    // stream plumbing at once. Wait for the disconnect edge rather than firing
+    // both and hoping, and guard the connection so a later disconnect (the
+    // operator pulling the plug) cannot re-trigger this switch.
+    auto* guard = new QObject(this);
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, guard,
+            [this, guard, connectTo](bool connected) {
+        if (connected) return;
+        guard->deleteLater();
+        // One turn later so the old backend's teardown finishes unwinding
+        // before the new one starts claiming devices.
+        QTimer::singleShot(0, this, connectTo);
+    });
+    m_userDisconnected = false;   // this is a switch, not "stop using radios"
+    m_radioModel.disconnectFromRadio();
+}
+
+void MainWindow::renameRadioTab(const QString& radioId)
+{
+    if (radioId.isEmpty()) return;
+
+    QString current;
+    for (const SavedRadio& saved : RadioTabStore::load()) {
+        if (saved.id == radioId) { current = saved.displayName(); break; }
+    }
+    if (current.isEmpty() && m_titleBar) {
+        current = radioId;
+    }
+
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, tr("Rename Radio"), tr("Name shown on the tab:"),
+        QLineEdit::Normal, current, &ok);
+    if (!ok) return;
+
+    // An empty name clears the override and falls back to what the radio calls
+    // itself, rather than leaving a nameless tab.
+    RadioTabStore::rename(radioId, name.trimmed());
+    scheduleRadioTabRefresh();
+}
+
+void MainWindow::deleteRadioTab(const QString& radioId)
+{
+    if (radioId.isEmpty()) return;
+
+    QString label = radioId;
+    for (const SavedRadio& saved : RadioTabStore::load()) {
+        if (saved.id == radioId) { label = saved.displayName(); break; }
+    }
+
+    const auto answer = FramelessMessageBox::question(
+        this, tr("Delete Radio Tab"),
+        tr("Remove “%1” from the radio strip?\n\n"
+           "This only forgets the saved tab — the radio itself is untouched, "
+           "and it will reappear if it is discovered on the network.").arg(label),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) return;
+
+    RadioTabStore::remove(radioId);
+    scheduleRadioTabRefresh();
+}
+
+void MainWindow::rememberConnectedRadio()
+{
+    if (!m_radioModel.isConnected()) return;
+
+    SavedRadio saved;
+    saved.family  = m_radioModel.family().isEmpty() ? QStringLiteral("flex")
+                                                    : m_radioModel.family();
+    saved.serial  = m_radioModel.serial();
+    saved.address = m_radioModel.radioAddress().isNull()
+                        ? QString()
+                        : m_radioModel.radioAddress().toString();
+    saved.id      = SavedRadio::makeId(saved.family, saved.serial, saved.address);
+    saved.name    = m_radioModel.nickname().isEmpty() ? m_radioModel.model()
+                                                      : m_radioModel.nickname();
+    if (saved.id.isEmpty()) return;
+    RadioTabStore::upsert(saved);
+}
+
 void MainWindow::refreshRadioTabs()
 {
     if (!m_titleBar || !m_connPanel) {
@@ -242,6 +365,30 @@ void MainWindow::refreshRadioTabs()
         tabs.append(entry);
     }
 
+    // Saved radios the operator has connected to before. Discovery cannot carry
+    // these: a radio that is powered down, on a routed/VPN address, or simply
+    // slow to answer a broadcast has no discovery record, and a
+    // discovery-only strip would drop its tab exactly when the operator wants
+    // to click it to reconnect. Appended after the live entries so what is on
+    // the network sorts first.
+    //
+    // A saved radio that IS discovered has already been added above, so this
+    // only fills gaps — but its operator rename still has to win, which is why
+    // the override is applied to the whole strip afterwards.
+    for (const SavedRadio& savedRadio : RadioTabStore::load()) {
+        if (savedRadio.id.isEmpty() || seen.contains(savedRadio.id)) {
+            continue;
+        }
+        seen.insert(savedRadio.id);
+        RadioTabEntry entry;
+        entry.id = savedRadio.id;
+        entry.name = savedRadio.displayName();
+        entry.transport = savedRadio.address.isEmpty() ? QStringLiteral("Saved")
+                                                       : savedRadio.address;
+        entry.status = statusFor(savedRadio.id, /*inUse=*/false);
+        tabs.append(entry);
+    }
+
     // A radio reached over a routed/VPN address never shows up in discovery, so
     // without this the operator would be connected with no tab to show for it.
     if (connected && !activeSerial.isEmpty() && !seen.contains(activeSerial)) {
@@ -252,6 +399,20 @@ void MainWindow::refreshRadioTabs()
         entry.transport = QStringLiteral("Manual");
         entry.status = RadioTabStatus::Connected;
         tabs.prepend(entry);
+    }
+
+    // The operator's rename wins over whatever the radio calls itself, on every
+    // entry regardless of which branch above produced it — a discovered radio
+    // must not revert to its factory nickname just because it answered a
+    // broadcast this second.
+    const QList<SavedRadio> savedRadios = RadioTabStore::load();
+    for (RadioTabEntry& entry : tabs) {
+        for (const SavedRadio& savedRadio : savedRadios) {
+            if (savedRadio.id == entry.id && !savedRadio.customName.isEmpty()) {
+                entry.name = savedRadio.customName;
+                break;
+            }
+        }
     }
 
     m_titleBar->setRadioTabs(tabs);
@@ -433,7 +594,15 @@ void MainWindow::wireDiscovery()
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioLost, this,
             [this](const QString&) { scheduleRadioTabRefresh(); });
     connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
-            [this](bool) { scheduleRadioTabRefresh(); });
+            [this](bool nowConnected) {
+        // Remember on the CONNECT edge only, and only after the model has the
+        // radio's identity — a radio the operator actually reached is worth a
+        // tab, whereas everything discovery merely saw is not.
+        if (nowConnected) {
+            rememberConnectedRadio();
+        }
+        scheduleRadioTabRefresh();
+    });
     connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
             [this](const QList<WanRadioInfo>& radios) {
         m_smartLinkRadios = radios;
@@ -454,6 +623,29 @@ void MainWindow::wireDiscovery()
         });
         connect(m_titleBar, &TitleBar::connectManuallyRequested,
                 this, &MainWindow::showConnectionDialog);
+
+        // Double-click, or the tab menu's Connect: the explicit switch. Unlike
+        // a single click this DOES drop the live session, which is why it is
+        // bound to a deliberate gesture rather than a stray one.
+        connect(m_titleBar, &TitleBar::radioSwitchRequested,
+                this, &MainWindow::switchToRadio);
+
+        connect(m_titleBar, &TitleBar::radioDisconnectRequested, this,
+                [this](const QString& radioId) {
+            if (!m_radioModel.isConnected() || m_radioModel.serial() != radioId) {
+                return;   // not the live session — nothing to disconnect
+            }
+            m_userDisconnected = true;
+            auto& s = AppSettings::instance();
+            s.remove("LastConnectedRadioSerial");
+            s.save();
+            m_radioModel.disconnectFromRadio();
+        });
+
+        connect(m_titleBar, &TitleBar::radioRenameRequested,
+                this, &MainWindow::renameRadioTab);
+        connect(m_titleBar, &TitleBar::radioDeleteRequested,
+                this, &MainWindow::deleteRadioTab);
     }
     scheduleRadioTabRefresh();
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,

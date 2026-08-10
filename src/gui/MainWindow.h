@@ -254,6 +254,17 @@ public:
     QJsonObject automationTxTimerSnapshot() const;
     // Unified-title-bar introspection + drive-the-real-control actions for the
     // agent automation bridge (`titlebar` model / `titlebar` verb).
+    // ── Radio tabs (persisted strip) ────────────────────────────────────────
+    // Disconnect the live session, if any, then connect the requested radio.
+    // Sequenced, not simultaneous: two backends must never hold the audio and
+    // stream plumbing at once.
+    void switchToRadio(const QString& radioId);
+    void renameRadioTab(const QString& radioId);
+    void deleteRadioTab(const QString& radioId);
+    // Remember a radio the operator has actually connected to, so its tab
+    // survives a restart and the radio being off the network.
+    void rememberConnectedRadio();
+
     QJsonObject automationAppletPanelSnapshot() const;
     bool automationAppletPanelAction(const QString& action, const QString& value,
                                      QString* error);

@@ -9,6 +9,8 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPushButton>
 #include <QRadialGradient>
@@ -85,10 +87,10 @@ QString statusToken(RadioTabStatus status)
 QString radioTabStatusText(RadioTabStatus status)
 {
     switch (status) {
-        case RadioTabStatus::Connected: return QStringLiteral("connected");
-        case RadioTabStatus::InUse:     return QStringLiteral("in use");
+        case RadioTabStatus::Connected: return QStringLiteral("Connected");
+        case RadioTabStatus::InUse:     return QStringLiteral("In use");
         case RadioTabStatus::Available:
-        default:                        return QStringLiteral("available");
+        default:                        return QStringLiteral("Available");
     }
 }
 
@@ -224,6 +226,17 @@ void RadioTab::focusOutEvent(QFocusEvent* ev)
     m_focusVisible = false;
     update();
     QAbstractButton::focusOutEvent(ev);
+}
+
+void RadioTab::mouseDoubleClickEvent(QMouseEvent* ev)
+{
+    // QAbstractButton has already emitted clicked() for the first press of the
+    // pair, so the selector behaviour has run; this adds the switch on top
+    // rather than replacing it.
+    if (ev->button() == Qt::LeftButton && !m_entry.id.isEmpty()) {
+        emit switchRequested(m_entry.id);
+    }
+    QAbstractButton::mouseDoubleClickEvent(ev);
 }
 
 void RadioTab::enterEvent(QEnterEvent* ev)
@@ -570,6 +583,48 @@ void RadioTabBar::rebuild()
             const QString id = tab->entry().id;
             setActiveRadio(id);
             emit radioActivated(id);
+        });
+        connect(tab, &RadioTab::switchRequested,
+                this, &RadioTabBar::radioSwitchRequested);
+        // Per-tab menu. Set on the tab itself, not the bar: the bar already
+        // owns a context menu (the blink toggle), and a menu on the parent
+        // could not tell which tab was under the cursor.
+        tab->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tab, &QWidget::customContextMenuRequested, this,
+                [this, tab](const QPoint& pos) {
+            const RadioTabEntry entry = tab->entry();
+            if (entry.id.isEmpty()) return;
+            // WA_DeleteOnClose + popup() rather than exec(): exec() spins a
+            // nested event loop, which lets connection events run out of order
+            // while the menu is open — the same reason the bar's own menu
+            // avoids it.
+            QMenu* menu = new QMenu(this);
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+
+            const bool isConnected = entry.status == RadioTabStatus::Connected;
+            QAction* switchTo = menu->addAction(tr("Connect"));
+            switchTo->setEnabled(!isConnected);
+            connect(switchTo, &QAction::triggered, this, [this, id = entry.id]() {
+                emit radioSwitchRequested(id);
+            });
+
+            QAction* disconnect = menu->addAction(tr("Disconnect"));
+            disconnect->setEnabled(isConnected);
+            connect(disconnect, &QAction::triggered, this, [this, id = entry.id]() {
+                emit radioDisconnectRequested(id);
+            });
+
+            menu->addSeparator();
+            QAction* rename = menu->addAction(tr("Rename…"));
+            connect(rename, &QAction::triggered, this, [this, id = entry.id]() {
+                emit radioRenameRequested(id);
+            });
+            QAction* del = menu->addAction(tr("Delete"));
+            connect(del, &QAction::triggered, this, [this, id = entry.id]() {
+                emit radioDeleteRequested(id);
+            });
+
+            menu->popup(tab->mapToGlobal(pos));
         });
         // Insert before the "+" button, which always stays last.
         m_layout->insertWidget(m_tabs.size(), tab);

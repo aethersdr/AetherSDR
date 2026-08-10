@@ -250,6 +250,14 @@ TitleBar::TitleBar(QWidget* parent)
             this, &TitleBar::radioTabActivated);
     connect(m_radioTabs, &RadioTabBar::connectManuallyRequested,
             this, &TitleBar::connectManuallyRequested);
+    connect(m_radioTabs, &RadioTabBar::radioSwitchRequested,
+            this, &TitleBar::radioSwitchRequested);
+    connect(m_radioTabs, &RadioTabBar::radioDisconnectRequested,
+            this, &TitleBar::radioDisconnectRequested);
+    connect(m_radioTabs, &RadioTabBar::radioRenameRequested,
+            this, &TitleBar::radioRenameRequested);
+    connect(m_radioTabs, &RadioTabBar::radioDeleteRequested,
+            this, &TitleBar::radioDeleteRequested);
     // Right-click a tab to toggle the blink, as the old heartbeat lamp did.
     // The View menu keeps its checkbox; both route through setBlinkEnabled().
     m_radioTabs->setContextMenuPolicy(Qt::CustomContextMenu);
