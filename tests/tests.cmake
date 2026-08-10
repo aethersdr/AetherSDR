@@ -4169,6 +4169,23 @@ add_test(NAME phone_applet_dexp_visibility_test
 set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# PhoneCwApplet — the APF row on the CW face (#4879). Widget-level, offscreen:
+# slice rebind must not stack handlers, the capability gate, and the model
+# round trip in both directions. No radio, no sockets.
+add_executable(phone_cw_applet_apf_test
+    tests/phone_cw_applet_apf_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_applet_apf_test PRIVATE src)
+target_link_libraries(phone_cw_applet_apf_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_cw_applet_apf_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_applet_apf_test COMMAND phone_cw_applet_apf_test)
+set_tests_properties(phone_cw_applet_apf_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp

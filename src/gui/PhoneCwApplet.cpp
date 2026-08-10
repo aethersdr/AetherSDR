@@ -585,7 +585,6 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_delaySlider, 1);
 
         m_delayEdit = new QLineEdit("500");
-        m_delayEdit->setStyleSheet(kInsetEditStyle);
         m_delayEdit->setFixedWidth(kValueW);
         m_delayEdit->setAlignment(Qt::AlignCenter);
         m_delayEdit->setValidator(new QIntValidator(0, 2000, m_delayEdit));
@@ -628,7 +627,6 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_speedSlider, 1);
 
         m_speedEdit = new QLineEdit("20");
-        m_speedEdit->setStyleSheet(kInsetEditStyle);
         m_speedEdit->setFixedWidth(kValueW);
         m_speedEdit->setAlignment(Qt::AlignCenter);
         m_speedEdit->setValidator(new QIntValidator(5, 100, m_speedEdit));
@@ -662,7 +660,6 @@ void PhoneCwApplet::buildCwPanel()
         m_sidetoneBtn->setFixedWidth(kLeftColW);
         m_sidetoneBtn->setAccessibleName("CW sidetone");
         m_sidetoneBtn->setAccessibleDescription("Toggle CW sidetone monitor");
-        m_sidetoneBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_sidetoneBtn);
 
         row->addSpacing(kGap);
@@ -675,7 +672,6 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_sidetoneSlider, 1);
 
         m_sidetoneEdit = new QLineEdit("50");
-        m_sidetoneEdit->setStyleSheet(kInsetEditStyle);
         m_sidetoneEdit->setFixedWidth(kValueW);
         m_sidetoneEdit->setAlignment(Qt::AlignCenter);
         m_sidetoneEdit->setValidator(new QIntValidator(0, 100, m_sidetoneEdit));
@@ -749,7 +745,6 @@ void PhoneCwApplet::buildCwPanel()
         m_breakinBtn->setFixedHeight(22);
         m_breakinBtn->setAccessibleName("CW break-in");
         m_breakinBtn->setAccessibleDescription("Toggle full break-in QSK mode");
-        m_breakinBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_breakinBtn);
 
         m_iambicBtn = new QPushButton("Iambic");
@@ -828,7 +823,12 @@ void PhoneCwApplet::buildCwPanel()
     // the other keying controls (#4879).  Same SliceModel as the DSP-tab pair,
     // so the two surfaces mirror each other with no bridging.
     {
-        auto* row = new QHBoxLayout;
+        // The row lives in its own container so the capability gate can hide it
+        // whole — see setHasRadioSideDsp().
+        m_apfRow = new QWidget;
+        m_apfRow->setObjectName(QStringLiteral("cwApfRow"));
+        auto* row = new QHBoxLayout(m_apfRow);
+        row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(4);
 
         m_apfBtn = new QPushButton("APF");
@@ -844,7 +844,6 @@ void PhoneCwApplet::buildCwPanel()
             "Toggle the CW audio peaking filter on the active slice");
         m_apfBtn->setToolTip("CW audio peaking filter — narrows the audio "
                              "passband around the CW pitch frequency to improve S/N.");
-        m_apfBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_apfBtn);
 
         row->addSpacing(kGap);
@@ -861,7 +860,6 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(m_apfSlider, 1);
 
         m_apfEdit = new QLineEdit("50");
-        m_apfEdit->setStyleSheet(kInsetEditStyle);
         m_apfEdit->setFixedWidth(kValueW);
         m_apfEdit->setAlignment(Qt::AlignCenter);
         m_apfEdit->setValidator(new QIntValidator(0, 100, m_apfEdit));
@@ -869,14 +867,19 @@ void PhoneCwApplet::buildCwPanel()
         m_apfEdit->setAccessibleDescription("CW audio peaking filter bandwidth, 0 to 100");
         row->addWidget(m_apfEdit);
 
+        // m_hasRadioSideDsp is checked on the OUTBOUND edge too, not just in
+        // the sync. Hiding and disabling the row stops a person driving it, but
+        // the automation bridge and any programmatic setChecked() still reach
+        // the signal — and a verb this radio's firmware cannot execute must not
+        // leave the client on any path.
         connect(m_apfBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_slice)
+            if (!m_updatingFromModel && m_hasRadioSideDsp && m_slice)
                 m_slice->setApf(on);
         });
         connect(m_apfSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_apfEdit->hasFocus())
                 m_apfEdit->setText(QString::number(v));
-            if (!m_updatingFromModel && m_slice)
+            if (!m_updatingFromModel && m_hasRadioSideDsp && m_slice)
                 m_slice->setApfLevel(v);
         });
         connect(m_apfEdit, &QLineEdit::editingFinished, this, [this]() {
@@ -885,8 +888,22 @@ void PhoneCwApplet::buildCwPanel()
             m_apfSlider->setValue(v);
         });
 
-        vbox->addLayout(row);
+        vbox->addWidget(m_apfRow);
     }
+
+    // ── One setStyleSheet() site per style, for the whole CW face ────────
+    // tools/audit_colours.py ratchets on setStyleSheet() CALL SITES rather than
+    // on colours, so every control added here used to cost the PR that added it
+    // two sites against its base. Styling the widgets together costs one apiece
+    // for the panel — and the next control is free.
+    //
+    // m_iambicBtn and the two pan labels are deliberately left alone: they use
+    // kBlueActive and kDimLabelStyle, and folding one-offs in here would trade
+    // a site for a conditional.
+    for (QPushButton* btn : {m_sidetoneBtn, m_breakinBtn, m_apfBtn})
+        btn->setStyleSheet(QString(kButtonBase) + kGreenActive);
+    for (QLineEdit* edit : {m_delayEdit, m_speedEdit, m_sidetoneEdit, m_apfEdit})
+        edit->setStyleSheet(kInsetEditStyle);
 
     // No slice is bound until AppletPanel::setSlice runs, so start the row
     // inert rather than showing controls that would silently go nowhere.
@@ -999,11 +1016,41 @@ void PhoneCwApplet::setSlice(SliceModel* slice)
     syncApfFromSlice();
 }
 
+void PhoneCwApplet::setHasRadioSideDsp(bool has)
+{
+    // APF's ONLY effect is `slice set <n> apf=`, a verb the radio's firmware
+    // executes — which is exactly the test docs/architecture/radio-capabilities-map.md
+    // gives for a control that belongs behind this flag:
+    //
+    //   "The test for whether a control belongs behind this flag is whether its
+    //    only effect is to emit a verb the radio's firmware executes."
+    //
+    // Ungated on the always-visible CW face this would be the HERMES §17 shape
+    // on an Icom or an HL2 — the button moves, the state persists, the audio
+    // never changes. That matters more here than on the DSP-tab twin, which the
+    // operator has to go looking for; this row is in front of them the whole
+    // time they are in CW.
+    //
+    // Rides capabilitiesChanged, which repeats on every edge, so bail on no-op.
+    if (m_hasRadioSideDsp == has)
+        return;
+    m_hasRadioSideDsp = has;
+    syncApfFromSlice();
+}
+
 void PhoneCwApplet::syncApfFromSlice()
 {
     if (!m_apfBtn) return;
 
-    const bool bound = !m_slice.isNull();
+    // Hidden, not merely disabled, on a radio with no radio-side DSP — matching
+    // VfoWidget::applyRadioSideDspVisibility(), which hides rather than greys
+    // the DSP grid's buttons. A disabled control still claims the feature
+    // exists here and is simply unavailable right now, which is the wrong
+    // thing to tell someone on an Icom.
+    if (m_apfRow)
+        m_apfRow->setVisible(m_hasRadioSideDsp);
+
+    const bool bound = m_hasRadioSideDsp && !m_slice.isNull();
     const bool on    = bound && m_slice->apfOn();
     const int  level = bound ? m_slice->apfLevel() : 50;
 

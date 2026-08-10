@@ -49,6 +49,14 @@ public:
     // returned to a slice they had used before.
     void setSlice(SliceModel* slice);
 
+    // Does the attached radio run its own receive DSP? Gates the APF row, whose
+    // only effect is `slice set <n> apf=` — a verb the radio's firmware
+    // executes, which is the test radio-capabilities-map.md gives for a control
+    // that belongs behind this flag. Pushed from MainWindow::applyCapabilitiesToUi
+    // off RadioModel::hasRadioSideDsp(), which is permissive while disconnected,
+    // so the row still shows with no radio attached.
+    void setHasRadioSideDsp(bool has);
+
 signals:
     void micLevelChanged(int level);  // slider value 0-100
 
@@ -156,9 +164,14 @@ private:
     // APF — per-slice CW audio peaking filter, mirroring the VfoWidget DSP-tab
     // pair.  Both surfaces drive the same SliceModel, so they stay in sync
     // without any bridging between them (#4879).
+    QWidget*     m_apfRow{nullptr};   // container, so the capability gate can hide the row whole
     QPushButton* m_apfBtn{nullptr};
     QSlider*     m_apfSlider{nullptr};
     QLineEdit*   m_apfEdit{nullptr};
+    // Permissive default, matching RadioModel::hasRadioSideDsp()'s own
+    // disconnected rule: the row shows until a backend says otherwise, so it
+    // does not blink out of existence on every disconnect edge.
+    bool m_hasRadioSideDsp{true};
 
     // ── Shared state ─────────────────────────────────────────────────────
 
