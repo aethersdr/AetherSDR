@@ -97,32 +97,58 @@ PanadapterStack::PanadapterStack(QWidget* parent)
     auto& settings = AppSettings::instance();
     const QString savedIds = settings.value(kFloatingPanIdsKey, "").toString();
     const bool restorePending =
-        settings.value(kFloatingRestorePendingKey, false).toBool();
-    switch (evaluateFloatingRestore(!savedIds.isEmpty(), restorePending)) {
-    case FloatingRestoreAction::DropSavedIds:
+        settings.value(kFloatingRestorePendingKey, kSettingsFalse).toBool();
+    const FloatingRestoreAction action =
+        evaluateFloatingRestore(!savedIds.isEmpty(), restorePending);
+    if (action == FloatingRestoreAction::DropSavedIds) {
         qCWarning(lcGui)
             << "PanadapterStack: the previous session did not survive floating"
             << savedIds
             << "— starting docked and forgetting the saved float state (#4617)";
-        m_floatingRestoreAbandonedIds = savedIds;
-        settings.setValue(kFloatingPanIdsKey, QString());
-        settings.setValue(kFloatingRestorePendingKey, false);
-        settings.save();
-        break;
-    case FloatingRestoreAction::ClearStaleMarker:
-        settings.setValue(kFloatingRestorePendingKey, false);
-        settings.save();
-        break;
-    case FloatingRestoreAction::Replay:
-        break;
+        m_floatingRestoreAbandonedCount =
+            static_cast<int>(savedIds.split(',', Qt::SkipEmptyParts).size());
+        // Tell the operator at launch, not only if they get as far as a
+        // successful connect — the #4617 case is precisely the one where
+        // connecting is the act the user has learnt to fear. A zero-timer is
+        // late enough that MainWindow::wirePanLifecycle() has connected to us
+        // (the event loop has not started yet at construction) and early
+        // enough that the notice describes *this* launch.
+        QTimer::singleShot(0, this,
+                           &PanadapterStack::announceAbandonedFloatingRestore);
     }
+
+    // The writes come from the policy header too, so that dropping the
+    // marker-clearing write — which would leave the guard armed forever and
+    // cost the layout on every launch — fails floating_restore_policy_test
+    // rather than passing it.
+    const FloatingRestoreWrites writes = floatingRestoreWrites(action);
+    if (writes.clearSavedIds) {
+        settings.setValue(kFloatingPanIdsKey, QString());
+    }
+    if (writes.clearMarker) {
+        settings.setValue(kFloatingRestorePendingKey, kSettingsFalse);
+    }
+    if (writes.clearSavedIds || writes.clearMarker) {
+        settings.save();
+    }
+}
+
+void PanadapterStack::announceAbandonedFloatingRestore()
+{
+    if (m_floatingRestoreAbandonedCount <= 0) return;
+    emit floatingRestoreAbandoned(m_floatingRestoreAbandonedCount);
 }
 
 void PanadapterStack::armFloatingRestoreMarker()
 {
-    // Caller commits this with the pan ID in one settings write, so the marker
-    // can never reach disk later than the ID it protects.
-    AppSettings::instance().setValue(kFloatingRestorePendingKey, true);
+    // Persisted here rather than left to the caller's save(): on the replay
+    // path the pan ID is *already* on disk, so the marker has to reach disk
+    // before the float work begins or a crash inside it is indistinguishable
+    // from a clean session. One extra transaction per pop-out buys that
+    // ordering, and it keeps the argument local to this function.
+    auto& settings = AppSettings::instance();
+    settings.setValue(kFloatingRestorePendingKey, kSettingsTrue);
+    settings.save();
 
     if (!m_floatingRestoreSettleTimer) {
         m_floatingRestoreSettleTimer = new QTimer(this);
@@ -139,10 +165,10 @@ void PanadapterStack::armFloatingRestoreMarker()
 void PanadapterStack::clearFloatingRestoreMarker()
 {
     auto& settings = AppSettings::instance();
-    if (!settings.value(kFloatingRestorePendingKey, false).toBool()) {
+    if (!settings.value(kFloatingRestorePendingKey, kSettingsFalse).toBool()) {
         return;
     }
-    settings.setValue(kFloatingRestorePendingKey, false);
+    settings.setValue(kFloatingRestorePendingKey, kSettingsFalse);
     settings.save();
 }
 
@@ -845,6 +871,20 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     PanadapterApplet* applet = m_pans.value(panId, nullptr);
     if (!applet || m_floatingWindows.contains(panId)) return;
 
+    // Everything below — the GPU teardown, the reparent into a new top-level
+    // window, the rebuildDockedSplitter() that resizes every remaining sibling
+    // QRhiWidget, fw->show(), and the deferred reset/first frame — is the code
+    // that has taken the process down on marginal D3D11 drivers (#4319/#4091).
+    // Arm *and persist* the marker before any of it: on the replay path the
+    // pan ID is already on disk (restoreFloatingState() read it from there), so
+    // a marker committed after this work would leave a crash here looking
+    // exactly like a clean session, and the next launch would replay straight
+    // back into it — the #4617 boot loop. Arming before saveFloatingState()
+    // also means the marker can never reach disk *later* than the ID it
+    // protects; the cost is that a crash in between drops the previously saved
+    // IDs too, which is the single-use price this guard already accepts.
+    armFloatingRestoreMarker();
+
     // Hide the SpectrumWidget and release GPU resources *before* reparenting.
     // On macOS, QRhiWidget with WA_NativeWindow has a native NSView; orphaning
     // the widget to nullptr creates a transient top-level NSWindow whose
@@ -872,13 +912,6 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     fw->restoreWindowGeometry();
     fw->show();
     fw->raise();
-    // Everything from here to the first frame in the new window — the deferred
-    // GPU reset, the show, and the resize it triggers — is the code that has
-    // taken the process down on marginal D3D11 drivers (#4319/#4091). Arm the
-    // marker first so saveFloatingState()'s save() commits it in the same
-    // transaction as the pan ID: if we die below, the next launch sees both
-    // and starts docked instead of replaying straight back into it (#4617).
-    armFloatingRestoreMarker();
     saveFloatingState();
     emit panFloated(panId);
 
@@ -1062,11 +1095,13 @@ void PanadapterStack::saveFloatingState() const
 void PanadapterStack::restoreFloatingState()
 {
     // The constructor already dropped the saved IDs if the previous session
-    // died floating them; report that here, where a window is listening.
-    if (!m_floatingRestoreAbandonedIds.isEmpty()) {
-        emit floatingRestoreAbandoned(m_floatingRestoreAbandonedIds);
-        m_floatingRestoreAbandonedIds.clear();
-    }
+    // died floating them, and already announced it on a zero-timer at launch.
+    // Say it once more here: the launch notice competes with the connect
+    // sequence's own status messages, and this is the moment the pop-out
+    // visibly fails to come back. Consumed after this, so a later reconnect
+    // does not resurrect a stale explanation.
+    announceAbandonedFloatingRestore();
+    m_floatingRestoreAbandonedCount = 0;
 
     const QString saved =
         AppSettings::instance().value(kFloatingPanIdsKey, "").toString();

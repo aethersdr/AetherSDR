@@ -25,6 +25,7 @@
 #include "AppletPanel.h"
 #include "ConnectedStationsDialog.h"
 #include "ConnectionPanel.h"
+#include "FloatingRestorePolicy.h"
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
@@ -1638,9 +1639,9 @@ void MainWindow::wirePanLifecycle()
                         ? saved
                         : defaultPanLayoutForCount(panCount);
                     const QString floatingPanIds = AppSettings::instance()
-                        .value("FloatingPanIds", "").toString();
+                        .value(kFloatingPanIdsKey, "").toString();
                     m_panStack->rearrangeLayout(layoutId);
-                    AppSettings::instance().setValue("FloatingPanIds", floatingPanIds);
+                    AppSettings::instance().setValue(kFloatingPanIdsKey, floatingPanIds);
 
                     // Defensive re-push xpixels for all pans after layout settles.
                     // Covers race where radio hadn't finished pan init when first push arrived.
@@ -1744,11 +1745,14 @@ void MainWindow::wirePanLifecycle()
     // docked rather than replaying the crash (#4617). Say so — otherwise the
     // pop-out silently fails to return and looks like a second bug.
     connect(m_panStack, &PanadapterStack::floatingRestoreAbandoned,
-            this, [this](const QString& abandonedPanIds) {
+            this, [this](int abandonedPanCount) {
+        // %n carries the count purely for plural agreement — phrased without a
+        // verb that has to agree, so the untranslated English reads correctly
+        // at 1 as well as at 2+.
         statusBar()->showMessage(
-            tr("Panadapter %1 was popped out when AetherSDR last closed "
-               "unexpectedly — it has been restored docked. Pop it out again "
-               "to retry.").arg(abandonedPanIds),
+            tr("%n panadapter(s) restored docked — AetherSDR last closed "
+               "unexpectedly while popping out. Pop out again to retry.",
+               nullptr, abandonedPanCount),
             15000);
     });
 

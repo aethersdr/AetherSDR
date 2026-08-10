@@ -81,6 +81,44 @@ int testGuardIsSingleUse()
     if (evaluateFloatingRestore(true, false) != FloatingRestoreAction::Replay) {
         return fail("the guard must not persist past the run that consumed it");
     }
+
+    // The two checks above only pin the *decision*. What actually makes the
+    // guard single-use is the write that retires the marker: drop it and the
+    // marker stays armed forever, so every launch from then on evaluates
+    // DropSavedIds and throws the layout away. Pinning the writes is what
+    // makes that mutation fail here instead of shipping.
+    if (!floatingRestoreWrites(FloatingRestoreAction::DropSavedIds).clearMarker) {
+        return fail("dropping the saved IDs must also retire the marker");
+    }
+    if (!floatingRestoreWrites(FloatingRestoreAction::ClearStaleMarker).clearMarker) {
+        return fail("a stale marker must be retired, or it re-fires every launch");
+    }
+    return 0;
+}
+
+int testWritesMatchTheDecision()
+{
+    using namespace AetherSDR;
+
+    // Replay is the untouched-state case. A healthy session that merely looked
+    // at the store must not write to it — a stray clear here would silently
+    // delete a layout that had nothing wrong with it.
+    const auto replay = floatingRestoreWrites(FloatingRestoreAction::Replay);
+    if (replay.clearSavedIds || replay.clearMarker) {
+        return fail("Replay must leave the persisted float state alone");
+    }
+
+    // Retiring a stale marker must not take the saved IDs with it: by
+    // definition there were none to protect, and clearing regardless would
+    // turn the benign case into data loss.
+    if (floatingRestoreWrites(FloatingRestoreAction::ClearStaleMarker).clearSavedIds) {
+        return fail("retiring a stale marker must not discard saved IDs");
+    }
+
+    // The crash case is the only one allowed to discard the layout.
+    if (!floatingRestoreWrites(FloatingRestoreAction::DropSavedIds).clearSavedIds) {
+        return fail("DropSavedIds must actually blank the saved IDs");
+    }
     return 0;
 }
 
@@ -92,6 +130,7 @@ int main()
     if (const int rc = testCrashedSessionStartsDocked()) return rc;
     if (const int rc = testStaleMarkerIsRetiredNotEscalated()) return rc;
     if (const int rc = testGuardIsSingleUse()) return rc;
+    if (const int rc = testWritesMatchTheDecision()) return rc;
     std::printf("floating_restore_policy_test: all cases passed\n");
     return 0;
 }

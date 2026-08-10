@@ -91,16 +91,19 @@ signals:
     void activePanChanged(const QString& panId);
     void panFloated(const QString& panId);
     void panDocked(const QString& panId);
-    // The previous session died while floating these pans, so they were
-    // dropped and this one came up docked. Carries the abandoned ID list so
-    // the window can tell the operator why their pop-out did not come back.
-    void floatingRestoreAbandoned(const QString& abandonedPanIds);
+    // The previous session died while floating panadapters, so they were
+    // dropped and this one came up docked. Carries how many were dropped —
+    // enough for plural agreement in the operator notice, and nothing more:
+    // the internal 0x4000… pan IDs appear nowhere else in the UI, so they
+    // would give the operator no action they could take.
+    void floatingRestoreAbandoned(int abandonedPanCount);
 
 private:
     void rebuildDockedSplitter();
     // Arm / retire the persisted "a float is in flight" marker (#4617).
     void armFloatingRestoreMarker();
     void clearFloatingRestoreMarker();
+    void announceAbandonedFloatingRestore();
 
     PanadapterRenderScheduler* m_renderScheduler{nullptr};
     BandStackPanel* m_bandStackPanel{nullptr};
@@ -111,10 +114,11 @@ private:
     QSet<QString> m_seenPanIds;
     QString m_activePanId;
     bool m_shutdownPrepared{false};
-    // Pan IDs the constructor discarded because the previous process never
-    // survived floating them. Held until restoreFloatingState() so the notice
-    // reaches a window that has had time to connect to us.
-    QString m_floatingRestoreAbandonedIds;
+    // How many pans the constructor discarded because the previous process
+    // never survived floating them. Announced on a zero-timer at launch (once
+    // wirePanLifecycle() has connected to us) and again from
+    // restoreFloatingState(), which consumes it.
+    int m_floatingRestoreAbandonedCount{0};
     QTimer* m_floatingRestoreSettleTimer{nullptr};
 };
 
