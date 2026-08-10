@@ -1,8 +1,8 @@
-#include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 #ifdef HAVE_MIDI
 
 #include "MidiMappingDialog.h"
+#include "core/AppSettings.h"
 #include "FramelessMessageBox.h"
 #include "core/MidiControlManager.h"
 #include "core/MidiSettings.h"
@@ -296,6 +296,8 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
         auto* saveProfileBtn = new QPushButton("Save");
         saveProfileBtn->setStyleSheet(kBtnStyle);
+        saveProfileBtn->setToolTip(
+            QStringLiteral("Save the current bindings as a named profile"));
         connect(saveProfileBtn, &QPushButton::clicked, this, [this] {
             QString name = m_profileCombo->currentText().trimmed();
             if (name.isEmpty()) return;
@@ -306,6 +308,8 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
         auto* loadProfileBtn = new QPushButton("Load");
         loadProfileBtn->setStyleSheet(kBtnStyle);
+        loadProfileBtn->setToolTip(
+            QStringLiteral("Apply the selected profile to the current bindings"));
         connect(loadProfileBtn, &QPushButton::clicked, this, [this] {
             QString name = m_profileCombo->currentText().trimmed();
             if (name.isEmpty()) return;
@@ -331,7 +335,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         importProfileBtn->setObjectName(QStringLiteral("midiProfileImportButton"));
         importProfileBtn->setAccessibleName(QStringLiteral("Import MIDI profile"));
         importProfileBtn->setToolTip(QStringLiteral(
-            "Import a profile file — an AetherSDR profile XML or a SmartSDR \".map\""));
+            "Import a profile file into the store — AetherSDR profile XML or SmartSDR \".map\""));
         connect(importProfileBtn, &QPushButton::clicked, this,
                 &MidiMappingDialog::importProfileFromFile);
         btnRow->addWidget(importProfileBtn);
@@ -341,7 +345,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         exportProfileBtn->setObjectName(QStringLiteral("midiProfileExportButton"));
         exportProfileBtn->setAccessibleName(QStringLiteral("Export MIDI profile"));
         exportProfileBtn->setToolTip(
-            QStringLiteral("Export the current bindings as a shareable profile file"));
+            QStringLiteral("Export the current bindings as an AetherSDR profile XML"));
         connect(exportProfileBtn, &QPushButton::clicked, this,
                 &MidiMappingDialog::exportProfileToFile);
         btnRow->addWidget(exportProfileBtn);
