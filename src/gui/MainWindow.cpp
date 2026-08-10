@@ -112,6 +112,7 @@
 #include "FlexControlDialog.h"
 #include "CwxPanel.h"
 #include "DvkAvailabilityGate.h"
+#include "VoiceModeGate.h"
 #include "DvkPanel.h"
 #include "core/DvkWavTransfer.h"
 #include "AmpApplet.h"
@@ -7581,7 +7582,10 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     routeRttyDecoderOutput();
     refreshRttyDecodeState();
 
-    // Update CWX/DVK indicator availability (follows the TX slice, #4173)
+    // Update CWX/DVK indicator availability (follows the TX slice, #4173) and
+    // the ASR indicator's (follows the ACTIVE slice, #4825) — this call is what
+    // covers an active-slice SWITCH for ASR; the mode-change edge on a non-TX
+    // active slice is handled in the modeChanged wiring.
     updateKeyerAvailability();
 
     // Detect band from frequency
@@ -9120,10 +9124,10 @@ void MainWindow::updateKeyerAvailability()
 
     const bool txIsCw  = hasCwKeyer
                          && (txMode == "CW" || txMode == "CWL");
-    const bool txIsSsb = (txMode == "USB" || txMode == "LSB"
-                          || txMode == "AM" || txMode == "SAM"
-                          || txMode == "FM" || txMode == "NFM"
-                          || txMode == "DFM");
+    // Voice-mode test through the shared predicate: the ASR block below asks
+    // the same question of a DIFFERENT slice, and one list keeps the two from
+    // drifting on which modes count (VoiceModeGate.h).
+    const bool txIsSsb = isVoiceMode(txMode);
 
     // DVK carries a second, mode-independent gate: the radio's own DVK
     // entitlement. Unlike the mode gate it survives every mode change, so it is
@@ -9134,10 +9138,10 @@ void MainWindow::updateKeyerAvailability()
         txIsSsb,
         m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
         m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature));
-    // hasVoiceKeyer is ANDed in HERE rather than into txIsSsb, because txIsSsb
-    // also drives the ASR indicator further down and Copy Assist is host-side —
-    // folding a voice-keyer capability into the shared mode test would take a
-    // working transcription feature down with the keyer.
+    // hasVoiceKeyer is ANDed in HERE rather than into the mode test, because
+    // isVoiceMode() is shared with the ASR indicator below and Copy Assist is
+    // host-side — folding a radio-side voice-keyer capability into the shared
+    // predicate would take a working transcription feature down with the keyer.
     const bool dvkAvailable = hasVoiceKeyer
                               && (dvkBlocker == DvkIndicatorBlocker::None);
     const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
@@ -9183,22 +9187,40 @@ void MainWindow::updateKeyerAvailability()
     m_dvkIndicator->setToolTip(dvkIndicatorTooltip(dvkBlocker));
 
 #ifdef AETHER_ASR_ENABLED
-    // ASR (Copy Assist): the inverse of CWX — available in voice modes only,
-    // dimmed/disabled in CW and DIGx/RTTY. A receive-side decode, but gated on
-    // the same slice's mode as the other indicators for a consistent row.
+    // ASR (Copy Assist): the inverse of CWX on mode — available in voice modes
+    // only, dimmed in CW and DIGx/RTTY — but NOT on slice. Copy Assist is a
+    // receive-side decode of the audio the operator is listening to, and it is
+    // already bound to the ACTIVE slice: setActiveSliceInternal() rebinds
+    // m_copyAssistFreqConn to that slice's frequencyChanged and calls onRetune()
+    // on a switch. The CW decoder, this feature's CW-mode counterpart, reads the
+    // same slice (refreshCwDecodeState()).
+    //
+    // It was gated on the TX slice for a visually consistent indicator row, and
+    // that cost the feature entirely with TX off: no slice carries isTxSlice(),
+    // so txMode is empty and a receive-only or antenna-disconnected operator
+    // could not open Copy Assist at all (#4825). Row consistency is the weaker
+    // constraint — CWX and DVK key the TX slice and genuinely belong to it, so
+    // the three indicators may now disagree, which is correct.
+    SliceModel* asrSlice = activeSlice();
+    const bool asrIsVoice = asrSlice && isVoiceMode(asrSlice->mode());
     if (m_asrIndicator) {
-        m_asrIndicator->setEnabled(txIsSsb);
+        m_asrIndicator->setEnabled(asrIsVoice);
         const bool asrVisible =
             m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
-        if (txSlice && !txIsSsb && asrVisible) {
+        // Same shape as the keyer auto-hides: only a slice that EXISTS and is in
+        // the wrong mode closes an open panel, so a transient no-active-slice
+        // window (slice teardown, band-stack rebuild) can't yank one the user
+        // has to re-open by hand (#4173).
+        if (asrSlice && !asrIsVoice && asrVisible) {
             m_copyAssistApplet->setCopyAssistVisible(false);
             setIndicatorStyle(m_asrIndicator, kDisabled);
         } else if (asrVisible) {
             setIndicatorStyle(m_asrIndicator, kActive);
         } else {
-            setIndicatorStyle(m_asrIndicator, txIsSsb ? kAvail : kDisabled);
+            setIndicatorStyle(m_asrIndicator, asrIsVoice ? kAvail : kDisabled);
         }
-        m_asrIndicator->setCursor(txIsSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        m_asrIndicator->setCursor(asrIsVoice ? Qt::PointingHandCursor
+                                             : Qt::ArrowCursor);
     }
 #endif
 }

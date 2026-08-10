@@ -100,6 +100,7 @@
 #include "models/RadioModel.h"
 #include "models/ModelCapabilities.h"
 #include "gui/DvkAvailabilityGate.h"
+#include "gui/VoiceModeGate.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/sim/SimBackend.h"
@@ -758,6 +759,73 @@ int main(int argc, char** argv)
         check(!disconnected.hasManualNotch(),
               "disconnected: hasManualNotch() is NOT permissive — no MN button on an "
               "empty window");
+    }
+
+    // ---- ASR (Copy Assist) indicator: gated on the ACTIVE slice (#4825) ----
+    //
+    // The two status-bar keyers and the ASR indicator ask the SAME mode question
+    // (isVoiceMode) of DIFFERENT slices, and that difference is the whole fix.
+    // CWX and DVK key the TX slice, so an absent TX slice must close them. Copy
+    // Assist decodes received audio and is already bound to the ACTIVE slice, so
+    // an absent TX slice must NOT close it — it did, which is #4825: an operator
+    // who turns TX off (antenna disconnected, bench work) or listens receive-only
+    // lost the feature outright.
+    //
+    // The mode half below is the production predicate; the slice half is
+    // restated, because MainWindow is not linkable from this target (it links
+    // aethercore, not the GUI) — the same compromise the keyer helpers above make.
+    {
+        // TX off: no slice carries isTxSlice(), so txSlice() is null and
+        // updateKeyerAvailability() reads an empty TX mode.
+        const QString txModeWithTxOff;                          // txSlice() == nullptr
+        const QString activeModeUsb = QStringLiteral("USB");
+
+        check(!isVoiceMode(txModeWithTxOff),
+              "TX off: the TX-slice mode test is false — CWX/DVK close, which is "
+              "right, there is nothing to key");
+        check(dvkIndicatorBlocker(isVoiceMode(txModeWithTxOff),
+                                  /*licenseSeen=*/false, /*licenseEnabled=*/false)
+                  == DvkIndicatorBlocker::TxModeNotVoice,
+              "TX off: the DVK gate names the mode as its blocker");
+        check(isVoiceMode(activeModeUsb),
+              "TX off while listening on USB: the ACTIVE slice's mode is still a "
+              "voice mode, so the ASR indicator stays available (#4825)");
+
+        // The row may now disagree with itself, and that is the intended
+        // outcome, not a regression: the indicators answer about two slices.
+        check(isVoiceMode(activeModeUsb) != isVoiceMode(txModeWithTxOff),
+              "the ASR and DVK indicators can disagree — they read different "
+              "slices, so a consistent-looking row is not the invariant");
+
+        // Mode gate itself is UNCHANGED: voice only. ASR in CW or DIGx would
+        // have nothing intelligible to transcribe.
+        check(!isVoiceMode(QStringLiteral("CW")),
+              "active slice in CW: ASR indicator stays dimmed (nothing to transcribe)");
+        check(!isVoiceMode(QStringLiteral("CWL")),
+              "active slice in CWL: ASR indicator stays dimmed");
+        check(!isVoiceMode(QStringLiteral("DIGU")) && !isVoiceMode(QStringLiteral("DIGL")),
+              "active slice in DIGU/DIGL: ASR indicator stays dimmed");
+        check(!isVoiceMode(QStringLiteral("RTTY")),
+              "active slice in RTTY: ASR indicator stays dimmed");
+        check(!isVoiceMode(QStringLiteral("FDVU")),
+              "active slice in FreeDV: ASR indicator stays dimmed (RADAE-encoded, "
+              "not acoustic speech)");
+
+        // The whole voice family, so a later edit cannot quietly drop one.
+        for (const QString& mode : {QStringLiteral("USB"), QStringLiteral("LSB"),
+                                    QStringLiteral("AM"),  QStringLiteral("SAM"),
+                                    QStringLiteral("FM"),  QStringLiteral("NFM"),
+                                    QStringLiteral("DFM")}) {
+            check(isVoiceMode(mode),
+                  "voice family member is a voice mode for both indicators");
+        }
+
+        // No active slice at all (last slice removed): an empty mode is not a
+        // voice mode, so the indicator closes. This is what the added
+        // updateKeyerAvailability() call in onSliceRemoved()'s no-slices branch
+        // is there to APPLY — without it the gate is right and never evaluated.
+        check(!isVoiceMode(QString()),
+              "no active slice: empty mode is not a voice mode — ASR closes");
     }
 
     if (g_failures == 0)
