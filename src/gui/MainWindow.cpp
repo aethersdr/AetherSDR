@@ -2515,6 +2515,15 @@ MainWindow::MainWindow(QWidget* parent)
 MainWindow::~MainWindow()
 {
     qApp->removeEventFilter(this);
+
+    // The qApp::focusChanged lambda (MainWindow_Shortcuts.cpp) runs
+    // releaseSliderShortcutLease(), which touches m_shortcutManager and the
+    // m_sliderShortcutLease* members. Those are value members, so they are gone
+    // by the time the QWidget base destructor's deleteChildren() clears focus on
+    // a focused child and re-emits focusChanged. QObject's context auto-disconnect
+    // only fires in ~QObject, which is later still. Sever it here (#4857).
+    QObject::disconnect(qApp, &QApplication::focusChanged, this, nullptr);
+
     preparePanadapterUiForShutdown();
 
     // KiwiSDR profile clients are QObject children, but their disconnect path emits
