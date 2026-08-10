@@ -7,6 +7,7 @@
 #include <QEvent>
 #include <QGuiApplication>
 #include <QMouseEvent>
+#include <QTimer>
 #include <QWidget>
 #include <QWindow>
 #include <algorithm>
@@ -48,9 +49,9 @@ FramelessResizer::~FramelessResizer()
     leaveEdgeZone();
 }
 
-bool FramelessResizer::ownsWindow(QWindow* win) const
+// static
+bool FramelessResizer::windowOwnsChain(const QWindow* win, const QWindow* mine)
 {
-    QWindow* mine = m_window->windowHandle();
     if (!win || !mine) {
         return false;
     }
@@ -62,12 +63,17 @@ bool FramelessResizer::ownsWindow(QWindow* win) const
     // standing workaround for platform window-state bugs.  The parent chain
     // carries no such dependency.  A separate top-level (a dialog) has a null
     // parent() and only a transientParent, so this never reaches across windows.
-    for (QWindow* w = win; w; w = w->parent()) {
+    for (const QWindow* w = win; w; w = w->parent()) {
         if (w == mine) {
             return true;
         }
     }
     return false;
+}
+
+bool FramelessResizer::ownsWindow(QWindow* win) const
+{
+    return windowOwnsChain(win, m_window->windowHandle());
 }
 
 Qt::Edges FramelessResizer::edgesAt(const QPoint& p) const
@@ -144,8 +150,10 @@ void FramelessResizer::beginManualResize(Qt::Edges edges, const QPoint& pressGlo
     // grab isn't fatal — motion events still arrive while the pointer stays
     // over one of our own windows — but a fast drag can then outrun the window
     // and stall, so it's worth a log line to explain a report of that.
+    m_manualResizeGrabbed = false;
     if (QWindow* handle = m_window->windowHandle()) {
-        if (!handle->setMouseGrabEnabled(true)) {
+        m_manualResizeGrabbed = handle->setMouseGrabEnabled(true);
+        if (!m_manualResizeGrabbed) {
             qCWarning(lcGui) << "FramelessResizer: mouse grab denied for manual "
                                  "resize; drag may stall if the pointer outruns "
                                  "the window";
@@ -153,46 +161,58 @@ void FramelessResizer::beginManualResize(Qt::Edges edges, const QPoint& pressGlo
     }
 }
 
-void FramelessResizer::continueManualResize(const QPoint& globalPos)
+// static
+QRect FramelessResizer::clampManualResize(const QRect& startGeom, const QPoint& delta,
+                                           Qt::Edges edges, const QSize& floor,
+                                           const QSize& ceiling)
 {
-    const QPoint delta = globalPos - m_manualResizePressGlobal;
-    QRect geom = m_manualResizeStartGeom;
+    QRect geom = startGeom;
 
     // The effective floor is the explicit minimum *and* whatever the layout
     // demands.  Clamping on minimumWidth()/minimumHeight() alone lets us ask
     // for a size Qt then silently grows back, and because it grows the size
     // while we keep moving the origin, the edge we are supposed to be holding
-    // still drifts.  Snapshotted once in beginManualResize() rather than
-    // recomputed here on every motion event.
-    const int minW = m_manualResizeFloor.width();
-    const int minH = m_manualResizeFloor.height();
-    const int maxW = m_window->maximumWidth();
-    const int maxH = m_window->maximumHeight();
+    // still drifts.  `floor` is snapshotted once in beginManualResize()
+    // rather than recomputed here on every motion event.
+    const int minW = floor.width();
+    const int minH = floor.height();
+    const int maxW = ceiling.width();
+    const int maxH = ceiling.height();
 
-    if (m_manualResizeEdges & Qt::LeftEdge) {
+    if (edges & Qt::LeftEdge) {
         int newLeft = geom.left() + delta.x();
         newLeft = std::min(newLeft, geom.right() - minW + 1);
         newLeft = std::max(newLeft, geom.right() - maxW + 1);
         geom.setLeft(newLeft);
     }
-    if (m_manualResizeEdges & Qt::RightEdge) {
+    if (edges & Qt::RightEdge) {
         int newRight = geom.right() + delta.x();
         newRight = std::max(newRight, geom.left() + minW - 1);
         newRight = std::min(newRight, geom.left() + maxW - 1);
         geom.setRight(newRight);
     }
-    if (m_manualResizeEdges & Qt::TopEdge) {
+    if (edges & Qt::TopEdge) {
         int newTop = geom.top() + delta.y();
         newTop = std::min(newTop, geom.bottom() - minH + 1);
         newTop = std::max(newTop, geom.bottom() - maxH + 1);
         geom.setTop(newTop);
     }
-    if (m_manualResizeEdges & Qt::BottomEdge) {
+    if (edges & Qt::BottomEdge) {
         int newBottom = geom.bottom() + delta.y();
         newBottom = std::max(newBottom, geom.top() + minH - 1);
         newBottom = std::min(newBottom, geom.top() + maxH - 1);
         geom.setBottom(newBottom);
     }
+    return geom;
+}
+
+void FramelessResizer::continueManualResize(const QPoint& globalPos)
+{
+    const QPoint delta = globalPos - m_manualResizePressGlobal;
+    const QSize ceiling(m_window->maximumWidth(), m_window->maximumHeight());
+    const QRect geom = clampManualResize(m_manualResizeStartGeom, delta,
+                                          m_manualResizeEdges, m_manualResizeFloor,
+                                          ceiling);
 
     // Skip no-op requests: several motion events can map to the same geometry,
     // and there is no reason to ask the platform to apply a geometry it is
@@ -210,6 +230,7 @@ void FramelessResizer::endManualResize()
         return;
     }
     m_manualResizeActive = false;
+    m_manualResizeGrabbed = false;
     m_manualResizeEdges = {};
     if (QWindow* handle = m_window->windowHandle()) {
         handle->setMouseGrabEnabled(false);
@@ -235,13 +256,18 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
 
     // Window-level events only: widget-level MouseMove is gated on the widget
     // having opted into mouse tracking, so it can't be relied on for hover.
-    // While a manual drag holds the grab every event in it is ours by
-    // definition — the pointer may well be outside the window by then.
+    // While a manual drag genuinely holds the grab, every event in it is ours
+    // by definition — the pointer may well be outside the window by then —
+    // but only once that grab actually succeeded (m_manualResizeGrabbed); a
+    // denied grab gives us no exclusivity guarantee, so without it we still
+    // require ownsWindow() like any other event, accepting that a fast drag
+    // may then stall if the pointer outruns the window (beginManualResize()
+    // already warns about that case).
     auto* win = qobject_cast<QWindow*>(obj);
     if (!win) {
         return false;
     }
-    if (!m_manualResizeActive && !ownsWindow(win)) {
+    if (!(m_manualResizeActive && m_manualResizeGrabbed) && !ownsWindow(win)) {
         // Pointer activity somewhere else while our override cursor is still
         // up: a popup that opened under a stationary pointer takes the events
         // without us ever seeing the move that would have cleared it.  The
@@ -313,16 +339,30 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
         const QPoint global = me->globalPosition().toPoint();
         const Qt::Edges edges = edgesAt(m_window->mapFromGlobal(global));
         if (edges && m_window->windowHandle()) {
-            if (FramelessMoveHelper::systemMoveResizeUnreliable()) {
-                // xcb: startSystemResize() would report success but the
-                // WM-driven grab it hands off to doesn't actually work
-                // (QTBUG-69716) — drag the geometry ourselves instead, the same
-                // fallback Qt's own QSizeGrip uses.  The edge cursor stays up
-                // for the duration since the WM isn't showing one.
+            if (FramelessMoveHelper::systemMoveResizeUnreliable(m_window)) {
+                // xcb (or Windows+translucent): startSystemResize() would
+                // report success but the WM-driven grab it hands off to
+                // doesn't actually work (QTBUG-69716 / QTBUG-90628) — drag
+                // the geometry ourselves instead, the same fallback Qt's own
+                // QSizeGrip uses. The edge cursor stays up for the duration
+                // since the WM isn't showing one.
                 beginManualResize(edges, global);
             } else {
-                leaveEdgeZone();  // hand cursor control back to the OS
-                m_window->windowHandle()->startSystemResize(edges);
+                // startSystemResize() reports success/failure honestly
+                // everywhere except the cases handled above — except macOS:
+                // QCocoaWindow has no override at all and unconditionally
+                // returns false (never implemented, not a QTBUG), so without
+                // checking this the press is consumed below and nothing
+                // happens: the exact xcb failure mode, now on macOS. Fall
+                // back to the same manual drag the branch above uses,
+                // keeping our own cursor up for it exactly as that path
+                // does — only hand cursor control to the OS once its own
+                // grab actually took the resize.
+                if (m_window->windowHandle()->startSystemResize(edges)) {
+                    leaveEdgeZone();
+                } else {
+                    beginManualResize(edges, global);
+                }
             }
             return true;      // consume: no widget should receive this press
         }
@@ -354,14 +394,30 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
     case QEvent::Leave:
         // Only drop the cursor once the pointer has really left the window —
         // crossing between this window's native children raises Leave too, and
-        // resetting on those would make the edge cursor flicker.  underMouse()
-        // rather than QCursor::pos(): the latter is a live global-cursor query,
-        // unreliable on native Wayland for the same reason the press handler
-        // above stopped using it, and there is no equivalent to the left/top-drag
-        // trailing problem here to justify the risk — Leave never fires mid-drag
-        // (m_manualResizeActive is already excluded above).
-        if (!m_manualResizeActive && !m_window->underMouse()) {
-            leaveEdgeZone();
+        // resetting on those would make the edge cursor flicker. Checked one
+        // event-loop turn later, not inline: WA_UnderMouse for the widget that
+        // owns this event is updated by that widget's own event() handling,
+        // which — like every receiver's event() — runs *after* the
+        // application-level filters (this one included) during the very same
+        // Leave dispatch. Reading m_window->underMouse() inline would see the
+        // pre-update, stale value and never fire, leaving the resize cursor
+        // stranded whenever the pointer leaves through a corner without a
+        // MouseMove first landing outside the margin. QCursor::pos() would
+        // dodge that timing problem but reintroduces the Wayland global-
+        // cursor-query unreliability the press handler above already moved
+        // away from. Deferring past this turn — including any Enter that
+        // immediately follows when the pointer actually just crossed into a
+        // different native child — lets Qt finish updating the attribute
+        // first, so underMouse() is authoritative by the time the deferred
+        // check runs. this is the QObject context: the connection (and this
+        // lambda) is dropped automatically if the resizer or its window is
+        // destroyed before the timer fires.
+        if (!m_manualResizeActive) {
+            QTimer::singleShot(0, this, [this]() {
+                if (!m_manualResizeActive && m_window && !m_window->underMouse()) {
+                    leaveEdgeZone();
+                }
+            });
         }
         break;
 

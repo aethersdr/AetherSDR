@@ -29,20 +29,49 @@ namespace AetherSDR {
 //     widget-level ones because a button-less QEvent::MouseMove only reaches a
 //     widget that opted into setMouseTracking().
 //
-//  2. xcb.  QWindow::startSystemResize() reports success but the WM-driven grab
-//     it hands off to is unreliable there (QTBUG-69716 — see
+//  2. xcb, and Windows+translucent.  QWindow::startSystemResize() reports
+//     success but the WM-driven grab it hands off to is unreliable there
+//     (QTBUG-69716 / QTBUG-90628 — see
 //     FramelessMoveHelper::systemMoveResizeUnreliable()), so the resizer drags
-//     the window geometry manually on that platform, the same fallback Qt's own
-//     QSizeGrip uses.
+//     the window geometry manually on those platforms, the same fallback Qt's
+//     own QSizeGrip uses. macOS is a third case, but a distinct one:
+//     QCocoaWindow has no startSystemResize() override at all and
+//     unconditionally returns false, so the press handler below falls back to
+//     the same manual drag whenever the call reports failure, rather than
+//     needing its own platform check.
 //
-// Cross-platform behavior change (quirk 1 is not xcb-specific): before this
-// fix, MainWindow's edge-hover/press events were swallowed by its native
-// children on every platform, not only xcb — the bug is about event routing
-// through native child promotion, which xcb testing merely surfaced. Moving
-// the filter application-wide therefore turns on a real 6px edge-resize band
-// on MainWindow everywhere, including platforms that previously reached this
-// class's edgesAt() with a dead filter and so never resized from an edge at
-// all.
+// Cross-platform behavior change (quirk 1 is not xcb-specific, but its actual
+// reach is narrower than "everywhere" — checked per platform rather than
+// asserted, see PR #4829): before this fix, MainWindow's edge-hover/press
+// events were swallowed by its native children wherever that promotion
+// happens, not only under xcb — the bug is about event routing through
+// native child promotion, which xcb testing merely surfaced. Moving the
+// filter application-wide turns on a real 6px edge-resize band on
+// MainWindow, but only where both preconditions hold:
+//   - MainWindow must actually be frameless. On Windows, MainWindow.cpp
+//     never sets Qt::FramelessWindowHint at all (`#ifndef Q_OS_WIN` around
+//     that call) — the FramelessWindowHint guard a few lines below then
+//     makes this whole class a no-op there regardless of the filter's
+//     reach, so quirk 1 has nothing to change on Windows.
+//   - Native child promotion must actually be happening. On macOS,
+//     SpectrumWidget deliberately blocks it: `applyNativeWindowIsolationPolicy()`
+//     (SpectrumWidget.cpp) pairs `Qt::WA_NativeWindow` (needed for its Metal
+//     QRhiWidget surface) with `Qt::WA_DontCreateNativeAncestors`
+//     specifically so that native leaf never promotes its QWidget ancestors
+//     (#4339) — the same cascade that leaves MainWindow's QStatusBar/central
+//     widget/QSizeGrip native on Linux. So quirk 1 doesn't reach MainWindow
+//     on macOS either. What exactly triggers the cascade on Linux/xcb
+//     specifically (as opposed to macOS's deliberately-blocked case) wasn't
+//     pinned down beyond the original `xwininfo -id <winid> -children`
+//     evidence — the fix doesn't depend on knowing why, only on native
+//     children provably swallowing events there.
+// Net effect: this class's practical reach for MainWindow is Linux/X11
+// (xcb) — real on that platform, a no-op on Windows, and a no-op for quirk 1
+// specifically on macOS (macOS still gets quirk 2's fallback for the
+// independent startSystemResize() problem above). Every other frameless
+// adopter (dialogs, floating panels) was unaffected by quirk 1 to begin
+// with, per the header's own note above that "this same code worked fine on
+// dialogs that happen to have no native children."
 //
 // Edge-resize itself is proven end-to-end, not just eyeballed: a real
 // XTestFakeButtonEvent/XTestFakeMotionEvent drag (genuine X11 input, not an
@@ -98,6 +127,28 @@ public:
     static void install(QWidget* window, int margin = 6, int topMoveReserve = 0);
     ~FramelessResizer() override;
 
+    // Pure logic pulled out of the private instance methods below so it's
+    // reachable from a unit test without constructing a real QWidget/QWindow
+    // hierarchy (frameless_resizer_test.cpp). Behavior is identical either
+    // way — continueManualResize()/ownsWindow() just forward into these.
+
+    // The clamping arithmetic continueManualResize() applies each motion
+    // event: anchors whichever edges aren't in `edges`, moves the rest by
+    // `delta`, and holds every edge within [floor, ceiling]. `floor` is
+    // already minimumSize().expandedTo(minimumSizeHint()) — see
+    // m_manualResizeFloor — and `ceiling` is
+    // {maximumWidth(), maximumHeight()}.
+    static QRect clampManualResize(const QRect& startGeom, const QPoint& delta,
+                                    Qt::Edges edges, const QSize& floor,
+                                    const QSize& ceiling);
+
+    // The parent-chain walk ownsWindow() applies: true when `win` is `mine`
+    // itself, or is parented (directly or transitively) to `mine` in the
+    // QWindow tree — the shape a native child's promoted window takes
+    // (quirk 1). A separate top-level (e.g. a dialog) has a null parent()
+    // and only a transientParent, so this never reaches across windows.
+    static bool windowOwnsChain(const QWindow* win, const QWindow* mine);
+
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
@@ -108,12 +159,12 @@ private:
     void leaveEdgeZone();
 
     // True when `win` is our top-level widget's window, or the window of one of
-    // its native descendants (quirk 1 above).
+    // its native descendants (quirk 1 above). Thin wrapper over windowOwnsChain().
     bool ownsWindow(QWindow* win) const;
 
     // Manual drag fallback (xcb — quirk 2 above).  Anchors whichever edges
     // weren't grabbed and resizes the rest by the pointer delta, clamped to the
-    // window's own min/max size.
+    // window's own min/max size. Thin wrapper over clampManualResize().
     void beginManualResize(Qt::Edges edges, const QPoint& pressGlobal);
     void continueManualResize(const QPoint& globalPos);
     void endManualResize();
@@ -125,6 +176,14 @@ private:
     Qt::Edges m_lastEdges{};
 
     bool      m_manualResizeActive{false};
+    // True only when setMouseGrabEnabled(true) actually succeeded in
+    // beginManualResize(). Gates the eventFilter() ownsWindow() bypass below
+    // it: without a real grab we have no exclusivity guarantee, so treating
+    // "a resize is active" alone as license to accept events from *any*
+    // window — including an unrelated dialog the user happens to be
+    // clicking in at the same time — would let that unrelated activity
+    // drive our resize.
+    bool      m_manualResizeGrabbed{false};
     Qt::Edges m_manualResizeEdges{};
     QPoint    m_manualResizePressGlobal;
     QRect     m_manualResizeStartGeom;

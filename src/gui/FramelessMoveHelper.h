@@ -15,12 +15,28 @@ namespace AetherSDR::FramelessMoveHelper {
 // workaround for the native-Wayland panadapter stall, #4725) the request is
 // silently dropped: the press is consumed, but the window never
 // actually tracks the pointer (#4827). Qt's own QSizeGrip hits the same wall
-// and works around it in usePlatformSizeGrip() by refusing the platform path
-// on xcb and dragging the geometry manually instead — every frameless
-// move/resize path in AetherSDR follows that same rule.
-inline bool systemMoveResizeUnreliable()
+// and works around it in usePlatformSizeGrip() (qsizegrip.cpp) by refusing
+// the platform path on xcb and dragging the geometry manually instead —
+// every frameless move/resize path in AetherSDR follows that same rule,
+// clause for clause: usePlatformSizeGrip() also refuses the platform path on
+// Windows when the top-level has Qt::WA_TranslucentBackground set
+// (QTBUG-90628 — flicker combining native resize with a translucent
+// top-level there), which AetherSDR's own MainWindow sets whenever frameless
+// mode is on (`setAttribute(Qt::WA_TranslucentBackground, true)` in
+// MainWindow.cpp). `window` may be null for a caller with no widget handy;
+// the Windows clause then simply doesn't apply, same as if the attribute
+// were unset.
+inline bool systemMoveResizeUnreliable(const QWidget* window)
 {
-    return QGuiApplication::platformName().contains(QLatin1String("xcb"));
+    const QString platform = QGuiApplication::platformName();
+    if (platform.contains(QLatin1String("xcb"))) {
+        return true;
+    }
+    if (window && window->testAttribute(Qt::WA_TranslucentBackground)
+        && platform == QLatin1String("windows")) {
+        return true;
+    }
+    return false;
 }
 
 namespace Detail {
@@ -57,7 +73,7 @@ inline bool start(QWidget* handle, QMouseEvent* ev)
     }
 
 #ifndef Q_OS_MAC
-    if (!systemMoveResizeUnreliable()) {
+    if (!systemMoveResizeUnreliable(window)) {
         if (QWindow* windowHandle = window->windowHandle()) {
             if (windowHandle->startSystemMove()) {
                 ev->accept();

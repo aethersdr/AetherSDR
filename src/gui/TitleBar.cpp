@@ -578,7 +578,7 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
         // desktop) the press is swallowed and the window just never follows
         // the pointer (#4827). Skip straight to the manual-move path below,
         // same rule Qt's own QSizeGrip::usePlatformSizeGrip() applies.
-        if (!FramelessMoveHelper::systemMoveResizeUnreliable()) {
+        if (!FramelessMoveHelper::systemMoveResizeUnreliable(w)) {
             if (auto* h = w->windowHandle())
                 if (h->startSystemMove()) {
                     m_windowMoveActive = true;
