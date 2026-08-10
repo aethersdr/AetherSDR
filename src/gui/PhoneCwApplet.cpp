@@ -3,6 +3,7 @@
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "ComboStyle.h"
 #include "HGauge.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
@@ -820,6 +821,76 @@ void PhoneCwApplet::buildCwPanel()
         vbox->addLayout(row);
     }
 
+    // ── APF: toggle button + level slider + inset value ─────────────────
+    // The audio peaking filter was reachable only from the slice flag's DSP
+    // tab, which is two clicks away and closes on focus loss.  CW operators
+    // ride it constantly, so it belongs on the always-visible CW face next to
+    // the other keying controls (#4879).  Same SliceModel as the DSP-tab pair,
+    // so the two surfaces mirror each other with no bridging.
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_apfBtn = new QPushButton("APF");
+        m_apfBtn->setCheckable(true);
+        m_apfBtn->setFixedHeight(22);
+        m_apfBtn->setFixedWidth(kLeftColW);
+        // A stable id for the automation bridge, which addresses controls by
+        // objectName before accessible name — see the note on makeDsp() in
+        // VfoWidget.cpp.  The DSP-tab twin is "dspAPFBtn".
+        m_apfBtn->setObjectName(QStringLiteral("cwApfBtn"));
+        m_apfBtn->setAccessibleName("CW audio peaking filter");
+        m_apfBtn->setAccessibleDescription(
+            "Toggle the CW audio peaking filter on the active slice");
+        m_apfBtn->setToolTip("CW audio peaking filter — narrows the audio "
+                             "passband around the CW pitch frequency to improve S/N.");
+        m_apfBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
+        row->addWidget(m_apfBtn);
+
+        row->addSpacing(kGap);
+
+        m_apfSlider = new GuardedSlider(Qt::Horizontal);
+        m_apfSlider->setObjectName(QStringLiteral("cwApfSlider"));
+        m_apfSlider->setRange(0, 100);
+        m_apfSlider->setValue(50);
+        m_apfSlider->setAccessibleName("APF bandwidth");
+        m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
+        m_apfSlider->setToolTip("Adjusts APF bandwidth. Higher values narrow the "
+                                "peak for better CW selectivity. Enabled when APF is on.");
+        applyPrimarySliderStyle(m_apfSlider);
+        row->addWidget(m_apfSlider, 1);
+
+        m_apfEdit = new QLineEdit("50");
+        m_apfEdit->setStyleSheet(kInsetEditStyle);
+        m_apfEdit->setFixedWidth(kValueW);
+        m_apfEdit->setAlignment(Qt::AlignCenter);
+        m_apfEdit->setValidator(new QIntValidator(0, 100, m_apfEdit));
+        m_apfEdit->setAccessibleName("APF bandwidth value");
+        m_apfEdit->setAccessibleDescription("CW audio peaking filter bandwidth, 0 to 100");
+        row->addWidget(m_apfEdit);
+
+        connect(m_apfBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (!m_updatingFromModel && m_slice)
+                m_slice->setApf(on);
+        });
+        connect(m_apfSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (!m_apfEdit->hasFocus())
+                m_apfEdit->setText(QString::number(v));
+            if (!m_updatingFromModel && m_slice)
+                m_slice->setApfLevel(v);
+        });
+        connect(m_apfEdit, &QLineEdit::editingFinished, this, [this]() {
+            const int v = qBound(0, m_apfEdit->text().toInt(), 100);
+            m_apfEdit->setText(QString::number(v));
+            m_apfSlider->setValue(v);
+        });
+
+        vbox->addLayout(row);
+    }
+
+    // No slice is bound until AppletPanel::setSlice runs, so start the row
+    // inert rather than showing controls that would silently go nowhere.
+    syncApfFromSlice();
 }
 
 // ── Mode switching ───────────────────────────────────────────────────────────
@@ -898,6 +969,55 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
 
     syncPhoneFromModel();
     syncCwFromModel();
+}
+
+// ── Slice binding ────────────────────────────────────────────────────────────
+
+void PhoneCwApplet::setSlice(SliceModel* slice)
+{
+    // Disconnect before re-binding.  This is the whole slice→applet edge, and
+    // the applet owns every connection on it, so a blanket disconnect is exact.
+    if (m_slice)
+        disconnect(m_slice, nullptr, this, nullptr);
+
+    m_slice = slice;
+
+    if (m_slice) {
+        connect(m_slice, &SliceModel::modeChanged,
+                this, &PhoneCwApplet::setMode);
+        // Radio-side echo drives the UI; the button below only requests
+        // (Principle II).  Both edges land here, so an APF change made from
+        // the DSP tab, another Multi-Flex client, or the front panel shows up
+        // on this face too.
+        connect(m_slice, &SliceModel::apfChanged,
+                this, &PhoneCwApplet::syncApfFromSlice);
+        connect(m_slice, &SliceModel::apfLevelChanged,
+                this, &PhoneCwApplet::syncApfFromSlice);
+        setMode(m_slice->mode());
+    }
+
+    syncApfFromSlice();
+}
+
+void PhoneCwApplet::syncApfFromSlice()
+{
+    if (!m_apfBtn) return;
+
+    const bool bound = !m_slice.isNull();
+    const bool on    = bound && m_slice->apfOn();
+    const int  level = bound ? m_slice->apfLevel() : 50;
+
+    m_updatingFromModel = true;
+    m_apfBtn->setEnabled(bound);
+    m_apfBtn->setChecked(on);
+    // The level row follows the filter's engagement, radio echo included — a
+    // slider that talks to a disengaged filter reads as "APF is broken" (#4658).
+    m_apfSlider->setEnabled(bound && on);
+    m_apfEdit->setEnabled(bound && on);
+    m_apfSlider->setValue(level);
+    if (!m_apfEdit->hasFocus())
+        m_apfEdit->setText(QString::number(level));
+    m_updatingFromModel = false;
 }
 
 // ── Phone sync ───────────────────────────────────────────────────────────────
