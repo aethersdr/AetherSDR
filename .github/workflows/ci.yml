@@ -234,6 +234,27 @@ jobs:
       - name: Test TCI protocol parsing and malformed-input rejection
         run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
 
+      # icom_civ_test joins the gate for the same reason as the steps above, and
+      # the DFM mode mapping is what earned it the slot. `modeFromNeutral()`
+      # handled FM and NFM but not DFM, so DFM fell through to the "no
+      # equivalent" arm and setSliceMode() re-asserted whatever the radio was
+      # already in: the mode control silently reverted, with no crash, no log
+      # line above DEBUG, and no other assertion in the tree able to see it.
+      # The reverse direction was the same shape — CivMode::Fm returned "FM"
+      # regardless of the data flag, so a radio in FM-D reported as plain FM and
+      # the next mode write cleared the flag, taking the radio out of data mode
+      # on its own.
+      #
+      # A mode map is exactly the kind of table that grows a hole when a mode is
+      # added elsewhere and forgotten here, and the failure is invisible from
+      # the UI, which shows the mode it asked for either way. That is only worth
+      # guarding if it runs before the merge.
+      #
+      # Pure string-to-enum arithmetic against a target the Build step already
+      # linked: no radio, no sockets, no event loop, milliseconds to run.
+      - name: Test Icom CI-V codec and mode mapping
+        run: ctest --test-dir build -R "^icom_civ_test$" --output-on-failure
+
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted
