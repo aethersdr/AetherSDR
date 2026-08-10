@@ -443,10 +443,14 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
     // Poll to exact equality — the assert below is ==, so a default 100 Hz poll
     // tolerance could break while still a few Hz off and then fail (the same trap
     // fixed at 2.3).
-    const qint64 vfoaFreq = pollFreqField(c, QStringLiteral("\\get_freq VFOA"), gotFreq, 1000, 1);
-    r.check(QStringLiteral("2.6  get_freq VFOA returns same Hz as get_freq"),
-            vfoaFreq == gotFreq,
-            QStringLiteral("%1").arg(vfoaFreq));
+    pollFreqField(c, QStringLiteral("\\get_freq VFOA"), gotFreq, 1000, 1);
+    // Then one authoritative read, so the RPRT assertion is explicit again rather
+    // than implied by the value comparison — pollFreqField only compares the field.
+    lines = c.send(QStringLiteral("\\get_freq VFOA"));
+    const qint64 vfoaFreq = c.field(lines, QStringLiteral("Frequency")).toLongLong();
+    r.check(QStringLiteral("2.6  get_freq VFOA returns RPRT 0 and the same Hz as get_freq"),
+            c.ok(lines) && vfoaFreq == gotFreq,
+            QStringLiteral("%1 | %2").arg(vfoaFreq).arg(lines.join(QStringLiteral(" "))));
 
     // 2.7  VFO-prefixed set_freq VFOA <hz>
     lines = c.send(QStringLiteral("\\set_freq VFOA %1").arg(testFreq));

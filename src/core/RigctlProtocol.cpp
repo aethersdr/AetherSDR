@@ -29,6 +29,19 @@ static void dropVfoPrefix(QStringList& parts)
         parts.removeFirst();
 }
 
+// Raise the operator-facing "slice is locked" flash for a tune we rejected before
+// it could reach SliceModel. The tune handlers answer the client synchronously
+// and pre-check the lock (the seam's bool is unobservable across their queued
+// call), so without this the client learns why the tune failed but the person at
+// the radio — wondering why WSJT-X will not retune — sees nothing. SliceModel
+// lives on the GUI thread, hence the queued call.
+static void notifyLockBlocked(SliceModel* slice)
+{
+    if (!slice) return;
+    QMetaObject::invokeMethod(slice, [slice] { slice->notifyTuneBlockedByLock(); },
+                              Qt::QueuedConnection);
+}
+
 // Existing level bits (kept as-is for compatibility — bit 13 is MICGAIN in
 // standard Hamlib 4.x but has always been advertised as RFPOWER here; string
 // matching drives the protocol, not the mask).
@@ -754,8 +767,12 @@ QString RigctlProtocol::cmdSetFreq(const QString& arg)
     // plausibility check above, test it here: we answer the client synchronously
     // and marshal the tune through a queued call, so the seam's bool is
     // unobservable — without this we would answer RPRT 0 for a tune the radio
-    // never makes.
-    if (slice->isLocked()) return rprt(-1);
+    // never makes. notifyLockBlocked() keeps the operator's lock flash, which the
+    // seam would otherwise have raised inside SliceModel.
+    if (slice->isLocked()) {
+        notifyLockBlocked(slice);
+        return rprt(-1);
+    }
 
     double mhz = hz / 1e6;
     RadioModel* model = m_model;
@@ -1217,10 +1234,25 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
     // Reject <=0 / NaN / absurdly high (same predicate as the tune seam).
     if (parts.isEmpty() || !ok || !RadioModel::isPlausibleCatTuneMhz(hz / 1e6)) return rprt(-1);
-    // A locked TX slice refuses the tune (see cmdSetFreq). A TX slice that does
-    // not exist yet is created unlocked by applySplitParam below, so only an
-    // existing one can reject here.
-    if (auto* tx = findTxSlice(); tx && tx->isLocked()) return rprt(-1);
+    // A locked TX slice refuses the tune (see cmdSetFreq). Resolve it READ-ONLY:
+    // the default findTxSlice() runs tryPromoteTxSlice(), which is not a query —
+    // it promotes the pending slice and applies the stashed m_pendingSplitFreqMHz
+    // from an earlier burst. Running that here, before applySplitParam() has
+    // called ensureSplitTxSlice() to decide promotion is safe, would fire a tune
+    // the client already superseded (WSJT-X "Rig" split sends set_freq/set_mode
+    // VFOB in quick succession), and a cross-band stale value would recenter the
+    // pan on top of it.
+    //
+    // Consequence of promote=false: a TX slice not yet promoted is invisible
+    // here, so this cannot catch ensureSplitTxSlice() promoting an EXISTING slice
+    // the operator has locked. That path still answers RPRT 0 and is then dropped
+    // on the lock by the seam — the operator gets the lock feedback, the client
+    // does not. Closing it needs the promotion decision and the lock test in one
+    // place; out of scope here.
+    if (auto* tx = findTxSlice(/*promote=*/false); tx && tx->isLocked()) {
+        notifyLockBlocked(tx);
+        return rprt(-1);
+    }
     const double mhz = hz / 1e6;
     return applySplitParam(
         [this, mhz]{ m_pendingSplitFreqMHz = mhz; },
@@ -2073,7 +2105,7 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
         // already near the plausibility bound could land out of range, so apply
         // the same predicate the seam does. Mirrors set_freq/set_split_freq.
         if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
-        if (slice->isLocked()) return rprt(-1);   // refused; see cmdSetFreq
+        if (slice->isLocked()) { notifyLockBlocked(slice); return rprt(-1); }  // see cmdSetFreq
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);
@@ -2086,7 +2118,7 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
         // reject here (see UP above) rather than acknowledge a tune tuneSliceForCat
         // will silently drop.
         if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
-        if (slice->isLocked()) return rprt(-1);   // refused; see cmdSetFreq
+        if (slice->isLocked()) { notifyLockBlocked(slice); return rprt(-1); }  // see cmdSetFreq
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);

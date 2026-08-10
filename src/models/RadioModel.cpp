@@ -4646,6 +4646,11 @@ bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
     // SliceModel also skips — and that case must still report success. (rigctld
     // pre-checks the lock too; its queued tune can't observe this bool.)
     if (slice->isLocked()) {
+        // Tell the OPERATOR, not just the CAT client. SliceModel::setFrequency and
+        // tuneAndRecenter raise this before bailing on m_locked, so returning here
+        // without it would swallow the on-screen lock flash — leaving someone whose
+        // WSJT-X has stopped retuning with no indication that the lock is why.
+        slice->notifyTuneBlockedByLock();
         return false;
     }
     // Recenter policy: an in-span retune keeps autopan=0 (no yank — external
