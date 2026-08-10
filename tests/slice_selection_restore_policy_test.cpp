@@ -28,6 +28,10 @@ int main()
           "LAN scope includes station name");
     check(SliceSelectionRestorePolicy::radioIdForScope(true, "", "N12345", "Station1") == "N12345/Station1",
           "WAN scope uses chassis serial and includes station name");
+    check(SliceSelectionRestorePolicy::scopeCanCarrySelection(
+              SliceSelectionRestorePolicy::radioIdForScope(true, "", "N12345", "Station1"))
+              && SliceSelectionRestorePolicy::shouldCaptureTxSlice(true, 1, true),
+          "the TX capture on an unexpected WAN drop");
     check(SliceSelectionRestorePolicy::radioIdForScope(true, "", "") == "",
           "WAN scope returns empty when chassis serial is unpopulated");
 
