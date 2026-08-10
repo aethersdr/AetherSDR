@@ -1,5 +1,6 @@
 #include "FramelessResizer.h"
 #include "FramelessMoveHelper.h"
+#include "core/LogManager.h"
 
 #include <QCoreApplication>
 #include <QCursor>
@@ -23,7 +24,13 @@ FramelessResizer::FramelessResizer(QWidget* window, int margin, int topMoveReser
 {
     // Application-wide rather than per-QWindow: see quirk 1 in the header.
     // eventFilter() bails on the first switch for anything that isn't a mouse
-    // event, so the cost to unrelated event traffic is a type comparison.
+    // event, so the cost to unrelated event traffic is a type comparison — but
+    // every open frameless window installs its own instance, so that
+    // comparison runs once per instance per event: O(open frameless windows)
+    // per mouse event, application-wide. Ten call sites today (`grep -rn
+    // "FramelessResizer::install" src/`), all top-level windows/dialogs rather
+    // than something instantiated per-item, so the constant stays small;
+    // worth a second look if that stops being true.
     if (QCoreApplication* app = QCoreApplication::instance()) {
         app->installEventFilter(this);
     }
@@ -127,11 +134,22 @@ void FramelessResizer::beginManualResize(Qt::Edges edges, const QPoint& pressGlo
     m_manualResizePressGlobal = pressGlobal;
     m_manualResizeStartGeom = m_window->geometry();
     m_manualResizeLastRequested = m_manualResizeStartGeom;
+    // Snapshot once here rather than recomputing in continueManualResize() on
+    // every motion event: minimumSizeHint() walks the widget's layout, and a
+    // drag can produce dozens of moves before the release.
+    m_manualResizeFloor = m_window->minimumSize().expandedTo(m_window->minimumSizeHint());
     // Keep receiving motion even when the pointer outruns the window or crosses
     // a native child.  startSystemResize() would have had the WM guarantee this;
-    // driving the drag ourselves means asking for the grab ourselves.
+    // driving the drag ourselves means asking for the grab ourselves.  A failed
+    // grab isn't fatal — motion events still arrive while the pointer stays
+    // over one of our own windows — but a fast drag can then outrun the window
+    // and stall, so it's worth a log line to explain a report of that.
     if (QWindow* handle = m_window->windowHandle()) {
-        handle->setMouseGrabEnabled(true);
+        if (!handle->setMouseGrabEnabled(true)) {
+            qCWarning(lcGui) << "FramelessResizer: mouse grab denied for manual "
+                                 "resize; drag may stall if the pointer outruns "
+                                 "the window";
+        }
     }
 }
 
@@ -144,10 +162,10 @@ void FramelessResizer::continueManualResize(const QPoint& globalPos)
     // demands.  Clamping on minimumWidth()/minimumHeight() alone lets us ask
     // for a size Qt then silently grows back, and because it grows the size
     // while we keep moving the origin, the edge we are supposed to be holding
-    // still drifts.
-    const QSize floor = m_window->minimumSize().expandedTo(m_window->minimumSizeHint());
-    const int minW = floor.width();
-    const int minH = floor.height();
+    // still drifts.  Snapshotted once in beginManualResize() rather than
+    // recomputed here on every motion event.
+    const int minW = m_manualResizeFloor.width();
+    const int minH = m_manualResizeFloor.height();
     const int maxW = m_window->maximumWidth();
     const int maxH = m_window->maximumHeight();
 
@@ -336,9 +354,13 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
     case QEvent::Leave:
         // Only drop the cursor once the pointer has really left the window —
         // crossing between this window's native children raises Leave too, and
-        // resetting on those would make the edge cursor flicker.
-        if (!m_manualResizeActive
-            && !m_window->rect().contains(m_window->mapFromGlobal(QCursor::pos()))) {
+        // resetting on those would make the edge cursor flicker.  underMouse()
+        // rather than QCursor::pos(): the latter is a live global-cursor query,
+        // unreliable on native Wayland for the same reason the press handler
+        // above stopped using it, and there is no equivalent to the left/top-drag
+        // trailing problem here to justify the risk — Leave never fires mid-drag
+        // (m_manualResizeActive is already excluded above).
+        if (!m_manualResizeActive && !m_window->underMouse()) {
             leaveEdgeZone();
         }
         break;

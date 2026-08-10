@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QPoint>
 #include <QRect>
+#include <QSize>
 #include <Qt>
 
 class QWidget;
@@ -33,6 +34,43 @@ namespace AetherSDR {
 //     FramelessMoveHelper::systemMoveResizeUnreliable()), so the resizer drags
 //     the window geometry manually on that platform, the same fallback Qt's own
 //     QSizeGrip uses.
+//
+// Cross-platform behavior change (quirk 1 is not xcb-specific): before this
+// fix, MainWindow's edge-hover/press events were swallowed by its native
+// children on every platform, not only xcb — the bug is about event routing
+// through native child promotion, which xcb testing merely surfaced. Moving
+// the filter application-wide therefore turns on a real 6px edge-resize band
+// on MainWindow everywhere, including platforms that previously reached this
+// class's edgesAt() with a dead filter and so never resized from an edge at
+// all.
+//
+// Edge-resize itself is proven end-to-end, not just eyeballed: a real
+// XTestFakeButtonEvent/XTestFakeMotionEvent drag (genuine X11 input, not an
+// app-level synthetic event — see PR #4829) on a running MainWindow's right
+// edge under xcb grew it by exactly the dragged delta, independently
+// confirmed by the resulting `display pan set … xpixels=` line the resize
+// pushed to the radio. AetherSDR's own automation-bridge pointer verbs were
+// tried first and don't work for this: `clickAt`/`dragAt`/`gesture`
+// synthesize `QMouseEvent`s straight to the target *QWidget* via
+// `QCoreApplication::sendEvent()`, never to its QWindow, so they never reach
+// this filter, which by design (quirk 1 above) only acts on window-level
+// events — the same reason native children swallowed the original bug. A
+// bridge-driven proof would need a window-targeted synthetic event path
+// added to the bridge; real OS-level input (as above) was the workaround.
+//
+// Shadowed-control check on MainWindow: confirmed live under xcb via a
+// read-only widgetAt/childAt probe at the running window's bottom-edge margin
+// — the status bar (46px, docked at the window's bottom edge) hosts several
+// clickable controls whose rects genuinely extend into the bottom 6px:
+// `gpsStatusButton` by ~4px, the "Cancel transmit" status label by ~1px. A
+// press landing there is consumed by this class before the widget ever sees
+// it — Qt calls application-installed event filters ahead of the receiver's
+// own event() for every dispatch, so that is guaranteed once a press reaches
+// this filter (proven above), not merely likely. Filed as a follow-up rather
+// than fixed here (#4886): the fix belongs in the status bar
+// layout (cap each stack's maximumHeight so its clickable area stops short
+// of the edge) rather than in this class, which has no way to know about a
+// specific adopter's child geometry.
 //
 // Known artifact of that manual path: dragging an edge that moves the window
 // origin (left or top) can make the opposite edge appear to shimmer under a
@@ -91,6 +129,10 @@ private:
     QPoint    m_manualResizePressGlobal;
     QRect     m_manualResizeStartGeom;
     QRect     m_manualResizeLastRequested;
+    // minimumSize().expandedTo(minimumSizeHint()), snapshotted once at press
+    // time rather than recomputed on every motion event — minimumSizeHint()
+    // walks the widget's layout, and a drag can produce dozens of moves.
+    QSize     m_manualResizeFloor;
 };
 
 } // namespace AetherSDR
