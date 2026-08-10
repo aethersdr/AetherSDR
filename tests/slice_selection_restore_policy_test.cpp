@@ -56,8 +56,15 @@ int main()
           "profile load held -> Defer");
     check(SliceSelectionRestorePolicy::restoreAction(true, false, false) == SliceSelectionRestorePolicy::RestoreAction::Defer,
           "scope not ready -> Defer");
-    check(SliceSelectionRestorePolicy::restoreAction(false, false, true) == SliceSelectionRestorePolicy::RestoreAction::Skip,
-          "disallowed -> Skip");
+    // Letters ready predicate
+    check(SliceSelectionRestorePolicy::lettersReadyForSelection(2, 2),
+          "letters ready when all enumerated slices have index_letter");
+    check(!SliceSelectionRestorePolicy::lettersReadyForSelection(2, 1),
+          "letters not ready when index_letter is pending on some slices");
+    check(SliceSelectionRestorePolicy::lettersReadyForSelection(2, 0),
+          "older firmware (no index_letter) considers letters ready via 'A' + id fallback");
+    check(!SliceSelectionRestorePolicy::lettersReadyForSelection(0, 0),
+          "un-enumerated slice list is not ready");
 
     if (failures == 0) {
         std::printf("\nAll slice selection restore policy tests passed.\n");

@@ -65,6 +65,19 @@ public:
             && !fromRestore;
     }
 
+    // Are slice letters ready for selection matching?
+    //
+    // On older firmware that never sends index_letter (SliceModel.h:34),
+    // slicesWithLetterFromRadio stays 0 and letter() falls back to 'A' + sliceId,
+    // so letters are immediately ready. On modern firmware, letters are ready
+    // when all enumerated slices have received index_letter status.
+    static bool lettersReadyForSelection(int enumeratedSliceCount,
+                                          int slicesWithLetterFromRadio)
+    {
+        if (enumeratedSliceCount <= 0) return false;
+        return slicesWithLetterFromRadio == 0 || slicesWithLetterFromRadio >= enumeratedSliceCount;
+    }
+
     // ── The post-connect restore window ────────────────────────────────────
 
     void onConnected()
