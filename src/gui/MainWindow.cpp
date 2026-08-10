@@ -3512,6 +3512,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // the last tune/drive edit before quit is remembered (RFC #4603 PR 3;
     // PR #4619 review).
     m_radioModel.flushPendingOperatingState();
+    captureTxSliceSelection();
 
     // Same reason as the TGXL/PGXL sockets above: the D-STAR helper is stopped
     // by the queued RadioModel::connectionStateChanged(false) handler, which
@@ -5533,6 +5534,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // status trickle with a wide margin. The generation it carries keeps a
         // previous connect's pending timeout from closing this window.
         m_daxRestore.onConnected();
+        m_activeSliceRestore.onConnected();
         const int daxGen = m_daxRestore.generation();
         QTimer::singleShot(10000, this, [this, daxGen]() {
             m_daxRestore.onSettleTimeout(daxGen);
@@ -5802,6 +5804,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // reopens it for its own enumeration. Disconnect teardown does not emit
         // sliceRemoved, so without this the window would stay armed until the
         // settle timer happened to fire.
+        captureTxSliceSelection();
+        m_activeSliceRestore.onDisconnected();
         m_daxRestore.onDisconnected();
 
         // Radio disconnected: trim CAT ports back to 1 so apps on channel A
@@ -7278,6 +7282,15 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
         m_optimisticActiveEdgeSliceId = sliceId;
         s->setActive(true);
         m_optimisticActiveEdgeSliceId = previousEdgeSliceId;
+    }
+
+    if (SliceSelectionRestorePolicy::shouldPersist(
+            m_updatingFromModel,
+            m_bandRecallSelection.isActive(s->panId(), QDateTime::currentMSecsSinceEpoch()),
+            profileLoadRadioStateWritesHeld(),
+            /*fromRestore=*/false)) {
+        m_activeSliceRestore.noteOperatorSelection();
+        noteActiveSliceSelection(s);
     }
 
     // Update RX EQ filter-cutoff guides whenever the active slice swaps —

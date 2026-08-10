@@ -3532,6 +3532,14 @@ target_include_directories(band_recall_slice_selection_policy_test PRIVATE src)
 add_test(NAME band_recall_slice_selection_policy_test
     COMMAND band_recall_slice_selection_policy_test)
 
+add_executable(slice_selection_restore_policy_test
+    tests/slice_selection_restore_policy_test.cpp
+)
+target_include_directories(slice_selection_restore_policy_test PRIVATE src)
+target_link_libraries(slice_selection_restore_policy_test PRIVATE Qt6::Core)
+add_test(NAME slice_selection_restore_policy_test
+    COMMAND slice_selection_restore_policy_test)
+
 # When that policy applies — the window opened by an actually-dispatched
 # `display pan set <pan> band=` write. Header-only.
 add_executable(band_recall_selection_guard_test

@@ -2000,6 +2000,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
     }
 
     connect(s, &SliceModel::txSliceChanged, this, [this, s](bool tx) {
+        if (tx) {
+            captureTxSliceSelection();
+        }
         // Update hasTxSlice on all spectrums for waterfall freeze logic
         if (tx) {
             for (auto* pan : m_radioModel.panadapters()) {
@@ -2218,6 +2221,19 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     refreshSliceLinkUi();
     updateAetherDspModePolicy();
+
+    connect(s, &SliceModel::letterChanged, this, [this, s]() {
+        if (s == m_pendingOperatorActiveSlice && s == activeSlice() && s->hasLetterFromRadio()) {
+            noteActiveSliceSelection(s);
+        }
+        if (m_activeSliceRestore.restoreAllowed()) {
+            scheduleSliceSelectionRestore();
+        }
+    });
+
+    if (m_activeSliceRestore.restoreAllowed()) {
+        scheduleSliceSelectionRestore();
+    }
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -6073,6 +6089,123 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
                 emittedNs);
         }
         break;  // one pan owns this stream id
+    }
+}
+
+QString MainWindow::sliceSelectionScope() const
+{
+    const bool isWan = m_radioModel.isWan();
+    const QString discoverySerial = m_radioModel.lastRadioInfo().serial;
+    const QString chassisSerial = m_radioModel.chassisSerial();
+    const QString stationName = m_radioModel.nickname();
+    return SliceSelectionRestorePolicy::radioIdForScope(
+        isWan, discoverySerial, chassisSerial, stationName);
+}
+
+bool MainWindow::storeSliceSelectionLetter(const QString& field, const QString& letter)
+{
+    const QString scope = sliceSelectionScope();
+    if (!SliceSelectionRestorePolicy::scopeCanCarrySelection(scope)) {
+        return false;
+    }
+    QJsonObject doc = AppSettings::instance().radioFeature(
+        m_radioModel.family(), scope, QStringLiteral("SliceSelection"));
+    doc[field] = letter;
+    return AppSettings::instance().setRadioFeature(
+        m_radioModel.family(), scope, QStringLiteral("SliceSelection"), 1, doc);
+}
+
+void MainWindow::noteActiveSliceSelection(SliceModel* slice)
+{
+    if (!slice) return;
+    if (!slice->hasLetterFromRadio()) {
+        m_pendingOperatorActiveSlice = slice;
+        return;
+    }
+    if (m_pendingOperatorActiveSlice == slice) {
+        m_pendingOperatorActiveSlice = nullptr;
+    }
+    storeSliceSelectionLetter(QStringLiteral("activeSliceLetter"), slice->letter());
+}
+
+void MainWindow::captureTxSliceSelection()
+{
+    const auto slices = m_radioModel.slices();
+    if (!SliceSelectionRestorePolicy::shouldCaptureTxSlice(
+            m_radioModel.isConnected() || m_shuttingDown,
+            slices.size(),
+            m_radioModel.txOwnedByUs())) {
+        return;
+    }
+    for (auto* sl : slices) {
+        if (sl->isTxSlice()) {
+            storeSliceSelectionLetter(QStringLiteral("txSliceLetter"), sl->letter());
+            return;
+        }
+    }
+}
+
+SliceModel* MainWindow::sliceForRestoreLetter(const QString& letter) const
+{
+    if (letter.isEmpty()) return nullptr;
+    for (auto* sl : m_radioModel.slices()) {
+        if (sl->letter() == letter) {
+            return sl;
+        }
+    }
+    return nullptr;
+}
+
+void MainWindow::scheduleSliceSelectionRestore()
+{
+    if (!m_activeSliceRestore.restoreAllowed()) return;
+    const int gen = m_activeSliceRestore.generation();
+    QTimer::singleShot(600, this, [this, gen]() {
+        if (gen == m_activeSliceRestore.generation()) {
+            applySliceSelectionRestore();
+        }
+    });
+}
+
+void MainWindow::applySliceSelectionRestore()
+{
+    const QString scope = sliceSelectionScope();
+    const bool scopeReady = SliceSelectionRestorePolicy::scopeCanCarrySelection(scope);
+    const auto action = SliceSelectionRestorePolicy::restoreAction(
+        m_activeSliceRestore.restoreAllowed(),
+        profileLoadRadioStateWritesHeld(),
+        scopeReady);
+
+    if (action == SliceSelectionRestorePolicy::RestoreAction::Skip) {
+        return;
+    }
+    if (action == SliceSelectionRestorePolicy::RestoreAction::Defer) {
+        scheduleSliceSelectionRestore();
+        return;
+    }
+
+    const QJsonObject doc = AppSettings::instance().radioFeature(
+        m_radioModel.family(), scope, QStringLiteral("SliceSelection"));
+
+    const QString savedActiveLetter = doc.value(QStringLiteral("activeSliceLetter")).toString();
+    const QString savedTxLetter = doc.value(QStringLiteral("txSliceLetter")).toString();
+
+    // Which slice owns transmit — restored first so local state settles before active
+    if (!savedTxLetter.isEmpty() && SliceSelectionRestorePolicy::mayAssertTxSlice(m_radioModel.txOwnedByUs())) {
+        if (auto* targetTx = sliceForRestoreLetter(savedTxLetter)) {
+            if (!targetTx->isTxSlice()) {
+                targetTx->setTxSlice(true);
+            }
+        }
+    }
+
+    // Which slice is active
+    if (!savedActiveLetter.isEmpty()) {
+        if (auto* targetActive = sliceForRestoreLetter(savedActiveLetter)) {
+            if (targetActive->sliceId() != m_activeSliceId) {
+                setActiveSlice(targetActive->sliceId());
+            }
+        }
     }
 }
 

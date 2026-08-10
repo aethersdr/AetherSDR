@@ -24,6 +24,7 @@
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
+#include "gui/SliceSelectionRestorePolicy.h"
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -1746,6 +1747,15 @@ private:
     QList<QMetaObject::Connection> m_daxSliceConns;
     QHash<int, int> m_daxSliceLastCh;  // sliceId -> last-known DAX channel
 #endif
+    SliceSelectionRestorePolicy m_activeSliceRestore;
+    SliceModel* m_pendingOperatorActiveSlice{nullptr};
+    QString sliceSelectionScope() const;
+    bool storeSliceSelectionLetter(const QString& field, const QString& letter);
+    void noteActiveSliceSelection(SliceModel* slice);
+    void captureTxSliceSelection();
+    void scheduleSliceSelectionRestore();
+    void applySliceSelectionRestore();
+    SliceModel* sliceForRestoreLetter(const QString& letter) const;
 };
 
 template <class T, class... Args>
