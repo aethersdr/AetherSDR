@@ -73,6 +73,45 @@ int main()
               && !ordinaryFallback.suppressActiveCommand,
           "ordinary topology fallback: existing reveal and activation remain");
 
+    // The connect-time bootstrap of the first ENUMERATED slice must never
+    // assert active=1. The radio emits active=1 status for slices as they
+    // enumerate (the last-created slice becomes active in the status stream);
+    // asserting active=1 on the first slice during enumeration overwrote the
+    // radio's active status before the remaining slices were created client-side,
+    // so an operator who left slice B active came back to slice A on every launch.
+    const RadioSliceSelectionDecision initialEnumeration =
+        radioSliceSelectionDecision(
+            false, RadioSliceSelectionSource::InitialEnumeration);
+    check(initialEnumeration.revealOffscreen
+              && initialEnumeration.suppressActiveCommand,
+          "initial enumeration: first slice is selected without asserting active=1");
+
+    // ...and it is equally suppressed during a band recall.
+    const RadioSliceSelectionDecision initialDuringRecall =
+        radioSliceSelectionDecision(
+            true, RadioSliceSelectionSource::InitialEnumeration);
+    check(!initialDuringRecall.revealOffscreen
+              && initialDuringRecall.suppressActiveCommand,
+          "initial enumeration during recall: synchronization-only");
+
+    // TopologyFallback is the ONLY source that may assert the selection — it
+    // fires when the active slice was removed and the radio needs to be told
+    // which one takes over. Guard that this stays a single exception.
+    const RadioSliceSelectionSource kSuppressingSources[] = {
+        RadioSliceSelectionSource::ActiveStatus,
+        RadioSliceSelectionSource::InitialEnumeration,
+    };
+    bool onlyFallbackAsserts =
+        !radioSliceSelectionDecision(
+             false, RadioSliceSelectionSource::TopologyFallback)
+             .suppressActiveCommand;
+    for (const RadioSliceSelectionSource source : kSuppressingSources) {
+        onlyFallbackAsserts = onlyFallbackAsserts
+            && radioSliceSelectionDecision(false, source).suppressActiveCommand;
+    }
+    check(onlyFallbackAsserts,
+          "only topology fallback asserts active=1 outside a recall");
+
     if (failures == 0) {
         std::printf("\nAll band-recall slice-selection policy tests passed.\n");
         return 0;

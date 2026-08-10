@@ -34,6 +34,7 @@ public:
     // *this* client (e.g. the second client's first slice is "A" even when
     // its global sliceId is 2).  Falls back to `'A' + sliceId` if the field
     // hasn't arrived yet (early in status, or older firmware).
+    bool    hasLetterFromRadio() const { return !m_letter.isEmpty(); }
     QString letter()     const { return m_letter.isEmpty()
                                      ? QString(QChar('A' + m_id))
                                      : m_letter; }

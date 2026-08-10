@@ -322,9 +322,7 @@ void MainWindow::selectSliceFromRadioState(
             << "MainWindow: band recall suppressing slice reveal"
             << "pan=" << slice->panId()
             << "slice=" << slice->sliceId()
-            << "source="
-            << (source == RadioSliceSelectionSource::ActiveStatus
-                    ? "active-status" : "topology-fallback");
+            << "source=" << radioSliceSelectionSourceName(source);
     }
 
     const bool wasUpdatingFromModel = m_updatingFromModel;
@@ -1628,6 +1626,8 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
 }
 
 
+
+
 void MainWindow::onSliceAdded(SliceModel* s)
 {
     // During layout transition, spectrums are being destroyed/recreated — skip
@@ -1644,8 +1644,18 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // First slice — wire everything up
     if (firstSlice) {
+        // Bootstrap only: give the UI a selection. Do NOT write active=1 —
+        // this is the first slice ENUMERATED, not the slice that should own
+        // the UI. A FLEX does not persist the operator's active-slice choice
+        // across a restart; during connect the status burst / enumeration
+        // order may end with a different slice active (often last-created),
+        // and that slice may not exist client-side yet (it arrives in a later
+        // status frame). Asserting here would clobber that live status and
+        // make first-enumerated always win. The adoption below — and the
+        // activeChanged handler / client-side restore — pick the right slice
+        // up when it arrives. (#2465 class)
         selectSliceFromRadioState(
-            s, RadioSliceSelectionSource::TopologyFallback);
+            s, RadioSliceSelectionSource::InitialEnumeration);
 
         // Detect initial band from radio's frequency
         if (m_bandSettings.currentBand().isEmpty())
