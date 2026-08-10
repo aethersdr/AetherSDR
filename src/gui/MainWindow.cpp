@@ -5568,10 +5568,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
         // Only start the local RX audio sink if the user wants audio routed
-        // to the PC. When PC Audio is off we may still request a
-        // remote_audio_rx stream for TCI clients; the sink should stay
-        // silent in that case. The PC Audio toggle handler starts/stops
-        // the sink when the user flips it.
+        // to the PC. TCI clients get RX audio via DAX (#1331), not
+        // remote_audio_rx, so PC Audio off means no stream and no sink.
+        // The PC Audio toggle handler starts/stops the sink when the user
+        // flips it.
         // Always sync the button to the setting here so any divergence
         // (e.g. from a profile load before connect) is corrected (#1536).
         {
