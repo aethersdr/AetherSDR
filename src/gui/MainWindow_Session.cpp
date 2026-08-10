@@ -1967,8 +1967,9 @@ void MainWindow::wireCatPorts()
 
     // TCI client count changes no longer auto-create/remove the audio stream.
     // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
-    // the stream overrode the user's explicit PC Audio toggle. Users who need
-    // TCI audio (WSJT-X) should enable PC Audio manually. (#1071)
+    // the stream overrode the user's explicit PC Audio toggle. TCI audio does
+    // not need PC Audio either: it uses DAX channels acquired by
+    // TciServer::ensureDaxForTci(), independently of remote_audio_rx. (#1071, #1331)
 #endif
 
 }
