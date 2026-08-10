@@ -344,6 +344,35 @@ void PanadapterStack::equalizeSizes()
     equalizeSplitter(m_splitter);
 }
 
+void PanadapterStack::refreshAfterLayoutShift()
+{
+    // Re-realize each spectrum's NATIVE window, not just its GPU pipelines.
+    //
+    // Measured: after the flip the widget reports the correct width (e.g.
+    // 1450) while its native surface is still the pre-flip 1190 — short by
+    // exactly the panel's 260 px.  So the widget repaints happily, every
+    // frame, into a drawable that is too narrow, and the strip beyond it is
+    // painted by nobody.  resetGpuResources() + update() alone does NOT fix
+    // this: re-rendering into the same undersized surface changes nothing,
+    // which is also why the continuously-redrawing waterfall never heals it.
+    //
+    // Destroying the native window is the part that actually re-establishes
+    // the geometry, so this uses the full reparent path even though the
+    // widget has not changed top-level.  It costs a Metal re-bind, which is
+    // acceptable for an explicit, infrequent operator action and is the same
+    // cost already paid when floating or docking a pan.
+    for (PanadapterApplet* applet : std::as_const(m_pans)) {
+        if (!applet) continue;
+        if (SpectrumWidget* sw = applet->spectrumWidget()) {
+            refreshAfterReparent(sw);
+        }
+    }
+    // The non-native siblings (band-stack strip, splitter handles) repaint
+    // from the ordinary damage path, but the move can leave their old
+    // footprint un-invalidated in a translucent window, so sweep the stack.
+    update();
+}
+
 int PanadapterStack::layoutRequiredPanCount(const QString& layoutId)
 {
     // Minimum applet count each layout id needs before rearrangeLayout()'s
