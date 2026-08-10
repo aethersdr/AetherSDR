@@ -92,6 +92,15 @@ static const QString kBtnGlyphStyle =
     "border: 1px solid {{color.border.strong}}; padding: 0; border-radius: 3px; }"
     "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
 
+// One apply site for the shared primary-button sheet — the colour ratchet
+// counts setStyleSheet() call sites, not colours (tools/audit_colours.py).
+static QPushButton* makeStyledButton(const QString& text)
+{
+    auto* btn = new QPushButton(text);
+    btn->setStyleSheet(kBtnStyle);
+    return btn;
+}
+
 MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* parent)
     : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
       m_manager(manager)
@@ -116,13 +125,11 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         m_portCombo->setMinimumWidth(250);
         grid->addWidget(m_portCombo, 0, 1);
 
-        auto* refreshBtn = new QPushButton("Refresh");
-        refreshBtn->setStyleSheet(kBtnStyle);
+        auto* refreshBtn = makeStyledButton("Refresh");
         connect(refreshBtn, &QPushButton::clicked, this, &MidiMappingDialog::refreshPortList);
         grid->addWidget(refreshBtn, 0, 2);
 
-        m_connectBtn = new QPushButton("Connect");
-        m_connectBtn->setStyleSheet(kBtnStyle);
+        m_connectBtn = makeStyledButton("Connect");
         connect(m_connectBtn, &QPushButton::clicked, this, [this] {
             if (m_manager->isOpen()) {
                 m_manager->closePort();
@@ -221,8 +228,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         connect(m_categoryCombo, &QComboBox::currentTextChanged, this, populateParams);
         populateParams();
 
-        auto* learnBtn = new QPushButton("Learn");
-        learnBtn->setStyleSheet(kBtnStyle);
+        auto* learnBtn = makeStyledButton("Learn");
         learnBtn->setToolTip("Add binding: select a parameter, click Learn, then move a knob on your controller");
         connect(learnBtn, &QPushButton::clicked, this, [this, learnBtn] {
             if (m_manager->isLearning()) {
@@ -275,8 +281,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
         // Button row
         auto* btnRow = new QHBoxLayout;
-        auto* clearAllBtn = new QPushButton("Clear All");
-        clearAllBtn->setStyleSheet(kBtnStyle);
+        auto* clearAllBtn = makeStyledButton("Clear All");
         connect(clearAllBtn, &QPushButton::clicked, this, [this] {
             m_manager->clearBindings();
             refreshBindingTable();
@@ -294,8 +299,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         btnRow->addWidget(new QLabel("Profile:"));
         btnRow->addWidget(m_profileCombo);
 
-        auto* saveProfileBtn = new QPushButton("Save");
-        saveProfileBtn->setStyleSheet(kBtnStyle);
+        auto* saveProfileBtn = makeStyledButton("Save");
         saveProfileBtn->setToolTip(
             QStringLiteral("Save the current bindings as a named profile"));
         connect(saveProfileBtn, &QPushButton::clicked, this, [this] {
@@ -306,8 +310,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         btnRow->addWidget(saveProfileBtn);
 
-        auto* loadProfileBtn = new QPushButton("Load");
-        loadProfileBtn->setStyleSheet(kBtnStyle);
+        auto* loadProfileBtn = makeStyledButton("Load");
         loadProfileBtn->setToolTip(
             QStringLiteral("Apply the selected profile to the current bindings"));
         connect(loadProfileBtn, &QPushButton::clicked, this, [this] {
@@ -330,8 +333,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         btnRow->addWidget(loadProfileBtn);
 
-        auto* importProfileBtn = new QPushButton("Import...");
-        importProfileBtn->setStyleSheet(kBtnStyle);
+        auto* importProfileBtn = makeStyledButton("Import...");
         importProfileBtn->setObjectName(QStringLiteral("midiProfileImportButton"));
         importProfileBtn->setAccessibleName(QStringLiteral("Import MIDI profile"));
         importProfileBtn->setToolTip(QStringLiteral(
@@ -340,8 +342,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                 &MidiMappingDialog::importProfileFromFile);
         btnRow->addWidget(importProfileBtn);
 
-        auto* exportProfileBtn = new QPushButton("Export...");
-        exportProfileBtn->setStyleSheet(kBtnStyle);
+        auto* exportProfileBtn = makeStyledButton("Export...");
         exportProfileBtn->setObjectName(QStringLiteral("midiProfileExportButton"));
         exportProfileBtn->setAccessibleName(QStringLiteral("Export MIDI profile"));
         exportProfileBtn->setToolTip(
@@ -357,8 +358,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
     // ── Close button ────────────────────────────────────────────────────
     auto* closeRow = new QHBoxLayout;
     closeRow->addStretch();
-    auto* closeBtn = new QPushButton("Close");
-    closeBtn->setStyleSheet(kBtnStyle);
+    auto* closeBtn = makeStyledButton("Close");
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     closeRow->addWidget(closeBtn);
     root->addLayout(closeRow);
