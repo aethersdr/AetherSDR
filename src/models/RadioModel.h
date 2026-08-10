@@ -832,9 +832,11 @@ public:
     // directly; the client lock logic does, exactly as the GUI path does. Call on
     // the GUI thread (owns SliceModel).
     // Returns false (and issues no tune) when the target is rejected — a null
-    // slice or an implausible frequency (see isPlausibleCatTuneMhz) — so the CAT
-    // protocol layer can report the failure instead of acknowledging a tune that
-    // never happened.
+    // slice, an implausible frequency (see isPlausibleCatTuneMhz), or a locked
+    // slice, which SliceModel refuses — so the CAT protocol layer can report the
+    // failure instead of acknowledging a tune that never happened. A retune to
+    // the frequency the slice already holds is a no-op, not a rejection, and
+    // still returns true.
     bool tuneSliceForCat(SliceModel* slice, double mhz);
 
     // Is this a physically plausible CAT-tune target (MHz)? The single policy for

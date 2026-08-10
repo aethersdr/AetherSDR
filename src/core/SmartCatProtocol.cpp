@@ -310,9 +310,10 @@ QString SmartCatProtocol::cmdFA(const QString& arg)
     // change makes the panadapter follow (in-span keeps autopan=0; out-of-span
     // recenters) instead of leaving it behind until a manual GUI action. CatPort
     // runs on the GUI thread, so this is a direct, synchronous call. It returns
-    // false for a rejected (non-positive/non-finite) target — answer "?;" rather
-    // than acknowledge a tune that never happened.
-    if (m_model && !m_model->tuneSliceForCat(a, hz / 1e6)) return "?;";
+    // false for a rejected target (non-positive/non-finite, or a locked slice the
+    // radio refuses) — answer "?;" rather than acknowledge a tune that never
+    // happened. CatPort observes this bool directly, unlike rigctld's queued call.
+    if (!m_model || !m_model->tuneSliceForCat(a, hz / 1e6)) return "?;";
     return {};
 }
 
@@ -337,7 +338,7 @@ QString SmartCatProtocol::cmdFB(const QString& arg)
     // offset from RX) keeps autopan=0 and does NOT yank; only a genuinely
     // cross-band TX recenters. TCI is the reference behavior we mirror. Answer
     // "?;" if the target is rejected rather than acknowledge a dropped tune.
-    if (m_model && !m_model->tuneSliceForCat(b, hz / 1e6)) return "?;";
+    if (!m_model || !m_model->tuneSliceForCat(b, hz / 1e6)) return "?;";
     return {};
 }
 
@@ -1427,7 +1428,7 @@ QString SmartCatProtocol::cmdUP(const QString& arg)
     // Cross-band-aware (see cmdFA): a multi-step move can leave the pan span, so
     // route through the recenter policy rather than a bare autopan=0 setFrequency.
     // Answer "?;" if the target is rejected rather than acknowledge a dropped tune.
-    if (m_model && !m_model->tuneSliceForCat(a, a->frequency() + stepMhz * steps))
+    if (!m_model || !m_model->tuneSliceForCat(a, a->frequency() + stepMhz * steps))
         return "?;";
     return {};
 }
@@ -1450,7 +1451,7 @@ QString SmartCatProtocol::cmdDN(const QString& arg)
     // Cross-band-aware (see cmdFA). A large multi-step DN can underflow the target
     // past 0; tuneSliceForCat rejects a non-positive frequency at the boundary and
     // returns false, so answer "?;" rather than acknowledge a tune that never ran.
-    if (m_model && !m_model->tuneSliceForCat(a, a->frequency() - stepMhz * steps))
+    if (!m_model || !m_model->tuneSliceForCat(a, a->frequency() - stepMhz * steps))
         return "?;";
     return {};
 }

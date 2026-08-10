@@ -4637,6 +4637,17 @@ bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
     if (!isPlausibleCatTuneMhz(mhz)) {
         return false;
     }
+    // A locked slice refuses the tune outright — SliceModel::setFrequency and
+    // tuneAndRecenter both bail on m_locked (and raise the lock feedback), so
+    // returning true here would be the same Principle VII lie the check above
+    // closes: the client reads success for a tune the radio never made. Test the
+    // lock rather than comparing the frequency before and after, because a
+    // retune to the frequency the slice already holds is a legitimate no-op that
+    // SliceModel also skips — and that case must still report success. (rigctld
+    // pre-checks the lock too; its queued tune can't observe this bool.)
+    if (slice->isLocked()) {
+        return false;
+    }
     // Recenter policy: an in-span retune keeps autopan=0 (no yank — external
     // Doppler software like SatPC32 steps every few seconds); an out-of-span or
     // cross-band target uses tuneAndRecenter so the radio recenters/re-bands the
@@ -4645,9 +4656,19 @@ bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
     // Lock / Pan-Follows-VFO) the radio needs to actually move a centered slice.
     // (A bare command via sendCmdPublic does NOT emit frequencyChanged, so the
     // follow never runs and the tune doesn't stick on real hardware.) SliceModel
-    // itself guards the slice lock and no-op (freq unchanged), so no extra checks
-    // here. We issue no pan command directly — the client lock logic does, exactly
-    // as the GUI tune path does.
+    // still guards the no-op case (freq unchanged) itself, so no extra check here.
+    // We issue no pan command directly — the client lock logic does, exactly as
+    // the GUI tune path does.
+    //
+    // Deliberately NOT a band-stack preselect: the GUI's own cross-band tune
+    // calls preselectBandStackForTune()/requestPanBand() first, which also
+    // restores that band's antenna, filters and zoom. CAT does not, by design —
+    // the CAT/DAX/TCI planes express intent and let the radio recenter rather
+    // than issuing pan/band commands directly, and confirm off the radio's reply
+    // instead of a fixed timer. TciServer::tuneSliceAndConfirm behaves the same
+    // way, and TCI is the reference we match. Consequence, called out in the PR:
+    // a CAT band change follows the pan but does not restore per-band stack
+    // state the way clicking the band button does.
     bool inSpan = false;
     if (const PanadapterModel* pan = panadapter(slice->panId())) {
         inSpan = pan->spanContainsMhz(mhz);

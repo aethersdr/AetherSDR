@@ -750,6 +750,12 @@ QString RigctlProtocol::cmdSetFreq(const QString& arg)
         return cmdSetSplitFreq(parts[0]);
     }
     if (!slice) return rprt(-8);
+    // A locked slice refuses the tune (tuneSliceForCat returns false). Like the
+    // plausibility check above, test it here: we answer the client synchronously
+    // and marshal the tune through a queued call, so the seam's bool is
+    // unobservable — without this we would answer RPRT 0 for a tune the radio
+    // never makes.
+    if (slice->isLocked()) return rprt(-1);
 
     double mhz = hz / 1e6;
     RadioModel* model = m_model;
@@ -1211,6 +1217,10 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
     // Reject <=0 / NaN / absurdly high (same predicate as the tune seam).
     if (parts.isEmpty() || !ok || !RadioModel::isPlausibleCatTuneMhz(hz / 1e6)) return rprt(-1);
+    // A locked TX slice refuses the tune (see cmdSetFreq). A TX slice that does
+    // not exist yet is created unlocked by applySplitParam below, so only an
+    // existing one can reject here.
+    if (auto* tx = findTxSlice(); tx && tx->isLocked()) return rprt(-1);
     const double mhz = hz / 1e6;
     return applySplitParam(
         [this, mhz]{ m_pendingSplitFreqMHz = mhz; },
@@ -2063,6 +2073,7 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
         // already near the plausibility bound could land out of range, so apply
         // the same predicate the seam does. Mirrors set_freq/set_split_freq.
         if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
+        if (slice->isLocked()) return rprt(-1);   // refused; see cmdSetFreq
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);
@@ -2075,6 +2086,7 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
         // reject here (see UP above) rather than acknowledge a tune tuneSliceForCat
         // will silently drop.
         if (!RadioModel::isPlausibleCatTuneMhz(mhz)) return rprt(-1);
+        if (slice->isLocked()) return rprt(-1);   // refused; see cmdSetFreq
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);

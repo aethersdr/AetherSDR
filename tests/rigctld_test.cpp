@@ -541,6 +541,47 @@ void section2c(RigctlClient& c, Runner& r, qint64 origFreq)
     r.check(QStringLiteral("2c.6  VFO unchanged after the rejected absurd set_freq (%1 Hz)").arg(origFreq),
             qAbs(unchanged - origFreq) < 100,
             QStringLiteral("got %1").arg(unchanged));
+
+    // 2c.7–2c.10  Locked-slice guard: SliceModel refuses a tune on a locked slice,
+    // so acknowledging one would report success for a tune the radio never makes
+    // — the same false success the bound checks above close. cmdSetFreq tests the
+    // lock synchronously for the same reason it tests plausibility: the seam's
+    // bool is unobservable across its queued call.
+    const QString origLock =
+        c.field(c.send(QStringLiteral("\\get_func LOCK")), QStringLiteral("LOCK"));
+    lines = c.send(QStringLiteral("\\set_func LOCK 1"));
+    r.check(QStringLiteral("2c.7  set_func LOCK 1 returns RPRT 0"),
+            c.ok(lines), lines.join(QStringLiteral(" | ")));
+
+    // The lock write is queued — wait until the model reports it before tuning,
+    // or the tune would race ahead of the lock and legitimately succeed.
+    QString lockVal;
+    for (int elapsed = 0; elapsed < 1000; elapsed += 50) {
+        QThread::msleep(50);
+        lockVal = c.field(c.send(QStringLiteral("\\get_func LOCK")), QStringLiteral("LOCK"));
+        if (lockVal == QLatin1String("1")) break;
+    }
+    r.check(QStringLiteral("2c.8  get_func LOCK confirms the slice is locked"),
+            lockVal == QLatin1String("1"), lockVal);
+
+    const qint64 lockedTarget = (origFreq < 10'150'000) ? 14'150'000 : 7'150'000;
+    lines = c.send(QStringLiteral("\\set_freq %1").arg(lockedTarget));
+    r.check(QStringLiteral("2c.9  set_freq on a locked slice rejected with RPRT -1"),
+            c.rprt(lines) == -1, lines.join(QStringLiteral(" | ")));
+    const qint64 held = pollFreqField(c, QStringLiteral("\\get_freq"), origFreq);
+    r.check(QStringLiteral("2c.10 VFO unchanged after the rejected locked set_freq (%1 Hz)").arg(origFreq),
+            qAbs(held - origFreq) < 100,
+            QStringLiteral("got %1").arg(held));
+
+    // Restore the lock to whatever the radio had — every later section tunes, and
+    // a slice left locked would fail all of them.
+    c.send(QStringLiteral("\\set_func LOCK %1")
+               .arg(origLock == QLatin1String("1") ? 1 : 0));
+    for (int elapsed = 0; elapsed < 1000; elapsed += 50) {
+        QThread::msleep(50);
+        if (c.field(c.send(QStringLiteral("\\get_func LOCK")), QStringLiteral("LOCK")) == origLock)
+            break;
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

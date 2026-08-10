@@ -602,10 +602,15 @@ void section7(CatClient& c, Runner& r)
     r.section(QStringLiteral("Section 7 — ZZAI — AI Mode (async unsolicited updates)"));
 
     // Setup (AI still off, so these push nothing): capture the current frequency
-    // and pin a known mode. 7.5/7.6 then exercise a genuine, IN-BAND change — a
-    // cross-band ZZFA would trigger a band-stack recall that also pushes the
-    // recalled mode, and that extra unsolicited MD push would desync the ordered
-    // request/response reads for the rest of the section.
+    // and pin a known mode. 7.5/7.6 then exercise a genuine, IN-BAND change.
+    // A cross-band ZZFA would not do: the RADIO recalls its band stack when the
+    // slice crosses into a new band and reports the recalled mode back, so one
+    // set yields TWO unsolicited pushes (FA then MD) and the extra MD desyncs the
+    // ordered request/response reads for the rest of the section. That recall is
+    // radio-side — tuneSliceForCat only tunes, it never sets a mode — and it is
+    // not introduced here: rigctld's cross-band path already used tuneAndRecenter
+    // before this change. Measured on a FLEX-6500, 20 m USB → 7.100 MHz: FA at
+    // +0.00 s, MD1 at +0.17 s, slice left on LSB.
     const QString faStart = c.query(QStringLiteral("ZZFA"));
     const qint64 startHz = (faStart.startsWith(QLatin1String("ZZFA")) && isDigits(faStart.mid(4), 11))
                            ? faStart.mid(4).toLongLong()
