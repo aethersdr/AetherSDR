@@ -1001,6 +1001,9 @@ set(GUI_SOURCES
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
+    src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/WorkspaceCanvas.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
     src/gui/ClientCompApplet.cpp
     src/gui/ClientCompCurveWidget.cpp
     src/gui/ClientCompKnob.cpp
@@ -3449,6 +3452,44 @@ target_include_directories(window_geometry_restore_test PRIVATE src)
 target_link_libraries(window_geometry_restore_test PRIVATE Qt6::Widgets)
 add_test(NAME window_geometry_restore_test COMMAND window_geometry_restore_test)
 set_tests_properties(window_geometry_restore_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Workspace canvas (RFC #4887) phase 1 — normalized geometry.  Pure logic, no
+# widgets: the edge-rounding rule that keeps tiled items seam-free, and the
+# resolution independence the whole RFC rests on, are pinned on every platform.
+add_executable(workspace_geometry_test
+    tests/workspace_geometry_test.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_geometry_test PRIVATE src)
+target_link_libraries(workspace_geometry_test PRIVATE Qt6::Core)
+add_test(NAME workspace_geometry_test COMMAND workspace_geometry_test)
+
+# Workspace canvas (RFC #4887) phase 1 — the canvas model: membership,
+# placement clamping, hit testing, and the dense-contiguous z invariant that
+# keeps raise/lower working after arbitrarily many operations.
+add_executable(workspace_layout_test
+    tests/workspace_layout_test.cpp
+    src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_layout_test PRIVATE src)
+target_link_libraries(workspace_layout_test PRIVATE Qt6::Core)
+add_test(NAME workspace_layout_test COMMAND workspace_layout_test)
+
+# Workspace canvas (RFC #4887) phase 1 — the widget half, offscreen: model
+# answers applied to real geometry and real Qt stacking, plus the take-vs-remove
+# ownership contract phase 3 depends on.
+add_executable(workspace_canvas_widget_test
+    tests/workspace_canvas_widget_test.cpp
+    src/gui/workspace/WorkspaceCanvas.cpp
+    src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_canvas_widget_test PRIVATE src)
+target_link_libraries(workspace_canvas_widget_test PRIVATE Qt6::Widgets)
+add_test(NAME workspace_canvas_widget_test COMMAND workspace_canvas_widget_test)
+set_tests_properties(workspace_canvas_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
