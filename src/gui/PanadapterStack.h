@@ -58,6 +58,24 @@ public:
     void equalizeSizes();
     void rearrangeLayout(const QString& layoutId);
 
+    // Re-assert every panadapter's GPU surface after the stack has been MOVED
+    // within its own window — the applet-panel dock-side flip, which slides
+    // the stack sideways without resizing it.
+    //
+    // The spectrum widgets are native children (WA_NativeWindow) with their
+    // own swapchains.  A sideways move lays out through a transient geometry,
+    // and the swapchain can end up sized for that transient rather than the
+    // final width; the widget then keeps presenting a too-narrow drawable and
+    // the strip it moved into is never painted by anyone.  Under
+    // MainWindow's WA_TranslucentBackground that strip is see-through, not
+    // merely blank.  Continuous rendering does NOT heal it — the pan redraws
+    // every frame into the same stale drawable.
+    //
+    // This is the same hazard prepareForTopLevelChange()/refreshAfterReparent()
+    // handle for reparenting between windows, minus the native-window
+    // teardown, which a same-window move does not need.
+    void refreshAfterLayoutShift();
+
     // Automation bridge hook: drive rearrangeLayout directly (or, with an empty
     // id, just report) so tests can exercise the splitter reparent path without
     // the radio granting extra panadapters. Rejects unknown ids (error map) and
