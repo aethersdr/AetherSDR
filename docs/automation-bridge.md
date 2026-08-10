@@ -696,6 +696,7 @@ connects).
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `eqstats` | Client EQ canvas objectName (default: all) | analyzer paint/cache counters — see [`get eqstats`](#get-eqstats) |
 | `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
+| `display` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter **Display panel** settings — see [`get display`](#get-display) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
@@ -956,6 +957,69 @@ used by the stacked trace renderer.
   sources; useful for checking that hidden histories continue updating.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
+
+### `get display`
+Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
+/ WATERFALL / BACKGROUND / APPEARANCE / 3D VIEW groups own, as one flat object
+per pan. Where `get tracedebug` is diagnostic internals, this is the operator's
+own preferences, so a display change is assertable field-by-field instead of by
+comparing screenshots.
+
+```json
+→ {"cmd":"get","model":"display","selector":"1"}
+← {"ok":true,"model":"display","pans":[{
+   "panIndex":1,"objectName":"",
+   "fftAverage":0,"fftFps":25,"fftWeightedAvg":false,
+   "fftHeatMap":true,"showGrid":true,
+   "fftLineWidth":2.0,"fftLineColor":"#00e5ff",
+   "fftFillAlpha":0.7,"fftFillColor":"#00e5ff",
+   "noiseFloorEnable":false,"noiseFloorPosition":75,
+   "wfBlankerEnabled":false,"wfBlankerThreshold":1.15,"wfBlankerMode":0,
+   "wfBlackLevel":15,"wfAutoBlack":true,"wfAutoBlackOffset":50,
+   "wfAutoBlackRadioSide":false,"effectiveWfAutoBlackRadioSide":false,
+   "wfColorGain":50,"wfLineDuration":100,
+   "backgroundImage":":/bg-default.jpg","backgroundOpacity":80,
+   "backgroundFillColor":"#0a0a14",
+   "freqGridSpacing":0,"freqScaleFontPt":8,"wfColorScheme":0,
+   "spectrumRenderMode":0,"dssFloorDepth":6,"dssGain":70,"dssRowSpan":100,
+   "kiwiWaterfallActive":false}]}
+```
+
+`selector` filters by pan index (`get display 0`) or objectName; omit it for
+every pan. A trailing **property** narrows each entry to `panIndex`,
+`objectName`, and that one field — `get display "" wfColorScheme` is the
+one-line way to diff a palette across pans.
+
+Field notes:
+
+- `wfAutoBlackRadioSide` is the operator's stored **intent**;
+  `effectiveWfAutoBlackRadioSide` is that intent masked by whether this radio
+  computes a black level at all (#4606). They differ legitimately — assert the
+  intent when checking what a preference action copied, the effective value when
+  checking what renders.
+- `backgroundImage` is `""` when the background is off entirely (the "Off"
+  button), `:/bg-default.jpg` for the bundled logo, otherwise a file path.
+- `dssFloorDepth` and `noiseFloorPosition` are stored per display source;
+  `kiwiWaterfallActive` says which one these resolved from, so a Flex-vs-Kiwi
+  mismatch reads as a labelled difference rather than a mystery failure.
+- `fftAverage`, `fftFps`, `fftWeightedAvg` and `wfLineDuration` are
+  radio-authoritative: the values here are what the widget last saw from radio
+  status, and they settle a turn or two after a command.
+
+**Proving "Clone to all Pans"** (Display panel → SYSTEM, above Reset to
+Defaults) — change something on pan 0, clone, and diff:
+
+```json
+→ {"cmd":"invoke","target":"pan 0/displayColorSchemeCombo","action":"select","value":"2"}
+→ {"cmd":"invoke","target":"pan 0/displayCloneToAllPansBtn","action":"click"}
+→ {"cmd":"get","model":"display"}
+← {"ok":true,"model":"display","pans":[
+   {"panIndex":0,"wfColorScheme":2, …},
+   {"panIndex":1,"wfColorScheme":2, …}]}
+```
+
+The radio-authoritative fields settle asynchronously, so re-poll rather than
+asserting them in the same write as the click.
 
 ### `get rhi`
 Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —

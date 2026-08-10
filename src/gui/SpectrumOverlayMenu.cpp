@@ -327,20 +327,34 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     connect(m_toggleBtn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggle);
 
     // Menu buttons — Band, ANT, DSP handled specially (sub-panels)
-    struct BtnDef { QString text; int specialIdx; void (SpectrumOverlayMenu::*sig)(); };
+    // `objName` is the automation bridge's handle on each row. Without it the
+    // sub-panels behind these buttons (Display, Band, ANT, DAX, Memory) are
+    // unreachable from a test: their contents are addressable but nothing can
+    // open them, so every control inside reads as "not visible".
+    struct BtnDef {
+        QString text;
+        const char* objName;
+        const char* a11y;
+        int specialIdx;
+        void (SpectrumOverlayMenu::*sig)();
+    };
     const BtnDef defs[] = {
-        {"+RX",      -1, nullptr},   // 0 — handled separately (signal has panId arg)
-        {"+TNF",     -1, &SpectrumOverlayMenu::addTnfClicked},  // 1
-        {"Band",      0, nullptr},   // 2 — toggleBandPanel
-        {"ANT",       1, nullptr},   // 3 — toggleAntPanel
-        {"Display",   4, nullptr},   // 4 — toggleDisplayPanel
-        {"Memory",    5, nullptr},   // 6 — toggleMemoryPanel
+        // 0 — handled separately (signal has panId arg)
+        {"+RX",     "panMenuAddRxBtn",    "Add receive slice",       -1, nullptr},
+        {"+TNF",    "panMenuAddTnfBtn",   "Add tracking notch filter", -1,
+         &SpectrumOverlayMenu::addTnfClicked},                       // 1
+        {"Band",    "panMenuBandBtn",     "Band panel",               0, nullptr},
+        {"ANT",     "panMenuAntBtn",      "Antenna panel",            1, nullptr},
+        {"Display", "panMenuDisplayBtn",  "Display panel",            4, nullptr},
+        {"Memory",  "panMenuMemoryBtn",   "Memory panel",             5, nullptr},
         // Add Memory lives at the top of MemoryBrowsePanel, outside the scrolling rows.
-        {"DAX",       3, nullptr},   // 6 — toggleDaxPanel
+        {"DAX",     "panMenuDaxBtn",      "DAX panel",                3, nullptr},
     };
 
     for (const auto& def : defs) {
         auto* btn = makeMenuBtn(def.text, this);
+        btn->setObjectName(QString::fromLatin1(def.objName));
+        btn->setAccessibleName(tr(def.a11y));
         if (def.specialIdx == 0)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleBandPanel);
         else if (def.specialIdx == 1)
@@ -2138,6 +2152,29 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             GpuSelector::saveChoiceId(m_gpuCombo->itemData(idx).toString());
             gpuNote->setVisible(true);   // surface the restart requirement once changed
         });
+    }
+
+    // ── Clone to all Pans ─────────────────────────────────────────────────
+    // Sits directly above Reset to Defaults: both are whole-panel actions, and
+    // this one is the constructive counterpart — it takes the look the operator
+    // just built here and applies it everywhere, instead of throwing it away.
+    {
+        m_cloneToAllPansBtn = new QPushButton("Clone to all Pans");
+        m_cloneToAllPansBtn->setObjectName("displayCloneToAllPansBtn");
+        m_cloneToAllPansBtn->setStyleSheet(btnStyle);
+        m_cloneToAllPansBtn->setToolTip(
+            "Copy every Display setting on this panadapter — trace, waterfall, "
+            "background, appearance and 3D view — onto all other open "
+            "panadapters.");
+        m_cloneToAllPansBtn->setAccessibleName(tr("Clone display settings to all panadapters"));
+        m_cloneToAllPansBtn->setAccessibleDescription(
+            tr("Applies this panadapter's Display panel settings to every other "
+               "open panadapter."));
+        connect(m_cloneToAllPansBtn, &QPushButton::clicked, this, [this] {
+            emit displaySettingsCloneRequested();
+        });
+        grid->addWidget(m_cloneToAllPansBtn, row, 0, 1, 4);
+        ++row;
     }
 
     // ── Reset button ──────────────────────────────────────────────────────

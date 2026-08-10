@@ -3002,6 +3002,163 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     }
 }
 
+// Display panel → "Clone to all Pans" (sits above Reset to Defaults).
+//
+// Every value the Display panel can change is written onto every OTHER open
+// panadapter. Three kinds of setting live in that panel and each has to travel
+// its own way — a single "copy the settings blob" pass would get two of them
+// wrong:
+//
+//   1. Client appearance (trace colours, fill, waterfall palette/blanker,
+//      background, grid, 3D view). The SpectrumWidget setters both apply and
+//      persist under the target's own per-pan settingsKey(), so calling them is
+//      the whole job.
+//   2. Client appearance whose setter does NOT persist (background image path
+//      and opacity — MainWindow has always owned those writes, see the
+//      backgroundImage* handlers). Persisted explicitly here.
+//   3. Radio-authoritative values (FFT average / FPS / weighted average,
+//      waterfall line duration, color gain, black level). Per AGENTS.md these
+//      are never persisted client-side; they are cloned by sending the same
+//      commands the live sliders send, so the radio echoes them back as status.
+//
+// Kiwi-backed pans re-use the waterfall gain/black/rate controls for a different
+// quantity (dBm range), so those three are skipped for such a target exactly as
+// the live per-control handlers skip them.
+int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
+{
+    if (!source || !m_panStack) {
+        return 0;
+    }
+    SpectrumWidget* src = source->spectrumWidget();
+    if (!src) {
+        return 0;
+    }
+
+    auto& settings = AppSettings::instance();
+    int cloned = 0;
+
+    for (PanadapterApplet* target : m_panStack->allApplets()) {
+        if (!target || target == source) {
+            continue;
+        }
+        SpectrumWidget* dst = target->spectrumWidget();
+        if (!dst || dst == src) {
+            continue;
+        }
+        const QString targetPanId = target->panId();
+        const bool targetIsKiwi = kiwiSdrPanDisplaysKiwi(targetPanId);
+
+        // ── PANADAPTER ────────────────────────────────────────────────────
+        dst->setFftHeatMap(src->fftHeatMap());
+        dst->setShowGrid(src->showGrid());
+        dst->setFftLineWidth(src->fftLineWidth());
+        dst->setFftLineColor(src->fftLineColor());
+        dst->setFftFillAlpha(src->fftFillAlpha());
+        dst->setFftFillColor(src->fftFillColor());
+        dst->setNoiseFloorPosition(src->noiseFloorPosition());
+        dst->setNoiseFloorEnable(src->noiseFloorEnabled());
+
+        // ── WATERFALL (client-side) ───────────────────────────────────────
+        dst->setWfBlankerEnabled(src->wfBlankerEnabled());
+        dst->setWfBlankerThreshold(src->wfBlankerThreshold());
+        dst->setWfBlankerMode(src->wfBlankerMode());
+        dst->setWfAutoBlack(src->wfAutoBlack());
+        dst->setWfAutoBlackOffset(src->wfAutoBlackOffset());
+        // The operator's stored INTENT, not the capability-masked value — see
+        // SpectrumWidget::wfAutoBlackRadioSide(). Cloning the masked value would
+        // quietly downgrade every other pan to SW on a radio without HW.
+        dst->setWfAutoBlackRadioSide(src->wfAutoBlackRadioSide());
+
+        // ── BACKGROUND ────────────────────────────────────────────────────
+        // "none" is the persisted spelling for background-off; an empty path is
+        // its in-memory form. Keep the two in step or a restart resurrects the
+        // default logo on a pan the operator turned off.
+        const QString bgPath = src->backgroundImagePath();
+        dst->setBackgroundImage(bgPath);
+        settings.setValue(dst->settingsKey("BackgroundImage"),
+                          bgPath.isEmpty() ? QStringLiteral("none") : bgPath);
+        dst->setBackgroundOpacity(src->backgroundOpacity());
+        settings.setValue(dst->settingsKey("BackgroundOpacity"),
+                          QString::number(src->backgroundOpacity()));
+        dst->setBackgroundFillColor(src->backgroundFillColor());
+
+        // ── APPEARANCE ────────────────────────────────────────────────────
+        dst->setFreqGridSpacing(src->freqGridSpacing());
+        dst->setFreqScaleFontPt(src->freqScaleFontPt());
+        dst->setWfColorScheme(src->wfColorScheme());
+
+        // ── 3D VIEW ───────────────────────────────────────────────────────
+        dst->setSpectrumRenderMode(src->spectrumRenderMode());
+        dst->setDssFloorDepth(src->dssFloorDepth());
+        dst->setDssGain(src->dssGain());
+        dst->setDssRowSpan(src->dssRowSpan());
+
+        // ── Radio-authoritative values ────────────────────────────────────
+        m_radioModel.sendCommand(QString("display pan set %1 average=%2")
+                                     .arg(targetPanId)
+                                     .arg(src->fftAverage()));
+        m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
+                                     .arg(targetPanId)
+                                     .arg(src->fftWeightedAvg() ? 1 : 0));
+        dst->setFftAverage(src->fftAverage());
+        dst->setFftWeightedAvg(src->fftWeightedAvg());
+        // Always update the widget's restore target; only ask the radio when the
+        // congestion-aware throttle isn't holding the rates down (same rule as
+        // the FPS slider — otherwise the clone fights the cap).
+        dst->setFftFps(src->fftFps());
+        if (!m_adaptiveThrottleActive) {
+            m_radioModel.requestPanDisplayRates(targetPanId, src->fftFps(),
+                                                /*wfMs=*/0);
+        }
+
+        if (!targetIsKiwi) {
+            dst->setWfColorGain(src->wfColorGain());
+            dst->setWfBlackLevel(src->wfBlackLevel());
+            if (auto* pan = m_radioModel.panadapter(targetPanId);
+                pan && !pan->waterfallId().isEmpty()) {
+                m_radioModel.sendCommand(
+                    QString("display panafall set %1 color_gain=%2")
+                        .arg(pan->waterfallId())
+                        .arg(src->wfColorGain()));
+                m_radioModel.sendCommand(
+                    QString("display panafall set %1 black_level=%2")
+                        .arg(pan->waterfallId())
+                        .arg(src->wfBlackLevel()));
+            }
+            dst->setWfLineDuration(src->wfLineDuration());
+            if (!m_adaptiveThrottleActive) {
+                m_radioModel.requestPanDisplayRates(targetPanId, /*fps=*/0,
+                                                    src->wfLineDuration());
+            }
+        }
+
+        // Repaint the target's own Display panel so an operator who opens it
+        // sees the cloned values rather than the pre-clone slider positions.
+        if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
+            dstMenu->syncDisplaySettings(
+                dst->fftAverage(), dst->fftFps(),
+                static_cast<int>(dst->fftFillAlpha() * 100.0f),
+                dst->fftWeightedAvg(), dst->fftFillColor(), dst->wfColorGain(),
+                dst->wfBlackLevel(), dst->wfAutoBlack(),
+                dst->wfAutoBlackOffset(), dst->wfLineDuration(),
+                dst->noiseFloorPosition(), dst->noiseFloorEnabled(),
+                dst->fftHeatMap(), dst->wfColorScheme(), dst->showGrid(),
+                dst->fftLineWidth(), dst->wfAutoBlackRadioSide(),
+                dst->spectrumRenderMode(), dst->dssFloorDepth(),
+                dst->dssGain(), dst->fftLineColor(), dst->dssRowSpan());
+            dstMenu->syncExtraDisplaySettings(
+                dst->wfBlankerEnabled(), dst->wfBlankerThreshold(),
+                dst->backgroundOpacity(), dst->freqGridSpacing(),
+                dst->backgroundFillColor(), dst->freqScaleFontPt());
+        }
+        ++cloned;
+    }
+
+    if (cloned > 0) {
+        settings.save();
+    }
+    return cloned;
+}
 
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
@@ -4273,6 +4430,28 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                                   QColor(0x00, 0xe5, 0xff), 100);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
                                        QColor(0x0a, 0x0a, 0x14));
+    });
+    connect(menu, &SpectrumOverlayMenu::displaySettingsCloneRequested,
+            this, [this, applet, sw] {
+        const int cloned = cloneDisplaySettingsToAllPans(applet);
+
+        // Feedback on the source pan: the operator is looking at THIS panel, and
+        // with a single pan open (or every other pan floated off-screen) a silent
+        // button is indistinguishable from a broken one.
+        PanadapterOverlayMessage message;
+        message.id = QStringLiteral("display.clone-to-all-pans");
+        message.timeoutMs = 4000;
+        message.dismissible = true;
+        if (cloned > 0) {
+            message.title = tr("Display settings cloned");
+            message.detail = tr("Applied to %n other panadapter(s).", nullptr, cloned);
+            message.tone = PanadapterOverlayMessageTone::Info;
+        } else {
+            message.title = tr("Nothing to clone");
+            message.detail = tr("This is the only open panadapter.");
+            message.tone = PanadapterOverlayMessageTone::Warning;
+        }
+        sw->upsertOverlayMessage(std::move(message));
     });
 
     auto resolveClickedPanId = [this, sw]() -> QString {

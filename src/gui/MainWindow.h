@@ -676,6 +676,11 @@ private:
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
+    // Display panel → "Clone to all Pans". Copies every Display setting from
+    // `source` onto every other open panadapter (client-side appearance via the
+    // SpectrumWidget setters that persist it, radio-authoritative values via the
+    // same commands the live sliders send). Returns how many pans were written.
+    int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
