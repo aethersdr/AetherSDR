@@ -6067,6 +6067,8 @@ void RadioModel::onDisconnected()
         m_staleSessionSerial = m_chassisSerial;
     m_chassisSerial.clear();
     m_callsign.clear();
+    m_txOwnedByUs = true;
+    m_txClientHandle = 0;
     // Clear the nickname here too, not just on the connectToRadio() seeding
     // path: connectViaWan() takes no RadioInfo and the LAN auto-reconnect timer
     // calls m_connection->connectToRadio(m_lastInfo) directly, both bypassing
@@ -9227,7 +9229,17 @@ void RadioModel::onStatusReceived(const QString& object,
 
 QString RadioModel::serial() const
 {
-    return m_lastInfo.serial;
+    const QString chassis = !m_chassisSerial.isEmpty()
+        ? m_chassisSerial.trimmed()
+        : m_staleSessionSerial.trimmed();
+    if (isWan()) {
+        return chassis;
+    }
+    const QString discoverySerial = m_lastInfo.serial.trimmed();
+    if (!discoverySerial.isEmpty()) {
+        return discoverySerial;
+    }
+    return chassis;
 }
 
 QString RadioModel::gpsNtpServerAddress() const
