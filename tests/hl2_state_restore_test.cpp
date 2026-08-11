@@ -67,6 +67,8 @@ int main(int argc, char** argv)
         bogus.filterLowHz = 5'000.0;                    // low >= high
         bogus.filterHighHz = 100.0;
         bogus.sampleRateHz = 12'345;                    // snapped, not rejected
+        bogus.agcMode = QStringLiteral("medium");       // not the vocabulary
+        bogus.agcThresholdDb = 4'000;                   // outside 0..100
         bogus.extensionSchemaVersion = 1;
         bogus.extension = QJsonObject{
             {QStringLiteral("rfGain"),
@@ -104,6 +106,97 @@ int main(int argc, char** argv)
                       .toInt()
                   >= 0,
               "a restored per-band drive clamps to 0..100");
+        // AGC: DROPPED, not clamped or aliased. "medium" is close enough to
+        // the real "med" that wdspAgcMode() would silently accept it as its
+        // fallback — the whole reason isKnownAgcModeString() exists — and a
+        // clamped 4000 would become an AGC-T of 100 nobody chose.
+        check(snapshot.agcMode == QStringLiteral("med"),
+              "an AGC mode outside the vocabulary is dropped, not aliased");
+        check(snapshot.agcThresholdDb == 65,
+              "an out-of-range AGC threshold is dropped, not clamped");
+    }
+
+    // ---- the AGC pair restores, independently ------------------------------
+    // #4909: the operator's AGC lived only in the WDSP channel, so every
+    // launch reopened it on med/65 and the setting was gone.
+    {
+        hl2::Hl2Backend backend;
+        RestoredRadioState remembered;
+        remembered.agcMode = QStringLiteral("slow");
+        remembered.agcThresholdDb = 40;
+        backend.applyRestoredState(remembered);
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcMode == QStringLiteral("slow") && snap.agcThresholdDb == 40,
+              "a remembered AGC pair seeds the session (#4909)");
+        backend.disconnectRadio();
+    }
+    {
+        // Half a document: the threshold alone applies against the default
+        // mode, matching the independent validation in applyRestoredState().
+        hl2::Hl2Backend backend;
+        RestoredRadioState thresholdOnly;
+        thresholdOnly.agcThresholdDb = 0;   // the sentinel's whole point
+        backend.applyRestoredState(thresholdOnly);
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcThresholdDb == 0,
+              "a remembered AGC threshold of 0 is restored, not read as absent");
+        check(snap.agcMode == QStringLiteral("med"),
+              "the AGC mode keeps its default when the document has none");
+        backend.disconnectRadio();
+    }
+    {
+        // The operator's own change is CAPTURED — the half of the bug that
+        // made the document empty in the first place.
+        hl2::Hl2Backend backend;
+        backend.applyRestoredState(RestoredRadioState{});
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+        backend.setSliceAgc(0, QStringLiteral("fast"), 25);
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcMode == QStringLiteral("fast") && snap.agcThresholdDb == 25,
+              "an operator AGC change reaches the capture snapshot");
+        backend.disconnectRadio();
+    }
+    {
+        // A radio swap must not carry the previous radio's AGC: an empty
+        // restore is a full reset, and buildReceivers() deliberately keeps
+        // receiver state across the rebuild.
+        hl2::Hl2Backend backend;
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+
+        RestoredRadioState radioA;
+        radioA.agcMode = QStringLiteral("fast");
+        radioA.agcThresholdDb = 12;
+        backend.applyRestoredState(radioA);
+        backend.connectRadio(req);
+        backend.disconnectRadio();
+
+        backend.applyRestoredState(RestoredRadioState{});   // radio B: no memory
+        backend.connectRadio(req);
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcMode == QStringLiteral("med") && snap.agcThresholdDb == 65,
+              "a memoryless radio comes up on the defaults, never the previous "
+              "radio's AGC");
+        backend.disconnectRadio();
     }
 
     // ---- restored state seeds the session at connect ----------------------

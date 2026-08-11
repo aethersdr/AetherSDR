@@ -202,6 +202,19 @@ the modes.
   samples at or beyond full scale**. At a 65 dB ceiling: peak 2.664, 0.27%.
 - Mode vocabulary: `off/slow/med/fast` → WDSP RXA 0/2/3/4. WDSP's "long" (1)
   has no representation in the four-way UI control.
+- **The AGC is client-owned state and nothing on the radio can be asked for
+  it.** There is no AGC register in the HPSDR map — the whole loop is WDSP on
+  this host — so the operator's mode and threshold live in the client's
+  operating-state document or nowhere. They ride the RFC #4603 `Agc` domain as
+  typed universal fields (`RestoredRadioState::agcMode` /
+  `agcThresholdDb`), captured on every `setSliceAgc` and seeded back onto
+  **every** receiver by `Hl2Backend::seedReceiverAgc()`.
+- The threshold's "not restored" sentinel is **-1, not 0**: 0 is a threshold the
+  operator can select, so a zero-means-absent encoding would quietly reset
+  anyone running the AGC-T at the bottom of the slider.
+- Restore is **flat**, not per band or per mode, unlike the drive and LNA maps.
+  Same reasoning as the TX cut points in §14.9: the control is one pair, and
+  making it jump on a band change would be a surprise, not a memory.
 
 ### AM/SAM hand back a DC pedestal, and nothing upstream removes it
 
@@ -301,6 +314,7 @@ apart from that audit loses the point.
 | 13 | RX filter set via `SetRXABandpassFreqs` alone, leaving the NBP stage — the filter actually in circuit — untouched | No sideband selection and no filtering AT ALL; 0 dB rejection of a tone outside the passband | `86a3d27b` |
 | 14 | HPSDR wire IQ handedness is opposite to WDSP's | USB demodulated the lower sideband and LSB the upper — audibly swapped, while the panadapter looked correct | `79c54266` |
 | 15 | AM in neither filter-polarity family | Switching to AM kept an SSB passband that filters the carrier OUT, so the envelope detector distorts rather than going quiet | `2996f0eb` |
+| 16 | AGC reached the backend but **nothing remembered or echoed it** — `setSliceAgc` never called `notifyOperatingStateChanged()`, no `Agc` domain existed, and `emitSliceState` never published the pair | Every launch reopened the WDSP channel on `med`/65; the operator's AGC was gone, and a restored value would have been invisible anyway because the applet kept showing `SliceModel`'s own defaults | #4909 |
 
 **Gap 13 is the second instance of the §2 lesson** — a plausible low-level API
 used where both reference clients use the canonical composite one

@@ -187,6 +187,12 @@ private:
     void emitAllSliceState();
     void emitAllPanState();
     void pushInitialState();
+    // Put every receiver's AGC pair where this session should come up: the
+    // remembered mode/threshold if this radio has a memory of them, the
+    // construction defaults if it does not (#4909). Called from BOTH ends of
+    // the restore handoff — see the definition for why one call site is not
+    // enough.
+    void seedReceiverAgc();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
     // Clamp 0..100, map onto the drive register, honour the transmit gate.

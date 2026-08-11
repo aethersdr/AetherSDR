@@ -168,6 +168,7 @@ struct RadioCapabilities {
         RfGain      = 1u << 3,  // LNA/preamp gain (per band — see RFC PR 3)
         TxSetpoints = 1u << 4,  // TX drive setpoints (per band); never keying
         Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
+        Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
