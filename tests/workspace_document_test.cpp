@@ -246,6 +246,34 @@ int main()
                parsed.activeWorkspace == QStringLiteral("classic"));
         report("every repair was reported", warnings.size() >= 5);
 
+        // Malformed CONTAINERS are reported too, not just malformed leaves —
+        // the parser claims "repaired and reported", and a silently skipped
+        // surface is the shape most likely to lose an operator's arrangement
+        // without a word (PR #4900 review, L2).
+        QJsonObject badShapes;
+        badShapes[QStringLiteral("version")] = WorkspaceDocument::kSchemaVersion;
+        QJsonObject wsBad;
+        wsBad[QStringLiteral("id")] = QStringLiteral("shapes");
+        wsBad[QStringLiteral("surfaces")] =
+            QJsonArray{QStringLiteral("not an object"), QJsonObject{
+                {QStringLiteral("id"), WorkspaceSurface::kMainId},
+                {QStringLiteral("items"), QJsonArray{QStringLiteral("also not an object")}}}};
+        badShapes[QStringLiteral("workspaces")] = QJsonArray{wsBad};
+
+        WorkspaceDocument shapes;
+        QStringList shapeWarnings;
+        report("a document with malformed containers still parses",
+               WorkspaceDocument::fromJson(badShapes, &shapes, nullptr, &shapeWarnings));
+
+        bool surfaceReported = false;
+        bool itemReported    = false;
+        for (const QString& w : shapeWarnings) {
+            if (w.contains(QStringLiteral("non-object surface"))) surfaceReported = true;
+            if (w.contains(QStringLiteral("non-object item")))    itemReported    = true;
+        }
+        report("a non-object surface is reported", surfaceReported);
+        report("a non-object item is reported",    itemReported);
+
         // An unbound profile must resolve to nothing, not to a guess:
         // decision 8 says an unbound recall leaves the workspace alone.
         report("an unbound radio profile resolves to nothing",

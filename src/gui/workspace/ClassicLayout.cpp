@@ -18,6 +18,13 @@ namespace {
 // expected id/cell-count pairs, so a change HERE fails immediately; a change
 // to either of the other two still has to be mirrored by hand.  Phase 3 puts
 // this in reach of a GUI-linked test and should close the gap properly.
+//
+// AND NOTE THE SHAPE IS NOT IDENTICAL.  kAllLayouts stores per-cell WEIGHTS
+// (`{{1,1},{1}}`); this stores per-row CELL COUNTS.  Today every weight is 1,
+// so the two agree exactly — but a future non-uniform layout, say a 2:1 split
+// written `{{2,1}}`, is not representable here at all and would silently come
+// out as equal halves rather than failing.  Adding one means changing this
+// vector to carry weights, not just adding a row (PR #4900 review, L1).
 struct LayoutRows {
     const char* id;
     QVector<int> rows;   // cells per row, top to bottom
@@ -133,6 +140,14 @@ QList<CanvasItem> composeClassic(const QStringList& panIds,
     }
 
     // ── Applets, stacked down the column ─────────────────────────────────
+    //
+    // Each applet gets 1/n of the column.  Past roughly a dozen open applets
+    // on a 1080 px canvas that falls under CanvasItem's 90 px floor and the
+    // clamp makes them overlap, where the real panel scrolls instead.  Nothing
+    // consumes this yet, so it is not reachable in phase 2 — but it is a real
+    // gap against "an operator who never opens the editor sees exactly what
+    // they see today", and phase 3 owes it either a scrolling column or a
+    // sensible overflow (PR #4900 review, L3).
     if (haveApplets) {
         const double slotHeight = 1.0 / appletIds.size();
         for (int i = 0; i < appletIds.size(); ++i) {

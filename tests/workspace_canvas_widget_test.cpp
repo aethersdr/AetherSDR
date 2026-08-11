@@ -17,6 +17,8 @@
 #include <QApplication>
 #include <QEvent>
 #include <QPointer>
+#include <QHash>
+#include <QMouseEvent>
 #include <QRect>
 #include <QSignalSpy>
 #include <QStringList>
@@ -273,6 +275,97 @@ int main(int argc, char** argv)
         delete taken;
         report("destroying a taken widget does not evict the id's new owner",
                canvas.contains("bystander"));
+    }
+
+    // ── A press raises, but a press on the frontmost is not an edit ──────
+    //
+    // eventFilter() runs bringItemToFront() on every press. Under auto-commit
+    // every stacking notification is a whole-document write, so clicking the
+    // item that is already on top must be silent — the same rule resizeEvent()
+    // follows for a resize that clamps nothing.
+    {
+        WorkspaceCanvas canvas;
+        canvas.resize(1000, 1000);
+        canvas.show();
+
+        auto* under = new QWidget;
+        auto* over  = new QWidget;
+        canvas.addItem("under", under, NormRect{0.1, 0.1, 0.4, 0.4});
+        canvas.addItem("over",  over,  NormRect{0.5, 0.5, 0.4, 0.4});
+
+        QSignalSpy stackSpy(&canvas, &WorkspaceCanvas::itemStackingChanged);
+
+        const auto press = [](QWidget* w) {
+            QMouseEvent ev(QEvent::MouseButtonPress, QPointF(5, 5),
+                           w->mapToGlobal(QPointF(5, 5)),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(w, &ev);
+        };
+
+        // "over" is already frontmost — pressing it changes nothing.
+        press(over);
+        report("pressing the frontmost item emits nothing", stackSpy.count() == 0);
+        report("...and it is still frontmost",
+               childIndex(&canvas, under) < childIndex(&canvas, over));
+
+        // Pressing the one underneath is a real change.
+        press(under);
+        report("pressing a lower item raises it", stackSpy.count() == 1);
+        report("...and Qt stacking followed",
+               childIndex(&canvas, over) < childIndex(&canvas, under));
+
+        // Pressing it again is now a no-op.
+        press(under);
+        report("pressing it again emits nothing", stackSpy.count() == 1);
+    }
+
+    // ── Restoring a saved surface through the widget ─────────────────────
+    //
+    // addItem() ignores a caller's z by design, and this is the only public
+    // way onto a canvas — so without restoreItems() a phase-3 restore would
+    // scramble stacking unless it happened to feed items in ascending z.
+    {
+        WorkspaceCanvas canvas;
+        canvas.resize(1000, 1000);
+        canvas.show();
+
+        // Saved order deliberately disagrees with array order.
+        AetherSDR::CanvasItem a;
+        a.id   = QStringLiteral("a");
+        a.rect = NormRect{0.0, 0.0, 0.3, 0.3};
+        a.z    = 2;
+        AetherSDR::CanvasItem b;
+        b.id   = QStringLiteral("b");
+        b.rect = NormRect{0.1, 0.1, 0.3, 0.3};
+        b.z    = 0;
+        AetherSDR::CanvasItem c;
+        c.id   = QStringLiteral("c");
+        c.rect = NormRect{0.2, 0.2, 0.3, 0.3};
+        c.z    = 1;
+
+        auto* wa = new QWidget;
+        auto* wb = new QWidget;
+        auto* wc = new QWidget;
+        const QHash<QString, QWidget*> widgets{{"a", wa}, {"b", wb}, {"c", wc}};
+
+        report("every item with a widget is placed",
+               canvas.restoreItems({a, b, c}, widgets) == 3);
+        report("the saved stacking is restored, not array order",
+               canvas.layout().zOf("b") == 0 && canvas.layout().zOf("c") == 1
+                   && canvas.layout().zOf("a") == 2);
+        report("...and real Qt stacking matches",
+               childIndex(&canvas, wb) < childIndex(&canvas, wc)
+                   && childIndex(&canvas, wc) < childIndex(&canvas, wa));
+        report("geometry came from the stored rects",
+               wa->geometry() == QRect(0, 0, 300, 300));
+
+        // An item with no widget is skipped rather than guessed at.
+        AetherSDR::CanvasItem orphan;
+        orphan.id   = QStringLiteral("ghost");
+        orphan.rect = NormRect{0.5, 0.5, 0.2, 0.2};
+        report("an item with no widget is skipped",
+               canvas.restoreItems({orphan}, {}) == 0
+                   && !canvas.contains("ghost"));
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

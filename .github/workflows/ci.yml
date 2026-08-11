@@ -186,6 +186,30 @@ jobs:
       - name: Test band edges and band-plan voice labels
         run: ctest --test-dir build -R "band_edges_test|bandplan_voice_labels_test" --output-on-failure
 
+      # The workspace-canvas suites (RFC #4887) join the gate on the same
+      # rationale, and for a specific reason: their whole value proposition is
+      # "pure logic, pinned headless on every platform", and until this step
+      # existed none of the six ran in any job. Linux compiles `all`, so they
+      # linked and nobody noticed they were never executed — which by
+      # Principle VIII demotes every assertion they carry from evidence to
+      # hypothesis (PR #4900 review, H2).
+      #
+      # What they pin is the class of defect that does not announce itself:
+      # pixel-edge rounding that only grows seams at particular canvas widths,
+      # a z invariant whose breakage makes raise/lower quietly stop working
+      # after enough operations, and a newer-schema guard whose failure mode is
+      # silently destroying a document a later build wrote. All of it is
+      # arithmetic plus one offscreen widget test — no radio, no network, no
+      # wall clock — so it is deterministic everywhere and gating on Linux
+      # alone is enough.
+      #
+      # Measured, not assumed: 244/250/243 ms for all six, against targets the
+      # Build step already linked.
+      - name: Test workspace canvas
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "^workspace_" --output-on-failure
+
       # hl2_am_dcblock_test is deliberately NOT on this gate, and re-adding it
       # needs a measurement first. #4774 added it here on the "milliseconds
       # against an already-linked target" rationale every other step above

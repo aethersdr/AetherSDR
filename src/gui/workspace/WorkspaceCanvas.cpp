@@ -4,6 +4,8 @@
 #include <QMouseEvent>
 #include <QResizeEvent>
 
+#include <algorithm>
+
 namespace AetherSDR {
 
 WorkspaceCanvas::WorkspaceCanvas(QWidget* parent)
@@ -81,6 +83,32 @@ bool WorkspaceCanvas::addItem(const QString& id,
     emit itemAdded(id);
     emit itemRectChanged(id, itemRect(id));
     return true;
+}
+
+int WorkspaceCanvas::restoreItems(const QList<CanvasItem>& items,
+                                  const QHash<QString, QWidget*>& widgets)
+{
+    // Sort by stored z and place bottom-to-top, which is what makes the saved
+    // stacking survive — see CanvasLayout::restoreItems() for why the batch
+    // shape is the only one that cannot get this wrong.
+    QList<CanvasItem> ordered = items;
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const CanvasItem& a, const CanvasItem& b) {
+                         return a.z < b.z;
+                     });
+
+    int placed = 0;
+    for (const CanvasItem& item : ordered) {
+        QWidget* content = widgets.value(item.id);
+        if (!content) {
+            continue;   // nothing to show for this id; skip rather than guess
+        }
+        if (addItem(item.id, content, item.rect, item.contentType,
+                    item.minimumSize)) {
+            ++placed;
+        }
+    }
+    return placed;
 }
 
 bool WorkspaceCanvas::removeItem(const QString& id)
@@ -204,18 +232,16 @@ void WorkspaceCanvas::resizeEvent(QResizeEvent* ev)
     }
 }
 
-void WorkspaceCanvas::mousePressEvent(QMouseEvent* ev)
-{
-    // Only reached for presses on bare canvas: anything over an item goes to
-    // that item's widget, and comes back through eventFilter().
-    QWidget::mousePressEvent(ev);
-}
-
 bool WorkspaceCanvas::eventFilter(QObject* watched, QEvent* ev)
 {
     if (ev->type() == QEvent::MouseButtonPress) {
         for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd(); ++it) {
             if (it.value().data() == watched) {
+                // bringItemToFront() is false when the item was already
+                // frontmost, and then nothing is emitted.  Without that, every
+                // click anywhere on the canvas would look like an edit and
+                // cost a whole-document write after the debounce — the same
+                // rule resizeEvent() follows (PR #4900 review, M2).
                 bringItemToFront(it.key());
                 break;
             }

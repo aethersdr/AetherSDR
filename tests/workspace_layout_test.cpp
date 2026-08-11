@@ -131,9 +131,9 @@ int main()
     // ── Rehydrating a saved stacking order ───────────────────────────────
     //
     // WorkspaceDocument persists z per item, and once an operator has raised
-    // anything, z no longer matches array order.  Inserting stored items with
-    // the default AssignTop would silently restore the arrangement with its
-    // stacking scrambled, so a restore path has to say PreserveGiven.
+    // anything, z no longer matches array order.  Feeding stored items to
+    // addItem() would silently restore the arrangement with its stacking
+    // scrambled, so a restore path has to use restoreItems().
     {
         CanvasLayout layout;
 
@@ -199,12 +199,18 @@ int main()
         report("lower moves one step back",
                layout.lower("a") && zOrder(layout) == QStringList({"a", "b", "c", "d"}));
 
-        // Already at an extreme: a no-op, and reported as success — the
-        // caller asked for a state that already holds.
-        report("lower at the bottom is a successful no-op",
-               layout.lower("a") && zOrder(layout) == QStringList({"a", "b", "c", "d"}));
-        report("raise at the top is a successful no-op",
-               layout.raise("d") && zOrder(layout) == QStringList({"a", "b", "c", "d"}));
+        // Already at an extreme: nothing changes, and that is reported as
+        // FALSE.  Callers turn these into change notifications, and under
+        // auto-commit a notification is a whole-document write — so "already
+        // frontmost" must not look like an edit.
+        report("lower at the bottom reports no change",
+               !layout.lower("a") && zOrder(layout) == QStringList({"a", "b", "c", "d"}));
+        report("raise at the top reports no change",
+               !layout.raise("d") && zOrder(layout) == QStringList({"a", "b", "c", "d"}));
+        report("bringToFront on the frontmost reports no change",
+               !layout.bringToFront("d") && zOrder(layout) == QStringList({"a", "b", "c", "d"}));
+        report("sendToBack on the backmost reports no change",
+               !layout.sendToBack("a") && zOrder(layout) == QStringList({"a", "b", "c", "d"}));
         report("z survives the no-ops", zIsDense(layout));
 
         report("bringToFront jumps to the top, others keep their order",

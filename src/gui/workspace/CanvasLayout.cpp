@@ -180,17 +180,16 @@ bool CanvasLayout::raise(const QString& id)
     }
 
     // Dense z means the neighbour above is exactly z + 1; swapping with it is
-    // the whole operation.  Already-topmost is a no-op, not a failure — the
-    // caller asked for a state that already holds.
+    // the whole operation.
     const int target = it->z + 1;
     for (CanvasItem& other : m_items) {
         if (other.z == target) {
             other.z = it->z;
             it->z   = target;
-            break;
+            return true;
         }
     }
-    return true;
+    return false;   // already topmost — nothing changed
 }
 
 bool CanvasLayout::lower(const QString& id)
@@ -205,10 +204,10 @@ bool CanvasLayout::lower(const QString& id)
         if (other.z == target) {
             other.z = it->z;
             it->z   = target;
-            break;
+            return true;
         }
     }
-    return true;
+    return false;   // already backmost — nothing changed
 }
 
 bool CanvasLayout::bringToFront(const QString& id)
@@ -216,6 +215,9 @@ bool CanvasLayout::bringToFront(const QString& id)
     CanvasItem* it = find(id);
     if (!it) {
         return false;
+    }
+    if (it->z == m_items.size() - 1) {
+        return false;   // already frontmost — nothing changed
     }
 
     // Park it above everything, then re-densify.  Doing it this way rather
@@ -231,6 +233,9 @@ bool CanvasLayout::sendToBack(const QString& id)
     CanvasItem* it = find(id);
     if (!it) {
         return false;
+    }
+    if (it->z == 0) {
+        return false;   // already backmost — nothing changed
     }
 
     it->z = -1;

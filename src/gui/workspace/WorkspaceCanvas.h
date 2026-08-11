@@ -54,6 +54,18 @@ public:
                  const QString& contentType = {},
                  const QSize& minimumSize = QSize(160, 90));
 
+    // Rehydrate a saved surface: place `widgets` (keyed by item id) according
+    // to `items`, honouring their stored z.
+    //
+    // This exists because addItem() deliberately ignores a caller's z, and
+    // WorkspaceCanvas is the ONLY public way onto a canvas — so without it a
+    // restore through the widget layer would scramble stacking unless it
+    // happened to feed items in ascending z, which nothing made true
+    // (PR #4900 review, M3).  Items with no matching widget are skipped.
+    // Returns how many were placed.
+    int restoreItems(const QList<CanvasItem>& items,
+                     const QHash<QString, QWidget*>& widgets);
+
     // Removes the item and deletes its widget.  Use takeItem() to keep it.
     bool removeItem(const QString& id);
 
@@ -86,6 +98,11 @@ signals:
     // Emitted whenever an item's stored rect changes — including the clamps
     // applied on a canvas resize, which is why the rect is carried in the
     // signal rather than left for the receiver to read back.
+    //
+    // Both of these are edits: phase 2's auto-commit turns each into a
+    // whole-document write, so neither fires for an operation that changed
+    // nothing.  A resize that clamps no item is silent, and so is raising an
+    // item that was already frontmost.
     void itemRectChanged(const QString& id, const NormRect& rect);
     void itemStackingChanged(const QString& id);
     void itemAdded(const QString& id);
@@ -93,7 +110,6 @@ signals:
 
 protected:
     void resizeEvent(QResizeEvent* ev) override;
-    void mousePressEvent(QMouseEvent* ev) override;
 
     // Raises an item when its widget is pressed.  Installed on the item widget
     // itself, so a press landing on a deeper descendant does not raise — real

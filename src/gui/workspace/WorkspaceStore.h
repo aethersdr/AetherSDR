@@ -98,9 +98,54 @@ public:
     // the caller ends the gesture with flush(), or lets the debounce fire.
     void setDocument(const WorkspaceDocument& doc);
 
+    // ── Overwrite protection ─────────────────────────────────────────────
+    //
+    // Refusing to PARSE a newer document is only half a guard: something has
+    // to refuse to WRITE over it too.  Without this, one setDocument() or
+    // touch() from phase 3 — a canvas resize while the error is still on
+    // screen is enough — would commit an empty default document over the row
+    // this build could not read, which is the exact loss the read-side guard
+    // exists to prevent (PR #4900 review, H1).
+    //
+    // So a LoadResult::Unusable arms a write block, and only an explicit
+    // caller decision clears it.  This mirrors the contract on
+    // AppSettings::setRadioFeature(), whose write-side guard must judge the
+    // row it is about to overwrite (AppSettings.h:71-74, from the #4614
+    // review) — this store implemented the read side of that and owed the
+    // other half.
+    bool isWriteBlocked() const { return m_writeBlocked; }
+
+    // Deliberately discard the unreadable stored document and allow writes
+    // again.  For a caller that has told the operator what is about to happen
+    // and had it confirmed — never a default, and never automatic.
+    void allowOverwrite();
+
     // ── Auto-commit ──────────────────────────────────────────────────────
+    //
+    // Write volume, concretely: a drag emits a placement change per mouse
+    // move — order 100/s — and every commit is a whole-document write by
+    // construction (Principle XIV).  The debounce is what makes that
+    // sustainable against a SQLite store: at kDefaultDebounceMs a continuous
+    // drag costs at most ~1.3 writes/s regardless of how long it lasts, and a
+    // gesture that ends costs exactly one.  A document with 8 pans and 26
+    // applets serialises to a few KB, so the worst case is a few KB/s during
+    // sustained dragging and nothing at rest.
     void touch();                 // dirty + (re)start the debounce
-    bool flush();                 // write now; false if suppressed or clean
+
+    enum class FlushResult {
+        Wrote,        // committed to AppSettings
+        Clean,        // nothing pending
+        Suppressed,   // restoring, or the write block is armed
+        Failed,       // the settings store refused the write
+    };
+
+    // Write now, reporting which of the four happened.  Callers that only
+    // care whether a write landed can use flush().
+    FlushResult flushWithStatus();
+
+    // True only for FlushResult::Wrote.
+    bool flush() { return flushWithStatus() == FlushResult::Wrote; }
+
     bool isDirty() const { return m_dirty; }
 
     // Suppress flushes while saved state is being replayed.  Setting it back
@@ -119,7 +164,7 @@ signals:
     void documentChanged();
 
 private:
-    bool writeNow();
+    FlushResult writeNow();
 
     WorkspaceDocument m_document;
     QTimer*     m_debounce{nullptr};
@@ -129,6 +174,7 @@ private:
     bool        m_dirty{false};
     bool        m_restoring{false};
     bool        m_loaded{false};
+    bool        m_writeBlocked{false};
 };
 
 }  // namespace AetherSDR

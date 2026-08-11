@@ -350,6 +350,108 @@ int main(int argc, char** argv)
                    && !migratedAgain);
     }
 
+    // ── The write block: refusing to parse is only half a guard ──────────
+    //
+    // The first round closed the overwrite at loadOrMigrate(). It was still
+    // open one call further along: nothing consulted the failed load on the
+    // WRITE path, so a single setDocument() or touch() from phase 3 — a canvas
+    // resize while the error is on screen is enough — would commit an empty
+    // default document over the row this build could not read.
+    {
+        const QString newerDocument = QStringLiteral(
+            R"({"version":99,"activeWorkspace":"from-the-future",)"
+            R"("workspaces":[{"id":"from-the-future","surfaces":[]}]})");
+
+        AppSettings::instance().setStationValue(WorkspaceStore::kSettingsKey,
+                                                newerDocument);
+        AppSettings::instance().save();
+
+        WorkspaceStore store;
+        store.loadWithStatus();
+        report("a refused load arms the write block", store.isWriteBlocked());
+
+        QSignalSpy flushSpy(&store, &WorkspaceStore::flushed);
+
+        // Exactly the phase-3 accident: an ordinary edit after a failed load.
+        store.setDocument(docWith(QStringLiteral("accident"),
+                                  QStringLiteral("applet:OOPS")));
+        report("an explicit flush is suppressed",
+               store.flushWithStatus() == WorkspaceStore::FlushResult::Suppressed);
+        report("no write was emitted", flushSpy.count() == 0);
+
+        // And the debounce must not sneak one through either.
+        store.setDebounceMs(20);
+        store.touch();
+        waitFor([&flushSpy] { return flushSpy.count() > 0; }, 300);
+        report("the debounce cannot bypass the write block", flushSpy.count() == 0);
+
+        report("the newer document is still intact", storedOnDisk() == newerDocument);
+
+        // Only an explicit decision clears it.
+        store.allowOverwrite();
+        report("allowOverwrite clears the block", !store.isWriteBlocked());
+        report("...and then the write lands", store.flush());
+        report("...over the old document", storedOnDisk().contains("applet:OOPS"));
+    }
+
+    // ── A dirty write-blocked store does not commit at teardown either ───
+    {
+        AppSettings::instance().setStationValue(WorkspaceStore::kSettingsKey,
+                                                QStringLiteral("{ corrupt"));
+        AppSettings::instance().save();
+        {
+            WorkspaceStore store;
+            store.loadWithStatus();
+            store.setDocument(docWith(QStringLiteral("teardown-blocked"),
+                                      QStringLiteral("applet:NOPE")));
+        }
+        report("teardown respects the write block",
+               storedOnDisk() == QStringLiteral("{ corrupt"));
+    }
+
+    // ── flush() distinguishes suppressed from clean ──────────────────────
+    {
+        AppSettings::instance().removeStationValue(WorkspaceStore::kSettingsKey);
+        AppSettings::instance().save();
+
+        WorkspaceStore store;
+        store.setDocument(docWith(QStringLiteral("tri"), QStringLiteral("applet:RX")));
+        store.flush();
+
+        report("a clean store reports Clean",
+               store.flushWithStatus() == WorkspaceStore::FlushResult::Clean);
+
+        store.touch();
+        store.setRestoring(true);
+        report("a restoring store reports Suppressed",
+               store.flushWithStatus() == WorkspaceStore::FlushResult::Suppressed);
+        store.setRestoring(false);
+        report("and a pending change reports Wrote",
+               store.flushWithStatus() == WorkspaceStore::FlushResult::Wrote);
+    }
+
+    // ── An empty-but-valid document is Absent, not Loaded ────────────────
+    //
+    // Otherwise loadOrMigrate() succeeds holding no workspace at all and never
+    // migrates, leaving phase 3 with nothing to show and no way to get it.
+    {
+        AppSettings::instance().setStationValue(
+            WorkspaceStore::kSettingsKey,
+            QStringLiteral(R"({"version":1,"activeWorkspace":"","workspaces":[]})"));
+        AppSettings::instance().save();
+
+        WorkspaceStore store;
+        report("a document with no workspaces reads as Absent",
+               store.loadWithStatus() == WorkspaceStore::LoadResult::Absent);
+        report("...so it is not write-blocked", !store.isWriteBlocked());
+
+        bool migrated = false;
+        report("...and loadOrMigrate migrates into it",
+               store.loadOrMigrate({"RX"}, {"0x40000000"}, &migrated) && migrated);
+        report("...producing a real workspace",
+               store.document().workspaceIds() == QStringList({"classic"}));
+    }
+
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");
     return g_failures == 0 ? 0 : 1;
 }

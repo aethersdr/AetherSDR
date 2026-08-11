@@ -97,6 +97,13 @@ public:
     // these.  Sparse or duplicated z is the bug that makes "raise" stop doing
     // anything after enough operations, so the invariant is restored eagerly
     // rather than checked for.
+    //
+    // Each returns TRUE ONLY IF THE STACKING ACTUALLY CHANGED — false for an
+    // unknown id, and false for an item already at that end.  Callers turn
+    // these into change notifications, and under auto-commit a notification
+    // is a whole-document write: raising an already-frontmost item on every
+    // mouse press would write the document on every click (PR #4900 review,
+    // M2).  Use contains() if you need to tell "no such item" from "no-op".
     bool raise(const QString& id);          // one step toward the front
     bool lower(const QString& id);          // one step toward the back
     bool bringToFront(const QString& id);

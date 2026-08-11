@@ -213,8 +213,17 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
             continue;
         }
 
+        if (wo.contains(QStringLiteral("surfaces"))
+            && !wo.value(QStringLiteral("surfaces")).isArray()) {
+            appendWarning(warnings,
+                          QStringLiteral("workspace '%1' has a non-array surfaces field")
+                              .arg(ws.id));
+        }
         for (const QJsonValue& sValue : wo.value(QStringLiteral("surfaces")).toArray()) {
             if (!sValue.isObject()) {
+                appendWarning(warnings,
+                              QStringLiteral("dropped a non-object surface in '%1'")
+                                  .arg(ws.id));
                 continue;
             }
             const QJsonObject so = sValue.toObject();
@@ -258,9 +267,19 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
                 }
             }
 
+            if (so.contains(QStringLiteral("items"))
+                && !so.value(QStringLiteral("items")).isArray()) {
+                appendWarning(warnings,
+                              QStringLiteral("surface '%1/%2' has a non-array items field")
+                                  .arg(ws.id, surface.id));
+            }
+
             QSet<QString> seenItemIds;
             for (const QJsonValue& iValue : so.value(QStringLiteral("items")).toArray()) {
                 if (!iValue.isObject()) {
+                    appendWarning(warnings,
+                                  QStringLiteral("dropped a non-object item in '%1/%2'")
+                                      .arg(ws.id, surface.id));
                     continue;
                 }
                 const QJsonObject io = iValue.toObject();
