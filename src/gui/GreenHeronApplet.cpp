@@ -5,6 +5,7 @@
 #include "core/ThemeManager.h"
 #include "models/GreenHeronModel.h"
 
+#include <QAccessible>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -44,6 +45,16 @@ const QString kSelectedActive =
 
 constexpr const char* kLabelStyle =
     "color: #8090a0; font-size: 10px; font-weight: bold;";
+
+// Announce a text-only change to a screen reader (docs/a11y.md, "Live value
+// updates"). Callers fire this ONLY when something actually changed: the
+// device republishes every ~0.5–3.4 s, and re-announcing an unchanged row on
+// every push would make the tile unusable with Orca / NVDA / VoiceOver.
+void announce(QWidget* widget, QAccessible::Event type)
+{
+    QAccessibleEvent event(widget, type);
+    QAccessible::updateAccessibility(&event);
+}
 
 const QString kFieldStyle =
     QStringLiteral("background: {{color.background.1}}; "
@@ -353,6 +364,7 @@ void GreenHeronApplet::syncFromModel()
         }
         const QSignalBlocker blocker(button);
         const QString holder = held.value(port);
+        const QString previousDescription = button->accessibleDescription();
 
         if (state.selected == port) {
             button->setText(tr("%1  ·  ON").arg(port));
@@ -379,6 +391,10 @@ void GreenHeronApplet::syncFromModel()
             button->setToolTip(tr("Select %1 on %2").arg(port, switchName));
             button->setAccessibleDescription(
                 tr("Select %1 on %2").arg(port, switchName));
+        }
+
+        if (button->accessibleDescription() != previousDescription) {
+            announce(button, QAccessible::DescriptionChanged);
         }
     }
 }
@@ -417,11 +433,15 @@ void GreenHeronApplet::updateStatus()
         text = tr("Not connected");
     }
 
+    const bool statusChanged = m_statusLabel->text() != text;
     m_statusLabel->setText(text);
     m_statusLabel->setStyleSheet(
         QStringLiteral("color: %1; font-size: 10px;").arg(colour));
     m_statusLabel->setAccessibleName(tr("Green Heron connection status"));
     m_statusLabel->setAccessibleDescription(text);
+    if (statusChanged) {
+        announce(m_statusLabel, QAccessible::DescriptionChanged);
+    }
 }
 
 void GreenHeronApplet::note(const QString& text)
