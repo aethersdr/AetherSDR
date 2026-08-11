@@ -451,7 +451,13 @@ private:
     // One-byte UDP prime to the radio's VITA-49 register *and* stream ports.
     // Priming the stream port is what opens the return path through a
     // stateful far-side firewall on a routed VPN — see kVitaStreamPort.
-    bool sendUdpPrime(const QHostAddress& radioAddr);
+    // Returns the ports a datagram actually reached, so callers log only
+    // what was sent rather than what was attempted.
+    QList<quint16> sendUdpPrime(const QHostAddress& radioAddr);
+
+    // Prime-send failures warn once per bring-up, not once per port per retry
+    // tick — the retry runs until the first VITA-49 packet arrives.
+    bool m_primeSendFailureLogged{false};
 
     QHostAddress m_radioAddress;
     quint16      m_radioPort{0};

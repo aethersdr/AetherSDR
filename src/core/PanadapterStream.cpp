@@ -198,25 +198,40 @@ void PanadapterStream::init()
     });
 }
 
-bool PanadapterStream::sendUdpPrime(const QHostAddress& radioAddr)
+QList<quint16> PanadapterStream::sendUdpPrime(const QHostAddress& radioAddr)
 {
     if (radioAddr.isNull() || !m_socket)
-        return false;
+        return {};
 
     const QByteArray reg(1, '\x00');
-    bool primed = false;
+    QList<quint16> sentPorts;
     for (const quint16 port : {kVitaRegisterPort, kVitaStreamPort}) {
         const qint64 sent = m_socket->writeDatagram(reg, radioAddr, port);
         if (sent == 1) {
             m_totalTxBytes.fetch_add(sent);
-            primed = true;
-        } else {
+            sentPorts.append(port);
+        } else if (!m_primeSendFailureLogged) {
+            // Once per bring-up, not once per port per tick: the retry now runs
+            // until the first VITA-49 packet arrives, so a socket that stays
+            // unwritable would otherwise warn forever.
+            m_primeSendFailureLogged = true;
             qCWarning(lcVita49) << "PanadapterStream: UDP prime to"
                                 << radioAddr.toString() << ":" << port
-                                << "failed:" << m_socket->errorString();
+                                << "failed:" << m_socket->errorString()
+                                << "(further prime send failures suppressed)";
         }
     }
-    return primed;
+    return sentPorts;
+}
+
+// Render the ports a prime actually reached, so the log can't claim both when
+// only one datagram went out.
+static QString describePrimePorts(const QList<quint16>& ports)
+{
+    QStringList out;
+    for (const quint16 p : ports)
+        out << QString::number(p);
+    return out.join(QStringLiteral(" and "));
 }
 
 bool PanadapterStream::isRunning() const
@@ -327,12 +342,14 @@ bool PanadapterStream::start(RadioConnection* conn)
     // returns 0x50001000 ("command not supported") on some firmware, and even
     // where it succeeds — it returns 0 on 4.2.20 — it does not by itself open
     // the return path. See kVitaStreamPort on why the stream port is primed too.
+    m_primeSendFailureLogged = false;   // fresh bring-up warns again if it fails
     const QHostAddress radioAddr = conn->radioAddress();
     if (!radioAddr.isNull()) {
-        if (sendUdpPrime(radioAddr)) {
+        const QList<quint16> primed = sendUdpPrime(radioAddr);
+        if (!primed.isEmpty()) {
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
                               << radioAddr.toString()
-                              << "ports" << kVitaRegisterPort << "and" << kVitaStreamPort;
+                              << "ports" << describePrimePorts(primed);
             m_routedPrimeElapsed.restart();
             m_routedPrimeTimer->start(kRoutedPrimeFastIntervalMs);
         }
@@ -395,11 +412,13 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         << QStringLiteral("flags=DontShareAddress")
         << QStringLiteral("reason=%1").arg(bindReason);
 
+    m_primeSendFailureLogged = false;   // fresh bind warns again if it fails
     if (!m_radioAddress.isNull()) {
-        if (sendUdpPrime(m_radioAddress)) {
+        const QList<quint16> primed = sendUdpPrime(m_radioAddress);
+        if (!primed.isEmpty()) {
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
                               << m_radioAddress.toString()
-                              << "ports" << kVitaRegisterPort << "and" << kVitaStreamPort;
+                              << "ports" << describePrimePorts(primed);
             m_routedPrimeElapsed.restart();
             m_routedPrimeTimer->start(kRoutedPrimeFastIntervalMs);
         }

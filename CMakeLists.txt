@@ -4952,6 +4952,15 @@ target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
 set_target_properties(flex_backend_lifecycle_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_backend_lifecycle_test COMMAND flex_backend_lifecycle_test)
 
+# The VITA-49 prime must reach BOTH 4992 (the radio listens) and 4993 (the radio
+# streams from). Dropping 4993 breaks only routed VPNs, which no other test or
+# LAN smoke check would catch. (#4926)
+add_executable(vita49_udp_prime_ports_test tests/vita49_udp_prime_ports_test.cpp)
+target_include_directories(vita49_udp_prime_ports_test PRIVATE src)
+target_link_libraries(vita49_udp_prime_ports_test PRIVATE aethercore Qt6::Core Qt6::Network)
+set_target_properties(vita49_udp_prime_ports_test PROPERTIES AUTOMOC ON)
+add_test(NAME vita49_udp_prime_ports_test COMMAND vita49_udp_prime_ports_test)
+
 # A pending client dBm request must retain a mismatching radio range for timeout
 # reconciliation and yield before a radio-authoritative band-stack restore.
 add_executable(panadapter_dbm_range_test tests/panadapter_dbm_range_test.cpp)
