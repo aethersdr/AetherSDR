@@ -4036,6 +4036,16 @@ target_include_directories(spot_mode_resolver_test PRIVATE src)
 target_link_libraries(spot_mode_resolver_test PRIVATE Qt6::Core)
 add_test(NAME spot_mode_resolver_test COMMAND spot_mode_resolver_test)
 
+# SpotHub's newest-spot-follows-the-viewport decision (#4889), header-only
+# and dependency-free by design so it's testable without DxClusterDialog's
+# full client/model dependency graph.
+add_executable(spot_auto_scroll_test
+    tests/spot_auto_scroll_test.cpp
+)
+target_include_directories(spot_auto_scroll_test PRIVATE src)
+target_link_libraries(spot_auto_scroll_test PRIVATE Qt6::Core)
+add_test(NAME spot_auto_scroll_test COMMAND spot_auto_scroll_test)
+
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp
     src/core/N1MMSpotParser.cpp

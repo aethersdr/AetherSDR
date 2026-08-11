@@ -5,6 +5,7 @@
 // must share its cap too. Header self-guards on HAVE_WEBSOCKETS.
 #include "FreeDvReporterDialog.h"
 #include "GuardedSlider.h"
+#include "SpotAutoScroll.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
 #include "core/N1MMSpotParser.h"
@@ -713,8 +714,11 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 #endif
 
     // Scroll spot table to show newest entries. The model is prepend-based
-    // (newest spot is always source row 0), and the table opens unsorted, so
-    // newest-first is the top, not the bottom (#4889).
+    // (newest spot is always source row 0), and the table is already sorted
+    // Time-descending by this point — setSortingEnabled(true) (buildSpotListTab)
+    // applies the header's default sort indicator (Qt 6: section 0, descending
+    // — the Time column, descending), which is the same order the model
+    // prepends in — so newest-first is the top, not the bottom (#4889).
     m_spotTable->scrollToTop();
 
     // Disable autoDefault on all buttons so Enter in command inputs
@@ -3342,37 +3346,26 @@ void DxClusterDialog::flushSpotBatch()
     // on that class). Which visual end that lands on depends on the current
     // sort, so "follow the newest spot" isn't always "follow the bottom"
     // the way it is for the append-only console panes this lambda was
-    // copied from (#4889):
-    //   - unsorted, or Time descending (newest first, same as source order)
-    //     → newest is at the TOP.
-    //   - Time ascending → newest is at the BOTTOM.
-    //   - sorted by any other column → newest lands wherever it lands;
-    //     don't auto-scroll and disturb where the user put the viewport.
-    const int sortCol = m_proxyModel->sortColumn();
-    const Qt::SortOrder sortOrder = m_proxyModel->sortOrder();
-    const bool newestAtTop = sortCol < 0
-        || (sortCol == SpotTableModel::ColTime && sortOrder == Qt::DescendingOrder);
-    const bool newestAtBottom = sortCol == SpotTableModel::ColTime
-        && sortOrder == Qt::AscendingOrder;
-
+    // copied from (#4889) — see decideSpotAutoScrollTarget() for the
+    // four-branch decision, pulled out as a pure function so it's testable
+    // without this dialog's dependency graph.
     auto* sb = m_spotTable->verticalScrollBar();
-    bool follow = false;
-    if (newestAtTop) {
-        follow = sb->value() <= 2;
-    } else if (newestAtBottom) {
-        follow = sb->value() >= sb->maximum() - 2;
-    }
+    const SpotAutoScrollTarget target = decideSpotAutoScrollTarget(
+        m_proxyModel->sortColumn(), m_proxyModel->sortOrder(),
+        SpotTableModel::ColTime, sb->value(), sb->maximum());
 
     m_spotModel->addSpots(m_spotBatch);
     m_spotBatch.clear();
 
-    if (!follow) {
-        return;
-    }
-    if (newestAtTop) {
+    switch (target) {
+    case SpotAutoScrollTarget::Top:
         m_spotTable->scrollToTop();
-    } else if (newestAtBottom) {
+        break;
+    case SpotAutoScrollTarget::Bottom:
         m_spotTable->scrollToBottom();
+        break;
+    case SpotAutoScrollTarget::None:
+        break;
     }
 }
 
