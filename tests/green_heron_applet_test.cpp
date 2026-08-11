@@ -319,6 +319,20 @@ void testPartialRosterKeepsTheRememberedSwitch()
         report(("a partial roster does not overwrite the persisted choice (step "
                 + std::to_string(sent) + ")").c_str(),
                persisted == QLatin1String("AS-84F-4"), persisted.toStdString());
+
+        // ...and nothing of ANOTHER switch's is clickable meanwhile. Not
+        // persisting the fallback is only half of it: while AS-84F-4 is
+        // unannounced, falling back to AS-84F-1 for display builds AS-84F-1's
+        // port buttons live on screen, and a click in that window sends
+        // SET_SWITCH to a switch the operator is not using. The remembered
+        // switch has no roster yet, so the correct tile is an empty one.
+        report(("no other switch's antennas are clickable meanwhile (step "
+                + std::to_string(sent) + ")").c_str(),
+               portButton(applet, QStringLiteral("Beam-20")) == nullptr);
+        report(("the tile still names the operator's switch (step "
+                + std::to_string(sent) + ")").c_str(),
+               applet.selectedSwitch() == QLatin1String("AS-84F-4"),
+               applet.selectedSwitch().toStdString());
     }
 
     // Record 4 announces it; the chooser must snap back on its own.
