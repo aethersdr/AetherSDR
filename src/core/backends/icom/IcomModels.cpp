@@ -50,6 +50,13 @@ constexpr std::array<IcomModel, 7> kModels{{
         // this model — worth recording precisely because it could not be
         // assumed. The IC-7610 row below is the counter-example: 689 points and
         // a 0..200 range.
+        //
+        // `hasDataModeCommand` is TRUE here and nowhere else: 1A 06 is read from
+        // THIS model's own guide (p.18, "Data mode with filter width settings")
+        // and the resulting frames were checked on the radio at 10.0.0.7. The
+        // IC-705 row above stays false despite being `verified` — that flag
+        // covers the scope/tuning numbers, and its guide is not in the tree to
+        // confirm this sub-command against.
         0xA2, "IC-9700", 2, 2,
         /*hasNetwork*/ true, /*hasWifi*/ false,
         /*hasScope*/ true, 475, 160, 11,
@@ -57,6 +64,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, 100.0,
         144'000'000ULL, 1'300'000'000ULL,
         /*verified*/ false,
+        /*hasDataModeCommand*/ true,
     },
     {
         0x98, "IC-7610", 2, 1,

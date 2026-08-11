@@ -5,6 +5,7 @@
 // Pure protocol: no sockets, no Qt, no hardware.
 
 #include "core/backends/icom/CivCodec.h"
+#include "core/backends/icom/IcomModels.h"
 
 #include <cstdio>
 #include <vector>
@@ -291,6 +292,35 @@ static void testCommands()
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0x02, 0x55, 0xFD}),
           "RF power 100% is 14 0A 0255");
 
+    // THE DATA FLAG IS NOT IN 0x06. This is the assertion whose absence let the
+    // defect ship: 0x06 carries {mode, filter} only, so a data mode and its
+    // plain counterpart produce the SAME frame. Measured on a real IC-9700 —
+    // DIGU and USB both went out as `06 01 01` and the radio ACKed both, so no
+    // software surface disagreed with any other.
+    //
+    // Assert the inequality directly rather than just the bytes of each: this
+    // is the property an operator depends on (asking for a data mode must reach
+    // the wire differently), and it stays meaningful if the frame layout later
+    // changes.
+    check(cmdSetMode(kIc705, CivMode::Usb, 1) == cmdSetMode(kIc705, CivMode::Usb, 1),
+          "cmdSetMode is deterministic");
+    check(cmdSetDataMode(kIc705, true, 1) != cmdSetDataMode(kIc705, false, 1),
+          "a data mode must not be byte-identical to its plain counterpart");
+
+    // 1A 06, per the IC-9700 CI-V Reference Guide p.18.
+    check(bytesAre(cmdSetDataMode(kIc705, true, 1),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0x01, 0x01, 0xFD}),
+          "data mode ON with FIL1 is 1A 06 01 01");
+    check(bytesAre(cmdSetDataMode(kIc705, true, 2),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0x01, 0x02, 0xFD}),
+          "data mode ON carries the filter slot");
+    // ⚠ The guide's footnote: "When 00 is set, also set 00 to [the filter
+    // byte]." So OFF is `00 00` — NOT 00 followed by the current slot. Passing
+    // filter 3 here proves the OFF path ignores it rather than echoing it.
+    check(bytesAre(cmdSetDataMode(kIc705, false, 3),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0x00, 0x00, 0xFD}),
+          "data mode OFF is 00 00, not 00 plus the filter slot");
+
     // BOTH scope switches exist and both are needed — enabling only the first
     // turns the scope on the radio's screen and sends us nothing.
     check(bytesAre(cmdScopeOnOff(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x10, 0x01, 0xFD}),
@@ -330,6 +360,39 @@ static void testCommands()
           "out-of-range reference clamps to +20.0 rather than wrapping");
 }
 
+// 1A 06 is opt-in per model, because the 1A sub-command map is model-specific
+// and an unsupported sub-command is a write to an unknown setting, not a
+// harmless no-op. Pin BOTH halves of that: the model we read the guide for is
+// enabled, and the ones we did not are not.
+static void testDataModeGating()
+{
+    const auto* ic9700 = modelForCivAddress(0xA2);
+    check(ic9700 != nullptr, "IC-9700 is in the model table");
+    check(ic9700 && ic9700->hasDataModeCommand,
+          "IC-9700 takes 1A 06 — its guide p.18 documents it and the frames were checked on the radio");
+
+    // The IC-705 is `verified` for scope/tuning, which is NOT the same claim.
+    // Its guide is not in the tree, so 1A 06 stays off: being confident about
+    // one part of a model's command table is not evidence about another.
+    const auto* ic705 = modelForCivAddress(0xA4);
+    check(ic705 != nullptr, "IC-705 is in the model table");
+    check(ic705 && !ic705->hasDataModeCommand,
+          "IC-705 does NOT advertise 1A 06 — verified scope geometry is not evidence about sub-commands");
+
+    // An unknown radio must never be sent a speculative 1A write.
+    check(!unknownModel().hasDataModeCommand,
+          "the unknown-radio fallback does not send 1A 06");
+
+    // Nothing else in the table has been checked against its own guide yet, so
+    // this is currently the ONLY model with the flag. If a future model turns it
+    // on, this count changes deliberately — with that model's guide read.
+    int enabled = 0;
+    for (const auto& m : knownModels())
+        if (m.hasDataModeCommand)
+            ++enabled;
+    check(enabled == 1, "exactly one model advertises 1A 06 today");
+}
+
 int main()
 {
     testFraming();
@@ -337,6 +400,7 @@ int main()
     testReassembler();
     testModes();
     testCommands();
+    testDataModeGating();
 
     if (g_failures == 0)
         std::printf("icom_civ_test: all checks passed\n");

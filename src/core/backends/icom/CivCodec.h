@@ -260,6 +260,11 @@ inline constexpr std::uint8_t kModMic     = 0x00;
 inline constexpr std::uint8_t kModUsb     = 0x01;
 inline constexpr std::uint8_t kModMicUsb  = 0x02;
 inline constexpr std::uint8_t kModWlan    = 0x03;
+
+// ⚠ NOT a 1A 05 menu item — this is the 1A SUB-COMMAND for the data-mode
+// setting, a sibling of 0x05 rather than a value within it. The items above are
+// decimal menu numbers encoded as BCD; this is a raw sub-command byte.
+inline constexpr std::uint8_t kDataMode   = 0x06;   // 1A 06 — data mode + filter
 }  // namespace setting
 
 // Read or write a 1A 05 SET-menu item. `item` is the DECIMAL menu number as
@@ -374,6 +379,12 @@ enum class CivMode : std::uint8_t {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadFrequency(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetMode(std::uint8_t to, CivMode mode, int filter);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadMode(std::uint8_t to);
+// 1A 06 — the DATA flag, which 0x06 (cmdSetMode) does not carry. Without this,
+// DIGU and USB are byte-identical on the wire and the radio's modulation input
+// never follows the mode: FT8 keys the rig with the MICROPHONE live.
+// ⚠ Per the guide, the OFF frame is `00 00` — when the flag is 00 the filter
+// byte must be 00 too, not the current slot. cmdSetDataMode enforces that.
+[[nodiscard]] std::vector<std::uint8_t> cmdSetDataMode(std::uint8_t to, bool dataMode, int filter);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadMeter(std::uint8_t to, std::uint8_t which);
 // The READ forms of 0x14 and 0x16 — same subcommand, no payload. The radio

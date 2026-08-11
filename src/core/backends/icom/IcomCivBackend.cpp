@@ -1300,7 +1300,24 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     // every mode change jumped to the widest filter, so an operator working a
     // narrow CW filter lost it the moment they visited another mode and came
     // back.
-    sendUserCommand(cmdSetMode(m_session ? m_session->civAddress() : 0xA4, *civ, m_filter));
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
+    sendUserCommand(cmdSetMode(addr, *civ, m_filter));
+
+    // THE DATA FLAG IS A SEPARATE COMMAND. 0x06 above carries {mode, filter}
+    // and has nowhere to put it, so until this was added `m_dataMode` was
+    // computed, stored, and never sent: DIGU and USB went out as identical
+    // frames and the radio kept transmitting from whichever modulation input it
+    // was already on. The radio ACKs `fb` either way, and our own read-back
+    // reports the mode we just set, so every software surface agreed with itself
+    // — it took watching the rig's front panel to see the mode not follow.
+    //
+    // UNCONDITIONAL on models that take it, not just when `data` is true: the
+    // flag is a radio-side toggle that persists, so leaving a data mode has to
+    // clear it explicitly. Sending only the ON edge would strand the radio in
+    // data mode on the next move to plain USB — the mirror of the bug being
+    // fixed, and the one an operator would notice second.
+    if (m_model && m_model->hasDataModeCommand)
+        sendUserCommand(cmdSetDataMode(addr, data, m_filter));
 
     // PUBLISH THE PASSBAND NOW, from the mode we just commanded.
     //

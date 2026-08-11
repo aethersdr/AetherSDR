@@ -470,6 +470,32 @@ std::vector<std::uint8_t> cmdReadMode(std::uint8_t to)
     return buildFrame(to, cmd::kReadMode);
 }
 
+std::vector<std::uint8_t> cmdSetDataMode(std::uint8_t to, bool dataMode, int filter)
+{
+    // 0x06 (set mode) carries the mode and the FILTER SLOT — it has no data-mode
+    // byte at all. The DATA flag is a SEPARATE command, and without it selecting
+    // DIGU/DIGL/DFM changed the mode while leaving the radio's modulation input
+    // alone: transmit audio kept coming from the MICROPHONE instead of the
+    // USB/WLAN modulator. `DIGU` and `USB` were byte-identical on the wire.
+    //
+    // Format, from the IC-9700 CI-V Reference Guide p.18 ("Data mode with filter
+    // width settings", command 1A 06):
+    //
+    //     byte 1   00 = Data mode OFF, 01 = Data mode ON
+    //     byte 2   01 = FIL1, 02 = FIL2, 03 = FIL3
+    //
+    // ⚠ The guide's own footnote: "When 00 is set, also set 00 to [byte 2]."
+    // So the OFF frame is 00 00 — NOT 00 followed by the current filter slot.
+    // Sending the filter alongside OFF is out of spec, and a radio is free to
+    // reject or misread it; the filter travels with 0x06 anyway, so nothing is
+    // lost by honouring this.
+    const std::uint8_t flag = dataMode ? 0x01 : 0x00;
+    const std::array<std::uint8_t, 2> body{
+        flag,
+        dataMode ? static_cast<std::uint8_t>(std::clamp(filter, 1, 3)) : std::uint8_t{0x00}};
+    return buildFrameSub(to, cmd::kSetting, setting::kDataMode, body);
+}
+
 std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value)
 {
     const auto bcd = encodeLevel(std::clamp(value, 0, 255));

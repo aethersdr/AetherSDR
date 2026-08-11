@@ -64,6 +64,21 @@ struct IcomModel {
     // should decline to advertise capabilities it cannot stand behind.
     bool verified = false;
 
+    // Accepts `1A 06` (data mode + filter width). Command 0x06 carries the mode
+    // and the filter slot but NOT the DATA flag, so without this a data mode is
+    // byte-identical to its plain counterpart on the wire and the radio keeps
+    // transmitting from whatever modulation input it was already on.
+    //
+    // Defaults to FALSE and is opt-in per model, for the same reason `verified`
+    // exists: the 1A sub-command map is model-specific, and an unsupported
+    // sub-command is a write to an unknown setting, not a harmless no-op. Turn
+    // it on only with that model's own CI-V guide in hand.
+    //
+    // ⚠ NEW FIELDS GO HERE, at the END. kModels uses positional initialisers,
+    // so inserting a member above `verified` silently shifts every row's value
+    // into the wrong field.
+    bool hasDataModeCommand = false;
+
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 

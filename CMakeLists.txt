@@ -2967,7 +2967,14 @@ add_test(NAME icom_protocol_test COMMAND icom_protocol_test)
 
 add_executable(icom_civ_test
     tests/icom_civ_test.cpp
-    src/core/backends/icom/CivCodec.cpp)
+    src/core/backends/icom/CivCodec.cpp
+    # The model table joins the codec here because 1A 06 (data mode) is gated on
+    # a per-model capability flag — asserting the frame bytes without asserting
+    # WHICH models are allowed to send them would leave the gate untested.
+    # IcomMeters carries the power curves the table references; both are plain
+    # data with no Qt, so the target stays pure protocol.
+    src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/IcomMeters.cpp)
 target_include_directories(icom_civ_test PRIVATE src)
 add_test(NAME icom_civ_test COMMAND icom_civ_test)
 
