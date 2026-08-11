@@ -244,6 +244,28 @@ void MainWindow::wireDiscovery()
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
+
+#ifdef HAVE_SERIALPORT
+    // FT-991 serial-port scan: same picker, same auto-reconnect slots,
+    // tagged family="ft991". Nothing here is family-special beyond the tag.
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    m_ft991Discovery.start();
+#endif
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
