@@ -94,6 +94,10 @@ public:
     void onHeartbeatLost();   // Call when radio lost from discovery
     void setDiscovering(bool active); // Solid amber while discovering / not yet connected
     void setMinimalMode(bool on);
+    // Windows needs this from nativeEvent(): the maximize control doubles as
+    // "leave minimal mode" there, and the WM_NC* path has to take the same
+    // branch this class takes on platforms where Qt still sees the click.
+    bool isMinimalMode() const { return m_minimalMode; }
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
     // Set the flash color used while adaptive throttle is active (empty = restore green).
     // Ignored while the disconnected-alarm blink is running.
