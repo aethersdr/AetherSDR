@@ -28,7 +28,10 @@ QVector<HGauge::Tick> evenTicks(float max)
 QLabel* makeValueLabel(QWidget* parent)
 {
     auto* lbl = new QLabel(parent);
-    lbl->setFixedWidth(46);
+    // 72px, not ACOM's 46px -- VK3AMP's 2000W variant needs 4-digit
+    // readouts (up to "2500" at meter full-scale), same width AmpApplet
+    // (PGXL, same power range) already uses for the same reason.
+    lbl->setFixedWidth(72);
     lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
     return lbl;
@@ -37,9 +40,10 @@ QLabel* makeValueLabel(QWidget* parent)
 QString activeBtnStyle(const QString& bg, const QString& border, const QString& fg)
 {
     return QStringLiteral(
-        "QPushButton { background: %1; border: 1px solid %2; border-radius: 3px; "
-        "color: %3; font-size: 10px; font-weight: bold; } "
-        "QPushButton:hover { background: %1; }").arg(bg, border, fg);
+        "QPushButton { background: %1; border: 2px solid %2; border-radius: 4px; "
+        "color: %3; font-size: 10px; font-weight: bold; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12); } "
+        "QPushButton:hover { background: %1; border: 2px solid %2; } "
+        "QPushButton:pressed { background: %1; border: 2px solid %2; }").arg(bg, border, fg);
 }
 
 QString neutralBtnStyle()
@@ -82,7 +86,8 @@ VkampApplet::VkampApplet(QWidget* parent)
     // ── PWR row ───────────────────────────────────────────────────────────
     m_pwrLabel = makeValueLabel(this);
     m_pwrLabel->setText("PWR");
-    m_pwrGauge = new HGauge(0.0f, 2000.0f, 1500.0f, "", "", evenTicks(2000.0f), this);
+    m_pwrGauge = new HGauge(0.0f, Vkamp::meterFullScaleWatts(m_variant), Vkamp::ratedWatts(m_variant),
+        "", "", evenTicks(Vkamp::meterFullScaleWatts(m_variant)), this);
     m_pwrGauge->setBallistics({0.030f, 0.800f});
     m_pwrGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
@@ -259,6 +264,13 @@ VkampApplet::VkampApplet(QWidget* parent)
     setConnected(false);
 }
 
+void VkampApplet::setVariant(Vkamp::Variant variant)
+{
+    m_variant = variant;
+    const float maxW = Vkamp::meterFullScaleWatts(variant);
+    m_pwrGauge->setRange(0.0f, maxW, Vkamp::ratedWatts(variant), evenTicks(maxW));
+}
+
 void VkampApplet::setForwardPower(float watts)
 {
     m_fwdWatts = watts;
@@ -317,9 +329,9 @@ void VkampApplet::setAntenna(int port)
     m_bandDirty = true;  // reuses the same throttle flag as band -- both are low-rate status fields
 
     auto& theme = AetherSDR::ThemeManager::instance();
-    theme.applyStyleSheet(m_ant1Btn, port == 1 ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
-    theme.applyStyleSheet(m_ant2Btn, port == 2 ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
-    theme.applyStyleSheet(m_ant3Btn, port == 3 ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+    theme.applyStyleSheet(m_ant1Btn, port == 1 ? activeBtnStyle("#123440", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
+    theme.applyStyleSheet(m_ant2Btn, port == 2 ? activeBtnStyle("#123440", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
+    theme.applyStyleSheet(m_ant3Btn, port == 3 ? activeBtnStyle("#123440", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
 }
 
 void VkampApplet::setBypass(bool on)
@@ -354,9 +366,9 @@ void VkampApplet::refreshVoltageButtons()
     const bool lowActive = m_voltageLow && !m_bypassed;
     const bool highActive = !m_voltageLow && !m_bypassed;
     theme.applyStyleSheet(m_voltLowBtn,
-        lowActive ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+        lowActive ? activeBtnStyle("#2a1c12", "#ff8d5c", "#fff4ee") : neutralBtnStyle());
     theme.applyStyleSheet(m_voltHighBtn,
-        highActive ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+        highActive ? activeBtnStyle("#102f3d", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
     const bool enabled = m_connected && !m_bypassed;
     m_voltLowBtn->setEnabled(enabled);
     m_voltHighBtn->setEnabled(enabled);

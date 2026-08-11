@@ -31,6 +31,27 @@ namespace AetherSDR {
 //     -- out of scope for this v1 (TCP+UDP only); see design doc Section 3.3.
 namespace Vkamp {
 
+// VK3AMP ships in three rated-power classes. The wire protocol has no
+// model/wattage field to auto-detect this from (design doc Section 5 --
+// written before this variant table existed, back when only the 2000W unit
+// had been tested), so the operator picks one in Peripherals settings
+// (PeripheralSettings "Vkamp"/"Variant") and it's threaded down to
+// VkampApplet::setVariant(). Defaults to W2000, the originally-confirmed
+// unit.
+enum class Variant { W600, W1000, W2000 };
+
+// Rated (nameplate) output for the variant -- also where the forward-power
+// gauge's red zone begins.
+float ratedWatts(Variant v);
+// Forward-power gauge full-scale: rated output plus ~25% headroom so a
+// carrier briefly over the nameplate rating is still visible on-scale
+// instead of pinning. Confirmed against real hardware only for W2000
+// (2000W rated -> 2500W full-scale); W600/W1000 apply the same ratio
+// pending their own confirmation.
+float meterFullScaleWatts(Variant v);
+// UI label, e.g. "2000 W".
+QString variantLabel(Variant v);
+
 // f1/band decode table (design doc Section 3.1) -- codes assigned in
 // straight ascending numeric order to bands in straight descending-
 // wavelength order. Two relay-group pairs (17-15, 12-10) share one code

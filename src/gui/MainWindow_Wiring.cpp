@@ -6116,6 +6116,14 @@ void MainWindow::wireMeters()
         if (!ip.isEmpty())
             m_vkampConn.connectNetwork(ip, static_cast<quint16>(port));
     }
+    // Forward-power gauge scale for whichever hardware variant (600W/1000W/
+    // 2000W) was last selected in Peripherals settings -- see
+    // RadioSetupDialog::vkampVariantChanged for the live-update path.
+    {
+        const int savedVariant = PeripheralSettings::deviceInt(
+            "Vkamp", "Variant", static_cast<int>(AetherSDR::Vkamp::Variant::W2000));
+        m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
+    }
 
     // Switch Fwd Power gauge scale based on radio max power and amplifier presence.
     // All three power gauges (TxApplet, TunerApplet, SMeterWidget) update together.

@@ -76,9 +76,31 @@ void VkampConnection::connectNetwork(const QString& host, quint16 port, quint16 
     m_reconnectTimer.stop();
     m_parser.reset();
 
+    // Abort any attempt still in flight first -- a bare connectToHost() on a
+    // socket that isn't UnconnectedState (e.g. a prior click still stuck in
+    // HostLookupState/ConnectingState, or mid-teardown from a just-failed
+    // attempt) is silently ignored by Qt rather than restarting the dial,
+    // which is what made Connect need several clicks before one landed in a
+    // clean state. Same guard AcomConnection::teardownDevice() already uses.
+    if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+        m_socket.abort();
+    }
+
     qCDebug(lcTuner) << "VkampConnection: connecting to" << host << ":" << port;
     m_socket.connectToHost(host, port);
     // onTransportUp() fires from the connected() signal (async).
+
+    const int epoch = ++m_connectEpoch;
+    QTimer::singleShot(kConnectTimeoutMs, this, [this, epoch]() {
+        if (m_connectEpoch != epoch) { return; }  // superseded by a later attempt
+        if (m_connected || m_socket.state() == QAbstractSocket::ConnectedState) { return; }
+        qCWarning(lcTuner) << "VkampConnection: connect timeout after" << kConnectTimeoutMs << "ms";
+        m_socket.abort();
+        emit connectionFailed(QStringLiteral("Connect timed out"));
+        if (!m_deliberateDisconnect && m_autoReconnect) {
+            armReconnect();
+        }
+    });
 }
 
 void VkampConnection::disconnect()
@@ -90,6 +112,7 @@ void VkampConnection::disconnect()
     // showing "Connected".
     const bool wasConnected = m_connected;
     m_deliberateDisconnect = true;
+    ++m_connectEpoch;  // invalidates any pending connect-timeout watchdog
     m_reconnectTimer.stop();
     m_keepaliveTimer.stop();
     m_staleStatusTimer.stop();
@@ -113,6 +136,14 @@ void VkampConnection::onTransportUp()
     m_connected = true;
     m_lastStatus = Vkamp::Status();
     qCInfo(lcTuner) << "VkampConnection: connected to" << description();
+
+    // Every command this protocol sends is a bare 2-byte ASCII code -- no
+    // bulk data to gain from Nagle's own coalescing, only its latency cost
+    // (tens-to-hundreds of ms once it interacts with the amp's own
+    // delayed-ACK timer). Same fix and reasoning as the companion
+    // vkamp_client.py's own connect(), which sets TCP_NODELAY for the same
+    // reason on every connection, not just a slow/remote one.
+    m_socket.setSocketOption(QAbstractSocket::LowDelayOption, 1);
 
     sendCommand(Vkamp::buildPoll());
     m_udpSocket.writeDatagram(Vkamp::buildPoll(), QHostAddress(m_lastHost), m_lastUdpPort);
@@ -173,6 +204,22 @@ void VkampConnection::onUdpReadyRead()
         m_udpSocket.readDatagram(data.data(), data.size());
         const auto telemetry = Vkamp::parseTelemetry(data);
         if (telemetry) {
+            // Below the lowest raw count the output calibration curve was
+            // ever actually fit to (~133W true output -- VkampProtocol.cpp's
+            // own kOutputCalMinRaw doc comment), outputWatts() correctly
+            // returns 0 rather than extrapolate into a bogus reading -- but
+            // that also means real sub-~130W raw counts go unrecorded
+            // anywhere right now. Logged at debug level purely so a real
+            // external-meter reading at this raw count can become a new
+            // calibration point later, same evidence bar as the existing
+            // ones (design doc Section 3.2) -- never a constant invented
+            // from this log alone.
+            if (telemetry->output > 0 && telemetry->outputWatts() <= 0.0f) {
+                qCDebug(lcTuner) << "VkampConnection: raw output" << telemetry->output
+                                  << "below the calibrated floor -- pair with an "
+                                     "external reference reading at this drive level "
+                                     "to extend the curve";
+            }
             emit telemetryUpdated(*telemetry);
         }
     }

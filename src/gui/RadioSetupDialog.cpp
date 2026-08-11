@@ -7847,6 +7847,40 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 m_vkamp->disconnect();
             }
         });
+
+        // Row 7: VK3AMP hardware variant -- 600W/1000W/2000W ship as
+        // distinct rated-power classes, and the wire protocol has no
+        // model/wattage field to auto-detect which one this is (design
+        // doc's variant table). Picking the wrong one only misscales the
+        // forward-power gauge, not a safety issue, so this defaults to
+        // W2000 (the originally-confirmed unit) rather than blocking on a
+        // choice.
+        auto* variantLbl = new QLabel("Amplifier Model");
+        variantLbl->setStyleSheet(kLabelStyle);
+        grid->addWidget(variantLbl, row + 1, 0);
+
+        auto* variantCombo = new QComboBox;
+        static const QString kVariantComboStyle =
+            "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
+            "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+        variantCombo->setStyleSheet(kVariantComboStyle);
+        for (auto v : {Vkamp::Variant::W600, Vkamp::Variant::W1000, Vkamp::Variant::W2000}) {
+            variantCombo->addItem(Vkamp::variantLabel(v), static_cast<int>(v));
+        }
+        const int savedVariant = PeripheralSettings::deviceInt(
+            "Vkamp", "Variant", static_cast<int>(Vkamp::Variant::W2000));
+        {
+            const int idx = variantCombo->findData(savedVariant);
+            variantCombo->setCurrentIndex(idx >= 0 ? idx : variantCombo->count() - 1);
+        }
+        grid->addWidget(variantCombo, row + 1, 1);
+
+        connect(variantCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this, variantCombo](int idx) {
+            PeripheralSettings::setDeviceInt("Vkamp", "Variant", variantCombo->itemData(idx).toInt());
+            emit vkampVariantChanged();
+        });
     }
 
     for (auto* lbl : group->findChildren<QLabel*>())

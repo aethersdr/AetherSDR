@@ -26,6 +26,12 @@ class VkampApplet : public QWidget {
 public:
     explicit VkampApplet(QWidget* parent = nullptr);
 
+    // Rescales the forward-power gauge to the selected hardware variant's
+    // rated output + headroom (Vkamp::meterFullScaleWatts/ratedWatts) --
+    // driven by the Peripherals settings row, see design doc's variant
+    // table. Safe to call before or after connect; defaults to W2000.
+    void setVariant(Vkamp::Variant variant);
+
     // Telemetry (UDP)
     void setForwardPower(float watts);
     void setReflectedPower(float watts);
@@ -104,6 +110,8 @@ private:
     bool m_bypassed{false};
     bool m_voltageLow{false};
     bool m_connected{false};
+
+    Vkamp::Variant m_variant{Vkamp::Variant::W2000};
 
     // setTemp/setSupplyVoltage/setCurrent/setBand/setAntenna arrive at
     // status/telemetry rate -- funneled through the 10Hz m_labelTimer tick

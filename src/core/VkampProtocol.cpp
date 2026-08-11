@@ -45,7 +45,33 @@ constexpr float kVoltageRailMidpoint = 49.7f;
 constexpr float kOutputCalA = 0.004512816228704022f;
 constexpr float kOutputCalB = -0.1747779854596575f;
 constexpr float kOutputCalC = 25.69141235049288f;
-constexpr float kOutputCalMinRaw = 175.6f;
+// Floor extended down from the companion project's original 175.6 (their
+// lowest confirmed point, raw~175.6 -> true 133W) after a live capture on
+// this codebase's own hardware: 121 telemetry frames during a steady 1W-
+// drive transmission clustered at raw 157-166 (mode 165, 58/121 frames),
+// user-confirmed true output ~111W. NOT extended further than this
+// steady-state cluster: the same capture's tail-off through 134 and 102 as
+// the transmission ended is transient, not a new steady point, and is
+// deliberately excluded.
+//
+// Anchored at 157 -- the LOW edge of that cluster -- not 165, its mode. An
+// earlier version of this fix anchored at the mode instead, which put most
+// of the real observed jitter (157-164) inside the ramp below it: a linear
+// taper multiplies against the full ~120W target, so even a 1-raw-count
+// blip swung the ramp's own fraction by 1/rampWidth =33%, i.e. ~40W --
+// looking exactly like the value "flickering" even though it was a stable
+// transmission the whole time. The quadratic above is actually well-
+// resolved through this whole range (~1.3W of true slope per raw count at
+// raw~160, confirmed by evaluating it directly) -- the flicker was 100% an
+// artifact of running real, already-noisy data through the taper meant for
+// smoothing a RARE undershoot blip below the confirmed cluster, not for
+// interpolating across the bulk of it. Anchoring at the cluster's own low
+// edge instead means raw 157-166 all resolve through the smooth quadratic
+// directly, and the (unchanged, still 3-count-wide) ramp only ever
+// activates for the rare sub-157 dip actually observed in this same
+// capture's tail-off -- exactly the boundary-smoothing role it was
+// originally designed for (see kOutputCalRampWidth's own doc comment).
+constexpr float kOutputCalMinRaw = 157.0f;
 constexpr float kOutputCalRampWidth = 3.0f;
 
 constexpr float kCurrentCalA = 0.4052965787643523f;
@@ -60,6 +86,26 @@ constexpr float kInputCalB = 0.1595133745143524f;
 constexpr float kInputCalC = 1.004316538777762f;
 
 }  // namespace
+
+float ratedWatts(Variant v)
+{
+    switch (v) {
+        case Variant::W600:  return 600.0f;
+        case Variant::W1000: return 1000.0f;
+        case Variant::W2000: return 2000.0f;
+    }
+    return 2000.0f;
+}
+
+float meterFullScaleWatts(Variant v)
+{
+    return ratedWatts(v) * 1.25f;
+}
+
+QString variantLabel(Variant v)
+{
+    return QStringLiteral("%1 W").arg(static_cast<int>(ratedWatts(v)));
+}
 
 QString bandName(int f1)
 {

@@ -79,6 +79,11 @@ signals:
     // persists it and pushes it to the running bridge, which then refuses every
     // mutating verb (#4188 area 6) — MCP clients can read but not drive.
     void automationBridgeReadOnlyChanged(bool readOnly);
+    // Fired when the user changes the VK3AMP hardware variant (600W/1000W/
+    // 2000W) in the Peripherals tab. The selection is persisted to
+    // PeripheralSettings before this fires; MainWindow re-reads it and
+    // pushes the new scale into VkampApplet::setVariant().
+    void vkampVariantChanged();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

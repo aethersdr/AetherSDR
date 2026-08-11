@@ -90,6 +90,31 @@ private:
     bool m_autoReconnect{false};
     bool m_deliberateDisconnect{false};
 
+    // Without an explicit watchdog, an unreachable/wrong IP falls back to
+    // the OS's own default TCP connect timeout -- as long as ~21s on
+    // Windows -- before connectionFailed() ever fires, which is what made
+    // Connect feel hung rather than just slow. Same epoch-guarded
+    // QTimer::singleShot pattern as DxClusterClient/WaveformInstaller/
+    // ProfileTransfer's own kConnectTimeoutMs (#2380: a stale timeout from
+    // attempt N must never abort a later attempt that already succeeded).
+    //
+    // 18000ms, not a smaller codebase-convention value -- ported from the
+    // companion vkamp_client.py's own VKAmp.__init__ default (timeout=18.0),
+    // whose own doc comment explains why: this amp's network stack only
+    // answers BROADCAST ARP "who-has" requests, never unicast ones, but
+    // Windows' neighbor-cache reconfirmation tries unicast probes against a
+    // stale ARP entry first and only falls back to broadcast once those go
+    // unanswered -- confirmed via live capture to take anywhere from ~9s to
+    // >12s depending on how stale the cached entry was. A shorter timeout
+    // (this shipped at 5000ms, then 10000ms, before this fix) cuts that
+    // escalation off mid-flight on every cold connect -- it then works fine
+    // on retry only because Windows has since finished the broadcast
+    // resolution and cached it, which is exactly the "works on the second
+    // click" symptom this was chasing. 18s gives the whole dance room to
+    // finish inside a single attempt, with margin.
+    static constexpr int kConnectTimeoutMs = 18000;
+    int m_connectEpoch{0};
+
     QTimer m_reconnectTimer;
     // The amp is silent during genuine idle time (design doc Section 6) --
     // this keepalive is the ONLY thing that produces a status reply while

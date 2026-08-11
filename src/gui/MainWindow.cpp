@@ -59,6 +59,7 @@
 #include "SMeterWidget.h"
 #include "TunerApplet.h"
 #include "TxApplet.h"
+#include "VkampApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
 #include "EqApplet.h"
@@ -3174,6 +3175,14 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         m_flexControlConnected,
         m_flexControlConnected && m_flexControl ? m_flexControl->portName() : QString());
 #endif
+    // VK3AMP hardware variant changed in Peripherals settings -- rescale
+    // the live forward-power gauge to match (see RadioSetupDialog.h's own
+    // doc comment on vkampVariantChanged).
+    connect(dlg, &RadioSetupDialog::vkampVariantChanged, this, [this]() {
+        const int saved = PeripheralSettings::deviceInt(
+            "Vkamp", "Variant", static_cast<int>(Vkamp::Variant::W2000));
+        m_appletPanel->vkampApplet()->setVariant(static_cast<Vkamp::Variant>(saved));
+    });
     // Toggle of SliceLetterDisplay → repaint every slice-letter widget
     // by re-emitting letterChanged on each slice (#2606).
     connect(dlg, &RadioSetupDialog::sliceLetterDisplayModeChanged,
@@ -3563,6 +3572,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // reported on Maestro (#3079).
     m_tgxlConn.disconnect();
     m_pgxlConn.disconnect();
+    // Same reasoning applies to the VK3AMP peripheral -- it has no
+    // radio-disconnect handler to ride at all (design doc's own "zero radio
+    // awareness" -- it never learns the app is closing otherwise), so
+    // without this the amp's TCP control socket is torn down implicitly by
+    // ~VkampConnection() as MainWindow's members are destructed, well after
+    // this function returns, leaving the amp holding a stale half-open
+    // connection instead of seeing a clean close.
+    m_vkampConn.disconnect();
 
     // Same event-loop reasoning: the operating-state capture flush normally
     // rides the queued backend disconnected() signal, which never lands

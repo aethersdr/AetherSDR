@@ -173,6 +173,17 @@ int main()
     report("parseTelemetry rejects a wrong field count", !parseTelemetry("450,8,94").has_value());
     report("parseTelemetry rejects a non-numeric field", !parseTelemetry("450,x,94,50").has_value());
 
+    // ── Per-variant power scaling (§ meter full-scale = rated * 1.25) ──────
+    report("VKAMP 600W variant: 600 W rated, 750 W meter full-scale",
+           nearlyEqual(ratedWatts(Variant::W600), 600.0f) &&
+           nearlyEqual(meterFullScaleWatts(Variant::W600), 750.0f));
+    report("VKAMP 1000W variant: 1000 W rated, 1250 W meter full-scale",
+           nearlyEqual(ratedWatts(Variant::W1000), 1000.0f) &&
+           nearlyEqual(meterFullScaleWatts(Variant::W1000), 1250.0f));
+    report("VKAMP 2000W variant: 2000 W rated, 2500 W meter full-scale",
+           nearlyEqual(ratedWatts(Variant::W2000), 2000.0f) &&
+           nearlyEqual(meterFullScaleWatts(Variant::W2000), 2500.0f));
+
     // ── Calibration curves -- ported verbatim from the companion project's
     //    own fitted constants (design doc Section 3.2). Expected values below
     //    are computed independently from those same published constants, not
@@ -180,12 +191,35 @@ int main()
     {
         Telemetry t;
         t.output = 100;
-        report("outputWatts() is 0 below the ramp start (raw 100 < 172.6)",
+        report("outputWatts() is 0 below the ramp start (raw 100 < 154.0)",
                nearlyEqual(t.outputWatts(), 0.0f));
 
-        t.output = 173;
-        report("outputWatts() tapers continuously inside the ramp zone (raw 173)",
-               nearlyEqual(t.outputWatts(), 17.4025f, 0.05f));
+        // Floor lowered from the companion project's original 175.6 to 157.0
+        // (kOutputCalMinRaw's own doc comment) after a live capture on real
+        // hardware: raw~157-166, steady, paired with a confirmed ~111W true
+        // reading. Anchored at the LOW edge of that cluster (157), not its
+        // mode (165) -- an earlier version of this fix anchored at the mode
+        // and put most of the real jitter inside the ramp, where a 1-count
+        // ADC blip swung the reading by ~40W (looked like flicker on a
+        // perfectly steady transmission). raw 156 below exercises the ramp
+        // zone, which now only covers the rare sub-157 case.
+        t.output = 156;
+        report("outputWatts() tapers continuously inside the (lowered) ramp zone (raw 156)",
+               nearlyEqual(t.outputWatts(), 72.1666f, 0.05f));
+
+        // Regression guard for the mode-vs-low-edge bug above: the real
+        // observed cluster (157-166) must resolve through the smooth
+        // quadratic, not the steep ramp -- so a 1-count ADC blip anywhere
+        // in that range should swing the reading by low single-digit watts
+        // (matching the curve's own ~1.3W/count local slope here), not the
+        // ~40W/count the ramp produces.
+        t.output = 157;
+        const float lowEdge = t.outputWatts();
+        t.output = 166;
+        const float highEdge = t.outputWatts();
+        report("outputWatts() swings by only a few W/count across the confirmed "
+               "157-166 cluster, not ~40W/count (the flicker bug)",
+               (highEdge - lowEdge) / 9.0f < 5.0f);
 
         t.output = 176;
         report("outputWatts() follows the full quadratic above the ramp (raw 176)",
