@@ -36,7 +36,12 @@ constexpr qreal kStatusSizePx = 9.5;
 // glow is data, not decoration: one swell per discovery packet, so a stalled
 // link simply stops breathing.  Long enough to read as a pulse rather than the
 // 100 ms blink the old standalone lamp used.
-constexpr int  kPulseDecayMs  = 1400;
+//
+// Kept BELOW the discovery beat interval (~1 s) on purpose.  At 1400 ms the
+// decay never finished before the next beat re-armed it, so the ticker ran at
+// 12.5 Hz for the entire connected session — a permanent repaint of the active
+// tab, in a bar whose whole design point is a small idle cost.
+constexpr int  kPulseDecayMs  = 850;
 constexpr int  kPulseTickMs   = 80;     // 12.5 Hz — smooth enough, cheap enough
 constexpr int  kAlarmBlinkMs  = 500;    // link-lost red blink, as before
 
@@ -439,7 +444,11 @@ RadioTabBar::RadioTabBar(QWidget* parent)
 
     // One shared ticker rather than an animation per tab: only the active tab
     // ever glows, and this app watches its idle-repaint budget closely.  The
-    // timer runs only while a beat is decaying, so an idle bar costs nothing.
+    // timer runs only while a beat is decaying and stops when the glow reaches
+    // zero — so a bar with no beats arriving costs nothing.  While a link IS
+    // beating the decay is shorter than the beat interval, so the ticker gets
+    // to stop between beats instead of being re-armed mid-decay and running
+    // continuously for the whole session.
     m_pulseTimer = new QTimer(this);
     m_pulseTimer->setInterval(kPulseTickMs);
     connect(m_pulseTimer, &QTimer::timeout, this, [this]() {
@@ -499,16 +508,36 @@ void RadioTabBar::pulseLink(const QColor& beatColor)
 void RadioTabBar::applyLinkVisuals()
 {
     const qreal eased = m_pulseLevel * m_pulseLevel;
+
+    // With no active radio the link state still has something to say —
+    // "searching" is reported precisely when nothing is connected, which is the
+    // state the indicator matters most in, and it is the whole reason the strip
+    // survives minimal mode.  Keying the carrier purely off m_activeId left it
+    // rendering nowhere in exactly that case, so fall back to the first tab.
+    // Once a radio is active it carries the state, as before.
+    RadioTab* carrier = nullptr;
     for (RadioTab* tab : std::as_const(m_tabs)) {
-        const bool isActive = tab->entry().id == m_activeId;
-        // Only the active tab carries the link state — the others describe
-        // radios this client is not talking to, so a heartbeat says nothing
-        // about them.
-        tab->setLinkOverride(isActive ? m_linkOverride : QColor(),
-                             isActive && m_alarm);
+        if (tab->entry().id == m_activeId) { carrier = tab; break; }
+    }
+    if (!carrier && !m_activeId.isEmpty()) {
+        // An active id that matches no tab yet (the strip is mid-rebuild) is
+        // not the disconnected case — leave the state uncarried rather than
+        // painting it onto an unrelated radio.
+        carrier = nullptr;
+    } else if (!carrier && !m_tabs.isEmpty()) {
+        carrier = m_tabs.first();
+    }
+
+    for (RadioTab* tab : std::as_const(m_tabs)) {
+        // Only the carrier shows the link state — the others describe radios
+        // this client is not talking to, so a heartbeat says nothing about them.
+        const bool isCarrier = tab == carrier;
+        tab->setLinkCarrier(isCarrier);
+        tab->setLinkOverride(isCarrier ? m_linkOverride : QColor(),
+                             isCarrier && m_alarm);
         tab->setAlarmVisible(m_alarmVisible);
-        tab->setBeatColor(isActive ? m_beatColor : QColor());
-        tab->setPulse(isActive ? eased : 0.0);
+        tab->setBeatColor(isCarrier ? m_beatColor : QColor());
+        tab->setPulse(isCarrier ? eased : 0.0);
     }
 }
 
@@ -567,9 +596,23 @@ void RadioTabBar::rebuild()
     while (m_tabs.size() < m_radios.size()) {
         auto* tab = new RadioTab(m_radios.at(m_tabs.size()), this);
         connect(tab, &QAbstractButton::clicked, this, [this, tab]() {
-            const QString id = tab->entry().id;
-            setActiveRadio(id);
-            emit radioActivated(id);
+            // Deliberately does NOT claim the clicked tab as active.  MainWindow
+            // treats a single click as "show me the picker", not "switch" — so
+            // moving m_activeId here would leave the strip, and the bridge's
+            // activeId, asserting a radio the client never connected to, with
+            // the link visuals following the wrong tab.  The active tab changes
+            // only when the session does, via setActiveRadio() from
+            // refreshRadioTabs().
+            //
+            // applyActiveState() re-asserts the checked state because
+            // QAbstractButton has already toggled this tab on press: the tabs
+            // are checkable and belong to no exclusive group, so clicking the
+            // ALREADY-active tab would otherwise leave it unchecked for good
+            // (setActiveRadio() early-returns on an unchanged id, and
+            // setRadios() early-returns on an unchanged list, so nothing else
+            // ever restores it).
+            applyActiveState();
+            emit radioActivated(tab->entry().id);
         });
         // Insert before the "+" button, which always stays last.
         m_layout->insertWidget(m_tabs.size(), tab);
@@ -583,13 +626,23 @@ void RadioTabBar::rebuild()
 
 void RadioTabBar::applyActiveState()
 {
+    // In compact (minimal) mode only one tab is shown.  It must be the same tab
+    // applyLinkVisuals() puts the link state on, or minimal mode hides the
+    // carrier and takes the radio-link indicator with it — the exact loss the
+    // strip is kept in minimal mode to prevent.  With no active radio that is
+    // the first tab, not nothing.
+    RadioTab* shown = nullptr;
+    for (RadioTab* tab : std::as_const(m_tabs)) {
+        if (tab->entry().id == m_activeId) { shown = tab; break; }
+    }
+    if (!shown && m_activeId.isEmpty() && !m_tabs.isEmpty()) {
+        shown = m_tabs.first();
+    }
+
     for (RadioTab* tab : std::as_const(m_tabs)) {
         const bool isActive = tab->entry().id == m_activeId;
         tab->setChecked(isActive);
-        // In compact (minimal) mode only the active tab is shown.  With no
-        // active radio nothing is shown, which is correct: there is no link to
-        // report on.
-        tab->setVisible(!m_compact || isActive);
+        tab->setVisible(!m_compact || tab == shown);
     }
     if (m_addButton) {
         m_addButton->setVisible(!m_compact);
@@ -681,7 +734,9 @@ void RadioTabBar::showDiscoveryPopover()
             if (m_popover) {
                 m_popover->close();
             }
-            setActiveRadio(id);
+            // Same rule as a tab click: choosing a row is a request, not a
+            // connection.  The active tab follows the session, never the
+            // gesture that asked for it.
             emit radioActivated(id);
         });
         rows->addWidget(row);
@@ -748,6 +803,7 @@ QVariantMap RadioTabBar::state() const
             {QStringLiteral("statusLine"), tab->accessibleDescription()},
             {QStringLiteral("transport"), e.transport},
             {QStringLiteral("active"), tab->isChecked()},
+            {QStringLiteral("linkCarrier"), tab->isLinkCarrier()},
             {QStringLiteral("accessibleName"), tab->accessibleName()},
         });
     }

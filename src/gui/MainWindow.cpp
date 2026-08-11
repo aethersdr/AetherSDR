@@ -3515,7 +3515,18 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 
     if (msg->message == WM_NCMOUSEMOVE) {
         if (auto* caption = captionButtons()) {
-            caption->setMaximizeForcedHover(msg->wParam == HTMAXBUTTON);
+            const bool onMaximize = msg->wParam == HTMAXBUTTON;
+            caption->setMaximizeForcedHover(onMaximize);
+            // WM_NCMOUSELEAVE only arrives if it has been asked for.  Without
+            // this, moving the cursor from the maximize control into the CLIENT
+            // area produces WM_MOUSEMOVE rather than another WM_NCMOUSEMOVE, so
+            // nothing clears the forced hover and the button stays lit until
+            // the next non-client move.
+            if (onMaximize) {
+                TRACKMOUSEEVENT tme{sizeof(TRACKMOUSEEVENT),
+                                    TME_LEAVE | TME_NONCLIENT, msg->hwnd, 0};
+                TrackMouseEvent(&tme);
+            }
         }
     } else if (msg->message == WM_NCMOUSELEAVE) {
         if (auto* caption = captionButtons()) {
@@ -3527,8 +3538,18 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         *result = 0;
         return true;
     } else if (msg->message == WM_NCLBUTTONUP && msg->wParam == HTMAXBUTTON) {
-        if (isMaximized()) showNormal();
-        else               showMaximized();
+        // Minimal mode reuses this control to LEAVE minimal mode, so it must
+        // not fall through to a plain maximize — that would blow a deliberately
+        // small strip up to full screen.  Same branch TitleBar takes on the
+        // platforms where Qt still sees the click; on main this worked because
+        // the control was a QLabel routed through TitleBar::eventFilter.
+        if (m_titleBar && m_titleBar->isMinimalMode()) {
+            emit m_titleBar->minimalModeWindowedExitRequested();
+        } else if (isMaximized()) {
+            showNormal();
+        } else {
+            showMaximized();
+        }
         *result = 0;
         return true;
     }
@@ -3597,7 +3618,13 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         // pixels, so on a scaled display the two disagree.
         const QPoint cursor = QCursor::pos();
 
-        if (auto* caption = captionButtons()) {
+        // Not in minimal mode: Snap Layouts offering to tile a deliberately
+        // small strip is wrong, and answering HTMAXBUTTON here is what takes
+        // the click away from Qt in the first place.  Declining it lets the
+        // control behave as it does everywhere else — where it exits minimal
+        // mode rather than maximizing.
+        const bool minimalMode = m_titleBar && m_titleBar->isMinimalMode();
+        if (auto* caption = captionButtons(); caption && !minimalMode) {
             const QRect maxRect = caption->maximizeButtonGlobalRect();
             if (!maxRect.isNull() && maxRect.contains(cursor)) {
                 *result = HTMAXBUTTON;   // makes Snap Layouts appear on hover
@@ -8894,10 +8921,18 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // showed it because there the strip needing new cover is taken by the
     // applet panel, an ordinary widget that paints correctly; that asymmetry
     // is why the report was always "panel on the left".
-    if (m_panStack)
-        m_panStack->refreshAfterLayoutShift();
-    if (m_splitter)
-        m_splitter->update();
+    // Scoped to an actual wall change.  applyAppletPanelState() routes show,
+    // hide, un-float, pop-out, Ctrl+Shift+S and the bridge verb all through
+    // this function, and refreshAfterLayoutShift() is a per-panadapter native
+    // re-realize — far too expensive to pay on transitions where no panadapter
+    // moved.  It is also the wrong moment on the hide path, which applies
+    // visibility after this returns.
+    if (!alreadyOnWall) {
+        if (m_panStack)
+            m_panStack->refreshAfterLayoutShift();
+        if (m_splitter)
+            m_splitter->update();
+    }
 
     if (m_titleBar)
         m_titleBar->setAppletDockState(m_appletPanel->isVisible(), left);
@@ -8910,7 +8945,21 @@ void MainWindow::setAppletPanelVisible(bool visible)
     // AppletPanel::setFixedWidth(260) means Qt restores the same width on
     // un-hide automatically — the splitter just shrinks PanStack (stretch=1)
     // by 260 and gives the slot back to the applet.
+    const bool changed = m_appletPanel->isVisible() != visible;
     m_appletPanel->setVisible(visible);
+
+    // The panadapter gains or loses the panel's 260 px here, which is the same
+    // geometry change that strands its native surface on a dock flip — so the
+    // refresh belongs here too, where the width actually changes, rather than
+    // being fired blanket from setAppletPanelDockedLeft() on transitions that
+    // move nothing.  Guarded on a real change so a redundant setVisible() is
+    // still free.
+    if (changed) {
+        if (m_panStack)
+            m_panStack->refreshAfterLayoutShift();
+        if (m_splitter)
+            m_splitter->update();
+    }
 
     AppSettings::instance().setValue("AppletPanelVisible", visible ? "True" : "False");
     AppSettings::instance().save();
