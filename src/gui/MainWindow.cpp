@@ -9188,12 +9188,21 @@ void MainWindow::updateKeyerAvailability()
 
 #ifdef AETHER_ASR_ENABLED
     // ASR (Copy Assist): the inverse of CWX on mode — available in voice modes
-    // only, dimmed in CW and DIGx/RTTY — but NOT on slice. Copy Assist is a
-    // receive-side decode of the audio the operator is listening to, and it is
-    // already bound to the ACTIVE slice: setActiveSliceInternal() rebinds
-    // m_copyAssistFreqConn to that slice's frequencyChanged and calls onRetune()
-    // on a switch. The CW decoder, this feature's CW-mode counterpart, reads the
-    // same slice (refreshCwDecodeState()).
+    // only, dimmed in CW and DIGx/RTTY — but NOT on slice. It follows the slice
+    // the operator has SELECTED, which is also the slice the rest of Copy Assist
+    // tracks: setActiveSliceInternal() rebinds m_copyAssistFreqConn to that
+    // slice's frequencyChanged and calls onRetune() on a switch. The CW decoder,
+    // this feature's CW-mode counterpart, gates on the same slice
+    // (refreshCwDecodeState()).
+    //
+    // The selected slice is a PROXY, not the audio source, and the difference
+    // matters to anyone changing this: the tap subscribes to
+    // AudioEngine::receivePresentationPostDspAudioReady and AsrTapPolicy locks
+    // onto a RECEIVER (the Flex, the applet Kiwi, an external Kiwi) on a
+    // first-block-wins rule with a 2 s release window — never onto a slice. On a
+    // Flex that stream is every audible slice already mixed together. So this
+    // gate answers "is the operator listening to something transcribable",
+    // which is a heuristic; it does not and cannot name the audio being decoded.
     //
     // It was gated on the TX slice for a visually consistent indicator row, and
     // that cost the feature entirely with TX off: no slice carries isTxSlice(),
@@ -9201,6 +9210,13 @@ void MainWindow::updateKeyerAvailability()
     // could not open Copy Assist at all (#4825). Row consistency is the weaker
     // constraint — CWX and DVK key the TX slice and genuinely belong to it, so
     // the three indicators may now disagree, which is correct.
+    //
+    // NOTE the auto-hide below now has teeth it did not have on the TX gate:
+    // hiding the panel calls setAsrEnabled(false) (PanadapterApplet), which
+    // disables the tap and drops the receiver lock. Selecting a CW slice
+    // therefore STOPS a running transcription, where before only a TX-slice mode
+    // change could. Deliberate — the indicator must track the selected slice to
+    // be worth anything — but it is the sharp edge of this change.
     SliceModel* asrSlice = activeSlice();
     const bool asrIsVoice = asrSlice && isVoiceMode(asrSlice->mode());
     if (m_asrIndicator) {

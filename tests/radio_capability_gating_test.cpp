@@ -771,9 +771,18 @@ int main(int argc, char** argv)
     // who turns TX off (antenna disconnected, bench work) or listens receive-only
     // lost the feature outright.
     //
-    // The mode half below is the production predicate; the slice half is
-    // restated, because MainWindow is not linkable from this target (it links
-    // aethercore, not the GUI) — the same compromise the keyer helpers above make.
+    // WHAT THIS BLOCK DOES NOT PIN, stated plainly because the assertions read
+    // like they cover the fix and they do not: every check here calls
+    // isVoiceMode(), and the PRE-FIX code used the same mode list. This block
+    // would pass, green, against the bug. It pins the mode list — which is worth
+    // pinning, it is now shared by two indicators — while the slice SOURCE, the
+    // actual subject of #4825, is out of reach: MainWindow is not linkable from
+    // this target (it links aethercore, not the GUI), so nothing here can ask
+    // updateKeyerAvailability() which slice it read. Same compromise the keyer
+    // helpers above make, and the same one the file header warns about. The fix
+    // itself was verified on hardware (a FLEX-6500 with TX off, and a two-slice
+    // TX=CW / active=USB pair); if that ever needs to become a test, the tri-state
+    // decision has to move out of MainWindow into VoiceModeGate.h first.
     {
         // TX off: no slice carries isTxSlice(), so txSlice() is null and
         // updateKeyerAvailability() reads an empty TX mode.
