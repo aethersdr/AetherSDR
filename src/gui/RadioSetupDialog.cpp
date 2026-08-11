@@ -1790,9 +1790,9 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         grid->addWidget(new QLabel("Network MTU:"), 5, 0);
         auto* mtuSpin = new QSpinBox;
         mtuSpin->setRange(576, 9000);
-        mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1400").toInt());
+        mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
         mtuSpin->setSuffix(" bytes");
-        mtuSpin->setToolTip("Maximum Transmission Unit for VITA-49 UDP packets.\nDefault: 1400 — within WireGuard's 1420 tunnel MTU, and at the limit for OpenVPN's 1400.\nLower this if spectrum stops over a VPN; raise it on a plain LAN for slightly fewer packets.");
+        mtuSpin->setToolTip("Maximum Transmission Unit for VITA-49 UDP packets.\nDefault: 1450 (compatible with most VPN/SD-WAN tunnels).");
         connect(mtuSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int val) {
             m_model->sendCommand(
                 QString("client set enforce_network_mtu=1 network_mtu=%1").arg(val));
