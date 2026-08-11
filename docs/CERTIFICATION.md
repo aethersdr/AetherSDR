@@ -6,6 +6,15 @@ after the fact — which is the point of the tool, and a useful check on it: som
 of what follows is a defect radiocert found, and some is a gap in radiocert
 itself that only a second radio could expose.
 
+**1.32–1.34 came from returning to the Hermes-Lite 2** on 2026-08-10 and running
+`radiocert meters` against it after the Icom work had reshaped the tool. All
+three are defects in the *tool*, not the radio, and all three are the shapes
+this document already warns about, aimed back at the instrument: a negative
+finding from a stage that never transmitted, a false positive that a sibling
+table had already been fixed to prevent, and a staleness probe reading a stale
+value. Turning the tool on a radio it has already certified is cheap, and it is
+the only way these were ever going to surface.
+
 Why `radiocert` is shaped the way it is, and what it still cannot do.
 
 The reference tables live in [`radio-certification.md`](radio-certification.md);
@@ -539,6 +548,102 @@ that matters. And a certification stage should assert the SEQUENCE a control
 produces, not the set: correct commands in the wrong order are a defect that
 set-membership cannot see.
 
+### 1.32 A stage that transmits must check that it transmitted
+
+`radiocert meters` was run twice against the same Hermes-Lite 2, minutes apart,
+with one difference: the operator's RF power slider sat at **0** for the first
+run. It reported
+
+> DEFINED BUT NEVER FED … `TX:SWR` … Either publish them with a documented scale
+> or stop defining them
+
+and `meter-scale` recorded `swr: -1` beside it. The second run, at 50 % drive,
+read `TX:SWR` = 1.0 with an age of 531 ms. Nothing had been fixed in between.
+
+The verb keyed correctly, the audio reached the modulator, `keyRefusals` was 0
+and every precondition passed — the radio simply radiated nothing, because zero
+drive is zero drive. `run()` clamps RF power **down** to the automation ceiling
+and has no floor, and no keyed stage asks whether forward power actually
+appeared before reporting on the meters that depend on it.
+
+This is §1.8 arriving from the other side. That lesson says a transmit stage
+must not infer "no RF" from a missing meter reading; this one says a **meter**
+stage must not infer "no meter" from missing RF. Both are the same confusion
+between the instrument and its subject, and the meters phase is where it is most
+dangerous — a false `NEVER FED` is a standing invitation to delete a working
+meter, which is precisely what the concern text recommends.
+
+**Consequence.** Any stage whose measurement requires a transmission must
+establish that the transmission happened, from a quantity independent of the
+thing being measured, and downgrade to **inconclusive** rather than negative
+when it did not. A drive floor would help and is not sufficient: an interlock, a
+band limit or a PA that never enabled produce the same silence at any slider
+setting. `NOT-TESTED` is already a first-class outcome in the control scrub
+(§1.29); the meters phase needs it too.
+
+### 1.33 A lesson learned in one table is not learned in its sibling
+
+Every HL2 meters run reports
+
+> UNIT MISMATCH — these are defined, fed and MISREAD … `TX:ALC` (declared dBFS,
+> expected dB)
+
+on a meter that is correct. `MeterSurfaces.h` holds `TX:ALC` as accepting
+`"dBFS,Percent"` — a **set** — and its comment says exactly why:
+
+> The first version of this field held the one unit the consumer applied, and
+> running it against a live radio flagged both FWDPWR and ALC as mismatched —
+> after they had been fixed.
+
+`kMeterTable` in `RadioCertification.cpp` is still the first version: one
+expected unit, compared by equality. So the fix was made, written down, and
+applied to one of the two tables that needed it — and the tool that reads the
+other one has emitted a permanent false positive on healthy hardware ever since.
+
+It ranks the finding first, too, above every real concern, because §1.28's
+ordering puts a fed-and-misread meter ahead of an absent one. The one class of
+finding designed to be impossible to overlook is the one that is always wrong.
+
+**Consequence.** When a check is duplicated — a document and its executable
+copy, two tables over the same domain — fixing one and not the other is worse
+than never having fixed either, because the surviving copy now contradicts a
+correction someone made deliberately. Grep for the other copy at the moment of
+the fix. And a concern that fires on every run of healthy hardware must be
+treated as a defect in the checker with the same urgency as a missed
+detection: §1.28 warns that a concern which never goes away stops being read,
+and this one is loud enough to take the real findings with it.
+
+### 1.34 The "is it rendered" probe needs the same guards as the gauge
+
+§1.27 added `asRendered` so a stage could report what the operator's gauge will
+actually show, rather than only what crossed the seam. On the HL2 it reports:
+
+```json
+"asRendered": { "fwdPowerWatts": 0.001, "swr": 1.0, "alcDbfs": -1.43 }
+```
+
+All three numbers are wrong in a different way, and the meters are fine:
+
+- **`fwdPowerWatts: 0.001`** in a run whose own keyed stage measured 2.0 W.
+  `stageMeterInventory` runs after `stageControlEffect` has unkeyed and settled
+  for 700 ms, so for a transmit-only quantity it samples the one moment the
+  value is guaranteed absent. It can never show a keyed reading.
+- **`swr: 1.0`** in the same run that reported `TX:SWR everFed: false` — a
+  stage contradicting itself inside one JSON object. `MeterModel::swr()` returns
+  `m_swr{1.0f}` with no measured companion, so "never fed" and "a perfect match"
+  are the same float. Reflected power has `reflectedPowerMeasured`; SWR has
+  `swrSampleLive()`, which `RigctlProtocol` and the SWR sweep both use and
+  `asRendered` does not.
+- **`alcDbfs: -1.43`** is a real value from the previous key, reported unlabelled
+  and unaged — §1.11's stale reading, in the probe added to catch staleness.
+
+**Consequence.** A probe that reads a consumer must read it the way the consumer
+does, including its freshness gate, and must sample it when the quantity can
+exist. Reading a typed accessor raw makes the probe a *third* convention
+alongside the seam and the gauge, and §1.1 applies to it as much as to anything
+else: it will agree with nothing and be believed anyway. Where the model already
+exposes a liveness predicate, the probe's failure to call it is the bug.
+
 ## 2. Next steps
 
 ### 2.1 The radio profile — highest leverage
@@ -625,6 +730,24 @@ must name its gate rather than reporting as merely stale.
 not an HL2 (§2.1). Until that lands, every per-meter reading is measured and
 valid and NOTHING renders a verdict on it — which is how a run can be green and
 useless at the same time.
+
+**Confirmed on hardware, 2026-08-10.** The 2026-08-10 Hermes-Lite 2 run turned
+three of the items above from anticipated into observed, and the "forward power
+must be non-zero while keyed" check is now the highest-priority one: it is the
+single check that would have caught §1.32. Four concrete changes fall out, all
+small and all in `RadioCertification.cpp`:
+
+1. **A keyed-RF precondition on the meters phase.** If no keyed stage produced
+   forward power, every transmit-meter verdict in that run is `INCONCLUSIVE`,
+   not `NEVER FED` (§1.32). This must not be a drive floor alone — an interlock
+   or a disabled PA is silent at any slider setting.
+2. **`acceptedUnits` as a set in `kMeterTable`,** matching `kMeterSurfaces`,
+   which ends a permanent false positive on healthy hardware (§1.33).
+3. **`asRendered` through the liveness gates and sampled while keyed** —
+   `swrSampleLive()` already exists and two other consumers call it (§1.34).
+4. **Refresh `kMeterTable`'s notes and `expectedOnHl2` column.** Four HL2 meters
+   are marked not-expected while being defined and fed, so a regression in any
+   of them cannot be reported by `expectedButMissing`.
 
 ### 2.4 What the bridge needs for any of this to be automatable
 
