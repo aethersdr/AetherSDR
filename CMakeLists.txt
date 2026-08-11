@@ -2116,9 +2116,11 @@ endif()
 # macOS app bundle
 if(APPLE)
     target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
-    # Unified-title-bar chrome: keeps the real NSWindow and restyles it, rather
-    # than going frameless and losing the traffic lights (and with them tiling,
-    # Stage Manager, the system shadow, and VoiceOver's window affordances).
+    # Unified-title-bar chrome: the window is frameless on macOS too, so this
+    # restores the rounded corners, drop shadow and native edge resize that
+    # NSWindowStyleMaskBorderless gives up.  The traffic lights are ours
+    # (WindowCaptionButtons) — see gui/mac/WindowChrome.h for why keeping the
+    # real NSWindow title bar was tried and abandoned.
     target_sources(AetherSDR PRIVATE src/gui/mac/WindowChrome.mm)
     # QuartzCore: the content view's CALayer carries the window's rounded
     # corners (kCACornerCurveContinuous for the system's squircle curvature).

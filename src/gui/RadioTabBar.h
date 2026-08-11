@@ -69,6 +69,15 @@ public:
     void setAlarmVisible(bool on);          // driven by the bar's blink phase
     void setBeatColor(const QColor& color); // throttle tint; invalid = dot colour
 
+    // Which tab is currently showing the link state.  Normally the active one,
+    // but with no radio connected it falls back to the first tab — "searching"
+    // is reported precisely when nothing is active, so keying the carrier off
+    // the active id alone left it rendering nowhere.  Exposed so the contract
+    // is assertable from a test and from the `titlebar` bridge model rather
+    // than only visible on screen.
+    void setLinkCarrier(bool on) { m_linkCarrier = on; }
+    bool isLinkCarrier() const { return m_linkCarrier; }
+
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
 
@@ -91,6 +100,7 @@ private:
     QColor        m_beatColor;       // invalid = use the dot colour
     bool          m_alarm{false};    // link lost — red, and blinking if enabled
     bool          m_alarmVisible{true};
+    bool          m_linkCarrier{false};
     bool          m_hovered{false};
     // Focus ring is drawn only for keyboard-delivered focus — see the paint
     // path.  Mouse and initial-window focus leave the tab unringed.

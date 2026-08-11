@@ -182,6 +182,51 @@ int main(int argc, char** argv)
               "the tab re-announces its new state");
     }
 
+    // ── Tab activation is a request, not a switch (PR #4906 review) ─────────
+    // Three defects that a scratch harness caught and nothing in CI did.
+    {
+        RadioTabBar* strip = bar->radioTabBar();
+        bar->setRadioTabs({connected, inUse});
+        bar->setActiveRadio(connected.id);
+        RadioTab* activeTab = tabWithId(*bar, connected.id);
+        RadioTab* otherTab = tabWithId(*bar, inUse.id);
+
+        if (activeTab && otherTab && strip) {
+            // Clicking the ALREADY-active tab must not leave it unchecked.
+            // RadioTab is checkable and in no exclusive group, so QAbstractButton
+            // toggles it off on press; setActiveRadio() then early-returns on an
+            // unchanged id, so without an explicit re-assert nothing ever
+            // re-checks it and the strip stops showing which radio you are on.
+            activeTab->click();
+            check(activeTab->isChecked(),
+                  "re-clicking the active tab leaves it checked");
+
+            // Clicking an INACTIVE tab must not claim it as active: MainWindow
+            // opens the picker rather than switching, so an optimistic claim
+            // would have the strip (and the bridge's activeId) assert a radio
+            // the client never connected to.
+            otherTab->click();
+            check(strip->activeRadioId() == connected.id,
+                  "clicking an inactive tab does not move the active radio");
+            check(!otherTab->isChecked(),
+                  "clicking an inactive tab does not check it");
+
+            // The link indicator needs a carrier even with nothing connected —
+            // "searching" is reported precisely when no radio is active, and
+            // that is the state the indicator exists for.
+            bar->setActiveRadio(QString());
+            strip->setLinkIndicator(QColor("#e0a020"), /*alarm=*/false);
+            int carriers = 0;
+            for (RadioTab* t : bar->findChildren<RadioTab*>()) {
+                if (t->isLinkCarrier()) ++carriers;
+            }
+            checkEqual(carriers, 1,
+                       "exactly one tab carries the link state with no active radio");
+        }
+        // Put the fixture back for whatever runs after this block.
+        bar->setActiveRadio(connected.id);
+    }
+
     // ── Discovered-radios popover ───────────────────────────────────────────
     RadioTabBar* tabs = bar->radioTabBar();
     check(tabs != nullptr, "the bar owns a radio tab strip");
