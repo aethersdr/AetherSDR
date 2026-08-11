@@ -634,5 +634,61 @@ int main()
                      "slack decay: onset returns to the block start after clean bursts");
     }
 
+    // ── 15. Caller-supplied scheduled timestamps are honored sample-exactly
+    // (#4890).  The iambic keyer passes each edge's grid deadline instead of
+    // the emission wall-clock; the rendered element and gap lengths must
+    // equal the scheduled spacing, not the (jittery) call spacing.  All four
+    // edges are queued back-to-back with explicit timestamps 48 ms apart —
+    // if setKeyDown() ignored `when` and stamped the call time, the edges
+    // would collapse to one instant and no full-length burst could render.
+    {
+        using clock = std::chrono::steady_clock;
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);
+
+        const auto unit = std::chrono::milliseconds(48);   // 25 WPM dit
+        const auto t0 = clock::now() - std::chrono::milliseconds(1);
+        gen.setKeyDown(true,  t0);
+        gen.setKeyDown(false, t0 + unit);
+        gen.setKeyDown(true,  t0 + 2 * unit);
+        gen.setKeyDown(false, t0 + 3 * unit);
+
+        std::vector<float> cat;
+        for (int b = 0; b < 100; ++b) {                    // 100×128 ≈ 267 ms
+            auto blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+
+        // Locate loud 8-sample windows; measure both bursts and the gap.
+        std::vector<int> loudRunStart, loudRunEnd;
+        bool loud = false;
+        for (int i = 0; i + 8 <= static_cast<int>(cat.size()); i += 8) {
+            float peak = 0.0f;
+            for (int j = i; j < i + 8; ++j) peak = std::max(peak, std::abs(cat[j]));
+            const bool nowLoud = peak > 0.1f;
+            if (nowLoud && !loud)  loudRunStart.push_back(i);
+            if (!nowLoud && loud)  loudRunEnd.push_back(i);
+            loud = nowLoud;
+        }
+        const int unitSamples = 48 * 48;                   // 2304 @ 48 kHz
+        const int tol = 16;                                // 8-sample windows ×2
+        bool exact = loudRunStart.size() == 2 && loudRunEnd.size() == 2;
+        if (exact) {
+            const int d1  = loudRunEnd[0]   - loudRunStart[0];
+            const int gap = loudRunStart[1] - loudRunEnd[0];
+            const int d2  = loudRunEnd[1]   - loudRunStart[1];
+            exact = std::abs(d1  - unitSamples) <= tol
+                 && std::abs(gap - unitSamples) <= tol
+                 && std::abs(d2  - unitSamples) <= tol;
+            if (!exact)
+                std::printf("  scheduled render: d1=%d gap=%d d2=%d want=%d\n",
+                            d1, gap, d2, unitSamples);
+        }
+        ok &= expect(exact,
+                     "scheduled timestamps render as sample-exact elements");
+    }
+
     return ok ? 0 : 1;
 }

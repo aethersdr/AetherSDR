@@ -8140,13 +8140,13 @@ void AudioEngine::stopTxStream()
     m_txSourceStartTime.invalidate();
 }
 
-void AudioEngine::setCwKeyDown(bool down)
+void AudioEngine::setCwKeyDown(bool down, std::chrono::steady_clock::time_point when)
 {
     // Drive the audible sidetone and the recorder-sidetone generator together so
     // the recording's CW envelope matches what the operator hears/sends. Both
     // setKeyDown()s are lock-free atomics, safe to call from the keyer threads.
-    if (m_cwSidetone)       m_cwSidetone->setKeyDown(down);
-    if (m_cwRecordSidetone) m_cwRecordSidetone->setKeyDown(down);
+    if (m_cwSidetone)       m_cwSidetone->setKeyDown(down, when);
+    if (m_cwRecordSidetone) m_cwRecordSidetone->setKeyDown(down, when);
     // Latch that this TX over is a CW over (our keyer fired). The record pump
     // gates on this so it captures CW but not voice/DAX/tune overs that never
     // key the sidetone. Reset on the radio TX→RX edge (setRadioTransmitting).

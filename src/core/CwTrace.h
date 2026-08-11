@@ -7,13 +7,26 @@
 
 namespace AetherSDR {
 
+inline std::chrono::steady_clock::time_point cwTraceEpoch() noexcept
+{
+    static const auto start = std::chrono::steady_clock::now();
+    return start;
+}
+
+// Express an arbitrary steady_clock instant on the same relative-ms axis as
+// cwTraceNowMs(), so scheduled times and wall times in one log line are
+// directly comparable.  Instants before the epoch clamp to 0 rather than
+// wrapping the unsigned result.
+inline quint64 cwTraceMsAt(std::chrono::steady_clock::time_point tp) noexcept
+{
+    const auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(
+        tp - cwTraceEpoch()).count();
+    return delta > 0 ? static_cast<quint64>(delta) : 0;
+}
+
 inline quint64 cwTraceNowMs() noexcept
 {
-    using Clock = std::chrono::steady_clock;
-    static const auto start = Clock::now();
-    return static_cast<quint64>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            Clock::now() - start).count());
+    return cwTraceMsAt(std::chrono::steady_clock::now());
 }
 
 inline quint64 nextCwTraceId() noexcept

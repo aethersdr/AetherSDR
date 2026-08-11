@@ -57,7 +57,7 @@ void IambicKeyer::stop()
     m_cv.notify_all();
     if (m_thread.joinable())
         m_thread.join();
-    if (m_lastEmittedKeyDown) emitKeyDown(false);
+    if (m_lastEmittedKeyDown) emitKeyDown(false, std::chrono::steady_clock::now());
     if (m_lastEmittedDit || m_lastEmittedDah) emitPaddleEvent(false, false);
 }
 
@@ -121,11 +121,11 @@ IambicKeyer::Element IambicKeyer::nextElementChoice(bool ditWanted,
     return justSent == Element::Dit ? Element::Dah : Element::Dit;
 }
 
-void IambicKeyer::emitKeyDown(bool down)
+void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when)
 {
     if (down == m_lastEmittedKeyDown) return;
     m_lastEmittedKeyDown = down;
-    if (m_onKeyDownChange) m_onKeyDownChange(down);
+    if (m_onKeyDownChange) m_onKeyDownChange(down, when);
 }
 
 void IambicKeyer::emitPaddleEvent(bool dit, bool dah)
@@ -243,7 +243,9 @@ void IambicKeyer::workerLoop()
             const auto markNow = std::chrono::steady_clock::now();
             if (grid + onDuration < markNow) grid = markNow;
             const auto onDeadline = grid + onDuration;
-            emitKeyDown(true);
+            // `grid` is this edge's scheduled instant — the callback runs at
+            // wake time but carries the exact deadline (#4890 wake scatter).
+            emitKeyDown(true, grid);
             {
                 std::unique_lock<std::mutex> lk(m_mu);
                 while (std::chrono::steady_clock::now() < onDeadline
@@ -263,7 +265,7 @@ void IambicKeyer::workerLoop()
             const auto gapNow = std::chrono::steady_clock::now();
             if (grid + offDuration < gapNow) grid = gapNow;
             const auto offDeadline = grid + offDuration;
-            emitKeyDown(false);
+            emitKeyDown(false, grid);
             if (m_stopRequested.load(std::memory_order_acquire)) break;
             {
                 std::unique_lock<std::mutex> lk(m_mu);
@@ -289,7 +291,9 @@ void IambicKeyer::workerLoop()
         // Active phase ended; loop back to idle wait.
     }
 
-    emitKeyDown(false);
+    // Shutdown safety release — no grid exists here, so the wall clock is
+    // the honest scheduled time.
+    emitKeyDown(false, std::chrono::steady_clock::now());
     emitPaddleEvent(false, false);
 }
 

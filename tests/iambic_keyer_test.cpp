@@ -14,15 +14,16 @@ namespace {
 
 struct KeyEvent {
     bool down;
-    std::chrono::steady_clock::time_point at;
+    std::chrono::steady_clock::time_point at;     // wall clock at callback
+    std::chrono::steady_clock::time_point sched;  // scheduled grid instant (#4890)
 };
 
 class Recorder {
 public:
-    void onKeyDownChange(bool down)
+    void onKeyDownChange(bool down, std::chrono::steady_clock::time_point when)
     {
         std::lock_guard<std::mutex> lk(m_mu);
-        m_events.push_back({down, std::chrono::steady_clock::now()});
+        m_events.push_back({down, std::chrono::steady_clock::now(), when});
     }
 
     void onPaddleEvent(bool dit, bool dah)
@@ -154,7 +155,9 @@ void testStraightDitProducesOneElement()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -179,7 +182,9 @@ void testStraightDahProducesOneElement()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -202,7 +207,9 @@ void testSqueezeAlternatesDitDah()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -235,7 +242,9 @@ void testInterElementGapIsOneUnit()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -260,7 +269,9 @@ void testReleaseStopsAfterCurrentElement()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicA);   // mode A: stop at element boundary
@@ -282,7 +293,9 @@ void testWpmChangesElementDuration()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(40);    // 1200/40 = 30ms unit
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -304,7 +317,9 @@ void testSwapPaddlesInvertsDitDah()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -340,7 +355,9 @@ void testModeBSimultaneousReleaseDuringDitAddsDah()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -374,7 +391,9 @@ void testModeBSimultaneousReleaseDuringDahAddsDit()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicB);
@@ -406,7 +425,9 @@ void testModeASimultaneousReleaseAddsNothing()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.setMode(IambicKeyer::Mode::IambicA);
@@ -426,7 +447,9 @@ void testIdleProducesNoElements()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
     k.setWpm(kTestWpm);
     k.start();
@@ -438,11 +461,60 @@ void testIdleProducesNoElements()
     report("no paddle press produces no key-down events", ok);
 }
 
+// #4890: the scheduled instants carried by the key-down callback must lie on
+// the exact element grid — consecutive scheduled deltas of a held-paddle dit
+// stream are precisely unitNs apart, regardless of when the worker thread
+// actually woke.  Wall-clock stamping cannot pass this: wake latency makes
+// some deltas land short of the unit (a late DOWN wake eats into the
+// following ON interval), and ns-exact equality never survives now() stamps.
+// A stalled CI box may legitimately re-anchor (catch-up limiter), which makes
+// a delta LONGER than the unit — allowed, but never shorter, and the exact
+// deltas must dominate.
+void testScheduledStampsAreGridExact()
+{
+    Recorder rec;
+    IambicKeyer k;
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
+    k.setOnPaddleEvent([&](bool d, bool h) { rec.onPaddleEvent(d, h); });
+    k.setWpm(25);                    // 1'200'000'000 / 25 = exactly 48 ms
+    k.setMode(IambicKeyer::Mode::IambicB);
+    k.start();
+
+    k.setPaddleState(true, false);
+    waitForNthDown(rec, 8);
+    k.setPaddleState(false, false);
+    waitForQuiescence(rec);
+    k.stop();
+
+    const auto unit = std::chrono::nanoseconds(1'200'000'000LL / 25);
+    const auto evs = rec.events();
+    int exact = 0, shorter = 0, longer = 0;
+    for (size_t i = 1; i < evs.size(); ++i) {
+        const auto delta = evs[i].sched - evs[i - 1].sched;
+        if (delta == unit)      ++exact;
+        else if (delta < unit)  ++shorter;
+        else                    ++longer;
+    }
+    const int deltas = static_cast<int>(evs.size()) - 1;
+    const bool enough = deltas >= 15;                  // 8 elements = 15+ deltas
+    const bool noneShort = (shorter == 0);
+    const bool mostlyExact = exact * 10 >= deltas * 8; // ≥80% ns-exact
+    if (!noneShort || !mostlyExact)
+        std::cout << "  scheduled deltas: exact=" << exact << " short=" << shorter
+                  << " long=" << longer << " of " << deltas << '\n';
+    report("scheduled stamps: no delta shorter than the unit", enough && noneShort);
+    report("scheduled stamps: grid-exact deltas dominate", enough && mostlyExact);
+}
+
 void testStartIsIdempotent()
 {
     Recorder rec;
     IambicKeyer k;
-    k.setOnKeyDownChange([&](bool d) { rec.onKeyDownChange(d); });
+    k.setOnKeyDownChange([&](bool d, std::chrono::steady_clock::time_point w) {
+        rec.onKeyDownChange(d, w);
+    });
     k.setWpm(kTestWpm);
     k.start();
     k.start();   // second call should be a no-op
@@ -466,6 +538,7 @@ int main()
     testModeBSimultaneousReleaseDuringDahAddsDit();
     testModeASimultaneousReleaseAddsNothing();
     testStartIsIdempotent();
+    testScheduledStampsAreGridExact();
     std::cout << "iambic_keyer_test: done, failures=" << g_failures << '\n';
     return g_failures == 0 ? 0 : 1;
 }
