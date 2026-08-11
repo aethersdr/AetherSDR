@@ -7024,17 +7024,10 @@ QJsonObject AutomationServer::doLiveness()
         const QString accepted = QString::fromLatin1(surf.acceptedUnits);
         // SET MEMBERSHIP, not equality — the consumer may legitimately handle
         // several units, and asking "are these the same string" reported a
-        // healthy meter as broken forever. See MeterSurfaces.h.
-        const QStringList acceptedList =
-            accepted.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        bool understood = acceptedList.isEmpty();
-        for (const QString& u : acceptedList) {
-            if (declared.compare(u.trimmed(), Qt::CaseInsensitive) == 0) {
-                understood = true;
-                break;
-            }
-        }
-        const bool disagrees = def && !declared.isEmpty() && !understood;
+        // healthy meter as broken forever. Through the shared predicate in
+        // MeterSurfaces.h, because a private copy of it here is how the
+        // `radiocert` table went on emitting the old answer (§1.33).
+        const bool disagrees = def && !meterUnitAccepted(accepted, declared);
         if (disagrees) {
             unitDisagreements
                 << QStringLiteral("%1 (backend declares %2; the consumer handles only %3)")
@@ -7061,7 +7054,7 @@ QJsonObject AutomationServer::doLiveness()
         if (!def)
             continue;
         const QString key = def->source + QLatin1Char(':') + def->name;
-        if (meterSurfaceFor(QLatin1String(key.toLatin1().constData())))
+        if (meterSurfaceFor(key))
             continue;
         publishedNowhere << key;
     }

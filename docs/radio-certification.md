@@ -37,12 +37,19 @@ Hermes-Lite 2 can physically produce it.
 | `TX:MICPEAK` | dBFS | yes | tracks input | inject −20 dBFS tone → reads −20 | **±1 dB** |
 | `TX:SWR` | SWR | yes | 1.0–1.5 into a dummy load | key with audio | **±0.3** |
 | `TX:SWR` idle | SWR | yes | **absent** | key with no audio | present-while-idle means the ratio saturated |
-| `TX:FWDPWR` | dBm | counts only | rises with drive | halve RF power → drops ≈6 dB | ±3 dB |
-| `TX:REFPWR` | dBm | counts only | ≪ forward into a load | key into a dummy load | ≥15 dB below forward |
-| `TX:ALC` | dB | **host-side** | gain the ALC applies | quiet input → gain rises | ±3 dB |
-| `TX:COMPPEAK` | dB | host-side | compression applied | — | not yet wired |
+| `TX:FWDPWR` | dBm | yes | rises with drive | halve RF power → drops ≈6 dB | ±3 dB |
+| `TX:REFPWR` | dBm | yes | ≪ forward into a load | key into a dummy load | ≥15 dB below forward |
+| `TX:ALC` | dBFS | **host-side** | post-ALC transmit peak | inject a tone → tracks the envelope | ±3 dB |
+| `TX:COMPPEAK` | dB | host-side | compression applied | PROC on → reads the gain reduction | reads 0 with PROC off |
 | `TX:MIC` | dBFS | host-side | pre-gain mic level | — | not yet wired |
 | `TX:HWALC` | dBFS | **no** | — | Flex RCA jack; no HL2 equivalent | — |
+
+`TX:FWDPWR` and `TX:REFPWR` are published in dBm through the reference curve in
+`Hl2Backend::directionalWatts()`, which is **uncalibrated** — the value is an
+estimate, not a measurement, and the meter descriptions say so. Uncalibrated is
+not the same as absent, and this table said "counts only" long after they were
+being published; a stale not-fed claim is what switches off the check that
+would notice the meter regressing (CERTIFICATION.md 1.32).
 
 ### Radio / hardware
 
@@ -233,7 +240,8 @@ this table, which is the same rule the report itself follows.
 | `TransmitModel::setRfPower(0)` | — | disables the PA | forward power to the floor | — | **no — unrunnable** |
 | `AudioEngine::setPcMicGain` | 0–100 | host-side, pre-modulator | halve → `TX:MICPEAK` drops ≈6 dB | ±1 dB | **yes — 6.023 dB measured** |
 | `SliceModel::setAgcThreshold` | 0–100 | WDSP `SetRXAAGCTop` | raise → audio floor rises | ±3 dB | no |
-| `SliceModel::setRfGain` | dB | **NOT WIRED** | LNA gain is connect-params only on HL2 | — | n/a |
+| RF Gain slider | dB | AD9866 LNA `0x0a[5:0]` | step the gain → S-meter must **not** move (the display reference tracks it) | ±3 dB of 0 | yes — `meters` phase |
+| `SliceModel::setRfGain` | dB | **dead end** | Flex wire text; the slider does not call it — see below | — | n/a |
 | `TransmitModel::setTunePower` | 0–100 | **NOT WIRED** | tune uses full drive | — | n/a |
 | `SliceModel::setSquelch` | on/off | **NOT WIRED** | — | — | n/a |
 | `setFilter(low, high)` | Hz | WDSP passband | tone outside the passband is rejected | ≥30 dB | no |
@@ -241,24 +249,28 @@ this table, which is the same rule the report itself follows.
 
 ### Gaps this table makes visible
 
-- **The RF power rows are unrunnable, not unimplemented.** Certifying them by
-  effect needs `TX:FWDPWR`, which is defined-but-never-fed on this backend (see
-  below). Until a power meter is published with a documented scale, the drive
-  control cannot be certified by effect on the HL2 at all — so `radiocert`
-  reports `rfPowerExercised: false` rather than implying a sweep happened.
-- **`SliceModel::setRfGain` has no runtime path.** The AD9866 LNA gain is sent
-  once in the connect parameters and never again, so the preamp/attenuator
-  control does nothing after connect. It is also the control an operator reaches
-  for first when the ADC overloads. `radiocert` only reports this on a radio
-  whose `family()` is `hl2` — asserting it generically told Flex operators a
-  working control was broken.
-- **`TX:FWDPWR` and `TX:REFPWR` are defined but never fed.** The counts are
-  uncalibrated, so they are deliberately not published — which leaves two power
-  meters on screen that can never move. Either publish with a documented scale
-  or stop defining them.
-- **`TX:ALC` is computed and thrown away.** `Hl2TxDsp` emits `alcGain` and
-  nothing consumes it, while an ALC meter is exactly what tells an operator
-  whether their mic gain is sane.
+- **The RF power rows are unimplemented, not unrunnable.** Certifying them by
+  effect needs `TX:FWDPWR`, which IS published now (in dBm, through the
+  uncalibrated reference curve). A halving is a ratio, so the missing
+  calibration cancels and the check is available as soon as someone writes it;
+  until then `radiocert` reports `rfPowerExercised: false` rather than implying
+  a sweep happened.
+- **`SliceModel::setRfGain` is a dead end, and the RF Gain slider does not use
+  it.** The setter's whole body is `slice set N rfgain=X`, Flex wire text no
+  seam backend can receive — but `SpectrumOverlayMenu` emits `rfGainChanged`
+  unconditionally and only falls back to the slice setter when there is no
+  radio model or no pan id. On the HL2 the slider therefore routes
+  `rfGainChanged` → `RadioModel::setPanRfGainFor` → `Hl2Backend::setPanRfGain`
+  → `applyLnaGainDb` → `MetisClient::setLnaGainDb`, writing AD9866
+  `0x0a[5:0]` at runtime. `radiocert` used to assert the opposite as a
+  hardcoded, family-gated finding on every HL2 run; it now MEASURES the
+  control instead, which is what let the gate go (CERTIFICATION.md 1.14, 1.35).
+- **`TX:FWDPWR` and `TX:REFPWR` are published and uncalibrated**, not absent.
+  They read in dBm through a reference curve for a different board. The gap is
+  a per-unit calibration, not a missing meter.
+- **`TX:ALC` is consumed.** `MeterModel::swAlc()` carries it to the Phone/CW
+  applet's ALC gauges. It was computed and discarded for a while, and the note
+  saying so outlived the wiring.
 - **Tune power is not separable from transmit power.** TUNE keys at whatever
   drive is set, which on a fresh connect is the operator's full RF power.
 

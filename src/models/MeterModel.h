@@ -114,6 +114,21 @@ public:
     // conflicting one.)
     static constexpr qint64 kTxMeterStaleMs = 2000;
 
+    // Minimum instantaneous forward power for an SWR ratio to mean anything.
+    //
+    // A radio with no carrier reports 0 dBm on FWDPWR, which is 10^(0/10)/1000
+    // = 0.001 W — small but not zero. SWR is computed from forward and
+    // reflected power, so below this there is no power behind the ratio and it
+    // saturates: an HL2 published 255.99 and held it. The threshold sits a hair
+    // above that floor, and 0 dBm is already 30 dB below a 1 W carrier, so
+    // nothing real lives underneath it. (#4533)
+    //
+    // PUBLIC because it is also the floor `radiocert` uses to decide whether a
+    // keyed stage actually radiated. Anything that reasons about "could SWR
+    // have been fed" must use this exact number rather than a second literal
+    // that happens to be near it.
+    static constexpr float kMinForwardWattsForSwr = 0.0011f;
+
     // Convenience: SWR.
     // ⚠ May be a stale reading from a previous transmit. Callers that display
     // it must gate on swrIfLive(); `allMeters()` and `metersForSource()`
