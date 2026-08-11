@@ -62,6 +62,16 @@ public:
     // takes it (-1 = unknown id). Mirrors the >= guards — keep in sync.
     static int layoutRequiredPanCount(const QString& layoutId);
 
+    // Automation bridge hook (#4864): drive floatPanadapter()/dockPanadapter()
+    // headlessly, so the reparent + GPU re-initialize path — the #2495/#4319/
+    // #4617 crash lineage — is testable without a live multi-pan radio and a
+    // hidden-button workaround. Rejects unknown pan ids (error map); float on
+    // a floating pan / dock on a docked one is reported as alreadyThere
+    // rather than an error, because the caller asked for a state that holds.
+    // Returns the pan's floating state plus floating/docked counts.
+    Q_INVOKABLE QVariantMap automationFloatDock(const QString& action,
+                                                const QString& panId);
+
     // Float/dock panadapters
     void floatPanadapter(const QString& panId);
     void dockPanadapter(const QString& panId);

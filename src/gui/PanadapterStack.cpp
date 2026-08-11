@@ -866,6 +866,35 @@ void PanadapterStack::applyLayout(const QString& layoutId, const QStringList& pa
 
 // ── Float / Dock ──────────────────────────────────────────────────────────
 
+QVariantMap PanadapterStack::automationFloatDock(const QString& action,
+                                                 const QString& panId)
+{
+    if (!m_pans.contains(panId)) {
+        return QVariantMap{
+            {QStringLiteral("error"),
+             QStringLiteral("unknown pan id: ") + panId},
+        };
+    }
+
+    const bool wantFloat = action == QLatin1String("float");
+    const bool already   = isFloating(panId) == wantFloat;
+    if (!already) {
+        // The real production paths — this is the whole point: the reparent
+        // and GPU re-init the crash lineage lives in, driven headlessly.
+        if (wantFloat) floatPanadapter(panId);
+        else           dockPanadapter(panId);
+    }
+
+    return QVariantMap{
+        {QStringLiteral("action"), action},
+        {QStringLiteral("panId"), panId},
+        {QStringLiteral("floating"), isFloating(panId)},
+        {QStringLiteral("alreadyThere"), already},
+        {QStringLiteral("floatingCount"), int(m_floatingWindows.size())},
+        {QStringLiteral("dockedCount"), int(m_pans.size() - m_floatingWindows.size())},
+    };
+}
+
 void PanadapterStack::floatPanadapter(const QString& panId)
 {
     PanadapterApplet* applet = m_pans.value(panId, nullptr);

@@ -23,6 +23,7 @@
 #include <QAction>
 #include <QLocalServer>
 #include <QScopeGuard>
+#include <QStatusBar>
 #include <QLocalSocket>
 #include <QApplication>
 #include <QScreen>
@@ -347,6 +348,15 @@ QJsonObject describeWidget(const QWidget* w)
     // restore / minimize without screenshotting, and prove the `window` verb
     // (resize only ever set explicit geometry, so an un-maximize was previously
     // unverifiable). (#3918)
+    // A QStatusBar's showMessage() text is otherwise unobservable from the
+    // tree — operator notices (e.g. the #4863 float-restore warning, or the
+    // canvas-unavailable message) could only be verified by screenshot
+    // (#4864, second gap).
+    if (const auto* sb = qobject_cast<const QStatusBar*>(w)) {
+        if (!sb->currentMessage().isEmpty())
+            o[QStringLiteral("statusMessage")] = sb->currentMessage();
+    }
+
     if (w->isWindow()) {
         const Qt::WindowStates st = w->windowState();
         const char* ws = "normal";
@@ -3063,12 +3073,14 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         // was dropped and the two-argument form could never work — doPan()'s
         // rfgain branch already splits the joined value and handles both shapes,
         // so the handler was right and only the parser choice was wrong.
-        add("pan", {}, "pan <create|add|remove|close|center|rfgain> [value]",
+        add("pan", {},
+            "pan <create|add|remove|close|center|rfgain|float|dock> [value] — "
+            "float/dock drive PanadapterStack's real reparent path (#4864)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "pan requires an action (create|add|remove|close|center|rfgain)"));
+                        "pan requires an action (create|add|remove|close|center|rfgain|float|dock)"));
                 return s.doPan(a.action, a.value);
             });
 
@@ -9137,6 +9149,50 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("rfgain")},
                            {QStringLiteral("panId"), target},
                            {QStringLiteral("gain"), gain}, {QStringLiteral("requested"), true}};
+    }
+
+    if (action == QLatin1String("float") || action == QLatin1String("dock")) {
+        // `pan float <panId|index|active>` / `pan dock …` — the reparent +
+        // GPU re-initialize path (#2495/#4319/#4617) made drivable headlessly
+        // (#4864). The UI affordances are unreachable from the bridge: the
+        // per-pan float button hides in single-pan mode and the context-menu
+        // pop-out is a transient QMenu.
+        const QString a = arg.trimmed();
+        QString panId;
+        if (a.isEmpty() || a.compare(QLatin1String("active"), Qt::CaseInsensitive) == 0) {
+            if (const PanadapterModel* p = radio->activePanadapter())
+                panId = p->panId();
+        } else if (a.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+            panId = a;
+        } else {
+            bool okIdx = false;
+            const int idx = a.toInt(&okIdx);
+            if (okIdx && idx >= 0 && idx < radio->panadapters().size())
+                panId = radio->panadapters().at(idx)->panId();
+        }
+        if (panId.isEmpty())
+            return err(QStringLiteral("pan %1: no panadapter to address (want "
+                                      "<panId|index|active>)").arg(action));
+
+        const QList<QWidget*> stacks =
+            findWidgetsByClass(QStringLiteral("PanadapterStack"));
+        if (stacks.isEmpty())
+            return err(QStringLiteral("no PanadapterStack found"));
+
+        QVariantMap snap;
+        if (!QMetaObject::invokeMethod(stacks.first(), "automationFloatDock",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, snap),
+                                       Q_ARG(QString, action),
+                                       Q_ARG(QString, panId))) {
+            return err(QStringLiteral("PanadapterStack::automationFloatDock failed"));
+        }
+        if (snap.contains(QStringLiteral("error")))
+            return err(snap.value(QStringLiteral("error")).toString());
+
+        QJsonObject out = QJsonObject::fromVariantMap(snap);
+        out[QStringLiteral("ok")] = true;
+        return out;
     }
 
     if (action == QLatin1String("close") || action == QLatin1String("remove")) {
