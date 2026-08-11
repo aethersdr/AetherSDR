@@ -117,12 +117,16 @@ bool PipeWireAudioBridge::open()
 
     cleanupStaleModules();
 
-    // Create 4 RX sources (radio → apps).  When libpipewire-0.3 is available
+    // Create NUM_CHANNELS (8) RX sources (radio → apps).  When libpipewire-0.3 is available
     // at build time, prefer native pw_stream sources — those let us set
     // PW_KEY_NODE_LATENCY directly and avoid the kernel FIFO entirely, which
     // is the path to <100 ms WSJT-X DT.  Fall back per-channel to the legacy
     // module-pipe-source FIFO if the native open fails (e.g. PipeWire not
     // running, only PulseAudio).
+    // The 8 is unconditional: the bridge opens before the radio slices=N
+    // capacity is known, so a 2-slice radio still opens 8 (extras stay idle).
+    // The operator-facing count is bounded in DaxApplet::setMaxDaxChannels();
+    // resizing the opened set after connect is a follow-up (see issue 4854).
     for (int i = 0; i < NUM_CHANNELS; ++i) {
 #ifdef HAVE_PIPEWIRE_NATIVE
         auto native = std::make_unique<PipeWireNativeRxSource>(i + 1);

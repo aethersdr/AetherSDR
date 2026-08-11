@@ -231,6 +231,11 @@ public:
         // Safe to add devices here — PropertiesChanged notifications will work.
 
         // 8 DAX RX input devices (radio → apps receive audio)
+        // Eight unconditionally: this HAL plugin is loaded by coreaudiod before
+        // any radio -- and thus any slices=N capacity -- is known, so a 2-slice
+        // radio still publishes 8 CoreAudio devices (the extras stay silent). The
+        // operator-facing count is bounded in DaxApplet::setMaxDaxChannels();
+        // resizing the published set after connect is a follow-up (see issue 4854).
         for (int ch = 1; ch <= 8; ++ch) {
             char name[64];
             snprintf(name, sizeof(name), "AetherSDR DAX %d", ch);
