@@ -328,7 +328,10 @@ void MainWindow::selectSliceFromRadioState(
     const bool wasUpdatingFromModel = m_updatingFromModel;
     m_updatingFromModel =
         wasUpdatingFromModel || decision.suppressActiveCommand;
+    const bool wasSelectingFromRadioState = m_selectingFromRadioState;
+    m_selectingFromRadioState = !decision.isOperatorSelection;
     setActiveSliceInternal(slice->sliceId(), decision.revealOffscreen);
+    m_selectingFromRadioState = wasSelectingFromRadioState;
     m_updatingFromModel = wasUpdatingFromModel;
 }
 

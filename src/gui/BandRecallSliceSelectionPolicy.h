@@ -26,6 +26,7 @@ enum class RadioSliceSelectionSource {
 struct RadioSliceSelectionDecision {
     bool revealOffscreen{true};
     bool suppressActiveCommand{false};
+    bool isOperatorSelection{false};
 };
 
 inline RadioSliceSelectionDecision radioSliceSelectionDecision(
@@ -33,15 +34,21 @@ inline RadioSliceSelectionDecision radioSliceSelectionDecision(
     RadioSliceSelectionSource source)
 {
     if (bandRecallInFlight) {
-        return {false, true};
+        return {false, true, false};
     }
 
     // TopologyFallback is the only source that may assert the selection: it
     // fires when the active slice was REMOVED, so the radio has no valid active
     // slice and must be told which one takes over.
+    //
+    // However, NO radio-driven source (ActiveStatus, TopologyFallback, InitialEnumeration)
+    // is an operator selection. TopologyFallback asserts active=1 on the wire
+    // because the radio needs a replacement active slice, BUT it must NOT be
+    // persisted as the operator's preference nor cancel the post-connect restore.
     return {
         true,
         source != RadioSliceSelectionSource::TopologyFallback,
+        false,
     };
 }
 

@@ -1749,6 +1749,7 @@ private:
 #endif
     SliceSelectionRestorePolicy m_activeSliceRestore;
     SliceModel* m_pendingOperatorActiveSlice{nullptr};
+    bool m_selectingFromRadioState{false};
     QString sliceSelectionScope() const;
     bool storeSliceSelectionLetter(const QString& field, const QString& letter);
     void noteActiveSliceSelection(SliceModel* slice);

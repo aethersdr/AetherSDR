@@ -112,6 +112,23 @@ int main()
     check(onlyFallbackAsserts,
           "only topology fallback asserts active=1 outside a recall");
 
+    // Verify that NO radio-driven source (ActiveStatus, TopologyFallback, InitialEnumeration)
+    // is classified as an operator selection (TopologyFallback asserts active=1 on the wire
+    // but must NOT be persisted as the operator's choice).
+    const RadioSliceSelectionSource kAllSources[] = {
+        RadioSliceSelectionSource::ActiveStatus,
+        RadioSliceSelectionSource::TopologyFallback,
+        RadioSliceSelectionSource::InitialEnumeration,
+    };
+    bool noSourceIsOperatorSelection = true;
+    for (const RadioSliceSelectionSource source : kAllSources) {
+        if (radioSliceSelectionDecision(false, source).isOperatorSelection) {
+            noSourceIsOperatorSelection = false;
+        }
+    }
+    check(noSourceIsOperatorSelection,
+          "no radio-driven source (including topology fallback) is an operator selection");
+
     if (failures == 0) {
         std::printf("\nAll band-recall slice-selection policy tests passed.\n");
         return 0;

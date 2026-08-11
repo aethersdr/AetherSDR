@@ -7285,7 +7285,7 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     }
 
     if (SliceSelectionRestorePolicy::shouldPersist(
-            m_updatingFromModel,
+            m_updatingFromModel || m_selectingFromRadioState,
             m_bandRecallSelection.isActive(s->panId(), QDateTime::currentMSecsSinceEpoch()),
             profileLoadRadioStateWritesHeld(),
             /*fromRestore=*/false)) {
