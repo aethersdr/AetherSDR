@@ -22,6 +22,8 @@
 #include "workspace/WorkspaceController.h"
 
 #include <QAction>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -222,6 +224,100 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
                 .value(QStringLiteral("PanadapterLayout"), QStringLiteral("1"))
                 .toString());
     }
+}
+
+QVariantMap MainWindow::automationWorkspace(const QString& action,
+                                            const QString& args)
+{
+    QVariantMap out;
+    if (!m_workspaceController || !m_workspaceCanvas) {
+        out[QStringLiteral("error")] = QStringLiteral("workspace canvas not wired");
+        return out;
+    }
+    const bool enabled = m_workspaceController->isEnabled();
+
+    if (action == QLatin1String("status") || action == QLatin1String("query")) {
+        out[QStringLiteral("enabled")]  = enabled;
+        out[QStringLiteral("gridSnap")] = m_workspaceCanvas->isGridSnapEnabled();
+        out[QStringLiteral("selected")] = m_workspaceCanvas->selectedItem();
+        QVariantList items;
+        for (const CanvasItem& it : m_workspaceCanvas->layout().itemsByZ()) {
+            QVariantMap m;
+            m[QStringLiteral("id")]   = it.id;
+            m[QStringLiteral("type")] = it.contentType;
+            m[QStringLiteral("x")]    = it.rect.x;
+            m[QStringLiteral("y")]    = it.rect.y;
+            m[QStringLiteral("w")]    = it.rect.w;
+            m[QStringLiteral("h")]    = it.rect.h;
+            m[QStringLiteral("z")]    = m_workspaceCanvas->layout().zOf(it.id);
+            items.append(m);
+        }
+        out[QStringLiteral("items")] = items;
+        out[QStringLiteral("count")] = items.size();
+        return out;
+    }
+
+    if (action == QLatin1String("enable") || action == QLatin1String("disable")) {
+        const bool want = (action == QLatin1String("enable"));
+        if (want != enabled) {
+            toggleWorkspaceCanvas(want);
+        }
+        const bool now = m_workspaceController->isEnabled();
+        out[QStringLiteral("enabled")] = now;
+        if (want && !now) {
+            // The refusal reason went to the status bar (the H1 path);
+            // dumpTree's statusMessage carries it for asserting.
+            out[QStringLiteral("error")] =
+                QStringLiteral("enable refused — see statusMessage");
+        }
+        return out;
+    }
+
+    if (action == QLatin1String("place")) {
+        if (!enabled) {
+            out[QStringLiteral("error")] = QStringLiteral("canvas mode is off");
+            return out;
+        }
+        const QStringList parts =
+            args.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.size() != 3 && parts.size() != 5) {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "place wants <itemId> <x> <y> [w h] (canvas fractions)");
+            return out;
+        }
+        const QString itemId = parts.at(0);
+        if (!m_workspaceCanvas->contains(itemId)) {
+            out[QStringLiteral("error")] =
+                QStringLiteral("no such item: %1").arg(itemId);
+            return out;
+        }
+        bool okX = false, okY = false, okW = true, okH = true;
+        NormRect r = m_workspaceCanvas->itemRect(itemId);
+        r.x = parts.at(1).toDouble(&okX);
+        r.y = parts.at(2).toDouble(&okY);
+        if (parts.size() == 5) {
+            r.w = parts.at(3).toDouble(&okW);
+            r.h = parts.at(4).toDouble(&okH);
+        }
+        if (!okX || !okY || !okW || !okH) {
+            out[QStringLiteral("error")] = QStringLiteral("unparseable coordinates");
+            return out;
+        }
+        m_workspaceCanvas->setItemRect(itemId, r);   // clamped; the
+        m_workspaceController->commitPlacement();    // controller records it
+        const NormRect applied = m_workspaceCanvas->itemRect(itemId);
+        out[QStringLiteral("id")] = itemId;
+        out[QStringLiteral("x")]  = applied.x;
+        out[QStringLiteral("y")]  = applied.y;
+        out[QStringLiteral("w")]  = applied.w;
+        out[QStringLiteral("h")]  = applied.h;
+        return out;
+    }
+
+    out[QStringLiteral("error")] =
+        QStringLiteral("unknown workspace action: %1 "
+                       "(status|enable|disable|place)").arg(action);
+    return out;
 }
 
 void MainWindow::setBandStackPanelVisible(bool show)

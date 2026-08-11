@@ -122,6 +122,10 @@ public:
     void movePanItem(const QPoint& globalPos);
     void endPanItemMove(const QPoint& globalPos);
 
+    // Flush the debounced document write now — the automation bridge's
+    // gesture boundary (a `workspace place` is one discrete edit).
+    void commitPlacement() { m_store.flush(); }
+
     // Band-stack hosting while the mode is on: the panel becomes the
     // "bandstack" canvas item (its spot persists; visibility stays the
     // session-transient flag it always was).

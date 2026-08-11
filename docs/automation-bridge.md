@@ -3141,7 +3141,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 64 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 65 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3182,6 +3182,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
 | `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — |
+| `workspace` | — | workspace <status\|enable\|disable\|place <itemId> <x> <y> [w h]> — |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |

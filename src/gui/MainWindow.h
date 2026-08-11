@@ -239,6 +239,11 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
+    // disable / place, driven by the `workspace` automation verb.  Returns
+    // an error key instead of throwing, like the other automation hooks.
+    Q_INVOKABLE QVariantMap automationWorkspace(const QString& action,
+                                                const QString& args);
     // Inject one learned VFO-knob CC value through MidiControlManager for
     // automation proof. Returns 0 on acceptance, 1 if MIDI is unavailable,
     // and 2 for an out-of-range MIDI value.

@@ -3084,6 +3084,34 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doPan(a.action, a.value);
             });
 
+        add("workspace", {},
+            "workspace <status|enable|disable|place <itemId> <x> <y> [w h]> — "
+            "the canvas as data: items with fractional rects and z (#4887 ph4)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                Q_UNUSED(s);
+                if (a.action.isEmpty())
+                    return err(QStringLiteral(
+                        "workspace requires an action (status|enable|disable|place)"));
+                QWidget* mw = primaryTopLevelWindow();
+                if (!mw)
+                    return err(QStringLiteral("no main window"));
+                QVariantMap snap;
+                if (!QMetaObject::invokeMethod(mw, "automationWorkspace",
+                                               Qt::DirectConnection,
+                                               Q_RETURN_ARG(QVariantMap, snap),
+                                               Q_ARG(QString, a.action),
+                                               Q_ARG(QString, a.value))) {
+                    return err(QStringLiteral(
+                        "MainWindow::automationWorkspace failed"));
+                }
+                if (snap.contains(QStringLiteral("error")))
+                    return err(snap.value(QStringLiteral("error")).toString());
+                QJsonObject out = QJsonObject::fromVariantMap(snap);
+                out[QStringLiteral("ok")] = true;
+                return out;
+            });
+
         add("layout", {}, "layout <rearrange <id>|get> — splitter layout exerciser",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
