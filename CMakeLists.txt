@@ -3091,6 +3091,15 @@ target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
 
+# The host-side impulse noise blanker (WDSP ANB) ahead of the demodulator. The
+# HL2 runs no firmware DSP, so this stage is the only noise blanker the radio
+# has and there is no wire traffic to assert against — the test measures the
+# audio instead.
+add_executable(hl2_noise_blanker_test tests/hl2_noise_blanker_test.cpp)
+target_include_directories(hl2_noise_blanker_test PRIVATE src)
+target_link_libraries(hl2_noise_blanker_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_noise_blanker_test COMMAND hl2_noise_blanker_test)
+
 # AM/SAM come back from WDSP's envelope detector with the carrier as a DC
 # pedestal; the blocker on the audio output must strip it without touching the
 # modes that were already zero-mean, and without its corner creeping up into

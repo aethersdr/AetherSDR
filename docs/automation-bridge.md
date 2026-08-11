@@ -338,6 +338,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get clock`](#get-clock) | AetherClock time-signal decode state (lock, station, decoded UTC, offset, quality). |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
+| | [`get hostnb`](#get-hostnb) | Host-side noise blanker, read from the backend (HL2). |
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
@@ -689,6 +690,7 @@ connects).
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. |
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), txSlice, …) |
+| `hostnb` | — (optional property) | HOST-SIDE noise blanker, read from the BACKEND: `{receivers:[{ddc,panId,on,level,threshold}]}`. **Distinct from `get slice nb`** — that reports the slice model, which is set the instant the button is clicked and stays true even if the intent never reached the DSP. This answers from the backend's own per-receiver state and also reports the WDSP `threshold` the 0..100 level became, so the inversion (higher level → lower threshold) can be asserted rather than assumed. Errors on a radio that does not declare `hasHostNoiseBlanker` rather than returning an empty success. |
 | `clock` | — | AetherClock snapshot: `state`/`stateName` (NoSignal/Acquiring/Locked), `station`/`stationName` (WWV/WWVH/WWVB), `decodedUtc` (ISO-8601, empty until a decode), `offsetMs` (decoded − host at the second edge; positive = host behind broadcast), `lockQuality` (0–100), `sliceId` (bound slice, −1 when stopped), `gpsTimeAvailable`. Validate applet Start/Tune/station-switch actions and lock progress without pixels. |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
@@ -1123,6 +1125,44 @@ scope actually consumed, in milliseconds per wall-clock second.
 - Hidden scopes keep counting appends (the data feed stays live) but never
   paint — `paintsPerSec` 0 with a nonzero `appendsPerSec` is the expected
   hidden-widget signature, not a bug.
+
+### `get hostnb`
+The host-side impulse noise blanker, answered by the **backend** rather than by
+the slice model. Only meaningful on a radio that declares
+`hasHostNoiseBlanker` — today the HL2, whose blanker is WDSP's ANB running on
+this host, ahead of the demodulator, because the radio ships raw IQ and has no
+firmware DSP to switch on.
+
+```json
+→ {"cmd":"get","model":"hostnb"}
+← {"ok":true,"model":"hostnb","hostnb":{"receivers":[
+   {"ddc":0,"panId":"0x40000000","on":true,"level":80,"threshold":7.579}]}}
+```
+
+- **Why it is not `get slice nb`.** That field comes from `SliceModel`, which
+  is set the moment the operator clicks NB — it is true whether or not the
+  intent survived the seam. A backend that ignored `setSliceNoiseBlanker`
+  entirely would still report `nb: true` there and look correct. This model
+  reads the backend's own per-receiver state, so the two disagreeing is exactly
+  the "the control moves and nothing happens" failure being caught.
+- `threshold` is what WDSP actually got: the 0..100 `level` runs the opposite
+  way from WDSP's trigger (a multiple of the running average magnitude, so
+  **smaller is more aggressive**), and reporting both lets a driver assert the
+  inversion rather than trust it. Level 0 → 100, level 50 → 20, level 100 → 4.
+- `on`/`level` are **per receiver**, not radio-wide — unlike the notches. Two
+  panadapters on different bands can legitimately want different settings.
+- Errors on a radio that does not declare the capability, rather than returning
+  an empty success that a test could pass against.
+
+**Proving the blanker end to end:**
+
+```
+slice dsp nb on 80          # drive the control the operator drives
+get hostnb                  # backend agrees: on=true, level=80, threshold≈7.6
+get slice active nb         # model agrees too
+slice dsp nb off
+get hostnb                  # on=false everywhere
+```
 
 ### `tune`
 Set a slice's frequency in MHz — the most fundamental control the

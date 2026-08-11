@@ -65,6 +65,12 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     wc.agcMode = config.agcMode;
     wc.maximumAgcGainDb = config.maximumAgcGainDb;
     wc.blockForOutput = config.blockForOutput;
+    // Opened WITH the operator's blanker rather than switched on afterwards, so
+    // the very first block through a rebuilt chain is already blanked and the
+    // stage is not re-armed (and therefore briefly deaf to impulses) on a rate
+    // change. m_nbOn survives configure(); Config deliberately does not carry it.
+    wc.noiseBlankerEnabled = m_nbOn;
+    wc.noiseBlankerLevel = m_nbLevel;
     // Filter length. WDSP's default of 2048 is fine for a passband edge, but it
     // also sets the NARROWEST POSSIBLE NOTCH — min_notch_width is
     // 1600 / (nc/256) Hz at 48 kHz, so 2048 taps floors a notch at 200 Hz and
@@ -119,7 +125,19 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
         addNotch(static_cast<int>(index), notch.centerHz, notch.widthHz, notch.active);
     }
     m_channel->setNotchesEnabled(m_notchesEnabled);
+    // The blanker's hold flag belongs to the channel, so a rebuild loses it.
+    // Re-assert it, or a rate change made while transmitting comes back with
+    // the blanker running on the mute path's silence.
+    m_channel->setNoiseBlankerHold(m_audioMuted);
     return true;
+}
+
+void Hl2RxDsp::setNoiseBlanker(bool on, int level)
+{
+    m_nbOn = on;
+    m_nbLevel = std::clamp(level, 0, 100);
+    if (m_channel)
+        m_channel->setNoiseBlanker(m_nbOn, m_nbLevel);
 }
 
 void Hl2RxDsp::setMode(WdspChannel::Mode mode)
@@ -148,6 +166,14 @@ void Hl2RxDsp::setAgc(int agcMode, double maximumGainDb)
 void Hl2RxDsp::setAudioMuted(bool muted)
 {
     m_audioMuted = muted;
+    // The mute path clocks the channel with ZEROS, and the noise blanker
+    // triggers on a RATIO — magnitude against a running average magnitude — so
+    // a transmit period of silence drags that average toward zero and the first
+    // real sample afterwards looks like an enormous impulse. The blanker would
+    // then gate the start of every receive period. Holding it freezes the
+    // average instead; WdspChannel flushes it on release.
+    if (m_channel)
+        m_channel->setNoiseBlankerHold(muted);
 }
 
 void Hl2RxDsp::setSpectrumRateFps(int fps)

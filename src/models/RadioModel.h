@@ -344,6 +344,10 @@ public:
     // notch with TNFs instead and will never claim it.
     bool hasLmsNoiseFilters() const;
     bool hasManualNotch() const;
+    // Whether THIS HOST blanks impulse noise in the radio's IQ
+    // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
+    // reasoning as hasManualNotch(): it can only add the NB button.
+    bool hasHostNoiseBlanker() const;
     // The filter widths the radio declares, widest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a

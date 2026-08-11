@@ -62,6 +62,12 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    // The impulse noise blanker, run on this host — the HL2 has no firmware DSP
+    // to switch on, so this is the same arrangement as the manual notch: the
+    // seam verb lands in WDSP here rather than on a wire. The other members of
+    // the radio-side DSP family (NR, ANF) are deliberately NOT implemented and
+    // stay hidden, because implementing one of them is not implementing all.
+    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -279,6 +285,13 @@ private:
         QString agcMode = QStringLiteral("med");
         int agcThresholdDb = 65;
 
+        // Authoritative noise-blanker state, held here for the same reason the
+        // AGC is: nothing on this radio echoes it back, and a receiver rebuilt
+        // by a sample-rate change or a reconnect has to be told again. Defaults
+        // mirror SliceModel's (off, level 50).
+        bool nbOn = false;
+        int  nbLevel = 50;
+
         // Host-side per-slice audio. The radio mixes nothing for us — a Flex
         // sums its slices on-radio and sends one stream, and an HL2 demodulates
         // every receiver here — so mute, level and balance are ours to apply.
@@ -335,6 +348,11 @@ private:
     // Re-point one receiver's notch axis at its current NCO. Called wherever
     // ncoHz changes; without it the notches stay where the NCO used to be.
     void pushNotchTune(const Receiver& r);
+    // Push this receiver's noise-blanker state into its chain. Needed at every
+    // place a chain is built or rebuilt — a fresh Hl2RxDsp opens with the
+    // blanker off, so without this a reconnect or an added panadapter silently
+    // turns off a blanker the operator's slice still shows as on.
+    void pushNoiseBlanker(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
     //

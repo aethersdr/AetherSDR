@@ -1590,6 +1590,7 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
             targetVfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
             targetVfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
             targetVfo->setHasManualNotch(m_radioModel.hasManualNotch());
+            targetVfo->setHasHostNoiseBlanker(m_radioModel.hasHostNoiseBlanker());
             targetVfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
             wireVfoWidget(targetVfo, s);
             targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
@@ -2134,6 +2135,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         vfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
         vfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
         vfo->setHasManualNotch(m_radioModel.hasManualNotch());
+        vfo->setHasHostNoiseBlanker(m_radioModel.hasHostNoiseBlanker());
         vfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
 
         wireVfoWidget(vfo, s);

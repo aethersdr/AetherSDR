@@ -3482,6 +3482,17 @@ bool RadioModel::hasManualNotch() const
     return backendCapabilities().hasManualNotch;
 }
 
+bool RadioModel::hasHostNoiseBlanker() const
+{
+    // NOT permissive, for the same reason hasManualNotch() is not: this flag
+    // can only ADD the NB button, so answering true with no backend attached
+    // would show it on a family that never claims it.
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    return backendCapabilities().hasHostNoiseBlanker;
+}
+
 QList<int> RadioModel::radioFilterWidthsHz() const
 {
     if (!m_backend || !isConnected()) {

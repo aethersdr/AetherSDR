@@ -4286,6 +4286,76 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("dsp"), data}};
     }
+    if (model == QLatin1String("hostnb")) {
+        // The HOST-SIDE noise blanker, read from the BACKEND rather than from
+        // the slice model.
+        //
+        // It needs its own model because `get slice` already reports nb/nbLevel
+        // and those come from SliceModel — set the instant the operator clicks,
+        // and therefore true whether or not the intent survived the seam. On a
+        // radio whose blanker is a WDSP stage with no wire traffic to capture,
+        // that is the difference between proving the feature and proving the
+        // button: a backend that ignored setSliceNoiseBlanker entirely would
+        // report nb=true from `get slice` and look correct.
+        RadioModel* radio = m_radioModel;
+        if (!radio)
+            return err(QStringLiteral("no radio model available"));
+        if (!radio->backendCapabilities().hasHostNoiseBlanker) {
+            // Refused rather than answered empty, for the reason doFreqCal
+            // refuses on a self-calibrating radio: an empty success is a test
+            // that passes against a radio where the question is meaningless.
+            return err(QStringLiteral(
+                "hostnb: this radio does not run a host-side noise blanker "
+                "(its blanker, if any, is the radio's own — see get slice nb)"));
+        }
+        IRadioBackend* backend = radio->backend();
+        if (!backend)
+            return err(QStringLiteral("no backend attached"));
+        // Same synchronous-extension contract doCiv documents: the HL2 answers
+        // inside invokeExtension, so a direct connection lands before the call
+        // returns, and anything that does not answer is reported as unsupported
+        // rather than as an empty success.
+        bool answered = false;
+        bool failed = false;
+        QVariant payload;
+        QString failure;
+        const quint64 rid = ++m_extensionRequestId;
+        auto okConn = connect(backend, &IRadioBackend::extensionResult, this,
+                              [&](quint64 id, const QVariant& v) {
+            if (id != rid) return;
+            answered = true;
+            payload = v;
+        }, Qt::DirectConnection);
+        auto errConn = connect(backend, &IRadioBackend::extensionError, this,
+                               [&](quint64 id, const QString& msg) {
+            if (id != rid) return;
+            answered = true;
+            failed = true;
+            failure = msg;
+        }, Qt::DirectConnection);
+        backend->invokeExtension(QStringLiteral("hl2"), QStringLiteral("nb.get"),
+                                 rid, QVariant());
+        disconnect(okConn);
+        disconnect(errConn);
+        if (!answered)
+            return err(QStringLiteral("this backend does not implement nb.get"));
+        if (failed)
+            return err(failure);
+        const QJsonObject data =
+            QJsonValue::fromVariant(payload).toObject();
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for hostnb"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("hostnb"), data}};
+    }
     if (model == QLatin1String("clients")) {
         // #3977: the multi-session forensics snapshot — who is connected to
         // the radio, which sessions have written OUR pans' dBm range, and
@@ -5280,7 +5350,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|clients|kiwi|wavestats|clock)"));
+                   + QStringLiteral(" (use audio|dsp|hostnb|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|clients|kiwi|wavestats|clock)"));
     }
 
     if (!property.isEmpty()) {

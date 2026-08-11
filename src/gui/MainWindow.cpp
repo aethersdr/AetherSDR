@@ -6826,6 +6826,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // has not claimed it, disconnected included.
     const bool lmsNoiseFilters = !connected || caps.hasLmsNoiseFilters;
     const bool manualNotch = connected && caps.hasManualNotch;
+    // Same non-permissive rule as manualNotch, and for the mirror of its
+    // reason: this one can only ADD the NB button, so a permissive read would
+    // put NB on screen for radios that claim neither capability.
+    const bool hostNoiseBlanker = connected && caps.hasHostNoiseBlanker;
 
     if (m_panStack) {
         for (auto* applet : m_panStack->allApplets()) {
@@ -6838,6 +6842,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 vfo->setHasRadioSideDsp(radioSideDsp);
                 vfo->setHasLmsNoiseFilters(lmsNoiseFilters);
                 vfo->setHasManualNotch(manualNotch);
+                vfo->setHasHostNoiseBlanker(hostNoiseBlanker);
                 // The VFO's filter grid and the RX applet's are two views of one
                 // radio; only the applet was being told what the hardware has.
                 vfo->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz

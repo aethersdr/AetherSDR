@@ -862,6 +862,10 @@ bool Hl2Backend::createPanadapter()
     // brought up to date. Otherwise adding a second panadapter gives you one
     // receiver with the interferer notched out and one without.
     seedNotches(r);
+    // Per-receiver, so a new panadapter starts from ITS OWN state rather than
+    // inheriting RX1's — which for a receiver that has never been configured is
+    // the default of off.
+    pushNoiseBlanker(r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -1345,6 +1349,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
     c.hasManualNotch = false;
+    // The one member of the noise family that is NOT moot here. WDSP's ANB runs
+    // on this host, on the raw IQ, ahead of the demodulator — the same
+    // arrangement as the manual notch and for the same reason (oracle addendum
+    // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
+    // not implemented, not because they could not be.
+    c.hasHostNoiseBlanker = true;
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -2210,6 +2220,25 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emitSliceState(ddc);
 }
 
+void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // PER-RECEIVER, unlike the notches. A notch is a fact about a frequency and
+    // therefore about the radio; a blanker setting is a judgement about how
+    // aggressively to gate one receiver's audio, and two receivers on different
+    // bands can legitimately disagree. The slice model already holds it
+    // per-slice, so honouring that is also what stops the second receiver's
+    // toggle from moving the first one's.
+    r->nbOn = on;
+    r->nbLevel = qBound(0, level, 100);
+    if (r->dsp)
+        QMetaObject::invokeMethod(r->dsp, "setNoiseBlanker", Qt::QueuedConnection,
+            Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
+}
+
 void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
 {
     Receiver* r = rx(ddcForSlice(sliceId));
@@ -2363,6 +2392,18 @@ void Hl2Backend::pushNotchTune(const Receiver& r)
     if (r.dsp)
         QMetaObject::invokeMethod(r.dsp, "setNotchTuneFrequency", Qt::QueuedConnection,
             Q_ARG(double, r.ncoHz));
+}
+
+void Hl2Backend::pushNoiseBlanker(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Sent even when OFF, and that is the point: a chain rebuilt while the
+    // operator had the blanker off is already off, but a chain rebuilt after
+    // they turned it off during a previous connect is not necessarily, and an
+    // unconditional push is the only version with no such case to reason about.
+    QMetaObject::invokeMethod(r.dsp, "setNoiseBlanker", Qt::QueuedConnection,
+        Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -3364,6 +3405,37 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             }
             return;
         }
+        // Noise-blanker READBACK, per receiver. Exists because the bridge's
+        // `get dsp` reports the SLICE MODEL's nb flag, which is set the moment
+        // the operator clicks and says nothing about whether the intent reached
+        // the DSP. On a radio whose blanker is a host-side stage with no wire
+        // traffic to capture, that gap is the whole difficulty of proving the
+        // feature: a backend that dropped the verb entirely would still report
+        // nb=true. This answers from the backend's own state instead.
+        if (verb == QLatin1String("nb.get")) {
+            if (requestId != 0) {
+                QVariantList rxList;
+                for (std::size_t i = 0; i < m_rx.size(); ++i) {
+                    const Receiver& r = m_rx[i];
+                    const auto* ids = m_ids.byDdc(static_cast<int>(i));
+                    rxList.append(QVariantMap{
+                        {QStringLiteral("ddc"), static_cast<int>(i)},
+                        {QStringLiteral("panId"), ids ? ids->panId : QString()},
+                        {QStringLiteral("on"), r.nbOn},
+                        {QStringLiteral("level"), r.nbLevel},
+                        // The value the level actually became inside WDSP, so a
+                        // driver can prove the 0..100 -> threshold inversion
+                        // rather than take it on trust.
+                        {QStringLiteral("threshold"),
+                         WdspChannel::noiseBlankerThresholdForLevel(r.nbLevel)},
+                    });
+                }
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("receivers"), rxList},
+                });
+            }
+            return;
+        }
     }
     // No other HL2 extension verbs; honor the async contract without hanging.
     if (requestId != 0)
@@ -3980,6 +4052,10 @@ void Hl2Backend::pushInitialState()
         // createPanadapter() seeded the receivers it creates; the ones built at
         // connect need it too, which is the whole set on a normal session.
         seedNotches(r);
+        // Same reasoning for the blanker: a fresh Hl2RxDsp opens with it off,
+        // so a reconnect into a session that had it on would leave the slice's
+        // NB button lit over a chain that is not blanking anything.
+        pushNoiseBlanker(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);

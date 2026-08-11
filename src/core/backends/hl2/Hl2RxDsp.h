@@ -107,6 +107,30 @@ public:
     // holds across a sample-rate change without needing to be recomputed.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
 
+    // Impulse noise blanker, on the raw IQ ahead of the demodulator.
+    //
+    // THE ONLY NOISE BLANKER THIS RADIO HAS. The HL2 ships raw IQ and runs no
+    // firmware DSP, so — exactly like the manual notch — this either happens on
+    // this host or it does not happen at all. That is why the NB button is
+    // visible on a radio that reports hasRadioSideDsp = false.
+    //
+    // Runs BEFORE the panadapter's own conjugation and before WdspChannel, on
+    // the wire samples. Placement is not a style choice: an impulse is narrow
+    // in time and wide in frequency, and once the bandpass has spread it over
+    // milliseconds there is no spike left to remove.
+    //
+    // `level` is 0..100, larger being more aggressive; WdspChannel owns the map
+    // onto WDSP's inverted threshold.
+    //
+    // Held OUTSIDE Config, like the shift and the notch set and for the same
+    // reason: configure() REPLACES m_config, so a rate change carrying a
+    // caller's default would switch the blanker off while the operator's NB
+    // button stayed lit. Anything that must outlive a rebuild lives in its own
+    // member and is re-applied at the end of configure().
+    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    [[nodiscard]] bool noiseBlankerEnabled() const { return m_nbOn; }
+    [[nodiscard]] int noiseBlankerLevel() const { return m_nbLevel; }
+
     // ── Manual notch filters ──────────────────────────────────────────────
     //
     // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
@@ -264,6 +288,9 @@ private:
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
+    // Noise-blanker state, kept out of m_config so configure() cannot clear it.
+    bool m_nbOn = false;
+    int  m_nbLevel = 50;      // 0..100, the slice model's units
     Config m_config;
 
     // Notch set, mirrored so reconfigure() can replay it — see the note on

@@ -3191,7 +3191,12 @@ void VfoWidget::updateExtendedDspVisibility()
 void VfoWidget::applyRadioSideDspVisibility()
 {
     m_nrBtn->setVisible(m_nrModeOk && m_hasRadioSideDsp);
-    m_nbBtn->setVisible(m_nbModeOk && m_hasRadioSideDsp);
+    // NB is the one member of the trio that does NOT need the radio to run its
+    // own DSP: on a direct-sampling backend this host blanks the IQ itself, so
+    // the button drives something real. OR'd rather than replaced, because on a
+    // Flex the blanker is still the radio's — see
+    // RadioCapabilities::hasHostNoiseBlanker.
+    m_nbBtn->setVisible(m_nbModeOk && (m_hasRadioSideDsp || m_hasHostNoiseBlanker));
     m_anfBtn->setVisible(m_anfModeOk && m_hasRadioSideDsp);
     // The LMS/FFT three carry a SECOND capability on top of the first. A radio
     // can run its own DSP without running FlexRadio's — see
@@ -3246,6 +3251,18 @@ void VfoWidget::setHasRadioSideDsp(bool has)
     // refresh here the flag would flip while the buttons kept their old state
     // until the next mode change. Before a slice exists the two mode recompute
     // sites read the flag on their own.
+    if (!m_slice)
+        return;
+    applyRadioSideDspVisibility();
+    relayoutDspGrid();
+}
+
+void VfoWidget::setHasHostNoiseBlanker(bool has)
+{
+    if (m_hasHostNoiseBlanker == has)
+        return;
+    m_hasHostNoiseBlanker = has;
+    // Same late-arrival hazard as setHasRadioSideDsp above.
     if (!m_slice)
         return;
     applyRadioSideDspVisibility();
