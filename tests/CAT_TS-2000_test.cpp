@@ -813,6 +813,11 @@ void section12(CatClient& c, Runner& r, bool doCw)
     // without a radio-side keyer (hasRadioSideCwKeyer()==false, e.g. the built-in
     // demo). Gate it behind --cw like section 13 so a keyerless/ungated run SKIPs
     // instead of failing, while keyered rigs (any Flex) keep the coverage.
+    //
+    // Section 13's 13.1 queries KY; too — deliberately, not as a leftover. They
+    // ask different questions: 12.13 is the Tier-2 *presence* check (KY0 *or*
+    // KY1 — the command answers at all), 13.1 is the pre-send *state* baseline
+    // (strictly == "KY0" — the buffer is idle before section 13 keys).
     if (doCw) {
         resp = c.query(QStringLiteral("KY"));
         r.check(QStringLiteral("12.13 KY; (query) → KY0 (idle) or KY1 (sending)"),
@@ -900,6 +905,8 @@ void section13cw(CatClient& c, Runner& r)
     c.send(QStringLiteral("MD3"));  // CW mode required for keying
     QThread::msleep(200);
 
+    // Stricter than 12.13's presence check (KY0 or KY1) on purpose: this is the
+    // pre-send baseline, so the buffer must be *idle* before we key below.
     QString resp = c.query(QStringLiteral("KY"));
     r.check(QStringLiteral("13.1 KY; → KY0 (buffer idle before send)"),
             resp == QLatin1String("KY0"), repr(resp));
