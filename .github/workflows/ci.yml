@@ -248,6 +248,21 @@ jobs:
       - name: Test TCI protocol parsing and malformed-input rejection
         run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
 
+      # Pins the VITA-49 prime port set (#4926). The radio listens for the prime
+      # on 4992 but streams back from source port 4993, so priming only 4992
+      # works on a flat LAN and dies over a routed VPN, where a stateful hop has
+      # no conntrack entry for the 4993 flow. The radio connects, the panadapter
+      # stays black, and nothing logs an error — the failure reproduces only
+      # over a real tunnel, so a refactor dropping 4993 would compile clean and
+      # pass every other test here.
+      #
+      # Two loopback UDP sockets and one datagram each way: ~0.07 s, no widgets
+      # and no wall-clock waits. It binds 127.0.0.1:4992/4993 because those
+      # ports are fixed by the protocol; if they are ever occupied on a runner
+      # it reports that as an environment failure rather than a silent pass.
+      - name: Test VITA-49 UDP prime reaches both radio ports
+        run: ctest --test-dir build -R "^vita49_udp_prime_ports_test$" --output-on-failure
+
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
       # without anyone noticing, because nothing made the hit rate visible.
