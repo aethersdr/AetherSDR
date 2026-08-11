@@ -33,6 +33,15 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 
 ## Wired and consumed
 
+**ColibriNANO (family `colibri`)** — a USB direct-sampling receiver driven
+through the vendor's `colibrinano_lib`. `model` `"ColibriNANO"`,
+`tuningMinHz/MaxHz` 9 kHz–55 MHz, `sampleRatesHz` nine rates
+(48 k…3.072 MHz), `canTransmit` ❌ (constant — it is a receiver, so
+`hostModulates` is ❌ too: RX-only must not open the mic),
+`clientSettingsDomains` Tuning|Passband|SpanRate|RfGain|Memories,
+everything else ❌/empty. Declared in `ColibriBackend::capabilities()`;
+design doc `aetherd-colibri-backend-design.md`.
+
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
 | `family` | `"flex"` | `"hl2"` | `"sim"` | `MainWindow::rfGainSettingsKey` | Scopes the persisted RF-gain key per family |
