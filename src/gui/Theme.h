@@ -14,10 +14,40 @@
 
 #include "core/ThemeManager.h"
 
+#include <QEvent>
+#include <QObject>
 #include <QString>
 #include <QWidget>
 
 namespace AetherSDR {
+
+namespace detail {
+
+// Supports applyPrimarySliderStyle()'s Qt::WA_Hover suppression (#4869) —
+// re-clears the attribute after every re-polish (theme switch, reparent)
+// re-asserts it. One process-wide instance filters every themed slider;
+// `watched` disambiguates which one on each call.
+class SliderHoverSuppressor : public QObject {
+public:
+    static SliderHoverSuppressor& instance()
+    {
+        static SliderHoverSuppressor s;
+        return s;
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::StyleChange) {
+            if (auto* w = qobject_cast<QWidget*>(watched)) {
+                w->setAttribute(Qt::WA_Hover, false);
+            }
+        }
+        return false;
+    }
+};
+
+} // namespace detail
 
 inline QString appStylesheetTemplate()
 {
@@ -229,11 +259,34 @@ inline QString primarySliderStyleTemplate(const QString& accentToken = QStringLi
 // widget-aware (walks the slider's container chain), so the applet's
 // scope override naturally reaches the rendered output without any
 // per-call-site change.
+//
+// Every themed slider also gets Qt::WA_Hover turned back off (#4869).
+// QStyleSheetStyle::polish() unconditionally turns WA_Hover ON for any
+// widget that has a stylesheet, regardless of whether that stylesheet
+// defines a :hover rule — and ours doesn't (see the groove/handle rules
+// above; hover/pressed states deliberately fall through to Qt defaults).
+// So hovering a themed slider fires a repaint that changes no pixels —
+// except at a fractional effective device pixel ratio (a non-integer
+// AetherSDR UI scale on a Retina display), where Qt's logical-to-native
+// rounding on that no-op repaint's flush leaves stale pixels on screen.
+// Confirmed: artifacts reproduce at 125%/150% and are absent at 100%
+// and 200% (integral DPR, no rounding error).
 inline void applyPrimarySliderStyle(QWidget* slider,
                                     const QString& accentToken = QStringLiteral("color.slider.foreground"))
 {
     if (!slider) return;
     ThemeManager::instance().applyStyleSheet(slider, primarySliderStyleTemplate(accentToken));
+    // polish() already ran synchronously inside setStyleSheet() above, so
+    // clear the attribute it just set...
+    slider->setAttribute(Qt::WA_Hover, false);
+    // ...and again after every future re-polish (a theme switch runs
+    // ThemeManager::reapplyAllTrackedStyleSheets(), and a reparent runs
+    // ThemeManager::eventFilter()'s QEvent::ParentChange path — both call
+    // setStyleSheet() again, which re-triggers polish()). One shared filter
+    // instance serves every themed slider; installing it more than once on
+    // the same widget (e.g. a second applyPrimarySliderStyle() call) is
+    // harmless since clearing an already-clear attribute is a no-op.
+    slider->installEventFilter(&detail::SliderHoverSuppressor::instance());
 }
 
 // Toggle button tribes — three semantic colour families that a checkable
