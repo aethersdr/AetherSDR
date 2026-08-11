@@ -56,6 +56,7 @@ class TciApplet;
 class DaxIqApplet;
 class AntennaGeniusApplet;
 class ShackSwitchApplet;
+class GreenHeronApplet;
 class MeterApplet;
 class ProfileSwitcherApplet;
 class HealthApplet;
@@ -146,6 +147,9 @@ public:
     DaxIqApplet*    daxIqApplet()    { return m_daxIqApplet; }
     AntennaGeniusApplet* agApplet()  { return m_agApplet; }
     ShackSwitchApplet*   ssApplet()  { return m_ssApplet; }
+    // The GHE tile owns its own GreenHeronModel — see GreenHeronApplet.h for
+    // why this one is not handed a model by MainWindow.
+    GreenHeronApplet*    greenHeronApplet() const { return m_greenHeronApplet; }
     MeterApplet*  meterApplet()  { return m_meterApplet; }
     ProfileSwitcherApplet* profileSwitcherApplet() { return m_profApplet; }
     HealthApplet* healthApplet() { return m_healthApplet; }
@@ -375,6 +379,7 @@ private:
     DaxIqApplet*   m_daxIqApplet{nullptr};
     AntennaGeniusApplet* m_agApplet{nullptr};
     ShackSwitchApplet*   m_ssApplet{nullptr};
+    GreenHeronApplet*    m_greenHeronApplet{nullptr};
     MeterApplet* m_meterApplet{nullptr};
     ProfileSwitcherApplet* m_profApplet{nullptr};
     HealthApplet* m_healthApplet{nullptr};
