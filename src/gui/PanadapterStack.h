@@ -72,6 +72,19 @@ public:
     Q_INVOKABLE QVariantMap automationFloatDock(const QString& action,
                                                 const QString& panId);
 
+    // Workspace-canvas seam (RFC #4887 phase 4).  The stack stays the pans'
+    // OWNER — creation, wiring, render scheduling, float/dock — and lends
+    // applets to the canvas.  detachForCanvas() only decides WHETHER (a
+    // floating pan stays out; pop-out is its own state and dockPanadapter()
+    // is its way back); the canvas reparents the applet itself, a plain
+    // same-top-level move exactly like applyLayout()'s splitter shuffles —
+    // no GPU dance, which is reserved for real top-level changes (#2495).
+    // returnFromCanvas() re-homes ONE applet into the docked splitter
+    // (addWidget's one-step reparent — never through nullptr, #1344);
+    // callers rebuild the arrangement afterwards via rearrangeLayout().
+    PanadapterApplet* detachForCanvas(const QString& panId);
+    void returnFromCanvas(const QString& panId, PanadapterApplet* applet);
+
     // Float/dock panadapters
     void floatPanadapter(const QString& panId);
     void dockPanadapter(const QString& panId);
@@ -101,6 +114,15 @@ signals:
     void activePanChanged(const QString& panId);
     void panFloated(const QString& panId);
     void panDocked(const QString& panId);
+    // Pan lifecycle, for the workspace controller (RFC #4887 phase 4).
+    // panAdded fires once per applet however it was created (addPanadapter
+    // or an applyLayout branch); panRemoved fires after the applet is
+    // unregistered and BEFORE it is destroyed, so a canvas can release its
+    // entry rather than relying on the destroyed-watch; panRekeyed follows
+    // the FLEX band-recall id swap (same applet, new id).
+    void panAdded(const QString& panId);
+    void panRemoved(const QString& panId);
+    void panRekeyed(const QString& oldId, const QString& newId);
     // The previous session died while floating panadapters, so they were
     // dropped and this one came up docked. Carries how many were dropped —
     // enough for plural agreement in the operator notice, and nothing more:
@@ -124,6 +146,10 @@ private:
     QSet<QString> m_seenPanIds;
     QString m_activePanId;
     bool m_shutdownPrepared{false};
+    // applyLayout() creates applets in its branches (some via addPanadapter,
+    // some inline); panAdded is suppressed during it and swept at its end so
+    // each applet is announced exactly once.
+    bool m_inApplyLayout{false};
     // How many pans the constructor discarded because the previous process
     // never survived floating them. Announced on a zero-timer at launch (once
     // wirePanLifecycle() has connected to us) and again from

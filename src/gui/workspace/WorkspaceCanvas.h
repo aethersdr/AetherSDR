@@ -76,6 +76,14 @@ public:
     // canvas and a container without destroying it.
     QWidget* takeItem(const QString& id);
 
+    // Drops the canvas's claim on the item — entry, selection, gesture,
+    // filter, destroyed-watch — WITHOUT touching the widget's parent.  The
+    // pan-item path (#4887 phase 4): a pan that floats has already been
+    // adopted by its PanFloatingWindow, and the detour takeItem() makes
+    // through setParent(nullptr) is exactly the transient-top-level move the
+    // #1344 lineage forbids for QRhi children.  Callers own the reparent.
+    QWidget* releaseItem(const QString& id);
+
     QWidget* itemWidget(const QString& id) const;
     bool contains(const QString& id) const { return m_layout.contains(id); }
     int itemCount() const { return m_layout.count(); }

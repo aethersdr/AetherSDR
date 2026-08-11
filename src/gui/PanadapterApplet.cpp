@@ -549,6 +549,20 @@ void PanadapterApplet::setMultiPanMode(bool multi)
     if (m_closeBtn) m_closeBtn->setVisible(multi);
 }
 
+void PanadapterApplet::setOnCanvas(bool on)
+{
+    m_onCanvas = on;
+    m_canvasPressed  = false;
+    m_canvasDragging = false;
+    if (on && m_popOutBtn) {
+        // A canvas item can always pop out (RFC #4887 decision 1 — pop-out
+        // stays), even as the only pan: the single-pan button hiding is a
+        // stack-mode economy, not a rule about floating.  Off-canvas, the
+        // stack's next setMultiPanMode() re-applies its economy.
+        m_popOutBtn->setVisible(true);
+    }
+}
+
 void PanadapterApplet::setFloatingState(bool floating)
 {
     m_isFloating = floating;
@@ -834,6 +848,48 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
         }
     }
 #endif
+
+    // Canvas item (RFC #4887 phase 4): the title strip streams a live-move
+    // gesture, mirroring ContainerTitleBar's canvas mode.  A 6 px threshold
+    // separates a click (activate, below) from a drag; everything past it is
+    // consumed so the strip's floating-drag machinery never sees it.
+    if (obj == m_titleBar && m_onCanvas && !m_isFloating
+        && (ev->type() == QEvent::MouseButtonPress
+            || ev->type() == QEvent::MouseMove
+            || ev->type() == QEvent::MouseButtonRelease)) {
+        constexpr int kCanvasDragThresholdPx = 6;
+        auto* me = static_cast<QMouseEvent*>(ev);
+        if (ev->type() == QEvent::MouseButtonPress) {
+            if (me->button() == Qt::LeftButton) {
+                m_canvasPressed  = true;
+                m_canvasDragging = false;
+                m_canvasPressPos = me->globalPosition().toPoint();
+            }
+            // fall through: the press still activates the pan below
+        } else if (ev->type() == QEvent::MouseMove) {
+            if (m_canvasPressed && (me->buttons() & Qt::LeftButton)) {
+                const QPoint g = me->globalPosition().toPoint();
+                if (!m_canvasDragging) {
+                    if ((g - m_canvasPressPos).manhattanLength()
+                        < kCanvasDragThresholdPx) {
+                        return true;
+                    }
+                    m_canvasDragging = true;
+                    emit canvasDragBegan(m_canvasPressPos);
+                }
+                emit canvasDragMoved(g);
+                return true;
+            }
+        } else {   // MouseButtonRelease
+            if (m_canvasDragging) {
+                m_canvasDragging = false;
+                m_canvasPressed  = false;
+                emit canvasDragEnded(me->globalPosition().toPoint());
+                return true;
+            }
+            m_canvasPressed = false;
+        }
+    }
 
     if (obj == m_titleBar && m_isFloating && ev->type() == QEvent::MouseMove) {
         return FramelessMoveHelper::move(m_titleBar, static_cast<QMouseEvent*>(ev));

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPoint>
 #include <QWidget>
 
 class QComboBox;
@@ -45,6 +46,15 @@ public:
     void setMultiPanMode(bool multi);
     void setFloatingState(bool floating);
 
+    // Canvas hosting (RFC #4887 phase 4): while the applet is an item on the
+    // workspace canvas its title strip streams the live-move gesture, the
+    // same mechanism as ContainerTitleBar's canvas mode — a real gesture the
+    // canvas session follows, not a QDrag ghost.  Set by PanadapterStack's
+    // detachForCanvas()/returnFromCanvas(); mutually exclusive with
+    // floating, whose frameless-move branches take precedence.
+    void setOnCanvas(bool on);
+    bool isOnCanvas() const { return m_onCanvas; }
+
 #ifdef AETHER_ASR_ENABLED
     // Copy Assist (ASR) decode dock — mirrors the CW decode panel: docked under
     // the waterfall, resizable, hidden until shown. copyAssistPanel() lazily
@@ -85,6 +95,10 @@ public:
 
 signals:
     void activated(const QString& panId);
+    // The canvas live-move stream (RFC #4887 phase 4; only while on-canvas).
+    void canvasDragBegan(const QPoint& globalPos);
+    void canvasDragMoved(const QPoint& globalPos);
+    void canvasDragEnded(const QPoint& globalPos);
     void closeRequested(const QString& panId);
     void popOutClicked();
     void dockClicked();
@@ -124,6 +138,12 @@ private:
     QPushButton*    m_maxBtn{nullptr};
     QPushButton*    m_closeBtn{nullptr};
     bool            m_isFloating{false};
+
+    // Canvas-item state (RFC #4887 phase 4).
+    bool   m_onCanvas{false};
+    bool   m_canvasPressed{false};
+    bool   m_canvasDragging{false};
+    QPoint m_canvasPressPos;
 
     // Main vertical layout (SpectrumWidget + docks); kept so the Copy Assist
     // dock can be inserted at the bottom on demand.

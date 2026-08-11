@@ -210,6 +210,16 @@ bool WorkspaceCanvas::removeItem(const QString& id)
 
 QWidget* WorkspaceCanvas::takeItem(const QString& id)
 {
+    QWidget* w = releaseItem(id);
+    if (w) {
+        w->hide();
+        w->setParent(nullptr);
+    }
+    return w;
+}
+
+QWidget* WorkspaceCanvas::releaseItem(const QString& id)
+{
     if (!m_layout.contains(id)) {
         return nullptr;
     }
@@ -236,8 +246,6 @@ QWidget* WorkspaceCanvas::takeItem(const QString& id)
         // would fire a lambda still holding this id — and if something else
         // has since taken the id, it would evict the wrong item.
         disconnect(w, &QObject::destroyed, this, nullptr);
-        w->hide();
-        w->setParent(nullptr);
     }
 
     // Removal renumbers z, so the surviving items' stacking has to be redone.
