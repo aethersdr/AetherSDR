@@ -273,14 +273,18 @@ QString GreenHeronApplet::effectiveSwitch() const
 {
     // The roster arrives over several reads and has no terminator, so "not on
     // the roster" never means "gone" with any certainty — it may simply be
-    // announced in a read that has not landed yet. Falling back is therefore a
-    // display decision only; m_wantedSwitch is left alone so a late SWITCHADD
-    // still re-selects what the operator asked for.
-    const QStringList names = m_model->displayOrder();
-    if (names.isEmpty() || names.contains(m_wantedSwitch)) {
+    // announced in a read that has not landed yet. A remembered choice is
+    // therefore never overridden: the tile shows it, finds no ports for it
+    // until its SWITCHADD lands, and so draws nothing clickable. Repointing at
+    // another switch would put THAT switch's antennas under the operator's
+    // cursor, and these buttons move real relays.
+    if (!m_wantedSwitch.isEmpty()) {
         return m_wantedSwitch;
     }
-    return names.first();
+    // Nothing remembered — first run. Showing the first switch beats showing an
+    // empty tile next to a connected server, and there is no choice to lose.
+    const QStringList names = m_model->displayOrder();
+    return names.isEmpty() ? QString{} : names.first();
 }
 
 void GreenHeronApplet::toggleConnection()
@@ -311,7 +315,13 @@ void GreenHeronApplet::refreshSwitchChoices()
     // once a roster has arrived. Until then the combo carries the remembered
     // choice alone, so the operator can see what it will re-select.
     QStringList names = m_model->displayOrder();
-    if (names.isEmpty() && !m_wantedSwitch.isEmpty()) {
+    // Keep the remembered choice in the list until the device actually
+    // announces it, so the operator sees what the tile is pointed at rather
+    // than a switch it silently fell back to. Appended at the end rather than
+    // re-sorted: displayOrder()'s comparator lives in the model, and this entry
+    // is transient — it merges into its sorted place the moment its SWITCHADD
+    // arrives.
+    if (!m_wantedSwitch.isEmpty() && !names.contains(m_wantedSwitch)) {
         names.append(m_wantedSwitch);
     }
     // Rebuild only when the roster actually changed: clearing the combo drops
