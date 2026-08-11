@@ -171,19 +171,22 @@ void GreenHeronModel::onSocketError()
     setLastError(m_socket->errorString());
     qCWarning(lcDevices) << "GreenHeron:" << m_host << "-" << m_socket->errorString();
 
-    const bool wasConnected = m_connected;
     m_connected = false;
     m_stale = !m_switches.isEmpty();
     m_keepAliveTimer->stop();
     m_connectTimer->stop();
     emit connectionStateChanged();
 
-    // disconnected() does not always follow an error (a refused connect never
-    // reached ESTABLISHED), so the retry is scheduled from here too; both
-    // paths are idempotent through the timer's isActive() guard.
-    if (!wasConnected) {
-        scheduleReconnect();
-    }
+    // disconnected() does not always follow an error — a refused connect never
+    // reached ESTABLISHED, and an established socket can fail (host
+    // unreachable, a reset seen mid-read) without Qt emitting it either. Retry
+    // unconditionally rather than guessing which errors are followed by a
+    // disconnect: scheduleReconnect() is idempotent through the timer's
+    // isActive() guard, and openSocket() tears the old socket down first, so
+    // the doubled call from the disconnect path costs nothing. Guarding on
+    // wasConnected here left a live session that errored without a disconnect
+    // with no retry ever scheduled.
+    scheduleReconnect();
 }
 
 void GreenHeronModel::onSocketReadyRead()
@@ -224,12 +227,15 @@ void GreenHeronModel::onKeepAlive()
 
 void GreenHeronModel::applyRecord(const Record& record)
 {
-    if (record.switchName.isEmpty()) {
-        return;
-    }
-
+    // The empty-name guard sits inside the three known verbs, not above the
+    // switch: an unknown verb never has a switch name parsed out of it, so
+    // guarding first made the Unknown branch below unreachable and dropped the
+    // record silently.
     switch (record.type) {
     case RecordType::SwitchAdd: {
+        if (record.switchName.isEmpty()) {
+            return;
+        }
         GreenHeronSwitchState& state = m_switches[record.switchName];
         state.name = record.switchName;
         QStringList ports;
@@ -246,6 +252,9 @@ void GreenHeronModel::applyRecord(const Record& record)
         break;
     }
     case RecordType::SwitchUpdate: {
+        if (record.switchName.isEmpty()) {
+            return;
+        }
         GreenHeronSwitchState& state = m_switches[record.switchName];
         state.name = record.switchName;
         state.selected = record.selected;
@@ -253,6 +262,9 @@ void GreenHeronModel::applyRecord(const Record& record)
         break;
     }
     case RecordType::SwitchLocks: {
+        if (record.switchName.isEmpty()) {
+            return;
+        }
         GreenHeronSwitchState& state = m_switches[record.switchName];
         state.name = record.switchName;
         state.locks = record.locks;
@@ -270,7 +282,18 @@ void GreenHeronModel::applyRecord(const Record& record)
 
 QStringList GreenHeronModel::displayOrder() const
 {
-    QStringList names = m_switches.keys();
+    // Only switches whose SWITCHADD has landed. A SWITCHUPDATE or SWITCHLOCKS
+    // that arrives first creates an entry with real state but no port roster,
+    // and offering that as a choice would put a switch with no antennas on
+    // screen. The entry itself is kept — the device may not resend that state —
+    // it simply is not presentable until its ports are known.
+    QStringList names;
+    names.reserve(m_switches.size());
+    for (auto it = m_switches.constBegin(); it != m_switches.constEnd(); ++it) {
+        if (!it->ports.isEmpty()) {
+            names.append(it.key());
+        }
+    }
     std::sort(names.begin(), names.end(), displayOrderLessThan);
     return names;
 }

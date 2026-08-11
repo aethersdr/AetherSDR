@@ -60,10 +60,16 @@ private:
     void buildUI();
     void toggleConnection();
     void refreshSwitchChoices();
+    // The switch actually driven and drawn: the operator's choice while the
+    // device still offers it, otherwise the first switch on the roster. Kept
+    // apart from m_wantedSwitch so a roster that is still arriving cannot
+    // overwrite what the operator asked for.
+    QString effectiveSwitch() const;
     void rebuildPortList();
     void syncFromModel();
     void updateStatus();
     void note(const QString& text);
+    void showNote(const QString& text, const QString& colourToken);
 
     GreenHeronModel* m_model{nullptr};
 
@@ -89,7 +95,9 @@ private:
 
     // The operator's choice, remembered across roster arrivals and restarts.
     // Held separately from the combo because the combo is empty until the
-    // device announces its switches.
+    // device announces its switches. Written only by the operator picking from
+    // the combo and by the settings load — never from an arriving roster, which
+    // spans several reads and is therefore incomplete for a time.
     QString m_wantedSwitch;
 };
 
