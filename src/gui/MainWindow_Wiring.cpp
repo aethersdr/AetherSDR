@@ -6097,14 +6097,9 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
 
 QString MainWindow::sliceSelectionScope() const
 {
-    const bool isWan = m_radioModel.isWan();
-    const QString discoverySerial = m_radioModel.lastRadioInfo().serial;
-    const QString chassisSerial = !m_radioModel.chassisSerial().isEmpty()
-        ? m_radioModel.chassisSerial()
-        : m_radioModel.serial();
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
     const QString stationName = m_radioModel.nickname();
-    return SliceSelectionRestorePolicy::radioIdForScope(
-        isWan, discoverySerial, chassisSerial, stationName);
+    return SliceSelectionRestorePolicy::radioIdForScope(scope.radioId(), stationName);
 }
 
 bool MainWindow::storeSliceSelectionLetter(const QString& field, const QString& letter)

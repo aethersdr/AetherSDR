@@ -16,20 +16,11 @@ namespace AetherSDR {
 class SliceSelectionRestorePolicy {
 public:
     // Scope key for the SliceSelection document.
-    // Includes station name to isolate Multi-Flex client instances on the same radio.
-    static QString radioIdForScope(bool isWan,
-                                   const QString& discoverySerial,
-                                   const QString& chassisSerial,
+    // Uses RadioSettingsScope's radioId, appending station name for Multi-Flex isolation.
+    static QString radioIdForScope(const QString& scopeRadioId,
                                    const QString& stationName = QString())
     {
-        QString baseId;
-        if (isWan) {
-            baseId = chassisSerial.trimmed();
-        } else {
-            baseId = !discoverySerial.trimmed().isEmpty()
-                ? discoverySerial.trimmed()
-                : chassisSerial.trimmed();
-        }
+        const QString baseId = scopeRadioId.trimmed();
         if (baseId.isEmpty()) {
             return QString();
         }

@@ -24,16 +24,14 @@ int main()
     using AetherSDR::SliceSelectionRestorePolicy;
 
     // Radio ID scoping — client station name isolates Multi-Flex instances
-    check(SliceSelectionRestorePolicy::radioIdForScope(false, "N12345", "", "Station1") == "N12345/Station1",
-          "LAN scope includes station name");
-    check(SliceSelectionRestorePolicy::radioIdForScope(true, "", "N12345", "Station1") == "N12345/Station1",
-          "WAN scope uses chassis serial and includes station name");
+    check(SliceSelectionRestorePolicy::radioIdForScope("N12345", "Station1") == "N12345/Station1",
+          "scope includes station name");
     check(SliceSelectionRestorePolicy::scopeCanCarrySelection(
-              SliceSelectionRestorePolicy::radioIdForScope(true, "", "N12345", "Station1"))
+              SliceSelectionRestorePolicy::radioIdForScope("N12345", "Station1"))
               && SliceSelectionRestorePolicy::shouldCaptureTxSlice(true, 1, true),
           "the TX capture on an unexpected WAN drop");
-    check(SliceSelectionRestorePolicy::radioIdForScope(true, "", "") == "",
-          "WAN scope returns empty when chassis serial is unpopulated");
+    check(SliceSelectionRestorePolicy::radioIdForScope("") == "",
+          "scope returns empty when base radio ID is unpopulated");
 
     // Scope carry guard
     check(SliceSelectionRestorePolicy::scopeCanCarrySelection("N12345/Station1"),
