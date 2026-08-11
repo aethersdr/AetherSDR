@@ -111,6 +111,11 @@ private:
     // edge may be before a fresh anchor discards it instead of replaying it.
     static constexpr int kReanchorIdleMs = 250;
 
+    // Upper bound on m_anchorSlack (#4890).  Must stay well below
+    // kReanchorIdleMs: the staleness guard measures anchor-vs-wall-clock
+    // drift THROUGH the slack, so slack eats into that margin.
+    static constexpr int kAnchorSlackCapMs = 100;
+
     void applyKeyEdge(bool down) noexcept;  // state-machine transition
 
     int                m_sampleRateHz;
@@ -148,6 +153,19 @@ private:
     std::chrono::steady_clock::time_point m_anchorTime;
     int64_t  m_anchorPos{0};
     int64_t  m_idleSamples{0};      // contiguous idle samples since the last edge
+
+    // Learned anchor headroom, in samples (#4890).  A push-model sink keeps
+    // its device buffer full, so m_streamPos advances at wall-clock pace and
+    // every edge target races the render head: an edge whose exact position
+    // was already rendered used to be clamped to the current block start,
+    // quantizing BOTH edges of an element to block boundaries (measured on
+    // Linux: dit SD 0.2 ms at emission -> 6-8 ms rendered, in whole-block
+    // steps).  When an edge arrives late, process() now shifts the whole
+    // anchor forward instead — relative spacing (the rhythm) survives, only
+    // absolute onset latency grows — and the deficit accumulates here so the
+    // NEXT burst anchors with enough headroom to stop racing at all.
+    // Bounded by kAnchorSlackCapMs; reset with the mapping.
+    int64_t  m_anchorSlack{0};
 
     // Mirror sink for the TX decode path (#2417).  Holds null until
     // AudioEngine plugs in its TX-decoder feeder.  When non-null, every

@@ -116,6 +116,7 @@ void CwSidetoneGenerator::reset() noexcept
     m_haveAnchor = false;
     m_streamPos = 0;
     m_idleSamples = 0;
+    m_anchorSlack = 0;
     // Drop queued edges (consumer-side drain: only the tail moves).
     m_edgeTail.store(m_edgeHead.load(std::memory_order_acquire),
                      std::memory_order_release);
@@ -273,20 +274,38 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
             break;
         const KeyEdge e = m_edgeQueue[tail % kEdgeQueueSize];
         if (!m_haveAnchor) {
-            // First edge of a burst plays at this block's start — the
-            // same onset latency as the old block-polling gate; every
-            // later edge lands relative to it, sample-exact.
+            // First edge of a burst plays at this block's start plus the
+            // slack learned from earlier late edges — every later edge
+            // lands relative to it, sample-exact.  Zero slack reproduces
+            // the old onset latency exactly.
             m_anchorTime = e.t;
-            m_anchorPos  = blockStart;
+            m_anchorPos  = blockStart + m_anchorSlack;
             m_haveAnchor = true;
         }
-        const int64_t target = m_anchorPos +
+        int64_t target = m_anchorPos +
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 e.t - m_anchorTime).count() * m_sampleRateHz / 1'000'000'000LL;
         if (target >= blockEnd)
             break;  // future block — edges are time-ordered, stop here
-        const int off = static_cast<int>(
-            std::max<int64_t>(target, blockStart) - blockStart);
+        if (target < blockStart) {
+            // The edge's exact position is already rendered.  Clamping just
+            // this edge would quantize it to the block boundary (#4890 —
+            // under a push-model sink the render head advances at wall-clock
+            // pace, so edges lose this race about half the time, and by whole
+            // refill-sized steps after a pump stall).  Shift the whole
+            // mapping forward instead: this edge plays at the head, every
+            // later edge keeps its exact distance from THIS one, and the
+            // learned slack makes the next burst anchor far enough ahead to
+            // stop racing.  Rhythm is preserved; only onset latency grows,
+            // bounded by the slack cap.
+            const int64_t deficit = blockStart - target;
+            m_anchorPos += deficit;
+            m_anchorSlack = std::min<int64_t>(
+                m_anchorSlack + deficit,
+                static_cast<int64_t>(m_sampleRateHz) * kAnchorSlackCapMs / 1000);
+            target = blockStart;
+        }
+        const int off = static_cast<int>(target - blockStart);
         blockEdges.append({off, e.down});
         m_edgeTail.store(tail + 1, std::memory_order_release);
     }

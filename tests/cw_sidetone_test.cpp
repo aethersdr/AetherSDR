@@ -424,5 +424,84 @@ int main()
                      "element after a consumer pause still sounds, once");
     }
 
+    // ── 12. Push-pump race: an element keyed while the render head is ahead
+    // of wall clock keeps its exact duration (#4890).  A push-model sink
+    // keeps the device buffer full, so process() renders ahead of real time
+    // and an edge's timestamp-mapped position can already be rendered by the
+    // time the edge is consumed.  Clamping just that edge to the block start
+    // quantized BOTH edges of the element to render-head positions — on the
+    // bench this collapsed rhythm into whole-block steps (Linux: emission
+    // SD 0.2 ms rendered as 6–8 ms, in 5.3 ms quanta).  The anchor must
+    // shift forward instead, preserving the element's length.
+    {
+        using clock = std::chrono::steady_clock;
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);
+
+        // Element A anchors the burst and flushes normally.  Deliberately
+        // twice element B's length: if B collapses at the render head, the
+        // last loud run the assertions measure is A, and A's length must
+        // not fit B's expected window.
+        gen.setKeyDown(true);
+        auto blk = runFrames(gen, 128);
+        std::vector<float> cat(blk.begin(), blk.end());
+        const auto a1 = clock::now();
+        while (clock::now() - a1 < std::chrono::milliseconds(20)) { /* spin */ }
+        gen.setKeyDown(false);
+        while (cat.size() < 2000) {
+            blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+
+        // Inter-element gap, during which the "pump" tops the buffer up —
+        // the render head moves ~80 ms ahead while the anchor is retained
+        // (gap and lead both well under the idle re-anchor threshold).
+        const auto g0 = clock::now();
+        while (clock::now() - g0 < std::chrono::milliseconds(40)) { /* spin */ }
+        while (cat.size() < 6000) {
+            blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+
+        // Element B: keyed in real time, consumed with the head far ahead.
+        gen.setKeyDown(true);
+        const auto b1 = clock::now();
+        while (clock::now() - b1 < std::chrono::milliseconds(10)) { /* spin */ }
+        const auto c0 = clock::now();
+        gen.setKeyDown(false);
+        const auto c1 = clock::now();
+        for (int b = 0; b < 40; ++b) {
+            blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+
+        // Locate element B — the last loud run — and measure its length.
+        int lastStart = -1, lastEnd = -1;
+        bool loudRun = false;
+        for (int i = 0; i + 8 <= static_cast<int>(cat.size()); i += 8) {
+            const float peak = maxAbs(std::vector<float>(
+                cat.begin() + i, cat.begin() + i + 8));
+            const bool loud = peak > 0.1f;
+            if (loud && !loudRun) lastStart = i;
+            if (loud) lastEnd = i + 8;
+            loudRun = loud;
+        }
+        ok &= expect(toneBursts(cat) == 2,
+                     "push-pump race: late element still renders as its own"
+                     " burst");
+        const auto loNs = std::chrono::duration_cast<std::chrono::nanoseconds>(c0 - b1).count();
+        const auto hiNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            c1 - (b1 - std::chrono::milliseconds(0))).count();
+        const int lo = static_cast<int>(loNs * 48000 / 1'000'000'000LL) - 16;
+        const int hi = static_cast<int>(hiNs * 48000 / 1'000'000'000LL) + 144;
+        const int lenB = (lastStart >= 0 && lastEnd > lastStart)
+                             ? lastEnd - lastStart : -1;
+        ok &= expect(lenB >= lo && lenB <= hi,
+                     "push-pump race: element duration is preserved, not"
+                     " clamped to the render head");
+    }
+
     return ok ? 0 : 1;
 }
