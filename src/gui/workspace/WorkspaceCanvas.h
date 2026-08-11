@@ -176,6 +176,7 @@ signals:
     void itemRemoved(const QString& id);
 
 protected:
+    bool event(QEvent* ev) override;   // ShortcutOverride: placement keys win
     void resizeEvent(QResizeEvent* ev) override;
     void dragEnterEvent(QDragEnterEvent* ev) override;
     void dragMoveEvent(QDragMoveEvent* ev) override;

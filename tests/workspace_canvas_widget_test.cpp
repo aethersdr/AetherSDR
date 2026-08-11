@@ -20,10 +20,13 @@
 #include <QHash>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QShortcut>
+#include <QTest>
 #include <QRect>
 #include <QSignalSpy>
 #include <QStringList>
 #include <QWidget>
+#include <QWindow>
 
 #include <cmath>
 #include <cstdio>
@@ -483,6 +486,79 @@ int main(int argc, char** argv)
         QCoreApplication::sendEvent(&canvas, &esc);
         report("Esc clears the selection",
                canvas.selectedItem().isEmpty());
+    }
+
+    // ── Placement keys beat application shortcuts — only while selected ──
+    //
+    // The main window binds Left/Right and Shift+Left/Right to frequency
+    // nudges.  The field report: Shift+arrows only resized vertically,
+    // because the horizontal pair was eaten by those shortcuts before the
+    // canvas saw them.  Pinned with a real competing QShortcut and keys
+    // delivered through the full chain (QTest::keyClick consults the
+    // shortcut map; sendEvent would bypass it and prove nothing).
+    {
+        QWidget window;
+        window.resize(1000, 1000);
+        auto* canvas = new WorkspaceCanvas;
+        canvas->setParent(&window);
+        canvas->setGeometry(0, 0, 1000, 1000);
+        window.show();
+        canvas->show();
+
+        int nudges = 0;
+        auto* freqNudge = new QShortcut(
+            QKeySequence(Qt::SHIFT | Qt::Key_Right), &window);
+        // ApplicationShortcut: WindowShortcut needs an ACTIVE window, which
+        // the offscreen platform never grants.  Same QShortcutMap, same
+        // ShortcutOverride consultation — the mechanism under test.
+        freqNudge->setContext(Qt::ApplicationShortcut);
+        QObject::connect(freqNudge, &QShortcut::activated,
+                         [&nudges] { ++nudges; });
+
+        canvas->addItem("a", new QWidget, NormRect{0.1, 0.1, 0.4, 0.4});
+        canvas->setFocus();
+
+        // Keys must travel the REAL delivery chain — window system event →
+        // shortcut map → ShortcutOverride → focus widget.  The QWidget
+        // overload of keyClick sends straight to the widget and consults no
+        // shortcut map, which would pass here while proving nothing.
+        QWindow* handle = window.windowHandle();
+
+        // No selection: the shortcut owns the key, the item is untouched.
+        QTest::keyClick(handle, Qt::Key_Right, Qt::ShiftModifier);
+        report("without a selection the app shortcut fires", nudges == 1);
+        report("...and the item is untouched",
+               canvas->itemRect("a") == NormRect{0.1, 0.1, 0.4, 0.4});
+
+        // Selected: the canvas reclaims the key — Shift+Right resizes
+        // HORIZONTALLY, the axis the field report lost.
+        canvas->selectItem("a");
+        QTest::keyClick(handle, Qt::Key_Right, Qt::ShiftModifier);
+        report("with a selection Shift+Right resizes width",
+               nearly(canvas->itemRect("a").w, 0.4 + 8.0 / 1000.0));
+        report("...and the app shortcut did not fire", nudges == 1);
+
+        // Both axes under one modifier — no Shift/Ctrl+Shift axis split.
+        QTest::keyClick(handle, Qt::Key_Down, Qt::ShiftModifier);
+        report("Shift+Down resizes height under the same modifier",
+               nearly(canvas->itemRect("a").h, 0.4 + 8.0 / 1000.0));
+
+        // Plain arrows move while selected (they were also bound app-wide).
+        auto* plainNudge = new QShortcut(QKeySequence(Qt::Key_Left), &window);
+        plainNudge->setContext(Qt::ApplicationShortcut);
+        int plain = 0;
+        QObject::connect(plainNudge, &QShortcut::activated,
+                         [&plain] { ++plain; });
+        QTest::keyClick(handle, Qt::Key_Left, Qt::NoModifier);
+        report("plain arrows move the selected item, not the VFO",
+               plain == 0 && nearly(canvas->itemRect("a").x, 0.1 - 8.0 / 1000.0));
+
+        // Deselect: the keys go straight back to the shortcuts.
+        canvas->clearSelection();
+        QTest::keyClick(handle, Qt::Key_Right, Qt::ShiftModifier);
+        QTest::keyClick(handle, Qt::Key_Left, Qt::NoModifier);
+        report("deselecting returns the keys to the app",
+               nudges == 2 && plain == 1);
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

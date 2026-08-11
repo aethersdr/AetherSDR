@@ -546,6 +546,36 @@ void WorkspaceCanvas::mousePressEvent(QMouseEvent* ev)
     QWidget::mousePressEvent(ev);
 }
 
+bool WorkspaceCanvas::event(QEvent* ev)
+{
+    // The main window binds the arrow family as application shortcuts —
+    // frequency nudges on Left/Right and Shift+Left/Right — and application
+    // shortcuts consume key events before the focused widget sees them.
+    // Accepting the ShortcutOverride reclaims the key for the widget.
+    //
+    // Scope is deliberate and narrow: only while a canvas item is SELECTED
+    // (or a gesture is live) and only while the canvas itself has focus —
+    // the override is consulted for the focus widget alone, so clicking into
+    // the spectrum or deselecting hands the VFO its keys straight back.
+    // Selecting an item is the operator saying "I'm placing things now."
+    if (ev->type() == QEvent::ShortcutOverride
+        && (!m_selectedId.isEmpty() || gestureActive())) {
+        auto* ke = static_cast<QKeyEvent*>(ev);
+        switch (ke->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_Escape:
+            ke->accept();
+            return true;
+        default:
+            break;
+        }
+    }
+    return QWidget::event(ev);
+}
+
 void WorkspaceCanvas::keyPressEvent(QKeyEvent* ev)
 {
     if (ev->key() == Qt::Key_Escape) {
