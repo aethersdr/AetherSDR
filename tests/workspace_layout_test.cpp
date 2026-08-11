@@ -32,8 +32,6 @@ void report(const char* name, bool ok)
     }
 }
 
-const QSize kCanvas(1000, 1000);
-
 CanvasItem make(const QString& id, const NormRect& rect)
 {
     CanvasItem it;
@@ -78,11 +76,11 @@ int main()
         report("empty layout has no items", layout.isEmpty() && layout.count() == 0);
 
         report("an item can be added",
-               layout.addItem(make("a", NormRect{0.0, 0.0, 0.4, 0.4}), kCanvas));
+               layout.addItem(make("a", NormRect{0.0, 0.0, 0.4, 0.4})));
         report("a duplicate id is refused",
-               !layout.addItem(make("a", NormRect{0.5, 0.5, 0.2, 0.2}), kCanvas));
+               !layout.addItem(make("a", NormRect{0.5, 0.5, 0.2, 0.2})));
         report("an empty id is refused",
-               !layout.addItem(make("", NormRect{0.5, 0.5, 0.2, 0.2}), kCanvas));
+               !layout.addItem(make("", NormRect{0.5, 0.5, 0.2, 0.2})));
         report("the refusals did not change the layout", layout.count() == 1);
 
         report("contains() finds it",        layout.contains("a"));
@@ -95,24 +93,36 @@ int main()
         report("layout is empty again",       layout.isEmpty());
     }
 
-    // ── Insert clamps placement ──────────────────────────────────────────
+    // ── Insert clamps placement — bounds only, never growth ──────────────
     {
         CanvasLayout layout;
         CanvasItem it = make("wide", NormRect{0.8, 0.8, 0.5, 0.5});
         it.minimumSize = QSize(100, 100);
-        layout.addItem(it, kCanvas);
+        layout.addItem(it);
 
         const NormRect stored = layout.item("wide")->rect;
-        report("an item added off-canvas is clamped on the way in",
+        report("an item added off-surface slides back inside",
                std::fabs(stored.x - 0.5) < 1e-9 && std::fabs(stored.y - 0.5) < 1e-9);
+        report("...keeping its size", std::fabs(stored.w - 0.5) < 1e-9);
+
+        // The model clamp is canvas-independent BY DESIGN: minimum sizes are
+        // a display concern.  Growing stored rects to meet a minimum against
+        // whatever size the canvas happened to be is how a pre-layout replay
+        // once rewrote an arrangement to full-canvas (phase 3 field report).
+        CanvasItem tiny = make("tiny", NormRect{0.4, 0.4, 0.01, 0.01});
+        tiny.minimumSize = QSize(400, 400);
+        layout.addItem(tiny);
+        report("a stored rect is never grown to meet a minimum",
+               std::fabs(layout.item("tiny")->rect.w - 0.01) < 1e-9
+                   && std::fabs(layout.item("tiny")->rect.h - 0.01) < 1e-9);
     }
 
     // ── z assignment and density ─────────────────────────────────────────
     {
         CanvasLayout layout;
-        layout.addItem(make("a", NormRect{0.0, 0.0, 0.3, 0.3}), kCanvas);
-        layout.addItem(make("b", NormRect{0.1, 0.1, 0.3, 0.3}), kCanvas);
-        layout.addItem(make("c", NormRect{0.2, 0.2, 0.3, 0.3}), kCanvas);
+        layout.addItem(make("a", NormRect{0.0, 0.0, 0.3, 0.3}));
+        layout.addItem(make("b", NormRect{0.1, 0.1, 0.3, 0.3}));
+        layout.addItem(make("c", NormRect{0.2, 0.2, 0.3, 0.3}));
 
         report("each new item lands on top",
                layout.zOf("a") == 0 && layout.zOf("b") == 1 && layout.zOf("c") == 2);
@@ -147,7 +157,7 @@ int main()
         c.z = 1;
 
         report("every stored item is restored",
-               layout.restoreItems({a, b, c}, kCanvas) == 3);
+               layout.restoreItems({a, b, c}) == 3);
         report("a restored arrangement keeps its saved stacking",
                zOrder(layout) == QStringList({"b", "c", "a"}));
         report("...and z is dense afterwards", zIsDense(layout));
@@ -159,7 +169,7 @@ int main()
         CanvasItem y = make("y", NormRect{0.2, 0.2, 0.2, 0.2});
         x.z = 40;
         y.z = 10;
-        sparse.restoreItems({x, y}, kCanvas);
+        sparse.restoreItems({x, y});
         report("sparse saved z is densified, preserving order",
                zOrder(sparse) == QStringList({"y", "x"}) && zIsDense(sparse));
 
@@ -169,7 +179,7 @@ int main()
         CanvasItem dup2 = make("dup", NormRect{0.3, 0.3, 0.2, 0.2});
         CanvasItem anon = make("", NormRect{0.5, 0.5, 0.2, 0.2});
         report("restore skips duplicate and anonymous items",
-               guarded.restoreItems({dup1, dup2, anon}, kCanvas) == 1
+               guarded.restoreItems({dup1, dup2, anon}) == 1
                    && guarded.count() == 1);
 
         // A plain add still puts a NEW item where the operator can see it,
@@ -177,8 +187,8 @@ int main()
         CanvasLayout fresh;
         CanvasItem buried = make("buried", NormRect{0.0, 0.0, 0.2, 0.2});
         buried.z = -99;
-        fresh.addItem(make("first", NormRect{0.3, 0.3, 0.2, 0.2}), kCanvas);
-        fresh.addItem(buried, kCanvas);
+        fresh.addItem(make("first", NormRect{0.3, 0.3, 0.2, 0.2}));
+        fresh.addItem(buried);
         report("addItem ignores the caller's z and lands on top",
                zOrder(fresh) == QStringList({"first", "buried"}));
     }
@@ -186,10 +196,10 @@ int main()
     // ── Stacking operations ──────────────────────────────────────────────
     {
         CanvasLayout layout;
-        layout.addItem(make("a", NormRect{0.0, 0.0, 0.3, 0.3}), kCanvas);
-        layout.addItem(make("b", NormRect{0.1, 0.1, 0.3, 0.3}), kCanvas);
-        layout.addItem(make("c", NormRect{0.2, 0.2, 0.3, 0.3}), kCanvas);
-        layout.addItem(make("d", NormRect{0.3, 0.3, 0.3, 0.3}), kCanvas);
+        layout.addItem(make("a", NormRect{0.0, 0.0, 0.3, 0.3}));
+        layout.addItem(make("b", NormRect{0.1, 0.1, 0.3, 0.3}));
+        layout.addItem(make("c", NormRect{0.2, 0.2, 0.3, 0.3}));
+        layout.addItem(make("d", NormRect{0.3, 0.3, 0.3, 0.3}));
         // bottom -> top: a b c d
 
         report("raise moves one step",
@@ -233,8 +243,8 @@ int main()
     {
         CanvasLayout layout;
         // Two items that overlap in the middle of the canvas.
-        layout.addItem(make("under", NormRect{0.10, 0.10, 0.40, 0.40}), kCanvas);
-        layout.addItem(make("over",  NormRect{0.30, 0.30, 0.40, 0.40}), kCanvas);
+        layout.addItem(make("under", NormRect{0.10, 0.10, 0.40, 0.40}));
+        layout.addItem(make("over",  NormRect{0.30, 0.30, 0.40, 0.40}));
 
         report("a point over only the lower item hits it",
                layout.hitTest(QPointF(0.15, 0.15)) == "under");
@@ -254,35 +264,21 @@ int main()
                layout.hitTest(QPointF(-0.5, 0.5)).isEmpty());
     }
 
-    // ── setRect and reclampAll ───────────────────────────────────────────
+    // ── setRect ──────────────────────────────────────────────────────────
     {
         CanvasLayout layout;
-        layout.addItem(make("a", NormRect{0.0, 0.0, 0.4, 0.4}), kCanvas);
+        layout.addItem(make("a", NormRect{0.0, 0.0, 0.4, 0.4}));
 
         report("setRect on an unknown id fails",
-               !layout.setRect("nope", NormRect{0.0, 0.0, 0.2, 0.2}, kCanvas));
+               !layout.setRect("nope", NormRect{0.0, 0.0, 0.2, 0.2}));
 
         report("setRect stores the new placement",
-               layout.setRect("a", NormRect{0.5, 0.5, 0.25, 0.25}, kCanvas)
+               layout.setRect("a", NormRect{0.5, 0.5, 0.25, 0.25})
                    && layout.item("a")->rect == NormRect{0.5, 0.5, 0.25, 0.25});
 
-        report("setRect clamps an off-canvas request",
-               layout.setRect("a", NormRect{0.9, 0.9, 0.5, 0.5}, kCanvas)
+        report("setRect slides an off-surface request back inside",
+               layout.setRect("a", NormRect{0.9, 0.9, 0.5, 0.5})
                    && layout.item("a")->rect == NormRect{0.5, 0.5, 0.5, 0.5});
-
-        // A resize that changes nothing must report nothing changed: this is
-        // what stops phase 2's auto-commit writing the document on every frame
-        // of a window drag.
-        CanvasLayout stable;
-        CanvasItem fits = make("fits", NormRect{0.1, 0.1, 0.2, 0.2});
-        fits.minimumSize = QSize(10, 10);
-        stable.addItem(fits, kCanvas);
-        report("a resize that changes nothing reports nothing",
-               stable.reclampAll(QSize(2000, 2000)).isEmpty());
-
-        // A canvas too small for the minimum does move it, and says so.
-        report("a resize that forces a clamp reports the moved item",
-               stable.reclampAll(QSize(20, 20)) == QStringList({"fits"}));
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

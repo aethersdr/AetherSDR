@@ -359,9 +359,10 @@ void WorkspaceController::onItemRectChanged(const QString& itemId, const NormRec
     if (m_applying || !m_enabled) {
         return;
     }
-    // Rect changes stream during a canvas resize, so this only touches; the
-    // debounce coalesces them (the store test pins that a resize storm is
-    // one write).  Discrete gestures flush at their own call sites.
+    // Only placement gestures reach here — a canvas resize emits nothing by
+    // design (stored rects are canvas-independent; the display clamp absorbs
+    // small windows).  Touch, don't flush: discrete gestures flush at their
+    // own call sites, and anything that streams coalesces in the debounce.
     writeItemRect(itemId, rect, /*flushNow=*/false);
 }
 

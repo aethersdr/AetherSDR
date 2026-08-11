@@ -45,23 +45,24 @@ void CanvasLayout::normalizeZ()
     }
 }
 
-bool CanvasLayout::addItem(CanvasItem item, const QSize& canvas)
+bool CanvasLayout::addItem(CanvasItem item)
 {
     if (item.id.isEmpty() || contains(item.id)) {
         return false;
     }
 
-    // A new item lands on top and inside.  Assigning z here rather than
-    // trusting the caller keeps the dense-contiguous invariant true from the
-    // first insert, with no normalize pass needed.
+    // A new item lands on top and inside the unit square.  Assigning z here
+    // rather than trusting the caller keeps the dense-contiguous invariant
+    // true from the first insert, with no normalize pass needed.  Bounds
+    // only — the display clamp handles minimum sizes at render time.
     item.z    = static_cast<int>(m_items.size());
-    item.rect = clampToCanvas(item.rect, item.minimumSize, canvas);
+    item.rect = clampToBounds(item.rect);
 
     m_items.append(item);
     return true;
 }
 
-int CanvasLayout::restoreItems(const QList<CanvasItem>& items, const QSize& canvas)
+int CanvasLayout::restoreItems(const QList<CanvasItem>& items)
 {
     // Sort by stored z FIRST, then insert bottom-to-top, so each insert's
     // assigned rank matches the saved order.  Doing it the other way — insert
@@ -75,7 +76,7 @@ int CanvasLayout::restoreItems(const QList<CanvasItem>& items, const QSize& canv
 
     int inserted = 0;
     for (CanvasItem& item : ordered) {
-        if (addItem(item, canvas)) {
+        if (addItem(item)) {
             ++inserted;
         }
     }
@@ -129,27 +130,14 @@ QList<CanvasItem> CanvasLayout::itemsByZ() const
     return out;
 }
 
-bool CanvasLayout::setRect(const QString& id, const NormRect& rect, const QSize& canvas)
+bool CanvasLayout::setRect(const QString& id, const NormRect& rect)
 {
     CanvasItem* it = find(id);
     if (!it) {
         return false;
     }
-    it->rect = clampToCanvas(rect, it->minimumSize, canvas);
+    it->rect = clampToBounds(rect);
     return true;
-}
-
-QStringList CanvasLayout::reclampAll(const QSize& canvas)
-{
-    QStringList moved;
-    for (CanvasItem& it : m_items) {
-        const NormRect before = it.rect;
-        it.rect = clampToCanvas(it.rect, it.minimumSize, canvas);
-        if (!(it.rect == before)) {
-            moved.append(it.id);
-        }
-    }
-    return moved;
 }
 
 QString CanvasLayout::hitTest(const QPointF& normPoint) const

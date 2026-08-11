@@ -21,6 +21,7 @@
 #include <QAction>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTimer>
 
 namespace AetherSDR {
 
@@ -58,8 +59,16 @@ void MainWindow::wireWorkspaceCanvas()
     // The stored document decides whether the mode comes back up.  boot()
     // never migrates — a fresh install that has never enabled the canvas
     // must not gain a Workspaces key just by launching.
+    //
+    // The mount itself is DEFERRED one event-loop turn: this runs in the
+    // MainWindow constructor, before show() and the first layout pass, and
+    // replaying the document onto a canvas with no real geometry is exactly
+    // how the phase 3 field report broke — every item displayed full-canvas
+    // for the whole session.  The model is bounds-only now so a degenerate
+    // size can no longer corrupt anything, but mounting after layout means
+    // the first frame the operator sees is the right one.
     if (m_workspaceController->boot()) {
-        toggleWorkspaceCanvas(true);
+        QTimer::singleShot(0, this, [this] { toggleWorkspaceCanvas(true); });
     }
 }
 

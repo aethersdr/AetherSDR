@@ -55,7 +55,7 @@ bool WorkspaceCanvas::addItem(const QString& id,
     item.rect        = rect;
     item.minimumSize = minimumSize;
 
-    if (!m_layout.addItem(item, size())) {
+    if (!m_layout.addItem(item)) {
         return false;
     }
 
@@ -157,7 +157,7 @@ QWidget* WorkspaceCanvas::itemWidget(const QString& id) const
 
 bool WorkspaceCanvas::setItemRect(const QString& id, const NormRect& rect)
 {
-    if (!m_layout.setRect(id, rect, size())) {
+    if (!m_layout.setRect(id, rect)) {
         return false;
     }
     applyGeometryFor(id);
@@ -263,16 +263,11 @@ void WorkspaceCanvas::resizeEvent(QResizeEvent* ev)
 {
     QWidget::resizeEvent(ev);
 
-    // A smaller canvas can push items out or below their minimum, so the
-    // model is re-clamped first and the pixels follow.  Only the items that
-    // actually moved are announced — a resize that changes nothing must not
-    // look like an edit (this is what keeps phase 2's auto-commit from
-    // writing the document on every frame of a window drag).
-    const QStringList moved = m_layout.reclampAll(size());
+    // Recompute display geometry only.  The model is untouched and nothing
+    // is announced: a resize is not an edit, and persisting what a small
+    // window forced on the view is how a transient startup size once
+    // destroyed a stored arrangement (RFC #4887 phase 3 field report).
     applyGeometry();
-    for (const QString& id : moved) {
-        emit itemRectChanged(id, itemRect(id));
-    }
 }
 
 bool WorkspaceCanvas::eventFilter(QObject* watched, QEvent* ev)
@@ -301,7 +296,12 @@ void WorkspaceCanvas::applyGeometryFor(const QString& id)
     if (!w || !it) {
         return;
     }
-    w->setGeometry(toPixels(it->rect, size()));
+    // The display clamp lives HERE and only here: minimum sizes are enforced
+    // against the canvas as it is right now, the stored rect stays pristine,
+    // and a canvas too small to honour a minimum shows a compromise it will
+    // abandon the moment the canvas grows back.
+    w->setGeometry(toPixels(clampToCanvas(it->rect, it->minimumSize, size()),
+                            size()));
 }
 
 void WorkspaceCanvas::applyGeometry()

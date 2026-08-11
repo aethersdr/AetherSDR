@@ -112,14 +112,16 @@ signals:
     // container's dragId().
     void dropReceived(const QString& payload, const QPointF& pos);
 
-    // Emitted whenever an item's stored rect changes — including the clamps
-    // applied on a canvas resize, which is why the rect is carried in the
-    // signal rather than left for the receiver to read back.
+    // Emitted when an item's STORED rect changes — placement gestures only.
+    // A canvas resize emits nothing: stored rects are canvas-independent,
+    // and the squeeze a small window forces on the view is display-time
+    // compromise (applyGeometryFor), never an edit.  Growing the window
+    // therefore restores the arrangement exactly, and a transient size at
+    // startup can no longer rewrite the document (the phase 3 field report).
     //
     // Both of these are edits: phase 2's auto-commit turns each into a
     // whole-document write, so neither fires for an operation that changed
-    // nothing.  A resize that clamps no item is silent, and so is raising an
-    // item that was already frontmost.
+    // nothing — raising an already-frontmost item is silent too.
     void itemRectChanged(const QString& id, const NormRect& rect);
     void itemStackingChanged(const QString& id);
     void itemAdded(const QString& id);

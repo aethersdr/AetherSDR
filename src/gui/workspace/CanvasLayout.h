@@ -30,13 +30,18 @@ public:
     // Rejects an empty or duplicate id: identity is what every other call
     // here takes as an argument, so letting a second "applet:RX" in would
     // make every later lookup ambiguous rather than merely wrong.  The item's
-    // z is assigned on insert (topmost) and its rect clamped, so a caller
-    // cannot introduce an off-canvas or buried item by construction.
+    // z is assigned on insert (topmost) and its rect bounds-clamped, so a
+    // caller cannot introduce an off-surface or buried item by construction.
+    //
+    // The model clamp is clampToBounds() — canvas-INDEPENDENT on purpose.
+    // Minimum-size enforcement happens at display time in WorkspaceCanvas;
+    // running it here once poisoned every stored rect when items were placed
+    // before the window was laid out (RFC #4887 phase 3 field report).
     //
     // For a NEW item this is what you want — it belongs where the operator can
     // see it.  To rehydrate a SAVED arrangement, use restoreItems(): the
     // stored z is meaningful there and this call would discard it.
-    bool addItem(CanvasItem item, const QSize& canvas);
+    bool addItem(CanvasItem item);
 
     // Rehydrate a whole saved surface at once.
     //
@@ -55,7 +60,7 @@ public:
     //
     // Items with an empty or duplicate id are skipped.  Returns how many
     // were inserted.
-    int restoreItems(const QList<CanvasItem>& items, const QSize& canvas);
+    int restoreItems(const QList<CanvasItem>& items);
     bool removeItem(const QString& id);
     void clear();
 
@@ -73,15 +78,10 @@ public:
 
     // ── Placement ────────────────────────────────────────────────────────
     //
-    // The rect is clamped against the canvas before it is stored, so the
-    // layout never holds a placement the operator cannot see.  Returns false
-    // for an unknown id only — a clamped-away rect is still a successful set.
-    bool setRect(const QString& id, const NormRect& rect, const QSize& canvas);
-
-    // Re-clamp every item, for when the canvas itself changed size.  Returns
-    // the ids whose rects actually moved, so a caller can persist just those
-    // (phase 2) rather than rewriting the whole document on every resize.
-    QStringList reclampAll(const QSize& canvas);
+    // The rect is bounds-clamped before it is stored, so the layout never
+    // holds a placement outside the unit square.  Returns false for an
+    // unknown id only — a clamped-away rect is still a successful set.
+    bool setRect(const QString& id, const NormRect& rect);
 
     // ── Hit testing ──────────────────────────────────────────────────────
     //

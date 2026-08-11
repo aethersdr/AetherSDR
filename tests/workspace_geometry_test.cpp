@@ -19,6 +19,7 @@
 #include <limits>
 
 using AetherSDR::NormRect;
+using AetherSDR::clampToBounds;
 using AetherSDR::clampToCanvas;
 using AetherSDR::fromPixels;
 using AetherSDR::minimumNormSize;
@@ -176,6 +177,27 @@ int main()
         report("an item pushed past the origin slides back",
                nearly(neg.x, 0.0) && nearly(neg.y, 0.0)
                    && nearly(neg.w, 0.4) && nearly(neg.h, 0.4));
+    }
+
+    // ── Case 6b: the bounds clamp — canvas-independent, growth-free ──────
+    //
+    // The model's only clamp.  Its whole point is that it CANNOT depend on
+    // how big the canvas happens to be: growing stored rects to meet pixel
+    // minimums against a transient startup size is how a real arrangement
+    // was once displayed as full-canvas wreckage (phase 3 field report).
+    {
+        report("bounds clamp slides an overshoot back, keeping size",
+               clampToBounds(NormRect{0.9, 0.0, 0.3, 0.3})
+                   == NormRect{0.7, 0.0, 0.3, 0.3});
+        report("bounds clamp never grows a small rect",
+               clampToBounds(NormRect{0.4, 0.4, 0.01, 0.01})
+                   == NormRect{0.4, 0.4, 0.01, 0.01});
+        report("bounds clamp caps an oversized rect at the surface",
+               clampToBounds(NormRect{-0.5, 0.2, 1.7, 0.5})
+                   == NormRect{0.0, 0.2, 1.0, 0.5});
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        report("bounds clamp rejects a non-finite rect",
+               clampToBounds(NormRect{nan, 0.0, 0.5, 0.5}) == NormRect{});
     }
 
     // ── Case 7: minimum size ─────────────────────────────────────────────

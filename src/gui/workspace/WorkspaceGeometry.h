@@ -68,6 +68,22 @@ NormRect fromPixels(const QRect& px, const QSize& canvas);
 // outcome than one that overflows a tiny window.
 QSizeF minimumNormSize(const QSize& minPx, const QSize& canvas);
 
+// Bring `r` inside the UNIT SQUARE, preserving its size wherever possible —
+// the canvas-independent half of clamping, and the only clamp the MODEL is
+// allowed to apply.
+//
+// Deliberately knows nothing about pixels: a stored rect must never depend
+// on how big the canvas happened to be when it was written.  The failure
+// this exists to prevent is real and was hit in the field: placing items at
+// startup, before the window is laid out, ran the pixel clamp against a
+// degenerate canvas, grew every item to full-surface to satisfy minimum
+// sizes, and wrecked the whole arrangement for the session (RFC #4887
+// phase 3 field report).  Minimum-size enforcement belongs to the DISPLAY
+// clamp below, applied at render time and never written back.
+//
+// Size is bounded to (0,1] with no growth; position slides inside.
+NormRect clampToBounds(const NormRect& r);
+
 // Bring `r` inside the canvas, preserving its size wherever possible.
 //
 // Order matters, and is chosen so a drag that overshoots an edge slides the
@@ -79,6 +95,11 @@ QSizeF minimumNormSize(const QSize& minPx, const QSize& canvas);
 // A degenerate canvas returns `r` untouched: with no surface to clamp against
 // there is no correct answer, and mangling the stored layout because a widget
 // has not been shown yet would lose real state.
+//
+// DISPLAY ONLY.  This result is what gets mapped to pixels; it is never
+// stored.  Feeding it back into the model bakes one window size's
+// compromises into the operator's arrangement — shrink the window once and
+// the layout would never recover.
 NormRect clampToCanvas(const NormRect& r, const QSize& minPx, const QSize& canvas);
 
 }  // namespace AetherSDR

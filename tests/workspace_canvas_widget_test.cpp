@@ -133,14 +133,26 @@ int main(int argc, char** argv)
                canvas.itemWidget("a")->geometry() == QRect(0, 0, 960, 540)
                    && canvas.itemWidget("b")->geometry() == QRect(960, 540, 960, 540));
 
-        // Both items fit at every size used above, so nothing was clamped and
-        // nothing should have been announced as an edit.
-        report("a resize that clamps nothing announces nothing",
-               rectChanges == 0);
+        // A resize is never an edit.  Not when everything fits...
+        report("a resize announces nothing", rectChanges == 0);
 
-        // Shrinking below the default minimum DOES move things, and must say so.
+        // ...and not when the canvas is too small to honour minimums: the
+        // DISPLAY compromises (the widget grows to stay usable) while the
+        // stored rect stays pristine.  Persisting the compromise is how a
+        // transient startup size once destroyed an arrangement for a whole
+        // session (phase 3 field report).
         resizeAndSettle(&canvas, 100, 100);
-        report("a resize that forces a clamp announces it", rectChanges > 0);
+        report("a squeezing resize still announces nothing", rectChanges == 0);
+        report("...the display compromises",
+               canvas.itemWidget("a")->geometry().width() > 50);
+        report("...but the stored rect is untouched",
+               canvas.itemRect("a") == NormRect{0.0, 0.0, 0.5, 0.5});
+
+        // And the arrangement comes back the moment the canvas does.
+        resizeAndSettle(&canvas, 1920, 1080);
+        report("growing the canvas restores the exact arrangement",
+               canvas.itemWidget("a")->geometry() == QRect(0, 0, 960, 540)
+                   && canvas.itemWidget("b")->geometry() == QRect(960, 540, 960, 540));
     }
 
     // ── Stacking ─────────────────────────────────────────────────────────

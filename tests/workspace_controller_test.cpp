@@ -27,6 +27,7 @@
 #include <QDropEvent>
 #include <QLabel>
 #include <QMimeData>
+#include <QRect>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -39,6 +40,7 @@ using AetherSDR::ContainerWidget;
 using AetherSDR::NormRect;
 using AetherSDR::WorkspaceCanvas;
 using AetherSDR::WorkspaceController;
+using AetherSDR::WorkspaceDocument;
 using AetherSDR::WorkspaceStore;
 
 namespace {
@@ -245,6 +247,83 @@ int main(int argc, char** argv)
                    return probe.load() && probe.document().canvasEnabled;
                }());
         ctl.disable();
+    }
+
+    // ── The field report: boot replay against a pre-layout canvas ────────
+    //
+    // The bug as reported: enable ran in the MainWindow constructor before
+    // the first layout pass, the canvas had no real geometry, every item was
+    // clamped to full-surface to satisfy pixel minimums, and the whole
+    // session displayed one applet covering everything.  The stored document
+    // survived only because the replay guard refused to write the wreckage
+    // back.  Pinned here: a replay against a degenerate canvas must leave
+    // stored rects untouched AND the display must recover on the first real
+    // resize.
+    {
+        AppSettings::instance().removeStationValue(WorkspaceStore::kSettingsKey);
+        AppSettings::instance().save();
+        {
+            // Author a document with a small applet rect, as the operator's
+            // session did.
+            WorkspaceStore author;
+            bool migrated = false;
+            author.loadOrMigrate({"RX", "TX"}, {}, &migrated);
+            WorkspaceDocument doc = author.document();
+            for (auto& ws : doc.workspaces) {
+                for (auto& surf : ws.surfaces) {
+                    for (auto& it : surf.items) {
+                        if (it.id == QStringLiteral("applet:RX")) {
+                            it.rect = NormRect{0.8, 0.1, 0.15, 0.2};
+                        }
+                    }
+                }
+            }
+            doc.canvasEnabled = true;
+            author.setDocument(doc);
+            author.flush();
+        }
+
+        QWidget panel3;
+        auto* lay3 = new QVBoxLayout(&panel3);
+        ContainerManager mgr3(&panel3);
+        auto* rx3 = mgr3.createContainer("RX", "RX");
+        rx3->setContent(new QLabel("rx"));
+        lay3->addWidget(rx3);
+        rx3->setContainerVisible(true);
+        panel3.show();
+
+        // The canvas exists but has never been laid out — 0x0, exactly the
+        // constructor-time state.
+        WorkspaceCanvas coldCanvas;
+        QWidget coldPanStack;
+        WorkspaceController coldCtl(&mgr3, &coldCanvas);
+        coldCtl.setPanStackWidget(&coldPanStack);
+
+        report("boot sees the enabled flag", coldCtl.boot());
+        report("enable succeeds against an unsized canvas",
+               coldCtl.enable({"RX", "TX"}));
+
+        report("the stored rect survives the cold replay",
+               coldCanvas.itemRect("applet:RX") == NormRect{0.8, 0.1, 0.15, 0.2});
+        report("...and on disk too",
+               storedDocument().contains(QStringLiteral("0.8")));
+
+        // First real layout: the display lands where the document says.
+        coldCanvas.resize(1000, 800);
+        coldCanvas.show();
+        QCoreApplication::processEvents();
+        const QRect px = coldCanvas.itemWidget("applet:RX")->geometry();
+        // 0.15 x 1000 = 150 px sits under the 160 px display floor, so the
+        // VIEW widens to the floor — while the stored rect stays 0.15.
+        // That split is the fix: display compromises, the document never does.
+        report("the first real resize shows the arrangement, not wreckage",
+               px == QRect(800, 80, 160, 160));
+        report("...while the stored rect keeps its exact size",
+               coldCanvas.itemRect("applet:RX") == NormRect{0.8, 0.1, 0.15, 0.2});
+        report("the pan area is not full-canvas either",
+               coldCanvas.itemRect(WorkspaceController::kPanStackItemId).w < 0.9);
+
+        coldCtl.disable();
     }
 
     // ── An unusable store fails the enable cleanly ───────────────────────

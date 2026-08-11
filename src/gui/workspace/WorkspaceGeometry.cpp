@@ -97,6 +97,23 @@ QSizeF minimumNormSize(const QSize& minPx, const QSize& canvas)
     return QSizeF(qMin(w, 1.0), qMin(h, 1.0));
 }
 
+NormRect clampToBounds(const NormRect& r)
+{
+    if (!finite(r.x) || !finite(r.y) || !finite(r.w) || !finite(r.h)) {
+        return {};
+    }
+
+    NormRect out = r;
+    // Size bounded, never grown: growth is a display concern.
+    out.w = clampDouble(out.w, 0.0, 1.0);
+    out.h = clampDouble(out.h, 0.0, 1.0);
+    // Position slides inside, same order as the display clamp: an overshoot
+    // moves the item back rather than resizing it.
+    out.x = clampDouble(out.x, 0.0, 1.0 - out.w);
+    out.y = clampDouble(out.y, 0.0, 1.0 - out.h);
+    return out;
+}
+
 NormRect clampToCanvas(const NormRect& r, const QSize& minPx, const QSize& canvas)
 {
     if (!canvasUsable(canvas)) {
