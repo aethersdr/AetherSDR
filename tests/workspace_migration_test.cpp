@@ -164,23 +164,70 @@ int main(int argc, char** argv)
                    && nearly(fourThree.at(4).w, 1.0 / 3.0)
                    && nearly(fourThree.at(4).y, 0.5));
 
-        // Every layout must tile the surface exactly — no dead strips, no
-        // overlap.  This is the property that would silently rot if a new id
-        // were added with a typo in its row counts.
-        bool allTile = true;
-        for (const QString& id : knownPanLayoutIds()) {
-            if (!nearly(totalArea(panCellsForLayout(id)), 1.0, 1e-9)) {
-                allTile = false;
-                std::printf("       layout '%s' covers %.6f\n",
-                            qPrintable(id), totalArea(panCellsForLayout(id)));
+        // The id -> cell-count expectations, duplicated here on purpose.
+        //
+        // These are the same numbers as PanadapterStack's kLayoutPanCounts and
+        // PanLayoutDialog's kAllLayouts, but those live in the GUI target this
+        // headless test does not link, so nothing compares them automatically.
+        // Spelling them out means a change to ClassicLayout's table fails HERE
+        // rather than drifting silently; a change to either GUI table still
+        // has to be mirrored by hand (see the DRIFT WARNING in ClassicLayout.cpp).
+        const QList<QPair<QString, int>> kExpectedCounts = {
+            {QStringLiteral("1"),   1}, {QStringLiteral("2v"),  2},
+            {QStringLiteral("2h"),  2}, {QStringLiteral("2h1"), 3},
+            {QStringLiteral("12h"), 3}, {QStringLiteral("3v"),  3},
+            {QStringLiteral("2x2"), 4}, {QStringLiteral("4v"),  4},
+            {QStringLiteral("3h2"), 5}, {QStringLiteral("2x3"), 6},
+            {QStringLiteral("4h3"), 7}, {QStringLiteral("2x4"), 8},
+        };
+
+        bool countsMatch = true;
+        for (const auto& expected : kExpectedCounts) {
+            const int actual = panCountForLayout(expected.first);
+            if (actual != expected.second) {
+                countsMatch = false;
+                std::printf("       layout '%s': expected %d cells, got %d\n",
+                            qPrintable(expected.first), expected.second, actual);
             }
         }
-        report("every layout tiles the surface exactly", allTile);
+        report("every layout id has the expected cell count", countsMatch);
+        report("the table holds exactly the expected ids",
+               knownPanLayoutIds().size() == kExpectedCounts.size());
 
-        report("pan counts match the layout ids",
-               panCountForLayout(QStringLiteral("2x4")) == 8
-                   && panCountForLayout(QStringLiteral("3h2")) == 5
-                   && panCountForLayout(QStringLiteral("1")) == 1);
+        // Cells must not overlap and must leave no gap.  Area alone cannot
+        // see either — equal rows of equal cells always sum to 1.0, typo or
+        // not — so this walks the actual rectangles: every probe point in the
+        // unit square must land in exactly one cell.
+        bool partitions = true;
+        for (const QString& id : knownPanLayoutIds()) {
+            const QList<NormRect> cells = panCellsForLayout(id);
+            if (!nearly(totalArea(cells), 1.0, 1e-9)) {
+                partitions = false;
+                std::printf("       layout '%s' covers %.6f\n",
+                            qPrintable(id), totalArea(cells));
+                continue;
+            }
+            for (int px = 0; px < 20 && partitions; ++px) {
+                for (int py = 0; py < 20 && partitions; ++py) {
+                    const double x = (px + 0.5) / 20.0;
+                    const double y = (py + 0.5) / 20.0;
+                    int hits = 0;
+                    for (const NormRect& cell : cells) {
+                        if (cell.contains(x, y)) {
+                            ++hits;
+                        }
+                    }
+                    if (hits != 1) {
+                        partitions = false;
+                        std::printf("       layout '%s': point (%.3f, %.3f) "
+                                    "is in %d cells\n",
+                                    qPrintable(id), x, y, hits);
+                    }
+                }
+            }
+        }
+        report("every layout partitions the surface — no gap, no overlap",
+               partitions);
 
         report("an unknown layout id yields nothing",
                panCellsForLayout(QStringLiteral("nope")).isEmpty()

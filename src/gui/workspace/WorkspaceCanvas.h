@@ -35,6 +35,12 @@ class WorkspaceCanvas : public QWidget {
 public:
     explicit WorkspaceCanvas(QWidget* parent = nullptr);
 
+    // Drops the per-item destroyed-watches.  Not optional: ~QWidget deletes
+    // the canvas's children AFTER this class's members are gone, so a watch
+    // left connected would fire into a lambda touching a destroyed
+    // CanvasLayout. See the destructor.
+    ~WorkspaceCanvas() override;
+
     // Place `content` on the canvas at `rect`.  The canvas reparents it and
     // owns its geometry from then on — callers must not setGeometry() it
     // afterwards, or the next resize will silently undo them.

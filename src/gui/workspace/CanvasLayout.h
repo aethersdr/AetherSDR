@@ -32,7 +32,30 @@ public:
     // make every later lookup ambiguous rather than merely wrong.  The item's
     // z is assigned on insert (topmost) and its rect clamped, so a caller
     // cannot introduce an off-canvas or buried item by construction.
+    //
+    // For a NEW item this is what you want — it belongs where the operator can
+    // see it.  To rehydrate a SAVED arrangement, use restoreItems(): the
+    // stored z is meaningful there and this call would discard it.
     bool addItem(CanvasItem item, const QSize& canvas);
+
+    // Rehydrate a whole saved surface at once.
+    //
+    // WorkspaceDocument persists z per item, and once an operator has raised
+    // anything, z no longer matches array order — so feeding stored items to
+    // addItem() would silently restore the arrangement with its stacking
+    // scrambled (PR #4900 review).  This sorts by stored z, inserts
+    // bottom-to-top, and densifies once at the end.
+    //
+    // It takes the whole set rather than offering a per-item "preserve z"
+    // flag because densifying after each insert would flatten the very
+    // ordering it was given: two items whose stored z differ by 2 both
+    // normalise to adjacent ranks, and the next insert can no longer tell
+    // which was on top.  The batch is the only shape that cannot get that
+    // wrong.
+    //
+    // Items with an empty or duplicate id are skipped.  Returns how many
+    // were inserted.
+    int restoreItems(const QList<CanvasItem>& items, const QSize& canvas);
     bool removeItem(const QString& id);
     void clear();
 

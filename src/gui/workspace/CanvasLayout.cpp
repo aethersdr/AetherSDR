@@ -53,12 +53,33 @@ bool CanvasLayout::addItem(CanvasItem item, const QSize& canvas)
 
     // A new item lands on top and inside.  Assigning z here rather than
     // trusting the caller keeps the dense-contiguous invariant true from the
-    // first insert.
+    // first insert, with no normalize pass needed.
     item.z    = static_cast<int>(m_items.size());
     item.rect = clampToCanvas(item.rect, item.minimumSize, canvas);
 
     m_items.append(item);
     return true;
+}
+
+int CanvasLayout::restoreItems(const QList<CanvasItem>& items, const QSize& canvas)
+{
+    // Sort by stored z FIRST, then insert bottom-to-top, so each insert's
+    // assigned rank matches the saved order.  Doing it the other way — insert
+    // then normalise — loses the ordering, because normalising collapses the
+    // stored z values that the next insert would have been compared against.
+    QList<CanvasItem> ordered = items;
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const CanvasItem& a, const CanvasItem& b) {
+                         return a.z < b.z;
+                     });
+
+    int inserted = 0;
+    for (CanvasItem& item : ordered) {
+        if (addItem(item, canvas)) {
+            ++inserted;
+        }
+    }
+    return inserted;
 }
 
 bool CanvasLayout::removeItem(const QString& id)

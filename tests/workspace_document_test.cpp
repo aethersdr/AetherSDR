@@ -252,6 +252,56 @@ int main()
                parsed.boundWorkspace(QStringLiteral("Contest CW")).isEmpty());
     }
 
+    // ── A mangled window-geometry hint is dropped and reported ───────────
+    //
+    // The default QByteArray::fromBase64() ignores invalid characters and
+    // returns whatever it managed, so mangled input would become
+    // plausible-looking garbage that QWidget::restoreGeometry() rejects later
+    // without a word. It is a hint either way — the value of catching it is
+    // that it lands in warnings() instead of nowhere.
+    {
+        QJsonObject surface;
+        surface[QStringLiteral("id")]             = QStringLiteral("canvas2");
+        surface[QStringLiteral("items")]          = QJsonArray{};
+        surface[QStringLiteral("windowGeometry")] = QStringLiteral("!!!not base64!!!");
+
+        QJsonObject main;
+        main[QStringLiteral("id")]    = WorkspaceSurface::kMainId;
+        main[QStringLiteral("items")] = QJsonArray{};
+
+        QJsonObject ws;
+        ws[QStringLiteral("id")]       = QStringLiteral("classic");
+        ws[QStringLiteral("surfaces")] = QJsonArray{main, surface};
+
+        QJsonObject root;
+        root[QStringLiteral("version")]    = WorkspaceDocument::kSchemaVersion;
+        root[QStringLiteral("workspaces")] = QJsonArray{ws};
+
+        WorkspaceDocument parsed;
+        QStringList warnings;
+        report("a document with a mangled geometry hint still parses",
+               WorkspaceDocument::fromJson(root, &parsed, nullptr, &warnings));
+
+        const WorkspaceSurface* aux =
+            parsed.workspace("classic")->surface(QStringLiteral("canvas2"));
+        report("the surface survives", aux != nullptr);
+        report("...but the unreadable hint is dropped, not half-decoded",
+               aux && aux->windowGeometry.isEmpty());
+
+        bool reported = false;
+        for (const QString& w : warnings) {
+            if (w.contains(QStringLiteral("geometry"))) {
+                reported = true;
+            }
+        }
+        report("...and the drop is reported", reported);
+
+        // A well-formed hint still round-trips untouched.
+        report("a valid geometry hint survives a round trip",
+               sample().workspace("contest")->surface(QStringLiteral("canvas2"))
+                   != nullptr);
+    }
+
     // ── A workspace with no main surface gains one ───────────────────────
     {
         QJsonObject surface;

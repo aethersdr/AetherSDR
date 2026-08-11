@@ -52,14 +52,31 @@ public:
 
     // ── Loading ──────────────────────────────────────────────────────────
     //
-    // Reads the stored document.  Returns false when there is nothing stored
-    // or what is stored cannot be used; `error` says which, and parse
-    // warnings (repaired damage) come back through warnings().
-    bool load();
+    // Why this is three outcomes and not a bool: "nothing stored" and "stored
+    // but unusable" must never be confused.  Migrating over the second one
+    // would rewrite a document this build refused to parse — including one a
+    // NEWER build wrote — which turns the schema guard into a data-loss path
+    // on a downgrade (PR #4900 review).
+    enum class LoadResult {
+        Loaded,     // a usable document is in hand
+        Absent,     // the key is genuinely empty — safe to migrate into
+        Unusable,   // present but refused: newer schema, corrupt, truncated
+    };
 
-    // Reads the stored document, and if there is none, builds "Classic" from
-    // the legacy keys and writes it.  Returns true when a document is in hand
-    // either way.  `migrated` reports which path was taken.
+    // Reads the stored document.  `error` says why on a non-Loaded result,
+    // and parse warnings (repaired damage) come back through warnings().
+    LoadResult loadWithStatus();
+
+    // Convenience wrapper: true only for LoadResult::Loaded.
+    bool load() { return loadWithStatus() == LoadResult::Loaded; }
+
+    // Reads the stored document, and ONLY IF THE KEY IS ABSENT builds
+    // "Classic" from the legacy keys and writes it.
+    //
+    // A present-but-unusable document is left exactly as it is: this returns
+    // false with lastError() set and writes nothing, so the newer document
+    // survives for the build that understands it.  Phase 3 surfaces that
+    // rather than silently starting from Classic.
     //
     // NOTE: nothing calls this yet.  Phase 2 ships the migration tested but
     // not wired — the first caller is phase 3, when there is a canvas to

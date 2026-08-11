@@ -15,6 +15,24 @@ WorkspaceCanvas::WorkspaceCanvas(QWidget* parent)
     setMouseTracking(true);
 }
 
+WorkspaceCanvas::~WorkspaceCanvas()
+{
+    // Destruction order is the trap here.  C++ destroys this class's members
+    // (m_layout, m_widgets) before the ~QWidget base runs, and ~QWidget is
+    // what deletes the child widgets — each of which emits destroyed().  A
+    // still-connected watch would therefore run its lambda against a
+    // CanvasLayout that no longer exists.  Qt's usual context-object
+    // protection does not save us: it disconnects in ~QObject, which is
+    // further down the chain than ~QWidget.
+    //
+    // So sever them here, while everything is still alive.
+    for (const auto& widget : m_widgets) {
+        if (QWidget* w = widget.data()) {
+            disconnect(w, &QObject::destroyed, this, nullptr);
+        }
+    }
+}
+
 bool WorkspaceCanvas::addItem(const QString& id,
                               QWidget* content,
                               const NormRect& rect,
@@ -38,6 +56,23 @@ bool WorkspaceCanvas::addItem(const QString& id,
     content->setParent(this);
     content->installEventFilter(this);
     m_widgets.insert(id, content);
+
+    // If the widget dies without going through takeItem()/removeItem() — a
+    // parent destroyed out from under us, or content someone else owns — the
+    // QPointer nulls but the model entry would survive as a ghost: contains()
+    // and itemCount() would still report it, hitTest() would still return its
+    // id over dead space, and addItem() with that id would fail forever.
+    // Phase 3 moves applets between canvases and containers, which is exactly
+    // where that happens (PR #4900 review).
+    connect(content, &QObject::destroyed, this, [this, id] {
+        if (!m_layout.contains(id)) {
+            return;
+        }
+        m_widgets.remove(id);
+        m_layout.removeItem(id);
+        applyStacking();
+        emit itemRemoved(id);
+    });
 
     applyGeometryFor(id);
     content->show();
@@ -69,6 +104,10 @@ QWidget* WorkspaceCanvas::takeItem(const QString& id)
 
     if (w) {
         w->removeEventFilter(this);
+        // Drop the destroyed-watch with the widget, or a later destruction
+        // would fire a lambda still holding this id — and if something else
+        // has since taken the id, it would evict the wrong item.
+        disconnect(w, &QObject::destroyed, this, nullptr);
         w->hide();
         w->setParent(nullptr);
     }

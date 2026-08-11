@@ -11,8 +11,13 @@ namespace {
 // rather than as the dialog's widget code so the geometry is testable without
 // a GUI — and so a thirteenth layout id is one line here, not a new branch.
 //
-// If PanLayoutDialog's table changes, this one has to change with it; the
-// migration test asserts the id set matches what PanadapterStack accepts.
+// DRIFT WARNING: this is a third copy of the same knowledge.  The other two —
+// PanLayoutDialog::kAllLayouts and PanadapterStack's kLayoutPanCounts — live
+// in the GUI target, which the headless migration test does not link, so
+// nothing compares them automatically.  What the test does do is duplicate the
+// expected id/cell-count pairs, so a change HERE fails immediately; a change
+// to either of the other two still has to be mirrored by hand.  Phase 3 puts
+// this in reach of a GUI-linked test and should close the gap properly.
 struct LayoutRows {
     const char* id;
     QVector<int> rows;   // cells per row, top to bottom

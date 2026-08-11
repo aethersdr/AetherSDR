@@ -18,6 +18,7 @@
 #include <QEvent>
 #include <QPointer>
 #include <QRect>
+#include <QSignalSpy>
 #include <QStringList>
 #include <QWidget>
 
@@ -231,6 +232,47 @@ int main(int argc, char** argv)
         report("z closes up after a removal",
                canvas.layout().zOf("a") == 0 && canvas.layout().zOf("c") == 1);
         report("stacking survives the removal", childIndex(&canvas, a) < childIndex(&canvas, c));
+    }
+
+    // ── A widget destroyed behind the canvas's back leaves no ghost ──────
+    //
+    // Phase 3 moves applets between canvases and containers, which is exactly
+    // where a widget can die out from under the model.  Without the
+    // destroyed-watch the layout entry survives: contains() still reports it,
+    // hitTest() still returns its id over dead space, and addItem() with that
+    // id fails forever.
+    {
+        WorkspaceCanvas canvas;
+        canvas.resize(1000, 1000);
+        canvas.show();
+
+        auto* victim = new QWidget;
+        canvas.addItem("victim", victim, NormRect{0.0, 0.0, 0.4, 0.4});
+        canvas.addItem("bystander", new QWidget, NormRect{0.5, 0.5, 0.4, 0.4});
+
+        QSignalSpy removedSpy(&canvas, &WorkspaceCanvas::itemRemoved);
+
+        delete victim;   // not through removeItem() / takeItem()
+
+        report("the model drops an externally destroyed item",
+               !canvas.contains("victim"));
+        report("...and the count follows",  canvas.itemCount() == 1);
+        report("...and it is announced",    removedSpy.count() == 1);
+        report("...and it no longer answers hit tests",
+               canvas.hitTest(QPoint(100, 100)).isEmpty());
+        report("...leaving the other item alone", canvas.contains("bystander"));
+
+        // The id is reusable, which it would not be if the entry had survived.
+        report("the freed id can be used again",
+               canvas.addItem("victim", new QWidget, NormRect{0.0, 0.0, 0.3, 0.3}));
+
+        // A widget handed back by takeItem() is no longer watched: destroying
+        // it must not evict whatever holds its old id now.
+        QWidget* taken = canvas.takeItem("bystander");
+        canvas.addItem("bystander", new QWidget, NormRect{0.6, 0.6, 0.3, 0.3});
+        delete taken;
+        report("destroying a taken widget does not evict the id's new owner",
+               canvas.contains("bystander"));
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

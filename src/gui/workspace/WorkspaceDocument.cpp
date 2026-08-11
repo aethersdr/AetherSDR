@@ -238,7 +238,24 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
             const QString geometry =
                 so.value(QStringLiteral("windowGeometry")).toString();
             if (!geometry.isEmpty()) {
-                surface.windowGeometry = QByteArray::fromBase64(geometry.toLatin1());
+                // Decode strictly.  The default fromBase64() silently ignores
+                // invalid characters and returns whatever it managed, so
+                // mangled input would become plausible-looking garbage that
+                // QWidget::restoreGeometry() rejects later without a word.
+                // This is a hint either way — dropping it costs one drag; the
+                // value is that it lands in warnings() instead of nowhere.
+                const auto decoded = QByteArray::fromBase64Encoding(
+                    geometry.toLatin1(),
+                    QByteArray::Base64Encoding
+                        | QByteArray::AbortOnBase64DecodingErrors);
+                if (decoded.decodingStatus == QByteArray::Base64DecodingStatus::Ok) {
+                    surface.windowGeometry = *decoded;
+                } else {
+                    appendWarning(warnings,
+                                  QStringLiteral("dropped an unreadable window "
+                                                 "geometry hint on '%1/%2'")
+                                      .arg(ws.id, surface.id));
+                }
             }
 
             QSet<QString> seenItemIds;

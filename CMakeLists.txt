@@ -3491,7 +3491,7 @@ add_executable(workspace_canvas_widget_test
     src/gui/workspace/WorkspaceGeometry.cpp
 )
 target_include_directories(workspace_canvas_widget_test PRIVATE src)
-target_link_libraries(workspace_canvas_widget_test PRIVATE Qt6::Widgets)
+target_link_libraries(workspace_canvas_widget_test PRIVATE Qt6::Widgets Qt6::Test)
 add_test(NAME workspace_canvas_widget_test COMMAND workspace_canvas_widget_test)
 set_tests_properties(workspace_canvas_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

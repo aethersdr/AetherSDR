@@ -128,6 +128,61 @@ int main()
         report("z is dense after removal", zIsDense(layout));
     }
 
+    // ── Rehydrating a saved stacking order ───────────────────────────────
+    //
+    // WorkspaceDocument persists z per item, and once an operator has raised
+    // anything, z no longer matches array order.  Inserting stored items with
+    // the default AssignTop would silently restore the arrangement with its
+    // stacking scrambled, so a restore path has to say PreserveGiven.
+    {
+        CanvasLayout layout;
+
+        // A saved set whose z deliberately disagrees with array order —
+        // exactly what "operator raised the bottom item" produces.
+        CanvasItem a = make("a", NormRect{0.0, 0.0, 0.3, 0.3});
+        CanvasItem b = make("b", NormRect{0.1, 0.1, 0.3, 0.3});
+        CanvasItem c = make("c", NormRect{0.2, 0.2, 0.3, 0.3});
+        a.z = 2;
+        b.z = 0;
+        c.z = 1;
+
+        report("every stored item is restored",
+               layout.restoreItems({a, b, c}, kCanvas) == 3);
+        report("a restored arrangement keeps its saved stacking",
+               zOrder(layout) == QStringList({"b", "c", "a"}));
+        report("...and z is dense afterwards", zIsDense(layout));
+
+        // Sparse saved z (an older document, or one hand-edited) restores in
+        // the same relative order rather than being rejected.
+        CanvasLayout sparse;
+        CanvasItem x = make("x", NormRect{0.0, 0.0, 0.2, 0.2});
+        CanvasItem y = make("y", NormRect{0.2, 0.2, 0.2, 0.2});
+        x.z = 40;
+        y.z = 10;
+        sparse.restoreItems({x, y}, kCanvas);
+        report("sparse saved z is densified, preserving order",
+               zOrder(sparse) == QStringList({"y", "x"}) && zIsDense(sparse));
+
+        // Restore skips what it cannot place, and says how many it took.
+        CanvasLayout guarded;
+        CanvasItem dup1 = make("dup", NormRect{0.0, 0.0, 0.2, 0.2});
+        CanvasItem dup2 = make("dup", NormRect{0.3, 0.3, 0.2, 0.2});
+        CanvasItem anon = make("", NormRect{0.5, 0.5, 0.2, 0.2});
+        report("restore skips duplicate and anonymous items",
+               guarded.restoreItems({dup1, dup2, anon}, kCanvas) == 1
+                   && guarded.count() == 1);
+
+        // A plain add still puts a NEW item where the operator can see it,
+        // whatever z it happens to carry.
+        CanvasLayout fresh;
+        CanvasItem buried = make("buried", NormRect{0.0, 0.0, 0.2, 0.2});
+        buried.z = -99;
+        fresh.addItem(make("first", NormRect{0.3, 0.3, 0.2, 0.2}), kCanvas);
+        fresh.addItem(buried, kCanvas);
+        report("addItem ignores the caller's z and lands on top",
+               zOrder(fresh) == QStringList({"first", "buried"}));
+    }
+
     // ── Stacking operations ──────────────────────────────────────────────
     {
         CanvasLayout layout;

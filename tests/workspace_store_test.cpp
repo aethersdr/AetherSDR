@@ -240,6 +240,80 @@ int main(int argc, char** argv)
         report("a corrupt document fails to load", !store.load());
         report("...and the store is not marked loaded", !store.isLoaded());
         report("...and reports the parse error", !store.lastError().isEmpty());
+        report("...and is reported as unusable, not absent",
+               store.loadWithStatus() == WorkspaceStore::LoadResult::Unusable);
+    }
+
+    // ── A present-but-unusable document is NEVER migrated over ───────────
+    //
+    // The failure this closes: an operator runs a build whose schema is newer,
+    // hits a bug, downgrades. If loadOrMigrate() treated "refused" the same as
+    // "absent", it would write a v1 Classic over the v2 document and every
+    // workspace, binding and surface the newer build held would be gone — the
+    // exact loss WorkspaceDocument's newer-schema guard exists to prevent.
+    {
+        const QString newerDocument = QStringLiteral(
+            R"({"version":99,"activeWorkspace":"from-the-future",)"
+            R"("workspaces":[{"id":"from-the-future","surfaces":[]}]})");
+
+        AppSettings::instance().setStationValue(WorkspaceStore::kSettingsKey,
+                                                newerDocument);
+        AppSettings::instance().save();
+
+        WorkspaceStore store;
+        report("a newer-schema document is refused",
+               store.loadWithStatus() == WorkspaceStore::LoadResult::Unusable);
+
+        bool migrated = true;
+        report("loadOrMigrate refuses rather than migrating over it",
+               !store.loadOrMigrate({"RX"}, {"0x40000000"}, &migrated));
+        report("...and reports that it did not migrate", !migrated);
+        report("...and says why", store.lastError().contains(QStringLiteral("newer")));
+
+        // The load-bearing assertion: the newer document is still on disk,
+        // byte for byte, for the build that understands it.
+        report("the newer document survives untouched",
+               storedOnDisk() == newerDocument);
+
+        // Same for damage that is merely corrupt.
+        AppSettings::instance().setStationValue(WorkspaceStore::kSettingsKey,
+                                                QStringLiteral("{ truncated"));
+        AppSettings::instance().save();
+
+        WorkspaceStore corrupt;
+        report("a corrupt document is not migrated over either",
+               !corrupt.loadOrMigrate({"RX"}, {"0x40000000"}));
+        report("...and it also survives", storedOnDisk() == QStringLiteral("{ truncated"));
+    }
+
+    // ── A change made during restore still gets its debounce ─────────────
+    //
+    // touch() starts no timer while suppressed, so leaving restore has to
+    // rearm it — otherwise the change waits for the next unrelated touch(),
+    // an explicit flush(), or the destructor, and a crash skips the last one.
+    {
+        AppSettings::instance().removeStationValue(WorkspaceStore::kSettingsKey);
+        AppSettings::instance().save();
+
+        WorkspaceStore store;
+        store.setDocument(docWith(QStringLiteral("base"), QStringLiteral("applet:RX")));
+        store.flush();
+        store.setDebounceMs(30);
+
+        QSignalSpy flushSpy(&store, &WorkspaceStore::flushed);
+
+        store.setRestoring(true);
+        store.setDocument(docWith(QStringLiteral("during"),
+                                  QStringLiteral("applet:DURING")));
+        report("nothing is written while restoring", flushSpy.count() == 0);
+
+        store.setRestoring(false);
+        report("leaving restore still does not write immediately",
+               flushSpy.count() == 0);
+        report("...but the debounce is rearmed and fires on its own",
+               waitFor([&flushSpy] { return flushSpy.count() > 0; }, 2000));
+        report("...and the change reached disk",
+               storedOnDisk().contains("applet:DURING"));
     }
 
     // ── loadOrMigrate falls back to Classic, once ────────────────────────
