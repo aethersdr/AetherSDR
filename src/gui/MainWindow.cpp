@@ -5695,7 +5695,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // Always sync the button to the setting here so any divergence
         // (e.g. from a profile load before connect) is corrected (#1536).
         {
-            const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+            const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True";
             m_titleBar->setPcAudioEnabled(pcAudio);
             if (pcAudio)
                 audioStartRx();
@@ -6630,7 +6630,7 @@ void MainWindow::applyMasterVolume(int pct)
 {
     if (pct < 0)   pct = 0;
     if (pct > 100) pct = 100;
-    bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True";
     if (pcAudio)
         m_audio->setRxVolume(pct / 100.0f);
     else

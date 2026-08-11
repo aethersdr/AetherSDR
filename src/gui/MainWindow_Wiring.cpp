@@ -1660,7 +1660,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // through the radio's hardware outputs, don't switch to PC. (#336)
         if (m_needAudioStream) {
             m_needAudioStream = false;
-            if (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True")
+            if (AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True")
                 m_radioModel.createRxAudioStream();
         }
 
@@ -2827,7 +2827,7 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
         }
     }
 
-    if (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True") {
+    if (AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True") {
         audioStartRx();
     }
 

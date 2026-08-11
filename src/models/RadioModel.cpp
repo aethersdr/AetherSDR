@@ -7479,7 +7479,14 @@ void RadioModel::removeRxAudioStream()
 
 void RadioModel::scheduleRxAudioStreamEnsure(const QString& reason)
 {
-    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    // Default is "False", not "True" (#1826). The stream this creates tells
+    // the radio to route RX audio to the PC instead of its own hardware
+    // speakers -- so on a fresh install, or any upgrade where the operator
+    // never touched the PC Audio button, a "True" default silently muted the
+    // radio's rear-panel speakers ~3s into every connect with no way to tell
+    // why. Existing users who explicitly chose PC Audio on keep that choice:
+    // this only changes what an unset/never-persisted key means.
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True";
     if (!pcAudio) {
         qCDebug(lcProtocol) << "RadioModel: PC audio disabled — skipping remote_audio_rx";
         if (m_rxAudio.streamId != 0) {
@@ -7492,7 +7499,7 @@ void RadioModel::scheduleRxAudioStreamEnsure(const QString& reason)
 
     logRemoteAudioRxSummary(QStringLiteral("ensure scheduled: ") + reason);
     QTimer::singleShot(350, this, [this, reason]() {
-        const bool pcAudioNow = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+        const bool pcAudioNow = AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True";
         if (!isConnected()) {
             logRemoteAudioRxSummary(QStringLiteral("ensure canceled: disconnected"));
             return;
@@ -7553,7 +7560,7 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
         break;
     }
 
-    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True";
     if (!pcAudio && m_rxAudio.streamId != 0
         && (action == RadioStatusOwnership::RemoteAudioRxAction::Adopted
             || action == RadioStatusOwnership::RemoteAudioRxAction::Updated)) {
@@ -7570,7 +7577,7 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
 
 void RadioModel::logRemoteAudioRxSummary(const QString& reason) const
 {
-    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True";
     const bool autoStartTci = AppSettings::instance().value("AutoStartTCI", "False").toString() == "True";
     const bool ownerKnown = m_rxAudio.clientHandle != 0;
     const bool ownedByUs = ownerKnown && m_rxAudio.clientHandle == clientHandle();
@@ -10471,7 +10478,7 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     audioOutputs["front_speaker_mute"] = m_frontSpeakerMute;
     radio["audio_outputs"] = audioOutputs;
 
-    const bool pcAudioSetting = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    const bool pcAudioSetting = AppSettings::instance().value("PcAudioEnabled", "False").toString() == "True";
     QJsonObject remoteAudioRx;
     remoteAudioRx["stream_id"] = m_rxAudio.streamId == 0
         ? QJsonValue()

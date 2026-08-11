@@ -90,7 +90,9 @@ enum class RecordStartDecision {
 // explanation is worse than none.
 //
 // `clientSideMode`      AppSettings "RecordingMode" == "Client" (the default).
-// `pcAudioEnabled`      AppSettings "PcAudioEnabled" == "True" (the default).
+// `pcAudioEnabled`      AppSettings "PcAudioEnabled" == "True" (default "False",
+//                       flipped in #1826 so a fresh install keeps the radio's
+//                       hardware speakers live instead of silently muting them).
 // `backendOwnsRxAudio`  IRadioBackend::ownsRxAudio() — the connected backend
 //                       demodulates in-process and feeds the recorder over the
 //                       seam, so `remote_audio_rx` (and PC Audio) is not in the

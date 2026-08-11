@@ -108,7 +108,7 @@ RecordStartDecision QsoRecorder::evaluateStart() const
     const bool clientSide =
         s.value("RecordingMode", "Client").toString() == "Client";
     const bool pcAudio =
-        s.value("PcAudioEnabled", "True").toString() == "True";
+        s.value("PcAudioEnabled", "False").toString() == "True";
     // No provider installed (unit tests, no radio) reads as false: the Flex
     // answer, and the one that keeps the guard active rather than silently off.
     const bool seamNative = m_backendOwnsRxAudio && m_backendOwnsRxAudio();

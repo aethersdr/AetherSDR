@@ -231,7 +231,7 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
     const QJsonObject mic = transmit["mic"].toObject();
     const QJsonObject radio = snapshot["radio"].toObject();
     const QJsonObject remoteAudioRx = radio["remote_audio_rx"].toObject();
-    const bool pcAudioEnabled = isSavedTrue(QStringLiteral("PcAudioEnabled"), QStringLiteral("True"));
+    const bool pcAudioEnabled = isSavedTrue(QStringLiteral("PcAudioEnabled"));
 
     QJsonObject rxRoute;
     rxRoute["output"] = pcAudioEnabled ? "PC audio" : "Radio audio";
@@ -379,7 +379,7 @@ QJsonObject buildAudioStartupSnapshot(const AudioEngine* audio, const QJsonObjec
 
     const QJsonObject transmit = snapshot["transmit"].toObject();
     const QJsonObject mic = transmit["mic"].toObject();
-    const bool pcAudioEnabled = isSavedTrue(QStringLiteral("PcAudioEnabled"), QStringLiteral("True"));
+    const bool pcAudioEnabled = isSavedTrue(QStringLiteral("PcAudioEnabled"));
 
     QJsonObject rxRoute;
     rxRoute["output"] = pcAudioEnabled ? "PC audio" : "Radio audio";

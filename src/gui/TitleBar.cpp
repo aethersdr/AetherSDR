@@ -289,7 +289,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_pcBtn->setFixedHeight(22);
     m_pcBtn->setFixedWidth(70);
 
-    bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
+    bool pcOn = s.value("PcAudioEnabled", "False").toString() == "True";
     m_pcBtn->setChecked(pcOn);
     m_pcBtn->setAccessibleName("PC Audio");
     m_pcBtn->setAccessibleDescription("Toggle PC audio receive playback");

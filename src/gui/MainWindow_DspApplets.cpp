@@ -215,7 +215,7 @@ void MainWindow::wirePooDooTiles()
         // the engine (not signals) so an already-on NR module shows up
         // immediately instead of waiting for the next toggle.
         const bool pcOn = AppSettings::instance()
-            .value("PcAudioEnabled", "True").toString() == "True";
+            .value("PcAudioEnabled", "False").toString() == "True";
         chain->setRxPcAudioEnabled(pcOn);
         if (m_aetherialStrip) m_aetherialStrip->setRxPcAudioEnabled(pcOn);
         dspState->nr2  = m_audio->nr2Enabled();

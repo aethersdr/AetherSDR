@@ -92,6 +92,34 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     AppSettings::instance().load();
 
+    // ── Fresh install: PC Audio defaults off (#1826) ────────────────────────
+    // A never-persisted PcAudioEnabled key used to read as "True", so a fresh
+    // install (or an upgrade where the operator never touched the button)
+    // opened the remote_audio_rx stream and muted the radio's own speakers
+    // with no explanation. Deliberately skips setMode() -- the whole point is
+    // to observe what an UNSET key resolves to, not one this test sets.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+
+        EXPECT_TRUE(rec.evaluateStart()
+                    == RecordStartDecision::BlockedPcAudioDisabled);
+
+        int blocked = 0;
+        RecordStartDecision reason = RecordStartDecision::Allow;
+        QObject::connect(&rec, &QsoRecorder::recordingBlocked,
+                         &rec, [&](RecordStartDecision r) { ++blocked; reason = r; });
+
+        rec.startRecording();
+        EXPECT_TRUE(!rec.isRecording());
+        EXPECT_EQ_INT(fileCount(tmp.path()), 0);
+        EXPECT_EQ_INT(blocked, 1);
+        EXPECT_TRUE(reason == RecordStartDecision::BlockedPcAudioDisabled);
+    }
+
     // ── The bug: Client-Side + PC Audio off ─────────────────────────────────
     {
         QTemporaryDir tmp;
