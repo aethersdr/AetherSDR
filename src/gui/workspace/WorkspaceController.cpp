@@ -24,7 +24,12 @@ const QByteArray kAppletMime = QByteArrayLiteral("application/x-aethersdr-applet
 
 }  // namespace
 
+namespace {
+const QString kPanItemPrefix = QStringLiteral("pan:");
+}
+
 const QString WorkspaceController::kPanStackItemId = QStringLiteral("panstack");
+const QString WorkspaceController::kBandStackItemId = QStringLiteral("bandstack");
 
 WorkspaceController::WorkspaceController(ContainerManager* manager,
                                          WorkspaceCanvas* canvas,
@@ -135,7 +140,10 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
         // and it is deliberately here — behind the operator's explicit
         // opt-in — rather than at startup, so an install that never enables
         // the mode never gains the key.
-        if (!m_store.loadOrMigrate(knownAppletIds, /*panIds=*/{})) {
+        // Remembered before the migration read so migrationPanSlotIds() can
+        // consult the same legacy keys.
+        m_knownAppletIds = knownAppletIds;
+        if (!m_store.loadOrMigrate(knownAppletIds, migrationPanSlotIds())) {
             if (whyNot) *whyNot = m_store.lastError();
             return false;
         }
@@ -195,27 +203,71 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
     QList<CanvasItem> toPlace;
     QHash<QString, QWidget*> widgets;
 
-    // The reserved pan area first.  If the document has never seen one
-    // (first enable), it takes the region Classic left for it.
-    CanvasItem panItem;
-    const CanvasItem* stored = nullptr;
-    for (const CanvasItem& it : main->items) {
-        if (it.id == kPanStackItemId) stored = &it;
-    }
-    if (stored) {
-        panItem = *stored;
-    } else {
-        panItem.id          = kPanStackItemId;
-        panItem.contentType = QStringLiteral("panstack");
-        panItem.rect        = panStackRectFromDocument();
-        panItem.z           = -1;   // restoreItems sorts; keep it at the back
-        main->items.prepend(panItem);
+    // ── One-time split: the phase-3 reserved panstack item becomes per-pan
+    // slot items (#4887 phase 4).  Deterministic even with zero live pans:
+    // the slot count comes from the operator's own saved pan layout, and
+    // the cells are carved from the panstack rect they replace, so the
+    // arrangement the operator had is exactly what the slots reproduce.  A
+    // phase-3 build reading the result simply recreates a full-region
+    // panstack item and ignores the slots — downgrade-safe both ways.
+    for (int i = 0; i < main->items.size(); ++i) {
+        if (main->items.at(i).id != kPanStackItemId) continue;
+        const CanvasItem panstack = main->items.takeAt(i);
+        const LegacyLayoutState legacy =
+            readLegacyLayoutState(m_knownAppletIds);
+        QList<NormRect> cells = panCellsForLayout(legacy.panLayoutId);
+        if (cells.isEmpty()) {
+            cells = panCellsForLayout(QStringLiteral("1"));
+        }
+        int inserted = 0;
+        for (int c = 0; c < cells.size(); ++c) {
+            const QString slotId = kPanItemPrefix + QString::number(c);
+            bool exists = false;
+            for (const CanvasItem& it : main->items) {
+                if (it.id == slotId) { exists = true; break; }
+            }
+            if (exists) continue;
+            CanvasItem it;
+            it.id          = slotId;
+            it.contentType = QStringLiteral("panadapter");
+            it.rect.x = panstack.rect.x + cells.at(c).x * panstack.rect.w;
+            it.rect.y = panstack.rect.y + cells.at(c).y * panstack.rect.h;
+            it.rect.w = cells.at(c).w * panstack.rect.w;
+            it.rect.h = cells.at(c).h * panstack.rect.h;
+            it.z = panstack.z;
+            main->items.insert(i + inserted, it);
+            ++inserted;
+        }
         if (docChanged) *docChanged = true;
+        break;
     }
-    panItem.minimumSize = QSize(320, 240);
-    if (m_panStackWidget) {
-        toPlace.append(panItem);
-        widgets.insert(kPanStackItemId, m_panStackWidget.data());
+
+    // ── Pans, from their slot items ──────────────────────────────────────
+    const QStringList livePans =
+        m_panHost.panIds ? m_panHost.panIds() : QStringList{};
+    for (const QString& panId : livePans) {
+        if (m_panHost.isFloating && m_panHost.isFloating(panId)) {
+            continue;   // pop-out stays (RFC decision 1)
+        }
+        const QString itemId = panItemIdFor(panId);
+        CanvasItem item;
+        bool found = false;
+        for (const CanvasItem& it : main->items) {
+            if (it.id == itemId) { item = it; found = true; break; }
+        }
+        if (!found) {
+            item.id          = itemId;
+            item.contentType = QStringLiteral("panadapter");
+            item.rect        = NormRect{0.2, 0.2, 0.6, 0.6};
+            item.z           = 0;
+            main->items.append(item);
+            if (docChanged) *docChanged = true;
+        }
+        item.minimumSize = QSize(320, 180);
+        QWidget* w = m_panHost.detach ? m_panHost.detach(panId) : nullptr;
+        if (!w) continue;
+        toPlace.append(item);
+        widgets.insert(itemId, w);
     }
 
     for (const CanvasItem& item : main->items) {
@@ -247,8 +299,27 @@ void WorkspaceController::disable()
     m_applying = true;
     const QStringList ids = m_canvas->layout().ids();
     for (const QString& itemId : ids) {
+        if (itemId.startsWith(kPanItemPrefix)) {
+            // Back into the stack's splitter — release, never take: the
+            // restore hook reparents in ONE step (addWidget), and the
+            // nullptr detour is forbidden for QRhi children (#1344).
+            QWidget* w = m_canvas->releaseItem(itemId);
+            const QString panId = panIdForItem(itemId);
+            if (w && !panId.isEmpty() && m_panHost.restore) {
+                m_panHost.restore(panId, w);
+            }
+            continue;
+        }
+        if (itemId == kBandStackItemId) {
+            QWidget* w = m_canvas->releaseItem(itemId);
+            if (w && m_panHost.reclaimBandStack) {
+                m_panHost.reclaimBandStack(w);   // stays visible: it was
+            }
+            continue;
+        }
         if (itemId == kPanStackItemId) {
-            // Released parentless; MainWindow puts it back in the splitter.
+            // Phase-3 document robustness: released parentless; MainWindow
+            // puts it back in the splitter.
             m_canvas->takeItem(itemId);
             continue;
         }
@@ -270,9 +341,237 @@ void WorkspaceController::disable()
     emit enabledChanged(false);
 }
 
-void WorkspaceController::setPanStackWidget(QWidget* w)
+void WorkspaceController::setPanHost(const PanHostHooks& hooks)
 {
-    m_panStackWidget = w;
+    m_panHost = hooks;
+}
+
+// ── Pans as items (RFC #4887 phase 4) ────────────────────────────────────
+
+int WorkspaceController::slotForPan(const QString& panId)
+{
+    const auto it = m_panSlots.constFind(panId);
+    if (it != m_panSlots.constEnd()) {
+        return it.value();
+    }
+    // Lowest free, so remove-then-add reuses the slot — the same discipline
+    // as RadioModel::neutralPanIndexFor, for the same reason.
+    int slot = 0;
+    const QList<int> used = m_panSlots.values();
+    while (used.contains(slot)) {
+        ++slot;
+    }
+    m_panSlots.insert(panId, slot);
+    return slot;
+}
+
+QString WorkspaceController::panItemIdFor(const QString& panId)
+{
+    return kPanItemPrefix + QString::number(slotForPan(panId));
+}
+
+QString WorkspaceController::panIdForItem(const QString& itemId) const
+{
+    if (!itemId.startsWith(kPanItemPrefix)) {
+        return QString();
+    }
+    bool ok = false;
+    const int slot = itemId.mid(kPanItemPrefix.size()).toInt(&ok);
+    if (!ok) {
+        return QString();
+    }
+    for (auto it = m_panSlots.constBegin(); it != m_panSlots.constEnd(); ++it) {
+        if (it.value() == slot) {
+            return it.key();
+        }
+    }
+    return QString();
+}
+
+QStringList WorkspaceController::migrationPanSlotIds() const
+{
+    const int live = m_panHost.panIds
+                         ? static_cast<int>(m_panHost.panIds().size())
+                         : 0;
+    const LegacyLayoutState legacy = readLegacyLayoutState(m_knownAppletIds);
+    const int fromLayout = panCountForLayout(legacy.panLayoutId);
+    const int count = qMax(1, qMax(live, fromLayout));
+    QStringList ids;
+    for (int i = 0; i < count; ++i) {
+        ids.append(QString::number(i));
+    }
+    return ids;
+}
+
+bool WorkspaceController::sendPanToCanvas(const QString& panId)
+{
+    if (!m_enabled) {
+        return false;
+    }
+    if (m_panHost.isFloating && m_panHost.isFloating(panId)) {
+        return false;   // pop-out stays (RFC decision 1)
+    }
+    const QString itemId = panItemIdFor(panId);
+    if (m_canvas->contains(itemId)) {
+        return true;   // already placed — the state the caller asked for
+    }
+
+    NormRect rect{0.2, 0.2, 0.6, 0.6};
+    const WorkspaceDocument& doc = m_store.document();
+    if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
+        if (const WorkspaceSurface* main = ws->surface(WorkspaceSurface::kMainId)) {
+            for (const CanvasItem& it : main->items) {
+                if (it.id == itemId) {
+                    rect = it.rect;
+                    break;
+                }
+            }
+        }
+    }
+
+    QWidget* w = m_panHost.detach ? m_panHost.detach(panId) : nullptr;
+    if (!w) {
+        return false;
+    }
+    if (!m_canvas->addItem(itemId, w, rect, QStringLiteral("panadapter"),
+                           QSize(320, 180))) {
+        if (m_panHost.restore) {
+            m_panHost.restore(panId, w);   // never strand a detached applet
+        }
+        return false;
+    }
+    writeItemPresence(itemId, QStringLiteral("panadapter"),
+                      m_canvas->itemRect(itemId), /*present=*/true,
+                      /*flushNow=*/true);
+    return true;
+}
+
+void WorkspaceController::onPanAdded(const QString& panId)
+{
+    if (!m_enabled) {
+        return;
+    }
+    sendPanToCanvas(panId);
+}
+
+void WorkspaceController::onPanRemoved(const QString& panId)
+{
+    // The stack emits this BEFORE destroying the applet, so releasing here
+    // (never reparenting — the widget is about to die) beats waiting for
+    // the destroyed-watch.  The document item is KEPT: a pan closing is not
+    // a statement about its spot, and the next pan in this slot takes it.
+    const auto it = m_panSlots.constFind(panId);
+    if (it != m_panSlots.constEnd()) {
+        m_canvas->releaseItem(kPanItemPrefix + QString::number(it.value()));
+        m_panSlots.erase(it);
+    }
+}
+
+void WorkspaceController::onPanRekeyed(const QString& oldId, const QString& newId)
+{
+    // Same applet, new radio id (FLEX band recall): the slot — and with it
+    // the canvas item — follows the applet.
+    const auto it = m_panSlots.constFind(oldId);
+    if (it != m_panSlots.constEnd()) {
+        const int slot = it.value();
+        m_panSlots.erase(it);
+        m_panSlots.insert(newId, slot);
+    }
+}
+
+void WorkspaceController::onPanFloated(const QString& panId)
+{
+    // The applet has already been adopted by its PanFloatingWindow — release
+    // the entry, never take it (#1344).  Slot and document item survive:
+    // a pan has no panel to be returned to, so its canvas home is where
+    // docking brings it back (unlike applets, floating forgets nothing).
+    const auto it = m_panSlots.constFind(panId);
+    if (it != m_panSlots.constEnd()) {
+        m_canvas->releaseItem(kPanItemPrefix + QString::number(it.value()));
+    }
+}
+
+void WorkspaceController::onPanDocked(const QString& panId)
+{
+    if (!m_enabled) {
+        return;
+    }
+    // dockPanadapter() has just re-homed the applet into the (hidden) stack
+    // splitter; bring it back to its canvas spot.
+    sendPanToCanvas(panId);
+}
+
+void WorkspaceController::beginPanItemMove(const QString& panId, const QPoint& globalPos)
+{
+    if (!m_enabled) {
+        return;
+    }
+    const QString itemId = panItemIdFor(panId);
+    if (m_canvas->contains(itemId)) {
+        m_canvas->beginMoveGesture(itemId, globalPos);
+    }
+}
+
+void WorkspaceController::movePanItem(const QPoint& globalPos)
+{
+    if (m_enabled) {
+        m_canvas->moveGesture(globalPos);
+    }
+}
+
+void WorkspaceController::endPanItemMove(const QPoint& globalPos)
+{
+    if (m_enabled) {
+        m_canvas->endGesture(globalPos);
+    }
+}
+
+void WorkspaceController::setBandStackVisible(bool on)
+{
+    if (!m_enabled || !m_panHost.bandStack) {
+        return;
+    }
+    QWidget* panel = m_panHost.bandStack();
+    if (!panel) {
+        return;
+    }
+
+    if (!on) {
+        if (m_canvas->contains(kBandStackItemId)) {
+            QWidget* w = m_canvas->releaseItem(kBandStackItemId);
+            if (w && m_panHost.reclaimBandStack) {
+                m_panHost.reclaimBandStack(w);
+            }
+            if (w) {
+                w->hide();
+            }
+        }
+        return;
+    }
+    if (m_canvas->contains(kBandStackItemId)) {
+        return;
+    }
+
+    // Its remembered spot, else a strip down the left edge.
+    NormRect rect{0.0, 0.0, 0.07, 1.0};
+    const WorkspaceDocument& doc = m_store.document();
+    if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
+        if (const WorkspaceSurface* main = ws->surface(WorkspaceSurface::kMainId)) {
+            for (const CanvasItem& it : main->items) {
+                if (it.id == kBandStackItemId) {
+                    rect = it.rect;
+                    break;
+                }
+            }
+        }
+    }
+    if (m_canvas->addItem(kBandStackItemId, panel, rect,
+                          QStringLiteral("bandstack"), QSize(90, 240))) {
+        panel->show();
+        writeItemPresence(kBandStackItemId, QStringLiteral("bandstack"),
+                          m_canvas->itemRect(kBandStackItemId),
+                          /*present=*/true, /*flushNow=*/true);
+    }
 }
 
 // ── Applet movement ──────────────────────────────────────────────────────
@@ -496,9 +795,16 @@ void WorkspaceController::writeItemRect(const QString& itemId, const NormRect& r
             }
         }
     }
-    // No item — a rect change for something the document does not track
-    // (e.g. the pan stack before its first persist) is recorded by adding it.
-    if (itemId == kPanStackItemId) {
+    // No item — a rect change for something the document does not track is
+    // recorded by adding it (a pan placed before its slot item existed, the
+    // band stack, or a phase-3 panstack).
+    if (itemId.startsWith(kPanItemPrefix)) {
+        writeItemPresence(itemId, QStringLiteral("panadapter"), rect,
+                          /*present=*/true, flushNow);
+    } else if (itemId == kBandStackItemId) {
+        writeItemPresence(itemId, QStringLiteral("bandstack"), rect,
+                          /*present=*/true, flushNow);
+    } else if (itemId == kPanStackItemId) {
         writeItemPresence(itemId, QStringLiteral("panstack"), rect,
                           /*present=*/true, flushNow);
     }
@@ -592,10 +898,24 @@ void WorkspaceController::resetToClassic()
 
     m_applying = true;
 
-    // Everything off the surface: applets back to their panel slots, the
-    // pan stack held aside for the re-place below.
+    // Everything off the surface: applets back to their panel slots, pans
+    // merely RELEASED (they stay parented to the canvas; the re-place below
+    // re-adds them — no nullptr detour, #1344), the band stack re-homed and
+    // hidden (Classic is the stock shell, and the stock shell shows none).
     const QStringList ids = m_canvas->layout().ids();
     for (const QString& itemId : ids) {
+        if (itemId.startsWith(kPanItemPrefix)) {
+            m_canvas->releaseItem(itemId);
+            continue;
+        }
+        if (itemId == kBandStackItemId) {
+            QWidget* w = m_canvas->releaseItem(itemId);
+            if (w && m_panHost.reclaimBandStack) {
+                m_panHost.reclaimBandStack(w);
+            }
+            if (w) w->hide();
+            continue;
+        }
         if (itemId == kPanStackItemId) {
             m_canvas->takeItem(itemId);
             continue;
@@ -612,7 +932,8 @@ void WorkspaceController::resetToClassic()
     // One definition of Classic, used everywhere (WorkspaceMigration).
     WorkspaceDocument doc = m_store.document();
     const WorkspaceDocument classic =
-        buildClassicDocument(readLegacyLayoutState(m_knownAppletIds), {});
+        buildClassicDocument(readLegacyLayoutState(m_knownAppletIds),
+                             migrationPanSlotIds());
     if (const Workspace* freshWs = classic.workspace(classicWorkspaceId())) {
         if (const WorkspaceSurface* freshMain =
                 freshWs->surface(WorkspaceSurface::kMainId)) {
@@ -642,11 +963,17 @@ void WorkspaceController::tidyLayout()
     }
 
     QList<CanvasItem> items;
+    QStringList fixedIds{kPanStackItemId};
     for (const CanvasItem& it : m_canvas->layout().itemsByZ()) {
         items.append(it);
+        // Every pan item is fixed: an applet overlapping the spectrum is a
+        // feature (the phase-5 rule), and tidy shoving the spectrum itself
+        // around would be the disorder it exists to fix.
+        if (it.id.startsWith(kPanItemPrefix)) {
+            fixedIds.append(it.id);
+        }
     }
-    const QList<TidyMove> moves =
-        tidyOverlaps(items, QStringList{kPanStackItemId});
+    const QList<TidyMove> moves = tidyOverlaps(items, fixedIds);
 
     for (const TidyMove& mv : moves) {
         m_canvas->setItemRect(mv.id, mv.rect);   // rect stream → touch
@@ -660,8 +987,9 @@ void WorkspaceController::tidyLayout()
 void WorkspaceController::onItemDraggedOut(const QString& itemId,
                                            const QPoint& globalPos)
 {
-    if (m_applying || !m_enabled || itemId == kPanStackItemId) {
-        return;
+    if (m_applying || !m_enabled || itemId == kPanStackItemId
+        || itemId == kBandStackItemId || itemId.startsWith(kPanItemPrefix)) {
+        return;   // only applets have a panel to land on
     }
     // Only a release over the return target means anything; the canvas has
     // already restored the item's rect, so anything else is a completed
@@ -688,6 +1016,29 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
     QMenu menu;
     const bool onApplet =
         !itemId.isEmpty() && itemId.startsWith(kAppletItemPrefix);
+    const bool onPan = !itemId.isEmpty() && itemId.startsWith(kPanItemPrefix);
+
+    if (onPan) {
+        const QString panId = panIdForItem(itemId);
+        QAction* popOut = menu.addAction(QStringLiteral("Pop out"), this,
+                                         [this, panId] {
+                                             if (m_panHost.requestFloat) {
+                                                 m_panHost.requestFloat(panId);
+                                             }
+                                         });
+        popOut->setEnabled(!panId.isEmpty()
+                           && static_cast<bool>(m_panHost.requestFloat));
+        menu.addAction(QStringLiteral("Bring to front"), this,
+                       [this, itemId] { m_canvas->bringItemToFront(itemId); });
+        menu.addAction(QStringLiteral("Send to back"), this,
+                       [this, itemId] { m_canvas->sendItemToBack(itemId); });
+        menu.addSeparator();
+    }
+    if (itemId == kBandStackItemId) {
+        menu.addAction(QStringLiteral("Hide band stack"), this,
+                       [this] { setBandStackVisible(false); });
+        menu.addSeparator();
+    }
 
     if (onApplet) {
         const QString appletId = itemId.mid(kAppletItemPrefix.size());
@@ -745,31 +1096,5 @@ NormRect WorkspaceController::defaultRectFor(const ContainerWidget* c,
     return r;
 }
 
-NormRect WorkspaceController::panStackRectFromDocument() const
-{
-    // First enable: the pan area takes whatever Classic left for it — the
-    // complement of the applet column, on whichever side the applets are.
-    const WorkspaceDocument& doc = m_store.document();
-    const Workspace* ws = doc.workspace(doc.activeWorkspace);
-    const WorkspaceSurface* main = ws ? ws->surface(WorkspaceSurface::kMainId) : nullptr;
-
-    bool haveApplets = false;
-    double minX = 1.0;
-    if (main) {
-        for (const CanvasItem& it : main->items) {
-            if (it.id.startsWith(kAppletItemPrefix)) {
-                haveApplets = true;
-                minX = qMin(minX, it.rect.x);
-            }
-        }
-    }
-
-    NormRect r{0.0, 0.0, 1.0, 1.0};
-    if (haveApplets) {
-        r.w = 1.0 - kClassicAppletColumnWidth;
-        r.x = (minX < 0.5) ? kClassicAppletColumnWidth : 0.0;   // column left → pans right
-    }
-    return r;
-}
 
 }  // namespace AetherSDR

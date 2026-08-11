@@ -33,11 +33,14 @@
 
 #include "gui/workspace/WorkspaceStore.h"
 
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QPointF>
 #include <QString>
 #include <QStringList>
+
+#include <functional>
 
 class QWidget;
 
@@ -51,10 +54,13 @@ class WorkspaceController : public QObject {
     Q_OBJECT
 
 public:
-    // The reserved item holding the panadapter area in phase 3.  Phase 4
-    // splits it into per-pan items; until then it is one non-closable region
-    // whose rect the document carries like any other item's.
+    // The phase-3 reserved item holding the whole panadapter area.  Phase 4
+    // SPLITS it into per-pan slot items on first enable (see
+    // placeActiveWorkspaceItems); the constant survives for that split and
+    // for downgrade robustness — a phase-3 document is still understood.
     static const QString kPanStackItemId;
+    // The band-stack panel's canvas item (transient panel, persistent spot).
+    static const QString kBandStackItemId;
 
     WorkspaceController(ContainerManager* manager,
                         WorkspaceCanvas* canvas,
@@ -80,9 +86,56 @@ public:
 
     bool isEnabled() const { return m_enabled; }
 
-    // The widget occupying the reserved pan area (the PanadapterStack).
-    // Held, not owned; enable() places it, disable() releases it.
-    void setPanStackWidget(QWidget* w);
+    // ── Pans as items (RFC #4887 phase 4) ────────────────────────────────
+    //
+    // The stack stays the pans' OWNER; this controller decides placement.
+    // The seam is a bundle of callbacks plus the lifecycle slots below,
+    // wired by MainWindow_Workspace — deliberately NOT a PanadapterStack*:
+    // pan-placement policy is unit-tested against plain QWidgets, and the
+    // GPU-adjacent stack never links into the workspace suites.
+    struct PanHostHooks {
+        std::function<QStringList()> panIds;                    // live, stack order
+        std::function<QWidget*(const QString&)> detach;         // null = refuse
+        std::function<void(const QString&, QWidget*)> restore;  // back to stack
+        std::function<bool(const QString&)> isFloating;
+        std::function<void(const QString&)> requestFloat;       // pop out
+        std::function<QWidget*()> bandStack;                    // the panel
+        std::function<void(QWidget*)> reclaimBandStack;         // re-home it
+    };
+    void setPanHost(const PanHostHooks& hooks);
+
+    // Document identity: pans are stored as "pan:<slot>", a small
+    // creation-order ordinal (lowest free on reuse) — NEVER the radio's
+    // stream id, which is session-scoped (rekey exists precisely because ids
+    // change) and would orphan every stored layout on reconnect.  The slot
+    // discipline mirrors SpectrumWidget::setPanIndex and RadioModel::
+    // neutralPanIndexFor, so all three identity spaces agree.
+    QString panItemIdFor(const QString& panId);
+
+    // Place one live pan onto the canvas (its stored slot rect, else a
+    // default).  The pan analogue of sendAppletToCanvas().
+    bool sendPanToCanvas(const QString& panId);
+
+    // The pan title strip's live-move stream, forwarded per applet by
+    // MainWindow_Workspace (the controller never sees the applet type).
+    void beginPanItemMove(const QString& panId, const QPoint& globalPos);
+    void movePanItem(const QPoint& globalPos);
+    void endPanItemMove(const QPoint& globalPos);
+
+    // Band-stack hosting while the mode is on: the panel becomes the
+    // "bandstack" canvas item (its spot persists; visibility stays the
+    // session-transient flag it always was).
+    void setBandStackVisible(bool on);
+
+public slots:
+    // Stack lifecycle (wired from PanadapterStack's phase-4b signals).
+    void onPanAdded(const QString& panId);
+    void onPanRemoved(const QString& panId);
+    void onPanRekeyed(const QString& oldId, const QString& newId);
+    void onPanFloated(const QString& panId);
+    void onPanDocked(const QString& panId);
+
+public:
 
     // ── Applet movement ──────────────────────────────────────────────────
     //
@@ -153,12 +206,20 @@ private:
     void placeActiveWorkspaceItems(WorkspaceDocument& doc, bool* docChanged);
 
     NormRect defaultRectFor(const ContainerWidget* c, const QPointF* center) const;
-    NormRect panStackRectFromDocument() const;
+
+    // Slot bookkeeping (phase 4).
+    int slotForPan(const QString& panId);          // assigns on first sight
+    QString panIdForItem(const QString& itemId) const;
+    // The slot-id list migration/reset feed composeClassic ("0", "1", …):
+    // as many as the operator's saved pan layout has cells, or the live pan
+    // count if that is higher — deterministic even with no radio connected.
+    QStringList migrationPanSlotIds() const;
 
     ContainerManager* m_manager{nullptr};
     WorkspaceCanvas*  m_canvas{nullptr};
     WorkspaceStore    m_store;
-    QPointer<QWidget> m_panStackWidget;
+    PanHostHooks m_panHost;
+    QHash<QString, int> m_panSlots;   // live panId → document slot
     QPointer<QWidget> m_returnTarget;
     QStringList m_knownAppletIds;   // from enable(), for resetToClassic()
     QString  m_undoItemId;      // last gesture's item…

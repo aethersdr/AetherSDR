@@ -5982,7 +5982,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsAutoSaveTimer && m_bsAutoSaveTimer->isActive())
             m_bsAutoSaveTimer->stop();
         if (m_panStack) {
-            m_panStack->setBandStackVisible(false);
+            setBandStackPanelVisible(false);
         }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();

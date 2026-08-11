@@ -27,6 +27,8 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QLabel>
+#include <QMap>
+#include <QSet>
 #include <QMimeData>
 #include <QRect>
 #include <QVBoxLayout>
@@ -126,9 +128,33 @@ int main(int argc, char** argv)
     canvas.resize(1000, 800);
     canvas.show();
 
-    QWidget panStack;
+    // A stand-in pan host (phase 4): one live pan as a plain QWidget, hooks
+    // over little lambdas — the same seam MainWindow_Workspace wires over
+    // the real PanadapterStack, with none of its GPU baggage.
+    QWidget panOwner;
+    auto* panBox = new QVBoxLayout(&panOwner);
+    QMap<QString, QWidget*> pans;
+    QSet<QString> floatingPans;
+    auto* panA = new QWidget(&panOwner);
+    panBox->addWidget(panA);
+    pans.insert(QStringLiteral("0x40000000"), panA);
+    panOwner.show();
+
     WorkspaceController ctl(&mgr, &canvas);
-    ctl.setPanStackWidget(&panStack);
+    WorkspaceController::PanHostHooks hooks;
+    hooks.panIds = [&] { return QStringList(pans.keys()); };
+    hooks.detach = [&](const QString& id) -> QWidget* {
+        return floatingPans.contains(id) ? nullptr : pans.value(id, nullptr);
+    };
+    hooks.restore = [&](const QString& id, QWidget* w) {
+        Q_UNUSED(id);
+        panBox->addWidget(w);
+        w->show();
+    };
+    hooks.isFloating = [&](const QString& id) {
+        return floatingPans.contains(id);
+    };
+    ctl.setPanHost(hooks);
 
     // ── Boot before any document exists ──────────────────────────────────
     report("boot with nothing stored asks for nothing", !ctl.boot());
@@ -145,16 +171,16 @@ int main(int argc, char** argv)
                    && canvas.contains("applet:RX") && canvas.contains("applet:TX"));
         report("...and left the panel layout",
                panelLayout->indexOf(rx) < 0 && panelLayout->indexOf(tx) < 0);
-        report("the pan stack rides as the reserved item",
-               canvas.contains(WorkspaceController::kPanStackItemId)
-                   && panStack.parentWidget() == &canvas);
-        report("the reserved pan area sits behind the applets",
-               canvas.layout().zOf(WorkspaceController::kPanStackItemId) == 0);
+        report("the live pan rides as its slot item (phase 4)",
+               canvas.contains(QStringLiteral("pan:0"))
+                   && panA->parentWidget() == &canvas);
+        report("the pan sits behind the applets",
+               canvas.layout().zOf(QStringLiteral("pan:0")) == 0);
 
         const QString doc = storedDocument();
         report("the document was flushed with the mode on",
                doc.contains(QStringLiteral("canvasEnabled"))
-                   && doc.contains(QStringLiteral("panstack")));
+                   && doc.contains(QStringLiteral("pan:0")));
         report("the legacy keys survive (dual-write)",
                AppSettings::instance().contains(QStringLiteral("Applet_RX")));
 
@@ -236,8 +262,9 @@ int main(int argc, char** argv)
         report("every applet is back in the panel",
                rx->isPanelDocked() && tx->isPanelDocked()
                    && panelLayout->indexOf(tx) >= 0);
-        report("the pan stack is released parentless",
-               panStack.parentWidget() == nullptr);
+        report("the pan went back to its owner, one-step (never nullptr)",
+               panA->parentWidget() == &panOwner
+                   && !canvas.contains(QStringLiteral("pan:0")));
         report("the canvas is empty", canvas.itemCount() == 0);
 
         const QString doc = storedDocument();
@@ -306,8 +333,8 @@ int main(int argc, char** argv)
                nearly(canvas.itemRect("applet:RX").x,
                       1.0 - AetherSDR::kClassicAppletColumnWidth)
                    && rx->isOnCanvas() && tx->isOnCanvas());
-        report("...and the pan area takes the remainder",
-               nearly(canvas.itemRect(WorkspaceController::kPanStackItemId).w,
+        report("...and the pan slot takes the remainder",
+               nearly(canvas.itemRect(QStringLiteral("pan:0")).w,
                       1.0 - AetherSDR::kClassicAppletColumnWidth));
 
         // Drag-out over the panel returns the applet to it; a drag-out over
@@ -377,9 +404,9 @@ int main(int argc, char** argv)
         // The canvas exists but has never been laid out — 0x0, exactly the
         // constructor-time state.
         WorkspaceCanvas coldCanvas;
-        QWidget coldPanStack;
         WorkspaceController coldCtl(&mgr3, &coldCanvas);
-        coldCtl.setPanStackWidget(&coldPanStack);
+        // Deliberately NO pan host: the controller must behave with every
+        // hook unset (a MainWindow that never wired pans).
 
         report("boot sees the enabled flag", coldCtl.boot());
         report("enable succeeds against an unsized canvas",
@@ -402,8 +429,8 @@ int main(int argc, char** argv)
                px == QRect(800, 80, 160, 160));
         report("...while the stored rect keeps its exact size",
                coldCanvas.itemRect("applet:RX") == NormRect{0.8, 0.1, 0.15, 0.2});
-        report("the pan area is not full-canvas either",
-               coldCanvas.itemRect(WorkspaceController::kPanStackItemId).w < 0.9);
+        report("no pan items appear without a pan host",
+               coldCanvas.itemCount() == 1);
 
         coldCtl.disable();
     }

@@ -13,8 +13,11 @@
 #include "MainWindow.h"
 
 #include "AppletPanel.h"
+#include "BandStackPanel.h"
+#include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "containers/ContainerManager.h"
+#include "core/AppSettings.h"
 #include "workspace/WorkspaceCanvas.h"
 #include "workspace/WorkspaceController.h"
 
@@ -48,6 +51,67 @@ void MainWindow::wireWorkspaceCanvas()
             m_workspaceController, &WorkspaceController::returnAppletToPanel);
     // A live move released over the panel returns the applet to it.
     m_workspaceController->setReturnTarget(m_appletPanel);
+
+    // ── Pans as items (RFC #4887 phase 4) ────────────────────────────────
+    //
+    // The controller's pan seam is callbacks + slots, never a stack pointer:
+    // policy stays unit-testable against plain widgets.  These lambdas are
+    // the only place the two types meet.
+    WorkspaceController::PanHostHooks hooks;
+    hooks.panIds     = [this] { return m_panStack->panIds(); };
+    hooks.detach     = [this](const QString& id) -> QWidget* {
+        return m_panStack->detachForCanvas(id);
+    };
+    hooks.restore    = [this](const QString& id, QWidget* w) {
+        m_panStack->returnFromCanvas(id, qobject_cast<PanadapterApplet*>(w));
+    };
+    hooks.isFloating = [this](const QString& id) {
+        return m_panStack->isFloating(id);
+    };
+    hooks.requestFloat = [this](const QString& id) {
+        m_panStack->floatPanadapter(id);
+    };
+    hooks.bandStack = [this]() -> QWidget* {
+        return m_panStack->bandStackPanel();
+    };
+    hooks.reclaimBandStack = [this](QWidget*) {
+        m_panStack->reclaimBandStackPanel();
+    };
+    m_workspaceController->setPanHost(hooks);
+
+    connect(m_panStack, &PanadapterStack::panAdded,
+            m_workspaceController, &WorkspaceController::onPanAdded);
+    connect(m_panStack, &PanadapterStack::panRemoved,
+            m_workspaceController, &WorkspaceController::onPanRemoved);
+    connect(m_panStack, &PanadapterStack::panRekeyed,
+            m_workspaceController, &WorkspaceController::onPanRekeyed);
+    connect(m_panStack, &PanadapterStack::panFloated,
+            m_workspaceController, &WorkspaceController::onPanFloated);
+    connect(m_panStack, &PanadapterStack::panDocked,
+            m_workspaceController, &WorkspaceController::onPanDocked);
+
+    // Each applet's title-strip live-move stream feeds the canvas gesture.
+    // Wired per applet at creation; the applet pointer is captured (not the
+    // id) so a band-recall rekey keeps the stream on the right item.
+    connect(m_panStack, &PanadapterStack::panAdded, this,
+            [this](const QString& panId) {
+                auto* a = m_panStack->panadapter(panId);
+                if (!a) {
+                    return;
+                }
+                connect(a, &PanadapterApplet::canvasDragBegan,
+                        m_workspaceController, [this, a](const QPoint& g) {
+                            m_workspaceController->beginPanItemMove(a->panId(), g);
+                        });
+                connect(a, &PanadapterApplet::canvasDragMoved,
+                        m_workspaceController, [this](const QPoint& g) {
+                            m_workspaceController->movePanItem(g);
+                        });
+                connect(a, &PanadapterApplet::canvasDragEnded,
+                        m_workspaceController, [this](const QPoint& g) {
+                            m_workspaceController->endPanItemMove(g);
+                        });
+            });
 
     connect(m_workspaceController, &WorkspaceController::enabledChanged,
             this, [this](bool on) {
@@ -97,9 +161,18 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
         if (panIdx < 0) {
             return;
         }
+        // Session-transient, so read it BEFORE the stack goes hidden.
+        const bool bandStackWasVisible =
+            m_panStack->bandStackPanel()
+            && m_panStack->bandStackPanel()->isVisibleTo(m_panStack);
+
         m_splitter->replaceWidget(panIdx, m_workspaceCanvas);
         m_workspaceCanvas->show();
-        m_workspaceController->setPanStackWidget(m_panStack);
+        // Since phase 4 the stack is not an item — its applets are.  It
+        // rides hidden as the pans' owner (creation, wiring, float/dock,
+        // render scheduling); enable() borrows each applet onto the canvas.
+        m_panStack->setParent(m_workspaceCanvas);
+        m_panStack->hide();
 
         QString whyNot;
         if (!m_workspaceController->enable(m_appletPanel->appletIds(), &whyNot)) {
@@ -119,8 +192,10 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             return;
         }
 
-        // The stack is now a canvas item; the splitter slot follows
-        // centralPanWidget() from here on.
+        if (bandStackWasVisible) {
+            m_workspaceController->setBandStackVisible(true);
+        }
+
         for (int i = 0; i < m_splitter->count(); ++i) {
             m_splitter->setStretchFactor(
                 i, m_splitter->widget(i) == m_workspaceCanvas ? 1 : 0);
@@ -129,7 +204,10 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
     }
 
     // Disable: the controller returns every applet to its panel slot and
-    // releases the pan stack parentless; the splitter takes both back.
+    // every pan applet into the stack's splitter (the band stack too); the
+    // splitter takes the stack back, and the operator's saved pan layout is
+    // re-applied so Classic comes back as the arrangement it was, not as a
+    // flat column of whatever order the returns happened in.
     m_workspaceController->disable();
 
     const int canvasIdx = m_splitter->indexOf(m_workspaceCanvas);
@@ -138,6 +216,23 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
     }
     m_workspaceCanvas->hide();
     m_panStack->show();
+    if (m_panStack->count() > 1) {
+        m_panStack->rearrangeLayout(
+            AppSettings::instance()
+                .value(QStringLiteral("PanadapterLayout"), QStringLiteral("1"))
+                .toString());
+    }
+}
+
+void MainWindow::setBandStackPanelVisible(bool show)
+{
+    if (m_workspaceController && m_workspaceController->isEnabled()) {
+        m_workspaceController->setBandStackVisible(show);
+        return;
+    }
+    if (m_panStack) {
+        m_panStack->setBandStackVisible(show);
+    }
 }
 
 }  // namespace AetherSDR

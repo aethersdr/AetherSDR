@@ -785,6 +785,9 @@ private:
     void wireWorkspaceCanvas();
     void toggleWorkspaceCanvas(bool on);
     QWidget* centralPanWidget() const;
+    // One router for band-stack visibility: canvas mode hosts the panel as
+    // a canvas item, classic mode shows it inside the stack (#4887 ph 4).
+    void setBandStackPanelVisible(bool show);
 
     // Show/hide the applet panel — single source of truth that updates the
     // title-bar dock icons and the persisted "AppletPanelVisible" setting.

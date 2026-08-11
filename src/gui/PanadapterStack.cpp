@@ -172,6 +172,16 @@ void PanadapterStack::clearFloatingRestoreMarker()
     settings.save();
 }
 
+void PanadapterStack::reclaimBandStackPanel()
+{
+    if (!m_bandStackPanel) {
+        return;
+    }
+    if (auto* hbox = qobject_cast<QHBoxLayout*>(layout())) {
+        hbox->insertWidget(0, m_bandStackPanel);
+    }
+}
+
 void PanadapterStack::setBandStackVisible(bool visible)
 {
     m_bandStackPanel->setVisible(visible);

@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QSet>
 #include <QSplitter>
+#include <QStringList>
 
 class QTimer;
 
@@ -40,6 +41,7 @@ public:
     SpectrumWidget* spectrum(const QString& panId) const;
     int count() const { return m_pans.size(); }
     QList<PanadapterApplet*> allApplets() const { return m_pans.values(); }
+    QStringList panIds() const { return m_pans.keys(); }
 
     // Active pan (determines which pan the applet column shows controls for)
     QString activePanId() const { return m_activePanId; }
@@ -49,6 +51,10 @@ public:
     void setSplitterOrientation(Qt::Orientation o) { m_splitter->setOrientation(o); }
     BandStackPanel* bandStackPanel() const { return m_bandStackPanel; }
     void setBandStackVisible(bool visible);
+    // Re-home the band-stack panel after workspace-canvas hosting (#4887
+    // phase 4): back to slot 0 of the stack's own layout, left of the
+    // splitter, exactly where the constructor put it.
+    void reclaimBandStackPanel();
     void equalizeSizes();
     void rearrangeLayout(const QString& layoutId);
 

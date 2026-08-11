@@ -634,7 +634,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     }
     if (obj == m_bandStackIndicator && event->type() == QEvent::MouseButtonPress) {
         bool show = !m_panStack->bandStackPanel()->isVisible();
-        m_panStack->setBandStackVisible(show);
+        setBandStackPanelVisible(show);
         updateBandStackIndicator();
         return true;
     }
