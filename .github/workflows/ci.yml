@@ -210,6 +210,16 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "^workspace_" --output-on-failure
 
+      # The demo RX engine's worker-thread contract (#4878): affinity, 24 kHz
+      # pacing on a coarse timer, keyed-mute, stallscope. This is the fix for
+      # the demo making the GUI thread carry a 333 Hz precise timer plus the
+      # whole synthesis load — the regression class only an executed test
+      # keeps dead. Pure event-loop test; ~1.5 s measured.
+      - name: Test demo backend threading
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "^sim_signal_source_test$" --output-on-failure
+
       # hl2_am_dcblock_test is deliberately NOT on this gate, and re-adding it
       # needs a measurement first. #4774 added it here on the "milliseconds
       # against an already-linked target" rationale every other step above

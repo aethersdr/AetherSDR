@@ -605,6 +605,7 @@ set(CORE_SOURCES
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
+    src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
@@ -3625,6 +3626,19 @@ set_target_properties(workspace_controller_test PROPERTIES AUTOMOC ON)
 add_test(NAME workspace_controller_test COMMAND workspace_controller_test)
 set_tests_properties(workspace_controller_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Demo RX engine on a worker thread (#4878) — the generator's thread affinity,
+# 24 kHz long-run pacing on a coarse timer, keyed-mute, stallscope, and queued
+# controls. Pure QObject + event loop; no widgets, no radio.
+add_executable(sim_signal_source_test
+    tests/sim_signal_source_test.cpp
+    src/core/backends/sim/SimSignalSource.cpp
+    src/core/backends/sim/NoiseMixer.cpp
+)
+target_include_directories(sim_signal_source_test PRIVATE src)
+target_link_libraries(sim_signal_source_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(sim_signal_source_test PROPERTIES AUTOMOC ON)
+add_test(NAME sim_signal_source_test COMMAND sim_signal_source_test)
 
 # KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
 add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)

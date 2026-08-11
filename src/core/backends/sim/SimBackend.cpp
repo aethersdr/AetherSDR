@@ -5,29 +5,30 @@
 
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
+#include "core/backends/sim/SimSignalSource.h"
 
 namespace AetherSDR {
 
 SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
 {
-    // Frame cadence: kFrameLen (128) samples at kSampleRate (24 kHz) = 5.333 ms
-    // of audio per frame — NOT an integer number of milliseconds. Any fixed-ms
-    // timer interval is therefore wrong: 5 ms overproduces ~6%, 6 ms underproduces
-    // ~11%, and the sink drops/starves the mismatch periodically = the audible
-    // wobble (measured). So we do NOT emit one frame per tick. Instead the timer
-    // runs faster than needed and each tick emits as many whole frames as the REAL
-    // elapsed time has earned, carrying the fractional-sample remainder forward.
-    // The long-run output rate is then exactly 24 kHz regardless of timer jitter.
-    m_audioTimer.setTimerType(Qt::PreciseTimer);
-    m_audioTimer.setInterval(3);   // oversample the deadline; onAudioTick paces itself
-    connect(&m_audioTimer, &QTimer::timeout, this, &SimBackend::onAudioTick);
-    // Give the demo something audible out of the box: a pink-noise floor plus a
-    // birdie carrier — a scene that immediately shows what NR/notch can do.
-    m_audio.setEnabled(NoiseMixer::Channel::Pink, true);
-    m_audio.setLevelDb(NoiseMixer::Channel::Pink, -22.0);
-    m_audio.setEnabled(NoiseMixer::Channel::Birdie, true);
-    m_audio.setLevelDb(NoiseMixer::Channel::Birdie, -18.0);
-    m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"), 1200.0);
+    // The synthetic RX engine, on its own worker (#4878). It was the only RX
+    // producer in the app on the GUI thread — a 3 ms Qt::PreciseTimer pinning
+    // the event dispatcher plus ~200 allocating emissions/s competing with
+    // paintEvent, which on software-GL machines is the reported multi-second
+    // input backlog. Signals cross back queued and are re-emitted over the
+    // seam below, the same topology as FlexBackend's wire objects (#502).
+    m_signalThread = new QThread(this);
+    m_signalThread->setObjectName("SimSignalSource");
+    m_signalSource = new SimSignalSource;   // no parent — moved to thread
+    m_signalSource->moveToThread(m_signalThread);
+    m_signalThread->start();
+
+    connect(m_signalSource, &SimSignalSource::audioFrameReady,
+            this, &IRadioBackend::audioFrameReady);
+    connect(m_signalSource, &SimSignalSource::sliceAudioFrameReady,
+            this, &IRadioBackend::sliceAudioFrameReady);
+    connect(m_signalSource, &SimSignalSource::spectrumFrameReady,
+            this, &IRadioBackend::spectrumFrameReady);
 
     // ---- Path B (RFC #4288): own a RadioConnection + PanadapterStream in
     // synthetic-demo mode, mirroring FlexBackend's ctor (same load-bearing #502
@@ -75,16 +76,16 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // the audio/spectrum tick also starts producing on the live path.
     connect(m_connection, &RadioConnection::connected, this, [this]() {
         m_connected = true;
-        m_audioTimer.start();
+        QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::start,
+                                  Qt::QueuedConnection);
         QTimer::singleShot(150, this, [this]() {
             if (m_connected) emitInitialState();
         });
     });
     connect(m_connection, &RadioConnection::disconnected, this, [this]() {
         m_connected = false;
-        m_audioTimer.stop();
-        m_audioClock.invalidate();   // fresh pacing baseline on the next connect
-        m_audioDebtNs = 0;
+        QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop,
+                                  Qt::QueuedConnection);
     });
 }
 
@@ -95,6 +96,19 @@ SimBackend::~SimBackend()
     // quit/wait), then panStream — the #502 order.
     if (m_connection)
         disconnect(m_connection, nullptr, this, nullptr);
+
+    // The producer goes first: stop the tick on its own thread, then let the
+    // thread drain — the same BlockingQueued-stop shape as the two below.
+    if (m_signalSource && m_signalThread && m_signalThread->isRunning()) {
+        QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop,
+                                  Qt::BlockingQueuedConnection);
+        m_signalSource->deleteLater();
+        m_signalThread->quit();
+        m_signalThread->wait(3000);
+    } else {
+        delete m_signalSource;
+    }
+    m_signalSource = nullptr;
 
     if (m_connection && m_connThread && m_connThread->isRunning()) {
         QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio,
@@ -119,170 +133,50 @@ SimBackend::~SimBackend()
     m_panStream = nullptr;
 }
 
-QByteArray SimBackend::toStereoBytes(const QVector<float>& mono)
-{
-    // AudioEngine::feedAudioData() wants 24 kHz STEREO float32: duplicate each
-    // mono sample into L and R. Little-endian float32 (native x86/ARM order the
-    // engine's downstream DSP reads).
-    QByteArray out;
-    out.resize(mono.size() * 2 * static_cast<int>(sizeof(float)));
-    auto* p = reinterpret_cast<float*>(out.data());
-    for (int i = 0; i < mono.size(); ++i) {
-        p[2 * i] = mono[i];
-        p[2 * i + 1] = mono[i];
-    }
-    return out;
-}
-
-void SimBackend::onAudioTick()
-{
-    if (!m_connected) {
-        return;
-    }
-
-    // Emit exactly as many whole frames as REAL elapsed time has earned since the
-    // last tick, so the long-run rate is precisely kSampleRate regardless of the
-    // (jittery, integer-ms) timer. m_audioClock accumulates elapsed nanoseconds;
-    // each kFrameLen-sample frame is worth (kFrameLen / kSampleRate) seconds.
-    if (!m_audioClock.isValid()) {
-        m_audioClock.start();
-        m_audioDebtNs = 0;
-        return;   // establish the t0 baseline; first frames go out next tick
-    }
-    m_audioDebtNs += m_audioClock.nsecsElapsed();
-    m_audioClock.restart();
-
-    constexpr qint64 kNsPerFrame =
-        (static_cast<qint64>(NoiseMixer::kFrameLen) * 1'000'000'000)
-        / NoiseMixer::kSampleRate;   // ~5'333'333 ns
-
-    // Cap the catch-up burst so a long stall (debugger pause, scheduling gap)
-    // can't dump seconds of audio at once; drop the excess debt instead.
-    constexpr int kMaxFramesPerTick = 8;   // ~43 ms — plenty of headroom
-    int frames = static_cast<int>(m_audioDebtNs / kNsPerFrame);
-    if (frames > kMaxFramesPerTick) {
-        frames = kMaxFramesPerTick;
-        m_audioDebtNs = 0;   // resync after a gap rather than spiral
-    } else {
-        m_audioDebtNs -= static_cast<qint64>(frames) * kNsPerFrame;
-    }
-
-
-    for (int i = 0; i < frames; ++i) {
-        // Muted while keyed — a demo radio must never sound live on TX (Principle VI).
-        const QVector<float> frame = m_keyed
-            ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
-            : m_audio.mixFrame();
-        const QByteArray stereo = toStereoBytes(frame);
-        emit audioFrameReady(stereo);
-        // Per-slice audio too, on this backend's single slice.
-        //
-        // Not optional: the TCI receiver channels are fed from
-        // sliceAudioFrameReady, because the mixed feed cannot say which slice a
-        // buffer belongs to. That routing used to be a hardcoded "channel 1"
-        // fed from audioFrameReady, which worked only while every in-process
-        // backend had exactly one receiver. Demo mode still does — but it has to
-        // SAY so, or TCI audio in demo mode goes silent.
-        emit sliceAudioFrameReady(kSliceId, stereo);
-
-        // A panadapter row a few times a second (not every audio frame — the
-        // display updates far slower than audio). ~20 fps at the 5.33 ms frame ≈
-        // every 9th. The stallscope fault freezes the spectrum/waterfall (audio
-        // keeps flowing) to exercise AE's scope-stall watchdog (#1411-class);
-        // clearFaults() resumes it.
-        if (!m_scopeStalled
-            && ++m_audioFrames % kSpectrumRowEveryNFrames == 0) {
-            constexpr int kBins = 1024;
-            constexpr double kFloorDbm = -120.0;
-            constexpr double kAudioSpanHz = 8000.0;   // show ±4 kHz around the VFO
-            const QVector<float> row =
-                m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
-            QByteArray bytes(reinterpret_cast<const char*>(row.constData()),
-                             row.size() * static_cast<int>(sizeof(float)));
-            emit spectrumFrameReady(kPanId, bytes);
-        }
-    }
-}
-
 void SimBackend::setDemoNoiseEnabled(const QString& channel, bool on)
 {
-    bool ok = false;
-    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (ok) m_audio.setEnabled(c, on);
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, channel, on] {
+        src->setNoiseEnabled(channel, on);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::setDemoNoiseLevel(const QString& channel, double levelDb)
 {
-    bool ok = false;
-    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (ok) m_audio.setLevelDb(c, levelDb);
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, channel, levelDb] {
+        src->setNoiseLevel(channel, levelDb);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::setDemoNoiseKnob(const QString& channel, const QString& knob,
                                   double value)
 {
-    bool ok = false;
-    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (!ok) return;
-
-    // The birdie's "hz" knob is an AUDIO pitch the operator dials, but the birdie
-    // itself is anchored to an absolute RF carrier so it behaves like a real
-    // signal under tuning. So re-anchor the carrier to (current VFO + requested
-    // pitch) and let updateBirdieFromVfo() derive the pitch from there.
-    //
-    // Writing the knob straight through instead would leave m_birdieCarrierMhz at
-    // its hard-coded default, and the very next VFO nudge would recompute the
-    // pitch from that stale carrier — silently discarding what the operator dialled.
-    if (c == NoiseMixer::Channel::Birdie && knob == QLatin1String("hz")) {
-        m_birdieCarrierMhz = m_sliceFreqMhz + (m_lsb ? -value : value) / 1.0e6;
-        updateBirdieFromVfo();
-        return;
-    }
-    m_audio.setKnob(c, knob, value);
+    // The birdie "hz" re-anchor logic lives with the mixer in the source —
+    // it needs the VFO and sideband atomically with the audio it changes.
+    QMetaObject::invokeMethod(m_signalSource,
+                              [src = m_signalSource, channel, knob, value] {
+        src->setNoiseKnob(channel, knob, value);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::loadDemoNoisePreset(const QString& presetName)
 {
-    m_audio.loadPreset(presetName);
-}
-
-void SimBackend::updateBirdieFromVfo()
-{
-    // Audio pitch from the RF offset, per sideband:
-    //   USB: pitch = carrier - VFO  (a carrier ABOVE the VFO is audible)
-    //   LSB: pitch = VFO - carrier  (a carrier BELOW the VFO is audible)
-    // A carrier on the "wrong" side gives a negative offset → silence, exactly
-    // like a real receiver: switch sideband and it disappears. Near zero it
-    // approaches zero-beat.
-    //
-    // Anything outside the audio passband is silent too. That covers the wrong
-    // sideband (negative) AND a carrier far off frequency: offsetHz is an RF
-    // difference, so a band change makes it megahertz-scale, and feeding e.g.
-    // 7 MHz to a 24 kHz oscillator does not go quiet — it aliases back into the
-    // audio band as a loud screech exactly where silence is expected. Passing 0
-    // is what tells NoiseMixer "not audible" (see genBirdie).
-    static constexpr double kMinAudibleHz = 50.0;      // below this it is zero-beat
-    static constexpr double kMaxAudibleHz = 6000.0;    // generous SSB/CW passband,
-                                                       // well inside 12 kHz Nyquist
-    const double offsetHz = (m_birdieCarrierMhz - m_sliceFreqMhz) * 1.0e6;
-    const double audioHz = m_lsb ? -offsetHz : offsetHz;
-    const bool audible = audioHz >= kMinAudibleHz && audioHz <= kMaxAudibleHz;
-    m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
-                    audible ? audioHz : 0.0);
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, presetName] {
+        src->loadPreset(presetName);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::setDemoAnf(bool on)
 {
-    // Auto-notch: engage → notch the active tonal channels (birdie/cw), which the
-    // mixer already identifies via autoNotchTones(). Off → clear. (Manual TNF
-    // notches aren't tracked separately yet, same as the PanadapterStream demo.)
-    if (on) m_audio.setNotches(m_audio.autoNotchTones());
-    else    m_audio.setNotches({});
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, on] {
+        src->setAnf(on);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::setDemoNb(bool on)
 {
-    m_audio.setNoiseBlank(on);
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, on] {
+        src->setNb(on);
+    }, Qt::QueuedConnection);
 }
 
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
@@ -355,7 +249,8 @@ void SimBackend::connectRadio(const RadioConnectRequest& /*request*/)
     emit connected();
     emit capabilitiesChanged();
     emitInitialState();
-    m_audioTimer.start();   // begin delivering synthetic RX audio + spectrum
+    QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::start,
+                              Qt::QueuedConnection);   // synthetic RX begins
 }
 
 void SimBackend::disconnectRadio()
@@ -363,9 +258,8 @@ void SimBackend::disconnectRadio()
     if (!m_connected) {
         return;
     }
-    m_audioTimer.stop();
-    m_audioClock.invalidate();   // reconnect re-establishes a fresh pacing baseline
-    m_audioDebtNs = 0;
+    QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop,
+                              Qt::QueuedConnection);
     m_connected = false;
     emit sliceRemoved(kSliceId);
 
@@ -454,7 +348,11 @@ void SimBackend::setSliceFrequency(int sliceId, double hz)
         return;
     }
     m_sliceFreqMhz = hz / 1.0e6;
-    updateBirdieFromVfo();            // tuning must move the audio we actually hear
+    // Tuning must move the audio we actually hear — queued to the source.
+    QMetaObject::invokeMethod(m_signalSource,
+                              [src = m_signalSource, mhz = m_sliceFreqMhz] {
+        src->setVfoMhz(mhz);
+    }, Qt::QueuedConnection);
     SliceDelta d;
     d.frequency = m_sliceFreqMhz;
     emit sliceChanged(kSliceId, d);   // radio is authoritative: echo the change back (Principle II)
@@ -469,9 +367,11 @@ void SimBackend::setSliceMode(int sliceId, const QString& mode)
     // Lower-sideband family: LSB, DIGL, CWL. Everything else demodulates
     // USB-style. Drives which side of the VFO the birdie is audible on.
     const QString up = mode.toUpper();
-    m_lsb = (up == QLatin1String("LSB") || up == QLatin1String("DIGL")
-             || up == QLatin1String("CWL"));
-    updateBirdieFromVfo();
+    const bool lsb = (up == QLatin1String("LSB") || up == QLatin1String("DIGL")
+                      || up == QLatin1String("CWL"));
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, lsb] {
+        src->setLowerSideband(lsb);
+    }, Qt::QueuedConnection);
     SliceDelta d;
     d.mode = m_sliceMode;
     emit sliceChanged(kSliceId, d);
@@ -525,10 +425,12 @@ void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
 void SimBackend::setKeying(bool key)
 {
     // RX-only (capabilities().canTransmit == false): the engine TX guard above
-    // the seam already denies keying. We DON'T transmit — but we do record the
-    // intent so onAudioTick() mutes the synthetic RX while "keyed", so the demo
-    // never plays receive audio over a (would-be) transmit (Principle VI).
-    m_keyed = key;
+    // the seam already denies keying. We DON'T transmit — but we do forward the
+    // intent so the source mutes the synthetic RX while "keyed": the demo never
+    // plays receive audio over a (would-be) transmit (Principle VI).
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource, key] {
+        src->setKeyed(key);
+    }, Qt::QueuedConnection);
 }
 
 void SimBackend::invokeExtension(const QString& ns, const QString& verb,
@@ -579,7 +481,9 @@ bool SimBackend::applyFault(const QString& fault, const QVariant& arg)
         return true;
     }
     if (f == QLatin1String("stallscope")) {
-        m_scopeStalled = true;   // onAudioTick stops emitting spectrum rows
+        QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource] {
+            src->setScopeStalled(true);   // spectrum freezes; audio keeps flowing
+        }, Qt::QueuedConnection);
         return true;
     }
     if (f == QLatin1String("disconnect")) {
@@ -679,7 +583,9 @@ void SimBackend::clearFaults()
     // Resume normal operation: un-stall the scope and drop SWR back to nominal.
     // (dropslice/disconnect are one-shot state changes recovered by reconnect,
     // not by clear — clear only reverses the *sustained* faults.)
-    m_scopeStalled = false;
+    QMetaObject::invokeMethod(m_signalSource, [src = m_signalSource] {
+        src->setScopeStalled(false);
+    }, Qt::QueuedConnection);
     if (m_lastSwr > 1.0) {
         // Re-assert the DEFINITION before the value. A disconnect in between runs
         // RadioModel::onDisconnected -> MeterModel::clear(), which drops the def;
