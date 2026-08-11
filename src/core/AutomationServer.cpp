@@ -5001,7 +5001,10 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         // GUI-header-free: snapshotted via meta-call, same as panstats.
         bool selectorIsIndex = false;
         const int wantIndex = selector.toInt(&selectorIsIndex);
-        QJsonArray pans;
+        // Collect first, emit second: an unknown property must be rejected
+        // once, up front, rather than after entries for the earlier pans have
+        // already been built — that is how the other models read.
+        QVector<QVariantMap> snaps;
         // A floated container is reachable from two top-level roots, so the
         // class walk can yield the same widget twice — dedupe by pointer.
         QSet<QWidget*> seen;
@@ -5026,23 +5029,28 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                 && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
                 continue;
             }
-            if (!property.isEmpty()) {
-                if (!snap.contains(property)) {
-                    return err(QStringLiteral("unknown property '") + property
-                               + QStringLiteral("' for display"));
-                }
-                QJsonObject one{
-                    {QStringLiteral("panIndex"),
-                     snap.value(QStringLiteral("panIndex")).toInt()},
-                    {QStringLiteral(
-                         "objectName"),
-                     snap.value(QStringLiteral("objectName")).toString()},
-                    {property,
-                     QJsonValue::fromVariant(snap.value(property))}};
-                pans.append(one);
+            snaps.append(snap);
+        }
+        // Every pan carries the same field set, so the first is enough to
+        // validate against. With no pan matched there is nothing to check the
+        // name against, so an empty `pans` is the honest answer.
+        if (!property.isEmpty() && !snaps.isEmpty()
+            && !snaps.first().contains(property)) {
+            return err(QStringLiteral("unknown property '") + property
+                       + QStringLiteral("' for display"));
+        }
+        QJsonArray pans;
+        for (const QVariantMap& snap : snaps) {
+            if (property.isEmpty()) {
+                pans.append(QJsonObject::fromVariantMap(snap));
                 continue;
             }
-            pans.append(QJsonObject::fromVariantMap(snap));
+            pans.append(QJsonObject{
+                {QStringLiteral("panIndex"),
+                 snap.value(QStringLiteral("panIndex")).toInt()},
+                {QStringLiteral("objectName"),
+                 snap.value(QStringLiteral("objectName")).toString()},
+                {property, QJsonValue::fromVariant(snap.value(property))}});
         }
         QJsonObject out{{QStringLiteral("ok"), true},
                         {QStringLiteral("model"), model},

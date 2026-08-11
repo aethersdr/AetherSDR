@@ -338,17 +338,19 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         int specialIdx;
         void (SpectrumOverlayMenu::*sig)();
     };
+    // QT_TR_NOOP marks each name for lupdate here and tr() translates it at the
+    // use site below — tr() on a non-literal extracts nothing.
     const BtnDef defs[] = {
         // 0 — handled separately (signal has panId arg)
-        {"+RX",     "panMenuAddRxBtn",    "Add receive slice",       -1, nullptr},
-        {"+TNF",    "panMenuAddTnfBtn",   "Add tracking notch filter", -1,
+        {"+RX",     "panMenuAddRxBtn",    QT_TR_NOOP("Add receive slice"),   -1, nullptr},
+        {"+TNF",    "panMenuAddTnfBtn",   QT_TR_NOOP("Add tracking notch filter"), -1,
          &SpectrumOverlayMenu::addTnfClicked},                       // 1
-        {"Band",    "panMenuBandBtn",     "Band panel",               0, nullptr},
-        {"ANT",     "panMenuAntBtn",      "Antenna panel",            1, nullptr},
-        {"Display", "panMenuDisplayBtn",  "Display panel",            4, nullptr},
-        {"Memory",  "panMenuMemoryBtn",   "Memory panel",             5, nullptr},
+        {"Band",    "panMenuBandBtn",     QT_TR_NOOP("Band panel"),           0, nullptr},
+        {"ANT",     "panMenuAntBtn",      QT_TR_NOOP("Antenna panel"),        1, nullptr},
+        {"Display", "panMenuDisplayBtn",  QT_TR_NOOP("Display panel"),        4, nullptr},
+        {"Memory",  "panMenuMemoryBtn",   QT_TR_NOOP("Memory panel"),         5, nullptr},
         // Add Memory lives at the top of MemoryBrowsePanel, outside the scrolling rows.
-        {"DAX",     "panMenuDaxBtn",      "DAX panel",                3, nullptr},
+        {"DAX",     "panMenuDaxBtn",      QT_TR_NOOP("DAX panel"),            3, nullptr},
     };
 
     for (const auto& def : defs) {

@@ -3035,6 +3035,9 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
     }
 
     auto& settings = AppSettings::instance();
+    // Whether the SOURCE pan is showing Kiwi decides what its waterfall
+    // level/rate accessors actually mean — see the waterfall block below.
+    const bool srcIsKiwi = kiwiSdrPanDisplaysKiwi(source->panId());
     int cloned = 0;
 
     for (PanadapterApplet* target : m_panStack->allApplets()) {
@@ -3055,19 +3058,24 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         dst->setFftLineColor(src->fftLineColor());
         dst->setFftFillAlpha(src->fftFillAlpha());
         dst->setFftFillColor(src->fftFillColor());
+        // noiseFloorPosition (and dssFloorDepth below) are stored per display
+        // source, so these setters write the target's CURRENTLY DISPLAYED
+        // source and read the source pan's. That is deliberate: the operator
+        // is cloning the look they can see, not a Flex slot and a Kiwi slot.
+        // The target's other-source value is left alone rather than
+        // overwritten with a position that was never chosen for it.
         dst->setNoiseFloorPosition(src->noiseFloorPosition());
         dst->setNoiseFloorEnable(src->noiseFloorEnabled());
 
         // ── WATERFALL (client-side) ───────────────────────────────────────
+        // The blanker is Flex/Kiwi-agnostic — it filters rows after they land,
+        // whatever produced them — so it clones unconditionally. Everything
+        // else on this group (auto-black trio, gain, black level, rate) is
+        // cloned in the waterfall block further down, which is gated: all five
+        // of those live per-control handlers bail on a Kiwi-displaying pan.
         dst->setWfBlankerEnabled(src->wfBlankerEnabled());
         dst->setWfBlankerThreshold(src->wfBlankerThreshold());
         dst->setWfBlankerMode(src->wfBlankerMode());
-        dst->setWfAutoBlack(src->wfAutoBlack());
-        dst->setWfAutoBlackOffset(src->wfAutoBlackOffset());
-        // The operator's stored INTENT, not the capability-masked value — see
-        // SpectrumWidget::wfAutoBlackRadioSide(). Cloning the masked value would
-        // quietly downgrade every other pan to SW on a radio without HW.
-        dst->setWfAutoBlackRadioSide(src->wfAutoBlackRadioSide());
 
         // ── BACKGROUND ────────────────────────────────────────────────────
         // "none" is the persisted spelling for background-off; an empty path is
@@ -3111,7 +3119,26 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
                                                 /*wfMs=*/0);
         }
 
-        if (!targetIsKiwi) {
+        // ── Waterfall level/rate controls ─────────────────────────────────
+        // Skipped whenever EITHER end is displaying Kiwi. Target-side is the
+        // guard the five live handlers use. Source-side matters just as much:
+        // on a Kiwi-displaying pan these sliders drive the profile's dBm
+        // min/max through KiwiSdrManager, so wfColorGain()/wfBlackLevel()/
+        // wfLineDuration() still hold whatever stale Flex values the widget
+        // last had. Cloning those would push a setting the operator never made
+        // anywhere onto every Flex pan — and send `display panafall set` for it.
+        if (!srcIsKiwi && !targetIsKiwi) {
+            dst->setWfAutoBlack(src->wfAutoBlack());
+            dst->setWfAutoBlackOffset(src->wfAutoBlackOffset());
+            // The operator's stored INTENT, not the capability-masked value —
+            // see SpectrumWidget::wfAutoBlackRadioSide(). Cloning the masked
+            // value would quietly downgrade every other pan to SW on a radio
+            // without HW.
+            dst->setWfAutoBlackRadioSide(src->wfAutoBlackRadioSide());
+            // No m_radioModel.setWaterfallAutoBlack()/setWaterfallAutoBlackSource()
+            // here, unlike the live handlers: those two are radio-GLOBAL, and
+            // the source pan's own toggle already set them to these values.
+            // Re-sending them once per target would be the same write N times.
             dst->setWfColorGain(src->wfColorGain());
             dst->setWfBlackLevel(src->wfBlackLevel());
             if (auto* pan = m_radioModel.panadapter(targetPanId);
@@ -3125,16 +3152,31 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
                         .arg(pan->waterfallId())
                         .arg(src->wfBlackLevel()));
             }
-            dst->setWfLineDuration(src->wfLineDuration());
+            // Clamp like the slider path does (applyWaterfallLineDuration).
+            // The source value came through the same clamp today, so this is
+            // belt-and-braces — but the two paths should not disagree about
+            // what a legal rate is.
+            const int wfRate = std::clamp(src->wfLineDuration(),
+                                          AetherSDR::WaterfallRate::kMin,
+                                          AetherSDR::WaterfallRate::kMax);
+            dst->setWfLineDuration(wfRate);
             if (!m_adaptiveThrottleActive) {
                 m_radioModel.requestPanDisplayRates(targetPanId, /*fps=*/0,
-                                                    src->wfLineDuration());
+                                                    wfRate);
             }
         }
 
         // Repaint the target's own Display panel so an operator who opens it
         // sees the cloned values rather than the pre-clone slider positions.
-        if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
+        if (targetIsKiwi) {
+            // syncDisplaySettings() opens with setKiwiWaterfallControlMode(false),
+            // which would drop a Kiwi-displaying pan's panel back to Flex
+            // control mode — relabelling WF Ceiling/Floor and resetting their
+            // ranges from the profile's dBm span to 0..100, clamping the stored
+            // dBm values on the way. This is the canonical restore: it runs the
+            // same Flex sync AND re-enters Kiwi mode.
+            syncKiwiSdrPanadapterUiState(targetPanId);
+        } else if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
             dstMenu->syncDisplaySettings(
                 dst->fftAverage(), dst->fftFps(),
                 static_cast<int>(dst->fftFillAlpha() * 100.0f),
@@ -3146,6 +3188,10 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
                 dst->fftLineWidth(), dst->wfAutoBlackRadioSide(),
                 dst->spectrumRenderMode(), dst->dssFloorDepth(),
                 dst->dssGain(), dst->fftLineColor(), dst->dssRowSpan());
+        }
+        // Kiwi-agnostic controls: syncKiwiSdrPanadapterUiState() does not carry
+        // these, so both branches need them.
+        if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
             dstMenu->syncExtraDisplaySettings(
                 dst->wfBlankerEnabled(), dst->wfBlankerThreshold(),
                 dst->backgroundOpacity(), dst->freqGridSpacing(),
