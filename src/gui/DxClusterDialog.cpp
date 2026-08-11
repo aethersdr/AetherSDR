@@ -712,8 +712,10 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     // FreeDV log loaded in deferred loadLogFiles() (#748)
 #endif
 
-    // Scroll spot table to show newest entries
-    m_spotTable->scrollToBottom();
+    // Scroll spot table to show newest entries. The model is prepend-based
+    // (newest spot is always source row 0), and the table opens unsorted, so
+    // newest-first is the top, not the bottom (#4889).
+    m_spotTable->scrollToTop();
 
     // Disable autoDefault on all buttons so Enter in command inputs
     // only fires returnPressed, not random button clicks (#459)
@@ -818,7 +820,9 @@ void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbn
     if (!allSpots.isEmpty())
         m_spotModel->addSpots(allSpots);
 
-    m_spotTable->scrollToBottom();
+    // Newest-first is the top, not the bottom — same reasoning as the
+    // constructor's initial scroll (#4889).
+    m_spotTable->scrollToTop();
 }
 
 void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
@@ -3333,17 +3337,43 @@ void DxClusterDialog::flushSpotBatch()
     }
     if (m_spotBatch.isEmpty()) return;
 
-    auto isAtBottom = [](QAbstractScrollArea* w) {
-        auto* sb = w->verticalScrollBar();
-        return sb->value() >= sb->maximum() - 2;
-    };
-    bool follow = isAtBottom(m_spotTable);
+    // The source model is prepend-based (SpotTableModel::addSpot(s) inserts
+    // at row 0, so the newest spot is always source row 0 — see the comment
+    // on that class). Which visual end that lands on depends on the current
+    // sort, so "follow the newest spot" isn't always "follow the bottom"
+    // the way it is for the append-only console panes this lambda was
+    // copied from (#4889):
+    //   - unsorted, or Time descending (newest first, same as source order)
+    //     → newest is at the TOP.
+    //   - Time ascending → newest is at the BOTTOM.
+    //   - sorted by any other column → newest lands wherever it lands;
+    //     don't auto-scroll and disturb where the user put the viewport.
+    const int sortCol = m_proxyModel->sortColumn();
+    const Qt::SortOrder sortOrder = m_proxyModel->sortOrder();
+    const bool newestAtTop = sortCol < 0
+        || (sortCol == SpotTableModel::ColTime && sortOrder == Qt::DescendingOrder);
+    const bool newestAtBottom = sortCol == SpotTableModel::ColTime
+        && sortOrder == Qt::AscendingOrder;
+
+    auto* sb = m_spotTable->verticalScrollBar();
+    bool follow = false;
+    if (newestAtTop) {
+        follow = sb->value() <= 2;
+    } else if (newestAtBottom) {
+        follow = sb->value() >= sb->maximum() - 2;
+    }
 
     m_spotModel->addSpots(m_spotBatch);
     m_spotBatch.clear();
 
-    if (follow)
+    if (!follow) {
+        return;
+    }
+    if (newestAtTop) {
+        m_spotTable->scrollToTop();
+    } else if (newestAtBottom) {
         m_spotTable->scrollToBottom();
+    }
 }
 
 void DxClusterDialog::updateStatus()
