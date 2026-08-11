@@ -38,6 +38,24 @@ constexpr QAbstractSocket::BindMode kLanVitaBindMode = QAbstractSocket::DontShar
 // on a FLEX-6500 over WireGuard: 4992 alone → 0 datagrams; adding 4993 →
 // 3377 datagrams in 10 s, and the flow then self-sustains because the inbound
 // stream keeps refreshing the conntrack entry.
+//
+// Scope of that evidence, so the next reader does not have to re-derive the
+// confidence level: one radio, fw 4.2.20.41343, one tunnel. FlexLib
+// v4.1.5.39794 does not corroborate either port for this purpose — per review
+// of #4926 its LAN path binds 4991 and registers over TCP with `client
+// udpport`, and 4993 does not appear in it at all — so this is a wire
+// observation (Principle IV), not a protocol document.
+//
+// That cuts both ways, and priming both ports is the firmware-agnostic answer
+// rather than a 4.2.20 workaround: the behaviour appears to have moved in a
+// recent Flex firmware, so a version gate would need revisiting if Flex moves
+// it again, while priming both covers radios that stream from either port.
+//
+// The cost on radios we have not measured is one unsolicited byte to 4993 per
+// connect — including on a flat LAN, where nobody needed the fix. One byte is
+// shorter than any VITA-49 header, so a radio that does not expect it should
+// discard it. That is reasoning, not a measurement, on anything but the 6500;
+// a capture from a second model or firmware is worth more than this comment.
 constexpr quint16 kVitaRegisterPort = 4992;  // radio listens for the prime here
 constexpr quint16 kVitaStreamPort   = 4993;  // radio streams VITA-49 from here
 

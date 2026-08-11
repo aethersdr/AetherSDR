@@ -452,7 +452,8 @@ key=value pairs by locating the last space before the first `=` sign.
    `meter`, `audio`, `gps`, `apd`, `client`, `xvtr`
 3. `client gui` + `client program AetherSDR` + `client station AetherSDR`
 4. Bind UDP socket, send `\x00` to radio:**4992 and 4993** (port registration)
-5. `client udpport <port>` (returns error 0x50001000 on v1.4.0.0 — expected)
+5. `client udpport <port>` (`0x50001000` on v1.4.0.0; `0` on fw 4.2.20 — either
+   way the one-byte prime is what registers us, see the quirks below)
 6. `slice list` → if empty, create default slice (14.225 MHz USB ANT1)
 7. `stream create type=remote_audio_rx compression=none` → radio starts sending
    VITA-49 audio to our UDP port
@@ -467,7 +468,25 @@ key=value pairs by locating the last space before the first `=` sign.
   routed VPN the far side is stateful, so priming only 4992 means every
   pan/waterfall/audio datagram arrives as an unsolicited 4993 flow and is
   dropped — radio connects, panadapter stays dead. Measured on a FLEX-6500
-  (fw 4.2.20): 4992 alone → 0 datagrams; adding 4993 → 3377 in 10 s.
+  (fw 4.2.20.41343) over WireGuard: 4992 alone → 0 datagrams; adding 4993 →
+  3377 in 10 s. **Scope:** one model, one firmware, observed on the wire
+  (Principle IV) — FlexLib v4.1.5.39794 does not corroborate it (its LAN path
+  binds 4991 and registers over TCP with `client udpport`; 4993 does not appear
+  in FlexLib at all). Priming both ports is deliberately firmware-agnostic
+  rather than a 4.2.20 workaround.
+- **`4993` also names the WAN/SmartLink UDP port** — `docs/architecture/pipelines.md`
+  documents it on the WAN path, and it is our default `publicUdpPort` when
+  SmartLink advertises none (`MainWindow.cpp`, `MainWindow_Session.cpp`), the
+  port `client udp_register` is sent *to*. Two separate observations: on LAN
+  4993 is where VITA-49 arrives *from* (measured), on WAN it is where the
+  radio's forwarded UDP is sent *to* (SmartLink port-forward convention). They
+  are consistent with a single radio-side VITA data socket on 4993 used by both
+  paths, but that unification is inference and has not been measured — on LAN
+  the radio still listens for the prime on **4992**, and our LAN prime to 4993
+  works by opening a conntrack pinhole, not by registering with the radio.
+  (`docs/architecture/tx-audio-signal-path.md` already treats 4993 as VITA data
+  generically rather than WAN-specifically, which points the same way, but it
+  says so as a packet-capture aside — not as a measurement either.)
 - `client set enforce_local_ptt=1` returns `0x50001000` — correct command is `client set local_ptt=1`; the radio echoes a full `connected` status to ALL clients updating their `local_ptt` field when ownership changes
 - Slice frequency is `RF_frequency` (not `freq`) in status messages
 - Streams are discriminated by **PacketClassCode** (PCC), NOT by packet type

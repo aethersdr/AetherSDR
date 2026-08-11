@@ -8,6 +8,21 @@
 // That failure reproduces only over a real tunnel, so a refactor that dropped
 // 4993 would pass every other test and every LAN smoke check. This pins the
 // port set at the socket: start() must put a prime datagram on BOTH ports.
+//
+// Two consequences of binding the literal ports, neither of which bites CI
+// (only Linux runs ctest) and both of which bite a developer locally:
+//
+//  - Two concurrent runs of the suite on one machine collide on 4992/4993 and
+//    one of them fails for a reason that is not a regression. The test says so
+//    explicitly rather than passing silently, but the message is easy to read
+//    as a real failure. Fixed ports are the point — an ephemeral pair would
+//    stop pinning the port set — so this is a caveat, not a defect.
+//  - start() picks its bind address via chooseLanBindAddress(). Here the
+//    explicit and session addresses are unset and the loopback TCP attempt
+//    never establishes, so it falls through to AnyIPv4 and the kernel routes
+//    the prime out of loopback. If a future change makes start() bind a real
+//    interface address instead, sending to 127.0.0.1 from a non-loopback
+//    source still works on Linux but not reliably on macOS or the BSDs.
 
 #include "core/PanadapterStream.h"
 #include "core/RadioConnection.h"

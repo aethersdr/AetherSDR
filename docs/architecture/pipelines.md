@@ -30,7 +30,7 @@ Multi-thread architecture — up to 12 threads depending on features enabled:
 │                                                                     │
 │  Radio UDP 4992 ──→ RadioDiscovery ──→ ConnectionPanel    [MAIN]    │
 │  Radio TCP 4992 ──→ RadioConnection ──→ RadioModel        [CONN]→[MAIN] │
-│  Radio UDP 4991 ──→ PanadapterStream (VITA-49 demux)      [NETWORK] │
+│  Radio UDP 4993 ──→ PanadapterStream (VITA-49 demux)      [NETWORK] │
 │  TGXL  TCP 9010 ──→ TgxlConnection ──→ TunerModel        [MAIN]    │
 │  WAN   TLS 4992 ──→ WanConnection ──→ RadioModel          [MAIN]    │
 │  WAN   UDP 4993 ──→ PanadapterStream                      [NETWORK] │
@@ -203,6 +203,22 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
   POTA (HTTP polling)  ─┤     + DxccColorProvider (ADIF lookup)
   FreeDV (WebSocket)   ─┘
 ```
+
+**On UDP 4993 appearing twice:** the `WAN UDP 4993` row is the radio's public
+UDP port on the SmartLink path — where `client udp_register` is sent *to*, and
+our default when SmartLink advertises no forwarded port. The `Radio UDP 4993`
+row is the LAN path, where VITA-49 arrives *from*: the radio listens for the
+one-byte prime on 4992 but streams back from source port 4993, which is why
+both are primed (see the VITA-49 quirks in `AGENTS.md`, and
+`PanadapterStream.cpp`). The two are consistent with a single radio-side VITA
+data socket on 4993 used by both paths, but only the LAN source port has been
+measured.
+
+That LAN row read `Radio UDP 4991` until #4926. 4991 is the radio-side
+*destination* for what PanadapterStream sends (`m_radioPort`, the DAX TX path),
+not where LAN VITA-49 comes in on — the inbound side lands on our ephemeral
+local port. The row is drawn inbound, so it now carries the measured source
+port.
 
 **Thread summary:**
 
