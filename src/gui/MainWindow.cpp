@@ -9223,11 +9223,27 @@ void MainWindow::updateKeyerAvailability()
         m_asrIndicator->setEnabled(asrIsVoice);
         const bool asrVisible =
             m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
-        // Same shape as the keyer auto-hides: only a slice that EXISTS and is in
-        // the wrong mode closes an open panel, so a transient no-active-slice
-        // window (slice teardown, band-stack rebuild) can't yank one the user
-        // has to re-open by hand (#4173).
-        if (asrSlice && !asrIsVoice && asrVisible) {
+        // NOT the keyers' shape, deliberately. They require their slice to EXIST
+        // before auto-hiding, so a transient no-TX-slice window during a TX
+        // handoff can't yank an open panel (#4173) — a handoff is frequent and
+        // normal. ASR closes on a null slice too, because "no slice at all" is
+        // not a handoff, and the alternative is a trap: the indicator would be
+        // setEnabled(false) yet styled kActive by the branch below, and a
+        // disabled indicator swallows its own clicks (MainWindow_Shortcuts.cpp)
+        // while the panel carries no close button of its own — leaving an open
+        // Copy Assist the operator cannot dismiss. Closing here keeps the two
+        // states that exist coherent: panel open ⇒ voice mode ⇒ indicator live
+        // and clickable.
+        //
+        // The null-slice case is ordinary, not exotic: DISCONNECT reaches it on
+        // every session. RadioModel clears m_slices without emitting
+        // sliceRemoved, so onSliceRemoved() never runs — but capabilitiesChanged
+        // fires on the disconnect edge, applyCapabilitiesToUi() calls this
+        // function, and activeSlice() then answers nullptr. Before this branch
+        // covered null, disconnecting with Copy Assist open left the panel
+        // stranded on screen. (AetherSDR's own ✕ handlers refuse to remove a
+        // last slice, so disconnect and a foreign client are the ways in.)
+        if (!asrIsVoice && asrVisible) {
             m_copyAssistApplet->setCopyAssistVisible(false);
             setIndicatorStyle(m_asrIndicator, kDisabled);
         } else if (asrVisible) {

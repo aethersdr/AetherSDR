@@ -2070,7 +2070,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // those two slices changes mode — narrowing this to the TX slice would
         // leave the ASR indicator stale after a CW→USB change on a non-TX
         // active slice, with no other edge to correct it.
-        if (s->isTxSlice() || s->sliceId() == m_activeSliceId)
+        //
+        // Through activeSlice(), not an m_activeSliceId comparison: the gate
+        // itself calls activeSlice(), which falls back to the first isActive()
+        // slice when the cached id's slice is not active. Asking the same
+        // question the gate asks keeps the trigger and the gate from diverging
+        // inside that fallback window (PR #4932 review).
+        if (s->isTxSlice() || activeSlice() == s)
             updateKeyerAvailability();
 #ifdef HAVE_RADE
         if (mode.startsWith("FDV"))
@@ -2427,7 +2433,10 @@ void MainWindow::onSliceRemoved(int id)
             // it. The re-select branch above reaches updateKeyerAvailability()
             // through setActiveSliceInternal(); this branch has no such call,
             // and without one the row keeps whatever state the departed slice
-            // left it in — a live ASR indicator with nothing to decode (#4825).
+            // left it in — a live-looking ASR indicator with nothing to decode,
+            // over an open Copy Assist panel that the (now disabled) indicator
+            // could no longer dismiss. The ASR gate closes the panel on a null
+            // slice for exactly that reason; this call is what runs it (#4825).
             updateKeyerAvailability();
         }
     }
