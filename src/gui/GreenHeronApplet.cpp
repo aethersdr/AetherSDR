@@ -266,7 +266,21 @@ void GreenHeronApplet::buildUI()
 
 QString GreenHeronApplet::selectedSwitch() const
 {
-    return m_wantedSwitch;
+    return effectiveSwitch();
+}
+
+QString GreenHeronApplet::effectiveSwitch() const
+{
+    // The roster arrives over several reads and has no terminator, so "not on
+    // the roster" never means "gone" with any certainty — it may simply be
+    // announced in a read that has not landed yet. Falling back is therefore a
+    // display decision only; m_wantedSwitch is left alone so a late SWITCHADD
+    // still re-selects what the operator asked for.
+    const QStringList names = m_model->displayOrder();
+    if (names.isEmpty() || names.contains(m_wantedSwitch)) {
+        return m_wantedSwitch;
+    }
+    return names.first();
 }
 
 void GreenHeronApplet::toggleConnection()
@@ -316,17 +330,20 @@ void GreenHeronApplet::refreshSwitchChoices()
     m_switchCombo->clear();
     m_switchCombo->addItems(names);
 
-    // Re-select the remembered switch if the device still has it; otherwise
-    // fall back to the first one rather than showing an empty list next to a
-    // connected server.
+    // Re-select the remembered switch if the device has announced it; otherwise
+    // show the first one rather than an empty list next to a connected server.
+    //
+    // The fallback does NOT write back to m_wantedSwitch or to settings. The
+    // roster spans several TCP reads, so a switch announced late is absent here
+    // for a moment through no fault of the operator; persisting the fallback
+    // would discard their choice on every connect and then drive the wrong
+    // switch's relays. Leaving it be means the combo snaps back on its own once
+    // the late SWITCHADD lands.
     const int index = names.indexOf(m_wantedSwitch);
     if (index >= 0) {
         m_switchCombo->setCurrentIndex(index);
     } else if (!names.isEmpty()) {
         m_switchCombo->setCurrentIndex(0);
-        m_wantedSwitch = names.first();
-        PeripheralSettings::setDeviceString(kSettingsDevice, kSettingsSwitch,
-                                            m_wantedSwitch);
     }
 }
 
@@ -354,7 +371,11 @@ void GreenHeronApplet::rebuildPortList()
         button->setAccessibleName(port);
         connect(button, &QPushButton::clicked, this, [this, switchName, port]() {
             if (m_model->selectPort(switchName, port)) {
-                note(tr("Sent %1 → %2").arg(switchName, port));
+                // A command that went out is not a warning. It is still not a
+                // confirmation either — the tile only lights when the device
+                // echoes the move back.
+                showNote(tr("Sent %1 → %2").arg(switchName, port),
+                         QStringLiteral("color.accent.success"));
             }
         });
         m_portLayout->addWidget(button);
@@ -367,7 +388,9 @@ void GreenHeronApplet::syncFromModel()
     refreshSwitchChoices();
     updateStatus();
 
-    const QString switchName = m_wantedSwitch;
+    // effectiveSwitch(), not m_wantedSwitch: the buttons built here send to the
+    // relays, so they must name the same switch the combo is showing.
+    const QString switchName = effectiveSwitch();
     const GreenHeronSwitchState state = m_model->switchState(switchName);
 
     if (switchName != m_builtForSwitch || state.ports != m_builtForPorts) {
@@ -438,16 +461,17 @@ void GreenHeronApplet::updateStatus()
     // rather than a status colour.
     QString colourToken = QStringLiteral("color.text.disabled");
     if (m_model->isConnected()) {
-        const GreenHeronSwitchState state = m_model->switchState(m_wantedSwitch);
+        const QString switchName = effectiveSwitch();
+        const GreenHeronSwitchState state = m_model->switchState(switchName);
         if (state.ports.isEmpty()) {
-            text = m_wantedSwitch.isEmpty()
+            text = switchName.isEmpty()
                        ? tr("Connected — waiting for roster")
-                       : tr("Connected — %1 not reported").arg(m_wantedSwitch);
+                       : tr("Connected — %1 not reported").arg(switchName);
             colourToken = QStringLiteral("color.accent.warning");
         } else {
             text = state.selected.isEmpty()
-                       ? tr("%1 connected").arg(m_wantedSwitch)
-                       : tr("%1 on %2").arg(m_wantedSwitch, state.selected);
+                       ? tr("%1 connected").arg(switchName)
+                       : tr("%1 on %2").arg(switchName, state.selected);
             colourToken = QStringLiteral("color.accent.success");
         }
     } else if (m_model->isStale()) {
@@ -473,7 +497,17 @@ void GreenHeronApplet::updateStatus()
 
 void GreenHeronApplet::note(const QString& text)
 {
+    // The plain form is the error/refusal one, so it keeps the warning token.
+    // It stays a single-argument slot because errorOccurred connects straight
+    // to it, and Qt's function-pointer connect does not honour default
+    // arguments.
+    showNote(text, QStringLiteral("color.accent.warning"));
+}
+
+void GreenHeronApplet::showNote(const QString& text, const QString& colourToken)
+{
     m_noteLabel->setText(text);
+    ThemeManager::instance().applyStyleSheet(m_noteLabel, statusStyle(colourToken));
     m_noteLabel->setAccessibleDescription(text);
     m_noteLabel->setVisible(!text.isEmpty());
     m_noteTimer->start();

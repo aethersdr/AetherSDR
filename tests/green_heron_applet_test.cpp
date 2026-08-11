@@ -81,6 +81,49 @@ private:
     QTcpSocket* m_connection{nullptr};
 };
 
+// The same roster, but delivered the way the wire actually delivers it: one
+// record per write with event-loop turns in between. FakeDevice's single
+// write() lands the whole script in one readyRead, which hides every defect
+// that only exists while the roster is half-arrived.
+const QList<QByteArray> kRosterRecords = {
+    QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-1\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n"),
+    QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-3\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n"),
+    QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-2\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n"),
+    QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-4\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n"),
+};
+
+// Writes the roster one record at a time and stops, so the test can inspect the
+// applet while only a prefix of the roster has been seen.
+class DribblingDevice : public QObject {
+public:
+    DribblingDevice()
+    {
+        m_server.listen(QHostAddress::LocalHost, 0);
+        connect(&m_server, &QTcpServer::newConnection, this, [this]() {
+            m_connection = m_server.nextPendingConnection();
+        });
+    }
+
+    quint16 port() const { return m_server.serverPort(); }
+    bool connected() const { return m_connection != nullptr; }
+
+    // Sends the next SWITCHADD. Returns false once the roster is exhausted.
+    bool sendNext()
+    {
+        if (m_connection == nullptr || m_next >= kRosterRecords.size()) {
+            return false;
+        }
+        m_connection->write(kRosterRecords.at(m_next++));
+        m_connection->flush();
+        return true;
+    }
+
+private:
+    QTcpServer m_server;
+    QTcpSocket* m_connection{nullptr};
+    int m_next{0};
+};
+
 bool waitFor(const std::function<bool()>& predicate, int timeoutMs = 5000)
 {
     QDeadlineTimer deadline(timeoutMs);
@@ -235,6 +278,67 @@ void testSwitchChoiceAndAddressPersist()
                == QLatin1String("127.0.0.1"));
 }
 
+// The roster spans several TCP reads and has no terminator. An operator whose
+// radio is fed from a late-announced switch must not lose that choice — nor
+// have the loss written to settings — while the earlier records are still
+// arriving. Announcing AS-84F-4 last is what makes this discriminating: it is
+// absent from the roster for three of the four steps.
+void testPartialRosterKeepsTheRememberedSwitch()
+{
+    PeripheralSettings::setDeviceString(QStringLiteral("GreenHeron"),
+                                        QStringLiteral("Switch"),
+                                        QStringLiteral("AS-84F-4"));
+
+    DribblingDevice device;
+    GreenHeronApplet applet;
+    auto* host = applet.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"));
+    auto* portSpin = applet.findChild<QSpinBox*>(QStringLiteral("greenHeronPort"));
+    auto* combo = applet.findChild<QComboBox*>(QStringLiteral("greenHeronSwitch"));
+    auto* connectBtn =
+        applet.findChild<QPushButton*>(QStringLiteral("greenHeronConnect"));
+
+    host->setText(QStringLiteral("127.0.0.1"));
+    portSpin->setValue(device.port());
+    connectBtn->click();
+    report("the dribbling device accepted the connection",
+           waitFor([&]() { return device.connected(); }));
+
+    // Records 1..3 — AS-84F-4 has not been announced yet at any of these steps.
+    for (int sent = 1; sent <= 3; ++sent) {
+        device.sendNext();
+        const bool arrived =
+            waitFor([&]() { return applet.model()->displayOrder().size() == sent; });
+        report(("partial roster step " + std::to_string(sent) + " arrived").c_str(),
+               arrived,
+               std::to_string(applet.model()->displayOrder().size()));
+
+        // The bug: the fallback used to write names.first() back to
+        // m_wantedSwitch AND to settings here, discarding the choice for good.
+        const QString persisted = PeripheralSettings::deviceString(
+            QStringLiteral("GreenHeron"), QStringLiteral("Switch"));
+        report(("a partial roster does not overwrite the persisted choice (step "
+                + std::to_string(sent) + ")").c_str(),
+               persisted == QLatin1String("AS-84F-4"), persisted.toStdString());
+    }
+
+    // Record 4 announces it; the chooser must snap back on its own.
+    device.sendNext();
+    const bool restored =
+        waitFor([&]() { return combo->currentText() == QLatin1String("AS-84F-4"); });
+    report("the late-announced switch is re-selected once it arrives", restored,
+           combo->currentText().toStdString());
+    report("and it is the switch the tile drives",
+           applet.selectedSwitch() == QLatin1String("AS-84F-4"),
+           applet.selectedSwitch().toStdString());
+
+    // The combo and the relays must never name different switches: the port
+    // buttons send to selectedSwitch(), so a display-only fix would leave the
+    // operator clicking AS-84F-4's antennas into AS-84F-1's relays.
+    report("the chooser and the driven switch agree",
+           combo->currentText() == applet.selectedSwitch(),
+           (combo->currentText() + " vs " + applet.selectedSwitch()).toStdString());
+}
+
 void testConfigIsOneOwnedObject()
 {
     // Constitution Principle V: the feature's configuration is one nested
@@ -265,6 +369,7 @@ int main(int argc, char** argv)
     testAppletBasics();
     testShowsOnlyTheChosenSwitch();
     testSwitchChoiceAndAddressPersist();
+    testPartialRosterKeepsTheRememberedSwitch();
     testConfigIsOneOwnedObject();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);

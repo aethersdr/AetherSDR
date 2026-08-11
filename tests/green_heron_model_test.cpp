@@ -259,6 +259,49 @@ void testSelectIsFireAndForgetAndNeverAssumed()
     report("the device's confirmation is what moves the model", confirmed);
 }
 
+// Record order on the wire is the device's business, not ours: a SWITCHUPDATE
+// can precede the SWITCHADD that names the switch's antennas. That state is
+// real and the device may never resend it, so it is kept — but a switch with no
+// known antennas is not offerable, so it stays out of displayOrder() until its
+// roster lands.
+void testUpdateBeforeAddIsHeldButNotOffered()
+{
+    FakeDevice device(QByteArrayLiteral(
+        "SWITCHUPDATE\x1f" "AS-84F-9\x1f" "Beam-40\x1f" "0\x1f" "-31\r\n"));
+    GreenHeronModel model;
+    model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
+
+    const bool held = waitFor([&]() {
+        return model.switchState(QStringLiteral("AS-84F-9")).selected
+               == QLatin1String("Beam-40");
+    });
+    report("state from an update before its add is kept", held);
+    report("but a switch with no antennas is not offered as a choice",
+           model.displayOrder().isEmpty(),
+           model.displayOrder().join(QLatin1Char(',')).toStdString());
+
+    // The SWITCHADD lands: the switch becomes offerable AND the earlier
+    // selection is still there — filling in the roster must not wipe it.
+    device.send(QByteArrayLiteral(
+        "SWITCHADD\x1f" "1\x1f" "AS-84F-9\x1f" "Beam-40\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n"));
+    const bool offered = waitFor([&]() {
+        return model.displayOrder() == QStringList{QStringLiteral("AS-84F-9")};
+    });
+    report("it becomes a choice once its roster arrives", offered,
+           model.displayOrder().join(QLatin1Char(',')).toStdString());
+    report("and the selection made before the roster survived",
+           model.switchState(QStringLiteral("AS-84F-9")).selected
+               == QLatin1String("Beam-40"),
+           model.switchState(QStringLiteral("AS-84F-9")).selected.toStdString());
+
+    // The attribution invariant the whole feature rests on: anything offerable
+    // has an announcement index, so a lock slot can always be resolved to it.
+    for (const QString& name : model.displayOrder()) {
+        report("an offered switch has an announcement index",
+               model.announcedOrder().contains(name), name.toStdString());
+    }
+}
+
 void testSelectRefusedWhenNotConnected()
 {
     GreenHeronModel model;
@@ -359,6 +402,7 @@ int main(int argc, char** argv)
     testLockSlotsIndexByAnnouncementOrder();
     testRecordsSplitOneByteAtATimeStillParse();
     testSelectIsFireAndForgetAndNeverAssumed();
+    testUpdateBeforeAddIsHeldButNotOffered();
     testSelectRefusedWhenNotConnected();
     testKeepAliveIsTheNulByte();
     testDropKeepsLastStateVisibleThenReconnects();
