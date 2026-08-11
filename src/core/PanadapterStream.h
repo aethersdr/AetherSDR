@@ -448,6 +448,11 @@ private:
     QMap<quint32, int> m_iqStreamIds;
     QSet<quint32> m_loggedDaxPacketStreams;
     QSet<quint32> m_loggedIqPacketStreams;
+    // One-byte UDP prime to the radio's VITA-49 register *and* stream ports.
+    // Priming the stream port is what opens the return path through a
+    // stateful far-side firewall on a routed VPN — see kVitaStreamPort.
+    bool sendUdpPrime(const QHostAddress& radioAddr);
+
     QHostAddress m_radioAddress;
     quint16      m_radioPort{0};
     QHostAddress m_localAddress;

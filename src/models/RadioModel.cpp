@@ -5686,8 +5686,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
         sendCmd(QString("client station %1").arg(ourStationName()));
         sendCmd("client set send_reduced_bw_dax=1");
-        // Set network MTU for VITA-49 packets (matches FlexLib behavior)
-        int mtu = AppSettings::instance().value("NetworkMtu", "1450").toInt();
+        // Set network MTU for VITA-49 packets (matches FlexLib behavior).
+        // 1400 clears both common tunnel MTUs — WireGuard's 1420 and OpenVPN's
+        // 1400 — because the radio sizes pan/waterfall payloads to fill this
+        // and an oversized datagram is dropped by the tunnel, not fragmented.
+        int mtu = AppSettings::instance().value("NetworkMtu", "1400").toInt();
         sendCmd(QString("client set enforce_network_mtu=1 network_mtu=%1").arg(mtu));
         // Enable keepalive (matches FlexLib behavior) — ping timer starts in startNetworkMonitor()
         sendCmd("keepalive enable");

@@ -22,6 +22,24 @@ namespace AetherSDR {
 namespace {
 
 constexpr QAbstractSocket::BindMode kLanVitaBindMode = QAbstractSocket::DontShareAddress;
+
+// The radio learns our UDP endpoint from the source address of the one-byte
+// prime datagram, and it *listens* for that prime on 4992 — but it *streams*
+// VITA-49 back from source port 4993. Those are two different flows.
+//
+// On a flat LAN nothing between us and the radio keeps state, so priming 4992
+// alone works and the asymmetry is invisible. Over a routed VPN (WireGuard)
+// the far side is stateful: conntrack holds an entry only for the flow we
+// primed, so every VITA-49 datagram — pan, waterfall, and audio alike —
+// arrives as an unsolicited 4993 flow and is dropped. TCP connects fine, and
+// the operator sees a working radio with a dead panadapter.
+//
+// Priming both ports costs one extra byte and opens the return path. Measured
+// on a FLEX-6500 over WireGuard: 4992 alone → 0 datagrams; adding 4993 →
+// 3377 datagrams in 10 s, and the flow then self-sustains because the inbound
+// stream keeps refreshing the conntrack entry.
+constexpr quint16 kVitaRegisterPort = 4992;  // radio listens for the prime here
+constexpr quint16 kVitaStreamPort   = 4993;  // radio streams VITA-49 from here
 constexpr float kMinSpectrumDbm = -180.0f;
 constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
 constexpr int kOpusFramesPerPacket = 240;
@@ -149,11 +167,29 @@ void PanadapterStream::init()
             m_routedPrimeTimer->stop();
             return;
         }
-        const QByteArray reg(1, '\x00');
-        const qint64 sent = m_socket->writeDatagram(reg, m_radioAddress, 4992);
-        if (sent > 0)
-            m_totalTxBytes.fetch_add(sent);
+        sendUdpPrime(m_radioAddress);
     });
+}
+
+bool PanadapterStream::sendUdpPrime(const QHostAddress& radioAddr)
+{
+    if (radioAddr.isNull() || !m_socket)
+        return false;
+
+    const QByteArray reg(1, '\x00');
+    bool primed = false;
+    for (const quint16 port : {kVitaRegisterPort, kVitaStreamPort}) {
+        const qint64 sent = m_socket->writeDatagram(reg, radioAddr, port);
+        if (sent == 1) {
+            m_totalTxBytes.fetch_add(sent);
+            primed = true;
+        } else {
+            qCWarning(lcVita49) << "PanadapterStream: UDP prime to"
+                                << radioAddr.toString() << ":" << port
+                                << "failed:" << m_socket->errorString();
+        }
+    }
+    return primed;
 }
 
 bool PanadapterStream::isRunning() const
@@ -258,23 +294,20 @@ bool PanadapterStream::start(RadioConnection* conn)
     qCDebug(lcVita49) << "PanadapterStream: local UDP endpoint"
                       << m_localAddress.toString() << ":" << m_localPort;
 
-    // Send a one-byte UDP registration datagram to the radio's VITA-49 port.
+    // Send a one-byte UDP registration datagram to the radio's VITA-49 ports.
     // The radio learns our IP:port from the source address of this datagram.
-    // This is required on firmware v1.4.0.0 where the TCP "client udpport"
-    // command may return 0x50001000 ("command not supported").
+    // This is the load-bearing registration: the TCP "client udpport" command
+    // returns 0x50001000 ("command not supported") on some firmware, and even
+    // where it succeeds — it returns 0 on 4.2.20 — it does not by itself open
+    // the return path. See kVitaStreamPort on why the stream port is primed too.
     const QHostAddress radioAddr = conn->radioAddress();
     if (!radioAddr.isNull()) {
-        const QByteArray reg(1, '\x00');
-        const qint64 sent = m_socket->writeDatagram(reg, radioAddr, 4992);
-        if (sent == 1) {
-            m_totalTxBytes.fetch_add(sent);
+        if (sendUdpPrime(radioAddr)) {
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
-                              << radioAddr.toString() << ":4992";
+                              << radioAddr.toString()
+                              << "ports" << kVitaRegisterPort << "and" << kVitaStreamPort;
             m_routedPrimeElapsed.restart();
             m_routedPrimeTimer->start(250);
-        } else {
-            qCWarning(lcVita49) << "PanadapterStream: UDP registration send failed:"
-                                << m_socket->errorString();
         }
     } else {
         qCWarning(lcVita49) << "PanadapterStream: radio address unknown — skipping UDP registration";
@@ -336,17 +369,12 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         << QStringLiteral("reason=%1").arg(bindReason);
 
     if (!m_radioAddress.isNull()) {
-        const QByteArray reg(1, '\x00');
-        const qint64 sent = m_socket->writeDatagram(reg, m_radioAddress, 4992);
-        if (sent == 1) {
-            m_totalTxBytes.fetch_add(sent);
+        if (sendUdpPrime(m_radioAddress)) {
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
-                              << m_radioAddress.toString() << ":4992";
+                              << m_radioAddress.toString()
+                              << "ports" << kVitaRegisterPort << "and" << kVitaStreamPort;
             m_routedPrimeElapsed.restart();
             m_routedPrimeTimer->start(250);
-        } else {
-            qCWarning(lcVita49) << "PanadapterStream: UDP registration send failed after rebind:"
-                                << m_socket->errorString();
         }
     } else {
         qCWarning(lcVita49) << "PanadapterStream: radio address unknown - skipping UDP registration after rebind";

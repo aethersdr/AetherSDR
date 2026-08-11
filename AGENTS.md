@@ -451,7 +451,7 @@ key=value pairs by locating the last space before the first `=` sign.
 2. `sub <topic> all` for each of: `slice`, `pan`, `tx`, `amplifier`, `atu`,
    `meter`, `audio`, `gps`, `apd`, `client`, `xvtr`
 3. `client gui` + `client program AetherSDR` + `client station AetherSDR`
-4. Bind UDP socket, send `\x00` to radio:4992 (port registration)
+4. Bind UDP socket, send `\x00` to radio:**4992 and 4993** (port registration)
 5. `client udpport <port>` (returns error 0x50001000 on v1.4.0.0 — expected)
 6. `slice list` → if empty, create default slice (14.225 MHz USB ANT1)
 7. `stream create type=remote_audio_rx compression=none` → radio starts sending
@@ -459,7 +459,15 @@ key=value pairs by locating the last space before the first `=` sign.
 
 ### Protocol / Firmware Quirks (v1.4.0.0 protocol on fw 4.x)
 
-- `client set udpport` returns `0x50001000` — use the one-byte UDP packet method
+- `client set udpport` returns `0x50001000` — use the one-byte UDP packet method.
+  (On fw 4.2.20 `client udpport` itself returns `0`, but succeeding does not
+  open the return path — the one-byte prime is still what registers us.)
+- **The radio listens for the prime on 4992 but streams VITA-49 back from
+  source port 4993.** Prime *both*. On a LAN the asymmetry is invisible; over a
+  routed VPN the far side is stateful, so priming only 4992 means every
+  pan/waterfall/audio datagram arrives as an unsolicited 4993 flow and is
+  dropped — radio connects, panadapter stays dead. Measured on a FLEX-6500
+  (fw 4.2.20): 4992 alone → 0 datagrams; adding 4993 → 3377 in 10 s.
 - `client set enforce_local_ptt=1` returns `0x50001000` — correct command is `client set local_ptt=1`; the radio echoes a full `connected` status to ALL clients updating their `local_ptt` field when ownership changes
 - Slice frequency is `RF_frequency` (not `freq`) in status messages
 - Streams are discriminated by **PacketClassCode** (PCC), NOT by packet type
