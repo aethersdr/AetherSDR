@@ -3909,6 +3909,14 @@ target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
+# Floating-panadapter crash-loop guard (#4617) — pins that a session which died
+# inside floatPanadapter() comes up docked instead of replaying the crash.
+add_executable(floating_restore_policy_test
+    tests/floating_restore_policy_test.cpp
+)
+target_include_directories(floating_restore_policy_test PRIVATE src)
+add_test(NAME floating_restore_policy_test COMMAND floating_restore_policy_test)
+
 add_executable(software_opengl_request_test
     tests/software_opengl_request_test.cpp
 )

@@ -5,6 +5,8 @@
 #include <QSet>
 #include <QSplitter>
 
+class QTimer;
+
 namespace AetherSDR {
 
 class BandStackPanel;
@@ -76,15 +78,32 @@ public:
     void saveFloatingState() const;
     void restoreFloatingState();
 
+    // How long a freshly floated panadapter must stay alive before the
+    // crash-loop marker is retired (#4617). The float path's failure mode is
+    // immediate — the reparent, the GPU re-initialize and the first frame in
+    // the new window all land within one event-loop turn — so this only has to
+    // outlast that turn plus the deferred refreshAfterReparent().
+    static constexpr int kFloatingRestoreSettleMs = 5000;
+
     void prepareShutdown();
 
 signals:
     void activePanChanged(const QString& panId);
     void panFloated(const QString& panId);
     void panDocked(const QString& panId);
+    // The previous session died while floating panadapters, so they were
+    // dropped and this one came up docked. Carries how many were dropped —
+    // enough for plural agreement in the operator notice, and nothing more:
+    // the internal 0x4000… pan IDs appear nowhere else in the UI, so they
+    // would give the operator no action they could take.
+    void floatingRestoreAbandoned(int abandonedPanCount);
 
 private:
     void rebuildDockedSplitter();
+    // Arm / retire the persisted "a float is in flight" marker (#4617).
+    void armFloatingRestoreMarker();
+    void clearFloatingRestoreMarker();
+    void announceAbandonedFloatingRestore();
 
     PanadapterRenderScheduler* m_renderScheduler{nullptr};
     BandStackPanel* m_bandStackPanel{nullptr};
@@ -95,6 +114,12 @@ private:
     QSet<QString> m_seenPanIds;
     QString m_activePanId;
     bool m_shutdownPrepared{false};
+    // How many pans the constructor discarded because the previous process
+    // never survived floating them. Announced on a zero-timer at launch (once
+    // wirePanLifecycle() has connected to us) and again from
+    // restoreFloatingState(), which consumes it.
+    int m_floatingRestoreAbandonedCount{0};
+    QTimer* m_floatingRestoreSettleTimer{nullptr};
 };
 
 } // namespace AetherSDR
