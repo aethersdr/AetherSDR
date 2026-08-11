@@ -1,9 +1,11 @@
 #include "TestSettingsProfile.h"
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
+#include "gui/Theme.h"
 
 #include <QApplication>
 #include <QLabel>
+#include <QSlider>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QSignalSpy>
@@ -15,6 +17,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QStringList>
+#include <QTest>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -1453,6 +1456,42 @@ int main(int argc, char** argv)
 
     // Restore Default Dark for any future test additions below.
     tm.setActiveTheme("Default Dark");
+
+    // #4869: a themed slider must not carry Qt::WA_Hover — the canonical
+    // slider theme (Theme.h) declares no :hover rule, so the hover repaint
+    // QStyleSheetStyle::polish() gates behind that attribute changes no
+    // pixels, and at a fractional effective device pixel ratio (a non-100%,
+    // non-200% AetherSDR UI scale on a Retina display) its partial-rect
+    // update() leaves stale pixels behind. Pins both polish paths
+    // applyPrimarySliderStyle()'s SliderHoverSuppressor has to cover:
+    //   - FIRST polish, on initial show() — every real call site styles the
+    //     slider while it's still unparented, so this is the path that
+    //     decides what an operator actually sees, and it's the one the
+    //     original #4869 fix silently failed to reach (QEvent::Polish is
+    //     delivered to filters BEFORE style()->polish() runs, so an inline
+    //     clear there fires too early; it has to be queued to land after).
+    //   - RE-polish, on a theme switch (reapplyAllTrackedStyleSheets()
+    //     polishes first and sends QEvent::StyleChange after, so an inline
+    //     clear there is correct).
+    {
+        QWidget host;
+        auto* layout = new QVBoxLayout(&host);
+        auto* slider = new QSlider(Qt::Horizontal);
+        // Styled before parenting, matching every real call site
+        // (RxApplet.cpp, PhoneApplet.cpp, AetherDspWidget.cpp, ...).
+        applyPrimarySliderStyle(slider);
+        layout->addWidget(slider);
+
+        host.show();
+        QTest::qWait(50);
+        EXPECT_TRUE(!slider->testAttribute(Qt::WA_Hover));
+
+        tm.setActiveTheme("Default Light");
+        QTest::qWait(50);
+        EXPECT_TRUE(!slider->testAttribute(Qt::WA_Hover));
+
+        tm.setActiveTheme("Default Dark");
+    }
 
     if (g_failures == 0) {
         std::fprintf(stderr, "PASS theme_manager_test\n");

@@ -15,6 +15,7 @@
 #include "core/ThemeManager.h"
 
 #include <QEvent>
+#include <QMetaObject>
 #include <QObject>
 #include <QString>
 #include <QWidget>
@@ -24,9 +25,29 @@ namespace AetherSDR {
 namespace detail {
 
 // Supports applyPrimarySliderStyle()'s Qt::WA_Hover suppression (#4869) —
-// re-clears the attribute after every re-polish (theme switch, reparent)
-// re-asserts it. One process-wide instance filters every themed slider;
-// `watched` disambiguates which one on each call.
+// re-clears the attribute every time QStyleSheetStyle::polish() sets it.
+// One process-wide instance filters every themed slider; `watched`
+// disambiguates which one on each call.
+//
+// Two distinct polish events, two distinct fixes — verified against Qt
+// 6.11.1 by instrumenting WA_Hover through the real construction sequence
+// every call site uses (style while unparented -> reparent -> show):
+//
+//   - RE-polish (a theme switch via ThemeManager::reapplyAllTrackedStyleSheets(),
+//     or a reparent via ThemeManager::eventFilter()'s ParentChange path) calls
+//     setStyleSheet() again, which polishes the widget FIRST and sends
+//     QEvent::StyleChange AFTER. Clearing inline on StyleChange is correct
+//     here — the attribute is already set by the time this filter runs.
+//   - FIRST polish is different. Every slider is styled via
+//     applyPrimarySliderStyle() while still unparented, so setStyleSheet()
+//     does not repolish (QWidget::setStyleSheet() only repolishes a widget
+//     that is ALREADY polished) — WA_Hover is not set yet at that call.  The
+//     real first polish happens later, inside ensurePolished() on first
+//     show(), which delivers QEvent::Polish — and event filters run BEFORE
+//     QWidget::event() reaches style()->polish(), so an inline clear here
+//     would fire too early, before polish() has set anything to clear.
+//     The clear has to be queued so it lands immediately after polish()
+//     runs instead.
 class SliderHoverSuppressor : public QObject {
 public:
     static SliderHoverSuppressor& instance()
@@ -38,9 +59,15 @@ public:
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override
     {
-        if (event->type() == QEvent::StyleChange) {
+        const QEvent::Type type = event->type();
+        if (type == QEvent::StyleChange || type == QEvent::Polish) {
             if (auto* w = qobject_cast<QWidget*>(watched)) {
-                w->setAttribute(Qt::WA_Hover, false);
+                if (type == QEvent::StyleChange) {
+                    w->setAttribute(Qt::WA_Hover, false);
+                } else {
+                    QMetaObject::invokeMethod(w, [w] { w->setAttribute(Qt::WA_Hover, false); },
+                                              Qt::QueuedConnection);
+                }
             }
         }
         return false;
@@ -271,21 +298,30 @@ inline QString primarySliderStyleTemplate(const QString& accentToken = QStringLi
 // rounding on that no-op repaint's flush leaves stale pixels on screen.
 // Confirmed: artifacts reproduce at 125%/150% and are absent at 100%
 // and 200% (integral DPR, no rounding error).
+//
+// This makes the ABSENCE of a slider :hover rule load-bearing — if one is
+// ever added to primarySliderStyleTemplate() above, it will silently never
+// render, because this suppression turns the attribute that gates it back
+// off before the operator can ever trigger it. Remove this suppression
+// first if that changes.
 inline void applyPrimarySliderStyle(QWidget* slider,
                                     const QString& accentToken = QStringLiteral("color.slider.foreground"))
 {
     if (!slider) return;
     ThemeManager::instance().applyStyleSheet(slider, primarySliderStyleTemplate(accentToken));
-    // polish() already ran synchronously inside setStyleSheet() above, so
-    // clear the attribute it just set...
+    // Belt-and-braces for the rare caller that re-styles an already-shown
+    // (already-polished) slider — QWidget::setStyleSheet() only repolishes a
+    // widget that is already polished, so on the normal path (every current
+    // call site styles the slider while it's still unparented) this clears
+    // an attribute that was never set: polish() hasn't run yet, so WA_Hover
+    // isn't set yet either. The real first polish happens later, inside
+    // ensurePolished() on first show() — see SliderHoverSuppressor for how
+    // that path is actually covered.
     slider->setAttribute(Qt::WA_Hover, false);
-    // ...and again after every future re-polish (a theme switch runs
-    // ThemeManager::reapplyAllTrackedStyleSheets(), and a reparent runs
-    // ThemeManager::eventFilter()'s QEvent::ParentChange path — both call
-    // setStyleSheet() again, which re-triggers polish()). One shared filter
-    // instance serves every themed slider; installing it more than once on
-    // the same widget (e.g. a second applyPrimarySliderStyle() call) is
-    // harmless since clearing an already-clear attribute is a no-op.
+    // One shared filter instance serves every themed slider.
+    // QObject::installEventFilter() de-duplicates internally (it removes any
+    // existing entry before prepending), so a second applyPrimarySliderStyle()
+    // call on the same widget cannot register the filter twice.
     slider->installEventFilter(&detail::SliderHoverSuppressor::instance());
 }
 
