@@ -168,7 +168,15 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             m_panStack->bandStackPanel()
             && m_panStack->bandStackPanel()->isVisibleTo(m_panStack);
 
-        m_splitter->replaceWidget(panIdx, m_workspaceCanvas);
+        // Detach the stack EXPLICITLY, then insert the canvas into the freed
+        // slot.  replaceWidget() would do a version of this internally, but
+        // the disable path cannot use it at all (below), and the two
+        // directions must mirror each other rather than lean on Qt's
+        // internal ordering.  The parentless moment is the same detour the
+        // phase-3 takeItem() made with the whole stack — field-proven here;
+        // on macOS this is the path refreshAfterReparent() exists for.
+        m_panStack->setParent(nullptr);
+        m_splitter->insertWidget(panIdx, m_workspaceCanvas);
         m_workspaceCanvas->show();
         // Since phase 4 the stack is not an item — its applets are.  It
         // rides hidden as the pans' owner (creation, wiring, float/dock,
@@ -212,7 +220,14 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
     // flat column of whatever order the returns happened in.
     m_workspaceController->disable();
 
+    // The stack is a CHILD of the canvas while the mode is on, so the swap
+    // must detach it first — replaceWidget(canvas, stack) would be replacing
+    // a widget with its own descendant, which Qt part-executes into a wedged
+    // shell: the canvas leaves the splitter with the stack still inside it,
+    // and "classic mode" comes back as a blank centre with the pan painting
+    // at its stale canvas rect (the 8600 field report).
     const int canvasIdx = m_splitter->indexOf(m_workspaceCanvas);
+    m_panStack->setParent(nullptr);
     if (canvasIdx >= 0) {
         m_splitter->replaceWidget(canvasIdx, m_panStack);
     }

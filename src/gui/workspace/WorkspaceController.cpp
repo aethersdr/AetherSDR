@@ -440,6 +440,16 @@ bool WorkspaceController::sendPanToCanvas(const QString& panId)
         }
         return false;
     }
+    // To the BACK, always.  addItem() places new items frontmost — right
+    // for applets, wrong for a pan: pans are the SURFACE the rest of the
+    // station sits on ("a meter over the spectrum is a feature").  Radio
+    // pans arrive seconds after enable-time placement (connect, band
+    // recall, dock), so without this every real-radio pan landed on top of
+    // the operator's arrangement and swallowed its clicks and wheel — the
+    // 8600 field report: only the pan and its VFO flag still responded.
+    // Boot-time placement honours stored z via restoreItems(); this keeps
+    // the late-arrival path consistent with it.
+    m_canvas->sendItemToBack(itemId);
     writeItemPresence(itemId, QStringLiteral("panadapter"),
                       m_canvas->itemRect(itemId), /*present=*/true,
                       /*flushNow=*/true);

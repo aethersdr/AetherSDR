@@ -371,6 +371,12 @@ int main(int argc, char** argv)
                canvas.contains("pan:1") && panB->parentWidget() == &canvas);
         report("...and its slot is persisted",
                storedDocument().contains(QStringLiteral("pan:1")));
+        report("...at the BACK — never over the operator's arrangement "
+               "(the 8600 field report)",
+               canvas.layout().zOf(QStringLiteral("pan:1"))
+                       < canvas.layout().zOf(QStringLiteral("applet:RX"))
+                   && canvas.layout().zOf(QStringLiteral("pan:1"))
+                          < canvas.layout().zOf(QStringLiteral("applet:TX")));
 
         // Float: the applet has been adopted elsewhere (here: simulated by
         // the flag); the entry is released, the document item survives.
