@@ -1163,12 +1163,18 @@ MainWindow::MainWindow(QWidget* parent)
         // MainWindow's direct children (QStatusBar, the central widget,
         // QSizeGrip) are all native windows that would otherwise swallow
         // every edge event before the top level saw it — see the
-        // FramelessResizer header (#4827).  It doesn't compete with the
-        // TitleBar's drag-to-move handler (the 6 px resize margin is well
-        // clear of the 18+ px title-bar height).  Stays installed across
-        // frameless toggles — when the system frame is back on, the
+        // FramelessResizer header (#4827).  topMoveReserve = TitleBar::kHeight
+        // reserves the whole title bar for its own drag-to-move handler and
+        // the menu bar / min-max-close controls it hosts, rather than the
+        // resizer's 6 px top-edge margin (previously the default 0, which
+        // put that margin *inside* the 32 px title bar and shadowed the
+        // first few px of all of them — #4886).  MainWindow therefore has
+        // no top-edge resize at all in frameless mode, only left/right/
+        // bottom; that trade was already implicit before this PR, since the
+        // filter was dead on every edge here until now.  Stays installed
+        // across frameless toggles — when the system frame is back on, the
         // platform owns resize and our filter no-ops.
-        FramelessResizer::install(this);
+        FramelessResizer::install(this, 6, TitleBar::kHeight);
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
         // key into the nested AppSettings["CwDecoder"] blob (#2417).  The

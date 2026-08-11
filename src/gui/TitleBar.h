@@ -24,6 +24,13 @@ class TitleBar : public QWidget {
     Q_OBJECT
 
 public:
+    // The fixed height set on `this` in the constructor. Named so
+    // MainWindow can pass it as FramelessResizer's topMoveReserve without
+    // duplicating the literal — the two must stay in lockstep, or the edge-
+    // resize margin either overlaps the title bar (#4886) or leaves a dead
+    // strip below it.
+    static constexpr int kHeight = 32;
+
     explicit TitleBar(QWidget* parent = nullptr);
 
     // Embed the menu bar into the left side of the title bar

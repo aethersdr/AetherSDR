@@ -111,7 +111,7 @@ TitleBar::TitleBar(QWidget* parent)
     : QWidget(parent)
 {
     AetherSDR::theme::setContainer(this, QStringLiteral("titlebar"));
-    setFixedHeight(32);
+    setFixedHeight(kHeight);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "TitleBar { background: {{color.background.0}}; border-bottom: 1px solid {{color.background.1}}; }");
 
     m_hbox = new QHBoxLayout(this);

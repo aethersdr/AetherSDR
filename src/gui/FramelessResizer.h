@@ -87,19 +87,35 @@ namespace AetherSDR {
 // bridge-driven proof would need a window-targeted synthetic event path
 // added to the bridge; real OS-level input (as above) was the workaround.
 //
-// Shadowed-control check on MainWindow: confirmed live under xcb via a
-// read-only widgetAt/childAt probe at the running window's bottom-edge margin
-// — the status bar (46px, docked at the window's bottom edge) hosts several
-// clickable controls whose rects genuinely extend into the bottom 6px:
-// `gpsStatusButton` by ~4px, the "Cancel transmit" status label by ~1px. A
-// press landing there is consumed by this class before the widget ever sees
-// it — Qt calls application-installed event filters ahead of the receiver's
-// own event() for every dispatch, so that is guaranteed once a press reaches
-// this filter (proven above), not merely likely. Filed as a follow-up rather
-// than fixed here (#4886): the fix belongs in the status bar
-// layout (cap each stack's maximumHeight so its clickable area stops short
-// of the edge) rather than in this class, which has no way to know about a
-// specific adopter's child geometry.
+// Shadowed-control check on MainWindow: confirmed live via a read-only
+// widgetAt/childAt probe at the running window's margins, on both edges the
+// default 6px band covers. A press landing in a shadowed rect is consumed by
+// this class before the widget ever sees it — Qt calls application-installed
+// event filters ahead of the receiver's own event() for every dispatch, so
+// that is guaranteed once a press reaches this filter, not merely likely.
+//
+//   - Top (TitleBar, 32px, at y=0): fixed in this PR by installing with
+//     topMoveReserve = TitleBar::kHeight (see MainWindow.cpp) instead of the
+//     default 0. Before that fix, the top 6px consumed the top 5px of
+//     QMenuBar and the top 2px of the Minimize/Maximize/Close labels — #4827
+//     itself lists those controls among the things that worked correctly
+//     before this PR, so a live band there was a regression, not a
+//     pre-existing gap, and worth fixing here rather than deferring.
+//   - Bottom (QStatusBar, 46px, docked flush): *not* fixed here, tracked as
+//     #4886. First measured (an earlier round of this PR) as two examples —
+//     `gpsStatusButton` by ~4px, the "Cancel transmit" label by ~1px — which
+//     understated it: the status bar's inner container and ~20 direct
+//     children are laid out flush with each other, so essentially every
+//     clickable status control extends ~4px into the band the same way
+//     `gpsStatusButton` does; `Cancel transmit` is the outlier that mostly
+//     stops short, not a second representative example. #4886's own
+//     enumeration should be corrected to match before it's acted on.
+//     Deferred rather than fixed alongside the top edge because the fix is
+//     the same shape either way — cap each control's clickable rect short of
+//     the margin — but the bottom edge has an order of magnitude more
+//     controls to individually re-check, and none of them are the window's
+//     own min/max/close/menu controls a regression report would be filed
+//     against immediately.
 //
 // Known artifact of that manual path: dragging an edge that moves the window
 // origin (left or top) can make the opposite edge appear to shimmer under a
@@ -148,6 +164,25 @@ public:
     // (quirk 1). A separate top-level (e.g. a dialog) has a null parent()
     // and only a transientParent, so this never reaches across windows.
     static bool windowOwnsChain(const QWindow* win, const QWindow* mine);
+
+    // The margin/reserve math edgesAt() applies: which edges (if any) a
+    // window-local point `p` is within `margin` px of, given the window's
+    // own `rect`. `topMoveReserve` excludes TopEdge for any point above that
+    // many px regardless of margin — the mechanism MainWindow's
+    // `topMoveReserve = TitleBar::kHeight` relies on to keep the resize band
+    // out of the title bar (#4886/#4827 review round 3). No edges at all
+    // while `maximizedOrFullscreen`, or for a point outside `rect` entirely
+    // (reachable since events now arrive from native children carrying
+    // global coordinates).
+    static Qt::Edges computeEdges(const QRect& rect, const QPoint& p, int margin,
+                                   int topMoveReserve, bool maximizedOrFullscreen);
+
+    // The decision QEvent::Leave applies when a manual resize is active but
+    // never got a real mouse grab: true means end the drag right there,
+    // because without a grab we stop receiving any further events for it —
+    // including the release — once the pointer leaves our window.
+    static bool shouldEndOnUngrabbedLeave(bool manualResizeActive,
+                                           bool manualResizeGrabbed);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;

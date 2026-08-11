@@ -1,11 +1,23 @@
-// Regression coverage for FramelessResizer's two pure-logic helpers, added
-// per review on PR #4829 (frameless move/resize under xcb, #4827): neither
-// continueManualResize()'s clamping arithmetic nor ownsWindow()'s
-// parent-chain matching had a test, and the XTest-driven proof in that PR
-// only exercises one platform's one drag. clampManualResize() and
-// windowOwnsChain() are the same code the private instance methods call
-// (FramelessResizer.h), pulled out static so they're reachable here without
-// a full widget/window hierarchy.
+// Regression coverage for FramelessResizer's pure-logic helpers, added per
+// review on PR #4829 (frameless move/resize under xcb, #4827) and grown
+// across two further review rounds. None of continueManualResize()'s
+// clamping arithmetic, ownsWindow()'s parent-chain matching, edgesAt()'s
+// margin/topMoveReserve math, or the ungrabbed-Leave end-drag decision had a
+// test, and the XTest-driven proof in that PR only exercises one platform's
+// one drag. clampManualResize(), windowOwnsChain(), computeEdges(), and
+// shouldEndOnUngrabbedLeave() are the same code the private instance methods
+// call (FramelessResizer.h), pulled out static so they're reachable here
+// without a full widget/window hierarchy.
+//
+// computeEdges() coverage exists specifically because of a real regression a
+// review round found: MainWindow's FramelessResizer::install() call left
+// topMoveReserve at its default 0, so the resize band lived inside the 32px
+// title bar and shadowed the menu bar and min/max/close controls (#4886).
+// The topMoveReserve cases below are the regression test for that class of
+// bug — a future adopter that installs with a title bar but forgets to pass
+// topMoveReserve won't be caught here (that's a call-site/integration
+// concern, not this function's), but if topMoveReserve *is* passed, these
+// cases pin down that it actually suppresses TopEdge correctly.
 
 #include "gui/FramelessResizer.h"
 
@@ -148,6 +160,87 @@ void testNoEdges()
            rectStr(result));
 }
 
+// The margin/topMoveReserve math edgesAt() applies — added for the #4829
+// review round that found MainWindow's install() call left topMoveReserve
+// at its default 0, so the resize band lived *inside* the title bar and
+// shadowed the menu bar and min/max/close controls (#4886). These cases
+// exist to keep that mechanism honest: a nonzero topMoveReserve must
+// suppress TopEdge for every point above it, margin-only or not.
+void testComputeEdges()
+{
+    const QRect win(0, 0, 400, 300);   // window-local rect, as edgesAt() sees it
+
+    // No topMoveReserve: every edge and corner detected within margin.
+    report("computeEdges: left edge",
+           FramelessResizer::computeEdges(win, QPoint(0, 150), 6, 0, false)
+               == Qt::LeftEdge);
+    report("computeEdges: right edge",
+           FramelessResizer::computeEdges(win, QPoint(399, 150), 6, 0, false)
+               == Qt::RightEdge);
+    report("computeEdges: top edge",
+           FramelessResizer::computeEdges(win, QPoint(200, 0), 6, 0, false)
+               == Qt::TopEdge);
+    report("computeEdges: bottom edge",
+           FramelessResizer::computeEdges(win, QPoint(200, 299), 6, 0, false)
+               == Qt::BottomEdge);
+    report("computeEdges: top-left corner",
+           FramelessResizer::computeEdges(win, QPoint(0, 0), 6, 0, false)
+               == (Qt::TopEdge | Qt::LeftEdge));
+    report("computeEdges: outside every margin — no edges",
+           FramelessResizer::computeEdges(win, QPoint(200, 150), 6, 0, false)
+               == Qt::Edges{});
+
+    // The regression this exists to catch: topMoveReserve=32 (TitleBar's
+    // real height) must suppress TopEdge for the whole reserved strip, even
+    // though y=5 is well within the 6px margin on its own.
+    report("computeEdges: y=5 inside a 32px topMoveReserve — TopEdge suppressed",
+           FramelessResizer::computeEdges(win, QPoint(200, 5), 6, 32, false)
+               == Qt::Edges{});
+    // topMoveReserve suppresses *every* edge in the reserved strip, not just
+    // TopEdge — edgesAt()'s early return exits before Left/Right/Bottom are
+    // even checked, matching its own comment that the whole strip is the
+    // window's own move handling, not a resize zone. A point at x=0 (which
+    // would be LeftEdge on its own) still gets nothing at y=5 < reserve=32.
+    report("computeEdges: reserve suppresses ALL edges in the strip, not just Top"
+           " — x=0,y=5 (would be LeftEdge) is still nothing",
+           FramelessResizer::computeEdges(win, QPoint(0, 5), 6, 32, false)
+               == Qt::Edges{});
+    report("computeEdges: topMoveReserve boundary — y==reserve is no longer"
+           " suppressed, but it's also past the margin so still no edge",
+           FramelessResizer::computeEdges(win, QPoint(200, 32), 6, 32, false)
+               == Qt::Edges{});
+    report("computeEdges: below topMoveReserve, within margin of a closer edge — LeftEdge",
+           FramelessResizer::computeEdges(win, QPoint(2, 40), 6, 32, false)
+               == Qt::LeftEdge);
+
+    // Maximized/fullscreen: no edges anywhere, topMoveReserve or not.
+    report("computeEdges: maximized suppresses every edge",
+           FramelessResizer::computeEdges(win, QPoint(0, 0), 6, 0, true)
+               == Qt::Edges{});
+
+    // A point outside the window rect entirely (reachable since native
+    // children deliver events in global coordinates) — no edges, not a
+    // false-positive edge from unclamped comparisons.
+    report("computeEdges: point outside the window rect — no edges",
+           FramelessResizer::computeEdges(win, QPoint(-10, 150), 6, 0, false)
+               == Qt::Edges{});
+}
+
+// The decision behind the #4829 review-round-3 fix: an active manual resize
+// with no real grab must end itself on Leave, or it strands m_manualResizeActive
+// true until (at best) a buttonless move eventually arrives.
+void testShouldEndOnUngrabbedLeave()
+{
+    report("shouldEndOnUngrabbedLeave: active + ungrabbed -> end it",
+           FramelessResizer::shouldEndOnUngrabbedLeave(true, false));
+    report("shouldEndOnUngrabbedLeave: active + grabbed -> leave it running",
+           !FramelessResizer::shouldEndOnUngrabbedLeave(true, true));
+    report("shouldEndOnUngrabbedLeave: inactive + ungrabbed -> nothing to end",
+           !FramelessResizer::shouldEndOnUngrabbedLeave(false, false));
+    report("shouldEndOnUngrabbedLeave: inactive + grabbed -> nothing to end",
+           !FramelessResizer::shouldEndOnUngrabbedLeave(false, true));
+}
+
 void testWindowOwnsChain()
 {
     QWindow mine;
@@ -185,6 +278,8 @@ int main(int argc, char** argv)
     testFloorClamp();
     testCeilingClamp();
     testNoEdges();
+    testComputeEdges();
+    testShouldEndOnUngrabbedLeave();
     testWindowOwnsChain();
 
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES PRESENT");

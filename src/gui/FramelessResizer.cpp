@@ -27,11 +27,17 @@ FramelessResizer::FramelessResizer(QWidget* window, int margin, int topMoveReser
     // eventFilter() bails on the first switch for anything that isn't a mouse
     // event, so the cost to unrelated event traffic is a type comparison — but
     // every open frameless window installs its own instance, so that
-    // comparison runs once per instance per event: O(open frameless windows)
-    // per mouse event, application-wide. Ten call sites today (`grep -rn
-    // "FramelessResizer::install" src/`), all top-level windows/dialogs rather
-    // than something instantiated per-item, so the constant stays small;
-    // worth a second look if that stops being true.
+    // comparison runs once per instance per event: O(live FramelessResizer
+    // instances) per mouse event, application-wide. Ten call sites today
+    // (`grep -rn "FramelessResizer::install" src/`), but one of them is
+    // PersistentDialog's own constructor — `grep -rn "public PersistentDialog"
+    // src/` finds 40 subclasses today, and PersistentDialog sets no
+    // WA_DeleteOnClose, so an instance survives its dialog being closed (just
+    // hidden) and the live count grows with every *distinct dialog type* the
+    // operator has opened at least once this session, not bounded by the ten
+    // call sites. Still cheap per filter — a type compare, then a
+    // qobject_cast and a short parent-chain walk — but watch instance count,
+    // not call sites, if this ever shows up in a profile.
     if (QCoreApplication* app = QCoreApplication::instance()) {
         app->installEventFilter(this);
     }
@@ -76,36 +82,61 @@ bool FramelessResizer::ownsWindow(QWindow* win) const
     return windowOwnsChain(win, m_window->windowHandle());
 }
 
-Qt::Edges FramelessResizer::edgesAt(const QPoint& p) const
+// static
+Qt::Edges FramelessResizer::computeEdges(const QRect& rect, const QPoint& p, int margin,
+                                          int topMoveReserve, bool maximizedOrFullscreen)
 {
     // A maximized or fullscreen window must not resize from an edge drag — the
     // compositor owns its geometry. Previously each adopter guarded this in its
     // own edgesAt(); centralizing it here closes the gap for every adopter
     // (#4266).
-    if (m_window->isMaximized() || m_window->isFullScreen()) {
+    if (maximizedOrFullscreen) {
         return {};
     }
     // Reserve an edge-to-edge top move handle (e.g. a full-width title bar) for
     // the window's own move handling rather than the top-edge resize zone, so a
     // title-bar grab isn't consumed as a resize (#4266). Resize still works
     // everywhere below the reserved strip.
-    if (m_topMoveReserve > 0 && p.y() < m_topMoveReserve) {
+    if (topMoveReserve > 0 && p.y() < topMoveReserve) {
         return {};
     }
-    const QRect r = m_window->rect();
     // Events now arrive from native children and carry global coordinates, so
     // a point outside the window is reachable in a way it wasn't before.
-    if (!r.contains(p)) {
+    if (!rect.contains(p)) {
         return {};
     }
     Qt::Edges edges;
-    if (p.x() <= m_margin)              edges |= Qt::LeftEdge;
-    if (p.x() >= r.width()  - m_margin) edges |= Qt::RightEdge;
-    if (p.y() <= m_margin)              edges |= Qt::TopEdge;
-    if (p.y() >= r.height() - m_margin) edges |= Qt::BottomEdge;
+    if (p.x() <= margin)                   edges |= Qt::LeftEdge;
+    if (p.x() >= rect.width()  - margin)   edges |= Qt::RightEdge;
+    if (p.y() <= margin)                   edges |= Qt::TopEdge;
+    if (p.y() >= rect.height() - margin)   edges |= Qt::BottomEdge;
     return edges;
 }
 
+// static
+bool FramelessResizer::shouldEndOnUngrabbedLeave(bool manualResizeActive,
+                                                  bool manualResizeGrabbed)
+{
+    return manualResizeActive && !manualResizeGrabbed;
+}
+
+Qt::Edges FramelessResizer::edgesAt(const QPoint& p) const
+{
+    return computeEdges(m_window->rect(), p, m_margin, m_topMoveReserve,
+                         m_window->isMaximized() || m_window->isFullScreen());
+}
+
+// Known limitation, not fixed here: QGuiApplication::setOverrideCursor()/
+// restoreOverrideCursor() is a single global LIFO stack shared by every
+// FramelessResizer instance (one per open frameless window/dialog — see the
+// constructor). Two places can now pop a turn after the push that logically
+// owns them — the deferred QEvent::Leave check below, and the cross-window
+// pop in eventFilter() when the pointer lands on an unowned window — so if a
+// second instance pushes its own override cursor in between, the deferred
+// pop here restores *that* instance's entry instead of this one's. Push/pop
+// stay balanced (nothing leaks), so the only visible effect is a transiently
+// wrong cursor shape right when the pointer crosses from one frameless
+// window's edge straight onto another's.
 void FramelessResizer::enterEdgeZone(Qt::Edges edges)
 {
     if (edges == m_lastEdges && m_cursorOverridden) return;
@@ -250,10 +281,6 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
         return false;   // the overwhelmingly common path
     }
 
-    if (!m_window) {
-        return false;
-    }
-
     // Window-level events only: widget-level MouseMove is gated on the widget
     // having opted into mouse tracking, so it can't be relied on for hover.
     // While a manual drag genuinely holds the grab, every event in it is ours
@@ -280,9 +307,15 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
     }
 
     // Hands off when the window has native decorations — the OS handles resize.
-    // endManualResize() rather than leaveEdgeZone(): a frameless toggle midway
-    // through a drag would otherwise leave the grab held and the active flag
-    // set, and that flag bypasses the ownership check above.
+    // endManualResize() rather than leaveEdgeZone() alone: a frameless toggle
+    // midway through a drag would otherwise leave the grab held and the
+    // active flag set, and that flag bypasses the ownership check above.
+    // The explicit leaveEdgeZone() below is not redundant with the one
+    // endManualResize() ends with: that one is skipped by endManualResize()'s
+    // own early return whenever m_manualResizeActive is already false, which
+    // is exactly the toggle-while-only-hovering case — no drag in progress,
+    // just an edge cursor up from a hover — where this call is the only
+    // thing that clears it.
     if (!(m_window->windowFlags() & Qt::FramelessWindowHint)) {
         endManualResize();
         leaveEdgeZone();
@@ -392,6 +425,24 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
     }
 
     case QEvent::Leave:
+        if (shouldEndOnUngrabbedLeave(m_manualResizeActive, m_manualResizeGrabbed)) {
+            // Denied grab (beginManualResize() already warned about this):
+            // once the pointer leaves our own window we stop receiving any
+            // events for it at all — including the MouseButtonRelease that
+            // would normally end the drag — because without a real grab,
+            // ownsWindow() is back in effect up in eventFilter() and nothing
+            // outside this window is "ours" any more. Left alone,
+            // m_manualResizeActive stays true (this same guard would also
+            // block the branch below from clearing it), and a *second*
+            // press elsewhere followed by a move back over this window
+            // would resume the drag from the now stale
+            // m_manualResizePressGlobal, snapping the window across
+            // whatever gap the pointer covered in between. End it here
+            // instead — the ungrabbed case was already a best-effort
+            // fallback (see beginManualResize()), not a guarantee.
+            endManualResize();
+            break;
+        }
         // Only drop the cursor once the pointer has really left the window —
         // crossing between this window's native children raises Leave too, and
         // resetting on those would make the edge cursor flicker. Checked one
