@@ -26,6 +26,7 @@ public:
     enum class DockMode {
         PanelDocked,   // inside its parent's body layout
         Floating,      // owned by a FloatingContainerWindow
+        Canvas,        // freely placed on a WorkspaceCanvas (RFC #4887, phase 3)
     };
 
     explicit ContainerWidget(const QString& id,
@@ -80,6 +81,7 @@ public:
     DockMode dockMode() const { return m_dockMode; }
     bool isFloating() const     { return m_dockMode == DockMode::Floating; }
     bool isPanelDocked() const  { return m_dockMode == DockMode::PanelDocked; }
+    bool isOnCanvas() const     { return m_dockMode == DockMode::Canvas; }
 
     // Logical visibility — distinct from QWidget::isVisible, which
     // reflects the current layout state (a panel-docked container is

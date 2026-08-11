@@ -150,11 +150,17 @@ void ContainerWidget::setDockMode(DockMode mode)
 void ContainerWidget::applyWidthPolicyTo(QWidget* child)
 {
     if (!child) return;
-    if (m_dockMode == DockMode::Floating) {
+    if (m_dockMode == DockMode::Floating || m_dockMode == DockMode::Canvas) {
         // Remember the docked cap once, then lift it so width-capped
         // applets fill the floating window instead of hugging the left
         // edge.  Uncapped content (maximumWidth == QWIDGETSIZE_MAX) is a
         // no-op here. (#3451)
+        //
+        // Canvas takes the same branch for the same reason: a canvas item is
+        // sized by the operator's rect, not by the panel's fixed column
+        // width, so a container that kept its docked cap would leave dead
+        // space to the right of its own content inside the rect the operator
+        // drew — the exact #3451 symptom, one placement mode over.
         if (!m_savedMaxWidths.contains(child))
             m_savedMaxWidths.insert(child, child->maximumWidth());
         child->setMaximumWidth(QWIDGETSIZE_MAX);

@@ -1214,9 +1214,13 @@ void AppletPanel::rebuildStackOrder()
         auto* item = m_stack->takeAt(0);
         delete item;  // deletes the layout item, NOT the widget
     }
-    // Re-add in current order (skip floating containers to avoid stealing them)
+    // Re-add in current order.  Skip containers the panel does not currently
+    // own: floating ones live in their own window, and canvas ones are
+    // children of a WorkspaceCanvas (RFC #4887 phase 3).  Adding either here
+    // would steal it back out of its placement mid-rebuild.
     for (const auto& entry : m_appletOrder) {
-        if (auto* cw = qobject_cast<ContainerWidget*>(entry.widget); cw && cw->isFloating())
+        auto* cw = qobject_cast<ContainerWidget*>(entry.widget);
+        if (cw && (cw->isFloating() || cw->isOnCanvas()))
             continue;
         m_stack->addWidget(entry.widget);
     }
