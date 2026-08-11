@@ -402,6 +402,12 @@ int main(int argc, char** argv)
         canvas.addItem("a", a, NormRect{0.1, 0.1, 0.4, 0.4});
         canvas.addItem("b", new QWidget, NormRect{0.6, 0.6, 0.3, 0.3});
 
+        // Grid snap off for this scenario: it pins the session mechanics
+        // (follow, cancel, drag-out, keyboard), and on a 1000 px test canvas
+        // the 96-division grid has a line within the magnet of nearly every
+        // hand-picked rect.  The grid tier has its own case below.
+        canvas.setGridSnapEnabled(false);
+
         QSignalSpy selSpy(&canvas, &WorkspaceCanvas::selectionChanged);
         QSignalSpy startSpy(&canvas, &WorkspaceCanvas::gestureStarted);
         QSignalSpy finishSpy(&canvas, &WorkspaceCanvas::gestureFinished);
@@ -464,13 +470,16 @@ int main(int argc, char** argv)
                nearly(canvas.itemRect("a").right(), 0.6));
 
         // The grid tier through a live gesture: from x=0.1, +213 px puts the
-        // origin at 0.313 — no peer line in reach, but 5/16 = 0.3125 is
-        // 0.0005 away — the move lands ON the grid line.
+        // origin at 0.313 — no peer line in reach, but 30/96 = 0.3125 is
+        // 0.0005 away, inside the 4 px grid magnet — the move lands ON the
+        // grid line.
+        canvas.setGridSnapEnabled(true);
         canvas.beginMoveGesture("a", origin);
         canvas.moveGesture(origin + QPoint(213, 0));
         canvas.endGesture(origin + QPoint(213, 0));
         report("a live move lands on the snap grid",
-               nearly(canvas.itemRect("a").x, 5.0 / 16.0));
+               nearly(canvas.itemRect("a").x, 30.0 / 96.0));
+        canvas.setGridSnapEnabled(false);
 
         // Keyboard: arrows nudge, Shift+arrows resize, both announce a
         // gesture pair (undo hangs off it).

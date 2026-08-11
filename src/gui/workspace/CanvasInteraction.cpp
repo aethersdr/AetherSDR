@@ -125,7 +125,8 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
                     const QList<NormRect>& peers,
                     double tolNormX, double tolNormY,
                     const QSizeF& minNorm,
-                    int gridX, int gridY)
+                    int gridX, int gridY,
+                    double gridTolNormX, double gridTolNormY)
 {
     SnapResult result;
     result.rect = moved;
@@ -133,6 +134,9 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     if (zone == HitZone::None || tolNormX < 0 || tolNormY < 0) {
         return result;
     }
+
+    if (gridTolNormX < 0) gridTolNormX = tolNormX;
+    if (gridTolNormY < 0) gridTolNormY = tolNormY;
 
     const bool move  = zone == HitZone::Move;
     const bool west  = zone == HitZone::W || zone == HitZone::NW || zone == HitZone::SW;
@@ -194,23 +198,23 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
                                   const QList<double>& tierOneOffsets,
                                   const QList<double>& grid,
                                   const QList<double>& gridOffsets, double base,
-                                  double tolerance) {
+                                  double tolerance, double gridTolerance) {
         const Best edges = pickFrom(tierOne, tierOneOffsets, base, tolerance);
         if (edges.found || grid.isEmpty()) {
             return edges;
         }
-        return pickFrom(grid, gridOffsets, base, tolerance);
+        return pickFrom(grid, gridOffsets, base, gridTolerance);
     };
 
     NormRect& r = result.rect;
 
     if (move) {
-        const Best bx = pick(xLines, {0.0, r.w, r.w / 2.0}, xGrid, {0.0}, r.x, tolNormX);
+        const Best bx = pick(xLines, {0.0, r.w, r.w / 2.0}, xGrid, {0.0}, r.x, tolNormX, gridTolNormX);
         if (bx.found) {
             r.x = clampD(bx.target - bx.ownOffset, 0.0, 1.0 - r.w);
             result.verticalGuides << bx.target;
         }
-        const Best by = pick(yLines, {0.0, r.h, r.h / 2.0}, yGrid, {0.0}, r.y, tolNormY);
+        const Best by = pick(yLines, {0.0, r.h, r.h / 2.0}, yGrid, {0.0}, r.y, tolNormY, gridTolNormY);
         if (by.found) {
             r.y = clampD(by.target - by.ownOffset, 0.0, 1.0 - r.h);
             result.horizontalGuides << by.target;
@@ -222,7 +226,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     const double minH = clampD(minNorm.height(), 0.0, 1.0);
 
     if (east) {
-        const Best b = pick(xLines, {0.0}, xGrid, {0.0}, r.right(), tolNormX);
+        const Best b = pick(xLines, {0.0}, xGrid, {0.0}, r.right(), tolNormX, gridTolNormX);
         if (b.found) {
             const double right = clampD(b.target, r.x + minW, 1.0);
             if (std::fabs(right - b.target) < 1e-12) {
@@ -231,7 +235,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
             r.w = right - r.x;
         }
     } else if (west) {
-        const Best b = pick(xLines, {0.0}, xGrid, {0.0}, r.x, tolNormX);
+        const Best b = pick(xLines, {0.0}, xGrid, {0.0}, r.x, tolNormX, gridTolNormX);
         if (b.found) {
             const double right = r.right();
             const double left  = clampD(b.target, 0.0, right - minW);
@@ -244,7 +248,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     }
 
     if (south) {
-        const Best b = pick(yLines, {0.0}, yGrid, {0.0}, r.bottom(), tolNormY);
+        const Best b = pick(yLines, {0.0}, yGrid, {0.0}, r.bottom(), tolNormY, gridTolNormY);
         if (b.found) {
             const double bottom = clampD(b.target, r.y + minH, 1.0);
             if (std::fabs(bottom - b.target) < 1e-12) {
@@ -253,7 +257,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
             r.h = bottom - r.y;
         }
     } else if (north) {
-        const Best b = pick(yLines, {0.0}, yGrid, {0.0}, r.y, tolNormY);
+        const Best b = pick(yLines, {0.0}, yGrid, {0.0}, r.y, tolNormY, gridTolNormY);
         if (b.found) {
             const double bottom = r.bottom();
             const double top    = clampD(b.target, 0.0, bottom - minH);

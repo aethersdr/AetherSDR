@@ -700,6 +700,12 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
         menu.addSeparator();
     }
 
+    QAction* gridSnap = menu.addAction(QStringLiteral("Snap to grid"));
+    gridSnap->setCheckable(true);
+    gridSnap->setChecked(m_canvas->isGridSnapEnabled());
+    connect(gridSnap, &QAction::toggled, this,
+            [this](bool on) { m_canvas->setGridSnapEnabled(on); });
+
     QAction* undo = menu.addAction(QStringLiteral("Undo last placement"), this,
                                    [this] { undoLastPlacement(); });
     undo->setEnabled(canUndo());

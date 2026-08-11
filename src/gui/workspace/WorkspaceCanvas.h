@@ -120,17 +120,24 @@ public:
 
     // Snap capture distance (px on the live canvas).
     static constexpr int kSnapTolerancePx = 8;
-    // The snap grid, in NORMALIZED divisions — 16x9 makes the cells EXACTLY
-    // square at a 16:9 window (1920/16 == 1080/9 == 120 px) and meaningfully
-    // coarse: 32x18 read as scatter rather than structure in field testing.
-    // Normalized on purpose: a pixel grid would put an item on-grid at one
-    // window size and off-grid at every other, which is the exact failure
-    // the fractional model exists to prevent.  1 px dots mark the
-    // intersections: always in the canvas background, and on top of
-    // everything while a gesture is live (the only time the targets matter
-    // more than the content).
-    static constexpr int kSnapGridColumns = 16;
-    static constexpr int kSnapGridRows    = 9;
+    // The snap grid, in NORMALIZED divisions — field-tuned to 96x54
+    // (~20 px cells at 1920, exactly square at 16:9).  Normalized on
+    // purpose: a pixel grid would put an item on-grid at one window size and
+    // off-grid at every other, which is the exact failure the fractional
+    // model exists to prevent.  1 px dots mark the intersections: always in
+    // the canvas background, and on top of everything while a gesture is
+    // live (the only time the targets matter more than the content).
+    static constexpr int kSnapGridColumns = 96;
+    static constexpr int kSnapGridRows    = 54;
+    // The grid's own magnet, gentler than the peer tier's: at ~20 px pitch a
+    // full 8 px pull would capture nearly every position and free placement
+    // would need Alt held permanently.
+    static constexpr int kGridSnapTolerancePx = 4;
+
+    // Whether gestures snap to the grid (the dots stay either way) — the
+    // RFC's "optional grid", toggled from the canvas context menu.
+    void setGridSnapEnabled(bool on) { m_gridSnapEnabled = on; }
+    bool isGridSnapEnabled() const { return m_gridSnapEnabled; }
     // Keyboard nudge step (px); Ctrl divides it for fine placement.
     static constexpr int kNudgePx = 8;
 
@@ -236,6 +243,7 @@ private:
     GestureOverlay* m_gestureOverlay{nullptr};
 
     // Active gesture.
+    bool m_gridSnapEnabled{true};
     QString  m_gestureId;
     HitZone  m_gestureZone{HitZone::None};
     NormRect m_gestureStart;

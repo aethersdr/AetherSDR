@@ -90,11 +90,16 @@ struct SnapResult {
 // tolerance (aligning to a neighbour is more intentional than a grid line),
 // and for a move it courts only the item's ORIGIN — left/right/centre all
 // chasing a ~35 px grid at +/-8 px left almost nowhere free to stand.
+// `gridTolNormX/Y` give the grid tier its own capture distance (default:
+// same as the peer tier).  A dense grid with a full-strength magnet
+// quantizes nearly every position; callers pair high division counts with a
+// gentler pull.
 SnapResult snapRect(const NormRect& moved, HitZone zone,
                     const QList<NormRect>& peers,
                     double tolNormX, double tolNormY,
                     const QSizeF& minNorm,
-                    int gridX = 0, int gridY = 0);
+                    int gridX = 0, int gridY = 0,
+                    double gridTolNormX = -1.0, double gridTolNormY = -1.0);
 
 // ── Tidy (RFC #4887 phase 5) ─────────────────────────────────────────────
 //

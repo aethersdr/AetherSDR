@@ -550,7 +550,10 @@ void WorkspaceCanvas::moveGesture(const QPoint& globalPos)
             snapRect(r, m_gestureZone, peers,
                      kSnapTolerancePx / double(width()),
                      kSnapTolerancePx / double(height()), minN,
-                     kSnapGridColumns, kSnapGridRows);
+                     m_gridSnapEnabled ? kSnapGridColumns : 0,
+                     m_gridSnapEnabled ? kSnapGridRows : 0,
+                     kGridSnapTolerancePx / double(width()),
+                     kGridSnapTolerancePx / double(height()));
         r         = snapped.rect;
         m_vGuides = snapped.verticalGuides;
         m_hGuides = snapped.horizontalGuides;
