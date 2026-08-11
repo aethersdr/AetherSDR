@@ -310,7 +310,8 @@ this table, which is the same rule the report itself follows.
 | `TransmitModel::setRfPower(0)` | — | disables the PA | forward power to the floor | — | **yes — 0 % reads the 0.001 W floor** |
 | `AudioEngine::setPcMicGain` | 0–100 | host-side, pre-modulator | halve → `TX:MICPEAK` drops ≈6 dB | ±1 dB | **yes — 6.023 dB measured** |
 | `SliceModel::setAgcThreshold` | 0–100 | WDSP `SetRXAAGCTop` | raise → audio floor rises | ±3 dB | no |
-| `SliceModel::setRfGain` | dB | **NOT WIRED** | LNA gain is connect-params only on HL2 | — | n/a |
+| `SliceModel::setRfGain` | dB | **dead — Flex wire text** | none; nothing on a non-Flex backend receives it | — | n/a — the operator's slider does not use it |
+| `IRadioBackend::setPanRfGain` | −8…+32 dB | AD9866 LNA `0x0a[5:0]`, at runtime | LNA gain changes; echoed to every pan | — | no — needs an S-meter delta check |
 | `TransmitModel::setTunePower` | 0–100 | **NOT WIRED** | tune uses full drive | — | n/a |
 | `SliceModel::setSquelch` | on/off | **NOT WIRED** | — | — | n/a |
 | `setFilter(low, high)` | Hz | WDSP passband | tone outside the passband is rejected | ≥30 dB | no |
@@ -325,13 +326,33 @@ this table, which is the same rule the report itself follows.
   criterion cannot separate a control fault from a curve error. `radiocert`
   still reports `rfPowerExercised: false`, which remains the right answer: the
   verb does not drive the slider, and the sweep above was manual.
-- **`SliceModel::setRfGain` has no runtime path.** The AD9866 LNA gain is sent
-  once in the connect parameters and never again, so the preamp/attenuator
-  control does nothing after connect. It is also the control an operator reaches
-  for first when the ADC overloads. `radiocert` only reports this on a radio
-  whose `family()` is `hl2` — asserting it generically told Flex operators a
-  working control was broken. **Still true as of 2026-08-10**, and it is the one
-  concern in the meters run that is a real, open defect.
+- **`SliceModel::setRfGain` has no runtime path — and that no longer means the
+  RF gain control is dead.** The symbol really is a dead end: its whole body is
+  `sendCommand("slice set N rfgain=X")`, raw Flex wire text, which no non-Flex
+  backend can receive. But the operator's RF Gain slider **does not use it.**
+  `SpectrumOverlayMenu` emits `rfGainChanged` unconditionally and only falls back
+  to the slice setter when there is no radio model or no pan id; on the HL2 both
+  exist, so the slider routes `rfGainChanged` → `RadioModel::setPanRfGainFor` →
+  `Hl2Backend::setPanRfGain` → `applyLnaGainDb` → `MetisClient::setLnaGainDb`,
+  which writes the AD9866 LNA register **at runtime**, remembers the value per
+  band, and echoes it to every pan.
+
+  `RadioModel::setPanRfGainFor` says so in its own comment: *"Without this the
+  HL2's RF Gain slider moved, persisted, and changed nothing: lnaGainDb was
+  applied once at connect and never again."* That is the defect this bullet used
+  to describe, and it was fixed.
+
+  **`radiocert` still reports it on every HL2 run**, because
+  `stageControlEffect` hardcodes `rfGainRuntimePath: false` behind a family
+  check. So it is a stale finding, not an open defect — the second one this
+  document's own tool emits on healthy hardware, alongside the `TX:ALC` unit
+  mismatch. See `CERTIFICATION.md` 1.35.
+
+  What is genuinely **uncertified** is the pan-level control's *effect*: nothing
+  has measured that changing the LNA gain moves the noise floor by the amount
+  asked for. That is a real gap and a runnable one — an 8 dB step should move
+  `SLC:LEVEL` by 8 dB, which is a known answer needing no calibration and no
+  transmission.
 - **`TX:FWDPWR`, `TX:REFPWR`, `TX:ALC` and `TX:COMPPEAK` are all fed** as of
   2026-08-10, and were described here as unpublished, computed-and-discarded or
   unwired long after they were wired. Directional power is published through the

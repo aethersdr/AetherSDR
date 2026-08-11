@@ -6,14 +6,16 @@ after the fact — which is the point of the tool, and a useful check on it: som
 of what follows is a defect radiocert found, and some is a gap in radiocert
 itself that only a second radio could expose.
 
-**1.32–1.34 came from returning to the Hermes-Lite 2** on 2026-08-10 and running
+**1.32–1.35 came from returning to the Hermes-Lite 2** on 2026-08-10 and running
 `radiocert meters` against it after the Icom work had reshaped the tool. All
-three are defects in the *tool*, not the radio, and all three are the shapes
-this document already warns about, aimed back at the instrument: a negative
-finding from a stage that never transmitted, a false positive that a sibling
-table had already been fixed to prevent, and a staleness probe reading a stale
-value. Turning the tool on a radio it has already certified is cheap, and it is
-the only way these were ever going to surface.
+four are defects in the *tool*, not the radio, and all four are shapes this
+document already warns about, aimed back at the instrument: a negative finding
+from a stage that never transmitted, a false positive that a sibling table had
+already been fixed to prevent, a staleness probe reading a stale value, and a
+hardcoded finding that outlived the bug it described. **Two of the concerns in
+that run were wrong and none of the meters were** — which is the ratio at which
+an operator stops reading concerns. Turning the tool on a radio it has already
+certified is cheap, and it is the only way these were ever going to surface.
 
 Why `radiocert` is shaped the way it is, and what it still cannot do.
 
@@ -643,6 +645,49 @@ exist. Reading a typed accessor raw makes the probe a *third* convention
 alongside the seam and the gauge, and §1.1 applies to it as much as to anything
 else: it will agree with nothing and be believed anyway. Where the model already
 exposes a liveness predicate, the probe's failure to call it is the bug.
+
+### 1.35 A hardcoded finding outlives the bug it describes
+
+`stageControlEffect` emits, on every Hermes-Lite 2 run:
+
+> `SliceModel::setRfGain` has no runtime path on this backend — LNA gain is
+> connect-parameters only, so the preamp/attenuator control does nothing after
+> connect
+
+The first clause is true and the conclusion is false. `SliceModel::setRfGain` is
+a dead end — its body is `sendCommand("slice set N rfgain=X")`, Flex wire text
+no seam backend can receive — but the operator's RF Gain slider does not call
+it. It routes through `RadioModel::setPanRfGainFor` to
+`Hl2Backend::setPanRfGain`, which writes the AD9866 LNA register at runtime.
+`setPanRfGainFor` exists *because of this bug* and says so:
+
+> Without this the HL2's RF Gain slider moved, persisted, and changed nothing:
+> `lnaGainDb` was applied once at connect and never again.
+
+The fix landed, the control works, and the finding stayed — because it is not a
+measurement. It is a `problems <<` string behind an `if (family == "hl2")`,
+asserted rather than observed, so nothing about the repair could reach it.
+
+§1.14 is the spatial version of this: a hardcoded fact about one radio, reported
+against another. This is the temporal version, and it is worse in one specific
+way — §1.14's false finding is visibly about the wrong radio, while this one is
+about the right radio and was simply true last year. Nothing distinguishes it
+from a live result, which is the same complaint §1.28 makes about a concern that
+never clears.
+
+It is also the **second** permanent false positive `radiocert` emits on healthy
+HL2 hardware, next to §1.33's unit mismatch. Two of the concerns in a clean run
+are wrong, which is the ratio at which an operator stops reading them.
+
+**Consequence.** A hardcoded finding needs an expiry mechanism, and the cheapest
+one is to stop hardcoding: assert the wiring the way the tool asserts everything
+else, by effect. RF gain has an unusually good one available — an 8 dB LNA step
+must move `SLC:LEVEL` by 8 dB, a known answer that needs no calibration and no
+transmission. Where a finding genuinely cannot be measured, it belongs in the
+radio profile (§2.1) as declared data with a date on it, not in a stage as a
+string. And when a defect is fixed, grep the certification tool for its
+description — the tool is the last place anyone looks for a stale claim about a
+bug they just repaired.
 
 ## 2. Next steps
 
