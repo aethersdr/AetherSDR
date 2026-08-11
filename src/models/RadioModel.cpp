@@ -4119,7 +4119,8 @@ void RadioModel::sendCwPtt(bool on, const QString& debugSource,
 }
 
 void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
-                               quint64 debugTraceId, quint64 debugSourceMs)
+                               quint64 debugTraceId, quint64 debugSourceMs,
+                               std::chrono::steady_clock::time_point scheduledAt)
 {
     if (m_backend && !usesFlexCommandPlane()) {
         if (!forwardNonFlexCwKeying(down)) {
@@ -4127,7 +4128,7 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
         }
     } else {
         sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                         debugSource, debugTraceId, debugSourceMs);
+                         debugSource, debugTraceId, debugSourceMs, scheduledAt);
     }
     const bool prev = m_cwKeyActive;
     m_cwKeyActive = down;
@@ -4173,7 +4174,8 @@ QByteArray RadioModel::buildNetCwPacket(const QByteArray& payload)
 }
 
 void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSource,
-                                  quint64 debugTraceId, quint64 debugSourceMs)
+                                  quint64 debugTraceId, quint64 debugSourceMs,
+                                  std::chrono::steady_clock::time_point scheduledAt)
 {
     if (m_netCwStreamId == 0) {
         // No netcw stream — fall back to TCP immediate
@@ -4209,7 +4211,23 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
             m_netCwClock.start();
         m_netCwLastSendMs = 0;
     } else {
-        const qint64 elapsed = m_netCwClock.elapsed();
+        qint64 elapsed = m_netCwClock.elapsed();
+        // #4890: when the edge carries a scheduled grid instant, back-date
+        // the 16-bit counter by the edge's age (worker wake latency + the
+        // queued GUI hop) so the radio's timing reconstruction input is the
+        // intended rhythm, not the send-time rhythm.  The age is clamped to
+        // a sane ceiling (a stale schedule must not warp the counter) and
+        // the result is clamped monotonic against the previous send —
+        // FlexLib's counter never runs backwards, so ours doesn't either.
+        if (scheduledAt != std::chrono::steady_clock::time_point{}) {
+            constexpr qint64 kMaxScheduleAgeMs = 100;
+            const qint64 age = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - scheduledAt).count();
+            if (age > 0)
+                elapsed -= std::min(age, kMaxScheduleAgeMs);
+            if (elapsed < m_netCwLastSendMs)
+                elapsed = m_netCwLastSendMs;
+        }
         timeMs = static_cast<quint16>(elapsed & 0xFFFF);
         m_netCwLastSendMs = elapsed;
     }

@@ -17,6 +17,7 @@
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
+#include <chrono>
 #include <optional>
 #include "SliceModel.h"
 #include "MeterModel.h"
@@ -765,8 +766,15 @@ public:
     // squeeze while key transitions on each element boundary.
     void sendCwPtt(bool on, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+    // `scheduledAt` (#4890): the edge's scheduled instant on the producer's
+    // element grid, when one exists.  The netcw `time=` field is derived
+    // from it instead of the send wall-clock, so the radio's timing
+    // reconstruction input carries the intended rhythm rather than
+    // worker-wake plus queued-hop jitter.  Default (epoch zero) = no
+    // schedule; send-time stamping is unchanged.
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
-                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
+                       std::chrono::steady_clock::time_point scheduledAt = {});
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
     void addSlice();           // Create a new slice on the active panadapter
@@ -1574,7 +1582,8 @@ private:
     QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
     qint64   m_netCwLastSendMs{-1};
     void sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
-                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
+                          std::chrono::steady_clock::time_point scheduledAt = {});
     QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;

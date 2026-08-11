@@ -1171,11 +1171,11 @@ void MainWindow::wireRadioModel()
                     << " down=" << down
                     << " schedMs=" << cwTraceMsAt(when);
             }
-            QMetaObject::invokeMethod(this, [this, down]() {
+            QMetaObject::invokeMethod(this, [this, down, when]() {
                 const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
                 const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
                 m_radioModel.sendCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                           traceId, sourceMs);
+                                           traceId, sourceMs, when);
             }, Qt::QueuedConnection);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
