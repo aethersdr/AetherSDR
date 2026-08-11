@@ -1002,6 +1002,7 @@ set(GUI_SOURCES
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
+    src/gui/workspace/CanvasInteraction.cpp
     src/gui/workspace/CanvasLayout.cpp
     src/gui/workspace/ClassicLayout.cpp
     src/gui/workspace/WorkspaceCanvas.cpp
@@ -3542,6 +3543,18 @@ target_include_directories(workspace_store_test PRIVATE src tests)
 target_link_libraries(workspace_store_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(workspace_store_test PROPERTIES AUTOMOC ON)
 add_test(NAME workspace_store_test COMMAND workspace_store_test)
+
+# Workspace canvas (RFC #4887) phase 5 — the pure interaction core: hit
+# zones, anchored resize (the anchored edge must never move), and the snap
+# solver (snaps only the gripped edges, never below the minimum).
+add_executable(workspace_interaction_test
+    tests/workspace_interaction_test.cpp
+    src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_interaction_test PRIVATE src)
+target_link_libraries(workspace_interaction_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME workspace_interaction_test COMMAND workspace_interaction_test)
 
 # Workspace canvas (RFC #4887) phase 3 — DockMode::Canvas at the manager
 # level: slot-preserving detach/return, float-docks-first, the evictor
