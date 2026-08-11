@@ -18,12 +18,14 @@
 #include <QEvent>
 #include <QPointer>
 #include <QHash>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QRect>
 #include <QSignalSpy>
 #include <QStringList>
 #include <QWidget>
 
+#include <cmath>
 #include <cstdio>
 
 using AetherSDR::NormRect;
@@ -44,6 +46,11 @@ void report(const char* name, bool ok)
 // Position of a child in its parent's child list.  Qt's stacking order IS
 // this order — raise() moves a widget to the end — so it is how "on top" is
 // observed without a screen.
+bool nearly(double a, double b, double tol = 1e-9)
+{
+    return std::fabs(a - b) <= tol;
+}
+
 int childIndex(const QWidget* parent, QWidget* child)
 {
     return parent->children().indexOf(child);
@@ -378,6 +385,104 @@ int main(int argc, char** argv)
         report("an item with no widget is skipped",
                canvas.restoreItems({orphan}, {}) == 0
                    && !canvas.contains("ghost"));
+    }
+
+    // ── Selection + the gesture session (phase 5) ────────────────────────
+    {
+        using AetherSDR::HitZone;
+
+        WorkspaceCanvas canvas;
+        canvas.resize(1000, 1000);
+        canvas.show();
+
+        auto* a = new QWidget;
+        canvas.addItem("a", a, NormRect{0.1, 0.1, 0.4, 0.4});
+        canvas.addItem("b", new QWidget, NormRect{0.6, 0.6, 0.3, 0.3});
+
+        QSignalSpy selSpy(&canvas, &WorkspaceCanvas::selectionChanged);
+        QSignalSpy startSpy(&canvas, &WorkspaceCanvas::gestureStarted);
+        QSignalSpy finishSpy(&canvas, &WorkspaceCanvas::gestureFinished);
+        QSignalSpy outSpy(&canvas, &WorkspaceCanvas::itemDraggedOut);
+
+        // Pressing an item selects it (through the real event filter).
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(5, 5),
+                          a->mapToGlobal(QPointF(5, 5)),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(a, &press);
+        report("pressing an item selects it",
+               canvas.selectedItem() == "a" && selSpy.count() == 1);
+
+        // A move gesture: begin at a global point, move right+down, end.
+        const QPoint origin = canvas.mapToGlobal(QPoint(500, 500));
+        canvas.beginMoveGesture("a", origin);
+        report("the gesture reports its start rect",
+               startSpy.count() == 1
+                   && qvariant_cast<NormRect>(startSpy.at(0).at(1))
+                          == NormRect{0.1, 0.1, 0.4, 0.4});
+        canvas.moveGesture(origin + QPoint(100, 50));   // +0.1, +0.05
+        report("the item follows live",
+               canvas.itemRect("a") == NormRect{0.2, 0.15, 0.4, 0.4});
+        canvas.endGesture(origin + QPoint(100, 50));
+        report("release commits and announces",
+               finishSpy.count() == 1 && canvas.itemRect("a") == NormRect{0.2, 0.15, 0.4, 0.4});
+
+        // Esc mid-gesture restores the start rect and never announces.
+        canvas.beginMoveGesture("a", origin);
+        canvas.moveGesture(origin + QPoint(300, 300));
+        canvas.cancelGesture();
+        report("cancel restores the start rect",
+               canvas.itemRect("a") == NormRect{0.2, 0.15, 0.4, 0.4});
+        report("...and does not report a finish", finishSpy.count() == 1);
+
+        // A move released OUTSIDE the canvas restores the rect and reports
+        // the drag-out with the release point.
+        canvas.beginMoveGesture("a", origin);
+        canvas.moveGesture(origin + QPoint(200, 0));
+        canvas.endGesture(canvas.mapToGlobal(QPoint(2000, 500)));
+        report("a release outside restores the rect",
+               canvas.itemRect("a") == NormRect{0.2, 0.15, 0.4, 0.4});
+        report("...and reports the drag-out once",
+               outSpy.count() == 1 && finishSpy.count() == 1);
+
+        // Resize through the session: E grip, anchor pinned.
+        canvas.selectItem("a");
+        canvas.beginFrameGesture(HitZone::E, origin);
+        canvas.moveGesture(origin + QPoint(100, 0));
+        canvas.endGesture(origin + QPoint(100, 0));
+        report("a frame resize grows the gripped edge",
+               canvas.itemRect("a") == NormRect{0.2, 0.15, 0.5, 0.4});
+
+        // Snapping in a live move: b's left edge is at 0.6; drag a's right
+        // edge to 0.594 — within the 8 px tolerance — and it captures.
+        canvas.beginMoveGesture("a", origin);
+        canvas.moveGesture(origin + QPoint(-106, 0));
+        canvas.endGesture(origin + QPoint(-106, 0));
+        report("a live move snaps to a peer edge",
+               nearly(canvas.itemRect("a").right(), 0.6));
+
+        // Keyboard: arrows nudge, Shift+arrows resize, both announce a
+        // gesture pair (undo hangs off it).
+        canvas.selectItem("a");
+        const int startCount = startSpy.count();
+        const NormRect before = canvas.itemRect("a");
+        QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+        QCoreApplication::sendEvent(&canvas, &right);
+        report("an arrow nudges by the step",
+               nearly(canvas.itemRect("a").x, before.x + 8.0 / 1000.0));
+        QKeyEvent grow(QEvent::KeyPress, Qt::Key_Down, Qt::ShiftModifier);
+        QCoreApplication::sendEvent(&canvas, &grow);
+        report("Shift+arrow resizes the SE corner",
+               nearly(canvas.itemRect("a").h, before.h + 8.0 / 1000.0)
+                   && nearly(canvas.itemRect("a").y, before.y));
+        report("keyboard placement announces gesture pairs",
+               startSpy.count() == startCount + 2
+                   && finishSpy.count() >= 3);
+
+        // Esc with no gesture clears the selection.
+        QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(&canvas, &esc);
+        report("Esc clears the selection",
+               canvas.selectedItem().isEmpty());
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

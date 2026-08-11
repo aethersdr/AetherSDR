@@ -15,7 +15,11 @@
 // unlike stored placement this code MAY know the canvas size; it just never
 // writes anything an operator did not do.
 
+#include "gui/workspace/CanvasItem.h"
 #include "gui/workspace/WorkspaceGeometry.h"
+
+#include <QString>
+#include <QStringList>
 
 #include <QList>
 #include <QPoint>
@@ -84,5 +88,22 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
                     const QList<NormRect>& peers,
                     double tolNormX, double tolNormY,
                     const QSizeF& minNorm);
+
+// ── Tidy (RFC #4887 phase 5) ─────────────────────────────────────────────
+//
+// Resolve overlaps between movable items by minimal downward pushes,
+// preserving every size and the left-to-right reading order.  Items named in
+// `fixedIds` neither move nor count as overlap (the pan area: a meter over
+// the spectrum is a feature, not disorder).  An item that cannot be pushed
+// inside the surface without a new overlap is left exactly where it was —
+// tidy never makes an arrangement worse.
+
+struct TidyMove {
+    QString  id;
+    NormRect rect;
+};
+
+QList<TidyMove> tidyOverlaps(const QList<CanvasItem>& items,
+                             const QStringList& fixedIds);
 
 }  // namespace AetherSDR

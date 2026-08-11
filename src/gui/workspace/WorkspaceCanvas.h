@@ -19,6 +19,7 @@
 // theme seed: those are RFC #4764's files, and phase 1 runs in parallel with
 // it precisely because it stays out of them.
 
+#include "gui/workspace/CanvasInteraction.h"
 #include "gui/workspace/CanvasLayout.h"
 
 #include <QHash>
@@ -95,6 +96,33 @@ public:
     // Read-only view of the model, for tests and for phase 2's serializer.
     const CanvasLayout& layout() const { return m_layout; }
 
+    // ── Selection + interactive gestures (RFC #4887 phase 5) ─────────────
+    //
+    // One item may be selected; selection shows the grip frame (resize) and
+    // is what the keyboard operates on.  Pressing an item selects and
+    // raises it; pressing bare canvas clears.
+    void selectItem(const QString& id);
+    void clearSelection();
+    QString selectedItem() const { return m_selectedId; }
+
+    // The gesture session — one at a time, driven from three sources that
+    // all land here: the title bar's live-move stream (via the controller),
+    // the grip frame's resize drags, and the keyboard.  The session applies
+    // applyDrag()+snapRect() live, so the item follows the cursor with snap
+    // guides painted; Esc cancels (restores the start rect); holding Alt
+    // suppresses snapping for the duration of that motion.
+    void beginMoveGesture(const QString& id, const QPoint& globalPos);
+    void beginFrameGesture(HitZone zone, const QPoint& globalPos);  // on the selection
+    void moveGesture(const QPoint& globalPos);
+    void endGesture(const QPoint& globalPos);
+    void cancelGesture();
+    bool gestureActive() const { return !m_gestureId.isEmpty(); }
+
+    // Snap capture distance (px on the live canvas).
+    static constexpr int kSnapTolerancePx = 8;
+    // Keyboard nudge step (px); Ctrl divides it for fine placement.
+    static constexpr int kNudgePx = 8;
+
     // ── Drag-and-drop (RFC #4887 phase 3) ────────────────────────────────
     //
     // The canvas accepts drops of one MIME type and reports them upward as
@@ -111,6 +139,26 @@ signals:
     // `payload` is the MIME data verbatim — for the applet MIME this is the
     // container's dragId().
     void dropReceived(const QString& payload, const QPointF& pos);
+
+    // Selection, for the frame, the controller's context menu, and a11y.
+    void selectionChanged(const QString& id);   // empty = cleared
+
+    // A gesture began (undo snapshots hang off this) and committed.  A
+    // cancelled gesture emits neither finish nor a rect change beyond the
+    // restore.  Keyboard nudges emit the same pair, so every placement
+    // change flows through one seam.
+    void gestureStarted(const QString& id, const NormRect& startRect);
+    void gestureFinished(const QString& id);
+
+    // A live move was RELEASED outside the canvas.  The item has already
+    // been restored to its start rect — whoever owns the surroundings
+    // decides whether the release point means something (the controller
+    // returns applets dropped onto the panel).
+    void itemDraggedOut(const QString& id, const QPoint& globalPos);
+
+    // Context menu request: `id` is the item under the cursor, empty over
+    // bare canvas.  Policy lives with the controller.
+    void contextMenuRequested(const QString& id, const QPoint& globalPos);
 
     // Emitted when an item's STORED rect changes — placement gestures only.
     // A canvas resize emits nothing: stored rects are canvas-independent,
@@ -132,6 +180,10 @@ protected:
     void dragEnterEvent(QDragEnterEvent* ev) override;
     void dragMoveEvent(QDragMoveEvent* ev) override;
     void dropEvent(QDropEvent* ev) override;
+    void mousePressEvent(QMouseEvent* ev) override;   // bare canvas: deselect
+    void keyPressEvent(QKeyEvent* ev) override;
+    void paintEvent(QPaintEvent* ev) override;        // snap guides
+    void contextMenuEvent(QContextMenuEvent* ev) override;
 
     // Raises an item when its widget is pressed.  Installed on the item widget
     // itself, so a press landing on a deeper descendant does not raise — real
@@ -143,6 +195,14 @@ private:
     // Model -> pixels, for every item.
     void applyGeometry();
 
+    // The display rect of one item — the stored rect through the display
+    // clamp.  What applyGeometryFor() sets and what the frame follows.
+    QRect displayRectFor(const QString& id) const;
+
+    void beginGesture(const QString& id, HitZone zone, const QPoint& globalPos);
+    void updateFrame();
+    QSizeF minNormFor(const QString& id) const;
+
     // Model -> Qt stacking.  Raising bottom-to-top leaves the highest z on
     // top; Qt has no "set stacking index", so the order of these calls IS the
     // result.
@@ -153,6 +213,18 @@ private:
     CanvasLayout m_layout;
     QHash<QString, QPointer<QWidget>> m_widgets;
     QByteArray m_dropMimeType;
+
+    // Selection + frame (phase 5).
+    QString m_selectedId;
+    class CanvasItemFrame* m_frame{nullptr};
+
+    // Active gesture.
+    QString  m_gestureId;
+    HitZone  m_gestureZone{HitZone::None};
+    NormRect m_gestureStart;
+    QPoint   m_gestureOrigin;   // global press position
+    QList<double> m_vGuides;
+    QList<double> m_hGuides;
 };
 
 }  // namespace AetherSDR

@@ -55,6 +55,16 @@ signals:
     void alwaysOnTopToggled(bool on);
     void dragStartRequested(const QPoint& globalPos);
 
+    // Live canvas move (RFC #4887 phase 5).  On a canvas the title bar
+    // streams the gesture instead of starting a QDrag: began carries the
+    // PRESS position (the gesture origin — using the threshold-crossing
+    // point would make the item jump by the threshold), moved streams every
+    // motion, ended fires on release.  A press that never crosses the
+    // threshold emits none of these, so a plain click still just raises.
+    void canvasDragBegan(const QPoint& globalPos);
+    void canvasDragMoved(const QPoint& globalPos);
+    void canvasDragEnded(const QPoint& globalPos);
+
 protected:
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
@@ -70,6 +80,7 @@ private:
     bool         m_closeAllowed{true};   // false = explicitly disabled (sidebar)
     bool         m_isFloating{false};
     bool         m_onCanvas{false};
+    bool         m_canvasDragging{false};
     bool         m_alwaysOnTop{false};
 };
 

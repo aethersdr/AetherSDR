@@ -2,6 +2,7 @@
 
 #include <QtGlobal>
 
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR {
@@ -236,6 +237,74 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     }
 
     return result;
+}
+
+QList<TidyMove> tidyOverlaps(const QList<CanvasItem>& items,
+                             const QStringList& fixedIds)
+{
+    const auto overlaps = [](const NormRect& a, const NormRect& b) {
+        return a.x < b.right() && b.x < a.right()
+               && a.y < b.bottom() && b.y < a.bottom();
+    };
+
+    // Movable items in reading order (top-to-bottom, then left-to-right):
+    // the order the eye scans is the order tidy preserves.
+    QList<CanvasItem> movable;
+    for (const CanvasItem& it : items) {
+        if (!fixedIds.contains(it.id)) {
+            movable.append(it);
+        }
+    }
+    std::stable_sort(movable.begin(), movable.end(),
+                     [](const CanvasItem& a, const CanvasItem& b) {
+                         if (!qFuzzyCompare(a.rect.y + 1.0, b.rect.y + 1.0)) {
+                             return a.rect.y < b.rect.y;
+                         }
+                         return a.rect.x < b.rect.x;
+                     });
+
+    QList<TidyMove> moves;
+    QList<NormRect> placed;
+
+    for (const CanvasItem& it : movable) {
+        NormRect r = it.rect;
+
+        // Push down past every already-placed rect it overlaps, repeating
+        // until clear — a push can land it on a later obstacle.
+        bool pushed = true;
+        int guard = 0;
+        while (pushed && ++guard < 64) {
+            pushed = false;
+            for (const NormRect& p : placed) {
+                if (overlaps(r, p)) {
+                    r.y    = p.bottom();
+                    pushed = true;
+                }
+            }
+        }
+
+        // Off the bottom, or still colliding: leave the ORIGINAL placement.
+        // Tidy never trades one overlap for a worse one.
+        bool ok = r.bottom() <= 1.0 + 1e-9;
+        if (ok) {
+            for (const NormRect& p : placed) {
+                if (overlaps(r, p)) {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if (!ok) {
+            placed.append(it.rect);
+            continue;
+        }
+
+        placed.append(r);
+        if (!(r == it.rect)) {
+            moves.append(TidyMove{it.id, r});
+        }
+    }
+    return moves;
 }
 
 }  // namespace AetherSDR

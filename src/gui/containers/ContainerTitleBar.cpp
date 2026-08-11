@@ -67,6 +67,12 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
 
     // Drag grip glyph (⋮⋮) — purely decorative; actual drag events
     // come from mouseMoveEvent on the bar as a whole.
+    // Addressable from the automation bridge as "<container>/containerTitleBar"
+    // (#3646 pattern, same scoping as the buttons below) — the canvas
+    // live-move gesture starts from THIS widget's mouse handlers, so a
+    // bridge drag has to be able to land here, not on the container.
+    setAccessibleName(QStringLiteral("containerTitleBar"));
+
     auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 10px; }");
     layout->addWidget(grip);
@@ -197,6 +203,19 @@ void ContainerTitleBar::mouseMoveEvent(QMouseEvent* ev)
         return;
     }
     const QPoint g = ev->globalPosition().toPoint();
+
+    // Canvas: a live gesture, not a QDrag.  The item follows the cursor via
+    // the canvas gesture session; the ghost-drag path below never runs.
+    if (m_onCanvas) {
+        if (!m_canvasDragging) {
+            if ((g - m_pressPos).manhattanLength() < kDragThresholdPx) return;
+            m_canvasDragging = true;
+            emit canvasDragBegan(m_pressPos);
+        }
+        emit canvasDragMoved(g);
+        return;
+    }
+
     if ((g - m_pressPos).manhattanLength() < kDragThresholdPx) return;
     // Let the owner handle the actual QDrag — Phase 1 just signals
     // that the user moved past the drag threshold.  Phases 3 / 4
@@ -211,6 +230,14 @@ void ContainerTitleBar::mouseReleaseEvent(QMouseEvent* ev)
     if (m_isFloating) {
         FramelessMoveHelper::finish(this, ev);
         setCursor(Qt::OpenHandCursor);
+        return;
+    }
+    if (m_canvasDragging) {
+        m_canvasDragging = false;
+        m_pressed = false;
+        setCursor(Qt::OpenHandCursor);
+        emit canvasDragEnded(ev->globalPosition().toPoint());
+        ev->accept();
         return;
     }
     QWidget::mouseReleaseEvent(ev);

@@ -117,6 +117,12 @@ signals:
     void floatRequested();
     void dockRequested();
 
+    // Live canvas move, forwarded from the title bar (RFC #4887 phase 5).
+    // The WorkspaceController routes these into the canvas gesture session.
+    void canvasDragBegan(const QPoint& globalPos);
+    void canvasDragMoved(const QPoint& globalPos);
+    void canvasDragEnded(const QPoint& globalPos);
+
     // Emitted when the user clicks the close (×) button in the
     // titlebar.  Connected code typically calls setContainerVisible(false)
     // but may choose to destroy the container instead.

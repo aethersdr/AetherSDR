@@ -1003,6 +1003,7 @@ set(GUI_SOURCES
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/CanvasItemFrame.cpp
     src/gui/workspace/CanvasLayout.cpp
     src/gui/workspace/ClassicLayout.cpp
     src/gui/workspace/WorkspaceCanvas.cpp
@@ -3489,8 +3490,10 @@ add_test(NAME workspace_layout_test COMMAND workspace_layout_test)
 # ownership contract phase 3 depends on.
 add_executable(workspace_canvas_widget_test
     tests/workspace_canvas_widget_test.cpp
-    src/gui/workspace/WorkspaceCanvas.cpp
+    src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/CanvasItemFrame.cpp
     src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/WorkspaceCanvas.cpp
     src/gui/workspace/WorkspaceGeometry.cpp
 )
 target_include_directories(workspace_canvas_widget_test PRIVATE src)
@@ -3593,6 +3596,8 @@ add_executable(workspace_controller_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
+    src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/CanvasItemFrame.cpp
     src/gui/workspace/CanvasLayout.cpp
     src/gui/workspace/ClassicLayout.cpp
     src/gui/workspace/WorkspaceCanvas.cpp

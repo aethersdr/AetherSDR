@@ -31,6 +31,11 @@ namespace AetherSDR {
 // actually hosts the panel.
 inline constexpr double kClassicAppletColumnWidth = 0.18;
 
+// Applets per Classic column before it wraps into another (slots stay above
+// the 90 px display floor on a 1080 px canvas).  Classic caps at three
+// columns; beyond that, applets compress within the last one.
+inline constexpr int kClassicMaxAppletsPerColumn = 11;
+
 // The panadapter cells for a layout id, in the order the stack assigns pans
 // (A, B, C, ...), covering the whole unit square.
 //

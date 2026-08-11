@@ -113,9 +113,13 @@ QList<CanvasItem> composeClassic(const QStringList& panIds,
     // operator never asked for.
     const bool haveApplets = !appletIds.isEmpty();
     const double columnWidth = haveApplets ? kClassicAppletColumnWidth : 0.0;
-    const double panWidth = 1.0 - columnWidth;
-    const double panOriginX = appletsLeft ? columnWidth : 0.0;
-    const double columnOriginX = appletsLeft ? 0.0 : panWidth;
+    const int wrapCols = haveApplets
+                             ? qMin(3, (static_cast<int>(appletIds.size())
+                                        + kClassicMaxAppletsPerColumn - 1)
+                                           / kClassicMaxAppletsPerColumn)
+                             : 0;
+    const double panWidth = 1.0 - wrapCols * columnWidth;
+    const double panOriginX = appletsLeft ? wrapCols * columnWidth : 0.0;
 
     // ── Pans, in their layout's cells, scaled into the pan region ────────
     QList<NormRect> cells = panCellsForLayout(layoutId);
@@ -139,27 +143,47 @@ QList<CanvasItem> composeClassic(const QStringList& panIds,
         items.append(item);
     }
 
-    // ── Applets, stacked down the column ─────────────────────────────────
+    // ── Applets, stacked down the column(s) ──────────────────────────────
     //
-    // Each applet gets 1/n of the column.  Past roughly a dozen open applets
-    // on a 1080 px canvas that falls under CanvasItem's 90 px floor and the
-    // clamp makes them overlap, where the real panel scrolls instead.  Nothing
-    // consumes this yet, so it is not reachable in phase 2 — but it is a real
-    // gap against "an operator who never opens the editor sees exactly what
-    // they see today", and phase 3 owes it either a scrolling column or a
-    // sensible overflow (PR #4900 review, L3).
+    // Up to ~11 applets share one column (slots stay above the 90 px display
+    // floor on a 1080 px canvas).  Beyond that the column WRAPS instead of
+    // letting slots collapse into an overlap — the L3 answer from PR #4900:
+    // the real panel scrolls, the canvas cannot, so Classic trades spectrum
+    // width for a second (at most third) column.  Applets beyond three full
+    // columns compress within the last one; at that point the operator has
+    // more applets open than any arrangement can show, and the canvas is the
+    // tool for choosing which ones matter.
     if (haveApplets) {
-        const double slotHeight = 1.0 / appletIds.size();
-        for (int i = 0; i < appletIds.size(); ++i) {
-            CanvasItem item;
-            item.id          = QStringLiteral("applet:") + appletIds.at(i);
-            item.contentType = QStringLiteral("applet");
-            item.z           = static_cast<int>(items.size());
-            item.rect.x = columnOriginX;
-            item.rect.y = i * slotHeight;
-            item.rect.w = columnWidth;
-            item.rect.h = slotHeight;
-            items.append(item);
+        const int n = static_cast<int>(appletIds.size());
+        const int colCount = qMin(3, (n + kClassicMaxAppletsPerColumn - 1)
+                                         / kClassicMaxAppletsPerColumn);
+
+        // Even distribution: 12 applets become 6+6, not 11+1.
+        const int base  = n / colCount;
+        const int extra = n % colCount;
+
+        int index = 0;
+        for (int col = 0; col < colCount; ++col) {
+            const int inThisColumn = base + (col < extra ? 1 : 0);
+            const double slotHeight = 1.0 / qMax(1, inThisColumn);
+
+            // Columns fill from the panel side inward.  Right-docked panel:
+            // column 0 hugs the right edge, column 1 sits left of it.
+            const double colX = appletsLeft
+                                    ? col * columnWidth
+                                    : 1.0 - (col + 1) * columnWidth;
+
+            for (int j = 0; j < inThisColumn && index < n; ++j, ++index) {
+                CanvasItem item;
+                item.id          = QStringLiteral("applet:") + appletIds.at(index);
+                item.contentType = QStringLiteral("applet");
+                item.z           = static_cast<int>(items.size());
+                item.rect.x = colX;
+                item.rect.y = j * slotHeight;
+                item.rect.w = columnWidth;
+                item.rect.h = slotHeight;
+                items.append(item);
+            }
         }
     }
 

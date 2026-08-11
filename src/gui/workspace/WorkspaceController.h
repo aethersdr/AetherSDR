@@ -97,6 +97,29 @@ public:
                             const NormRect* where = nullptr);
     bool returnAppletToPanel(const QString& appletId);
 
+    // ── Escape hatches (RFC #4887 phase 5) ───────────────────────────────
+    //
+    // Undo restores the rect the last gesture (mouse or keyboard) started
+    // from — single-slot by design, per the RFC's "undo for the last
+    // placement"; invoking it twice toggles, which doubles as redo.
+    bool undoLastPlacement();
+    bool canUndo() const { return !m_undoItemId.isEmpty(); }
+
+    // Rebuild the active workspace's main surface as Classic — pan area plus
+    // the open applets in a fresh column — and re-place everything.  The one
+    // guaranteed way back to a sane shell.
+    void resetToClassic();
+
+    // Resolve applet-vs-applet overlaps by minimal downward pushes.  Items
+    // overlapping the PAN AREA are left alone on purpose: a meter over the
+    // spectrum is a feature, not disorder.
+    void tidyLayout();
+
+    // Where a live drag out of the canvas may land (the applet panel).
+    // Releasing a move over this widget returns the applet to it; anywhere
+    // else the drag is an abort (the canvas has already restored the rect).
+    void setReturnTarget(QWidget* target);
+
 signals:
     void enabledChanged(bool enabled);
 
@@ -121,6 +144,13 @@ private:
     void onItemRectChanged(const QString& itemId, const NormRect& rect);
     void onContainerCreated(const QString& containerId);
     void wireContainer(ContainerWidget* c);
+    void onItemDraggedOut(const QString& itemId, const QPoint& globalPos);
+    void onContextMenuRequested(const QString& itemId, const QPoint& globalPos);
+
+    // The placement replay shared by enable() and resetToClassic(): put the
+    // pan stack and every eligible applet item of the active workspace onto
+    // the (empty) canvas.  Callers hold m_applying.
+    void placeActiveWorkspaceItems(WorkspaceDocument& doc, bool* docChanged);
 
     NormRect defaultRectFor(const ContainerWidget* c, const QPointF* center) const;
     NormRect panStackRectFromDocument() const;
@@ -129,6 +159,10 @@ private:
     WorkspaceCanvas*  m_canvas{nullptr};
     WorkspaceStore    m_store;
     QPointer<QWidget> m_panStackWidget;
+    QPointer<QWidget> m_returnTarget;
+    QStringList m_knownAppletIds;   // from enable(), for resetToClassic()
+    QString  m_undoItemId;      // last gesture's item…
+    NormRect m_undoRect;        // …and the rect it started from
     bool m_enabled{false};
     // True while enable()/disable() replay the document onto the canvas —
     // the canvas signals fired by that replay describe what the document

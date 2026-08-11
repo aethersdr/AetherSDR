@@ -12,6 +12,7 @@
 // Nothing here knows what a QWidget is, so all of it is unit-tested headless
 // on every platform — see tests/workspace_geometry_test.cpp.
 
+#include <QMetaType>
 #include <QRect>
 #include <QSize>
 #include <QSizeF>
@@ -103,3 +104,7 @@ NormRect clampToBounds(const NormRect& r);
 NormRect clampToCanvas(const NormRect& r, const QSize& minPx, const QSize& canvas);
 
 }  // namespace AetherSDR
+
+// Signal parameter in WorkspaceCanvas (gestureStarted); registered so
+// QSignalSpy and queued connections can carry it.
+Q_DECLARE_METATYPE(AetherSDR::NormRect)

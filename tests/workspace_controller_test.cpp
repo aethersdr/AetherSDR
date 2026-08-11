@@ -20,6 +20,7 @@
 #include "gui/containers/ContainerWidget.h"
 #include "gui/workspace/WorkspaceCanvas.h"
 #include "gui/workspace/WorkspaceController.h"
+#include "gui/workspace/ClassicLayout.h"
 #include "gui/workspace/WorkspaceStore.h"
 
 #include <QApplication>
@@ -31,6 +32,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <cmath>
 #include <cstdio>
 #include <iostream>
 
@@ -53,6 +55,11 @@ void report(const char* name, bool ok)
     if (!ok) {
         ++g_failures;
     }
+}
+
+bool nearly(double a, double b, double tol = 1e-9)
+{
+    return std::fabs(a - b) <= tol;
 }
 
 QString storedDocument()
@@ -246,6 +253,81 @@ int main(int argc, char** argv)
                    WorkspaceStore probe;
                    return probe.load() && probe.document().canvasEnabled;
                }());
+        ctl.disable();
+    }
+
+    // ── Phase 5: undo, tidy, reset, drag-out return ──────────────────────
+    {
+        // RX forgot its canvas home in the float block above, so re-enable
+        // places only TX; send RX back explicitly.
+        report("re-enable for the phase 5 block",
+               ctl.enable({"RX", "TX"}) && tx->isOnCanvas()
+                   && ctl.sendAppletToCanvas("RX") && rx->isOnCanvas());
+
+        // The offscreen platform stacks every top-level at the same origin,
+        // which would make "over the panel" also "inside the canvas".  Pull
+        // them apart so global points are unambiguous.
+        canvas.window()->move(0, 0);
+        panel.window()->move(3000, 0);
+
+        // Undo restores the rect the last gesture started from; twice
+        // toggles (single-slot redo).
+        const NormRect before = canvas.itemRect("applet:RX");
+        const QPoint origin = canvas.mapToGlobal(QPoint(500, 400));
+        canvas.beginMoveGesture("applet:RX", origin);
+        canvas.moveGesture(origin + QPoint(120, 80));
+        canvas.endGesture(origin + QPoint(120, 80));
+        const NormRect after = canvas.itemRect("applet:RX");
+        report("a live gesture moved the item", !(after == before));
+
+        report("undo restores the pre-gesture rect",
+               ctl.undoLastPlacement()
+                   && canvas.itemRect("applet:RX") == before);
+        report("undo again toggles back (redo)",
+               ctl.undoLastPlacement()
+                   && canvas.itemRect("applet:RX") == after);
+
+        // Tidy: overlap TX onto RX, then resolve — TX pushed clear, sizes
+        // kept; panstack overlaps ignored throughout.
+        const NormRect rxRect = canvas.itemRect("applet:RX");
+        NormRect overlap = rxRect;
+        overlap.y += rxRect.h / 2.0;   // half-covering RX
+        canvas.setItemRect("applet:TX", overlap);
+        ctl.tidyLayout();
+        const NormRect txTidied = canvas.itemRect("applet:TX");
+        report("tidy pushes the overlapping applet clear",
+               txTidied.y >= rxRect.bottom() - 1e-9
+                   && nearly(txTidied.h, overlap.h));
+
+        // Reset to Classic: fresh column derived from the live legacy keys.
+        canvas.setItemRect("applet:RX", NormRect{0.05, 0.05, 0.3, 0.3});
+        ctl.resetToClassic();
+        report("reset places the applets back in the Classic column",
+               nearly(canvas.itemRect("applet:RX").x,
+                      1.0 - AetherSDR::kClassicAppletColumnWidth)
+                   && rx->isOnCanvas() && tx->isOnCanvas());
+        report("...and the pan area takes the remainder",
+               nearly(canvas.itemRect(WorkspaceController::kPanStackItemId).w,
+                      1.0 - AetherSDR::kClassicAppletColumnWidth));
+
+        // Drag-out over the panel returns the applet to it; a drag-out over
+        // nothing is an abort the canvas already restored.
+        ctl.setReturnTarget(&panel);
+        const QPoint overPanel = panel.mapToGlobal(QPoint(10, 10));
+        canvas.beginMoveGesture("applet:RX", origin);
+        canvas.moveGesture(origin + QPoint(50, 0));
+        canvas.endGesture(overPanel);
+        report("a release over the panel returns the applet",
+               rx->isPanelDocked() && !canvas.contains("applet:RX"));
+
+        const NormRect txBefore = canvas.itemRect("applet:TX");
+        canvas.beginMoveGesture("applet:TX", origin);
+        canvas.moveGesture(origin + QPoint(50, 0));
+        canvas.endGesture(canvas.mapToGlobal(QPoint(-500, -500)));
+        report("a release over nothing restores and stays",
+               tx->isOnCanvas() && canvas.itemRect("applet:TX") == txBefore);
+
+        ctl.sendAppletToCanvas("RX");
         ctl.disable();
     }
 

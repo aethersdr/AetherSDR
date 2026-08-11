@@ -11,6 +11,8 @@
 #include <QList>
 #include <QPoint>
 #include <QRect>
+#include <QString>
+#include <QStringList>
 
 #include <cmath>
 #include <cstdio>
@@ -218,6 +220,86 @@ int main()
         s = snapRect(moved, HitZone::E, peers, tol, tol, minN);
         report("a snap cannot shrink below the minimum",
                s.rect.w >= minN.width() - 1e-12);
+    }
+
+    // ── Tidy ─────────────────────────────────────────────────────────────
+    {
+        using AetherSDR::CanvasItem;
+        using AetherSDR::TidyMove;
+        using AetherSDR::tidyOverlaps;
+
+        const auto make = [](const QString& id, const NormRect& r) {
+            CanvasItem it;
+            it.id   = id;
+            it.rect = r;
+            return it;
+        };
+
+        // Two overlapping items: the lower-in-reading-order one is pushed
+        // below the first, sizes intact.
+        {
+            const QList<CanvasItem> items{
+                make("a", NormRect{0.1, 0.1, 0.3, 0.3}),
+                make("b", NormRect{0.2, 0.2, 0.3, 0.3}),
+            };
+            const auto moves = tidyOverlaps(items, {});
+            report("tidy resolves a simple overlap downward",
+                   moves.size() == 1 && moves.first().id == "b"
+                       && nearly(moves.first().rect.y, 0.4)
+                       && nearly(moves.first().rect.x, 0.2)
+                       && nearly(moves.first().rect.h, 0.3));
+        }
+
+        // Already tidy: nothing moves, nothing reported.
+        {
+            const QList<CanvasItem> items{
+                make("a", NormRect{0.0, 0.0, 0.3, 0.3}),
+                make("b", NormRect{0.5, 0.5, 0.3, 0.3}),
+            };
+            report("tidy leaves a clean arrangement alone",
+                   tidyOverlaps(items, {}).isEmpty());
+        }
+
+        // Overlap with a FIXED item is not disorder: a meter over the pan
+        // area stays exactly where the operator put it.
+        {
+            const QList<CanvasItem> items{
+                make("panstack", NormRect{0.0, 0.0, 0.8, 1.0}),
+                make("meter",    NormRect{0.3, 0.3, 0.2, 0.2}),
+            };
+            report("tidy ignores overlap with fixed items",
+                   tidyOverlaps(items, {"panstack"}).isEmpty());
+        }
+
+        // A chain: pushing b below a lands it on c, so it pushes past c too.
+        {
+            const QList<CanvasItem> items{
+                make("a", NormRect{0.1, 0.0, 0.3, 0.3}),
+                make("b", NormRect{0.1, 0.1, 0.3, 0.3}),
+                make("c", NormRect{0.1, 0.35, 0.3, 0.2}),
+            };
+            // Reading order places b (y=0.1) before c (y=0.35): b slots in
+            // directly below a, and c — now overlapped by b's new position —
+            // is pushed through it to below both.
+            const auto moves = tidyOverlaps(items, {});
+            bool bMoved = false, cChained = false;
+            for (const TidyMove& mv : moves) {
+                if (mv.id == "b") bMoved   = nearly(mv.rect.y, 0.3);
+                if (mv.id == "c") cChained = nearly(mv.rect.y, 0.6);
+            }
+            report("tidy pushes through chained obstacles", bMoved && cChained);
+        }
+
+        // No room below: the item is left exactly where it was — tidy never
+        // makes an arrangement worse.
+        {
+            const QList<CanvasItem> items{
+                make("a", NormRect{0.0, 0.0, 1.0, 0.6}),
+                make("b", NormRect{0.0, 0.5, 1.0, 0.6}),
+            };
+            report("tidy gives up rather than push off the surface",
+                   tidyOverlaps(items, {}).isEmpty());
+        }
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");

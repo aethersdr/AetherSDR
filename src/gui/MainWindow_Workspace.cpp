@@ -46,6 +46,8 @@ void MainWindow::wireWorkspaceCanvas()
 
     connect(m_appletPanel, &AppletPanel::canvasReturnRequested,
             m_workspaceController, &WorkspaceController::returnAppletToPanel);
+    // A live move released over the panel returns the applet to it.
+    m_workspaceController->setReturnTarget(m_appletPanel);
 
     connect(m_workspaceController, &WorkspaceController::enabledChanged,
             this, [this](bool on) {

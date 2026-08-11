@@ -39,6 +39,12 @@ ContainerWidget::ContainerWidget(const QString& id, const QString& title,
             this, &ContainerWidget::alwaysOnTopToggled);
     connect(m_titleBar, &ContainerTitleBar::dragStartRequested,
             this, &ContainerWidget::onTitleBarDragStart);
+    connect(m_titleBar, &ContainerTitleBar::canvasDragBegan,
+            this, &ContainerWidget::canvasDragBegan);
+    connect(m_titleBar, &ContainerTitleBar::canvasDragMoved,
+            this, &ContainerWidget::canvasDragMoved);
+    connect(m_titleBar, &ContainerTitleBar::canvasDragEnded,
+            this, &ContainerWidget::canvasDragEnded);
 }
 
 ContainerWidget::~ContainerWidget() = default;

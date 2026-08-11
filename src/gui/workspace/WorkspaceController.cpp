@@ -2,10 +2,15 @@
 
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
+#include "gui/workspace/CanvasInteraction.h"
 #include "gui/workspace/ClassicLayout.h"
+#include "gui/workspace/WorkspaceMigration.h"
 #include "gui/workspace/WorkspaceCanvas.h"
 
 #include <QHash>
+#include <QMenu>
+#include <QPoint>
+#include <QWidget>
 
 namespace AetherSDR {
 
@@ -42,6 +47,24 @@ WorkspaceController::WorkspaceController(ContainerManager* manager,
                 if (m_applying || !m_enabled) return;
                 writeStackingFromCanvas();
             });
+
+    // Gestures (phase 5): snapshot for undo at the start, flush the debounced
+    // rect stream at the end — the auto-commit gesture boundary.
+    connect(m_canvas, &WorkspaceCanvas::gestureStarted,
+            this, [this](const QString& itemId, const NormRect& startRect) {
+                if (m_applying || !m_enabled) return;
+                m_undoItemId = itemId;
+                m_undoRect   = startRect;
+            });
+    connect(m_canvas, &WorkspaceCanvas::gestureFinished,
+            this, [this](const QString&) {
+                if (m_applying || !m_enabled) return;
+                m_store.flush();
+            });
+    connect(m_canvas, &WorkspaceCanvas::itemDraggedOut,
+            this, &WorkspaceController::onItemDraggedOut);
+    connect(m_canvas, &WorkspaceCanvas::contextMenuRequested,
+            this, &WorkspaceController::onContextMenuRequested);
 
     // Leaving the canvas through the manager — the title-bar "return to
     // panel" button, or the detour a float takes — always forgets the
@@ -130,31 +153,64 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
         return false;
     }
 
-    // Assemble the placement list from the document.  The replay itself is
-    // guarded: the canvas signals it fires describe what the document
-    // already says.
+    Q_UNUSED(main);
+
+    // Remembered for resetToClassic(), which re-derives Classic from the
+    // same legacy keys the first enable migrated from.
+    m_knownAppletIds = knownAppletIds;
+
+    // The replay itself is guarded: the canvas signals it fires describe
+    // what the document already says.
     m_applying = true;
+    bool docChanged = false;
+    placeActiveWorkspaceItems(doc, &docChanged);
+    m_applying = false;
+
+    doc.canvasEnabled = true;
+    m_store.setDocument(doc);
+    m_store.flush();
+
+    m_enabled = true;
+    emit enabledChanged(true);
+    return true;
+}
+
+void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
+                                                    bool* docChanged)
+{
+    Workspace* ws = nullptr;
+    for (Workspace& w : doc.workspaces) {
+        if (w.id == doc.activeWorkspace) ws = &w;
+    }
+    WorkspaceSurface* main = nullptr;
+    if (ws) {
+        for (WorkspaceSurface& surf : ws->surfaces) {
+            if (surf.id == WorkspaceSurface::kMainId) main = &surf;
+        }
+    }
+    if (!main) {
+        return;
+    }
 
     QList<CanvasItem> toPlace;
     QHash<QString, QWidget*> widgets;
-    bool docChanged = false;
 
     // The reserved pan area first.  If the document has never seen one
     // (first enable), it takes the region Classic left for it.
     CanvasItem panItem;
-    if (const CanvasItem* stored = [&]() -> const CanvasItem* {
-            for (const CanvasItem& it : main->items) {
-                if (it.id == kPanStackItemId) return &it;
-            }
-            return nullptr;
-        }()) {
+    const CanvasItem* stored = nullptr;
+    for (const CanvasItem& it : main->items) {
+        if (it.id == kPanStackItemId) stored = &it;
+    }
+    if (stored) {
         panItem = *stored;
     } else {
         panItem.id          = kPanStackItemId;
         panItem.contentType = QStringLiteral("panstack");
         panItem.rect        = panStackRectFromDocument();
         panItem.z           = -1;   // restoreItems sorts; keep it at the back
-        docChanged          = true;
+        main->items.prepend(panItem);
+        if (docChanged) *docChanged = true;
     }
     panItem.minimumSize = QSize(320, 240);
     if (m_panStackWidget) {
@@ -180,28 +236,6 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
     }
 
     m_canvas->restoreItems(toPlace, widgets);
-    m_applying = false;
-
-    doc.canvasEnabled = true;
-    if (docChanged) {
-        Workspace* wsMut = nullptr;
-        for (Workspace& w : doc.workspaces) {
-            if (w.id == doc.activeWorkspace) wsMut = &w;
-        }
-        if (wsMut) {
-            for (WorkspaceSurface& s : wsMut->surfaces) {
-                if (s.id == WorkspaceSurface::kMainId) {
-                    s.items.prepend(panItem);
-                }
-            }
-        }
-    }
-    m_store.setDocument(doc);
-    m_store.flush();
-
-    m_enabled = true;
-    emit enabledChanged(true);
-    return true;
 }
 
 void WorkspaceController::disable()
@@ -375,6 +409,27 @@ void WorkspaceController::onContainerCreated(const QString& containerId)
 
 void WorkspaceController::wireContainer(ContainerWidget* c)
 {
+    // Live move (phase 5): the title bar streams the gesture; the canvas
+    // session makes the item follow the cursor with snapping.
+    connect(c, &ContainerWidget::canvasDragBegan, this,
+            [this, c](const QPoint& g) {
+                if (m_enabled && c->isOnCanvas()) {
+                    m_canvas->beginMoveGesture(itemIdFor(c), g);
+                }
+            });
+    connect(c, &ContainerWidget::canvasDragMoved, this,
+            [this, c](const QPoint& g) {
+                if (m_enabled && c->isOnCanvas()) {
+                    m_canvas->moveGesture(g);
+                }
+            });
+    connect(c, &ContainerWidget::canvasDragEnded, this,
+            [this, c](const QPoint& g) {
+                if (m_enabled && c->isOnCanvas()) {
+                    m_canvas->endGesture(g);
+                }
+            });
+
     // Open/close from the bar buttons.  Closing an applet that lives on the
     // canvas evicts it but keeps its home; reopening returns it there.
     connect(c, &ContainerWidget::visibilityChanged, this, [this, c](bool visible) {
@@ -502,6 +557,158 @@ void WorkspaceController::writeStackingFromCanvas()
     }
     m_store.setDocument(doc);
     m_store.flush();
+}
+
+// ── Escape hatches (phase 5) ─────────────────────────────────────────────
+
+void WorkspaceController::setReturnTarget(QWidget* target)
+{
+    m_returnTarget = target;
+}
+
+bool WorkspaceController::undoLastPlacement()
+{
+    if (!m_enabled || !canUndo()) {
+        return false;
+    }
+    if (!m_canvas->layout().contains(m_undoItemId)) {
+        m_undoItemId.clear();
+        return false;
+    }
+    // Swap current and remembered: undoing twice toggles, which is the
+    // single-slot version of redo.
+    const NormRect current = m_canvas->itemRect(m_undoItemId);
+    m_canvas->setItemRect(m_undoItemId, m_undoRect);
+    m_undoRect = current;
+    m_store.flush();
+    return true;
+}
+
+void WorkspaceController::resetToClassic()
+{
+    if (!m_enabled) {
+        return;
+    }
+
+    m_applying = true;
+
+    // Everything off the surface: applets back to their panel slots, the
+    // pan stack held aside for the re-place below.
+    const QStringList ids = m_canvas->layout().ids();
+    for (const QString& itemId : ids) {
+        if (itemId == kPanStackItemId) {
+            m_canvas->takeItem(itemId);
+            continue;
+        }
+        QWidget* w = m_canvas->takeItem(itemId);
+        if (auto* c = qobject_cast<ContainerWidget*>(w)) {
+            m_manager->returnFromCanvas(c->id(), c);
+        }
+    }
+
+    // Classic is re-derived from the same legacy keys the first enable
+    // migrated from — the panel still dual-writes them, so this reflects
+    // the operator's CURRENT open applets and order, not a stale snapshot.
+    // One definition of Classic, used everywhere (WorkspaceMigration).
+    WorkspaceDocument doc = m_store.document();
+    const WorkspaceDocument classic =
+        buildClassicDocument(readLegacyLayoutState(m_knownAppletIds), {});
+    if (const Workspace* freshWs = classic.workspace(classicWorkspaceId())) {
+        if (const WorkspaceSurface* freshMain =
+                freshWs->surface(WorkspaceSurface::kMainId)) {
+            for (Workspace& w : doc.workspaces) {
+                if (w.id != doc.activeWorkspace) continue;
+                for (WorkspaceSurface& surf : w.surfaces) {
+                    if (surf.id == WorkspaceSurface::kMainId) {
+                        surf.items = freshMain->items;
+                    }
+                }
+            }
+        }
+    }
+
+    placeActiveWorkspaceItems(doc, nullptr);
+    m_applying = false;
+
+    m_undoItemId.clear();   // a whole-surface change; a one-rect undo would lie
+    m_store.setDocument(doc);
+    m_store.flush();
+}
+
+void WorkspaceController::tidyLayout()
+{
+    if (!m_enabled) {
+        return;
+    }
+
+    QList<CanvasItem> items;
+    for (const CanvasItem& it : m_canvas->layout().itemsByZ()) {
+        items.append(it);
+    }
+    const QList<TidyMove> moves =
+        tidyOverlaps(items, QStringList{kPanStackItemId});
+
+    for (const TidyMove& mv : moves) {
+        m_canvas->setItemRect(mv.id, mv.rect);   // rect stream → touch
+    }
+    if (!moves.isEmpty()) {
+        m_undoItemId.clear();   // multi-item change; single-slot undo is out
+        m_store.flush();
+    }
+}
+
+void WorkspaceController::onItemDraggedOut(const QString& itemId,
+                                           const QPoint& globalPos)
+{
+    if (m_applying || !m_enabled || itemId == kPanStackItemId) {
+        return;
+    }
+    // Only a release over the return target means anything; the canvas has
+    // already restored the item's rect, so anything else is a completed
+    // abort.
+    QWidget* target = m_returnTarget.data();
+    if (!target || !target->isVisible()) {
+        return;
+    }
+    if (!target->rect().contains(target->mapFromGlobal(globalPos))) {
+        return;
+    }
+    if (itemId.startsWith(kAppletItemPrefix)) {
+        returnAppletToPanel(itemId.mid(kAppletItemPrefix.size()));
+    }
+}
+
+void WorkspaceController::onContextMenuRequested(const QString& itemId,
+                                                 const QPoint& globalPos)
+{
+    if (!m_enabled) {
+        return;
+    }
+
+    QMenu menu;
+    const bool onApplet =
+        !itemId.isEmpty() && itemId.startsWith(kAppletItemPrefix);
+
+    if (onApplet) {
+        const QString appletId = itemId.mid(kAppletItemPrefix.size());
+        menu.addAction(QStringLiteral("Return to panel"), this,
+                       [this, appletId] { returnAppletToPanel(appletId); });
+        menu.addAction(QStringLiteral("Bring to front"), this,
+                       [this, itemId] { m_canvas->bringItemToFront(itemId); });
+        menu.addAction(QStringLiteral("Send to back"), this,
+                       [this, itemId] { m_canvas->sendItemToBack(itemId); });
+        menu.addSeparator();
+    }
+
+    QAction* undo = menu.addAction(QStringLiteral("Undo last placement"), this,
+                                   [this] { undoLastPlacement(); });
+    undo->setEnabled(canUndo());
+    menu.addAction(QStringLiteral("Tidy layout"), this,
+                   [this] { tidyLayout(); });
+    menu.addAction(QStringLiteral("Reset layout to Classic"), this,
+                   [this] { resetToClassic(); });
+
+    menu.exec(globalPos);
 }
 
 // ── Geometry helpers ─────────────────────────────────────────────────────

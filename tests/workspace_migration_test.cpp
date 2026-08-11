@@ -296,6 +296,49 @@ int main(int argc, char** argv)
         report("composed items carry dense ascending z", zAscending);
     }
 
+    // ── Classic column wrap (phase 5 — the PR #4900 L3 answer) ───────────
+    {
+        QStringList many;
+        for (int i = 0; i < 12; ++i) many << QStringLiteral("A%1").arg(i);
+        const QList<CanvasItem> wrapped =
+            composeClassic({}, many, QStringLiteral("1"), false);
+
+        report("12 applets wrap into two columns",
+               wrapped.size() == 12);
+        // Even split: 6 + 6, not 11 + 1.
+        int rightCol = 0, innerCol = 0;
+        for (const CanvasItem& it : wrapped) {
+            if (nearly(it.rect.x, 1.0 - AetherSDR::kClassicAppletColumnWidth)) {
+                ++rightCol;
+            } else if (nearly(it.rect.x,
+                              1.0 - 2 * AetherSDR::kClassicAppletColumnWidth)) {
+                ++innerCol;
+            }
+        }
+        report("...split evenly", rightCol == 6 && innerCol == 6);
+        report("...slots above the collapse point",
+               nearly(wrapped.first().rect.h, 1.0 / 6.0));
+
+        // Small counts stay one column — the shipped behaviour is unchanged.
+        const QList<CanvasItem> few =
+            composeClassic({}, {"RX", "TX", "PWR"}, QStringLiteral("1"), false);
+        bool oneColumn = true;
+        for (const CanvasItem& it : few) {
+            if (!nearly(it.rect.x, 1.0 - AetherSDR::kClassicAppletColumnWidth)) {
+                oneColumn = false;
+            }
+        }
+        report("3 applets keep the single column", oneColumn);
+
+        // The pan region cedes width to every wrapped column.
+        const QList<CanvasItem> withPan =
+            composeClassic({"p"}, many, QStringLiteral("1"), false);
+        const CanvasItem* pan = findItem(withPan, QStringLiteral("pan:p"));
+        report("the pan region accounts for wrapped columns",
+               pan && nearly(pan->rect.w,
+                             1.0 - 2 * AetherSDR::kClassicAppletColumnWidth));
+    }
+
     // ── Reading the legacy keys ──────────────────────────────────────────
     {
         clearLegacyKeys();
