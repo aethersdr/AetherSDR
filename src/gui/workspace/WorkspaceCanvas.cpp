@@ -18,6 +18,65 @@
 
 namespace AetherSDR {
 
+namespace {
+
+// 1 px dots at every snap-grid intersection.  Shared by the background pass
+// (exposed canvas) and the gesture overlay (above everything, drag-scoped).
+void paintGridDots(QPainter& p, const QSize& size, const QColor& color)
+{
+    p.setPen(color);
+    for (int ix = 1; ix < WorkspaceCanvas::kSnapGridColumns; ++ix) {
+        const int x = qRound(ix * size.width()
+                             / double(WorkspaceCanvas::kSnapGridColumns));
+        for (int iy = 1; iy < WorkspaceCanvas::kSnapGridRows; ++iy) {
+            const int y = qRound(iy * size.height()
+                                 / double(WorkspaceCanvas::kSnapGridRows));
+            p.drawPoint(x, y);
+        }
+    }
+}
+
+}  // namespace
+
+// Paints only while a gesture is live: the snap guides and the grid dots,
+// above every item.  Mouse-transparent so it can sit on top without eating
+// a single event.
+class WorkspaceCanvas::GestureOverlay : public QWidget {
+public:
+    explicit GestureOverlay(WorkspaceCanvas* canvas)
+        : QWidget(canvas)
+        , m_canvas(canvas)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+
+        QColor dot = palette().windowText().color();
+        dot.setAlpha(90);
+        paintGridDots(p, size(), dot);
+
+        QPen pen(palette().highlight().color(), 1, Qt::DashLine);
+        p.setPen(pen);
+        for (double x : m_canvas->m_vGuides) {
+            const int px = qRound(x * width());
+            p.drawLine(px, 0, px, height());
+        }
+        for (double y : m_canvas->m_hGuides) {
+            const int py = qRound(y * height());
+            p.drawLine(0, py, width(), py);
+        }
+    }
+
+private:
+    WorkspaceCanvas* m_canvas{nullptr};
+};
+
 WorkspaceCanvas::WorkspaceCanvas(QWidget* parent)
     : QWidget(parent)
 {
@@ -29,6 +88,7 @@ WorkspaceCanvas::WorkspaceCanvas(QWidget* parent)
     setAccessibleName(QStringLiteral("Workspace canvas"));
 
     m_frame = new CanvasItemFrame(this);
+    m_gestureOverlay = new GestureOverlay(this);
 }
 
 WorkspaceCanvas::~WorkspaceCanvas()
@@ -151,7 +211,7 @@ QWidget* WorkspaceCanvas::takeItem(const QString& id)
         m_vGuides.clear();
         m_hGuides.clear();
         releaseKeyboard();
-        update();
+        if (m_gestureOverlay) m_gestureOverlay->hide();
     }
 
     QWidget* w = m_widgets.take(id).data();
@@ -291,6 +351,9 @@ void WorkspaceCanvas::resizeEvent(QResizeEvent* ev)
     // window forced on the view is how a transient startup size once
     // destroyed a stored arrangement (RFC #4887 phase 3 field report).
     applyGeometry();
+    if (m_gestureOverlay && m_gestureOverlay->isVisible()) {
+        m_gestureOverlay->setGeometry(rect());
+    }
 }
 
 bool WorkspaceCanvas::eventFilter(QObject* watched, QEvent* ev)
@@ -354,9 +417,13 @@ void WorkspaceCanvas::applyStacking()
             w->raise();
         }
     }
-    // The selection frame rides above every item, always.
+    // The selection frame rides above every item, always; the gesture
+    // overlay above even that, so guides are never occluded mid-drag.
     if (m_frame && m_frame->isVisible()) {
         m_frame->raise();
+    }
+    if (m_gestureOverlay && m_gestureOverlay->isVisible()) {
+        m_gestureOverlay->raise();
     }
 }
 
@@ -435,6 +502,11 @@ void WorkspaceCanvas::beginGesture(const QString& id, HitZone zone,
     // mid-drag from a title bar that has the mouse grab.  Scoped strictly
     // to the gesture: released in endGesture()/cancelGesture().
     grabKeyboard();
+
+    m_gestureOverlay->setGeometry(rect());
+    m_gestureOverlay->show();
+    m_gestureOverlay->raise();
+
     emit gestureStarted(id, m_gestureStart);
 }
 
@@ -477,14 +549,15 @@ void WorkspaceCanvas::moveGesture(const QPoint& globalPos)
         const SnapResult snapped =
             snapRect(r, m_gestureZone, peers,
                      kSnapTolerancePx / double(width()),
-                     kSnapTolerancePx / double(height()), minN);
+                     kSnapTolerancePx / double(height()), minN,
+                     kSnapGridColumns, kSnapGridRows);
         r         = snapped.rect;
         m_vGuides = snapped.verticalGuides;
         m_hGuides = snapped.horizontalGuides;
     }
 
     setItemRect(m_gestureId, r);
-    update();   // guides
+    m_gestureOverlay->update();   // guides + grid dots
 }
 
 void WorkspaceCanvas::endGesture(const QPoint& globalPos)
@@ -498,7 +571,7 @@ void WorkspaceCanvas::endGesture(const QPoint& globalPos)
     m_vGuides.clear();
     m_hGuides.clear();
     releaseKeyboard();
-    update();
+    m_gestureOverlay->hide();
 
     // A MOVE released outside the canvas is not a placement — it is either a
     // return to the panel (the controller's call) or an abort.  Restore the
@@ -521,8 +594,8 @@ void WorkspaceCanvas::cancelGesture()
     m_vGuides.clear();
     m_hGuides.clear();
     releaseKeyboard();
+    m_gestureOverlay->hide();
     setItemRect(id, m_gestureStart);
-    update();
 }
 
 // ── Bare-canvas input (phase 5) ──────────────────────────────────────────
@@ -626,20 +699,14 @@ void WorkspaceCanvas::keyPressEvent(QKeyEvent* ev)
 void WorkspaceCanvas::paintEvent(QPaintEvent* ev)
 {
     QWidget::paintEvent(ev);
-    if (m_vGuides.isEmpty() && m_hGuides.isEmpty()) {
-        return;
-    }
+    // Background dots: visible wherever items leave the canvas exposed.
+    // (A widget paints UNDER its children, so this pass cannot show through
+    // the spectrum — the gesture overlay handles the on-top case, and the
+    // guides live there with it.)
     QPainter p(this);
-    QPen pen(palette().highlight().color(), 1, Qt::DashLine);
-    p.setPen(pen);
-    for (double x : m_vGuides) {
-        const int px = qRound(x * width());
-        p.drawLine(px, 0, px, height());
-    }
-    for (double y : m_hGuides) {
-        const int py = qRound(y * height());
-        p.drawLine(0, py, width(), py);
-    }
+    QColor dot = palette().windowText().color();
+    dot.setAlpha(60);
+    paintGridDots(p, size(), dot);
 }
 
 void WorkspaceCanvas::contextMenuEvent(QContextMenuEvent* ev)

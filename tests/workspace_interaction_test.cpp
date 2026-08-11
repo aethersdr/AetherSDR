@@ -222,6 +222,54 @@ int main()
                s.rect.w >= minN.width() - 1e-12);
     }
 
+    // ── Snap: the grid tier ──────────────────────────────────────────────
+    {
+        const double tol = 0.02;
+        const QList<NormRect> noPeers;
+        const QList<NormRect> peers{NormRect{0.0, 0.0, 0.5, 0.5}};
+
+        // With no peers in reach, a 32-division grid captures: left edge at
+        // 0.255 → 8/32 = 0.25.
+        NormRect moved{0.255, 0.7, 0.2, 0.2};
+        auto s = snapRect(moved, HitZone::Move, noPeers, tol, tol, minN, 32, 18);
+        report("the grid captures when no peer is in reach",
+               nearly(s.rect.x, 0.25) && s.verticalGuides == QList<double>{0.25});
+
+        // A peer edge inside tolerance BEATS a nearer grid line: right edge
+        // at 0.507 — grid line 0.5 is 0.007 away, but so is the peer's right
+        // edge at 0.5... make them differ: peer right = 0.5, grid 16/32 =
+        // 0.5 identical.  Use x: item left at 0.515; peer.right = 0.5
+        // (0.015 away), grid 17/32 = 0.53125 (0.016 away) — both in tol,
+        // peer wins even though grid competes.
+        moved = NormRect{0.515, 0.7, 0.2, 0.2};
+        s = snapRect(moved, HitZone::Move, peers, tol, tol, minN, 32, 18);
+        report("a peer edge beats the grid when both are reachable",
+               nearly(s.rect.x, 0.5));
+
+        // The stronger claim: the peer wins even when the GRID is NEARER.
+        // Left edge at 0.53: grid 0.53125 is 0.00125 away, peer.right 0.5 is
+        // 0.03 away — out of tol... shrink the gap: left edge 0.512 → peer
+        // 0.012, grid 17/32 dist 0.019 — peer nearer anyway.  Construct
+        // nearer-grid: left 0.525 → grid 0.00625, peer 0.025 — both in tol
+        // (0.03): peer STILL wins by tier.
+        s = snapRect(NormRect{0.525, 0.7, 0.2, 0.2}, HitZone::Move, peers,
+                     0.03, 0.03, minN, 32, 18);
+        report("the peer tier wins even when a grid line is nearer",
+               nearly(s.rect.x, 0.5));
+
+        // Grid disabled: 0.255 stays free.
+        s = snapRect(NormRect{0.255, 0.7, 0.2, 0.2}, HitZone::Move, noPeers,
+                     tol, tol, minN, 0, 0);
+        report("grid zero disables the grid tier",
+               nearly(s.rect.x, 0.255) && s.verticalGuides.isEmpty());
+
+        // Resize: the gripped edge lands on a grid line, anchor untouched.
+        s = snapRect(NormRect{0.3, 0.5, 0.257, 0.2}, HitZone::E, noPeers,
+                     tol, tol, minN, 32, 18);
+        report("a resize snaps its gripped edge to the grid",
+               nearly(s.rect.right(), 0.5625) && nearly(s.rect.x, 0.3));
+    }
+
     // ── Tidy ─────────────────────────────────────────────────────────────
     {
         using AetherSDR::CanvasItem;

@@ -124,7 +124,8 @@ NormRect applyDrag(const NormRect& start, HitZone zone,
 SnapResult snapRect(const NormRect& moved, HitZone zone,
                     const QList<NormRect>& peers,
                     double tolNormX, double tolNormY,
-                    const QSizeF& minNorm)
+                    const QSizeF& minNorm,
+                    int gridX, int gridY)
 {
     SnapResult result;
     result.rect = moved;
@@ -139,12 +140,23 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     const bool north = zone == HitZone::N || zone == HitZone::NW || zone == HitZone::NE;
     const bool south = zone == HitZone::S || zone == HitZone::SW || zone == HitZone::SE;
 
-    // Candidate lines: the surface's own edges and every peer edge + centre.
+    // Candidate lines in two tiers.  Tier one: the surface's own edges and
+    // every peer edge + centre.  Tier two: the grid.  The grid is consulted
+    // only when tier one finds nothing — a neighbour's edge within reach
+    // always beats a grid line.
     QList<double> xLines{0.0, 1.0};
     QList<double> yLines{0.0, 1.0};
     for (const NormRect& p : peers) {
         xLines << p.x << p.right() << p.x + p.w / 2.0;
         yLines << p.y << p.bottom() << p.y + p.h / 2.0;
+    }
+    QList<double> xGrid;
+    QList<double> yGrid;
+    for (int i = 1; i < gridX; ++i) {
+        xGrid << i / double(gridX);
+    }
+    for (int i = 1; i < gridY; ++i) {
+        yGrid << i / double(gridY);
     }
 
     // One axis at a time: find the nearest (candidate line, own edge) pair
@@ -157,9 +169,9 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
         bool   found = false;
     };
 
-    const auto pick = [](const QList<double>& lines,
-                         const QList<double>& ownOffsets, double base,
-                         double tolerance) {
+    const auto pickFrom = [](const QList<double>& lines,
+                             const QList<double>& ownOffsets, double base,
+                             double tolerance) {
         Best best{tolerance, 0.0, 0.0, false};
         for (double own : ownOffsets) {
             const double at = base + own;
@@ -172,16 +184,33 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
         }
         return best;
     };
+    // The grid tier deliberately offers FEWER own-lines than the peer tier:
+    // only the origin (or the gripped edge).  With left, right AND centre
+    // all courting a ~35 px-pitch grid at +/-8 px, nearly every position
+    // captured somewhere and free placement needed Alt held permanently —
+    // aligning edges and centres is what PEERS are for; the grid quantizes
+    // where the item STARTS.
+    const auto pick = [&pickFrom](const QList<double>& tierOne,
+                                  const QList<double>& tierOneOffsets,
+                                  const QList<double>& grid,
+                                  const QList<double>& gridOffsets, double base,
+                                  double tolerance) {
+        const Best edges = pickFrom(tierOne, tierOneOffsets, base, tolerance);
+        if (edges.found || grid.isEmpty()) {
+            return edges;
+        }
+        return pickFrom(grid, gridOffsets, base, tolerance);
+    };
 
     NormRect& r = result.rect;
 
     if (move) {
-        const Best bx = pick(xLines, {0.0, r.w, r.w / 2.0}, r.x, tolNormX);
+        const Best bx = pick(xLines, {0.0, r.w, r.w / 2.0}, xGrid, {0.0}, r.x, tolNormX);
         if (bx.found) {
             r.x = clampD(bx.target - bx.ownOffset, 0.0, 1.0 - r.w);
             result.verticalGuides << bx.target;
         }
-        const Best by = pick(yLines, {0.0, r.h, r.h / 2.0}, r.y, tolNormY);
+        const Best by = pick(yLines, {0.0, r.h, r.h / 2.0}, yGrid, {0.0}, r.y, tolNormY);
         if (by.found) {
             r.y = clampD(by.target - by.ownOffset, 0.0, 1.0 - r.h);
             result.horizontalGuides << by.target;
@@ -193,7 +222,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     const double minH = clampD(minNorm.height(), 0.0, 1.0);
 
     if (east) {
-        const Best b = pick(xLines, {0.0}, r.right(), tolNormX);
+        const Best b = pick(xLines, {0.0}, xGrid, {0.0}, r.right(), tolNormX);
         if (b.found) {
             const double right = clampD(b.target, r.x + minW, 1.0);
             if (std::fabs(right - b.target) < 1e-12) {
@@ -202,7 +231,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
             r.w = right - r.x;
         }
     } else if (west) {
-        const Best b = pick(xLines, {0.0}, r.x, tolNormX);
+        const Best b = pick(xLines, {0.0}, xGrid, {0.0}, r.x, tolNormX);
         if (b.found) {
             const double right = r.right();
             const double left  = clampD(b.target, 0.0, right - minW);
@@ -215,7 +244,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     }
 
     if (south) {
-        const Best b = pick(yLines, {0.0}, r.bottom(), tolNormY);
+        const Best b = pick(yLines, {0.0}, yGrid, {0.0}, r.bottom(), tolNormY);
         if (b.found) {
             const double bottom = clampD(b.target, r.y + minH, 1.0);
             if (std::fabs(bottom - b.target) < 1e-12) {
@@ -224,7 +253,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
             r.h = bottom - r.y;
         }
     } else if (north) {
-        const Best b = pick(yLines, {0.0}, r.y, tolNormY);
+        const Best b = pick(yLines, {0.0}, yGrid, {0.0}, r.y, tolNormY);
         if (b.found) {
             const double bottom = r.bottom();
             const double top    = clampD(b.target, 0.0, bottom - minH);

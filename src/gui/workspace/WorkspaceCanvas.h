@@ -120,6 +120,15 @@ public:
 
     // Snap capture distance (px on the live canvas).
     static constexpr int kSnapTolerancePx = 8;
+    // The snap grid, in NORMALIZED divisions — 32x18 keeps the cells roughly
+    // square at 16:9.  Normalized on purpose: a pixel grid would put an item
+    // on-grid at one window size and off-grid at every other, which is the
+    // exact failure the fractional model exists to prevent.  1 px dots mark
+    // the intersections: always in the canvas background, and on top of
+    // everything while a gesture is live (the only time the targets matter
+    // more than the content).
+    static constexpr int kSnapGridColumns = 32;
+    static constexpr int kSnapGridRows    = 18;
     // Keyboard nudge step (px); Ctrl divides it for fine placement.
     static constexpr int kNudgePx = 8;
 
@@ -218,6 +227,11 @@ private:
     // Selection + frame (phase 5).
     QString m_selectedId;
     class CanvasItemFrame* m_frame{nullptr};
+    // Gesture visuals — guides + grid dots painted ABOVE the items (a
+    // widget's own paint sits under its children, so the canvas paintEvent
+    // can only reach exposed background).  Mouse-transparent.
+    class GestureOverlay;
+    GestureOverlay* m_gestureOverlay{nullptr};
 
     // Active gesture.
     QString  m_gestureId;

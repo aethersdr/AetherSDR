@@ -84,10 +84,17 @@ struct SnapResult {
 // caller; disabled (e.g. Alt held) is expressed by calling with zero
 // tolerance or simply not calling.  Resize snaps re-apply the minimum so a
 // snap can never shrink an item below it.
+// `gridX`/`gridY` add a normalized grid (that many divisions per axis) to
+// the candidates; 0 disables it.  Two deliberate asymmetries against the
+// peer tier: the grid is consulted only when NO peer or surface edge is in
+// tolerance (aligning to a neighbour is more intentional than a grid line),
+// and for a move it courts only the item's ORIGIN — left/right/centre all
+// chasing a ~35 px grid at +/-8 px left almost nowhere free to stand.
 SnapResult snapRect(const NormRect& moved, HitZone zone,
                     const QList<NormRect>& peers,
                     double tolNormX, double tolNormY,
-                    const QSizeF& minNorm);
+                    const QSizeF& minNorm,
+                    int gridX = 0, int gridY = 0);
 
 // ── Tidy (RFC #4887 phase 5) ─────────────────────────────────────────────
 //
