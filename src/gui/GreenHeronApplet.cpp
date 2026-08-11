@@ -30,21 +30,46 @@ constexpr const char* kSettingsSwitch = "Switch";
 
 constexpr int kNoteTimeoutMs = 5000;
 
-// Matches the other accessory applets' tile chrome.
-constexpr const char* kButtonBase =
-    "QPushButton { background: #1a2a3a; border: 1px solid #203040; "
-    "border-radius: 3px; padding: 3px 4px; font-size: 10px; color: #c8d8e8; "
-    "text-align: left; }"
-    "QPushButton:hover { background: #243848; }"
-    "QPushButton:disabled { color: #55606c; background: #141d26; "
-    "font-style: italic; }";
+// Everything here is a ThemeManager token template, applied through
+// applyStyleSheet() rather than setStyleSheet(). Two reasons beyond the
+// hardcoded-colour ratchet: tokens follow the theme (and the applet's scope
+// in the container tree), and applyStyleSheet re-applies on themeChanged, so
+// the tile repaints on a theme switch with no per-call-site wiring.
+//
+// The port rows are Success-tribe toggles per docs/theming/toggle-button-
+// tokens.md — a checked row means "this antenna is connected", which is the
+// enable/activate semantic, not a generic mode selector.
+const QString kPortButtonStyle = QStringLiteral(
+    "QPushButton { background: {{color.toggle.background}}; "
+    "border: 1px solid {{color.toggle.border}}; border-radius: 3px; "
+    "padding: 3px 4px; font-size: 10px; "
+    "color: {{color.toggle.foreground}}; text-align: left; }"
+    "QPushButton:hover { background: {{color.background.2}}; }"
+    "QPushButton:disabled { color: {{color.toggle.foreground.disabled}}; "
+    "background: {{color.toggle.background.disabled}}; "
+    "border: 1px solid {{color.toggle.border.disabled}}; font-style: italic; }"
+    "QPushButton:checked { "
+    "background-color: {{color.toggle.success.background.checked}}; "
+    "color: {{color.toggle.success.foreground.checked}}; "
+    "border: 1px solid {{color.toggle.success.border.checked}}; "
+    "font-weight: bold; }");
 
-const QString kSelectedActive =
-    "QPushButton:checked { background-color: #006040; color: #00ff88; "
-    "border: 1px solid #00a060; font-weight: bold; }";
+const QString kConnectButtonStyle = QStringLiteral(
+    "QPushButton { background: {{color.toggle.background}}; "
+    "border: 1px solid {{color.toggle.border}}; border-radius: 3px; "
+    "padding: 2px 2px; font-size: 10px; font-weight: bold; "
+    "color: {{color.toggle.foreground}}; text-align: center; }"
+    "QPushButton:hover { background: {{color.background.2}}; }");
 
-constexpr const char* kLabelStyle =
-    "color: #8090a0; font-size: 10px; font-weight: bold;";
+const QString kLabelStyle = QStringLiteral(
+    "color: {{color.text.label}}; font-size: 10px; font-weight: bold;");
+
+// One template, one token slot — the status line's colour IS its state, so
+// the caller passes the token rather than each call site owning a hex value.
+QString statusStyle(const QString& colourToken)
+{
+    return QStringLiteral("color: {{%1}}; font-size: 10px;").arg(colourToken);
+}
 
 // Announce a text-only change to a screen reader (docs/a11y.md, "Live value
 // updates"). Callers fire this ONLY when something actually changed: the
@@ -127,7 +152,7 @@ void GreenHeronApplet::buildUI()
         row->setSpacing(4);
 
         auto* hostLabel = new QLabel(tr("IP"));
-        hostLabel->setStyleSheet(kLabelStyle);
+        ThemeManager::instance().applyStyleSheet(hostLabel, kLabelStyle);
         row->addWidget(hostLabel);
 
         m_hostEdit = new QLineEdit;
@@ -146,7 +171,7 @@ void GreenHeronApplet::buildUI()
         row->addWidget(m_hostEdit, 1);
 
         auto* portLabel = new QLabel(tr("Port"));
-        portLabel->setStyleSheet(kLabelStyle);
+        ThemeManager::instance().applyStyleSheet(portLabel, kLabelStyle);
         row->addWidget(portLabel);
 
         m_portSpin = new QSpinBox;
@@ -173,7 +198,7 @@ void GreenHeronApplet::buildUI()
         row->setSpacing(4);
 
         auto* switchLabel = new QLabel(tr("Switch"));
-        switchLabel->setStyleSheet(kLabelStyle);
+        ThemeManager::instance().applyStyleSheet(switchLabel, kLabelStyle);
         row->addWidget(switchLabel);
 
         m_switchCombo = new QComboBox;
@@ -207,10 +232,8 @@ void GreenHeronApplet::buildUI()
         m_connectBtn->setObjectName(QStringLiteral("greenHeronConnect"));
         m_connectBtn->setAccessibleName(tr("Connect to Everyware server"));
         m_connectBtn->setFixedWidth(72);
-        m_connectBtn->setStyleSheet(
-            QString(kButtonBase)
-            + "QPushButton { font-size: 10px; font-weight: bold; "
-              "text-align: center; }");
+        ThemeManager::instance().applyStyleSheet(m_connectBtn,
+                                                 kConnectButtonStyle);
         connect(m_connectBtn, &QPushButton::clicked,
                 this, &GreenHeronApplet::toggleConnection);
         row->addWidget(m_connectBtn);
@@ -221,7 +244,8 @@ void GreenHeronApplet::buildUI()
     m_statusLabel = new QLabel(tr("Not connected"));
     m_statusLabel->setObjectName(QStringLiteral("greenHeronStatus"));
     m_statusLabel->setAlignment(Qt::AlignCenter);
-    m_statusLabel->setStyleSheet("color: #606878; font-size: 10px;");
+    ThemeManager::instance().applyStyleSheet(
+        m_statusLabel, statusStyle(QStringLiteral("color.text.disabled")));
     outer->addWidget(m_statusLabel);
 
     // ── The chosen switch's antenna ports ───────────────────────────────────
@@ -234,7 +258,8 @@ void GreenHeronApplet::buildUI()
     m_noteLabel = new QLabel;
     m_noteLabel->setObjectName(QStringLiteral("greenHeronNote"));
     m_noteLabel->setWordWrap(true);
-    m_noteLabel->setStyleSheet("color: #c77800; font-size: 10px;");
+    ThemeManager::instance().applyStyleSheet(
+        m_noteLabel, statusStyle(QStringLiteral("color.accent.warning")));
     m_noteLabel->hide();
     outer->addWidget(m_noteLabel);
 }
@@ -323,7 +348,7 @@ void GreenHeronApplet::rebuildPortList()
     for (const QString& port : m_builtForPorts) {
         auto* button = new QPushButton(port);
         button->setCheckable(true);
-        button->setStyleSheet(QString(kButtonBase) + kSelectedActive);
+        ThemeManager::instance().applyStyleSheet(button, kPortButtonStyle);
         button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         button->setMinimumWidth(0);
         button->setAccessibleName(port);
@@ -409,34 +434,36 @@ void GreenHeronApplet::updateStatus()
     m_portSpin->setEnabled(!wanted);
 
     QString text;
-    QString colour = QStringLiteral("#606878");
+    // Idle reads as neither good nor bad, so it takes the muted text token
+    // rather than a status colour.
+    QString colourToken = QStringLiteral("color.text.disabled");
     if (m_model->isConnected()) {
         const GreenHeronSwitchState state = m_model->switchState(m_wantedSwitch);
         if (state.ports.isEmpty()) {
             text = m_wantedSwitch.isEmpty()
                        ? tr("Connected — waiting for roster")
                        : tr("Connected — %1 not reported").arg(m_wantedSwitch);
-            colour = QStringLiteral("#c77800");
+            colourToken = QStringLiteral("color.accent.warning");
         } else {
             text = state.selected.isEmpty()
                        ? tr("%1 connected").arg(m_wantedSwitch)
                        : tr("%1 on %2").arg(m_wantedSwitch, state.selected);
-            colour = QStringLiteral("#2e7d32");
+            colourToken = QStringLiteral("color.accent.success");
         }
     } else if (m_model->isStale()) {
         text = tr("Reconnecting — state is stale");
-        colour = QStringLiteral("#c77800");
+        colourToken = QStringLiteral("color.accent.warning");
     } else if (wanted) {
         text = tr("Connecting…");
-        colour = QStringLiteral("#c77800");
+        colourToken = QStringLiteral("color.accent.warning");
     } else {
         text = tr("Not connected");
     }
 
     const bool statusChanged = m_statusLabel->text() != text;
     m_statusLabel->setText(text);
-    m_statusLabel->setStyleSheet(
-        QStringLiteral("color: %1; font-size: 10px;").arg(colour));
+    ThemeManager::instance().applyStyleSheet(m_statusLabel,
+                                             statusStyle(colourToken));
     m_statusLabel->setAccessibleName(tr("Green Heron connection status"));
     m_statusLabel->setAccessibleDescription(text);
     if (statusChanged) {
