@@ -45,3 +45,8 @@ third_party/sherpa-onnx-*.tar.bz2
 
 # macOS Finder metadata
 .DS_Store
+
+# Windows installers produced by packaging/windows/installer.iss. They are
+# ~60 MB build artifacts, published as release assets rather than committed —
+# a binary that size is permanent once it enters git history.
+/AetherSDR-v*-Windows-x64-setup.exe
