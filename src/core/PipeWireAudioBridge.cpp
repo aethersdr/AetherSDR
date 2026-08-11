@@ -126,7 +126,7 @@ bool PipeWireAudioBridge::open()
     // The 8 is unconditional: the bridge opens before the radio slices=N
     // capacity is known, so a 2-slice radio still opens 8 (extras stay idle).
     // The operator-facing count is bounded in DaxApplet::setMaxDaxChannels();
-    // resizing the opened set after connect is a follow-up (see issue 4854).
+    // resizing the opened set after connect is a follow-up (see issue 4935).
     for (int i = 0; i < NUM_CHANNELS; ++i) {
 #ifdef HAVE_PIPEWIRE_NATIVE
         auto native = std::make_unique<PipeWireNativeRxSource>(i + 1);
