@@ -61,6 +61,7 @@ public:
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
+    void setCwPitch(int hz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
@@ -297,6 +298,37 @@ private:
         double sMeterDbm = 0.0;
         bool   haveSMeter = false;
     };
+
+    // ---- CW BFO ----
+    //
+    // Receiver::filterLowHz/HighHz and Receiver::sliceFreqHz are OPERATOR-FACING
+    // and carrier-relative: the cuts are measured from the marker, and in CW the
+    // marker is where the signal is, not where its audio ends up. The
+    // demodulator needs the other domain. These two are the only translation
+    // between them, so a DSP push that reads the raw members instead of going
+    // through them leaves the receiver listening a whole pitch away from the
+    // marker with nothing on screen to say so.
+    //
+    // Every non-CW mode has a zero BFO and both helpers are the identity, which
+    // is why they are safe to route ALL receivers through rather than only the
+    // CW ones.
+
+    // Where a signal on the marker comes out, in Hz of audio: +pitch for CWU,
+    // -pitch for CWL, 0 otherwise.
+    [[nodiscard]] double cwBfoHz(const QString& mode) const noexcept;
+    // The receiver's passband in the demodulator's audio domain — the operator's
+    // carrier-relative cuts slid up (CWU) or down (CWL) onto the pitch.
+    [[nodiscard]] std::pair<double, double> dspFilterHz(const Receiver& r) const noexcept;
+    // The WDSP shift for this receiver: the slice's offset from the NCO, less
+    // the BFO, so the detector's zero sits a pitch BELOW the marker (CWU) and
+    // the marker itself lands on the pitch.
+    [[nodiscard]] double rxShiftHz(const Receiver& r) const noexcept;
+
+    // The operator's CW pitch, mirrored from TransmitModel through
+    // setCwPitch(). Defaults to TransmitModel's own 600 so a receiver built
+    // before the first push is not built on a different pitch than the one the
+    // Phone/CW applet is already displaying.
+    int m_cwPitchHz = 600;
     // GUI THREAD ONLY. Nothing below the seam may touch this — see m_ioDsps for
     // what the sample path reads instead, and publishIoDsps() for why.
     std::vector<Receiver> m_rx;

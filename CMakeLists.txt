@@ -3118,6 +3118,14 @@ target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
 
+# CW BFO geometry: the marker sits on the signal, the pitch comes from the
+# detector's zero. Companion to hl2_shift_test — same synthetic-tone harness,
+# one more offset in the chain.
+add_executable(hl2_cw_bfo_test tests/hl2_cw_bfo_test.cpp)
+target_include_directories(hl2_cw_bfo_test PRIVATE src)
+target_link_libraries(hl2_cw_bfo_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_cw_bfo_test COMMAND hl2_cw_bfo_test)
+
 add_executable(hl2_notch_seed_test tests/hl2_notch_seed_test.cpp)
 target_include_directories(hl2_notch_seed_test PRIVATE src)
 target_link_libraries(hl2_notch_seed_test PRIVATE aethercore Qt6::Core Qt6::Test)
