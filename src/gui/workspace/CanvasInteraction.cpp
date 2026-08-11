@@ -186,7 +186,7 @@ SnapResult snapRect(const NormRect& moved, HitZone zone,
     };
     // The grid tier deliberately offers FEWER own-lines than the peer tier:
     // only the origin (or the gripped edge).  With left, right AND centre
-    // all courting a ~35 px-pitch grid at +/-8 px, nearly every position
+    // all courting the grid pitch at +/-8 px, nearly every position
     // captured somewhere and free placement needed Alt held permanently —
     // aligning edges and centres is what PEERS are for; the grid quantizes
     // where the item STARTS.

@@ -464,13 +464,13 @@ int main(int argc, char** argv)
                nearly(canvas.itemRect("a").right(), 0.6));
 
         // The grid tier through a live gesture: from x=0.1, +213 px puts the
-        // origin at 0.313 — no peer line in reach, but 10/32 = 0.3125 is
+        // origin at 0.313 — no peer line in reach, but 5/16 = 0.3125 is
         // 0.0005 away — the move lands ON the grid line.
         canvas.beginMoveGesture("a", origin);
         canvas.moveGesture(origin + QPoint(213, 0));
         canvas.endGesture(origin + QPoint(213, 0));
         report("a live move lands on the snap grid",
-               nearly(canvas.itemRect("a").x, 10.0 / 32.0));
+               nearly(canvas.itemRect("a").x, 5.0 / 16.0));
 
         // Keyboard: arrows nudge, Shift+arrows resize, both announce a
         // gesture pair (undo hangs off it).

@@ -120,15 +120,17 @@ public:
 
     // Snap capture distance (px on the live canvas).
     static constexpr int kSnapTolerancePx = 8;
-    // The snap grid, in NORMALIZED divisions — 32x18 keeps the cells roughly
-    // square at 16:9.  Normalized on purpose: a pixel grid would put an item
-    // on-grid at one window size and off-grid at every other, which is the
-    // exact failure the fractional model exists to prevent.  1 px dots mark
-    // the intersections: always in the canvas background, and on top of
+    // The snap grid, in NORMALIZED divisions — 16x9 makes the cells EXACTLY
+    // square at a 16:9 window (1920/16 == 1080/9 == 120 px) and meaningfully
+    // coarse: 32x18 read as scatter rather than structure in field testing.
+    // Normalized on purpose: a pixel grid would put an item on-grid at one
+    // window size and off-grid at every other, which is the exact failure
+    // the fractional model exists to prevent.  1 px dots mark the
+    // intersections: always in the canvas background, and on top of
     // everything while a gesture is live (the only time the targets matter
     // more than the content).
-    static constexpr int kSnapGridColumns = 32;
-    static constexpr int kSnapGridRows    = 18;
+    static constexpr int kSnapGridColumns = 16;
+    static constexpr int kSnapGridRows    = 9;
     // Keyboard nudge step (px); Ctrl divides it for fine placement.
     static constexpr int kNudgePx = 8;
 
