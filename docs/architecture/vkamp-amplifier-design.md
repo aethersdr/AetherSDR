@@ -69,6 +69,40 @@ explicitly here rather than silently carried over, since the whole point of
 Principle IV is that contamination isn't a local defect that's easy to spot
 later — it has to be kept out at the door.
 
+**Provenance ordering — was any *retained* protocol knowledge decompile-
+derived, even indirectly?** Principle IV's contamination clause isn't scoped
+to the one excluded table: "a contribution that began clean but pulled in
+decompiler output at any point is contaminated... it travels to everything
+written by reading it." Since `vkamp_client.py`'s author is also the one who
+decompiled `Helios DX.exe`, that's a fair question to ask explicitly rather
+than leave implicit — answered here directly from the companion project's own
+git history, not from memory:
+
+- The wire protocol retained here — bare 2-digit ASCII commands, the status/
+  telemetry CSV formats, and the antenna/bypass behavior this design doc
+  documents in §3.1/§4 — is already fully present, and narrated as live
+  hardware discovery ("hardware disproved that: sending `3{n}` only ever
+  produces...", "there is no known way to...") in that project's **very first
+  commit**, dated 9 days before any commit references the decompile at all.
+- The decompile is introduced in a single later commit titled "add
+  unconfirmed fault-name hint from TCI_VKAMP RE" — exactly the
+  `ERROR_CODE_NAMES` table this doc already excludes above, not a rewrite or
+  extension of the already-established protocol work.
+- That project's own `.gitignore`, written contemporaneously (not as
+  after-the-fact justification), states the decompile dump was pulled in "to
+  cross-reference against this project's own reverse-engineering (e.g.
+  `vkamp_client.py`'s `ERROR_CODE_NAMES`)" — scoped to the fault table by the
+  author's own note at the time, matching this doc's exclusion exactly.
+- The calibration curves (design doc §3.2) are least-squares fits against
+  named, independently-dated packet-capture files cross-referenced with
+  external meter and front-panel readings — a numeric curve fit isn't
+  information a decompiled UI switch statement could produce, regardless of
+  which commit date the final fitted constants landed on.
+
+So: capture-based protocol work came first and stands independent of the
+decompile; the decompile's only role, then or since, is the one table this
+doc already refuses to carry over.
+
 ---
 
 ## 2. What gets added
@@ -346,7 +380,13 @@ feature.
   vendor spec** (§1) — worth the maintainer's own judgment on whether that
   evidence bar meets this project's Constitution Principle I the same way
   ACOM's manufacturer-documented protocol did, or whether additional
-  independent confirmation is wanted before merge.
+  independent confirmation is wanted before merge. The narrower question of
+  whether that project's own decompile work (§1's Provenance ordering
+  paragraph) contaminated the *retained* protocol knowledge is answered
+  there directly from its git history — capture-based work demonstrably
+  predates the decompile by 9 days, and the decompile's only role is the
+  already-excluded fault-name table. What remains open is the broader
+  evidence-bar judgment call above, not that narrower provenance question.
 - **Calibration constants** (output/reflected/input/current curves, §3.2)
   are fitted against one (or a small number of) real unit(s) — like ACOM's
   own multi-model power table, these may need adjustment as more hardware
