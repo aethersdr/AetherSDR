@@ -2536,6 +2536,57 @@ target_include_directories(mqtt_antenna_alias_test PRIVATE src)
 target_link_libraries(mqtt_antenna_alias_test PRIVATE Qt6::Core)
 add_test(NAME mqtt_antenna_alias_test COMMAND mqtt_antenna_alias_test)
 
+# Green Heron Everyware antenna switch.  The protocol test is pure — verbatim
+# wire fixtures in, records out, no socket — which is why GreenHeronProtocol.cpp
+# has no I/O in it.  The model test drives the real QTcpSocket path against a
+# stand-in server on loopback; both run with no hardware.
+add_executable(green_heron_protocol_test
+    tests/green_heron_protocol_test.cpp
+    src/core/GreenHeronProtocol.cpp
+)
+target_include_directories(green_heron_protocol_test PRIVATE src)
+target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
+add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
+
+add_executable(green_heron_model_test
+    tests/green_heron_model_test.cpp
+    src/models/GreenHeronModel.cpp
+    src/core/GreenHeronProtocol.cpp
+    # GreenHeronModel logs through lcDevices; LogManager drags AsyncLogWriter
+    # and AppSettings for its writer/ctor chain at link time.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(green_heron_model_test PRIVATE src)
+target_link_libraries(green_heron_model_test PRIVATE Qt6::Core Qt6::Network)
+set_target_properties(green_heron_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME green_heron_model_test COMMAND green_heron_model_test)
+
+# The GHE tile itself: one switch on screen rather than the device's whole
+# matrix, and the Principle V single-object persistence behind it.  Offscreen.
+add_executable(green_heron_applet_test
+    tests/green_heron_applet_test.cpp
+    src/gui/GreenHeronApplet.cpp
+    src/models/GreenHeronModel.cpp
+    src/core/GreenHeronProtocol.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    # ThemeManager.cpp calls seedGeneratedDefaults(), which lives ONLY in the
+    # generated seed TU — omitting it is a link error, not a compile one.
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(green_heron_applet_test PRIVATE src tests)
+target_link_libraries(green_heron_applet_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+)
+set_target_properties(green_heron_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME green_heron_applet_test COMMAND green_heron_applet_test)
+set_tests_properties(green_heron_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
     src/core/MqttSettings.cpp
@@ -4091,6 +4142,8 @@ set(AETHER_SETTINGS_CONSUMERS
     log_manager_filter_rules_test
     bandplan_voice_labels_test
     vkamp_connection_test
+    green_heron_model_test
+    green_heron_applet_test
     radio_capability_gating_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)

@@ -1,0 +1,272 @@
+// Offscreen tests for the GHE applet.
+//
+// The applet shows ONE switch — the one the operator says this radio is fed
+// from — rather than the whole matrix the device serves. That choice is what
+// these tests pin: the address fields persist as one owned settings object
+// (Constitution Principle V), the chooser survives a roster arriving after
+// the applet was built, and an antenna held by a DIFFERENT switch renders as
+// in-use rather than as a click that would silently do nothing.
+//
+// Run:  QT_QPA_PLATFORM=offscreen ./build/green_heron_applet_test
+
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
+#include "core/GreenHeronProtocol.h"
+#include "core/PeripheralSettings.h"
+#include "gui/GreenHeronApplet.h"
+#include "models/GreenHeronModel.h"
+
+#include <QApplication>
+#include <QComboBox>
+#include <QDeadlineTimer>
+#include <QHostAddress>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QTcpServer>
+#include <QTcpSocket>
+
+#include <cstdio>
+#include <functional>
+#include <string>
+
+using namespace AetherSDR;
+
+namespace {
+
+int g_failed = 0;
+
+// The single AppSettings key every peripheral's config lives under — mirrored
+// from PeripheralSettings so the test asserts against the STORED shape, not
+// just the accessors.
+const char* const kPeripheralsRootKey = "Peripherals";
+
+void report(const char* name, bool ok, const std::string& detail = {})
+{
+    std::printf("%s %-62s %s\n", ok ? "[ OK ]" : "[FAIL]", name, detail.c_str());
+    if (!ok) {
+        ++g_failed;
+    }
+}
+
+// Roster in the device's own announcement order (1, 3, 2, 4 — not sorted),
+// plus the discriminating lock record: AS-84F-3 holds Beam-15 and the device
+// reports it in SLOT 1, which is AS-84F-3's ANNOUNCEMENT index.
+const QByteArray kScript =
+    QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-1\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n")
+    + QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-3\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n")
+    + QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-2\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n")
+    + QByteArrayLiteral("SWITCHADD\x1f" "1\x1f" "AS-84F-4\x1f" "Beam-15\x1d" "0\x1d" "0\x1d" "false\x1f" "Beam-20\x1d" "0\x1d" "0\x1d" "false\x1f" "OFF\x1d" "0\x1d" "0\x1d" "false\r\n")
+    + QByteArrayLiteral("SWITCHUPDATE\x1f" "AS-84F-1\x1f" "Beam-20\x1f" "0\x1f" "-27\r\n")
+    + QByteArrayLiteral("SWITCHLOCKS\x1f" "AS-84F-1\x1f" "Beam-20\x1f" "Beam-15\x1f" "OFF\x1f" "OFF\r\n");
+
+class FakeDevice : public QObject {
+public:
+    FakeDevice()
+    {
+        m_server.listen(QHostAddress::LocalHost, 0);
+        connect(&m_server, &QTcpServer::newConnection, this, [this]() {
+            m_connection = m_server.nextPendingConnection();
+            m_connection->write(kScript);
+            m_connection->flush();
+        });
+    }
+
+    quint16 port() const { return m_server.serverPort(); }
+
+private:
+    QTcpServer m_server;
+    QTcpSocket* m_connection{nullptr};
+};
+
+bool waitFor(const std::function<bool()>& predicate, int timeoutMs = 5000)
+{
+    QDeadlineTimer deadline(timeoutMs);
+    while (!deadline.hasExpired()) {
+        if (predicate()) {
+            return true;
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    return predicate();
+}
+
+QPushButton* portButton(const GreenHeronApplet& applet, const QString& port)
+{
+    const QList<QPushButton*> buttons = applet.findChildren<QPushButton*>();
+    for (QPushButton* button : buttons) {
+        if (button->accessibleName() == port) {
+            return button;
+        }
+    }
+    return nullptr;
+}
+
+void testAppletBasics()
+{
+    GreenHeronApplet applet;
+    report("objectName addressable", applet.objectName() == "greenHeronApplet",
+           applet.objectName().toStdString());
+    report("owns its own model", applet.model() != nullptr);
+    report("fits the 260px applet panel", applet.maximumWidth() == 260,
+           std::to_string(applet.maximumWidth()));
+
+    // The three fields the operator fills in.
+    report("has an IP field",
+           applet.findChild<QLineEdit*>(QStringLiteral("greenHeronHost")) != nullptr);
+    report("has a port field",
+           applet.findChild<QSpinBox*>(QStringLiteral("greenHeronPort")) != nullptr);
+    report("has a switch chooser",
+           applet.findChild<QComboBox*>(QStringLiteral("greenHeronSwitch")) != nullptr);
+
+    auto* portSpin = applet.findChild<QSpinBox*>(QStringLiteral("greenHeronPort"));
+    report("port defaults to the protocol port",
+           portSpin != nullptr && portSpin->value() == GreenHeron::kDefaultPort,
+           portSpin != nullptr ? std::to_string(portSpin->value()) : "missing");
+
+    // It must embed as an ordinary child — the container framework supplies
+    // the window when the operator floats it.
+    QWidget host;
+    auto* child = new GreenHeronApplet(&host);
+    report("embeds as a child widget", child->parentWidget() == &host);
+}
+
+void testShowsOnlyTheChosenSwitch()
+{
+    FakeDevice device;
+    GreenHeronApplet applet;
+    auto* host = applet.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"));
+    auto* portSpin = applet.findChild<QSpinBox*>(QStringLiteral("greenHeronPort"));
+    auto* combo = applet.findChild<QComboBox*>(QStringLiteral("greenHeronSwitch"));
+    auto* connectBtn =
+        applet.findChild<QPushButton*>(QStringLiteral("greenHeronConnect"));
+
+    host->setText(QStringLiteral("127.0.0.1"));
+    portSpin->setValue(device.port());
+    connectBtn->click();
+
+    const bool rostered = waitFor([&]() { return combo->count() == 4; });
+    report("the chooser fills from the device's roster", rostered,
+           std::to_string(combo->count()));
+
+    QStringList shown;
+    for (int i = 0; i < combo->count(); ++i) {
+        shown.append(combo->itemText(i));
+    }
+    report("the chooser lists switches in display order",
+           shown == QStringList({"AS-84F-1", "AS-84F-2", "AS-84F-3", "AS-84F-4"}),
+           shown.join(QLatin1Char(',')).toStdString());
+
+    // One switch on screen, not the matrix: three ports, not twelve.
+    combo->setCurrentText(QStringLiteral("AS-84F-1"));
+    const bool built = waitFor([&]() {
+        return portButton(applet, QStringLiteral("Beam-20")) != nullptr;
+    });
+    report("the chosen switch's ports are drawn", built);
+    report("only the chosen switch is drawn",
+           applet.findChildren<QPushButton*>().size()
+               == 3 + 1 /* the Connect button */,
+           std::to_string(applet.findChildren<QPushButton*>().size()));
+
+    // Selected on this switch → lit and clickable.
+    QPushButton* selected = portButton(applet, QStringLiteral("Beam-20"));
+    report("the device's selection is the one that lights",
+           selected != nullptr && selected->isChecked());
+    report("the selection is described for a screen reader",
+           selected != nullptr
+               && selected->accessibleDescription().contains(
+                   QStringLiteral("currently selected")),
+           selected != nullptr ? selected->accessibleDescription().toStdString() : "");
+
+    // Held by AS-84F-3 (slot 1 = the SECOND switch ANNOUNCED). Indexing the
+    // sorted order instead would name AS-84F-2 here — no crash, nothing
+    // logged, and the tile confidently blames the wrong switch.
+    QPushButton* locked = portButton(applet, QStringLiteral("Beam-15"));
+    report("an antenna held elsewhere is not selectable",
+           locked != nullptr && !locked->isEnabled());
+    report("the holder named is the switch that ANNOUNCED at that slot",
+           locked != nullptr && locked->text().contains(QStringLiteral("AS-84F-3")),
+           locked != nullptr ? locked->text().toStdString() : "");
+
+    // A free port stays clickable.
+    QPushButton* free = portButton(applet, QStringLiteral("OFF"));
+    report("a free antenna stays selectable",
+           free != nullptr && free->isEnabled() && !free->isChecked());
+}
+
+void testSwitchChoiceAndAddressPersist()
+{
+    {
+        FakeDevice device;
+        GreenHeronApplet applet;
+        applet.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"))
+            ->setText(QStringLiteral("127.0.0.1"));
+        applet.findChild<QSpinBox*>(QStringLiteral("greenHeronPort"))
+            ->setValue(device.port());
+        applet.findChild<QPushButton*>(QStringLiteral("greenHeronConnect"))->click();
+
+        auto* combo = applet.findChild<QComboBox*>(QStringLiteral("greenHeronSwitch"));
+        waitFor([&]() { return combo->count() == 4; });
+        combo->setCurrentText(QStringLiteral("AS-84F-3"));
+        report("the applet reports the chosen switch",
+               applet.selectedSwitch() == QLatin1String("AS-84F-3"),
+               applet.selectedSwitch().toStdString());
+    }
+
+    report("host persisted",
+           PeripheralSettings::deviceString(QStringLiteral("GreenHeron"),
+                                            QStringLiteral("Host"))
+               == QLatin1String("127.0.0.1"));
+    report("switch choice persisted",
+           PeripheralSettings::deviceString(QStringLiteral("GreenHeron"),
+                                            QStringLiteral("Switch"))
+               == QLatin1String("AS-84F-3"));
+
+    // A fresh applet restores the remembered switch before any roster exists,
+    // so the operator can see what it will re-select.
+    GreenHeronApplet restored;
+    report("the remembered switch is restored before connecting",
+           restored.selectedSwitch() == QLatin1String("AS-84F-3"),
+           restored.selectedSwitch().toStdString());
+    report("the remembered host is restored",
+           restored.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"))->text()
+               == QLatin1String("127.0.0.1"));
+}
+
+void testConfigIsOneOwnedObject()
+{
+    // Constitution Principle V: the feature's configuration is one nested
+    // object under one root key, not loose flat keys in the shared namespace.
+    auto& settings = AppSettings::instance();
+    const QString raw = settings.value(kPeripheralsRootKey, QString{}).toString();
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8());
+    report("peripherals config is one JSON object", doc.isObject(), raw.toStdString());
+
+    const QJsonObject green =
+        doc.object().value(QStringLiteral("GreenHeron")).toObject();
+    report("Green Heron owns a sub-object inside it", !green.isEmpty());
+    report("host lives in the object, not a flat key",
+           green.contains(QStringLiteral("Host"))
+               && !settings.contains("GreenHeron_Host")
+               && !settings.contains("GHE_Host"));
+    report("switch choice lives in the object",
+           green.contains(QStringLiteral("Switch")));
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile("green_heron_applet_test");
+    QApplication app(argc, argv);
+
+    testAppletBasics();
+    testShowsOnlyTheChosenSwitch();
+    testSwitchChoiceAndAddressPersist();
+    testConfigIsOneOwnedObject();
+
+    std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);
+    return g_failed ? 1 : 0;
+}

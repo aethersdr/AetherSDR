@@ -239,6 +239,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/GreenHeronProtocol.h": {
+  "tag": "peripheral(greenheron)",
+  "note": "Pure framing/parsing/encoding for the Green Heron Everyware antenna-switch wire protocol \u2014 no sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/HidEncoderManager.h": {
   "tag": "ui-support",
   "note": "USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state",
@@ -788,6 +794,12 @@
  "models/FlexWaveformModel.h": {
   "tag": "vendor(flex)",
   "note": "FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/GreenHeronModel.h": {
+  "tag": "peripheral(greenheron)",
+  "note": "Green Heron \"Everyware\" antenna-switch client \u2014 a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
   "split": "",
   "confidence": "high"
  },

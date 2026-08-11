@@ -37,6 +37,7 @@
 #include "DaxIqApplet.h"
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
+#include "GreenHeronApplet.h"
 #include "MeterApplet.h"
 #include "ProfileSwitcherApplet.h"
 #include "HealthApplet.h"
@@ -154,7 +155,7 @@ MeterSettings::Snapshot loadVuMeterSettings()
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "CLOCK"
+    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -991,6 +992,16 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // Green Heron Everyware antenna switch.  NOT markHardwareConditional()
+    // like AG/SS: the Everyware server has no discovery path, so there is
+    // nothing to detect and nothing to condition the button on — the operator
+    // types the server's address into the tile itself, which they cannot do
+    // if the tile is hidden until the device is found.  Same shape as KSDR:
+    // always in the bar, closed until opened.
+    m_greenHeronApplet = new GreenHeronApplet;
+    m_appletOrder.append(makeEntry("GHE", "Green Heron", m_greenHeronApplet, false,
+                                   m_drawer, m_drawerLayout));
+
 #ifdef HAVE_MQTT
     m_mqttApplet = new MqttApplet;
     m_appletOrder.append(makeEntry("MQTT", "MQTT", m_mqttApplet, false, m_drawer, m_drawerLayout));
@@ -1290,6 +1301,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("HLTH"),  QStringLiteral("Antennas & Switching")},
         {QStringLiteral("AG"),    QStringLiteral("Antennas & Switching")},
         {QStringLiteral("SS"),    QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("GHE"),   QStringLiteral("Antennas & Switching")},
         {QStringLiteral("CAT"),   QStringLiteral("Integration")},
         {QStringLiteral("DAX"),   QStringLiteral("Integration")},
         {QStringLiteral("IQ"),    QStringLiteral("Integration")},
