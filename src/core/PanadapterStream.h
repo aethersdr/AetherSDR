@@ -464,7 +464,7 @@ private:
     // WAN UDP registration and keepalive
     QTimer*  m_wanRegisterTimer{nullptr};   // 50ms: "client udp_register" until first packet
     QTimer*  m_wanPingTimer{nullptr};       // 5s: "client ping" keepalive after registration
-    QTimer*  m_routedPrimeTimer{nullptr};   // 250ms: non-WAN UDP prime retry until first packet
+    QTimer*  m_routedPrimeTimer{nullptr};   // non-WAN UDP prime retry until first packet; backs off 250ms→1s→5s
     bool     m_isWanMode{false};
     bool     m_wanRegistered{false};
     quint32  m_wanClientHandle{0};

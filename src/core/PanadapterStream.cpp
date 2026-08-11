@@ -40,6 +40,22 @@ constexpr QAbstractSocket::BindMode kLanVitaBindMode = QAbstractSocket::DontShar
 // stream keeps refreshing the conntrack entry.
 constexpr quint16 kVitaRegisterPort = 4992;  // radio listens for the prime here
 constexpr quint16 kVitaStreamPort   = 4993;  // radio streams VITA-49 from here
+
+// Routed-prime cadence. The prime has to keep going until the first VITA-49
+// packet actually arrives, which is not the same instant as connect: the
+// operator may not open a panadapter for a while, and a stateful hop's UDP
+// conntrack entry expires on its own (30 s is the common default) long before
+// then. Re-priming refreshes it.
+//
+// This used to give up after 2 s, which made a single lost prime permanent —
+// no spectrum for the rest of the session, no recovery, and nothing in the UI
+// to say why. Backing off instead of stopping keeps the cheap fast retry for
+// the common case and still costs only two bytes every 5 s once settled.
+constexpr int kRoutedPrimeFastMs      = 2000;   // fast retry while a connect is landing
+constexpr int kRoutedPrimeFastIntervalMs = 250;
+constexpr int kRoutedPrimeMidMs       = 15000;  // then ease off
+constexpr int kRoutedPrimeMidIntervalMs  = 1000;
+constexpr int kRoutedPrimeIdleIntervalMs = 5000; // then hold the pinhole open indefinitely
 constexpr float kMinSpectrumDbm = -180.0f;
 constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
 constexpr int kOpusFramesPerPacket = 240;
@@ -161,13 +177,24 @@ void PanadapterStream::init()
     });
 
     connect(m_routedPrimeTimer, &QTimer::timeout, this, [this] {
-        if (m_isWanMode || m_hasReceivedPacket || m_radioAddress.isNull())
-            return;
-        if (!m_routedPrimeElapsed.isValid() || m_routedPrimeElapsed.elapsed() >= 2000) {
+        // First packet stops this for good — see the receive path, which also
+        // stops the timer and logs how long the prime took to take effect.
+        if (m_isWanMode || m_hasReceivedPacket || m_radioAddress.isNull()
+            || !m_routedPrimeElapsed.isValid()) {
             m_routedPrimeTimer->stop();
             return;
         }
         sendUdpPrime(m_radioAddress);
+
+        const qint64 elapsed = m_routedPrimeElapsed.elapsed();
+        const int next = elapsed < kRoutedPrimeFastMs ? kRoutedPrimeFastIntervalMs
+                       : elapsed < kRoutedPrimeMidMs  ? kRoutedPrimeMidIntervalMs
+                                                      : kRoutedPrimeIdleIntervalMs;
+        if (m_routedPrimeTimer->interval() != next) {
+            m_routedPrimeTimer->setInterval(next);
+            qCDebug(lcVita49) << "PanadapterStream: routed prime backing off to"
+                              << next << "ms after" << elapsed << "ms with no VITA-49";
+        }
     });
 }
 
@@ -307,7 +334,7 @@ bool PanadapterStream::start(RadioConnection* conn)
                               << radioAddr.toString()
                               << "ports" << kVitaRegisterPort << "and" << kVitaStreamPort;
             m_routedPrimeElapsed.restart();
-            m_routedPrimeTimer->start(250);
+            m_routedPrimeTimer->start(kRoutedPrimeFastIntervalMs);
         }
     } else {
         qCWarning(lcVita49) << "PanadapterStream: radio address unknown — skipping UDP registration";
@@ -374,7 +401,7 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
                               << m_radioAddress.toString()
                               << "ports" << kVitaRegisterPort << "and" << kVitaStreamPort;
             m_routedPrimeElapsed.restart();
-            m_routedPrimeTimer->start(250);
+            m_routedPrimeTimer->start(kRoutedPrimeFastIntervalMs);
         }
     } else {
         qCWarning(lcVita49) << "PanadapterStream: radio address unknown - skipping UDP registration after rebind";
