@@ -358,6 +358,83 @@ int main(int argc, char** argv)
         ctl.disable();
     }
 
+    // ── Phase 4: pan lifecycle through the hooks seam ────────────────────
+    {
+        report("re-enable for the phase 4 block",
+               ctl.enable({"RX", "TX"}) && canvas.contains("pan:0"));
+
+        // A second pan arrives (radio granted `pan create`).
+        auto* panB = new QWidget(&panOwner);
+        pans.insert(QStringLiteral("0x40000001"), panB);
+        ctl.onPanAdded(QStringLiteral("0x40000001"));
+        report("a new pan is placed as the next slot",
+               canvas.contains("pan:1") && panB->parentWidget() == &canvas);
+        report("...and its slot is persisted",
+               storedDocument().contains(QStringLiteral("pan:1")));
+
+        // Float: the applet has been adopted elsewhere (here: simulated by
+        // the flag); the entry is released, the document item survives.
+        const NormRect homeB = canvas.itemRect("pan:1");
+        floatingPans.insert(QStringLiteral("0x40000001"));
+        ctl.onPanFloated(QStringLiteral("0x40000001"));
+        report("a floated pan leaves the canvas",
+               !canvas.contains("pan:1"));
+        report("...keeping its document home",
+               storedDocument().contains(QStringLiteral("pan:1")));
+
+        // Dock: back to the very spot.
+        floatingPans.remove(QStringLiteral("0x40000001"));
+        ctl.onPanDocked(QStringLiteral("0x40000001"));
+        report("docking returns the pan to its canvas home",
+               canvas.contains("pan:1") && canvas.itemRect("pan:1") == homeB);
+
+        // Rekey (FLEX band recall): same applet, new id, slot follows.
+        ctl.onPanRekeyed(QStringLiteral("0x40000001"),
+                         QStringLiteral("0x40000005"));
+        pans.insert(QStringLiteral("0x40000005"),
+                    pans.take(QStringLiteral("0x40000001")));
+        report("a rekeyed pan keeps its slot item",
+               ctl.panItemIdFor(QStringLiteral("0x40000005"))
+                       == QStringLiteral("pan:1")
+                   && canvas.contains("pan:1"));
+
+        // Remove: entry released pre-destruction, slot freed for reuse,
+        // document item kept.
+        ctl.onPanRemoved(QStringLiteral("0x40000005"));
+        pans.remove(QStringLiteral("0x40000005"));
+        report("a removed pan releases its entry",
+               !canvas.contains("pan:1"));
+        report("...but the document keeps the slot",
+               storedDocument().contains(QStringLiteral("pan:1")));
+
+        auto* panC = new QWidget(&panOwner);
+        pans.insert(QStringLiteral("0x40000002"), panC);
+        ctl.onPanAdded(QStringLiteral("0x40000002"));
+        report("the freed slot is reused, at its remembered rect",
+               canvas.contains("pan:1") && canvas.itemRect("pan:1") == homeB);
+
+        // Band stack: hosted as its own item while the mode is on.
+        QWidget bandStack(&panOwner);
+        hooks.bandStack        = [&]() -> QWidget* { return &bandStack; };
+        hooks.reclaimBandStack = [&](QWidget* w) {
+            w->setParent(&panOwner);
+        };
+        ctl.setPanHost(hooks);
+        ctl.setBandStackVisible(true);
+        report("the band stack becomes a canvas item",
+               canvas.contains(WorkspaceController::kBandStackItemId)
+                   && bandStack.parentWidget() == &canvas);
+        ctl.setBandStackVisible(false);
+        report("...and hiding re-homes it",
+               !canvas.contains(WorkspaceController::kBandStackItemId)
+                   && bandStack.parentWidget() == &panOwner
+                   && !bandStack.isVisible());
+
+        ctl.onPanRemoved(QStringLiteral("0x40000002"));
+        pans.remove(QStringLiteral("0x40000002"));
+        ctl.disable();
+    }
+
     // ── The field report: boot replay against a pre-layout canvas ────────
     //
     // The bug as reported: enable ran in the MainWindow constructor before
