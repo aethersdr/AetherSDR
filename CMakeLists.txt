@@ -630,6 +630,13 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
+    src/core/backends/colibri/ColibriLib.cpp        # ColibriNANO — vendor DLL loader (protocol authority)
+    src/core/backends/colibri/ColibriDevice.cpp     # ColibriNANO — descriptor + IQ stream on the I/O thread
+    src/core/backends/colibri/ColibriSpectrum.cpp   # ColibriNANO — FFT panadapter (FFTW)
+    src/core/backends/colibri/ColibriRxDsp.cpp      # ColibriNANO — IQ -> WdspChannel demod + spectrum
+    src/core/backends/colibri/ColibriBackend.cpp    # ColibriNANO — IRadioBackend impl (RX-only)
+    src/core/backends/colibri/ColibriDiscovery.cpp  # ColibriNANO — USB enumeration -> picker
+    src/core/backends/colibri/ColibriSettings.cpp   # owned config object, "Colibri" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
@@ -801,6 +808,20 @@ set(CORE_SOURCES
     src/core/aprs/AprsBeacon.cpp
     src/core/aprs/AprsSettings.cpp
 )
+
+if(Qt6SerialPort_FOUND)
+    # The FT-991 backend speaks CAT over QSerialPort; a build without Qt
+    # SerialPort simply has no "ft991" family (RadioModel and MainWindow
+    # guard their references on HAVE_SERIALPORT).
+    list(APPEND CORE_SOURCES
+        src/core/backends/ft991/Ft991Cat.cpp        # FT-991 — CAT frame codec (authority: Yaesu CAT manual)
+        src/core/backends/ft991/Ft991Spectrum.cpp   # FT-991 — audio-band FFT panadapter (FFTW)
+        src/core/backends/ft991/Ft991Device.cpp     # FT-991 — CAT serial + USB codec on the I/O thread
+        src/core/backends/ft991/Ft991Backend.cpp    # FT-991 — IRadioBackend impl (audio-lens pan)
+        src/core/backends/ft991/Ft991Discovery.cpp  # FT-991 — CP210x port scan -> picker
+        src/core/backends/ft991/Ft991Settings.cpp   # owned config object, "Ft991" root key (Principle V)
+    )
+endif()
 
 if(APPLE)
     list(APPEND CORE_SOURCES src/core/VirtualAudioBridge.cpp src/core/MacMicPermission.mm)
@@ -4150,6 +4171,19 @@ add_executable(spe_protocol_test
 target_include_directories(spe_protocol_test PRIVATE src)
 target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
 add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
+
+if(Qt6SerialPort_FOUND)
+    # Ft991Cat is deliberately free of QSerialPort so the wire vocabulary is
+    # testable without hardware; the guard is only here because the family
+    # itself is not built without Qt SerialPort.
+    add_executable(ft991_cat_test
+        tests/ft991_cat_test.cpp
+        src/core/backends/ft991/Ft991Cat.cpp
+    )
+    target_include_directories(ft991_cat_test PRIVATE src)
+    target_link_libraries(ft991_cat_test PRIVATE Qt6::Core)
+    add_test(NAME ft991_cat_test COMMAND ft991_cat_test)
+endif()
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp

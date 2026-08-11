@@ -244,6 +244,48 @@ void MainWindow::wireDiscovery()
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
+
+    // ColibriNANO discovery: same picker, same auto-reconnect slots, tagged
+    // family="colibrinano". Nothing here is family-special beyond the tag.
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    connect(&m_colibriDiscovery, &colibri::ColibriDiscovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    m_colibriDiscovery.start();
+
+#ifdef HAVE_SERIALPORT
+    // FT-991 discovery: same picker, same auto-reconnect slots, tagged
+    // family="ft-991". Nothing here is family-special beyond the tag.
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    connect(&m_ft991Discovery, &ft991::Ft991Discovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    m_ft991Discovery.start();
+#endif
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,

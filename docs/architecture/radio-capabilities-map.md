@@ -33,6 +33,29 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 
 ## Wired and consumed
 
+**ColibriNANO (family `colibri`)** — a USB direct-sampling receiver driven
+through the vendor's `colibrinano_lib`. `model` `"ColibriNANO"`,
+`tuningMinHz/MaxHz` 9 kHz–55 MHz, `sampleRatesHz` nine rates
+(48 k…3.072 MHz), `canTransmit` ❌ (constant — it is a receiver, so
+`hostModulates` is ❌ too: RX-only must not open the mic),
+`clientSettingsDomains` Tuning|Passband|SpanRate|RfGain|Memories,
+everything else ❌/empty. Declared in `ColibriBackend::capabilities()`;
+design doc `aetherd-colibri-backend-design.md`.
+
+**Yaesu FT-991 (family `ft991`)** — CAT over the radio's serial port, audio
+over its USB codec. `model` `"FT-991"`, `tuningMinHz/MaxHz` 30 kHz–470 MHz,
+`canTransmit` ✅ (CAT `TX1;`/`TX0;`), `txPowerMaxWatts` 100,
+`hostModulates` ✅ (the RF modulator is in the radio, but the capability's
+consumers — mic-source list, PC-audio lock, TCI TX routing — gate on where
+the TX *audio* comes from, and that is this host's codec playback),
+`clientSettingsDomains` **empty** (the radio persists its own VFO/mode —
+radio-authoritative, like the Icom). On the DSP tiers it is the same shape
+as an Icom: `hasRadioSideDsp` ✅ (CAT `NB`+`NL`, `NR`+`RL`, auto-notch
+`BC`), `hasLmsNoiseFilters` ❌ (nothing resembling NRL/ANFL/ANFT),
+`hasManualNotch` ✅ (`BP`, frequency-placed and converted to the seam's
+0..100 passband position in the backend). Only built when Qt SerialPort is
+(`HAVE_SERIALPORT`). Design doc `aetherd-ft991-backend-design.md`.
+
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
 | `family` | `"flex"` | `"hl2"` | `"sim"` | `MainWindow::rfGainSettingsKey` | Scopes the persisted RF-gain key per family |
