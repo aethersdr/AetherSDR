@@ -236,6 +236,17 @@ protected:
         }
         if (srcIdx < 0) return;
 
+        // A canvas item dropped onto the panel is a return, not a reorder:
+        // the workspace controller takes it off the canvas and restores its
+        // panel slot (RFC #4887 phase 3), and the reorder below then moves
+        // it to where it was dropped like any other entry.
+        if (auto* cw = qobject_cast<ContainerWidget*>(
+                m_panel->m_appletOrder[srcIdx].widget);
+            cw && cw->isOnCanvas()) {
+            emit m_panel->canvasReturnRequested(draggedId);
+            if (cw->isOnCanvas()) return;   // nobody handled it — leave it be
+        }
+
         // Adjust drop index if moving down (after removing source)
         if (dropIdx > srcIdx) dropIdx--;
         if (dropIdx == srcIdx) return;
@@ -1225,6 +1236,15 @@ void AppletPanel::rebuildStackOrder()
         m_stack->addWidget(entry.widget);
     }
     m_stack->addStretch(1);  // factor 1: absorb all surplus, pin tiles to sizeHint (#3461)
+}
+
+QStringList AppletPanel::appletIds() const
+{
+    QStringList ids;
+    ids.reserve(m_appletOrder.size());
+    for (const auto& entry : m_appletOrder)
+        ids.append(entry.id);
+    return ids;
 }
 
 void AppletPanel::saveOrder()

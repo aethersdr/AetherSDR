@@ -296,6 +296,17 @@ void ContainerManager::floatContainer(const QString& id)
     ContainerWidget* c = m_containers.value(id).data();
     if (!c || c->isFloating()) return;
 
+    // A canvas-mode container leaves the canvas first, through the one
+    // hook that knows how, and arrives here panel-docked in its original
+    // slot — so the float below records a REAL slot to dock back to,
+    // not the canvas it can no longer see.
+    if (c->isOnCanvas()) {
+        if (!m_canvasEvictor) return;   // no canvas owner: nothing safe to do
+        m_canvasEvictor(id);
+        c = m_containers.value(id).data();
+        if (!c || c->isFloating() || c->isOnCanvas()) return;
+    }
+
     prepareRhiChildrenForReparent(c);   // #2495 — before any reparent below
 
     detachFromCurrentSlot(id, c);
@@ -431,7 +442,18 @@ void ContainerManager::onDockRequested()
 {
     auto* c = qobject_cast<ContainerWidget*>(sender());
     if (!c) return;
+    // On the canvas, "dock" means return to the panel — the evictor takes
+    // the item off the canvas and routes back through returnFromCanvas().
+    if (c->isOnCanvas()) {
+        if (m_canvasEvictor) m_canvasEvictor(c->id());
+        return;
+    }
     dockContainer(c->id()); // dockContainer() -> saveState() flushes (#4427)
+}
+
+void ContainerManager::setCanvasEvictor(std::function<void(const QString&)> evictor)
+{
+    m_canvasEvictor = std::move(evictor);
 }
 
 void ContainerManager::onCloseRequested()
@@ -591,6 +613,11 @@ void ContainerManager::restoreState()
         if (mode == ContainerWidget::DockMode::Floating) {
             floatContainer(id);
         }
+        // DockMode::Canvas deliberately falls through to panel-docked here:
+        // no canvas exists at restore time.  The WorkspaceController
+        // re-places canvas items from the workspace document when the mode
+        // is enabled — the document, not ContainerTree, is placement truth
+        // (Principle V); the mode string is a dual-write mirror.
     }
 }
 

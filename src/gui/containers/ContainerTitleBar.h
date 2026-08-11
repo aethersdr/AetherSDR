@@ -40,6 +40,15 @@ public:
     void setAlwaysOnTopState(bool on);
     bool alwaysOnTopState() const { return m_alwaysOnTop; }
 
+    // Canvas placement (RFC #4887 phase 3).  Visually a variant of the
+    // docked state — the float/dock button reads "return to panel", the
+    // close button stays, the pin stays hidden — and the mouse handlers
+    // keep the DOCKED behaviour on purpose: title-bar drags still go
+    // through the owner's QDrag, which is what lets a canvas item be
+    // dragged to a new spot or back onto the panel with the exact
+    // mechanism the panel already uses for reordering.
+    void setCanvasState(bool onCanvas);
+
 signals:
     void floatToggleClicked();
     void closeClicked();
@@ -60,6 +69,7 @@ private:
     bool         m_pressed{false};
     bool         m_closeAllowed{true};   // false = explicitly disabled (sidebar)
     bool         m_isFloating{false};
+    bool         m_onCanvas{false};
     bool         m_alwaysOnTop{false};
 };
 

@@ -2049,6 +2049,7 @@ MainWindow::MainWindow(QWidget* parent)
     // PUDU monitor, RX chain edit) → wireDspApplets()
     // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
     wireDspApplets();
+    wireWorkspaceCanvas();   // RFC #4887 phase 3 — MainWindow_Workspace.cpp
 
     // PROC / NOR / DX / DX+ -> the client compressor, on a radio that modulates
     // on this host. After wireDspApplets(), which is what gives the applet panel
@@ -2483,8 +2484,8 @@ MainWindow::MainWindow(QWidget* parent)
         QList<int> sizes(m_splitter->count(), 0);
         for (int i = 0; i < m_splitter->count(); ++i) {
             QWidget* w = m_splitter->widget(i);
-            if (w == m_panStack)         sizes[i] = centerW;
-            else if (w == m_appletPanel) sizes[i] = appletW;
+            if (w == centralPanWidget())  sizes[i] = centerW;
+            else if (w == m_appletPanel)  sizes[i] = appletW;
         }
         m_splitter->setSizes(sizes);
     });
@@ -8594,7 +8595,7 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // (right dock).  insertWidget()/addWidget() on an already-attached child
     // reparents it to the new index without destroy/recreate.
     if (left) {
-        const int panIdx = m_splitter->indexOf(m_panStack);
+        const int panIdx = m_splitter->indexOf(centralPanWidget());
         if (panIdx < 0) return;
         m_splitter->insertWidget(panIdx, m_appletPanel);
     } else {
@@ -8604,7 +8605,7 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
     for (int i = 0; i < m_splitter->count(); ++i) {
         QWidget* w = m_splitter->widget(i);
-        m_splitter->setStretchFactor(i, w == m_panStack ? 1 : 0);
+        m_splitter->setStretchFactor(i, w == centralPanWidget() ? 1 : 0);
         m_splitter->setCollapsible(i, false);
     }
 
@@ -8628,8 +8629,8 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
         QList<int> newSizes(m_splitter->count(), 0);
         for (int i = 0; i < m_splitter->count(); ++i) {
             QWidget* w = m_splitter->widget(i);
-            if (w == m_panStack)         newSizes[i] = centerW;
-            else if (w == m_appletPanel) newSizes[i] = appletW;
+            if (w == centralPanWidget())  newSizes[i] = centerW;
+            else if (w == m_appletPanel)  newSizes[i] = appletW;
         }
         m_splitter->setSizes(newSizes);
     }

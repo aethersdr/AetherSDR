@@ -79,6 +79,15 @@ public:
 
     QString activeWorkspace;
 
+    // Whether canvas mode is switched on (View menu).  Lives here rather
+    // than in a flat AppSettings key because the workspace document is the
+    // feature's single configuration object (Principle V) — the toggle is as
+    // much workspace state as the placement it reveals.  Optional in the
+    // stored form and absent when false, so phase-2 documents parse
+    // unchanged and a downgraded build that rewrites the document merely
+    // drops a flag whose feature it does not have.
+    bool canvasEnabled = false;
+
     // ── Queries ──────────────────────────────────────────────────────────
     const Workspace* workspace(const QString& id) const;
     bool contains(const QString& id) const { return workspace(id) != nullptr; }

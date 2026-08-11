@@ -817,6 +817,15 @@ void MainWindow::buildMenuBar()
 
     auto* viewMenu = menuBar()->addMenu("&View");
 
+    // Workspace canvas (RFC #4887 phase 3) — opt-in, reversible.  The check
+    // state persists inside the workspace document itself (Principle V), not
+    // in a settings key: wireWorkspaceCanvas() re-applies it at startup and
+    // enabledChanged keeps the action honest if enabling fails.
+    m_workspaceCanvasAction = viewMenu->addAction("Workspace &Canvas (experimental)");
+    m_workspaceCanvasAction->setCheckable(true);
+    connect(m_workspaceCanvasAction, &QAction::toggled, this,
+            [this](bool on) { toggleWorkspaceCanvas(on); });
+
     // Applet-panel show/hide and pop-out are now driven entirely from the
     // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as
     // a window-scoped QShortcut so the keystroke survives the View-menu

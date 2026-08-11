@@ -134,7 +134,13 @@ void ContainerWidget::setDockMode(DockMode mode)
 {
     if (mode == m_dockMode) return;
     m_dockMode = mode;
-    if (m_titleBar) m_titleBar->setFloatingState(mode == DockMode::Floating);
+    if (m_titleBar) {
+        // Order matters: setFloatingState() repaints the docked/floating
+        // visuals, and setCanvasState() overrides them only when the new
+        // mode is Canvas.
+        m_titleBar->setFloatingState(mode == DockMode::Floating);
+        m_titleBar->setCanvasState(mode == DockMode::Canvas);
+    }
     // Re-apply the width policy to every body child for the new mode:
     // floating lifts width caps so content fills the window; docking
     // restores each child's original cap. (#3451)
@@ -177,7 +183,11 @@ void ContainerWidget::restoreWidthPolicy(QWidget* child)
 
 void ContainerWidget::onTitleBarFloatToggle()
 {
-    if (isFloating()) emit dockRequested();
+    // On the canvas the button means "return to panel", which is a dock:
+    // ContainerManager routes it through the canvas evictor.  Floating from
+    // the canvas is the two-step return-then-float, so every transition uses
+    // the one reparent path that already exists for it.
+    if (isFloating() || isOnCanvas()) emit dockRequested();
     else              emit floatRequested();
 }
 

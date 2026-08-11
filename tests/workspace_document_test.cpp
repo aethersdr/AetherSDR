@@ -353,6 +353,24 @@ int main()
         report("...and says so", !warnings.isEmpty());
     }
 
+    // ── canvasEnabled round trip (phase 3) ───────────────────────────────
+    {
+        WorkspaceDocument off = sample();
+        report("canvasEnabled defaults to false", !off.canvasEnabled);
+
+        WorkspaceDocument offParsed;
+        WorkspaceDocument::fromStoredJson(off.toStoredJson(), &offParsed);
+        report("...and false is absent from the stored form",
+               !off.toStoredJson().contains("canvasEnabled")
+                   && !offParsed.canvasEnabled);
+
+        WorkspaceDocument on = sample();
+        on.canvasEnabled = true;
+        WorkspaceDocument onParsed;
+        WorkspaceDocument::fromStoredJson(on.toStoredJson(), &onParsed);
+        report("canvasEnabled survives a round trip", onParsed.canvasEnabled);
+    }
+
     // ── Binding lookup ───────────────────────────────────────────────────
     {
         const WorkspaceDocument doc = sample();

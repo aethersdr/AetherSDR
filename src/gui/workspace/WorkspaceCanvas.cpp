@@ -1,6 +1,10 @@
 #include "gui/workspace/WorkspaceCanvas.h"
 
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QResizeEvent>
 
@@ -214,6 +218,45 @@ bool WorkspaceCanvas::sendItemToBack(const QString& id)
     applyStacking();
     emit itemStackingChanged(id);
     return true;
+}
+
+void WorkspaceCanvas::setDropMimeType(const QByteArray& mimeType)
+{
+    m_dropMimeType = mimeType;
+    setAcceptDrops(!mimeType.isEmpty());
+}
+
+void WorkspaceCanvas::dragEnterEvent(QDragEnterEvent* ev)
+{
+    if (!m_dropMimeType.isEmpty()
+        && ev->mimeData()->hasFormat(QString::fromLatin1(m_dropMimeType))) {
+        ev->acceptProposedAction();
+    }
+}
+
+void WorkspaceCanvas::dragMoveEvent(QDragMoveEvent* ev)
+{
+    if (!m_dropMimeType.isEmpty()
+        && ev->mimeData()->hasFormat(QString::fromLatin1(m_dropMimeType))) {
+        ev->acceptProposedAction();
+    }
+}
+
+void WorkspaceCanvas::dropEvent(QDropEvent* ev)
+{
+    if (m_dropMimeType.isEmpty()
+        || !ev->mimeData()->hasFormat(QString::fromLatin1(m_dropMimeType))
+        || width() <= 0 || height() <= 0) {
+        return;
+    }
+
+    const QString payload = QString::fromUtf8(
+        ev->mimeData()->data(QString::fromLatin1(m_dropMimeType)));
+    const QPointF pos(ev->position().x() / width(),
+                      ev->position().y() / height());
+
+    ev->acceptProposedAction();
+    emit dropReceived(payload, pos);
 }
 
 void WorkspaceCanvas::resizeEvent(QResizeEvent* ev)

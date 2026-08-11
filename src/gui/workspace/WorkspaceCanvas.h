@@ -22,6 +22,7 @@
 #include "gui/workspace/CanvasLayout.h"
 
 #include <QHash>
+#include <QPointF>
 #include <QPointer>
 #include <QSize>
 #include <QString>
@@ -94,7 +95,23 @@ public:
     // Read-only view of the model, for tests and for phase 2's serializer.
     const CanvasLayout& layout() const { return m_layout; }
 
+    // ── Drag-and-drop (RFC #4887 phase 3) ────────────────────────────────
+    //
+    // The canvas accepts drops of one MIME type and reports them upward as
+    // (payload, normalized point); it applies no policy of its own.  What a
+    // drop MEANS — place a panel applet, move an existing item, refuse —
+    // is the WorkspaceController's call, because the answer depends on
+    // state the canvas cannot see (the panel, the manager, the document).
+    // Empty MIME type (the default) leaves drops disabled.
+    void setDropMimeType(const QByteArray& mimeType);
+    QByteArray dropMimeType() const { return m_dropMimeType; }
+
 signals:
+    // A drop of the accepted MIME type landed at `pos` (canvas fractions).
+    // `payload` is the MIME data verbatim — for the applet MIME this is the
+    // container's dragId().
+    void dropReceived(const QString& payload, const QPointF& pos);
+
     // Emitted whenever an item's stored rect changes — including the clamps
     // applied on a canvas resize, which is why the rect is carried in the
     // signal rather than left for the receiver to read back.
@@ -110,6 +127,9 @@ signals:
 
 protected:
     void resizeEvent(QResizeEvent* ev) override;
+    void dragEnterEvent(QDragEnterEvent* ev) override;
+    void dragMoveEvent(QDragMoveEvent* ev) override;
+    void dropEvent(QDropEvent* ev) override;
 
     // Raises an item when its widget is pressed.  Installed on the item widget
     // itself, so a press landing on a deeper descendant does not raise — real
@@ -130,6 +150,7 @@ private:
 
     CanvasLayout m_layout;
     QHash<QString, QPointer<QWidget>> m_widgets;
+    QByteArray m_dropMimeType;
 };
 
 }  // namespace AetherSDR

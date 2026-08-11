@@ -244,6 +244,11 @@ public:
     // for all legacy applets — these accessors exist so new features
     // can opt in to the container system early.
     ContainerManager* containerManager() { return m_containerMgr; }
+
+    // Canonical applet entry ids in current column order — the same ids the
+    // Applet_<ID> keys and AppletOrder use.  The workspace controller feeds
+    // these to the legacy-key migration (RFC #4887 phase 3).
+    QStringList appletIds() const;
     ContainerWidget*  rootSidebarContainer() { return m_rootSidebar; }
 
     // Global controls lock — disables wheel/mouse on sidebar sliders (#745)
@@ -262,6 +267,12 @@ public:
     };
 
     friend class AppletDropArea;
+
+signals:
+    // A canvas-mode container was dropped back onto the panel; the workspace
+    // controller owns the transition (RFC #4887 phase 3).
+    void canvasReturnRequested(const QString& appletId);
+
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;

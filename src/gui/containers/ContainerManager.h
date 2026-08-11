@@ -110,6 +110,16 @@ public:
     // (WorkspaceCanvas::takeItem()).
     void returnFromCanvas(const QString& id, ContainerWidget* c);
 
+    // The manager's one hook into whoever owns the canvas.  When a
+    // canvas-mode container asks to dock (title-bar button) or must leave
+    // the canvas before floating, the manager calls this to have the
+    // controller take the item off the canvas and hand the container back
+    // through returnFromCanvas().  Kept as a callback rather than a
+    // signal because the transition must complete synchronously — a
+    // float that queued the eviction would reparent a widget the canvas
+    // still owns.
+    void setCanvasEvictor(std::function<void(const QString&)> evictor);
+
     // Follow the main-window frameless setting for all active floating windows.
     void setFramelessMode(bool on);
 
@@ -169,6 +179,7 @@ private:
     QMap<QString, QPointer<ContainerWidget>> m_containers;
     QMap<QString, FloatingContainerWindow*> m_floatingWindows;
     QMap<QString, ContentFactory>           m_factories;
+    std::function<void(const QString&)>     m_canvasEvictor;
     QMap<QString, Meta>                     m_meta;
 
     // True only while restoreState() is replaying saved state, so saveState()

@@ -145,6 +145,20 @@ void ContainerTitleBar::setFloatingState(bool isFloating)
     if (m_pinBtn) m_pinBtn->setVisible(isFloating);
 }
 
+void ContainerTitleBar::setCanvasState(bool onCanvas)
+{
+    m_onCanvas = onCanvas;
+    if (!onCanvas) return;   // setFloatingState() repaints the other states
+
+    // On the canvas the one-button affordance means "back to the panel".
+    // Floating from the canvas is deliberately a two-step (return, then
+    // pop out) so there is exactly one reparent path per transition.
+    m_floatBtn->setText(QString::fromUtf8("\xe2\x86\x99"));   // same ↙ as float-mode dock
+    m_floatBtn->setToolTip(QStringLiteral("Return to panel"));
+    if (m_closeBtn) m_closeBtn->setVisible(m_closeAllowed);
+    if (m_pinBtn)   m_pinBtn->setVisible(false);
+}
+
 void ContainerTitleBar::setAlwaysOnTopState(bool on)
 {
     m_alwaysOnTop = on;

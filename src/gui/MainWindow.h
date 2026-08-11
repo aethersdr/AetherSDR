@@ -125,6 +125,8 @@ class IRadioBackend;
 class PanadapterApplet;
 class MiniPanApplet;
 class PanadapterStack;
+class WorkspaceCanvas;
+class WorkspaceController;
 class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
@@ -779,6 +781,11 @@ private:
     // the title bar and persisted via "AppletPanelDockedLeft".
     void setAppletPanelDockedLeft(bool left);
 
+    // Workspace canvas (RFC #4887 phase 3) — MainWindow_Workspace.cpp.
+    void wireWorkspaceCanvas();
+    void toggleWorkspaceCanvas(bool on);
+    QWidget* centralPanWidget() const;
+
     // Show/hide the applet panel — single source of truth that updates the
     // title-bar dock icons and the persisted "AppletPanelVisible" setting.
     void setAppletPanelVisible(bool visible);
@@ -1217,6 +1224,14 @@ private:
     ::QSizeGrip*      m_sizeGrip{nullptr};
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
+    // Workspace canvas (RFC #4887 phase 3) — created in wireWorkspaceCanvas()
+    // (MainWindow_Workspace.cpp).  When canvas mode is on, m_workspaceCanvas
+    // sits in the splitter slot m_panStack normally occupies and hosts it as
+    // a canvas item; centralPanWidget() is what splitter size/stretch code
+    // compares against so both arrangements share one code path.
+    WorkspaceCanvas*     m_workspaceCanvas{nullptr};
+    WorkspaceController* m_workspaceController{nullptr};
+    QAction*             m_workspaceCanvasAction{nullptr};
     QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
     QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
     bool m_miniPanFeedWanted{false};              // applet visible → consume frames

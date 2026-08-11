@@ -150,6 +150,9 @@ QJsonObject WorkspaceDocument::toJson() const
     root[QStringLiteral("version")]         = kSchemaVersion;
     root[QStringLiteral("activeWorkspace")] = activeWorkspace;
     root[QStringLiteral("workspaces")]      = wsArray;
+    if (canvasEnabled) {
+        root[QStringLiteral("canvasEnabled")] = true;
+    }
     if (!bindingsObj.isEmpty()) {
         root[QStringLiteral("bindings")] = bindingsObj;
     }
@@ -341,6 +344,8 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
         }
         doc.bindings.insert(it.key(), target);
     }
+
+    doc.canvasEnabled = root.value(QStringLiteral("canvasEnabled")).toBool(false);
 
     doc.activeWorkspace = root.value(QStringLiteral("activeWorkspace")).toString();
     if (!doc.activeWorkspace.isEmpty() && !doc.contains(doc.activeWorkspace)) {
