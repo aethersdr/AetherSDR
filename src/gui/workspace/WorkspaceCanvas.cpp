@@ -2,6 +2,8 @@
 
 #include "gui/workspace/CanvasItemFrame.h"
 
+#include "core/ThemeManager.h"
+
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QDragEnterEvent>
@@ -57,9 +59,11 @@ protected:
     {
         QPainter p(this);
 
-        QColor dot = palette().windowText().color();
-        dot.setAlpha(90);
-        paintGridDots(p, size(), dot);
+        // The token carries its own alpha and is used verbatim by both dot
+        // passes, so themes control the dots with one value.
+        paintGridDots(p, size(),
+                      ThemeManager::instance().color(
+                          m_canvas, QStringLiteral("color.canvas.dots")));
 
         QPen pen(palette().highlight().color(), 1, Qt::DashLine);
         p.setPen(pen);
@@ -89,6 +93,15 @@ WorkspaceCanvas::WorkspaceCanvas(QWidget* parent)
 
     m_frame = new CanvasItemFrame(this);
     m_gestureOverlay = new GestureOverlay(this);
+
+    // The background and dots paint with raw QPainter from theme tokens, so
+    // unlike applyStyleSheet() registrants they need an explicit nudge when
+    // the theme changes.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this] {
+                update();
+                if (m_gestureOverlay) m_gestureOverlay->update();
+            });
 }
 
 WorkspaceCanvas::~WorkspaceCanvas()
@@ -702,14 +715,18 @@ void WorkspaceCanvas::keyPressEvent(QKeyEvent* ev)
 void WorkspaceCanvas::paintEvent(QPaintEvent* ev)
 {
     QWidget::paintEvent(ev);
-    // Background dots: visible wherever items leave the canvas exposed.
-    // (A widget paints UNDER its children, so this pass cannot show through
-    // the spectrum — the gesture overlay handles the on-top case, and the
-    // guides live there with it.)
+    // Background + dots from the color.canvas.* tokens (default background:
+    // 50% darker than color.background.app, so exposed canvas reads as a
+    // distinct working surface).  Only visible wherever items leave the
+    // canvas exposed — a widget paints UNDER its children, so this pass
+    // cannot show through the spectrum; the gesture overlay handles the
+    // on-top case, and the guides live there with it.
     QPainter p(this);
-    QColor dot = palette().windowText().color();
-    dot.setAlpha(60);
-    paintGridDots(p, size(), dot);
+    auto& theme = ThemeManager::instance();
+    p.fillRect(rect(),
+               theme.color(this, QStringLiteral("color.canvas.background")));
+    paintGridDots(p, size(),
+                  theme.color(this, QStringLiteral("color.canvas.dots")));
 }
 
 void WorkspaceCanvas::contextMenuEvent(QContextMenuEvent* ev)

@@ -3495,6 +3495,11 @@ add_executable(workspace_canvas_widget_test
     src/gui/workspace/CanvasLayout.cpp
     src/gui/workspace/WorkspaceCanvas.cpp
     src/gui/workspace/WorkspaceGeometry.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(workspace_canvas_widget_test PRIVATE src)
 target_link_libraries(workspace_canvas_widget_test PRIVATE Qt6::Widgets Qt6::Test)
@@ -6180,6 +6185,7 @@ set(AETHER_SETTINGS_CONSUMERS
     amp_applet_test
     container_manager_test
     container_nesting_test
+    workspace_canvas_widget_test
     workspace_container_mode_test
     workspace_controller_test
     mini_pan_widget_test
