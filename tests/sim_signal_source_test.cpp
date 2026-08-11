@@ -12,6 +12,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSet>
 #include <QThread>
 
 #include <cstdio>
@@ -69,6 +70,7 @@ public:
     int slice = 0;
     int spectrum = 0;
     int lastSliceId = -1;
+    QSet<int> panIdsSeen;
     qint64 samples = 0;
     QByteArray lastAudio;
 
@@ -86,7 +88,10 @@ public:
                     lastSliceId = id;
                 });
         connect(src, &AetherSDR::SimSignalSource::spectrumFrameReady, this,
-                [this](int, const QByteArray&) { ++spectrum; });
+                [this](int pan, const QByteArray&) {
+                    ++spectrum;
+                    panIdsSeen.insert(pan);
+                });
     }
 };
 
@@ -162,6 +167,19 @@ int main(int argc, char** argv)
     rx.audio = 0;
     report("controls apply on the worker without disturbing the stream",
            waitFor([&] { return rx.audio > 2; }, 1000));
+
+    // ── Multi-pan: rows address every live pan (#4887 phase 4) ───────────
+    QMetaObject::invokeMethod(src, [src] {
+        src->setScopeStalled(false);   // stallscope check above left it on
+        src->setPanIndices({0, 2});
+    }, Qt::QueuedConnection);
+    waitFor([&] { return false; }, 60);
+    rx.panIdsSeen.clear();
+    rx.spectrum = 0;
+    waitFor([&] { return rx.spectrum > 6; }, 2000);
+    report("spectrum rows address every live pan, and only those",
+           rx.panIdsSeen.contains(0) && rx.panIdsSeen.contains(2)
+               && rx.panIdsSeen.size() == 2);
 
     // ── Stop stops ───────────────────────────────────────────────────────
     QMetaObject::invokeMethod(src, &SimSignalSource::stop, Qt::QueuedConnection);

@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QTimer>
@@ -68,6 +69,13 @@ public slots:
     void setVfoMhz(double mhz);
     void setLowerSideband(bool lsb);
 
+    // Which pans exist, as backend pan indices in creation order (#4887
+    // phase 4 — the demo grew real multi-pan). One spectrum row per live pan
+    // every kSpectrumRowEveryNFrames frames, each addressed by its index.
+    // The audio stays single-scene: every demo pan is a view of the same
+    // antenna, so the mix is computed once and only the emission fans out.
+    void setPanIndices(const QList<int>& indices);
+
 signals:
     // 24 kHz stereo float32, the format AudioEngine::feedAudioData() eats.
     void audioFrameReady(const QByteArray& stereo);
@@ -80,7 +88,6 @@ private:
     static QByteArray toStereoBytes(const QVector<float>& mono);
 
     static constexpr int kSliceId = 0;
-    static constexpr int kPanId = 0;
 
     NoiseMixer    m_audio;
     QTimer        m_timer;
@@ -89,6 +96,7 @@ private:
     quint64       m_frames{0};
     bool          m_keyed{false};
     bool          m_scopeStalled{false};
+    QList<int>    m_panIndices{0};   // pan 0 exists from connect
 
     double m_sliceFreqMhz{14.100};
     bool   m_lsb{false};

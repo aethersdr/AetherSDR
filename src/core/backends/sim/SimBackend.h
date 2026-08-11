@@ -2,7 +2,9 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QVector>
 
@@ -62,6 +64,11 @@ public:
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
+    // Multi-pan demo (#4887 phase 4). Create/remove run over the synthetic
+    // wire — the SAME status-line shape the connect script claims pan 0
+    // with — so there is one path that creates a demo pane, not two.
+    bool createPanadapter() override;
+    bool removePanadapter(const QString& panId) override;
     void setKeying(bool key) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
@@ -157,6 +164,18 @@ private:
     QThread*         m_signalThread{nullptr};
 
     bool   m_connected{false};
+    // Live synthetic pans by WIRE id ("0x40000000"+index, lowercase), in
+    // creation order. Pan 0 is seeded when the wire script claims it at
+    // connect; the rest are minted by createPanadapter(). The set tracks
+    // pans whose wire status is injected but whose normalized geometry has
+    // not been emitted yet — geometry must land AFTER RadioModel claims the
+    // pan (see the ctor's statusReceived listener).
+    QStringList m_wirePanIds;
+    QSet<QString> m_pansAwaitingGeometry;
+    static QString wirePanIdFor(int index);
+    static QString wireWfIdFor(int index);
+    static int wirePanIndexOf(const QString& panId);
+    void pushPanIndicesToSource();
     double m_sliceFreqMhz{14.100};   // default: 20 m, a lively demo band
     QString m_sliceMode{QStringLiteral("USB")};
     int    m_filterLowHz{100};

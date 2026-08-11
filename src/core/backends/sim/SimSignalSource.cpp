@@ -123,11 +123,22 @@ void SimSignalSource::onTick()
             constexpr double kAudioSpanHz = 8000.0;   // ±4 kHz around the VFO
             const QVector<float> row =
                 m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
-            QByteArray bytes(reinterpret_cast<const char*>(row.constData()),
-                             row.size() * static_cast<int>(sizeof(float)));
-            emit spectrumFrameReady(kPanId, bytes);
+            const QByteArray bytes(
+                reinterpret_cast<const char*>(row.constData()),
+                row.size() * static_cast<int>(sizeof(float)));
+            // One row PER LIVE PAN, addressed by index. The mix is computed
+            // once — every demo pan views the same antenna — but each pan
+            // gets its own emission, so the seam carries real multi-pan load
+            // and RadioModel routes rows to the right pane (#4887 phase 4).
+            for (const int pan : m_panIndices)
+                emit spectrumFrameReady(pan, bytes);
         }
     }
+}
+
+void SimSignalSource::setPanIndices(const QList<int>& indices)
+{
+    m_panIndices = indices;
 }
 
 void SimSignalSource::setNoiseEnabled(const QString& channel, bool on)

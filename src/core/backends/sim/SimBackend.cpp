@@ -76,6 +76,10 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // the audio/spectrum tick also starts producing on the live path.
     connect(m_connection, &RadioConnection::connected, this, [this]() {
         m_connected = true;
+        // The wire script claims pan 0; dynamic creates append (#4887 ph 4).
+        m_wirePanIds = QStringList{wirePanIdFor(0)};
+        m_pansAwaitingGeometry.clear();
+        pushPanIndicesToSource();
         QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::start,
                                   Qt::QueuedConnection);
         QTimer::singleShot(150, this, [this]() {
@@ -84,8 +88,38 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     });
     connect(m_connection, &RadioConnection::disconnected, this, [this]() {
         m_connected = false;
+        m_wirePanIds.clear();
+        m_pansAwaitingGeometry.clear();
         QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop,
                                   Qt::QueuedConnection);
+    });
+
+    // Seam-geometry trigger for dynamically created pans (#4887 phase 4). A
+    // wire-claimed pan's center/bandwidth fields are never decoded in demo
+    // mode (that decode is m_flexBackend-gated), so each new pan needs the
+    // same normalized panCenterBandwidthChanged bridge pan 0 gets from
+    // emitInitialState() — but only AFTER RadioModel has claimed the pan,
+    // else the geometry is cached by index and the fresh pane starts blank.
+    // The wire status arriving HERE proves the line parsed; the zero-timer
+    // hop below then runs after RadioModel's own queued copy of the same
+    // emission, whichever order the two statusReceived connections were made
+    // in (both events are already in the GUI queue before the timer posts).
+    connect(m_connection, &RadioConnection::statusReceived, this,
+            [this](const QString& object, const QMap<QString, QString>& kvs) {
+        Q_UNUSED(kvs);
+        if (m_pansAwaitingGeometry.isEmpty()
+            || !object.startsWith(QLatin1String("display pan ")))
+            return;
+        const QString panId = object.section(QLatin1Char(' '), 2, 2).toLower();
+        if (!m_pansAwaitingGeometry.remove(panId))
+            return;
+        QTimer::singleShot(0, this, [this, panId]() {
+            if (!m_connected)
+                return;
+            emit panCenterBandwidthChanged(panId, m_sliceFreqMhz,
+                                           kDemoPanBandwidthMhz);
+            emit panWaterfallLineDurationChanged(panId, kWaterfallRate);
+        });
     });
 }
 
@@ -190,7 +224,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
-    caps.maxPanadapters = 1;
+    // Four receivers since #4887 phase 4 — enough to exercise the workspace
+    // canvas's per-pan items and measure the multi-pan render budget in CI
+    // and smokes without a real radio. The slice stays singular: extra demo
+    // pans are extra VIEWS of the same antenna, not receivers-with-audio.
+    caps.maxPanadapters = 4;
     caps.sampleRatesHz = {};     // no data plane yet
     // A simulator must never look like something that can key a transmitter
     // (Principle VI). TX stays off in the skeleton.
@@ -576,6 +614,117 @@ void SimBackend::pushFaultStatus(const QString& line)
     if (m_connection)
         QMetaObject::invokeMethod(m_connection, "injectFaultStatus",
                                   Qt::QueuedConnection, Q_ARG(QString, line));
+}
+
+// ---- Multi-pan demo (#4887 phase 4) ----
+
+QString SimBackend::wirePanIdFor(int index)
+{
+    return QStringLiteral("0x%1").arg(0x40000000u + static_cast<quint32>(index),
+                                      8, 16, QLatin1Char('0'));
+}
+
+QString SimBackend::wireWfIdFor(int index)
+{
+    return QStringLiteral("0x%1").arg(0x42000000u + static_cast<quint32>(index),
+                                      8, 16, QLatin1Char('0'));
+}
+
+int SimBackend::wirePanIndexOf(const QString& panId)
+{
+    bool ok = false;
+    const quint32 raw = panId.mid(2).toUInt(&ok, 16);
+    if (!ok || raw < 0x40000000u || raw >= 0x40000000u + 64u)
+        return -1;
+    return static_cast<int>(raw - 0x40000000u);
+}
+
+void SimBackend::pushPanIndicesToSource()
+{
+    QList<int> indices;
+    for (const QString& id : m_wirePanIds) {
+        const int idx = wirePanIndexOf(id);
+        if (idx >= 0)
+            indices.append(idx);
+    }
+    QMetaObject::invokeMethod(m_signalSource,
+                              [src = m_signalSource, indices]() {
+        src->setPanIndices(indices);
+    }, Qt::QueuedConnection);
+}
+
+bool SimBackend::createPanadapter()
+{
+    // The seam branch of RadioModel::createPanadapter() lands here (the demo
+    // has no m_flexBackend). Mint the pan the way pan 0 was minted: inject
+    // the SAME "display pan"/"display waterfall" status shape the synthetic
+    // connect script uses (RadioConnection::startSyntheticDemoConnect), so
+    // RadioModel claims it over the wire and ONE path creates a demo pane.
+    // The normalized geometry bridge is emitted by the ctor's statusReceived
+    // listener once the claim has landed.
+    if (!m_connected)
+        return false;
+    if (m_wirePanIds.size() >= capabilities().maxPanadapters)
+        return false;   // RadioModel announces panadapterLimitReached
+
+    // Lowest free index, so remove-then-create reuses the slot — mirroring
+    // RadioModel::neutralPanIndexFor(), which keeps the two sides' index
+    // spaces agreeing across arbitrary create/remove sequences.
+    int index = 0;
+    while (m_wirePanIds.contains(wirePanIdFor(index)))
+        ++index;
+    const QString panId = wirePanIdFor(index);
+    const QString wfId  = wireWfIdFor(index);
+
+    // Centered on the current VFO: the demo's spectrum row IS the ±4 kHz
+    // audio scene, so every pan views the same antenna and the same span
+    // lockstep applies (see kDemoPanBandwidthMhz).
+    pushFaultStatus(QStringLiteral(
+        "SDE300001|display pan %1 client_handle=0xDE300001 "
+        "waterfall=%2 center=%3 bandwidth=%4 "
+        "min_dbm=-140 max_dbm=-20 x_pixels=1024 y_pixels=700 fps=25 "
+        "ant_list=ANT1")
+        .arg(panId, wfId,
+             QString::number(m_sliceFreqMhz, 'f', 6),
+             QString::number(kDemoPanBandwidthMhz, 'f', 6)));
+    pushFaultStatus(QStringLiteral(
+        "SDE300001|display waterfall %1 client_handle=0xDE300001 "
+        "panadapter=%2 line_duration=%3 auto_black=1 "
+        "black_level=15 color_gain=50")
+        .arg(wfId, panId, QString::number(kWaterfallRate)));
+
+    m_wirePanIds.append(panId);
+    m_pansAwaitingGeometry.insert(panId);
+    pushPanIndicesToSource();
+    return true;
+}
+
+bool SimBackend::removePanadapter(const QString& panId)
+{
+    if (!m_connected)
+        return false;
+    const QString normalized = panId.toLower();
+    if (!m_wirePanIds.contains(normalized))
+        return false;
+    // Pan 0 hosts the demo slice. A real radio tears a pan's slices down
+    // with it, and a demo that silently orphaned its only slice would be
+    // exercising a state no radio produces — refuse instead, the same
+    // "declined" a backend gives for its last receiver.
+    if (wirePanIndexOf(normalized) == 0)
+        return false;
+
+    // Teardown pair, mirroring the real Flex wire (#3843): the pan AND its
+    // waterfall, or the waterfall inventory keeps the orphan forever.
+    const int index = wirePanIndexOf(normalized);
+    pushFaultStatus(QStringLiteral("SDE300001|display pan %1 removed")
+                        .arg(normalized));
+    pushFaultStatus(QStringLiteral("SDE300001|display waterfall %1 removed")
+                        .arg(wireWfIdFor(index)));
+
+    m_wirePanIds.removeAll(normalized);
+    m_pansAwaitingGeometry.remove(normalized);
+    pushPanIndicesToSource();
+    return true;
 }
 
 void SimBackend::clearFaults()
