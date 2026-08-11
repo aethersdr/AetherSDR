@@ -260,8 +260,12 @@ jobs:
       # and no wall-clock waits. It binds 127.0.0.1:4992/4993 because those
       # ports are fixed by the protocol; if they are ever occupied on a runner
       # it reports that as an environment failure rather than a silent pass.
+      #
+      # --no-tests=error because a -R that matches nothing exits 0: rename or
+      # move the target and this step would go green while testing nothing,
+      # which is the same silent pass the step exists to close.
       - name: Test VITA-49 UDP prime reaches both radio ports
-        run: ctest --test-dir build -R "^vita49_udp_prime_ports_test$" --output-on-failure
+        run: ctest --test-dir build -R "^vita49_udp_prime_ports_test$" --no-tests=error --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
