@@ -6,6 +6,12 @@ from `tools/audit_colours.py` output (3621 references across 524
 unique colours) by clustering close variants into a smaller canonical
 set.
 
+> Writing new UI? The agent-facing rules for *using* these tokens —
+> the semantic system-state map, the no-new-literals rule, and the
+> add-a-token path for new UX — live in
+> [`docs/style/theme-style-guide.md`](../style/theme-style-guide.md).
+> This file is the migration inventory behind them.
+
 ## Methodology
 
 The audit produced 524 unique colours.  Frequency distribution:
