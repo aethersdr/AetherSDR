@@ -37,6 +37,7 @@ When helping with AetherSDR:
   See "Build targets" and "In-flight: aetherd" under Architecture Overview.
 - **Read `CONTRIBUTING.md`** for full contributor guidelines, coding conventions,
   and the AI-to-AI debugging protocol (open a GitHub issue for cross-agent coordination)
+- **Adding or changing UI? Read [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) first** — every colour resolves through a ThemeManager token (error/warning/success/notification/TX all have one); never hardcode a colour literal. CI's hardcoded-colour ratchet fails a PR that raises the count above its base branch.
 - **Sign every commit you author.** `main` enforces `required_signatures`, so a
   PR with unsigned commits cannot merge without an admin override. If the
   contributor has not set up commit signing yet, walk them through
