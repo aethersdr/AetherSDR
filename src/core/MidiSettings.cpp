@@ -165,6 +165,16 @@ QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
 
         sawAssignment = true;
 
+        // Section first: rows in a section we never bind from are not ours to
+        // key-validate. Vendors key their feedback sections in their own
+        // dialect ("L1=", "LED1="), and judging those by the control/button
+        // key format would fail the whole file instead of naming the skip.
+        if (section == Section::Other) {
+            // e.g. the LEDs section: device feedback, not a binding.
+            result.skippedUnknownParam << function + QStringLiteral(" (not a control/button row)");
+            continue;
+        }
+
         const QChar kind = key.isEmpty() ? QChar() : key.at(0).toUpper();
         bool numberOk = false;
         const int number = key.mid(1).toInt(&numberOk);
@@ -172,12 +182,6 @@ QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
             || !numberOk || number < 0 || number > 127) {
             result.errors << QStringLiteral("Line %1: bad assignment key \"%2\"")
                                  .arg(i + 1).arg(key);
-            continue;
-        }
-
-        if (section == Section::Other) {
-            // e.g. the LEDs section: device feedback, not a binding.
-            result.skippedUnknownParam << function + QStringLiteral(" (not a control/button row)");
             continue;
         }
 
@@ -263,14 +267,24 @@ QVector<MidiBinding> parseProfileXml(const QByteArray& bytes,
                 << param + QStringLiteral(" (type \"%1\")").arg(attrs.value("type").toString());
             continue;
         }
-        const int channel = attrs.value("channel").toInt();
-        if (channel < -1 || channel > 15) {
-            result.skippedBadType << param + QStringLiteral(" (channel %1)").arg(channel);
+        // Absent attributes keep their defaults (our writer always emits both,
+        // hand-written files may not); a present-but-non-numeric value is a
+        // named skip, never a silent 0 — channel 0 is MIDI channel 1, not the
+        // any-channel wildcard, so accepting it would bind the row wrongly.
+        const auto channelAttr = attrs.value("channel");
+        bool channelOk = true;
+        const int channel = channelAttr.isNull() ? 0 : channelAttr.toInt(&channelOk);
+        if (!channelOk || channel < -1 || channel > 15) {
+            result.skippedBadType
+                << param + QStringLiteral(" (channel \"%1\")").arg(channelAttr.toString());
             continue;
         }
-        const int number = attrs.value("number").toInt();
-        if (type != MidiBinding::PitchBend && (number < 0 || number > 127)) {
-            result.skippedBadType << param + QStringLiteral(" (number %1)").arg(number);
+        const auto numberAttr = attrs.value("number");
+        bool numberOk = true;
+        const int number = numberAttr.isNull() ? 0 : numberAttr.toInt(&numberOk);
+        if (!numberOk || (type != MidiBinding::PitchBend && (number < 0 || number > 127))) {
+            result.skippedBadType
+                << param + QStringLiteral(" (number \"%1\")").arg(numberAttr.toString());
             continue;
         }
 
@@ -509,6 +523,10 @@ MidiImportResult MidiSettings::importProfile(
     // Sniff the dialect: native XML leads with '<'; a SmartSDR ".map" leads
     // with a "#"-headed section. Anything else is not a profile.
     QVector<MidiBinding> bindings;
+    // A leading UTF-8 BOM (any file round-tripped through a Windows editor)
+    // never reaches this comparison: QString::fromUtf8() consumes it. The
+    // import test pins that, so a toolchain that ever stops doing it fails
+    // loudly here rather than reporting a valid profile as unrecognized.
     const QString head = QString::fromUtf8(bytes.left(256)).trimmed();
     if (head.startsWith(QLatin1Char('<')))
         bindings = parseProfileXml(bytes, paramValidator, result);

@@ -180,6 +180,22 @@ int main(int argc, char** argv)
     ok &= expect(r2.ok() && r2.profileName == "CTR2-Test_v1_0 (2)",
                  "a name collision gets a suffix, never an overwrite");
 
+    // Sections we never bind from carry the vendor's own key dialect. Judging
+    // those rows by the control/button key format would fail the whole file;
+    // they are named skips, and the bindings around them still import.
+    const auto rLeds = settings.importProfile(
+        writeImportFile("with-leds.map",
+                        "# Controls\n"
+                        "C100=freq\n"
+                        "# LEDs\n"
+                        "L1=txled\n"
+                        "LED2=rxled;active\n"),
+        validator);
+    ok &= expect(rLeds.ok() && rLeds.importedCount == 1,
+                 "a vendor-dialect LEDs section doesn't fail the import");
+    ok &= expect(rLeds.skippedUnknownParam.size() == 2,
+                 "LEDs rows are named skips, not file-level errors");
+
     const auto r3 = settings.importProfile(writeImportFile("garbage.map", "hello world\n"),
                                            validator);
     ok &= expect(!r3.ok() && r3.importedCount == 0, "unrecognized content fails loudly");
@@ -218,6 +234,53 @@ int main(int argc, char** argv)
     const auto r7 = settings.importProfile(
         writeImportFile("trunc.xml", "<MidiProfile><Binding param=\"x\""), validator);
     ok &= expect(!r7.ok(), "truncated XML fails loudly");
+
+    // A row whose value is present but not a number must be a named skip, not
+    // a silent 0: channel 0 is MIDI channel 1, not the any-channel wildcard,
+    // and number 0 is CC 0 — either would bind the row to the wrong control.
+    const auto r9 = settings.importProfile(
+        writeImportFile("badnumbers.xml",
+                        "<MidiProfile>"
+                        "<Binding param=\"rx.afGain\" channel=\"abc\" type=\"0\" number=\"10\"/>"
+                        "<Binding param=\"rx.nrEnable\" channel=\"0\" type=\"0\" number=\"xyz\"/>"
+                        "<Binding param=\"tx.rfPower\" channel=\"0\" type=\"0\" number=\"12\"/>"
+                        "</MidiProfile>\n"),
+        validator);
+    ok &= expect(r9.ok() && r9.importedCount == 1,
+                 "XML: non-numeric channel/number rows don't become bindings");
+    ok &= expect(r9.skippedBadType.size() == 2, "XML: both bad-value rows are skipped by name");
+    {
+        const auto imported = settings.loadProfile(r9.profileName);
+        bool wrongBinding = false;
+        for (const auto& b : imported)
+            if (b.paramId == "rx.afGain" || b.paramId == "rx.nrEnable")
+                wrongBinding = true;
+        ok &= expect(!wrongBinding, "XML: no wrong binding is stored from a bad-value row");
+    }
+
+    // Absent attributes are not the same as bad ones — hand-written files omit
+    // them and must still import.
+    const auto r10 = settings.importProfile(
+        writeImportFile("sparse.xml",
+                        "<MidiProfile>"
+                        "<Binding param=\"rx.afGain\" type=\"0\" number=\"7\"/>"
+                        "</MidiProfile>\n"),
+        validator);
+    ok &= expect(r10.ok() && r10.importedCount == 1,
+                 "XML: an absent attribute keeps its default and still imports");
+
+    // A UTF-8 BOM (any file round-tripped through a Windows editor) must not
+    // defeat the dialect sniff. QString::fromUtf8() consumes the BOM, so this
+    // holds without a guard in the sniff — pinned here so a toolchain that
+    // stops consuming it is caught by this test rather than by a user.
+    const auto r11 = settings.importProfile(
+        writeImportFile("bom.xml",
+                        QByteArray("\xEF\xBB\xBF")
+                            + "<MidiProfile>"
+                              "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\" number=\"9\"/>"
+                              "</MidiProfile>\n"),
+        validator);
+    ok &= expect(r11.ok() && r11.importedCount == 1, "a UTF-8 BOM still sniffs as profile XML");
 
     // Export → Import round trip through the user-facing export path.
     const auto exported = settings.exportProfile(
