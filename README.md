@@ -97,7 +97,7 @@ MIDI, Stream Deck/StreamController plugins, and generic USB-serial adapters:
 - Icom RC-28 USB remote encoder
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
-- MIDI controllers with learn mode, manual mapping entry, profiles, and relative-encoder support
+- MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
 - Elgato Stream Deck devices through the bundled macOS/Windows Stream Deck plugin
 - Stream Deck devices on Linux through the bundled StreamController plugin
 - USB-serial PTT/CW interfaces for foot switches, straight keys, iambic paddles,
