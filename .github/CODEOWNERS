@@ -47,6 +47,12 @@
 #         third_party/, plugins/, hal-plugin/, resources/, packaging/,
 #         scripts/). Broadest collaborator roster because routine
 #         source review benefits from more eyes.
+#         CAUTION: *.md has no slash, so it matches at ANY depth — a
+#         markdown file inside a Tier 3 directory (resources/help/*.md,
+#         scripts/*.md, …) is Tier 2, not Tier 3. That is intended
+#         (documentation is documentation wherever it lives) but it does
+#         mean "everything under resources/" above is shorthand, not
+#         literal.
 #
 # Team rosters are managed in the GitHub org settings:
 #   https://github.com/orgs/aethersdr/teams
@@ -92,13 +98,14 @@ docs/                        @aethersdr/infrastructure
 # Routine CI workflow definitions live at Tier 2 to unblock day-to-day CI
 # iteration. NOTE the residual risk: a workflow runs with repo secrets /
 # GITHUB_TOKEN scopes, so a Tier-2 owner can approve a change that exfiltrates a
-# secret or alters CI behaviour. The SECURITY-SENSITIVE workflows — the release
-# signing/publish pipeline and the CodeQL scan invocation — are carved back to
-# Tier 1 individually in the Security section below (last-match-wins), because
-# CodeQL is NOT a required status check (a Tier-2 edit could silently disable it)
-# and the release workflows consume the signing secret at run time. Everything
-# else here (ci, static-checks, sanitizers, system-libs-canary,
-# mirror-aether-gate, update-rnnoise, build-sherpa-onnx-aarch64) stays Tier 2.
+# secret or alters CI behaviour. The SECURITY-SENSITIVE workflows — those that
+# hold release secrets, feed bytes into a signed artifact, or form part of the
+# CodeQL scanner's trust chain — are carved back to Tier 1 individually in the
+# Security section below (last-match-wins), because CodeQL is NOT a required
+# status check (a Tier-2 edit could silently disable it) and the release
+# workflows consume the signing secret at run time. Everything else here (ci,
+# static-checks, sanitizers, system-libs-canary, mirror-aether-gate,
+# update-rnnoise, build-sherpa-onnx-aarch64) stays Tier 2.
 .github/workflows/           @aethersdr/infrastructure
 .github/dependabot.yml       @aethersdr/infrastructure
 .github/docker/              @aethersdr/infrastructure
@@ -146,14 +153,21 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 # undetected). Routine CI workflows stay Tier 2. Keep the list below in sync
 # with .github/workflows/ as workflows are added/renamed.
 #
-# The criterion is "produces or feeds a signed/official release artifact." That
-# includes producer workflows whose output a Tier-1 release step consumes, even
-# if the producer itself doesn't hold a secret — poisoning the input defeats the
-# consumer's gate. Specifically:
+# The criterion has three limbs — a workflow is Tier 1 if it holds release
+# secrets, feeds bytes into a signed artifact, or forms part of the CodeQL
+# scanner's trust chain. The second limb covers producer workflows whose output
+# a Tier-1 release step consumes, even if the producer itself holds no secret:
+# poisoning the input defeats the consumer's gate. The third exists because a
+# scan is only as trustworthy as what it runs inside. Specifically:
 #   - streamdeck-plugins.yml uploads *.zip artifacts onto the v* release, which
-#     sign-release.yml (Tier 1) then GPG-signs with the release key.
-# It was left at Tier 2 in the initial carve-out; a Tier-2 edit reaches around
-# the release gate, so it is carved to Tier 1 as well.
+#     sign-release.yml (Tier 1) then GPG-signs with the release key. It was left
+#     at Tier 2 in the initial carve-out; a Tier-2 edit reaches around the
+#     release gate, so it is carved to Tier 1 as well.
+#   - docker-ci-image.yml builds ghcr.io/aethersdr/aethersdr-ci, and codeql.yml
+#     runs INSIDE that image. A Tier-2 edit to the image could subvert the scan
+#     without touching codeql.yml. It holds no release secret and produces no
+#     release artifact, so only the third limb catches it — which is why the
+#     criterion is stated as three limbs rather than the release one alone.
 #
 # build-macos-qt.yml was listed here for the same reason — it published the
 # deps-qt-* Qt tarball that macos-dmg.yml baked into the signed DMG. That
@@ -173,7 +187,8 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 .github/workflows/streamdeck-plugins.yml @aethersdr/maintainers
 
 # NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
-# .claude/commands/) are intentionally NOT gated here — they sit at Tier 2.
+# .github/copilot-instructions.md, .claude/commands/) are intentionally NOT
+# gated here — they sit at Tier 2.
 # See the Tier 2 section above for the reasoning. Do NOT re-add them.
 #
 # What makes that safe is that the one genuinely normative rule about agent
