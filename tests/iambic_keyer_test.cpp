@@ -461,15 +461,21 @@ void testIdleProducesNoElements()
     report("no paddle press produces no key-down events", ok);
 }
 
-// #4890: the scheduled instants carried by the key-down callback must lie on
-// the exact element grid — consecutive scheduled deltas of a held-paddle dit
-// stream are precisely unitNs apart, regardless of when the worker thread
-// actually woke.  Wall-clock stamping cannot pass this: wake latency makes
-// some deltas land short of the unit (a late DOWN wake eats into the
-// following ON interval), and ns-exact equality never survives now() stamps.
-// A stalled CI box may legitimately re-anchor (catch-up limiter), which makes
-// a delta LONGER than the unit — allowed, but never shorter, and the exact
-// deltas must dominate.
+// #4890: the scheduled instants carried by the key-down callback describe the
+// element grid, not the moment the worker happened to wake.  What that makes
+// GATEABLE is a one-way invariant: `grid` only ever advances — by an exact
+// element duration, or forward to now() when the catch-up limiter re-anchors
+// after a stall — so no scheduled delta can be SHORTER than the unit.
+// Wall-clock stamping cannot hold that: a late wake followed by an on-time
+// one produces a short delta.
+//
+// How many deltas come out ns-EXACT is deliberately not gated.  That count
+// measures the host's wake latency (a box overshooting wait_until by more
+// than one element re-anchors on most elements — correct behaviour, and every
+// such delta lands in `longer`), which is exactly the environment-dependent
+// quantity this suite's header rules out as a gate.  It is printed instead.
+// The sample-exact rendering of scheduled stamps is pinned deterministically,
+// with no scheduler involved, by cw_sidetone_test case 12.
 void testScheduledStampsAreGridExact()
 {
     Recorder rec;
@@ -483,7 +489,7 @@ void testScheduledStampsAreGridExact()
     k.start();
 
     k.setPaddleState(true, false);
-    waitForNthDown(rec, 8);
+    const bool sawEight = waitForNthDown(rec, 8);
     k.setPaddleState(false, false);
     waitForQuiescence(rec);
     k.stop();
@@ -498,14 +504,16 @@ void testScheduledStampsAreGridExact()
         else                    ++longer;
     }
     const int deltas = static_cast<int>(evs.size()) - 1;
-    const bool enough = deltas >= 15;                  // 8 elements = 15+ deltas
-    const bool noneShort = (shorter == 0);
-    const bool mostlyExact = exact * 10 >= deltas * 8; // ≥80% ns-exact
-    if (!noneShort || !mostlyExact)
-        std::cout << "  scheduled deltas: exact=" << exact << " short=" << shorter
-                  << " long=" << longer << " of " << deltas << '\n';
-    report("scheduled stamps: no delta shorter than the unit", enough && noneShort);
-    report("scheduled stamps: grid-exact deltas dominate", enough && mostlyExact);
+    std::cout << "    info: scheduled deltas exact=" << exact
+              << " longer=" << longer << " shorter=" << shorter
+              << " of " << deltas << '\n';
+    if (!sawEight)
+        std::cout << "    info: host did not complete 8 elements within the cap\n";
+    // A host too stalled to finish 8 elements inside waitForNthDown's cap
+    // still has enough deltas to evaluate the invariant — gate on the
+    // invariant, not on how many elements the box managed.
+    const bool enough = deltas >= 4;
+    report("scheduled stamps: no delta shorter than the unit", enough && shorter == 0);
 }
 
 void testStartIsIdempotent()

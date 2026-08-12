@@ -4225,8 +4225,14 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
                 std::chrono::steady_clock::now() - scheduledAt).count();
             if (age > 0)
                 elapsed -= std::min(age, kMaxScheduleAgeMs);
-            if (elapsed < m_netCwLastSendMs)
-                elapsed = m_netCwLastSendMs;
+            // Strictly increasing, not merely non-decreasing: two edges
+            // sharing a time= reconstruct as a zero-length element on the
+            // radio, which is worse than the late edge the back-dating
+            // exists to correct.  Reachable whenever this edge's age
+            // exceeds the previous edge's by more than the element
+            // spacing — precisely the queued-GUI-hop stall being chased.
+            if (elapsed <= m_netCwLastSendMs)
+                elapsed = m_netCwLastSendMs + 1;
         }
         timeMs = static_cast<quint16>(elapsed & 0xFFFF);
         m_netCwLastSendMs = elapsed;

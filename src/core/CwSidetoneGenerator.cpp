@@ -95,7 +95,6 @@ void CwSidetoneGenerator::setKeyDown(bool down,
     // correctness concern.
     while (m_edgeLock.test_and_set(std::memory_order_acquire)) { /* spin */ }
     const auto now = std::max(when, m_lastQueuedStamp);
-    m_lastQueuedStamp = now;
     const uint32_t head = m_edgeHead.load(std::memory_order_relaxed);
     const uint32_t tail = m_edgeTail.load(std::memory_order_acquire);
     // Mirror the latest state BEFORE publishing the head.  The lock excludes
@@ -109,6 +108,11 @@ void CwSidetoneGenerator::setKeyDown(bool down,
     // mid-element, plus a second phantom edge undoing it.
     m_keyDown.store(down, std::memory_order_relaxed);
     if (head - tail < kEdgeQueueSize) {
+        // Raise the floor only for an edge that actually enters the queue:
+        // the floor exists to keep queued stamps ordered, and a dropped edge
+        // has no place in that order.  (Monotonicity holds either way; this
+        // keeps the member true to its name.)
+        m_lastQueuedStamp = now;
         m_edgeQueue[head % kEdgeQueueSize] = {now, down};
         m_edgeHead.store(head + 1, std::memory_order_release);
     }
