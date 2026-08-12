@@ -517,6 +517,71 @@ int main(int argc, char** argv)
             canvas.setGridSnapEnabled(false);
         }
 
+        // ── Red-team gaps: the locked posture under REAL events ──────────
+        // No prior test ever pressed a locked canvas — the bare widget
+        // defaults to editing and every press fixture inherited it (B2/m6/
+        // m7 were invisible to the whole suite).
+        {
+            canvas.addItem("locked:x", new QWidget, NormRect{0.1, 0.6, 0.2, 0.2});
+            canvas.addItem("locked:y", new QWidget, NormRect{0.15, 0.65, 0.2, 0.2});
+            const int zBefore = canvas.layout().zOf("locked:x");
+            canvas.setEditMode(false);
+            report("leaving edit clears the selection",
+                   canvas.selectedItem().isEmpty());
+
+            // A press that lands on the canvas (an item's dead space
+            // propagating) must not select, raise, or persist anything.
+            QMouseEvent press(QEvent::MouseButtonPress,
+                              QPointF(150, 650),
+                              canvas.mapToGlobal(QPointF(150, 650)),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(&canvas, &press);
+            report("a locked canvas ignores presses (B2)",
+                   canvas.selectedItem().isEmpty()
+                       && canvas.layout().zOf("locked:x") == zBefore);
+
+            canvas.setEditMode(true);
+            QMouseEvent mid(QEvent::MouseButtonPress,
+                            QPointF(150, 650),
+                            canvas.mapToGlobal(QPointF(150, 650)),
+                            Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(&canvas, &mid);
+            report("middle-click is not placement (m7)",
+                   canvas.selectedItem().isEmpty());
+
+            canvas.removeItem("locked:x");
+            canvas.removeItem("locked:y");
+        }
+
+        // ── Red-team M1: hit-test what the operator SEES ─────────────────
+        // Stored below the 160x90 display floor: the widget is drawn
+        // min-clamped, and a click inside the visible margin must select
+        // THE item, not whatever the stored rect leaves behind it.
+        {
+            canvas.addItem("tiny", new QWidget, NormRect{0.30, 0.30, 0.02, 0.02});
+            // stored: 300..320 x 300..320 on the 1000px canvas; display:
+            // 300..460 x 300..390 (160x90 floor).
+            report("a click in the clamp margin hits the visible item (M1)",
+                   canvas.hitTest(QPoint(440, 370)) == QStringLiteral("tiny"));
+            report("...and past the display edge misses it",
+                   canvas.hitTest(QPoint(470, 400)) != QStringLiteral("tiny"));
+            canvas.removeItem("tiny");
+        }
+
+        // ── Red-team M2: the write boundary refuses hostile rects ────────
+        {
+            canvas.addItem("guard", new QWidget, NormRect{0.5, 0.5, 0.2, 0.2});
+            const NormRect held = canvas.itemRect("guard");
+            report("setItemRect refuses a zero-size rect",
+                   !canvas.setItemRect("guard", NormRect{0.1, 0.1, 0.0, 0.0})
+                       && canvas.itemRect("guard") == held);
+            report("...and a non-finite one",
+                   !canvas.setItemRect("guard",
+                                       NormRect{std::nan(""), 0.1, 0.2, 0.2})
+                       && canvas.itemRect("guard") == held);
+            canvas.removeItem("guard");
+        }
+
         // Keyboard: arrows nudge, Shift+arrows resize, both announce a
         // gesture pair (undo hangs off it).
         canvas.selectItem("a");

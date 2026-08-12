@@ -135,6 +135,7 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
     if (m_enabled) {
         return true;
     }
+    bool justMigrated = false;
 
     if (!m_store.isLoaded()) {
         // First enable on this install: migrate the legacy layout keys into
@@ -145,13 +146,11 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
         // Remembered before the migration read so migrationPanSlotIds() can
         // consult the same legacy keys.
         m_knownAppletIds = knownAppletIds;
-        bool migrated = false;
         if (!m_store.loadOrMigrate(knownAppletIds, migrationPanSlotIds(),
-                                   &migrated)) {
+                                   &justMigrated)) {
             if (whyNot) *whyNot = m_store.lastError();
             return false;
         }
-        m_justMigrated = migrated;
     }
 
     WorkspaceDocument doc = m_store.document();
@@ -166,8 +165,6 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
         return false;
     }
 
-    Q_UNUSED(main);
-
     // Remembered for resetToClassic(), which re-derives Classic from the
     // same legacy keys the first enable migrated from.
     m_knownAppletIds = knownAppletIds;
@@ -175,8 +172,7 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
     // The replay itself is guarded: the canvas signals it fires describe
     // what the document already says.
     m_applying = true;
-    bool docChanged = false;
-    placeActiveWorkspaceItems(doc, &docChanged);
+    placeActiveWorkspaceItems(doc, nullptr);
     m_applying = false;
 
     doc.canvasEnabled = true;
@@ -190,8 +186,9 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
     // migration: the operator just opted in precisely to arrange things,
     // and greeting them with a locked surface would bury the feature they
     // asked for behind a second menu trip.  Session-transient thereafter.
-    m_canvas->setEditMode(m_justMigrated);
-    m_justMigrated = false;
+    // (A local, deliberately — a member here went stale across a failed
+    // enable and opened editing on a later one that was not first: m8.)
+    m_canvas->setEditMode(justMigrated);
 
     emit enabledChanged(true);
     return true;
@@ -468,17 +465,30 @@ bool WorkspaceController::sendPanToCanvas(const QString& panId)
         m_canvas->releaseItem(itemId);
     }
 
+    bool haveStored = false;
     NormRect rect{0.2, 0.2, 0.6, 0.6};
     const WorkspaceDocument& doc = m_store.document();
     if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
         if (const WorkspaceSurface* main = ws->surface(WorkspaceSurface::kMainId)) {
             for (const CanvasItem& it : main->items) {
                 if (it.id == itemId) {
-                    rect = it.rect;
+                    rect       = it.rect;
+                    haveStored = true;
                     break;
                 }
             }
         }
+    }
+    if (!haveStored) {
+        // Cascade, not one shared rect (red-team B3): every defaulted pan
+        // landing at the same {0.2,0.2,0.6,0.6} made `pan create` a visual
+        // no-op — three new pans stacked pixel-identical behind the first.
+        // The classic window-manager stagger, keyed by slot so it is
+        // deterministic; clamped by addItem either way.
+        const int slot = slotForPan(panId);
+        const double step = 0.05 * (slot % 5);
+        rect.x = 0.15 + step;
+        rect.y = 0.15 + step;
     }
 
     QWidget* w = m_panHost.detach ? m_panHost.detach(panId) : nullptr;
@@ -492,16 +502,26 @@ bool WorkspaceController::sendPanToCanvas(const QString& panId)
         }
         return false;
     }
-    // To the BACK, always.  addItem() places new items frontmost — right
-    // for applets, wrong for a pan: pans are the SURFACE the rest of the
-    // station sits on ("a meter over the spectrum is a feature").  Radio
-    // pans arrive seconds after enable-time placement (connect, band
-    // recall, dock), so without this every real-radio pan landed on top of
-    // the operator's arrangement and swallowed its clicks and wheel — the
-    // 8600 field report: only the pan and its VFO flag still responded.
-    // Boot-time placement honours stored z via restoreItems(); this keeps
-    // the late-arrival path consistent with it.
+    // Below every applet, always — pans are the SURFACE the station sits
+    // on ("a meter over the spectrum is a feature"), and a pan landing
+    // frontmost swallowed the operator's clicks and wheel (the 8600 field
+    // report: only the pan and its VFO flag still responded).  A stored
+    // rect (arrival into an existing arrangement) goes to the very back;
+    // a DEFAULTED rect is a deliberate new pan, and burying it under the
+    // older pans made `pan create` invisible (red-team B3, maintainer
+    // ruling): it stacks ABOVE the other pans, still below all applets.
     m_canvas->sendItemToBack(itemId);
+    if (!haveStored) {
+        int otherPans = 0;
+        for (const CanvasItem& it : m_canvas->layout().itemsByZ()) {
+            if (it.id != itemId && it.id.startsWith(kPanItemPrefix)) {
+                ++otherPans;
+            }
+        }
+        for (int i = 0; i < otherPans; ++i) {
+            m_canvas->raiseItem(itemId);
+        }
+    }
     writeItemPresence(itemId, QStringLiteral("panadapter"),
                       m_canvas->itemRect(itemId), /*present=*/true,
                       /*flushNow=*/true);
@@ -988,6 +1008,24 @@ void WorkspaceController::resetToClassic()
         }
     }
 
+    // Compact the slot map first (red-team M3): slots can be sparse after
+    // a mid-pan close ({0,2,3}), while the Classic being built is dense
+    // ("pan:0".."pan:n-1") — an uncompacted slot 3 would find no Classic
+    // item and land at the cascade default while a Classic cell sat
+    // widget-less.  Reset means "the sane shell"; renumbering during it is
+    // safe because every pan item is being rebuilt wholesale anyway.
+    {
+        QList<QPair<int, QString>> bySlot;
+        for (auto it = m_panSlots.constBegin(); it != m_panSlots.constEnd(); ++it) {
+            bySlot.append({it.value(), it.key()});
+        }
+        std::sort(bySlot.begin(), bySlot.end());
+        m_panSlots.clear();
+        for (int i = 0; i < bySlot.size(); ++i) {
+            m_panSlots.insert(bySlot.at(i).second, i);
+        }
+    }
+
     // Classic is re-derived from the same legacy keys the first enable
     // migrated from — the panel still dual-writes them, so this reflects
     // the operator's CURRENT open applets and order, not a stale snapshot.
@@ -1105,8 +1143,12 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
                                          });
         popOut->setEnabled(!panId.isEmpty()
                            && static_cast<bool>(m_panHost.requestFloat));
-        menu.addAction(QStringLiteral("Bring to front"), this,
-                       [this, itemId] { m_canvas->bringItemToFront(itemId); });
+        // No "Bring to front" for pans (review m3, maintainer ruling): the
+        // replay normalization exists to keep pans below the controls and
+        // would undo it at the next mode cycle — offering a control the
+        // persistence layer reverts is worse than not offering it.
+        // Deliberate pan-over-applet layering arrives with phase 6's
+        // pinning, as a property the normalization respects.
         menu.addAction(QStringLiteral("Send to back"), this,
                        [this, itemId] { m_canvas->sendItemToBack(itemId); });
         menu.addSeparator();

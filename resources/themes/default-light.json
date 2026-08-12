@@ -5,281 +5,173 @@
   "version": "1.2",
   "description": "AetherSDR's first light theme — v2 schema (primitives + nested scopes).  Semantic tokens resolve through a tailwind-style palette via {alias} references; rendered output is bit-identical to v1.0.",
   "primitives": {
-    "color.blue.500": "#0088b0",
-    "color.blue.300": "#0098c0",
-    "color.blue.700": "#005080",
-    "color.red.500": "#c02020",
+    "color.blue.500":  "#0088b0",
+    "color.blue.300":  "#0098c0",
+    "color.blue.700":  "#005080",
+    "color.red.500":   "#c02020",
     "color.amber.500": "#d08010",
     "color.green.500": "#1a8040",
-    "color.gray.50": "#1a2a3a",
-    "color.gray.100": "#506070",
-    "color.gray.300": "#7090a8",
-    "color.gray.400": "#90a0b0",
-    "color.gray.500": "#a0b0c0",
-    "color.gray.600": "#b0bcc8",
-    "color.gray.700": "#c0c8d0",
-    "color.gray.750": "#c8d2dc",
-    "color.gray.800": "#dde5ed",
-    "color.gray.900": "#f5f5f8",
-    "color.gray.950": "#ffffff"
+    "color.gray.50":   "#1a2a3a",
+    "color.gray.100":  "#506070",
+    "color.gray.300":  "#7090a8",
+    "color.gray.400":  "#90a0b0",
+    "color.gray.500":  "#a0b0c0",
+    "color.gray.600":  "#b0bcc8",
+    "color.gray.700":  "#c0c8d0",
+    "color.gray.750":  "#c8d2dc",
+    "color.gray.800":  "#dde5ed",
+    "color.gray.900":  "#f5f5f8",
+    "color.gray.950":  "#ffffff"
   },
   "scopes": {
     "root": {
       "tokens": {
         "color": {
           "background": {
-            "0": "{color.gray.900}",
-            "1": "{color.gray.800}",
-            "2": "{color.gray.750}",
-            "3": "{color.gray.600}",
-            "tx": "#ffeacc",
-            "success": "#c8e8d0",
-            "warning": "#f5e8d0",
+            "0":        "{color.gray.900}",
+            "1":        "{color.gray.800}",
+            "2":        "{color.gray.750}",
+            "3":        "{color.gray.600}",
+            "tx":       "#ffeacc",
+            "success":  "#c8e8d0",
+            "warning":  "#f5e8d0",
             "spectrum": "{color.gray.950}",
-            "app": "{color.gray.900}"
+            "app":      "{color.gray.900}"
           },
           "canvas": {
             "background": "#7b7b7c",
-            "dots": "#501a2a3a"
+            "dots":       "#501a2a3a"
           },
-          "accent": "{color.blue.500}",
-          "accent.bright": "{color.blue.300}",
-          "accent.dim": "{color.blue.700}",
+          "accent":         "{color.blue.500}",
+          "accent.bright":  "{color.blue.300}",
+          "accent.dim":     "{color.blue.700}",
           "accent.warning": "{color.amber.500}",
-          "accent.danger": "{color.red.500}",
+          "accent.danger":  "{color.red.500}",
           "accent.success": "{color.green.500}",
-          "waterfall.live": "{color.red.500}",
+          "waterfall.live":    "{color.red.500}",
           "waterfall.history": "{color.gray.300}",
-          "tx.mox.border": "#d08020",
-          "tx.mox.text": "#f0c890",
+          "tx.mox.border":       "#d08020",
+          "tx.mox.text":         "#f0c890",
           "tx.mox.border.hover": "#e09030",
-          "tx.mox.text.hover": "#ffd8a0",
+          "tx.mox.text.hover":   "#ffd8a0",
           "text": {
-            "primary": "{color.gray.50}",
+            "primary":   "{color.gray.50}",
             "secondary": "{color.gray.100}",
-            "label": "{color.gray.300}",
-            "disabled": "{color.gray.500}"
+            "label":     "{color.gray.300}",
+            "disabled":  "{color.gray.500}"
           },
           "border": {
             "subtle": "{color.gray.700}",
             "strong": "{color.gray.400}",
             "accent": "{color.blue.500}",
-            "tx": "#b08840"
+            "tx":     "#b08840"
           },
           "meter": {
-            "crst": "{color.red.500}",
-            "rms": "{color.blue.500}",
+            "crst":   "{color.red.500}",
+            "rms":    "{color.blue.500}",
             "thresh": "{color.amber.500}",
-            "peak": "{color.gray.50}",
+            "peak":   "{color.gray.50}",
             "gainReduction": "#a06010",
             "pivot.fill": "#14181c",
-            "pivot.rim": "#3a4250",
+            "pivot.rim":  "#3a4250",
             "pivot.glow": "#ff9a40",
             "bar.fill": "{color.gray.700}",
             "bar.fillGradient": {
               "type": "linear-gradient",
               "angle": 0,
               "stops": [
-                {
-                  "at": 0.0,
-                  "color": "#2f9e6a"
-                },
-                {
-                  "at": 0.55,
-                  "color": "#6cc56a"
-                },
-                {
-                  "at": 0.8,
-                  "color": "#e8b94c"
-                },
-                {
-                  "at": 0.95,
-                  "color": "#e8553c"
-                },
-                {
-                  "at": 1.0,
-                  "color": "#f2362a"
-                }
+                { "at": 0.00, "color": "#2f9e6a" },
+                { "at": 0.55, "color": "#6cc56a" },
+                { "at": 0.80, "color": "#e8b94c" },
+                { "at": 0.95, "color": "#e8553c" },
+                { "at": 1.00, "color": "#f2362a" }
               ]
             }
           },
           "spectrum": {
-            "trace": "{color.blue.500}",
+            "trace":    "{color.blue.500}",
             "peakHold": "#c08020",
-            "average": "{color.gray.100}",
-            "grid": "#d0d8e0"
+            "average":  "{color.gray.100}",
+            "grid":     "#d0d8e0"
           },
           "waterfall.colormap": {
             "default": {
               "type": "linear-gradient",
               "angle": 180,
               "stops": [
-                {
-                  "at": 0.0,
-                  "color": "#000000"
-                },
-                {
-                  "at": 0.15,
-                  "color": "#000080"
-                },
-                {
-                  "at": 0.3,
-                  "color": "#0040ff"
-                },
-                {
-                  "at": 0.45,
-                  "color": "#00c8ff"
-                },
-                {
-                  "at": 0.6,
-                  "color": "#00dc00"
-                },
-                {
-                  "at": 0.8,
-                  "color": "#ffff00"
-                },
-                {
-                  "at": 1.0,
-                  "color": "#ff0000"
-                }
+                { "at": 0.00, "color": "#000000" },
+                { "at": 0.15, "color": "#000080" },
+                { "at": 0.30, "color": "#0040ff" },
+                { "at": 0.45, "color": "#00c8ff" },
+                { "at": 0.60, "color": "#00dc00" },
+                { "at": 0.80, "color": "#ffff00" },
+                { "at": 1.00, "color": "#ff0000" }
               ]
             },
             "grayscale": {
               "type": "linear-gradient",
               "angle": 180,
               "stops": [
-                {
-                  "at": 0.0,
-                  "color": "#000000"
-                },
-                {
-                  "at": 1.0,
-                  "color": "#ffffff"
-                }
+                { "at": 0.00, "color": "#000000" },
+                { "at": 1.00, "color": "#ffffff" }
               ]
             },
             "blueGreen": {
               "type": "linear-gradient",
               "angle": 180,
               "stops": [
-                {
-                  "at": 0.0,
-                  "color": "#000000"
-                },
-                {
-                  "at": 0.25,
-                  "color": "#001e78"
-                },
-                {
-                  "at": 0.5,
-                  "color": "#0064b4"
-                },
-                {
-                  "at": 0.75,
-                  "color": "#00c882"
-                },
-                {
-                  "at": 1.0,
-                  "color": "#dcffdc"
-                }
+                { "at": 0.00, "color": "#000000" },
+                { "at": 0.25, "color": "#001e78" },
+                { "at": 0.50, "color": "#0064b4" },
+                { "at": 0.75, "color": "#00c882" },
+                { "at": 1.00, "color": "#dcffdc" }
               ]
             },
             "fire": {
               "type": "linear-gradient",
               "angle": 180,
               "stops": [
-                {
-                  "at": 0.0,
-                  "color": "#000000"
-                },
-                {
-                  "at": 0.25,
-                  "color": "#800000"
-                },
-                {
-                  "at": 0.5,
-                  "color": "#dc5000"
-                },
-                {
-                  "at": 0.75,
-                  "color": "#ffc800"
-                },
-                {
-                  "at": 1.0,
-                  "color": "#ffffdc"
-                }
+                { "at": 0.00, "color": "#000000" },
+                { "at": 0.25, "color": "#800000" },
+                { "at": 0.50, "color": "#dc5000" },
+                { "at": 0.75, "color": "#ffc800" },
+                { "at": 1.00, "color": "#ffffdc" }
               ]
             },
             "plasma": {
               "type": "linear-gradient",
               "angle": 180,
               "stops": [
-                {
-                  "at": 0.0,
-                  "color": "#000000"
-                },
-                {
-                  "at": 0.25,
-                  "color": "#50008c"
-                },
-                {
-                  "at": 0.5,
-                  "color": "#c80078"
-                },
-                {
-                  "at": 0.75,
-                  "color": "#f07800"
-                },
-                {
-                  "at": 1.0,
-                  "color": "#ffff50"
-                }
+                { "at": 0.00, "color": "#000000" },
+                { "at": 0.25, "color": "#50008c" },
+                { "at": 0.50, "color": "#c80078" },
+                { "at": 0.75, "color": "#f07800" },
+                { "at": 1.00, "color": "#ffff50" }
               ]
             },
             "purple": {
               "type": "linear-gradient",
               "angle": 180,
               "stops": [
-                {
-                  "at": 0.0,
-                  "color": "#000000"
-                },
-                {
-                  "at": 0.15,
-                  "color": "#0000ff"
-                },
-                {
-                  "at": 0.3,
-                  "color": "#00ff00"
-                },
-                {
-                  "at": 0.45,
-                  "color": "#ffff00"
-                },
-                {
-                  "at": 0.6,
-                  "color": "#ff0000"
-                },
-                {
-                  "at": 0.75,
-                  "color": "#800080"
-                },
-                {
-                  "at": 1.0,
-                  "color": "#ffffff"
-                }
+                { "at": 0.00, "color": "#000000" },
+                { "at": 0.15, "color": "#0000ff" },
+                { "at": 0.30, "color": "#00ff00" },
+                { "at": 0.45, "color": "#ffff00" },
+                { "at": 0.60, "color": "#ff0000" },
+                { "at": 0.75, "color": "#800080" },
+                { "at": 1.00, "color": "#ffffff" }
               ]
             }
           },
           "slice": {
-            "a": "{color.blue.500}",
-            "b": "#a020a0",
-            "c": "#208020",
-            "d": "#a08000",
-            "e": "#c06000",
-            "f": "#008070",
-            "g": "#a04060",
-            "h": "#604090",
+            "a":  "{color.blue.500}",
+            "b":  "#a020a0",
+            "c":  "#208020",
+            "d":  "#a08000",
+            "e":  "#c06000",
+            "f":  "#008070",
+            "g":  "#a04060",
+            "h":  "#604090",
             "tx": "{color.red.500}",
             "dim": {
               "a": "#a0c8e0",
@@ -293,102 +185,74 @@
             }
           },
           "slider": {
-            "background": "{color.gray.700}",
-            "foreground": "{color.blue.500}",
-            "handle": "{color.gray.50}",
+            "background":          "{color.gray.700}",
+            "foreground":          "{color.blue.500}",
+            "handle":              "{color.gray.50}",
             "background.disabled": "{color.gray.800}",
             "foreground.disabled": "{color.gray.500}",
-            "handle.disabled": "{color.gray.400}"
+            "handle.disabled":     "{color.gray.400}"
           },
           "knob": {
-            "background": "{color.gray.800}",
-            "foreground": "{color.blue.700}",
-            "handle": "{color.gray.50}",
+            "background":          "{color.gray.800}",
+            "foreground":          "{color.blue.700}",
+            "handle":              "{color.gray.50}",
             "background.disabled": "{color.gray.700}",
             "foreground.disabled": "{color.gray.500}",
-            "handle.disabled": "{color.gray.400}"
+            "handle.disabled":     "{color.gray.400}"
           },
           "toggle": {
-            "background": "{color.gray.800}",
-            "foreground": "{color.gray.50}",
-            "border": "{color.gray.750}",
+            "background":          "{color.gray.800}",
+            "foreground":          "{color.gray.50}",
+            "border":              "{color.gray.750}",
             "background.disabled": "{color.gray.900}",
             "foreground.disabled": "{color.gray.500}",
-            "border.disabled": "{color.gray.900}",
-            "accent.background.checked": "{color.blue.700}",
-            "accent.foreground.checked": "{color.blue.500}",
-            "accent.border.checked": "{color.blue.500}",
+            "border.disabled":     "{color.gray.900}",
+            "accent.background.checked":  "{color.blue.700}",
+            "accent.foreground.checked":  "{color.blue.500}",
+            "accent.border.checked":      "{color.blue.500}",
             "success.background.checked": "#c8e8d0",
             "success.foreground.checked": "{color.green.500}",
-            "success.border.checked": "{color.green.500}",
+            "success.border.checked":     "{color.green.500}",
             "warning.background.checked": "#f5e8d0",
             "warning.foreground.checked": "{color.amber.500}",
-            "warning.border.checked": "{color.amber.500}"
+            "warning.border.checked":     "{color.amber.500}"
           },
           "highlight": {
-            "tx": "#fc4500",
-            "rx": "#379baf",
+            "tx":      "#fc4500",
+            "rx":      "#379baf",
             "message": "#e58be5",
-            "fg": "#000000"
+            "fg":      "#000000"
           },
           "button": {
-            "background.disabled": "{color.gray.700}",
-            "foreground.disabled": "{color.gray.500}",
-            "border.disabled": "{color.gray.600}",
+            "background.disabled":        "{color.gray.700}",
+            "foreground.disabled":        "{color.gray.500}",
+            "border.disabled":            "{color.gray.600}",
             "danger.background.disabled": "#f0d8d8",
             "danger.foreground.disabled": "#b08080",
-            "danger.border.disabled": "#d0a8a8"
+            "danger.border.disabled":     "#d0a8a8"
           }
         },
         "font": {
           "family": {
-            "ui": {
-              "family": "Inter",
-              "size": 12,
-              "color": "#1a2a3a"
-            },
-            "mono": {
-              "family": "monospace",
-              "size": 12,
-              "color": "#1a2a3a"
-            },
-            "segment7": {
-              "family": "DSEG7 Modern",
-              "size": 14,
-              "color": "#0088b0"
-            },
-            "segment14": {
-              "family": "DSEG14 Modern",
-              "size": 14,
-              "color": "#0088b0"
-            },
-            "weather": {
-              "family": "DSEGWeather",
-              "size": 14,
-              "color": "#1a2a3a"
-            },
-            "freq": {
-              "family": "DSEG7 Modern",
-              "size": 26,
-              "color": "#0088b0"
-            },
-            "temp": {
-              "family": "DSEG7 Modern",
-              "size": 12,
-              "color": "#506070"
-            }
+            "ui":         { "family": "Inter",         "size": 12, "color": "#1a2a3a" },
+            "mono":       { "family": "monospace",     "size": 12, "color": "#1a2a3a" },
+            "segment7":   { "family": "DSEG7 Modern",  "size": 14, "color": "#0088b0" },
+            "segment14":  { "family": "DSEG14 Modern", "size": 14, "color": "#0088b0" },
+            "weather":    { "family": "DSEGWeather",   "size": 14, "color": "#1a2a3a" },
+            "freq":       { "family": "DSEG7 Modern",  "size": 26, "color": "#0088b0" },
+            "temp":       { "family": "DSEG7 Modern",  "size": 12, "color": "#506070" }
           },
           "size": {
-            "tiny": 9,
-            "small": 10,
+            "tiny":   9,
+            "small":  10,
             "normal": 12,
-            "large": 14
+            "large":  14
           }
         },
         "sizing": {
           "panel": {
-            "padding": 4,
-            "spacing": 4,
+            "padding":      4,
+            "spacing":      4,
             "cornerRadius": 4
           },
           "border": {
@@ -403,22 +267,22 @@
           "scopes": {
             "tx": {
               "tokens": {
-                "color.slider.foreground": "{color.red.500}",
-                "color.knob.foreground": "{color.red.500}",
+                "color.slider.foreground":                "{color.red.500}",
+                "color.knob.foreground":                  "{color.red.500}",
                 "color.toggle.accent.background.checked": "{color.red.500}"
               }
             },
             "rx": {
               "tokens": {
-                "color.slider.foreground": "{color.green.500}",
-                "color.knob.foreground": "{color.green.500}",
+                "color.slider.foreground":                "{color.green.500}",
+                "color.knob.foreground":                  "{color.green.500}",
                 "color.toggle.accent.background.checked": "{color.green.500}"
               }
             },
             "comp": {
               "tokens": {
-                "color.slider.foreground": "{color.amber.500}",
-                "color.knob.foreground": "{color.amber.500}",
+                "color.slider.foreground":                "{color.amber.500}",
+                "color.knob.foreground":                  "{color.amber.500}",
                 "color.toggle.accent.background.checked": "{color.amber.500}"
               }
             }

@@ -1241,6 +1241,7 @@ private:
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
     QAction*             m_workspaceEditAction{nullptr};
+    bool                 m_statusMessageMirrorWired{false};
     QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
     QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
     bool m_miniPanFeedWanted{false};              // applet visible → consume frames

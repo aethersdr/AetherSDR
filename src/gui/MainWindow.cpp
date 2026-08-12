@@ -9585,37 +9585,53 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
     // pan is new is found by DIFFING rather than parsing a create reply: the
     // backend numbers its own pans and skips retired numbers after a close.
     if (!m_radioModel.usesFlexCommandPlane()) {
-        QSet<QString> before;
+        auto before = std::make_shared<QSet<QString>>();
         for (auto* p : m_panStack->allApplets())
-            before.insert(p->panId());
+            before->insert(p->panId());
         for (auto* p : m_radioModel.panadapters())
-            if (p) before.insert(p->panId());
+            if (p) before->insert(p->panId());
 
         m_radioModel.createPanadapter();
 
-        QString createdId;
-        for (auto* p : m_radioModel.panadapters()) {
-            if (p && !before.contains(p->panId())) {
-                createdId = p->panId();
-                break;
+        // The seam create is NOT synchronous for every backend (red-team
+        // M4): HL2's is, but the demo mints its pan over the synthetic wire
+        // — two queued thread hops — so an immediate diff found nothing,
+        // declared "capacity full", and aborted the recursion while the pan
+        // materialised a moment later.  Diff after the create has settled;
+        // 300 ms covers both wire hops with margin and is indistinguishable
+        // from the existing 200 ms inter-create pacing for a synchronous
+        // backend.
+        QTimer::singleShot(300, this,
+                           [this, layoutId, total, panIds, created, before]() {
+            if (m_shuttingDown || !m_panStack) {
+                return;
             }
-        }
-        if (createdId.isEmpty()) {
-            // The backend refused — receiver count, or the link budget at this
-            // span. It has already logged which; surface it and stop rather than
-            // recursing against a limit that will refuse every remaining pan.
-            qWarning() << "applyPanLayout: backend declined pan"
-                       << (created + 1) << "of" << total;
-            showPanadapterSliceCapacityMessage();
-            return;
-        }
-        panIds->append(createdId);
-        qDebug() << "applyPanLayout: created pan" << (created + 1) << "of" << total
-                 << "id:" << createdId;
-        // Same inter-create delay as the Flex path. Adding a receiver restarts
-        // the EP6 stream, so back-to-back creates would stack restarts.
-        QTimer::singleShot(200, this, [this, layoutId, total, panIds, created]() {
-            createPansSequentially(layoutId, total, panIds, created + 1);
+            QString createdId;
+            for (auto* p : m_radioModel.panadapters()) {
+                if (p && !before->contains(p->panId())) {
+                    createdId = p->panId();
+                    break;
+                }
+            }
+            if (createdId.isEmpty()) {
+                // The backend refused — receiver count, or the link budget
+                // at this span. It has already logged which; surface it and
+                // stop rather than recursing against a limit that will
+                // refuse every remaining pan.
+                qWarning() << "applyPanLayout: backend declined pan"
+                           << (created + 1) << "of" << total;
+                showPanadapterSliceCapacityMessage();
+                return;
+            }
+            panIds->append(createdId);
+            qDebug() << "applyPanLayout: created pan" << (created + 1)
+                     << "of" << total << "id:" << createdId;
+            // Same inter-create pacing rationale as the Flex path: adding a
+            // receiver restarts the EP6 stream, so creates stay spaced.
+            QTimer::singleShot(200, this,
+                               [this, layoutId, total, panIds, created]() {
+                createPansSequentially(layoutId, total, panIds, created + 1);
+            });
         });
         return;
     }

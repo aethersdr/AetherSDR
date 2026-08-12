@@ -3088,8 +3088,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("workspace", {},
-            "workspace <status|enable|disable|place <itemId> <x> <y> [w h]> — "
-            "the canvas as data: items with fractional rects and z (#4887 ph4)",
+            "workspace <status|enable|disable|edit on|off|place <itemId> <x> <y> "
+            "[w h]> — the canvas as data: items with fractional rects and z; "
+            "edit flips the operator posture (#4887 ph4)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 Q_UNUSED(s);

@@ -25,7 +25,6 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QSplitter>
-#include <QStatusBar>
 #include <QTimer>
 
 namespace AetherSDR {
@@ -43,17 +42,11 @@ QWidget* MainWindow::centralPanWidget() const
 
 void MainWindow::wireWorkspaceCanvas()
 {
-    // The automation bridge reports the status-bar message in dumpTree
-    // (#4864) by reading a generic dynamic property — core/ must not know
-    // the QStatusBar type (engine-boundary EB2).  The gui side owns the
-    // widget, so the mirror lives here, wired once at startup.
-    connect(statusBar(), &QStatusBar::messageChanged, this,
-            [this](const QString& m) {
-                statusBar()->setProperty("currentMessage", m);
-            });
-    statusBar()->setProperty("currentMessage", statusBar()->currentMessage());
-
-    m_workspaceCanvas = new WorkspaceCanvas;
+    // Owned by the window from birth (review note: parentless, it leaked on
+    // never-enabled installs and after every disable) — and being a child
+    // of the same top level is ALSO what makes every mount move below a
+    // same-top-level reparent (red-team B1).
+    m_workspaceCanvas = new WorkspaceCanvas(this);
     m_workspaceCanvas->hide();   // mounted on demand by toggleWorkspaceCanvas()
 
     m_workspaceController = new WorkspaceController(
@@ -211,29 +204,41 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             m_panStack->bandStackPanel()
             && m_panStack->bandStackPanel()->isVisibleTo(m_panStack);
 
-        // Detach the stack EXPLICITLY, then insert the canvas into the freed
-        // slot.  replaceWidget() would do a version of this internally, but
-        // the disable path cannot use it at all (below), and the two
-        // directions must mirror each other rather than lean on Qt's
-        // internal ordering.  The parentless moment is the same detour the
-        // phase-3 takeItem() made with the whole stack — field-proven here;
-        // on macOS this is the path refreshAfterReparent() exists for.
-        m_panStack->setParent(nullptr);
-        m_splitter->insertWidget(panIdx, m_workspaceCanvas);
-        m_workspaceCanvas->show();
+        // EVERY move below is a ONE-STEP, SAME-TOP-LEVEL reparent — the
+        // #2495-safe pattern for the QRhiWidget children riding inside the
+        // stack.  No widget ever passes through setParent(nullptr): a
+        // parentless QWidget IS a transient top-level, and taking the
+        // stack's live QRhi children through one without float/dock's
+        // prepare/reset dance is the #1344/#4091 hazard (red-team B1 —
+        // the previous shape did exactly that, twice per toggle).  The
+        // canvas is a child of this window from construction, so
+        // stack→canvas and canvas→splitter both stay inside one top-level.
+        //
         // Since phase 4 the stack is not an item — its applets are.  It
         // rides hidden as the pans' owner (creation, wiring, float/dock,
         // render scheduling); enable() borrows each applet onto the canvas.
         m_panStack->setParent(m_workspaceCanvas);
         m_panStack->hide();
+        m_splitter->insertWidget(panIdx, m_workspaceCanvas);
+        m_workspaceCanvas->show();
 
         QString whyNot;
         if (!m_workspaceController->enable(m_appletPanel->appletIds(), &whyNot)) {
             // Put the shell back exactly as it was and say why, without a
             // modal in the way of whatever the operator was doing.  The
             // write-blocked newer-document case lands here (PR #4900 H1).
-            m_splitter->replaceWidget(m_splitter->indexOf(m_workspaceCanvas),
-                                      m_panStack);
+            // Same one-step discipline in reverse — the previous rollback
+            // called replaceWidget(canvas, <canvas's own child>), the
+            // exact wedged-shell shape the reviews flagged, on the one
+            // path that runs when something already went wrong.
+            m_panStack->setParent(this);
+            const int backIdx = m_splitter->indexOf(m_workspaceCanvas);
+            if (backIdx >= 0) {
+                m_splitter->replaceWidget(backIdx, m_panStack);
+            } else {
+                m_splitter->insertWidget(panIdx, m_panStack);
+            }
+            m_workspaceCanvas->setParent(this);
             m_workspaceCanvas->hide();
             m_panStack->show();
             if (m_workspaceCanvasAction) {
@@ -263,17 +268,22 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
     // flat column of whatever order the returns happened in.
     m_workspaceController->disable();
 
-    // The stack is a CHILD of the canvas while the mode is on, so the swap
-    // must detach it first — replaceWidget(canvas, stack) would be replacing
-    // a widget with its own descendant, which Qt part-executes into a wedged
-    // shell: the canvas leaves the splitter with the stack still inside it,
-    // and "classic mode" comes back as a blank centre with the pan painting
-    // at its stale canvas rect (the 8600 field report).
+    // The stack is a CHILD of the canvas while the mode is on, so it steps
+    // to this window first (one-step, same-top-level — never through
+    // nullptr, red-team B1), then swaps into the canvas's slot.  The
+    // canvas is re-owned by this window afterwards: replaceWidget() drops
+    // its parent, and an unowned canvas leaks across mode cycles and
+    // never-enabled sessions (review note).
     const int canvasIdx = m_splitter->indexOf(m_workspaceCanvas);
-    m_panStack->setParent(nullptr);
+    m_panStack->setParent(this);
     if (canvasIdx >= 0) {
         m_splitter->replaceWidget(canvasIdx, m_panStack);
+    } else {
+        // The canvas is somehow already out of the splitter — never leave
+        // the shell without a centre widget (review note).
+        m_splitter->insertWidget(0, m_panStack);
     }
+    m_workspaceCanvas->setParent(this);
     m_workspaceCanvas->hide();
     m_panStack->show();
     if (m_panStack->count() > 1) {
@@ -383,6 +393,16 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         }
         if (!okX || !okY || !okW || !okH) {
             out[QStringLiteral("error")] = QStringLiteral("unparseable coordinates");
+            return out;
+        }
+        // Reject, don't clamp, hostile numerics (red-team M2): inf/nan and
+        // zero/negative sizes used to collapse to a {0,0,0,0} rect that was
+        // persisted — a permanently unhittable item reported as ok:true.
+        // setItemRect refuses invalid rects too now; this check exists so
+        // the CALLER hears why instead of a silent no-op.
+        if (!r.isValid()) {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "coordinates must be finite with positive size");
             return out;
         }
         m_workspaceCanvas->setItemRect(itemId, r);   // clamped; the

@@ -26,16 +26,23 @@ namespace {
 // (exposed canvas) and the gesture overlay (above everything, drag-scoped).
 void paintGridDots(QPainter& p, const QSize& size, const QColor& color)
 {
-    p.setPen(color);
+    // One batched call, not ~5.2k drawPoint() round-trips — the overlay
+    // repaints on every mouse-move of a live drag (review perf note).
+    static QVector<QPoint> dots;
+    dots.clear();
+    dots.reserve((WorkspaceCanvas::kSnapGridColumns - 1)
+                 * (WorkspaceCanvas::kSnapGridRows - 1));
     for (int ix = 1; ix < WorkspaceCanvas::kSnapGridColumns; ++ix) {
         const int x = qRound(ix * size.width()
                              / double(WorkspaceCanvas::kSnapGridColumns));
         for (int iy = 1; iy < WorkspaceCanvas::kSnapGridRows; ++iy) {
             const int y = qRound(iy * size.height()
                                  / double(WorkspaceCanvas::kSnapGridRows));
-            p.drawPoint(x, y);
+            dots.append(QPoint(x, y));
         }
     }
+    p.setPen(color);
+    p.drawPoints(dots.constData(), dots.size());
 }
 
 }  // namespace
@@ -157,6 +164,21 @@ bool WorkspaceCanvas::addItem(const QString& id,
         if (!m_layout.contains(id)) {
             return;
         }
+        // Everything releaseItem() clears must clear here too (red-team
+        // m5): a widget deleted OUTSIDE the release path — shutdown paths
+        // delete lent applets directly — must not leave the selection
+        // naming a dead item, the frame at a stale rect, or a keyboard
+        // grab held.
+        if (id == m_selectedId) {
+            clearSelection();
+        }
+        if (id == m_gestureId) {
+            m_gestureId.clear();
+            m_vGuides.clear();
+            m_hGuides.clear();
+            releaseKeyboard();
+            if (m_gestureOverlay) m_gestureOverlay->hide();
+        }
         m_widgets.remove(id);
         m_layout.removeItem(id);
         applyStacking();
@@ -261,6 +283,13 @@ QWidget* WorkspaceCanvas::itemWidget(const QString& id) const
 
 bool WorkspaceCanvas::setItemRect(const QString& id, const NormRect& rect)
 {
+    // The invariant WorkspaceGeometry.h states — a zero-area or non-finite
+    // rect maps to an invisible item that still answers nothing — is
+    // enforced HERE, at the one write boundary, so no caller (the bridge's
+    // `place` was one, red-team M2) can persist an unhittable item.
+    if (!rect.isValid()) {
+        return false;
+    }
     if (!m_layout.setRect(id, rect)) {
         return false;
     }
@@ -280,8 +309,19 @@ QString WorkspaceCanvas::hitTest(const QPoint& pos) const
     if (width() <= 0 || height() <= 0) {
         return {};
     }
-    return m_layout.hitTest(QPointF(pos.x() / static_cast<double>(width()),
-                                    pos.y() / static_cast<double>(height())));
+    // Against the DISPLAY rects, top-down — not the stored model rects
+    // (red-team M1).  Wherever the minimum-size clamp bites, the widget on
+    // screen is larger than its stored rect, and hit-testing the model
+    // sent every click in that margin to whatever sits behind: wrong
+    // selection, wrong raise, wrong context menu.  Input must agree with
+    // pixels; the model keeps its canvas-independence untouched.
+    const QList<CanvasItem> byZ = m_layout.itemsByZ();
+    for (auto it = byZ.crbegin(); it != byZ.crend(); ++it) {
+        if (displayRectFor(it->id).contains(pos)) {
+            return it->id;
+        }
+    }
+    return {};
 }
 
 bool WorkspaceCanvas::raiseItem(const QString& id)
@@ -667,12 +707,21 @@ void WorkspaceCanvas::mousePressEvent(QMouseEvent* ev)
     // kind would undo the selection the event filter just made (the click
     // landed ON the item, from the operator's point of view), so hit-test
     // rather than assume.
-    const QString hit = hitTest(ev->position().toPoint());
-    if (hit.isEmpty()) {
-        clearSelection();
-    } else {
-        bringItemToFront(hit);
-        selectItem(hit);   // no-op when the filter already selected it
+    //
+    // Edit mode gates the whole select/raise branch (red-team B2): this was
+    // the ONE press handler the Edit Layout commit did not gate, and a
+    // stray click on an applet's dead space while merely operating raised a
+    // pan over the controls, drew the frame, and persisted the z change —
+    // the 8600 field report reintroduced through the back door.  Left
+    // button only (m7): middle/back-button presses are not placement.
+    if (m_editMode && ev->button() == Qt::LeftButton) {
+        const QString hit = hitTest(ev->position().toPoint());
+        if (hit.isEmpty()) {
+            clearSelection();
+        } else {
+            bringItemToFront(hit);
+            selectItem(hit);   // no-op when the filter already selected it
+        }
     }
     setFocus(Qt::MouseFocusReason);
     QWidget::mousePressEvent(ev);

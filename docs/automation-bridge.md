@@ -3182,7 +3182,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
 | `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — |
-| `workspace` | — | workspace <status\|enable\|disable\|place <itemId> <x> <y> [w h]> — |
+| `workspace` | — | workspace <status\|enable\|disable\|edit on\|off\|place <itemId> <x> <y> |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |

@@ -410,6 +410,23 @@ QVariantMap PanadapterStack::automationRearrange(const QString& layoutId)
 
 void PanadapterStack::rearrangeLayout(const QString& layoutId)
 {
+    // Nothing to arrange while every non-floating applet is on loan to the
+    // canvas — and bail BEFORE the float-docking loop below, which used to
+    // run first: the layout dialog in canvas mode un-popped the operator's
+    // floats and then no-opped (review m4).  The canvas owns arrangement in
+    // that posture; this method arranges the stack's own splitter only.
+    {
+        bool anyOurs = false;
+        for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
+            if (!m_lentToCanvas.contains(it.key())) {
+                anyOurs = true;
+                break;
+            }
+        }
+        if (!anyOurs) {
+            return;
+        }
+    }
     // Dock any floating pans first.  m_pans always contains every applet
     // including those currently in a PanFloatingWindow (floatPanadapter
     // never removes from m_pans), so the reparent loop below would yank

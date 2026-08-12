@@ -236,16 +236,11 @@ protected:
         }
         if (srcIdx < 0) return;
 
-        // A canvas item dropped onto the panel is a return, not a reorder:
-        // the workspace controller takes it off the canvas and restores its
-        // panel slot (RFC #4887 phase 3), and the reorder below then moves
-        // it to where it was dropped like any other entry.
-        if (auto* cw = qobject_cast<ContainerWidget*>(
-                m_panel->m_appletOrder[srcIdx].widget);
-            cw && cw->isOnCanvas()) {
-            emit m_panel->canvasReturnRequested(draggedId);
-            if (cw->isOnCanvas()) return;   // nobody handled it — leave it be
-        }
+        // No canvas-return branch here (review m10): phase 5 replaced the
+        // canvas title-bar QDrag with the live gesture stream, so a canvas
+        // item can no longer arrive as a QDrag drop — returns flow through
+        // WorkspaceCanvas::itemDraggedOut and the controller's return
+        // target instead.
 
         // Adjust drop index if moving down (after removing source)
         if (dropIdx > srcIdx) dropIdx--;

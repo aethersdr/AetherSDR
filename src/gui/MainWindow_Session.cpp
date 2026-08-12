@@ -62,6 +62,8 @@
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
+
+#include <QStatusBar>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -2318,6 +2320,23 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
 
     if (!m_automation)
         m_automation = std::make_unique<AutomationServer>();
+
+    // dumpTree reports the status-bar message (#4864) by reading a generic
+    // dynamic property — core/ must not know the QStatusBar type
+    // (engine-boundary EB2).  The gui side owns the widget, and the mirror
+    // lives HERE, with the rest of the bridge wiring it serves (review m13:
+    // it was previously wired inside the workspace-canvas mount, which has
+    // no structural link to it).  Idempotent across re-wires: the property
+    // write is safe to connect once per server start.
+    if (!m_statusMessageMirrorWired) {
+        m_statusMessageMirrorWired = true;
+        connect(statusBar(), &QStatusBar::messageChanged, this,
+                [this](const QString& m) {
+                    statusBar()->setProperty("currentMessage", m);
+                });
+        statusBar()->setProperty("currentMessage",
+                                 statusBar()->currentMessage());
+    }
 
     m_automation->setRadioModel(&radioModel());  // for the get() verb
     m_automation->setAudioEngine(audioEngine());

@@ -437,6 +437,31 @@ int main(int argc, char** argv)
         report("the freed slot is reused, at its remembered rect",
                canvas.contains("pan:1") && canvas.itemRect("pan:1") == homeB);
 
+        // Two pans with NO stored slot rect must not stack pixel-identical
+        // (red-team B3): defaults cascade, and a deliberate new pan sits
+        // above the older pans while staying below every applet.
+        {
+            auto* panD = new QWidget(&panOwner);
+            auto* panE = new QWidget(&panOwner);
+            pans.insert(QStringLiteral("0x40000010"), panD);
+            pans.insert(QStringLiteral("0x40000011"), panE);
+            // Fresh slots -> no document rect for either.
+            ctl.onPanAdded(QStringLiteral("0x40000010"));
+            ctl.onPanAdded(QStringLiteral("0x40000011"));
+            const QString dId = ctl.panItemIdFor(QStringLiteral("0x40000010"));
+            const QString eId = ctl.panItemIdFor(QStringLiteral("0x40000011"));
+            report("defaulted pans cascade to distinct rects (B3)",
+                   canvas.itemRect(dId).x != canvas.itemRect(eId).x);
+            report("...the newer sits above the older, below the applets",
+                   canvas.layout().zOf(eId) > canvas.layout().zOf(dId)
+                       && canvas.layout().zOf(eId)
+                              < canvas.layout().zOf(QStringLiteral("applet:RX")));
+            ctl.onPanRemoved(QStringLiteral("0x40000010"));
+            ctl.onPanRemoved(QStringLiteral("0x40000011"));
+            pans.remove(QStringLiteral("0x40000010"));
+            pans.remove(QStringLiteral("0x40000011"));
+        }
+
         // Band stack: hosted as its own item while the mode is on.
         QWidget bandStack(&panOwner);
         hooks.bandStack        = [&]() -> QWidget* { return &bandStack; };
