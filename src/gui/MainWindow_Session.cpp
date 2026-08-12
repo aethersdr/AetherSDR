@@ -51,6 +51,7 @@
 #include "DaxIqApplet.h"
 #include "TciApplet.h"
 #include "PanadapterStack.h"
+#include "workspace/WorkspaceController.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
 #include "models/PanadapterModel.h"
@@ -1719,7 +1720,20 @@ void MainWindow::wirePanLifecycle()
 
                 // Restore floating-pan state saved from the previous session.
                 // Runs for any pan count so a single floated pan is also restored.
-                m_panStack->restoreFloatingState();
+                //
+                // NOT while the workspace canvas is on (RFC #4887, maintainer
+                // ruling 2026-08-12): canvas mode owns placement, and replaying
+                // window-persistence floats under it hands the operator an
+                // uncontrollable always-above window that looks exactly like a
+                // broken canvas pan — stale FloatingPanIds from the pre-canvas
+                // era cost a full day of field debugging to identify. The
+                // restored pans have already arrived as canvas items at their
+                // slots by this point; popping out MANUALLY is untouched
+                // (decision 1 — pop-out stays), and the saved key is left
+                // alone so a canvas-off session still restores it.
+                if (!(m_workspaceController && m_workspaceController->isEnabled())) {
+                    m_panStack->restoreFloatingState();
+                }
             });
         }
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
