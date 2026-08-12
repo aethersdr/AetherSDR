@@ -436,6 +436,21 @@ int main(int argc, char** argv)
                    && bandStack.parentWidget() == &panOwner
                    && !bandStack.isVisible());
 
+        // A z-poisoned document cannot resurrect a pan over the controls:
+        // force the pan frontmost (recording it), cycle the mode, and the
+        // replay must normalize pans back below everything (8600 report).
+        canvas.bringItemToFront(QStringLiteral("pan:1"));
+        report("poison recorded: the pan sits over the applets",
+               canvas.layout().zOf(QStringLiteral("pan:1"))
+                   > canvas.layout().zOf(QStringLiteral("applet:RX")));
+        ctl.disable();
+        report("re-enable normalizes pans back to the bottom",
+               ctl.enable({"RX", "TX"})
+                   && canvas.layout().zOf(QStringLiteral("pan:1"))
+                          < canvas.layout().zOf(QStringLiteral("applet:RX"))
+                   && canvas.layout().zOf(QStringLiteral("pan:1"))
+                          < canvas.layout().zOf(QStringLiteral("applet:TX")));
+
         ctl.onPanRemoved(QStringLiteral("0x40000002"));
         pans.remove(QStringLiteral("0x40000002"));
         ctl.disable();

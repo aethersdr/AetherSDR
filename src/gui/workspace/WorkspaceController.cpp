@@ -9,6 +9,8 @@
 
 #include <QHash>
 #include <QMenu>
+
+#include <algorithm>
 #include <QPoint>
 #include <QWidget>
 
@@ -240,6 +242,36 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
         }
         if (docChanged) *docChanged = true;
         break;
+    }
+
+    // ── Normalize: pans BELOW everything else, always ────────────────────
+    //
+    // The document's z is otherwise replayed verbatim, and a document that
+    // lived through the frontmost-arrival bug (or any future mishap) would
+    // resurrect pans over the operator's controls at every boot — the 8600
+    // field report's second act.  Pans are the surface the station sits on;
+    // enforcing that at replay costs a deliberate pan-over-applet stacking
+    // across restarts (nothing supports one today — phase 6's pinning is
+    // where that would live) and buys layouts that cannot rot.
+    {
+        QList<CanvasItem> ordered = main->items;
+        std::stable_sort(ordered.begin(), ordered.end(),
+                         [](const CanvasItem& a, const CanvasItem& b) {
+                             return a.z < b.z;
+                         });
+        std::stable_partition(ordered.begin(), ordered.end(),
+                              [](const CanvasItem& it) {
+                                  return it.id.startsWith(kPanItemPrefix);
+                              });
+        bool zChanged = false;
+        for (int i = 0; i < ordered.size(); ++i) {
+            if (ordered[i].z != i) {
+                ordered[i].z = i;
+                zChanged = true;
+            }
+        }
+        main->items = ordered;
+        if (zChanged && docChanged) *docChanged = true;
     }
 
     // ── Pans, from their slot items ──────────────────────────────────────
