@@ -1131,6 +1131,11 @@ void MainWindow::wireRadioModel()
         m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
             // Lock-free atomic gate; safe to call directly from the keyer
             // thread, matching the iambic keyer's gate path below.
+            // CWX: same fix pending (#4890).  This keyer runs the same
+            // absolute-grid schedule (#3644) and knows each edge's instant
+            // (m_epoch + m_nextEdgeMs), but still takes the 1-arg callback,
+            // so its sidetone renders wake rhythm while the iambic path
+            // below renders scheduled rhythm.
             if (m_audio)
                 m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
         });

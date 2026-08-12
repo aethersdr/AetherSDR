@@ -4228,11 +4228,22 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
             // Strictly increasing, not merely non-decreasing: two edges
             // sharing a time= reconstruct as a zero-length element on the
             // radio, which is worse than the late edge the back-dating
-            // exists to correct.  Reachable whenever this edge's age
-            // exceeds the previous edge's by more than the element
-            // spacing — precisely the queued-GUI-hop stall being chased.
+            // exists to correct.
+            //
+            // The fallback is the un-back-dated reading, NOT prev + 1: this
+            // counter is shared with senders that carry no schedule (`cw ptt`
+            // from Space/MOX, `cw key` from TCI and MIDI), which stamp at
+            // real elapsed.  With break_in=0 the operator asserts CW PTT
+            // while the keyer runs, so the next scheduled edge back-dates
+            // below that stamp; bumping it to prev + 1 would hand the radio
+            // a 1 ms element, the same defect one participant over.  The
+            // real send time keeps true spacing whenever back-dating cannot
+            // be honoured, and prev + 1 stays as the ordering backstop.
+            // This comparison also covers a fresh burst, where `elapsed` can
+            // go negative because the clock is younger than the age clamp —
+            // m_netCwLastSendMs is >= 0 in this branch, so that lands here too.
             if (elapsed <= m_netCwLastSendMs)
-                elapsed = m_netCwLastSendMs + 1;
+                elapsed = std::max(m_netCwClock.elapsed(), m_netCwLastSendMs + 1);
         }
         timeMs = static_cast<quint16>(elapsed & 0xFFFF);
         m_netCwLastSendMs = elapsed;

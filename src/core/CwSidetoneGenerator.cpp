@@ -87,6 +87,16 @@ void CwSidetoneGenerator::setKeyDown(bool down,
     // queue with a later stamp.  The clamp preserves the schedule's exact
     // spacing whenever edges from one producer arrive back-to-back, which
     // is the #4890 case that matters.
+    // Bound worth knowing: the GUI echo (cwKeyDownChanged →
+    // MainWindow.cpp:1419 → setCwKeyDown(down)) queues a wall-clock stamp
+    // after each scheduled edge, so the floor sits at wall clock going into
+    // the next one.  Scheduled stamps therefore hold only while that echo
+    // round-trip stays shorter than one element (measured ~2 ms against
+    // 48 ms at 25 WPM).  Should an echo ever land after the following grid
+    // instant, that edge clamps to the echo's stamp and the sidetone
+    // reverts to wall-clock rhythm — the pre-#4890 behaviour, not
+    // corruption.  Removing the coupling means suppressing the echo for
+    // producers that already drove the gate directly.
     // Worst case among producers: the GUI thread descheduled inside the
     // section leaves a keying worker spinning until the holder resumes.
     // The section is ~20 instructions, so the window is vanishingly

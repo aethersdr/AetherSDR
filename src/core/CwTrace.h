@@ -17,6 +17,13 @@ inline std::chrono::steady_clock::time_point cwTraceEpoch() noexcept
 // cwTraceNowMs(), so scheduled times and wall times in one log line are
 // directly comparable.  Instants before the epoch clamp to 0 rather than
 // wrapping the unsigned result.
+//
+// Reading the log: the epoch is pinned by whichever trace call runs first,
+// which for a key-edge line is the cwTraceNowMs() beside it.  The first
+// traced edge's scheduled instant therefore predates the epoch by the wake
+// latency and prints as schedMs=0.  That 0 is the clamp, not a measured
+// zero-latency wake — a parser summarising t − schedMs should drop the
+// first edge rather than treat it as an outlier.
 inline quint64 cwTraceMsAt(std::chrono::steady_clock::time_point tp) noexcept
 {
     const auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(
