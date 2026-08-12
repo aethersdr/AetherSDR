@@ -63,6 +63,15 @@ void QGVLayerTiles::setCameraUpdatesDuringAnimation(bool value)
     qgvDebug() << "CameraUpdatesDuringAnimation changed to" << value;
 }
 
+void QGVLayerTiles::setHorizontalWrapEnabled(bool enabled)
+{
+    if (mHorizontalWrapEnabled == enabled) {
+        return;
+    }
+    mHorizontalWrapEnabled = enabled;
+    processCamera();
+}
+
 void QGVLayerTiles::onProjection(QGVMap* geoMap)
 {
     QGVLayer::onProjection(geoMap);
@@ -147,7 +156,14 @@ void QGVLayerTiles::processCamera()
     }
     const QGVProjection* projection = getMap()->getProjection();
     const QGVCameraState camera = getMap()->getCamera();
-    const QRectF areaProjRect = camera.projRect().intersected(projection->boundaryProjRect());
+    QRectF areaProjRect = camera.projRect();
+    const QRectF world = projection->boundaryProjRect();
+    if (mHorizontalWrapEnabled) {
+        areaProjRect.setTop(qMax(areaProjRect.top(), world.top()));
+        areaProjRect.setBottom(qMin(areaProjRect.bottom(), world.bottom()));
+    } else {
+        areaProjRect = areaProjRect.intersected(world);
+    }
     const QGV::GeoRect areaGeoRect = projection->projToGeo(areaProjRect);
 
     int originZoom = scaleToZoom(camera.scale());
@@ -163,11 +179,23 @@ void QGVLayerTiles::processCamera()
                                      : static_cast<int>(mPerfomanceProfile.TilesMarginNoZoomChange);
     const int sizePerZoom = static_cast<int>(qPow(2, mCurZoom));
     const QRect maxRect = QRect(QPoint(0, 0), QPoint(sizePerZoom, sizePerZoom));
-    const QPoint topLeft = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.topLeft()).pos();
-    const QPoint bottomRight = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.bottomRight()).pos();
+    QPoint topLeft = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.topLeft()).pos();
+    QPoint bottomRight = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.bottomRight()).pos();
+    if (mHorizontalWrapEnabled) {
+        const double tilesPerProjectionUnit = sizePerZoom / world.width();
+        topLeft.setX(static_cast<int>(qFloor(
+            (areaProjRect.left() - world.left()) * tilesPerProjectionUnit)));
+        bottomRight.setX(static_cast<int>(qFloor(
+            (areaProjRect.right() - world.left()) * tilesPerProjectionUnit)));
+    }
     QRect activeRect = QRect(topLeft, bottomRight);
     activeRect = activeRect.adjusted(-margin, -margin, margin, margin);
-    activeRect = activeRect.intersected(maxRect);
+    if (mHorizontalWrapEnabled) {
+        activeRect.setTop(qMax(activeRect.top(), maxRect.top()));
+        activeRect.setBottom(qMin(activeRect.bottom(), maxRect.bottom()));
+    } else {
+        activeRect = activeRect.intersected(maxRect);
+    }
     const bool rectChanged = (!zoomChanged && (mCurRect != activeRect));
     mCurRect = activeRect;
 

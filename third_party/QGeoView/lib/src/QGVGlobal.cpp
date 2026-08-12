@@ -478,6 +478,28 @@ QByteArray getTileUserAgent()
     return tileUserAgent;
 }
 
+double wrapProjectionX(double x, double left, double width)
+{
+    if (!qIsFinite(x) || !qIsFinite(left) || !qIsFinite(width) || width <= 0.0) {
+        return x;
+    }
+    double offset = std::fmod(x - left, width);
+    if (offset < 0.0) {
+        offset += width;
+    }
+    return left + offset;
+}
+
+int wrapTileX(int zoom, int x)
+{
+    if (zoom < 0 || zoom >= 31) {
+        return x;
+    }
+    const int tileCount = 1 << zoom;
+    const int remainder = x % tileCount;
+    return remainder < 0 ? remainder + tileCount : remainder;
+}
+
 } // namespace QGV
 
 QDebug operator<<(QDebug debug, const QGV::GeoPos& value)

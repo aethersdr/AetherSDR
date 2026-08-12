@@ -104,7 +104,7 @@ private:
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
-    MapMarkerItem* m_homeMarker{nullptr};
+    QVector<MapMarkerItem*> m_homeMarkers;
     MapMarkerItem* m_hoverMarker{nullptr};
     QLabel* m_hoverCard{nullptr};
     QVector<MapMarkerItem*> m_markers;

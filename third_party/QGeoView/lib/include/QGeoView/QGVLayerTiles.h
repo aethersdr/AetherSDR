@@ -35,6 +35,7 @@ public:
     void setVisibleZoomLayersBelowCurrent(size_t value);
     void setVisibleZoomLayersAboveCurrent(size_t value);
     void setCameraUpdatesDuringAnimation(bool value);
+    void setHorizontalWrapEnabled(bool enabled);
 
 protected:
     void onProjection(QGVMap* geoMap) override;
@@ -66,6 +67,7 @@ private:
     QMap<int, QMap<QGV::GeoTilePos, QGVDrawItem*>> mIndex;
 
     QElapsedTimer mLastAnimation;
+    bool mHorizontalWrapEnabled = false;
 
     struct
     {

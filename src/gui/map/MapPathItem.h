@@ -16,15 +16,20 @@ class MapPathItem : public QGVDrawItem {
 
 public:
     MapPathItem(double fromLat, double fromLon,
-                double toLat, double toLon, const QColor& color);
+                double toLat, double toLon, const QColor& color,
+                int relativeWorldOffset = 0);
 
 private:
     void onProjection(QGVMap* geoMap) override;
+    void onCamera(const QGVCameraState& oldState,
+                  const QGVCameraState& newState) override;
     QPainterPath projShape() const override;
     void projPaint(QPainter* painter) override;
 
     double m_fromLat, m_fromLon, m_toLat, m_toLon;
+    int m_relativeWorldOffset{0};
     QColor m_color;
+    QPainterPath m_baseProjPath;
     QPainterPath m_projPath;
 };
 

@@ -24,3 +24,13 @@ this list current when updating the snapshot.
    `http://{a,b,c}.tile.openstreetmap.org` to
    `https://tile.openstreetmap.org` (subdomain aliases are deprecated by
    OSM and plain HTTP redirects anyway).
+
+5. **`QGVGlobal`, `QGVMapQGView`, and the tile layers** — added optional
+   horizontal world repetition. The camera stays continuous across the
+   antimeridian, logical tile x positions repeat while network URLs remain
+   canonical, and a bounded decoded-image cache avoids repeated PNG decode on
+   nearby revisits.
+
+6. **`lib/src/QGVMapQGView.cpp`** — normalized wheel and high-resolution
+   touchpad zoom to one symmetric exponential curve. Upstream's asymmetric
+   in/out exponents made navigation feel markedly different by direction.

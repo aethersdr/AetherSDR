@@ -41,11 +41,13 @@ QGV::GeoPos slerp(double lat1, double lon1, double lat2, double lon2,
 } // namespace
 
 MapPathItem::MapPathItem(double fromLat, double fromLon,
-                         double toLat, double toLon, const QColor& color)
+                         double toLat, double toLon, const QColor& color,
+                         int relativeWorldOffset)
     : m_fromLat(fromLat)
     , m_fromLon(fromLon)
     , m_toLat(toLat)
     , m_toLon(toLon)
+    , m_relativeWorldOffset(relativeWorldOffset)
     , m_color(color)
 {
     setSelectable(false);
@@ -61,19 +63,38 @@ void MapPathItem::onProjection(QGVMap* geoMap)
     // width means the great circle wrapped — start a new subpath.
     const double worldWidth = proj->boundaryProjRect().width();
 
-    m_projPath = QPainterPath();
+    m_baseProjPath = QPainterPath();
     QPointF prev;
     for (int i = 0; i <= kSegments; ++i) {
         const double t = static_cast<double>(i) / kSegments;
         const QPointF p = proj->geoToProj(
             slerp(m_fromLat, m_fromLon, m_toLat, m_toLon, t));
         if (i == 0 || std::abs(p.x() - prev.x()) > worldWidth / 2.0) {
-            m_projPath.moveTo(p);
+            m_baseProjPath.moveTo(p);
         } else {
-            m_projPath.lineTo(p);
+            m_baseProjPath.lineTo(p);
         }
         prev = p;
     }
+    m_projPath = m_baseProjPath;
+    onCamera(geoMap->getCamera(), geoMap->getCamera());
+}
+
+void MapPathItem::onCamera(const QGVCameraState& oldState,
+                           const QGVCameraState& newState)
+{
+    const double worldWidth = newState.getProjection()->boundaryProjRect().width();
+    const double worldOffset = m_relativeWorldOffset + qRound(
+        (newState.projCenter().x() - m_baseProjPath.boundingRect().center().x())
+        / worldWidth);
+    const QPainterPath shifted = QTransform::fromTranslate(
+        worldOffset * worldWidth, 0.0).map(m_baseProjPath);
+    if (shifted != m_projPath) {
+        m_projPath = shifted;
+        resetBoundary();
+        refresh();
+    }
+    QGVDrawItem::onCamera(oldState, newState);
 }
 
 QPainterPath MapPathItem::projShape() const

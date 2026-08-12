@@ -48,6 +48,8 @@ public:
     double getMinScale() const;
     double getMaxScale() const;
     void setScaleLimits(double minScale, double maxScale);
+    void setHorizontalWrapEnabled(bool enabled);
+    bool horizontalWrapEnabled() const;
     void cleanState();
 
 Q_SIGNALS:
@@ -60,6 +62,7 @@ private:
     void cameraScale(const QRectF& projRect);
     void cameraRotate(double azimuth);
     void cameraMove(const QPointF& projPos);
+    void updateHorizontalWrapSceneRect(const QPointF& center);
     void blockCameraUpdate();
     void unblockCameraUpdate();
     void applyCameraUpdate(const QGVCameraState& oldState);
@@ -103,6 +106,7 @@ private:
     double mMaxScale;
     double mScale;
     double mAzimuth;
+    bool mHorizontalWrapEnabled;
     QGV::MouseActions mMouseActions;
     QRect mViewRect;
     QGV::MapState mState;

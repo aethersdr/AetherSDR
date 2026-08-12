@@ -20,6 +20,10 @@
 
 #include "QGVLayerTiles.h"
 
+#include <QCache>
+#include <QImage>
+#include <QUrl>
+
 #include <QNetworkReply>
 
 class QGV_LIB_DECL QGVLayerTilesOnline : public QGVLayerTiles
@@ -27,12 +31,14 @@ class QGV_LIB_DECL QGVLayerTilesOnline : public QGVLayerTiles
     Q_OBJECT
 
 public:
+    QGVLayerTilesOnline();
     ~QGVLayerTilesOnline();
 
 protected:
     virtual QString tilePosToUrl(const QGV::GeoTilePos& tilePos) const = 0;
 
 private:
+    QRectF tileProjectionRect(const QGV::GeoTilePos& tilePos) const;
     void request(const QGV::GeoTilePos& tilePos) override;
     void cancel(const QGV::GeoTilePos& tilePos) override;
     void onReplyFinished(QNetworkReply* reply, const QGV::GeoTilePos& tilePos);
@@ -40,4 +46,5 @@ private:
 
 private:
     QMap<QGV::GeoTilePos, QNetworkReply*> mRequest;
+    QCache<QUrl, QImage> mDecodedTileCache;
 };

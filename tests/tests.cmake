@@ -843,6 +843,21 @@ add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
 add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
 
+# Slippy-map cylindrical-world math plus QGraphicsView camera constraints.
+# Drives a real QGVMap, so it needs the offscreen platform; never touches the
+# tile network.
+add_executable(map_wrap_test tests/map_wrap_test.cpp)
+target_link_libraries(map_wrap_test PRIVATE
+    qgeoview
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Network
+)
+add_test(NAME map_wrap_test COMMAND map_wrap_test)
+set_tests_properties(map_wrap_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Frameless-window geometry restore (#4328) — blob parse + the caption-free
 # re-clamp.  Windows-only in effect, but the logic is pure, so it is pinned on
 # every platform; case 4 drives a real QWidget so a future Qt changing the

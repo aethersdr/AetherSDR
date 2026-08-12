@@ -195,6 +195,12 @@ QGV_LIB_DECL QNetworkAccessManager* getNetworkManager();
 QGV_LIB_DECL void setTileUserAgent(const QByteArray& userAgent);
 QGV_LIB_DECL QByteArray getTileUserAgent();
 
+// AetherSDR patch: helpers shared by the horizontally repeating camera and
+// tile layers. Projection x is wrapped into [left, left + width); XYZ tile x
+// is wrapped into [0, 2^zoom). Invalid inputs are returned unchanged.
+QGV_LIB_DECL double wrapProjectionX(double x, double left, double width);
+QGV_LIB_DECL int wrapTileX(int zoom, int x);
+
 QGV_LIB_DECL QTransform createTransfrom(QPointF const& projAnchor, double scale, double azimuth);
 QGV_LIB_DECL QTransform createTransfromScale(QPointF const& projAnchor, double scale);
 QGV_LIB_DECL QTransform createTransfromAzimuth(QPointF const& projAnchor, double azimuth);
