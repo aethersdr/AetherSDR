@@ -165,6 +165,8 @@ int main(int argc, char** argv)
         QString whyNot;
         report("enable succeeds", ctl.enable({"RX", "TX"}, &whyNot));
         report("...and reports enabled", ctl.isEnabled());
+        report("the FIRST enable (migration) opens editing",
+               canvas.isEditMode());
 
         report("both applets are on the canvas",
                rx->isOnCanvas() && tx->isOnCanvas()
@@ -275,6 +277,8 @@ int main(int argc, char** argv)
 
         report("re-enable places from the kept document",
                ctl.enable({"RX", "TX"}) && tx->isOnCanvas());
+        report("...and comes up LOCKED (operating posture)",
+               !canvas.isEditMode());
         report("...and boot on a fresh controller now asks for the mode",
                [&] {
                    WorkspaceStore probe;
@@ -290,6 +294,19 @@ int main(int argc, char** argv)
         report("re-enable for the phase 5 block",
                ctl.enable({"RX", "TX"}) && tx->isOnCanvas()
                    && ctl.sendAppletToCanvas("RX") && rx->isOnCanvas());
+
+        // Locked first: a gesture must be refused outright (the edit-mode
+        // field request — interacting with an applet must not arm
+        // placement), then editing is entered for the rest of the block.
+        {
+            const NormRect held = canvas.itemRect("applet:RX");
+            canvas.beginMoveGesture("applet:RX",
+                                    canvas.mapToGlobal(QPoint(500, 400)));
+            report("a locked canvas arms no gesture",
+                   !canvas.gestureActive()
+                       && canvas.itemRect("applet:RX") == held);
+        }
+        canvas.setEditMode(true);
 
         // The offscreen platform stacks every top-level at the same origin,
         // which would make "over the panel" also "inside the canvas".  Pull
@@ -362,6 +379,7 @@ int main(int argc, char** argv)
     {
         report("re-enable for the phase 4 block",
                ctl.enable({"RX", "TX"}) && canvas.contains("pan:0"));
+        canvas.setEditMode(true);   // the block below arranges
 
         // A second pan arrives (radio granted `pan create`).
         auto* panB = new QWidget(&panOwner);

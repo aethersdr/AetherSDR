@@ -145,10 +145,13 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
         // Remembered before the migration read so migrationPanSlotIds() can
         // consult the same legacy keys.
         m_knownAppletIds = knownAppletIds;
-        if (!m_store.loadOrMigrate(knownAppletIds, migrationPanSlotIds())) {
+        bool migrated = false;
+        if (!m_store.loadOrMigrate(knownAppletIds, migrationPanSlotIds(),
+                                   &migrated)) {
             if (whyNot) *whyNot = m_store.lastError();
             return false;
         }
+        m_justMigrated = migrated;
     }
 
     WorkspaceDocument doc = m_store.document();
@@ -181,6 +184,15 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
     m_store.flush();
 
     m_enabled = true;
+
+    // The operating posture: enabled means USING the station, so the canvas
+    // comes up locked — except on the very first enable, which ran the
+    // migration: the operator just opted in precisely to arrange things,
+    // and greeting them with a locked surface would bury the feature they
+    // asked for behind a second menu trip.  Session-transient thereafter.
+    m_canvas->setEditMode(m_justMigrated);
+    m_justMigrated = false;
+
     emit enabledChanged(true);
     return true;
 }
@@ -1064,6 +1076,21 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
     }
 
     QMenu menu;
+
+    // Edit Layout leads in BOTH postures — it is the door between them —
+    // and everything below it is placement, so a locked canvas shows only
+    // the door.
+    QAction* editToggle = menu.addAction(QStringLiteral("Edit layout"));
+    editToggle->setCheckable(true);
+    editToggle->setChecked(m_canvas->isEditMode());
+    connect(editToggle, &QAction::toggled, this,
+            [this](bool on) { m_canvas->setEditMode(on); });
+    if (!m_canvas->isEditMode()) {
+        menu.exec(globalPos);
+        return;
+    }
+    menu.addSeparator();
+
     const bool onApplet =
         !itemId.isEmpty() && itemId.startsWith(kAppletItemPrefix);
     const bool onPan = !itemId.isEmpty() && itemId.startsWith(kPanItemPrefix);

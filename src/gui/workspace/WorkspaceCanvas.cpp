@@ -332,6 +332,9 @@ void WorkspaceCanvas::setDropMimeType(const QByteArray& mimeType)
 
 void WorkspaceCanvas::dragEnterEvent(QDragEnterEvent* ev)
 {
+    if (!m_editMode) {
+        return;   // locked: not accepted, the panel ghost shows refusal
+    }
     if (!m_dropMimeType.isEmpty()
         && ev->mimeData()->hasFormat(QString::fromLatin1(m_dropMimeType))) {
         ev->acceptProposedAction();
@@ -379,7 +382,7 @@ void WorkspaceCanvas::resizeEvent(QResizeEvent* ev)
 
 bool WorkspaceCanvas::eventFilter(QObject* watched, QEvent* ev)
 {
-    if (ev->type() == QEvent::MouseButtonPress) {
+    if (m_editMode && ev->type() == QEvent::MouseButtonPress) {
         for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd(); ++it) {
             if (it.value().data() == watched) {
                 // bringItemToFront() is false when the item was already
@@ -450,6 +453,22 @@ void WorkspaceCanvas::applyStacking()
 
 // ── Selection (phase 5) ──────────────────────────────────────────────────
 
+void WorkspaceCanvas::setEditMode(bool on)
+{
+    if (m_editMode == on) {
+        return;
+    }
+    m_editMode = on;
+    if (!on) {
+        // Leaving edit mid-gesture abandons the gesture (rect restored) and
+        // the selection with it — a locked canvas shows no frame.
+        cancelGesture();
+        clearSelection();
+    }
+    update();   // grid dots appear/disappear with the mode
+    emit editModeChanged(on);
+}
+
 void WorkspaceCanvas::selectItem(const QString& id)
 {
     if (id == m_selectedId || !m_layout.contains(id)) {
@@ -506,8 +525,9 @@ void WorkspaceCanvas::beginGesture(const QString& id, HitZone zone,
                                    const QPoint& globalPos)
 {
     const CanvasItem* it = m_layout.item(id);
-    if (!it || zone == HitZone::None || width() <= 0 || height() <= 0) {
-        return;
+    if (!m_editMode || !it || zone == HitZone::None
+        || width() <= 0 || height() <= 0) {
+        return;   // a locked canvas arms no placement gesture
     }
     if (gestureActive()) {
         cancelGesture();   // one at a time; a stray second press wins cleanly
@@ -670,7 +690,7 @@ bool WorkspaceCanvas::event(QEvent* ev)
     // the override is consulted for the focus widget alone, so clicking into
     // the spectrum or deselecting hands the VFO its keys straight back.
     // Selecting an item is the operator saying "I'm placing things now."
-    if (ev->type() == QEvent::ShortcutOverride
+    if (m_editMode && ev->type() == QEvent::ShortcutOverride
         && (!m_selectedId.isEmpty() || gestureActive())) {
         auto* ke = static_cast<QKeyEvent*>(ev);
         switch (ke->key()) {
@@ -690,6 +710,10 @@ bool WorkspaceCanvas::event(QEvent* ev)
 
 void WorkspaceCanvas::keyPressEvent(QKeyEvent* ev)
 {
+    if (!m_editMode) {
+        QWidget::keyPressEvent(ev);
+        return;
+    }
     if (ev->key() == Qt::Key_Escape) {
         if (gestureActive()) {
             cancelGesture();
@@ -748,8 +772,12 @@ void WorkspaceCanvas::paintEvent(QPaintEvent* ev)
     auto& theme = ThemeManager::instance();
     p.fillRect(rect(),
                theme.color(this, QStringLiteral("color.canvas.background")));
-    paintGridDots(p, size(),
-                  theme.color(this, QStringLiteral("color.canvas.dots")));
+    if (m_editMode) {
+        // Dots are placement targets; a locked canvas is an operating
+        // surface and shows none.
+        paintGridDots(p, size(),
+                      theme.color(this, QStringLiteral("color.canvas.dots")));
+    }
 }
 
 void WorkspaceCanvas::contextMenuEvent(QContextMenuEvent* ev)

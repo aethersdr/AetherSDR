@@ -135,7 +135,27 @@ void MainWindow::wireWorkspaceCanvas()
                     QSignalBlocker blocker(m_workspaceCanvasAction);
                     m_workspaceCanvasAction->setChecked(on);
                 }
+                // Edit Layout is meaningful only while the canvas is up.
+                if (m_workspaceEditAction) {
+                    m_workspaceEditAction->setEnabled(on);
+                }
             });
+
+    // Edit Layout ↔ canvas edit mode, both directions: the context menu's
+    // toggle and the controller's first-enable policy also flip the mode,
+    // and the menu action must stay honest.
+    if (m_workspaceEditAction) {
+        connect(m_workspaceEditAction, &QAction::toggled, this, [this](bool on) {
+            m_workspaceCanvas->setEditMode(on);
+        });
+        connect(m_workspaceCanvas, &WorkspaceCanvas::editModeChanged, this,
+                [this](bool on) {
+                    if (m_workspaceEditAction->isChecked() != on) {
+                        QSignalBlocker blocker(m_workspaceEditAction);
+                        m_workspaceEditAction->setChecked(on);
+                    }
+                });
+    }
 
     // The stored document decides whether the mode comes back up.  boot()
     // never migrates — a fresh install that has never enabled the canvas
@@ -266,6 +286,7 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
 
     if (action == QLatin1String("status") || action == QLatin1String("query")) {
         out[QStringLiteral("enabled")]  = enabled;
+        out[QStringLiteral("edit")]     = m_workspaceCanvas->isEditMode();
         out[QStringLiteral("gridSnap")] = m_workspaceCanvas->isGridSnapEnabled();
         out[QStringLiteral("selected")] = m_workspaceCanvas->selectedItem();
         QVariantList items;
@@ -305,6 +326,22 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             out[QStringLiteral("error")] =
                 QStringLiteral("enable refused — see statusMessage");
         }
+        return out;
+    }
+
+    if (action == QLatin1String("edit")) {
+        // Operator posture only — `place` stays available in BOTH postures
+        // (the bridge is not an operator, and tests must be able to arrange
+        // a locked canvas).
+        const QString v = args.trimmed().toLower();
+        if (v == QLatin1String("on") || v == QLatin1String("off")) {
+            m_workspaceCanvas->setEditMode(v == QLatin1String("on"));
+        } else if (!v.isEmpty()) {
+            out[QStringLiteral("error")] =
+                QStringLiteral("edit wants on|off (or nothing to query)");
+            return out;
+        }
+        out[QStringLiteral("edit")] = m_workspaceCanvas->isEditMode();
         return out;
     }
 
@@ -351,7 +388,7 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
 
     out[QStringLiteral("error")] =
         QStringLiteral("unknown workspace action: %1 "
-                       "(status|enable|disable|place)").arg(action);
+                       "(status|enable|disable|edit|place)").arg(action);
     return out;
 }
 

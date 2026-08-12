@@ -1240,6 +1240,7 @@ private:
     WorkspaceCanvas*     m_workspaceCanvas{nullptr};
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
+    QAction*             m_workspaceEditAction{nullptr};
     QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
     QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
     bool m_miniPanFeedWanted{false};              // applet visible → consume frames

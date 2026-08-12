@@ -146,6 +146,23 @@ public:
     // RFC's "optional grid", toggled from the canvas context menu.
     void setGridSnapEnabled(bool on) { m_gridSnapEnabled = on; }
     bool isGridSnapEnabled() const { return m_gridSnapEnabled; }
+
+    // ── Edit mode (8600 field request) ───────────────────────────────────
+    //
+    // A locked canvas is for OPERATING: no click-to-select, no frame, no
+    // title-strip drags, no drops, no nudge keys, no grid dots — presses go
+    // to the applet content and nothing arms placement.  Edit mode is the
+    // arranging posture: everything above comes back.  The BARE widget
+    // defaults to editing (a canvas with no controller is an editor — the
+    // phase-1 tests and any future preview use it that way); the
+    // controller imposes the locked operating posture at enable().
+    //
+    // Deliberately NOT gated here: setItemRect/restoreItems (lifecycle
+    // placement — reopen-restore, pan arrival, dock-return and the
+    // automation bridge are not operator edits), and the context-menu
+    // signal (the controller builds a mode-aware menu).
+    void setEditMode(bool on);
+    bool isEditMode() const { return m_editMode; }
     // Keyboard nudge step (px); Ctrl divides it for fine placement.
     static constexpr int kNudgePx = 8;
 
@@ -168,6 +185,10 @@ signals:
 
     // Selection, for the frame, the controller's context menu, and a11y.
     void selectionChanged(const QString& id);   // empty = cleared
+
+    // Edit mode flipped — the View-menu action and the context menu both
+    // drive it, so each keeps the other honest through this.
+    void editModeChanged(bool on);
 
     // A gesture began (undo snapshots hang off this) and committed.  A
     // cancelled gesture emits neither finish nor a rect change beyond the
@@ -252,6 +273,7 @@ private:
 
     // Active gesture.
     bool m_gridSnapEnabled{true};
+    bool m_editMode{true};
     QString  m_gestureId;
     HitZone  m_gestureZone{HitZone::None};
     NormRect m_gestureStart;

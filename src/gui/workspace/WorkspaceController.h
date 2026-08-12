@@ -229,6 +229,7 @@ private:
     QString  m_undoItemId;      // last gesture's item…
     NormRect m_undoRect;        // …and the rect it started from
     bool m_enabled{false};
+    bool m_justMigrated{false};   // first enable opens editing (see enable())
     // True while enable()/disable() replay the document onto the canvas —
     // the canvas signals fired by that replay describe what the document
     // already says, and echoing them back into it would be the #4427
