@@ -250,6 +250,7 @@ void PanadapterStack::removePanadapter(const QString& panId)
 
     auto* applet = m_pans.take(panId);
     if (!applet) return;
+    m_lentToCanvas.remove(panId);
 
     // Unregistered but not yet destroyed: a canvas hosting this applet
     // releases its entry here instead of waiting for the destroyed-watch.
@@ -275,6 +276,8 @@ void PanadapterStack::rekey(const QString& oldId, const QString& newId)
 {
     if (auto* applet = m_pans.take(oldId)) {
         m_pans[newId] = applet;
+        if (m_lentToCanvas.remove(oldId))
+            m_lentToCanvas.insert(newId);
         m_seenPanIds.remove(oldId);
         m_seenPanIds.insert(newId);
         if (m_activePanId == oldId)
@@ -451,8 +454,17 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
         saveFloatingState();
     }
 
-    // Collect applets in order
-    QList<PanadapterApplet*> applets = m_pans.values();
+    // Collect applets in order — loaned ones are the canvas's to place, not
+    // this method's (see m_lentToCanvas; the connect-time layout restore
+    // lands here with canvas mode on, and must not reclaim a thing).  A
+    // float docked by the loop above re-lends itself DURING that loop: the
+    // panDocked emission is direct, the controller detaches on the spot,
+    // and the collection below correctly skips it.
+    QList<PanadapterApplet*> applets;
+    for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
+        if (!m_lentToCanvas.contains(it.key()))
+            applets.append(it.value());
+    }
     if (applets.isEmpty()) return;
 
     // Build the new splitter first, then move applets straight into it below.
@@ -631,6 +643,7 @@ void PanadapterStack::removeAll()
         emit panRemoved(id);
     qDeleteAll(m_pans);
     m_pans.clear();
+    m_lentToCanvas.clear();
     m_activePanId.clear();
 
     // Delete the old splitter and create a fresh one
@@ -645,7 +658,10 @@ void PanadapterStack::rebuildDockedSplitter()
 {
     QList<PanadapterApplet*> docked;
     for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
-        if (!m_floatingWindows.contains(it.key())) {
+        // A loaned applet is the CANVAS's to place — reparenting it here is
+        // the silent theft behind the 8600 field report (see m_lentToCanvas).
+        if (!m_floatingWindows.contains(it.key())
+            && !m_lentToCanvas.contains(it.key())) {
             docked.append(it.value());
         }
     }
@@ -932,8 +948,10 @@ PanadapterApplet* PanadapterStack::detachForCanvas(const QString& panId)
     if (m_floatingWindows.contains(panId))
         return nullptr;
     PanadapterApplet* applet = m_pans.value(panId, nullptr);
-    if (applet)
+    if (applet) {
         applet->setOnCanvas(true);
+        m_lentToCanvas.insert(panId);
+    }
     return applet;
 }
 
@@ -942,6 +960,7 @@ void PanadapterStack::returnFromCanvas(const QString& panId,
 {
     if (!applet || m_pans.value(panId, nullptr) != applet)
         return;
+    m_lentToCanvas.remove(panId);
     applet->setOnCanvas(false);
     m_splitter->addWidget(applet);
     m_splitter->setStretchFactor(m_splitter->indexOf(applet), 1);
@@ -990,6 +1009,7 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     // and lifetime.
     auto* fw = new PanFloatingWindow(window());
     fw->adoptApplet(applet);
+    m_lentToCanvas.remove(panId); // the float window owns it now
     applet->setOnCanvas(false);   // floating now; canvas releases its entry
     applet->spectrumWidget()->setFloating(true);
 

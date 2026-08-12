@@ -445,7 +445,15 @@ bool WorkspaceController::sendPanToCanvas(const QString& panId)
     }
     const QString itemId = panItemIdFor(panId);
     if (m_canvas->contains(itemId)) {
-        return true;   // already placed — the state the caller asked for
+        QWidget* placed = m_canvas->itemWidget(itemId);
+        if (placed && placed->parentWidget() == m_canvas) {
+            return true;   // genuinely placed — the state the caller asked for
+        }
+        // The entry is a lie: the widget was reclaimed behind the canvas's
+        // back (a stack rebuild that predates the loan set, or any future
+        // path that forgets it).  Heal instead of trusting: drop the stale
+        // entry and fall through to a fresh detach-and-place.
+        m_canvas->releaseItem(itemId);
     }
 
     NormRect rect{0.2, 0.2, 0.6, 0.6};

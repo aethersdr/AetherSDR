@@ -150,6 +150,18 @@ private:
     QMap<QString, PanFloatingWindow*> m_floatingWindows;
     // Preserve floating state for restored pans that were unavailable this run.
     QSet<QString> m_seenPanIds;
+    // Applets currently ON LOAN to the workspace canvas (RFC #4887 phase 4).
+    // THE INVARIANT EVERY REBUILD PATH MUST HONOR: an applet in this set is
+    // not the stack's to arrange.  rebuildDockedSplitter() and
+    // rearrangeLayout() both enumerate m_pans and reparent what they find —
+    // five call sites reach them (float, dock, the connect-time layout
+    // restore, pan close, the layout dialog), and before this set existed
+    // every one of them silently reclaimed canvas-hosted applets into the
+    // hidden stack: the canvas kept a healthy model while the widget on
+    // screen answered to a splitter, which surfaced as "the pan won't snap,
+    // won't stack, won't restore" (the 8600 field report).  detachForCanvas
+    // lends, returnFromCanvas/floatPanadapter/removePanadapter collect.
+    QSet<QString> m_lentToCanvas;
     QString m_activePanId;
     bool m_shutdownPrepared{false};
     // applyLayout() creates applets in its branches (some via addPanadapter,

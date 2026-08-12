@@ -265,6 +265,13 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             m[QStringLiteral("w")]    = it.rect.w;
             m[QStringLiteral("h")]    = it.rect.h;
             m[QStringLiteral("z")]    = m_workspaceCanvas->layout().zOf(it.id);
+            // Whether the widget is REALLY a canvas child right now — the
+            // model can be healthy while a stack rebuild has reclaimed the
+            // widget (the 8600 theft), and this is how a smoke proves the
+            // difference without trusting the model it is auditing.
+            QWidget* w = m_workspaceCanvas->itemWidget(it.id);
+            m[QStringLiteral("hosted")] =
+                (w && w->parentWidget() == m_workspaceCanvas);
             items.append(m);
         }
         out[QStringLiteral("items")] = items;

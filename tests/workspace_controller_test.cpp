@@ -436,6 +436,20 @@ int main(int argc, char** argv)
                    && bandStack.parentWidget() == &panOwner
                    && !bandStack.isVisible());
 
+        // A reclaimed widget cannot hide behind a healthy model: steal the
+        // pan back to its owner behind the canvas's back (what the stack's
+        // rebuild paths did in the 8600 field report), and the next
+        // placement request must heal — drop the stale entry, re-detach,
+        // re-place — rather than trust contains().
+        panBox->addWidget(pans.value(QStringLiteral("0x40000002")));   // theft
+        report("the model still claims the stolen pan",
+               canvas.contains("pan:1"));
+        ctl.onPanDocked(QStringLiteral("0x40000002"));
+        report("a placement request heals a stolen pan",
+               canvas.contains("pan:1")
+                   && pans.value(QStringLiteral("0x40000002"))->parentWidget()
+                          == &canvas);
+
         // A z-poisoned document cannot resurrect a pan over the controls:
         // force the pan frontmost (recording it), cycle the mode, and the
         // replay must normalize pans back below everything (8600 report).
