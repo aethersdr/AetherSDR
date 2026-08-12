@@ -8,9 +8,13 @@
 // vendor's own server (tcpdump captures, plus a hexdump probe run against a
 // live installation), which Principle IV names explicitly as a clean input.
 // No binary was decompiled, disassembled, or read for strings, and nothing
-// here is transcribed from such output. Ported from the author's own prior
-// MIT-licensed implementation (github.com/motoham88/everyware-linux); the
-// two front ends that project also ships — a curses TUI and an MQTT/Home
+// here is transcribed from such output.
+//
+// CODE PROVENANCE, which is a separate question from the protocol provenance
+// above: this is a from-scratch Qt port of the author's own prior MIT-licensed
+// implementation (github.com/motoham88/everyware-linux), contributed under
+// this repository's GPLv3 by the same copyright holder. Nothing is vendored.
+// The two front ends that project also ships — a curses TUI and an MQTT/Home
 // Assistant bridge — are deliberately NOT part of this port.
 //
 // What is on the far end of port 10000 is the Everyware *server* — a service

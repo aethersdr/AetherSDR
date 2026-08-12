@@ -211,10 +211,15 @@ a live installation — which Principle IV names explicitly as a clean input. No
 binary was decompiled, disassembled, or read for strings, and nothing here is
 transcribed from such output.
 
-Ported from the author's own prior MIT-licensed implementation,
-[`motoham88/everyware-linux`](https://github.com/motoham88/everyware-linux).
-That project's other two front ends — a curses TUI and an MQTT / Home Assistant
-bridge — are deliberately **not** part of this port; AetherSDR has its own MQTT
-applet, and the TUI has no analogue here.
+**Code provenance**, which is a separate question from the protocol provenance
+above: the implementation is a from-scratch Qt port of the author's own prior
+MIT-licensed
+[`motoham88/everyware-linux`](https://github.com/motoham88/everyware-linux),
+contributed to this repository under its GPLv3 by the same copyright holder.
+Nothing is vendored — no file here is a copy of that project — so there is no
+`THIRD_PARTY_LICENSES` entry for it. That project's other two front ends — a
+curses TUI and an MQTT / Home Assistant bridge — are deliberately **not** part
+of this port; AetherSDR has its own MQTT applet, and the TUI has no analogue
+here.
 
 AetherSDR is not affiliated with or endorsed by Green Heron Engineering.
