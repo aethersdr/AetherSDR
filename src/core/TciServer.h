@@ -264,8 +264,11 @@ private:
         QHash<int, QByteArray> rxAccumBuf;
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
-        bool         iqEnabled{false};       // client sent IQ_START
-        int          iqChannel{0};           // TCI TRX → DAX IQ channel (0-based)
+        // TCI IQ subscriptions are per client AND per receiver. SDC can open
+        // several skimmers over one WebSocket by sending iq_start for each
+        // receiver; a single scalar silently replaced the previous receiver
+        // and left its radio-side DAX IQ stream orphaned.
+        QSet<int>    iqReceivers;             // TCI TRX indexes (0..3)
         bool         spectrumEnabled{false}; // client sent spectrum_event:on;
         // Payload-free lifecycle telemetry retained across disconnect. Command
         // names are stored without their arguments, so diagnostics can identify
@@ -279,6 +282,14 @@ private:
         int          lastSocketError{-1};
         QString      lastSocketErrorString;
     };
+
+    bool iqReceiverInUse(int trx, const QWebSocket* except = nullptr) const;
+    void startIqForClient(ClientState& client, int trx);
+    void stopIqForClient(ClientState& client, int trx);
+    void ensureIqStream(int trx);
+    void releaseIqStreamIfUnused(int trx);
+    void reconcileIqStreams();
+    void releaseAllIqStreams();
 
     // Minimum frames to accumulate before flushing to r8brain.
     // ~21ms at 24kHz — large enough for clean resampling, small enough
@@ -302,6 +313,12 @@ private:
     QPointer<SliceModel> m_activeSlice;
     QString           m_activeLetter;   // focused slice's display letter (#4160)
     QMap<int, int>     m_channelTrx;            // DAX channel → last-resolved TCI TRX (routing cache, #3669)
+    // DAX IQ channels created by TCI rather than borrowed from another local
+    // consumer. Only owned channels are removed when the last TCI subscriber
+    // leaves. Pending removal covers iq_stop racing the stream-create status.
+    QSet<int>         m_tciIqChannels;          // 1-based DAX IQ channels
+    QSet<int>         m_pendingIqRemovals;      // 1-based channels awaiting create status
+    int               m_iqSampleRate{48000};   // shared achieved rate for all TCI IQ receivers
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
     // #4567: stable sliceId→trx receiver bindings. Acquired on sliceAdded,

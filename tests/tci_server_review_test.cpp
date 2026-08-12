@@ -1339,6 +1339,160 @@ public:
                            expectedPcm.constData(),
                            static_cast<size_t>(expectedPcm.size())) == 0;
     }
+
+    // SDC can open several skimmers over one WebSocket by subscribing each
+    // advertised receiver. The pre-fix scalar iqChannel retained only the last
+    // iq_start, so only one band received frames and the earlier DAX IQ streams
+    // leaked. Exercise the actual socket parser and binary sender for all four.
+    static bool oneClientReceivesFourIqStreams()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        for (int sliceId = 0; sliceId < DaxIqModel::NUM_CHANNELS; ++sliceId) {
+            if (!model.automationApplySliceFixture(sliceId, QString(), &error)) {
+                std::printf("      IQ fixture %d failed: %s\n", sliceId,
+                            error.toUtf8().constData());
+                return false;
+            }
+        }
+
+        QStringList iqCommands;
+        QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
+                         [&iqCommands](const QString& command) {
+            iqCommands.append(command);
+        });
+
+        if (!server.start(0) || !server.m_server) {
+            std::printf("      TCI server failed to bind an ephemeral port\n");
+            return false;
+        }
+
+        QVector<QByteArray> receivedFrames;
+        QWebSocket client;
+        QObject::connect(&client, &QWebSocket::binaryMessageReceived,
+                         [&receivedFrames](const QByteArray& frame) {
+            receivedFrames.append(frame);
+        });
+        client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+        for (int i = 0; i < 100
+             && (client.state() != QAbstractSocket::ConnectedState
+                 || server.m_clients.isEmpty()); ++i) {
+            spin(10);
+        }
+        if (client.state() != QAbstractSocket::ConnectedState
+            || server.m_clients.isEmpty()) {
+            return false;
+        }
+
+        client.sendTextMessage(QStringLiteral(
+            "iq_samplerate:96000;iq_start:0;iq_start:1;iq_start:2;iq_start:3;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().iqReceivers.size()
+                    != DaxIqModel::NUM_CHANNELS; ++i) {
+            spin(10);
+        }
+        const QSet<int> allReceivers{0, 1, 2, 3};
+        if (server.m_iqSampleRate != 96000
+            || server.m_clients.first().iqReceivers != allReceivers) {
+            std::printf("      IQ subscriptions=%lld rate=%d\n",
+                        static_cast<long long>(
+                            server.m_clients.first().iqReceivers.size()),
+                        server.m_iqSampleRate);
+            return false;
+        }
+        for (int channel = 1; channel <= DaxIqModel::NUM_CHANNELS; ++channel) {
+            if (!iqCommands.contains(
+                    QStringLiteral("stream create type=dax_iq daxiq_channel=%1")
+                        .arg(channel))) {
+                std::printf("      no DAX IQ create for channel %d\n", channel);
+                return false;
+            }
+        }
+
+        float iqPair[2]{0.25f, -0.5f};
+        QByteArray rawPayload(reinterpret_cast<const char*>(iqPair),
+                              static_cast<int>(sizeof(iqPair)));
+        for (int channel = 1; channel <= DaxIqModel::NUM_CHANNELS; ++channel) {
+            server.onIqDataReady(channel, rawPayload, 96000);
+        }
+        for (int i = 0; i < 100
+             && receivedFrames.size() < DaxIqModel::NUM_CHANNELS; ++i) {
+            spin(10);
+        }
+
+        const auto frameReceivers = [](const QVector<QByteArray>& frames) {
+            QSet<int> receivers;
+            for (const QByteArray& frame : frames) {
+                if (frame.size() < 64) {
+                    continue;
+                }
+                quint32 receiver = 0;
+                quint32 type = 0;
+                std::memcpy(&receiver, frame.constData(), sizeof(receiver));
+                std::memcpy(&type,
+                            frame.constData() + 6 * static_cast<int>(sizeof(quint32)),
+                            sizeof(type));
+                if (type == 0) {
+                    receivers.insert(static_cast<int>(receiver));
+                }
+            }
+            return receivers;
+        };
+        if (frameReceivers(receivedFrames) != allReceivers) {
+            std::printf("      four-stream frame receivers=%lld\n",
+                        static_cast<long long>(frameReceivers(receivedFrames).size()));
+            return false;
+        }
+
+        // Stopping receiver 1 must leave 0, 2 and 3 live on this same socket.
+        client.sendTextMessage(QStringLiteral("iq_stop:1;"));
+        for (int i = 0; i < 100
+             && server.m_clients.first().iqReceivers.contains(1); ++i) {
+            spin(10);
+        }
+        receivedFrames.clear();
+        for (int channel = 1; channel <= DaxIqModel::NUM_CHANNELS; ++channel) {
+            server.onIqDataReady(channel, rawPayload, 96000);
+        }
+        for (int i = 0; i < 100 && receivedFrames.size() < 3; ++i) {
+            spin(10);
+        }
+        return server.m_clients.first().iqReceivers == QSet<int>{0, 2, 3}
+            && frameReceivers(receivedFrames) == QSet<int>{0, 2, 3};
+    }
+
+    // Receiver resources are multicast/reference-counted across clients. One
+    // client's stop must not remove a stream another still consumes, and a
+    // stop racing the create status must remain pending until an id exists.
+    static bool sharedIqSubscriptionIsClientScoped()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket clientA;
+        QWebSocket clientB;
+        TciServer::ClientState a;
+        a.socket = &clientA;
+        a.iqReceivers.insert(1);
+        TciServer::ClientState b;
+        b.socket = &clientB;
+        b.iqReceivers.insert(1);
+        server.m_clients.append(a);
+        server.m_clients.append(b);
+        server.m_tciIqChannels.insert(2);
+
+        server.stopIqForClient(server.m_clients[0], 1);
+        if (!server.m_tciIqChannels.contains(2)
+            || server.m_pendingIqRemovals.contains(2)
+            || !server.m_clients[1].iqReceivers.contains(1)) {
+            return false;
+        }
+
+        server.stopIqForClient(server.m_clients[1], 1);
+        return server.m_tciIqChannels.contains(2)
+            && server.m_pendingIqRemovals.contains(2);
+    }
 };
 
 } // namespace AetherSDR
@@ -1401,6 +1555,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::pttRouteLogSanitizesClientSource();
     const bool native24kPayload
         = AetherSDR::TciServerReviewTest::native24kAudioRetainsAccumulatedPayload();
+    const bool fourIqStreams
+        = AetherSDR::TciServerReviewTest::oneClientReceivesFourIqStreams();
+    const bool iqClientScoped
+        = AetherSDR::TciServerReviewTest::sharedIqSubscriptionIsClientScoped();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -1459,6 +1617,10 @@ int main(int argc, char** argv)
                 routeLogSanitizes ? "PASS" : "FAIL");
     std::printf("%s  native 24 kHz TCI RX retains accumulated payload (#4744)\n",
                 native24kPayload ? "PASS" : "FAIL");
+    std::printf("%s  one TCI client receives four independent IQ streams\n",
+                fourIqStreams ? "PASS" : "FAIL");
+    std::printf("%s  shared IQ subscriptions are client-scoped\n",
+                iqClientScoped ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
@@ -1470,6 +1632,6 @@ int main(int argc, char** argv)
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         && vfoChannelZeroOnce
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
-        && native24kPayload
+        && native24kPayload && fourIqStreams && iqClientScoped
         ? 0 : 1;
 }

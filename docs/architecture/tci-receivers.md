@@ -15,16 +15,20 @@ The receiver-index policy is only one half of the routing contract. Channel
 
 ## Rules
 
-1. **Contiguous `0..N-1` indexing.**
-   Receiver indexes are the position of each slice in the owned-slice
-   list, starting at zero.  If you own slices with Flex IDs 1 and 3, TCI
-   advertises `trx_count:2` and maps them to receivers 0 and 1.
+1. **Dense initial `0..N-1` indexing.**
+   Each newly seen slice is assigned the lowest free receiver index. If you
+   initially own slices with Flex IDs 1 and 3, TCI advertises `trx_count:2`
+   and maps them to receivers 0 and 1. Raw Flex IDs never appear on the wire.
 
-2. **Indexes can shift at runtime.**
-   If a lower-numbered owned slice is removed (e.g. another client
-   deletes it), the remaining slices are re-indexed.  TCI clients receive
-   updated notifications but should be prepared for index changes between
-   sessions.
+2. **Live indexes are stable.**
+   A receiver binding is pinned to its Flex slice ID. A band-stack
+   destroy/recreate holds that binding through the settle window, so the
+   recreated slice returns on the same receiver and surviving slices do not
+   silently move. A genuinely closed slice frees its receiver after the
+   settle window; a later slice fills the lowest hole. `trx_count` remains one
+   plus the highest held/live receiver, so a temporary hole never invalidates
+   a receiver a client is already using. Clients should still rediscover the
+   mapping on a new radio session.
 
 3. **Legacy-client fallback.**
    `TciProtocol::sliceForTrx()` includes a compatibility path: if the
@@ -124,6 +128,28 @@ The receiver-index policy is only one half of the routing contract. Channel
    so transmit safety and the documented receiver-prefixed form win. The
    parser fails closed rather than risk either keying the address or silently
    removing a legitimate numeric payload (Constitution VI/VII).
+
+## IQ Stream Subscriptions
+
+TCI IQ subscriptions are scoped by both client and receiver. One WebSocket may
+send `iq_start:0;`, `iq_start:1;`, `iq_start:2;`, and `iq_start:3;` to run four
+band skimmers concurrently. Each receiver maps to the corresponding 1-based
+Flex DAX IQ channel (`trx 0` to DAX IQ 1, through `trx 3` to DAX IQ 4), and
+type-0 binary frames carry that receiver index in their header.
+
+The radio-side stream is shared. AetherSDR creates at most one DAX IQ stream
+per receiver, keeps it while any TCI client remains subscribed, and removes it
+when the last subscriber stops or disconnects. A stream that was already
+owned by the DAX IQ applet is borrowed rather than removed by TCI cleanup.
+`iq_stop:<n>;` affects only that receiver for that client; the client's other
+band streams continue uninterrupted.
+
+`iq_samplerate` is the shared achieved rate for active TCI IQ receivers. A
+valid change is applied to every active DAX IQ stream and remembered for
+streams started later. Logical subscriptions survive a radio reconnect and
+are re-armed against the same stable receiver/pan binding when its slice
+returns. The pan binding is required because the DAX IQ channel is centered on
+the pan reported by `dds`, not merely on its slice frequency.
 
 ## Spot Click Notifications
 
