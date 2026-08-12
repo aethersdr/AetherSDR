@@ -22,6 +22,12 @@ puts this file at CODEOWNERS Tier 2 (infrastructure) while the Constitution
 and GOVERNANCE.md stay Tier 1 (maintainer-only): editing build conventions
 is not a governance act and should not need a maintainer's approval.
 
+One passage restates policy rather than describing practice:
+§"Autonomous Agent Boundaries" below elaborates the autonomy limits that
+[`GOVERNANCE.md`](GOVERNANCE.md) §AI Contributors defines. It may narrow or
+illustrate them, never widen them — relaxing any of those bullets is an
+amendment to GOVERNANCE.md and cannot be made in a Tier-2 PR.
+
 ## Project Goal
 
 Replicate the **Windows-only FlexRadio SmartSDR client** (written in C#) as a
@@ -144,6 +150,13 @@ multi-agent-visible claim mechanism that prevents this. It is the
 operational implementation of Principle X.
 
 ### Autonomous Agent Boundaries
+
+> **Authority: [`GOVERNANCE.md`](GOVERNANCE.md) §AI Contributors.** That
+> section defines these limits and is Tier 1 (maintainer-only). What follows
+> is the worked-example elaboration for agent consumption — it may narrow or
+> illustrate the limits, never widen them. If this list and GOVERNANCE.md
+> differ, GOVERNANCE.md governs and the difference is a defect here. Do not
+> relax any bullet below in a Tier-2 PR; that is an amendment to GOVERNANCE.md.
 
 AI agents (including AetherClaude/pi-claude) may autonomously fix:
 - **Bugs with clear root cause** — persistence missing, guard missing, crash fix

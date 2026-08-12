@@ -159,9 +159,16 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 
 # NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
 # .claude/commands/) are intentionally NOT gated here — they sit at Tier 2.
-# See the Tier 2 section above for the reasoning. Do NOT re-add them: the
-# governance authority over agent behaviour is CONSTITUTION.md +
-# GOVERNANCE.md §AI Contributors, both still Tier 1.
+# See the Tier 2 section above for the reasoning. Do NOT re-add them.
+#
+# What makes that safe is that the one genuinely normative rule about agent
+# behaviour — the may/may-not-autonomously-change list — is DEFINED in
+# GOVERNANCE.md §AI Contributors (Tier 1), not in AGENTS.md. AGENTS.md
+# §"Autonomous Agent Boundaries" elaborates it with examples and is explicitly
+# barred from widening it; relaxing those limits is a GOVERNANCE.md amendment
+# and lands in a Tier-1 PR. If a future change moves a rule the other way —
+# out of GOVERNANCE.md and into an instruction file — this carve-out breaks
+# and the file in question belongs back at Tier 1.
 
 # NOTE: MainWindow.cpp/.h are intentionally NOT gated here — they sit on the
 # Tier 3 reviewer default (the `*` line), same as the #3351 decomposition's

@@ -173,6 +173,11 @@ coordination protocol are in
 [`CONSTITUTION.md`](CONSTITUTION.md) or [`GOVERNANCE.md`](GOVERNANCE.md),
 those files win, and the conflict is a bug in `AGENTS.md` worth reporting.
 
+The limits on what an automated agent may change without a human deciding are
+defined in [`GOVERNANCE.md`](GOVERNANCE.md#ai-contributors) §AI Contributors,
+which is Tier 1. `AGENTS.md` §"Autonomous Agent Boundaries" elaborates them
+but may not widen them.
+
 ---
 
 ## Code of Conduct
