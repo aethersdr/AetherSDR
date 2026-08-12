@@ -481,6 +481,42 @@ int main(int argc, char** argv)
                nearly(canvas.itemRect("a").x, 30.0 / 96.0));
         canvas.setGridSnapEnabled(false);
 
+        // A PAN ignores applet magnets and reaches the grid (8600 field
+        // report): with an applet layered on it whose left edge (324 px) is
+        // 3 px from the drop point, the pan must pass it by and land on the
+        // grid line at 31/96 (322.9 px, 1.9 px away) — peer capture would
+        // have beaten the grid for any other item type.  The applet keeps
+        // its pan magnetism: dropped 2.9 px from the pan's right edge, it
+        // captures the edge even though a grid line sits further inside
+        // its own magnet range.
+        {
+            canvas.setGridSnapEnabled(true);
+            auto* pan = new QWidget;
+            canvas.addItem("pan:0", pan, NormRect{0.20, 0.50, 0.30, 0.30},
+                           QStringLiteral("panadapter"));
+            canvas.addItem("applet:A", new QWidget,
+                           NormRect{0.324, 0.50, 0.20, 0.25});
+
+            canvas.beginMoveGesture("pan:0", origin);
+            canvas.moveGesture(origin + QPoint(121, 0));
+            canvas.endGesture(origin + QPoint(121, 0));
+            report("a pan passes applet edges and snaps to the grid",
+                   nearly(canvas.itemRect("pan:0").x, 31.0 / 96.0)
+                       && nearly(canvas.itemRect("pan:0").y, 0.5));
+
+            const double panRight = canvas.itemRect("pan:0").x
+                                    + canvas.itemRect("pan:0").w;
+            canvas.beginMoveGesture("applet:A", origin);
+            canvas.moveGesture(origin + QPoint(296, 0));
+            canvas.endGesture(origin + QPoint(296, 0));
+            report("an applet still snaps to the pan's edge",
+                   nearly(canvas.itemRect("applet:A").x, panRight));
+
+            canvas.removeItem("pan:0");
+            canvas.removeItem("applet:A");
+            canvas.setGridSnapEnabled(false);
+        }
+
         // Keyboard: arrows nudge, Shift+arrows resize, both announce a
         // gesture pair (undo hangs off it).
         canvas.selectItem("a");

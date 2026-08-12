@@ -561,11 +561,26 @@ void WorkspaceCanvas::moveGesture(const QPoint& globalPos)
     // Alt suppresses snapping for as long as it is held — checked per
     // motion so the operator can toggle precision mid-drag.
     if (!(QApplication::keyboardModifiers() & Qt::AltModifier)) {
+        // A pan aligns to the ROOM — the grid, the canvas edges, the other
+        // pans — never to the furniture riding on it.  Its edges sweep the
+        // whole surface, and with applets layered on top the 8 px peer tier
+        // (which deliberately beats the grid) captured on nearly every
+        // motion, so the grid never engaged: "the pan doesn't snap to grid"
+        // (8600 field report).  Applets keep every magnet, including pan
+        // edges — a meter aligned to the spectrum edge is the point.
+        const CanvasItem* moving = m_layout.item(m_gestureId);
+        const bool movingPan =
+            moving && moving->contentType == QLatin1String("panadapter");
         QList<NormRect> peers;
         for (const CanvasItem& other : m_layout.itemsByZ()) {
-            if (other.id != m_gestureId) {
-                peers.append(other.rect);
+            if (other.id == m_gestureId) {
+                continue;
             }
+            if (movingPan
+                && other.contentType != QLatin1String("panadapter")) {
+                continue;
+            }
+            peers.append(other.rect);
         }
         const SnapResult snapped =
             snapRect(r, m_gestureZone, peers,
