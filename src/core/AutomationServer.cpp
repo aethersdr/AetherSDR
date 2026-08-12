@@ -23,7 +23,6 @@
 #include <QAction>
 #include <QLocalServer>
 #include <QScopeGuard>
-#include <QStatusBar>
 #include <QLocalSocket>
 #include <QApplication>
 #include <QScreen>
@@ -351,10 +350,14 @@ QJsonObject describeWidget(const QWidget* w)
     // A QStatusBar's showMessage() text is otherwise unobservable from the
     // tree — operator notices (e.g. the #4863 float-restore warning, or the
     // canvas-unavailable message) could only be verified by screenshot
-    // (#4864, second gap).
-    if (const auto* sb = qobject_cast<const QStatusBar*>(w)) {
-        if (!sb->currentMessage().isEmpty())
-            o[QStringLiteral("statusMessage")] = sb->currentMessage();
+    // (#4864, second gap).  Read through the dynamic property MainWindow
+    // mirrors on the widget, NOT the QStatusBar type: core/ must not grow
+    // QtWidgets knowledge (engine-boundary EB2, aetherd RFC §10) — the gui
+    // side owns the widget, this side reads generic object data.
+    {
+        const QVariant msg = w->property("currentMessage");
+        if (msg.isValid() && !msg.toString().isEmpty())
+            o[QStringLiteral("statusMessage")] = msg.toString();
     }
 
     if (w->isWindow()) {

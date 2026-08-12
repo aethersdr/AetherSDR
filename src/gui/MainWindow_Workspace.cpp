@@ -43,6 +43,16 @@ QWidget* MainWindow::centralPanWidget() const
 
 void MainWindow::wireWorkspaceCanvas()
 {
+    // The automation bridge reports the status-bar message in dumpTree
+    // (#4864) by reading a generic dynamic property — core/ must not know
+    // the QStatusBar type (engine-boundary EB2).  The gui side owns the
+    // widget, so the mirror lives here, wired once at startup.
+    connect(statusBar(), &QStatusBar::messageChanged, this,
+            [this](const QString& m) {
+                statusBar()->setProperty("currentMessage", m);
+            });
+    statusBar()->setProperty("currentMessage", statusBar()->currentMessage());
+
     m_workspaceCanvas = new WorkspaceCanvas;
     m_workspaceCanvas->hide();   // mounted on demand by toggleWorkspaceCanvas()
 
