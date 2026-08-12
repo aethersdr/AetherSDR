@@ -11,9 +11,9 @@ screen (error, warning, success, notification, transmit, selection,
 plain text…) to *the token that says it*. If you follow the map, your
 UI is themeable for free, consistent with every existing screen, and
 correct in both bundled themes. If you invent a colour instead, you
-have created the 651st unique colour in a codebase that is actively
-migrating down from 650 (#3184) — and a reviewer will send you back
-here.
+have created one more unique colour in a codebase that is actively
+migrating its colours down onto the token set (#3184) — and a reviewer
+will send you back here.
 
 ## 1. How colours work here
 
@@ -21,7 +21,9 @@ The theme system (RFC #3076) is two layers of named tokens, defined in
 `resources/themes/default-dark.json` and `default-light.json` and
 served by `AetherSDR::ThemeManager`:
 
-- **Primitive palette** — `color.gray.50…950`, `color.blue.300/500/700`,
+- **Primitive palette** — a grey ramp (whose steps differ per theme:
+  dark carries `gray.200`/`gray.850`, light carries
+  `gray.100`/`gray.300`/`gray.750`), plus `color.blue.300/500/700`,
   `color.red.500`, `color.green.500`, `color.amber.500`. These are the
   raw pigments. **UI code never references primitives directly**; they
   exist so semantic tokens can share pigments consistently.
@@ -30,10 +32,11 @@ served by `AetherSDR::ThemeManager`:
   the layer UI code uses, and the layer this guide maps.
 
 Tokens can also be **scoped**: the theme JSON can override a token for
-a widget subtree (for example, `applet.tx` turns the checked-toggle
-accent red where the root theme has it blue). The widget-aware
-accessors below resolve scope automatically — prefer them inside
-applets.
+a widget subtree (for example, the `applet/tx` scope turns the
+checked-toggle accent red where the root theme has it blue — scope
+paths are slash-joined, and a widget opts in by carrying the path in
+its `themeContainer` property). The widget-aware accessors below
+resolve scope automatically — prefer them inside applets.
 
 ### Consuming tokens
 
@@ -52,8 +55,14 @@ tm.applyStyleSheet(m_statusLabel,
     "QLabel { color: {{color.accent.danger}}; font-size: 10px; }");
 ```
 
-Missing tokens log a warning and fall back to the compiled-in default
-(`src/core/ThemeSeedGenerated.cpp`, generated — never hand-edited).
+A token the *loaded theme* omits resolves from the compiled-in seed
+(`src/core/ThemeSeedGenerated.cpp`, generated — never hand-edited):
+`loadThemeFromPath()` re-seeds it as a base layer before flattening the
+JSON on top. A token that exists **nowhere** does not fall back — it
+logs a warning and `color()` returns `Qt::transparent`, while a
+`{{token}}` in a stylesheet resolves to an empty fragment that Qt
+discards, leaving the widget looking unchanged. If a colour is missing
+or refuses to change, check the log for `missing color token`.
 
 ## 2. The semantic map
 
@@ -65,7 +74,7 @@ a token for a role it does not name.
 
 | You are showing… | Token(s) |
 |---|---|
-| **Error / fault / danger / destructive action** | `color.accent.danger` (foreground); `color.button.danger.*` for destructive buttons |
+| **Error / fault / danger / destructive action** | `color.accent.danger` (foreground); `color.button.danger.*.disabled` for a destructive button's disabled state — enabled-state button colours are not tokenised yet, so an enabled destructive button takes its colour from `color.accent.danger` |
 | **Warning / caution / approaching a limit** | `color.accent.warning` (foreground); `color.background.warning` (panel tint); `color.toggle.warning.*` (checked warning toggles) |
 | **Success / OK / enabled-and-healthy** | `color.accent.success` (foreground); `color.background.success` (panel tint); `color.toggle.success.*` (checked success toggles) |
 | **Notification / message / attention ping** | `color.highlight.message`, with `color.highlight.fg` for text drawn on top |
@@ -83,10 +92,14 @@ a token for a role it does not name.
 
 ### Control families
 
-Shared widgets have complete per-state token families — reach for the
-family before composing from the tables above:
+Shared widgets have per-state token families — reach for the family
+before composing from the tables above. `color.toggle.*`,
+`color.slider.*` and `color.knob.*` are complete; `color.button.*` is
+not (see below):
 
-- `color.button.*` (incl. `.danger.*` and `.disabled` states)
+- `color.button.*` — **disabled states only** today (`background`,
+  `foreground`, `border` and their `danger.` counterparts, all
+  `.disabled`); enabled-state button colours are not tokenised yet
 - `color.toggle.*` (base + `.accent/.success/.warning` checked variants —
   see `docs/theming/toggle-button-tokens.md`)
 - `color.slider.*` / `color.knob.*` (see
@@ -95,10 +108,17 @@ family before composing from the tables above:
 - `color.spectrum.*`, `color.waterfall.*` (traces, grid, colormaps)
 - `color.slice.a…h` + `color.slice.dim.*` (slice identity colours)
 
-The full token inventory is greppable:
-`git grep -o '"color\.[a-z0-9._]*"' src/core/ThemeSeedGenerated.cpp`.
-The design rationale and the hex values each token canonicalised from
-live in `docs/theming/canonical-tokens.md`.
+The full semantic-token inventory is greppable — 103 tokens, the same
+set the bundled themes carry at root scope:
+
+```bash
+git grep -oh '"color\.[a-zA-Z0-9._]*"' src/core/ThemeSeedGenerated.cpp | sort -u
+```
+
+Keep the character class case-sensitive; a lowercase-only class
+silently drops the four camelCase names. The design rationale and the
+hex values each token canonicalised from live in
+`docs/theming/canonical-tokens.md`.
 
 ## 3. Do not deviate
 
@@ -126,7 +146,12 @@ sanctioned way a new colour enters the codebase, and it enters as a
    above.
 2. Add it to **both** `resources/themes/default-dark.json` and
    `default-light.json`. Prefer referencing an existing primitive
-   (`{color.amber.500}`) over a fresh hex value.
+   (`{color.amber.500}`) over a fresh hex value — but check the alias
+   resolves in **both** themes: the grey ramps differ, and an alias to a
+   primitive a theme lacks is returned as the literal string
+   (`ThemeManager::resolveAlias()`), yielding an invalid `QColor` with
+   no warning. Nothing catches this for you — `gen_theme_seed.py` reads
+   only `default-dark.json`.
 3. Regenerate the compiled-in seed: `python tools/gen_theme_seed.py`
    (CI's `check_theme_seed` gate fails the PR if the seed and JSON
    drift).
@@ -139,8 +164,8 @@ deserves.
 
 ## 5. Colour-as-data (the exemptions)
 
-A small set of colours are *data*, not theme, and are exempt from all
-of the above:
+A small set of colours are *data*, not theme, and are exempt from the
+no-literals rule above:
 
 - `CompactColorPicker.cpp` swatches — a colour picker's swatches are
   its content.
@@ -150,23 +175,46 @@ of the above:
   `ThemeSeedGenerated.cpp` — those literals *are* the tokens.
 - Brand assets (logos, icons with fixed brand colours).
 
+**The exemption is not automatic in CI.** The ratchet in §6 counts every
+hex literal in any file outside `COLOUR_ALLOWLIST`
+(`tools/audit_colours.py`), which today lists only
+`src/core/ThemeManager.cpp` and `ThemeSeedGenerated.cpp` — so adding one
+swatch to `CompactColorPicker.cpp` fails the gate. If your colour is
+genuinely data, add the FILE to `COLOUR_ALLOWLIST` with a reason in the
+same PR.
+
 If you believe you have found a new member of this list, say so in the
 PR description rather than deciding silently.
 
 ## 6. Checking yourself
 
-`tools/audit_colours.py` is the advisory audit behind this guide — it
-inventories hardcoded colours and suggests the token each one should
-map to:
+`tools/audit_colours.py` is the tool behind this guide — it inventories
+hardcoded colours and suggests the token each one should map to:
 
 ```bash
 python tools/audit_colours.py --src src --summary-only
 ```
 
-Run it if you want to confirm your change adds nothing new (compare
-against a clean checkout with `--compare-src`). Conformance is an
-authoring-time responsibility: choose the token when you write the
-code, and nothing downstream has anything to flag.
+CI runs the same tool as a **blocking** gate. The "Hardcoded-colour
+ratchet" step in `.github/workflows/static-checks.yml` runs it with
+`--compare-src <base>/src --strict`, which exits 1 if your branch raises
+the unique-colour, total-reference or `setStyleSheet()` count above the
+**tip of your base branch at CI time** — not above your merge base. To
+see the same verdict before you push:
+
+```bash
+git worktree add /tmp/colour-base origin/main
+python tools/audit_colours.py --src src \
+    --compare-src /tmp/colour-base/src --summary-only --strict
+```
+
+Because the comparison is against `main`'s tip, a branch that has fallen
+behind can fail on counts *`main` itself reduced*. If the gate reports a
+rise you cannot find in your own diff, merge `main` and re-run before
+hunting for it.
+
+Conformance is an authoring-time responsibility: choose the token when
+you write the code, and the gate has nothing to flag.
 
 ## See also
 
