@@ -2,9 +2,11 @@
 // Run: ./build/tx_mic_channel_normalizer_test
 
 #include "core/Resampler.h"
+#include "core/TxCaptureBuffer.h"
 #include "core/TxMicChannelNormalizer.h"
 
 #include <QByteArray>
+#include <QBuffer>
 #include <QtEndian>
 
 #include <algorithm>
@@ -23,6 +25,7 @@ using AetherSDR::TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo;
 using AetherSDR::TxMicChannelNormalizer::collapseFloat32ToInt16MonoBigEndian;
 using AetherSDR::TxMicChannelNormalizer::measureInt16StereoLevelBlock;
 using AetherSDR::TxMicChannelNormalizer::rmsFromLevelBlock;
+namespace TxCaptureBuffer = AetherSDR::TxCaptureBuffer;
 
 namespace {
 
@@ -306,6 +309,56 @@ void testDaxRadioNativeCollapseKeepsOneSidedLevel()
            diag.selectedMode == ChannelMode::Left && diag.oneSidedStereo);
 }
 
+void testCaptureReadIsBounded()
+{
+    QByteArray backlog(TxCaptureBuffer::kMaxReadBytes + 4096, 'x');
+    QBuffer device(&backlog);
+    device.open(QIODevice::ReadOnly);
+
+    const QByteArray block = TxCaptureBuffer::readBoundedInt16(&device, 2);
+    report("pull-mode capture reads at most one bounded block",
+           block.size() == TxCaptureBuffer::kMaxReadBytes);
+    report("bounded capture leaves excess backend residue for later callbacks",
+           device.bytesAvailable() == 4096);
+}
+
+void testDumpSizedMicBlockIsRejectedBeforeDereference()
+{
+    char sentinel = 0;
+    constexpr qsizetype dumpInputBytes = 0x80007900;
+    const QByteArray dumpSized = QByteArray::fromRawData(&sentinel, dumpInputBytes);
+    Diagnostics diag;
+
+    const QByteArray out = canonicalizeInt16ToMonoStereo(
+        dumpSized,
+        2,
+        48000,
+        ChannelMode::Average,
+        nullptr,
+        &diag);
+
+    report("2 GiB dump-sized mic block is rejected without allocation",
+           out.isEmpty() && diag.inputRejected);
+    report("rejection diagnostics preserve the dump byte count",
+           diag.inputBytes == dumpInputBytes && diag.frames == 0);
+}
+
+void testMisalignedMicBlockIsRejected()
+{
+    const QByteArray malformed(6, '\0'); // stereo Int16 requires 4-byte frames
+    Diagnostics diag;
+    const QByteArray out = canonicalizeInt16ToMonoStereo(
+        malformed,
+        2,
+        48000,
+        ChannelMode::Auto,
+        nullptr,
+        &diag);
+
+    report("partial stereo Int16 frame is rejected at the boundary",
+           out.isEmpty() && diag.inputRejected && diag.inputBytes == malformed.size());
+}
+
 int main()
 {
     std::printf("TX mic channel normalizer tests\n\n");
@@ -319,6 +372,9 @@ int main()
     testPcMicMeterSeesRightOnly();
     testOpusFrameSizingAfterNormalization();
     testDaxRadioNativeCollapseKeepsOneSidedLevel();
+    testCaptureReadIsBounded();
+    testDumpSizedMicBlockIsRejectedBeforeDereference();
+    testMisalignedMicBlockIsRejected();
 
     std::printf("\n%s\n", g_failed == 0 ? "All tests passed." : "Some tests failed.");
     return g_failed == 0 ? 0 : 1;

@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
+#include "TxCaptureBuffer.h"
 #include "ClientEq.h"
 #include "ClientComp.h"
 #include "ClientGate.h"
@@ -8034,15 +8035,16 @@ void AudioEngine::onTxAudioReady()
         if (event != TxCaptureHealthTracker::Event::None) {
             logTxCaptureHealthEvent(event);
         }
-#ifdef Q_OS_LINUX
-        // Qt/PipeWire capture is edge-driven: leaving the pull device unread
-        // fills its ring, after which no new readyRead edge arrives to resume
-        // PC Audio when TCI stops (#4230). Keep consuming the Linux source but
-        // discard these samples so only TCI audio reaches the radio. Windows
-        // and macOS retain their existing behavior until equivalent evidence
-        // exists for those backends.
+#ifndef Q_OS_MAC
+        // Pull-mode capture must keep consuming while TCI owns TX audio. An
+        // unread Qt/PipeWire ring stops producing readyRead edges (#4230), and
+        // Qt/WASAPI appends every unread block to an unbounded residue. The
+        // latter crossed 2 GiB after multi-hour TCI sessions and crashed the
+        // Int16 normalizer when local mic processing resumed. Discard one
+        // bounded block per callback so neither backend can accumulate.
         if (m_micDevice) {
-            const QByteArray discarded = m_micDevice->readAll();
+            const QByteArray discarded = TxCaptureBuffer::readBoundedInt16(
+                m_micDevice.data(), m_txInputChannels);
             if (!discarded.isEmpty()) {
                 m_txCaptureHealth.recordMicRead(txCaptureNowMs());
             }
@@ -8069,7 +8071,8 @@ void AudioEngine::onTxAudioReady()
 #else
     if (!m_micDevice
         || (!m_hostModulation && m_txStreamId == 0 && m_remoteTxStreamId == 0)) return;
-    QByteArray data = m_micDevice->readAll();
+    QByteArray data = TxCaptureBuffer::readBoundedInt16(
+        m_micDevice.data(), m_txInputChannels);
     if (data.isEmpty()) return;
     m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
 #endif
@@ -8087,7 +8090,15 @@ void AudioEngine::onTxAudioReady()
         m_txMicChannelMode,
         &m_txMicChannelState,
         &channelDiagnostics);
-    if (data.isEmpty()) return;
+    if (data.isEmpty()) {
+        if (channelDiagnostics.inputRejected) {
+            qCWarning(lcAudio) << "AudioEngine: rejected invalid TX mic block"
+                               << "bytes:" << channelDiagnostics.inputBytes
+                               << "rate:" << channelDiagnostics.inputSampleRate
+                               << "channels:" << channelDiagnostics.inputChannels;
+        }
+        return;
+    }
     logTxInputChannelDiagnostics(channelDiagnostics, "TX mic");
 
     // Resample canonical mono int16 to 24kHz duplicated stereo if needed, then

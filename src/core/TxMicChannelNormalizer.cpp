@@ -1,5 +1,7 @@
 #include "TxMicChannelNormalizer.h"
 
+#include "TxCaptureBuffer.h"
+
 #include <QtEndian>
 
 #include <algorithm>
@@ -11,6 +13,24 @@ namespace {
 constexpr float kSilenceFloor = 0.0005623413f; // -65 dBFS
 constexpr float kWeakToStrongRatio = 0.25118864f; // -12 dB
 constexpr int kDefaultSampleRate = 24000;
+
+bool validRealtimeBlock(const QByteArray& input,
+                        qsizetype bytesPerSample,
+                        int channels,
+                        Diagnostics& diagnostics)
+{
+    diagnostics.inputBytes = input.size();
+    if (input.isEmpty()) {
+        return false;
+    }
+
+    const qsizetype frameBytes = bytesPerSample * channels;
+    const bool valid = input.size() <= TxCaptureBuffer::kMaxReadBytes
+        && frameBytes > 0
+        && (input.size() % frameBytes) == 0;
+    diagnostics.inputRejected = !valid;
+    return valid;
+}
 
 int frameHoldCount(int sampleRate, int frames)
 {
@@ -203,24 +223,24 @@ QByteArray canonicalizeInt16ToMonoStereo(const QByteArray& input,
                                          Diagnostics* diagnostics)
 {
     const int channels = inputChannels <= 1 ? 1 : 2;
-    const int sampleCount = input.size() / static_cast<int>(sizeof(int16_t));
-    const int frames = sampleCount / channels;
-    if (frames <= 0) {
+    Diagnostics diag;
+    diag.inputChannels = channels;
+    diag.inputSampleRate = inputSampleRate;
+    if (!validRealtimeBlock(input, sizeof(int16_t), channels, diag)) {
         if (diagnostics) {
-            *diagnostics = {};
-            diagnostics->inputChannels = channels;
-            diagnostics->inputSampleRate = inputSampleRate;
+            *diagnostics = diag;
         }
         return {};
     }
 
-    Diagnostics diag;
-    diag.inputChannels = channels;
-    diag.inputSampleRate = inputSampleRate;
+    const qsizetype sampleCount = input.size() / static_cast<qsizetype>(sizeof(int16_t));
+    const int frames = static_cast<int>(sampleCount / channels);
     diag.frames = frames;
 
     const auto* src = reinterpret_cast<const int16_t*>(input.constData());
-    QByteArray stereo(frames * 2 * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
+    const qsizetype outputBytes = static_cast<qsizetype>(frames)
+        * 2 * static_cast<qsizetype>(sizeof(int16_t));
+    QByteArray stereo(outputBytes, Qt::Uninitialized);
     auto* dst = reinterpret_cast<int16_t*>(stereo.data());
 
     if (channels == 1) {
@@ -284,24 +304,24 @@ QByteArray collapseFloat32ToInt16MonoBigEndian(const QByteArray& input,
                                                Diagnostics* diagnostics)
 {
     const int channels = inputChannels <= 1 ? 1 : 2;
-    const int sampleCount = input.size() / static_cast<int>(sizeof(float));
-    const int frames = sampleCount / channels;
-    if (frames <= 0) {
+    Diagnostics diag;
+    diag.inputChannels = channels;
+    diag.inputSampleRate = inputSampleRate;
+    if (!validRealtimeBlock(input, sizeof(float), channels, diag)) {
         if (diagnostics) {
-            *diagnostics = {};
-            diagnostics->inputChannels = channels;
-            diagnostics->inputSampleRate = inputSampleRate;
+            *diagnostics = diag;
         }
         return {};
     }
 
-    Diagnostics diag;
-    diag.inputChannels = channels;
-    diag.inputSampleRate = inputSampleRate;
+    const qsizetype sampleCount = input.size() / static_cast<qsizetype>(sizeof(float));
+    const int frames = static_cast<int>(sampleCount / channels);
     diag.frames = frames;
 
     const auto* src = reinterpret_cast<const float*>(input.constData());
-    QByteArray mono(frames * static_cast<int>(sizeof(qint16)), Qt::Uninitialized);
+    const qsizetype outputBytes = static_cast<qsizetype>(frames)
+        * static_cast<qsizetype>(sizeof(qint16));
+    QByteArray mono(outputBytes, Qt::Uninitialized);
     auto* dst = reinterpret_cast<qint16*>(mono.data());
 
     if (channels == 1) {

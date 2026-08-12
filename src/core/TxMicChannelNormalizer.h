@@ -35,6 +35,8 @@ struct Diagnostics {
     int inputChannels{0};
     int inputSampleRate{0};
     int frames{0};
+    qsizetype inputBytes{0};
+    bool inputRejected{false};
 };
 
 struct LevelBlock {

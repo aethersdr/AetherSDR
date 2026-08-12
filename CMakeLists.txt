@@ -652,6 +652,7 @@ set(CORE_SOURCES
     src/core/AudioOutputRouter.cpp
     src/core/AetherDspModePolicy.cpp
     src/core/AudioEngine.cpp
+    src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
     src/core/Biquad.cpp
@@ -3647,6 +3648,7 @@ target_link_libraries(client_quindar_test PRIVATE Qt6::Core)
 
 add_executable(tx_mic_channel_normalizer_test
     tests/tx_mic_channel_normalizer_test.cpp
+    src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/Resampler.cpp
 )

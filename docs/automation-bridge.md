@@ -721,6 +721,9 @@ handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 `source_was_active`, `saturation_observed`, `tci_suppressed_callbacks`,
 `full_buffer_during_tci_observations`, `idle_during_tci_transitions`,
 `post_tci_local_tx_while_saturated`, and `last_mic_read_age_ms`.
+Linux and Windows pull-mode inputs are drained in bounded blocks during TCI
+suppression, so a growing `buffer_bytes_available` value or a new saturation
+event now indicates that the backend has stopped making forward progress.
 `saturation_observed` is set when the capture buffer reaches its reported
 capacity during TCI suppression. An Active-to-Idle transition with suppressed
 callbacks and unread bytes remains a fallback for backends that do not expose a

@@ -329,6 +329,12 @@ flowchart TD
   5 ms timer polls that buffer and calls `onTxAudioReady()`.
 - Linux and Windows use pull mode: the device's `readyRead` signal calls
   `onTxAudioReady()` directly.
+- Pull-mode reads are capped at 256 KiB. While fresh TCI TX audio owns the
+  route, Linux and Windows continue consuming and discarding bounded mic
+  blocks. Linux needs this to preserve future `readyRead` edges; Windows needs
+  it because Qt/WASAPI otherwise appends unread capture into an unbounded
+  residue. A multi-hour residue exceeded 2 GiB in v26.8.2 and overflowed the
+  normalizer's old signed-`int` output-size calculation.
 
 When the capture sample rate is not 24 kHz, `m_txResampler` converts to the
 internal 24 kHz voice rate.
@@ -339,6 +345,8 @@ internal 24 kHz voice rate.
 before the voice TX chain or early RADE/DAX branches:
 
 - The actual negotiated channel count is stored as `m_txInputChannels`.
+- Oversized or frame-misaligned realtime blocks are rejected before sample
+  access or allocation; buffer-size calculations use `qsizetype`.
 - Mono input is duplicated to stereo with no level change.
 - Stereo input is reduced to one canonical mono voice signal before any
   resampling. Auto mode measures raw L/R RMS per block, selects the stronger
