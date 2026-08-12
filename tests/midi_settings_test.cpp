@@ -196,6 +196,58 @@ int main(int argc, char** argv)
     ok &= expect(rLeds.skippedUnknownParam.size() == 2,
                  "LEDs rows are named skips, not file-level errors");
 
+    // A real device has one row per LED; the details list should name the
+    // target once rather than once per row.
+    const auto rLedsMany = settings.importProfile(
+        writeImportFile("many-leds.map",
+                        "# Controls\n"
+                        "C100=freq\n"
+                        "# LEDs\n"
+                        "L1=txled\n"
+                        "L2=txled\n"
+                        "L3=txled\n"
+                        "L4=txled\n"),
+        validator);
+    ok &= expect(rLedsMany.ok() && rLedsMany.skippedUnknownParam.size() == 1,
+                 "repeated LEDs rows collapse to one named skip");
+
+    // Two functions on ONE MIDI source: MidiControlManager indexes by
+    // MidiBinding::key(), so importing both would leave the earlier one
+    // unreachable after Load with nothing reporting it.
+    const auto rKeyClash = settings.importProfile(
+        writeImportFile("keyclash.map",
+                        "# Buttons\n"
+                        "B13=nr\n"
+                        "B13=banddown\n"),
+        validator);
+    ok &= expect(rKeyClash.ok() && rKeyClash.importedCount == 1,
+                 "two functions on one key import as one binding");
+    ok &= expect(rKeyClash.duplicates.size() == 1
+                     && rKeyClash.duplicates.first().contains("B13"),
+                 "the losing row is named as a duplicate, not dropped silently");
+    {
+        const auto stored = settings.loadProfile(rKeyClash.profileName);
+        QSet<quint32> keys;
+        for (const auto& b : stored) keys.insert(b.key());
+        ok &= expect(stored.size() == static_cast<int>(keys.size()),
+                     "no stored profile binds one MIDI source twice");
+    }
+
+    // Same collision in the native XML — likelier there, since addBinding()
+    // dedups by param only and our own export can carry it.
+    const auto rXmlKeyClash = settings.importProfile(
+        writeImportFile("keyclash.xml",
+                        "<MidiProfile>"
+                        "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\" number=\"7\"/>"
+                        "<Binding param=\"tx.rfPower\" channel=\"0\" type=\"0\" number=\"7\"/>"
+                        "</MidiProfile>\n"),
+        validator);
+    ok &= expect(rXmlKeyClash.ok() && rXmlKeyClash.importedCount == 1,
+                 "XML: two bindings on one source import as one");
+    ok &= expect(rXmlKeyClash.duplicates.size() == 1
+                     && rXmlKeyClash.duplicates.first().contains("CC"),
+                 "XML: the losing binding is named with its source");
+
     const auto r3 = settings.importProfile(writeImportFile("garbage.map", "hello world\n"),
                                            validator);
     ok &= expect(!r3.ok() && r3.importedCount == 0, "unrecognized content fails loudly");

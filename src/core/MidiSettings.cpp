@@ -107,6 +107,20 @@ constexpr MapFunctionEntry kSmartSdrMapFunctions[] = {
     { "zoomout",       "global.panZoomOut", false },
 };
 
+// Message-type name for skip/duplicate reports.  Spelled out here rather than
+// calling MidiBinding::sourceDisplayName(), which lives in
+// MidiControlManager.cpp — midi_settings_test links this file alone.
+QString midiMsgTypeName(MidiBinding::MsgType type)
+{
+    switch (type) {
+    case MidiBinding::CC:        return QStringLiteral("CC");
+    case MidiBinding::NoteOn:    return QStringLiteral("Note On");
+    case MidiBinding::NoteOff:   return QStringLiteral("Note Off");
+    case MidiBinding::PitchBend: return QStringLiteral("Pitch Bend");
+    }
+    return QStringLiteral("message");
+}
+
 const MapFunctionEntry* findMapFunction(const QString& function)
 {
     for (const auto& entry : kSmartSdrMapFunctions) {
@@ -126,6 +140,7 @@ QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
 {
     QVector<MidiBinding> bindings;
     QSet<QString> importedParams;
+    QSet<quint32> importedKeys;
     bool sawAssignment = false;
 
     enum class Section { None, Controls, Buttons, Other };
@@ -170,8 +185,11 @@ QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
         // dialect ("L1=", "LED1="), and judging those by the control/button
         // key format would fail the whole file instead of naming the skip.
         if (section == Section::Other) {
-            // e.g. the LEDs section: device feedback, not a binding.
-            result.skippedUnknownParam << function + QStringLiteral(" (not a control/button row)");
+            // e.g. the LEDs section: device feedback, not a binding.  Named
+            // once, not once per row — a real device has one row per LED.
+            const QString note = function + QStringLiteral(" (not a control/button row)");
+            if (!result.skippedUnknownParam.contains(note))
+                result.skippedUnknownParam << note;
             continue;
         }
 
@@ -194,8 +212,10 @@ QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
 
         const QString paramId = QLatin1String(entry->paramId);
         if (paramValidator && !paramValidator(paramId)) {
-            result.skippedUnknownParam
-                << function + QStringLiteral(" (param %1 not registered)").arg(paramId);
+            const QString note =
+                function + QStringLiteral(" (param %1 not registered)").arg(paramId);
+            if (!result.skippedUnknownParam.contains(note))
+                result.skippedUnknownParam << note;
             continue;
         }
         if (importedParams.contains(paramId)) {
@@ -210,8 +230,18 @@ QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
         b.paramId = paramId;
         b.inverted = false;
         b.relative = (b.msgType == MidiBinding::CC) && entry->relativeCc;
+        // Two rows on one MIDI source is the other way a binding disappears:
+        // MidiControlManager indexes by MidiBinding::key(), one entry per
+        // key, so the later row would make the earlier one unreachable after
+        // Load while both still show in the table. Name it instead.
+        if (importedKeys.contains(b.key())) {
+            result.duplicates
+                << function + QStringLiteral(" (%1 already bound)").arg(key);
+            continue;
+        }
         bindings.append(b);
         importedParams.insert(paramId);
+        importedKeys.insert(b.key());
     }
 
     if (!sawAssignment)
@@ -231,6 +261,7 @@ QVector<MidiBinding> parseProfileXml(const QByteArray& bytes,
 {
     QVector<MidiBinding> bindings;
     QSet<QString> importedParams;
+    QSet<quint32> importedKeys;
     bool sawRoot = false;
     bool sawBindingElement = false;
 
@@ -304,8 +335,22 @@ QVector<MidiBinding> parseProfileXml(const QByteArray& bytes,
         b.number = number;
         b.inverted = (attrs.value("inverted") == u"True");
         b.relative = (attrs.value("relative") == u"True");
+        // Same MIDI-source collision as the .map path, and likelier here:
+        // addBinding() dedups by param only, so our own export can carry two
+        // bindings on one source. The later one would win the index after
+        // Load and the earlier would go quiet with nothing reporting it.
+        if (importedKeys.contains(b.key())) {
+            result.duplicates
+                << param + QStringLiteral(" (%1 %2 on channel %3 already bound)")
+                               .arg(midiMsgTypeName(b.msgType))
+                               .arg(number)
+                               .arg(channel < 0 ? QStringLiteral("any")
+                                                : QString::number(channel + 1));
+            continue;
+        }
         bindings.append(b);
         importedParams.insert(param);
+        importedKeys.insert(b.key());
     }
 
     if (xml.hasError()) {
