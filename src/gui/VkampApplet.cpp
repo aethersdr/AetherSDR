@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 #include "MeterSmoother.h"
 
+#include <QAccessible>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -337,6 +338,13 @@ void VkampApplet::setAntenna(int port)
 void VkampApplet::setBypass(bool on)
 {
     m_bypassed = on;
+    m_bypassBtn->setText(on ? "BYPASS" : "AMP ON");
+    // Text-only value change -- see docs/a11y.md; same pattern as
+    // AcomApplet::updateTempLabel()'s own dynamic-text button.
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(m_bypassBtn, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
     auto& theme = AetherSDR::ThemeManager::instance();
     theme.applyStyleSheet(m_bypassBtn,
         on ? activeBtnStyle("#3a2a12", "#6a4a1a", "#ffb84d") : neutralBtnStyle());
@@ -395,6 +403,12 @@ void VkampApplet::setResetProgress(double remainingSeconds, bool active)
         m_resetBtn->setEnabled(m_connected);
         m_resetBtn->setText("RESET");
     }
+    // Text-only value change -- see docs/a11y.md. Fires at most once per
+    // second (VkampConnection's own kResetIntervalSeconds), not high-rate.
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(m_resetBtn, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 void VkampApplet::setConnected(bool connected)
@@ -432,6 +446,13 @@ void VkampApplet::setConnected(bool connected)
         m_tempLabel->setText("TEMP  — C");
         m_voltsLabel->setText("SUPPLY  — V");
         m_currentLabel->setText("CURR  — A");
+        // Consume any pending status update now, before updateValueLabels()
+        // below -- otherwise a status frame that landed in the last
+        // <=100ms leaves this true, and updateValueLabels()'s own
+        // if (m_valuesDirty) block immediately overwrites the placeholders
+        // above with "0C"/"0.0V"/"0.0A", which reads as a real reading
+        // rather than "no data" for the rest of the disconnected session.
+        m_valuesDirty = false;
         m_fwdWatts = 0.0f;
         m_reflectedWatts = 0.0f;
         m_swrVal = 1.0f;
