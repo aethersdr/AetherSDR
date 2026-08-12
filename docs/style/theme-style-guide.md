@@ -198,20 +198,20 @@ python tools/audit_colours.py --src src --summary-only
 CI runs the same tool as a **blocking** gate. The "Hardcoded-colour
 ratchet" step in `.github/workflows/static-checks.yml` runs it with
 `--compare-src <base>/src --strict`, which exits 1 if your branch raises
-the unique-colour, total-reference or `setStyleSheet()` count above the
-**tip of your base branch at CI time** — not above your merge base. To
-see the same verdict before you push:
+the unique-colour, total-reference or `setStyleSheet()` count above **the
+merge base of your branch and `main`**. To see the same verdict before
+you push:
 
 ```bash
-git worktree add /tmp/colour-base origin/main
+BASE=$(git merge-base HEAD origin/main)
+git worktree add /tmp/colour-base "$BASE"
 python tools/audit_colours.py --src src \
     --compare-src /tmp/colour-base/src --summary-only --strict
+git worktree remove /tmp/colour-base
 ```
 
-Because the comparison is against `main`'s tip, a branch that has fallen
-behind can fail on counts *`main` itself reduced*. If the gate reports a
-rise you cannot find in your own diff, merge `main` and re-run before
-hunting for it.
+The base is the merge base rather than `main`'s tip so that colours
+`main` removed after you branched cannot be billed to your PR (#4956).
 
 Conformance is an authoring-time responsibility: choose the token when
 you write the code, and the gate has nothing to flag.
