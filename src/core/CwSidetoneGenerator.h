@@ -51,6 +51,15 @@ public:
     // m_keyDown.
     void setKeyDown(bool down) noexcept;
 
+    // Late-edge branch fire count since reset() (#4890).  Exists so a test can
+    // prove it exercised that branch rather than passing vacuously; read from
+    // the same thread as process().
+    int64_t shiftCount() const noexcept { return m_shiftCount; }
+
+    // Staleness re-anchors since reset() (#4890) — mapping dropped because
+    // wall clock ran away from the render head.  Read from process()'s thread.
+    int64_t staleReanchorCount() const noexcept { return m_staleReanchors; }
+
     bool  isEnabled() const noexcept { return m_enabled.load(std::memory_order_relaxed); }
     float pitchHz() const noexcept   { return m_pitchHz.load(std::memory_order_relaxed); }
     float volume() const noexcept    { return m_volume.load(std::memory_order_relaxed); }
@@ -111,10 +120,25 @@ private:
     // edge may be before a fresh anchor discards it instead of replaying it.
     static constexpr int kReanchorIdleMs = 250;
 
-    // Upper bound on m_anchorSlack (#4890).  Must stay well below
-    // kReanchorIdleMs: the staleness guard measures anchor-vs-wall-clock
-    // drift THROUGH the slack, so slack eats into that margin.
+    // Upper bound on m_anchorSlack (#4890) — the headroom a NEW anchor starts
+    // with, and the only offset that is carried rather than corrective.  It
+    // sits inside the staleness guard's margin (a fresh anchor is placed at
+    // blockStart + slack, so the mapping starts that far ahead of the head),
+    // hence the relationship the assert pins.
+    //
+    // The per-edge forward shift is deliberately NOT bounded by this or any
+    // constant.  A shift is a re-alignment, not drift: it moves the mapping to
+    // the render head, so afterwards the guard quantity is the wall time since
+    // that edge, not a running total.  Measured over a sustained racing burst
+    // (119 shifts) the quantity peaked at 2.4 ms against this 250 ms threshold
+    // and never re-anchored.  Capping the shift was tried and is actively
+    // harmful: it strands the mapping behind the head, so every later edge in
+    // that anchor clamps and element durations collapse to block multiples
+    // (measured: 5.0 ms elements rendering as 2.8 ms) — the exact defect this
+    // change exists to remove.
     static constexpr int kAnchorSlackCapMs = 100;
+    static_assert(kAnchorSlackCapMs < kReanchorIdleMs,
+                  "carried slack must leave the staleness guard margin");
 
     void applyKeyEdge(bool down) noexcept;  // state-machine transition
 
@@ -165,7 +189,29 @@ private:
     // absolute onset latency grows — and the deficit accumulates here so the
     // NEXT burst anchors with enough headroom to stop racing at all.
     // Bounded by kAnchorSlackCapMs; reset with the mapping.
+    //
+    // It decays as well as grows, and must: this generator exists because the
+    // radio's own sidetone costs 30-100 ms round trip, so a slack that only
+    // ratcheted upward would let one transient stall park the client tone
+    // inside the very range it is meant to avoid, for the rest of the
+    // session.  An anchor that completed without ever running late is
+    // evidence the sink has headroom to spare, and halves it.
     int64_t  m_anchorSlack{0};
+
+    // Whether the current anchor has ever had to shift for a late edge.  An
+    // anchor released without one is evidence the sink had headroom to spare
+    // for that whole burst, which is when slack gives ground.
+    bool     m_anchorWentLate{false};
+
+    // Test-only observability (#4890).  m_shiftCount: a harness that cannot
+    // get the render head ahead of wall clock never exercises the late-edge
+    // branch, and its assertions would then pass against the pre-fix code too,
+    // so a test can require the branch actually fired.  m_staleReanchors: pins
+    // that sustained racing does NOT walk the mapping into the staleness guard
+    // — the concern that motivated bounding the shift, which measurement
+    // refuted.
+    int64_t  m_shiftCount{0};
+    int64_t  m_staleReanchors{0};
 
     // Mirror sink for the TX decode path (#2417).  Holds null until
     // AudioEngine plugs in its TX-decoder feeder.  When non-null, every
