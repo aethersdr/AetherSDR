@@ -7829,6 +7829,17 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             const int port = portSpin->value();
             PeripheralSettings::setDeviceString("Vkamp", "ManualIp", ip);
             PeripheralSettings::setDeviceInt("Vkamp", "ManualPort", port);
+            // Immediate feedback -- a cold connect can legitimately take
+            // several seconds (this amp's own network stack only answers
+            // broadcast ARP, which can stall Windows' unicast-first
+            // neighbor-cache reconfirmation for up to ~kConnectTimeoutMs --
+            // see VkampConnection.h's own doc comment). Without this the
+            // status label just sits on "Not connected" the whole time,
+            // which reads as frozen/unresponsive rather than in progress.
+            // Overwritten by updateVkampState()/the connectionFailed handler
+            // below as soon as the real outcome lands.
+            statusLbl->setText("Connecting…");
+            statusLbl->setStyleSheet("QLabel { color: #e0a000; font-size: 11px; }");
             m_vkamp->connectNetwork(ip, static_cast<quint16>(port));
         });
 
