@@ -346,8 +346,19 @@ void VkampApplet::setBypass(bool on)
         QAccessible::updateAccessibility(&event);
     }
     auto& theme = AetherSDR::ThemeManager::instance();
+    // activeBtnStyle has no :disabled rule (unlike neutralBtnStyle), so the
+    // green "AMP ON" style is only applied while actually connected -- bypass
+    // is always forced false on disconnect (see setConnected()), and without
+    // this guard that would paint a bright, undimmed "AMP ON" button while
+    // the amp is disconnected, which is actively misleading rather than just
+    // visually inconsistent.
     theme.applyStyleSheet(m_bypassBtn,
-        on ? activeBtnStyle("#3a2a12", "#6a4a1a", "#ffb84d") : neutralBtnStyle());
+        on ? activeBtnStyle("#3a2a12", "#6a4a1a", "#ffb84d")
+           : (m_connected
+                  // Green, matching the "CONNECTED" status pill's own
+                  // palette -- AMP ON is the normal/good operating state.
+                  ? activeBtnStyle("#0f2a1c", "#4dd87a", "#6be899")
+                  : neutralBtnStyle()));
     refreshVoltageButtons();
 }
 
