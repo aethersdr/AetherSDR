@@ -148,12 +148,13 @@ three tiers, broadest → most restrictive:
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
   `.github/copilot-instructions.md`, `.claude/commands/`).
 - **Tier 1 — governance / security** (`@aethersdr/maintainers`): the governance
-  docs (`CONSTITUTION.md`, `GOVERNANCE.md`, `CONTRIBUTING.md`,
-  `CODE_OF_CONDUCT.md`, `LICENSE`), the security/compliance paths
-  (`SECURITY.md`, `.github/CODEOWNERS` itself, the CodeQL config, the release
-  signing key), and the workflows that hold release secrets or feed bytes into
-  a signed artifact — which includes the CI-image build, since the CodeQL scan
-  runs inside that image.
+  docs (the Constitution — **both** its canonical copy at
+  `.specify/memory/constitution.md` and the root `CONSTITUTION.md` mirror —
+  plus `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`),
+  the security/compliance paths (`SECURITY*`, `.github/CODEOWNERS` itself, the
+  CodeQL config, the release signing key), and the workflows that hold release
+  secrets or feed bytes into a signed artifact — which includes the CI-image
+  build, since the CodeQL scan runs inside that image.
 
 The lists above are a summary. `.github/CODEOWNERS` is the enforced artifact
 and wins on any disagreement; the path-level breakdown for contributors is the

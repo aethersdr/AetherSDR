@@ -12,11 +12,13 @@
 #
 # Tier 1 — @aethersdr/maintainers (currently: @ten9876).
 #         The RULES OF THE PROJECT and the paths that can compromise a
-#         signed release — nothing else. Governance (CONSTITUTION,
-#         GOVERNANCE, CONTRIBUTING, CODE_OF_CONDUCT, LICENSE) and
-#         security controls (SECURITY.md, signing keys, CODEOWNERS
-#         itself, CodeQL config, and the security-sensitive workflows —
-#         release signing/publish + the CodeQL scan invocation).
+#         signed release — nothing else. Governance (CONSTITUTION — both
+#         the canonical .specify copy and the root mirror — GOVERNANCE,
+#         CONTRIBUTING, CODE_OF_CONDUCT, LICENSE) and security controls
+#         (SECURITY*, signing keys, CODEOWNERS itself, CodeQL config,
+#         and the security-sensitive workflows: those that hold release
+#         secrets, feed bytes into a signed artifact, or form part of
+#         the scanner's trust chain).
 #         Deliberately narrow: a path belongs here only if a wrong
 #         change to it alters who decides things or what gets signed.
 # Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat,
@@ -118,8 +120,21 @@ CONTRIBUTING.md              @aethersdr/maintainers
 GOVERNANCE.md                @aethersdr/maintainers
 LICENSE                      @aethersdr/maintainers
 
+# The Constitution's CANONICAL copy. The root CONSTITUTION.md above is the
+# byte-identical mirror kept for discoverability — the closing note in that
+# file, CONTRIBUTING.md, AGENTS.md, and .github/copilot-instructions.md all
+# name this path as the source. Gating only the mirror would leave the
+# canonical text editable at Tier 2, which is the same failure this file's
+# Tier 1 test is meant to catch. Both are gated because the two are synced
+# BY HAND until a pre-commit check enforces byte-equality.
+.specify/memory/constitution.md   @aethersdr/maintainers
+
 # Security & compliance
-SECURITY.md                  @aethersdr/maintainers
+# SECURITY* rather than SECURITY.md: the glob is a no-op on today's tree
+# (SECURITY.md is the only match) but keeps a future SECURITY-AUDIT.md or
+# SECURITY-ADVISORIES.md from falling through *.md to Tier 2. Same reasoning
+# as the .claude/commands/ line above — do not narrow it back to a literal.
+SECURITY*                    @aethersdr/maintainers
 .github/CODEOWNERS           @aethersdr/maintainers
 .github/codeql/              @aethersdr/maintainers
 docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
