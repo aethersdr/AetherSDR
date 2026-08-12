@@ -12,6 +12,16 @@ If you are an AI assistant: read this file end-to-end before writing
 code or recommending merges. The file is ~830 lines; that is the cost
 of doing the job right on this codebase.
 
+**This file is documentation, not policy.** It describes how to build
+AetherSDR — architecture, conventions, build steps, protocol notes. The
+rules that bind you live in [`CONSTITUTION.md`](CONSTITUTION.md) and
+[`GOVERNANCE.md`](GOVERNANCE.md), and they outrank everything here. Where
+this file appears to contradict either, they win, and the contradiction is
+a defect in this file — fix it or open an issue. That separation is what
+puts this file at CODEOWNERS Tier 2 (infrastructure) while the Constitution
+and GOVERNANCE.md stay Tier 1 (maintainer-only): editing build conventions
+is not a governance act and should not need a maintainer's approval.
+
 ## Project Goal
 
 Replicate the **Windows-only FlexRadio SmartSDR client** (written in C#) as a
@@ -35,8 +45,10 @@ When helping with AetherSDR:
 - **New engine code goes in `libaethercore`** (`src/core/` or `src/models/`),
   exposed to the UI through models — never via a new gui→core header include.
   See "Build targets" and "In-flight: aetherd" under Architecture Overview.
-- **Read `CONTRIBUTING.md`** for full contributor guidelines, coding conventions,
-  and the AI-to-AI debugging protocol (open a GitHub issue for cross-agent coordination)
+- **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
+  reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
+  coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
+  for cross-agent coordination)
 - **Sign every commit you author.** `main` enforces `required_signatures`, so a
   PR with unsigned commits cannot merge without an admin override. If the
   contributor has not set up commit signing yet, walk them through

@@ -142,14 +142,29 @@ three tiers, broadest → most restrictive:
 - **Tier 3 — source code** (`@aethersdr/reviewers`): all of `src/` — including
   the whole of `MainWindow` — plus anything not enumerated below. The broad
   reviewer roster; routine source review benefits from more eyes.
-- **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `docs/`, `*.md`,
-  `tests/`, `CMakeLists.txt`, and the routine CI workflows under
-  `.github/workflows/`.
+- **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `docs/`, `*.md`
+  (including `ROADMAP.md`), `tests/`, `CMakeLists.txt`, the routine CI
+  workflows under `.github/workflows/`, and the AI-instruction files
+  (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/commands/`).
 - **Tier 1 — governance / security** (`@aethersdr/maintainers`): the governance
-  and security/compliance docs, `.github/CODEOWNERS` itself, the CodeQL config,
-  the security-sensitive workflows (release signing/publish + the CodeQL scan
-  invocation), and the AI-instruction files (`AGENTS.md`, `CLAUDE.md`,
-  `GEMINI.md`, `.claude/commands/`).
+  docs (`CONSTITUTION.md`, `GOVERNANCE.md`, `CONTRIBUTING.md`,
+  `CODE_OF_CONDUCT.md`, `LICENSE`), the security/compliance paths
+  (`SECURITY.md`, `.github/CODEOWNERS` itself, the CodeQL config, the release
+  signing key), and the security-sensitive workflows (release signing/publish +
+  the CodeQL scan invocation).
+
+Tier 1 is deliberately narrow: a path belongs there only if a wrong change to
+it would alter **who decides things** or **what gets signed**. Documentation
+that merely describes how to build the software — including the AI-instruction
+files, which carry architecture, build steps, and style conventions rather than
+policy — sits at Tier 2. Where an instruction file appears to conflict with
+this document or the Constitution, those win; the conflict is a defect in the
+instruction file, not a governance change, so gating it at Tier 1 bought
+friction rather than control.
+
+This reallocation does not touch **project direction**, which §Project
+Direction reserves to the Project Maintainer regardless of who can approve an
+edit to `ROADMAP.md`.
 
 Self-approval is blocked by GitHub on every tier — your own PR always needs a
 review from someone else. The Tier-1 paths are hard gates: no merge without

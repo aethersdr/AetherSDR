@@ -6,25 +6,37 @@
 # restrictive tiers override the broader defaults via CODEOWNERS'
 # last-match-wins semantics:
 #
-#   Tier 3 (source code, broad default)       — top of file (the `*` line)
-#   Tier 2 (project infrastructure)           — middle (specific paths)
-#   Tier 1 (governance, security, bot policy) — bottom (most specific paths)
+#   Tier 3 (source code, broad default)   — top of file (the `*` line)
+#   Tier 2 (project infrastructure)       — middle (specific paths)
+#   Tier 1 (governance, security)         — bottom (most specific paths)
 #
 # Tier 1 — @aethersdr/maintainers (currently: @ten9876).
-#         Project governance and direction (CONSTITUTION, GOVERNANCE,
-#         CONTRIBUTING, CODE_OF_CONDUCT, LICENSE, ROADMAP), security
-#         controls (SECURITY*, signing keys, CODEOWNERS itself, CodeQL
-#         config, and the security-sensitive workflows — release
-#         signing/publish + the CodeQL scan invocation), and bot/agent
-#         instruction (AGENTS.md, CLAUDE.md, GEMINI.md, .claude/commands/).
-# Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat).
+#         The RULES OF THE PROJECT and the paths that can compromise a
+#         signed release — nothing else. Governance (CONSTITUTION,
+#         GOVERNANCE, CONTRIBUTING, CODE_OF_CONDUCT, LICENSE) and
+#         security controls (SECURITY.md, signing keys, CODEOWNERS
+#         itself, CodeQL config, and the security-sensitive workflows —
+#         release signing/publish + the CodeQL scan invocation).
+#         Deliberately narrow: a path belongs here only if a wrong
+#         change to it alters who decides things or what gets signed.
+# Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat,
+#         @rfoust).
 #         Project infrastructure: CI/CD configuration — the ROUTINE
 #         workflow definitions (.github/workflows/ except the sensitive
 #         ones carved to Tier 1), dependabot, docker, issue templates —
 #         plus documentation (docs/, *.md catchall, including
-#         README/CHANGELOG/SUPPORT which fall through here from the *.md
-#         glob), tests, build configuration (CMakeLists.txt), and
-#         legal/compliance tracking (THIRD_PARTY_LICENSES).
+#         README/CHANGELOG/SUPPORT/ROADMAP which fall through here from
+#         the *.md glob), tests, build configuration (CMakeLists.txt),
+#         and legal/compliance tracking (THIRD_PARTY_LICENSES).
+#         ALSO the AI-instruction files (AGENTS.md, CLAUDE.md,
+#         GEMINI.md, .github/copilot-instructions.md, .claude/commands/).
+#         Those are operational documentation — architecture, build
+#         steps, style guide, protocol notes — not policy. The policy
+#         they must not contradict is CONSTITUTION.md / GOVERNANCE.md,
+#         which stay at Tier 1 and outrank them; a conflict is a bug in
+#         the instruction file, not a governance change. Keeping them
+#         maintainer-gated bottlenecked ~173 commits a year on a
+#         single-member team for no governance gain.
 #         Narrower owner set than Tier 3 because infrastructure changes
 #         need deeper repo context than routine source review.
 # Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T, @rfoust, @chibondking).
@@ -65,6 +77,15 @@ tests/                       @aethersdr/infrastructure
 docs/                        @aethersdr/infrastructure
 *.md                         @aethersdr/infrastructure
 
+# AI-instruction files. AGENTS.md / CLAUDE.md / GEMINI.md /
+# .github/copilot-instructions.md all land here via the *.md glob above —
+# they are listed in the Tier 2 header comment rather than repeated as
+# patterns. .claude/commands/ DOES need its own line: without it only the
+# *.md files inside it match Tier 2, and any future non-markdown file there
+# would fall through to the `*` line — i.e. Tier 3, which is BROADER than
+# where it started. Keep this line even if the directory only holds .md today.
+.claude/commands/            @aethersdr/infrastructure
+
 # GitHub-specific tooling
 # Routine CI workflow definitions live at Tier 2 to unblock day-to-day CI
 # iteration. NOTE the residual risk: a workflow runs with repo secrets /
@@ -74,7 +95,8 @@ docs/                        @aethersdr/infrastructure
 # Tier 1 individually in the Security section below (last-match-wins), because
 # CodeQL is NOT a required status check (a Tier-2 edit could silently disable it)
 # and the release workflows consume the signing secret at run time. Everything
-# else here (ci, engine-boundary, a11y-check, sanitizers, …) stays Tier 2.
+# else here (ci, static-checks, sanitizers, system-libs-canary,
+# mirror-aether-gate, update-rnnoise, build-sherpa-onnx-aarch64) stays Tier 2.
 .github/workflows/           @aethersdr/infrastructure
 .github/dependabot.yml       @aethersdr/infrastructure
 .github/docker/              @aethersdr/infrastructure
@@ -84,21 +106,20 @@ docs/                        @aethersdr/infrastructure
 CMakeLists.txt               @aethersdr/infrastructure
 THIRD_PARTY_LICENSES         @aethersdr/infrastructure
 
-# ── Tier 1: governance, security, bot policy — maintainer-only ────────────
-# Project governance & direction
-AGENTS.md                    @aethersdr/maintainers
-CLAUDE.md                    @aethersdr/maintainers
+# ── Tier 1: governance and security — maintainer-only ─────────────────────
+# Project governance. These define who decides what and under which rules;
+# everything that merely DESCRIBES how to build the software is Tier 2.
+# ROADMAP.md is not here: it is a statement of intent, not a rule, and
+# GOVERNANCE.md §Project Direction already reserves direction to the
+# maintainer independently of who can approve a roadmap edit.
 CODE_OF_CONDUCT.md           @aethersdr/maintainers
 CONSTITUTION.md              @aethersdr/maintainers
 CONTRIBUTING.md              @aethersdr/maintainers
-GEMINI.md                    @aethersdr/maintainers
 GOVERNANCE.md                @aethersdr/maintainers
 LICENSE                      @aethersdr/maintainers
-ROADMAP.md                   @aethersdr/maintainers
 
 # Security & compliance
 SECURITY.md                  @aethersdr/maintainers
-SECURITY-AUDIT.md            @aethersdr/maintainers
 .github/CODEOWNERS           @aethersdr/maintainers
 .github/codeql/              @aethersdr/maintainers
 docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
@@ -136,8 +157,11 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 .github/workflows/docker-ci-image.yml    @aethersdr/maintainers
 .github/workflows/streamdeck-plugins.yml @aethersdr/maintainers
 
-# Bot / agent instruction (source of truth for AI tool behaviour)
-.claude/commands/            @aethersdr/maintainers
+# NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
+# .claude/commands/) are intentionally NOT gated here — they sit at Tier 2.
+# See the Tier 2 section above for the reasoning. Do NOT re-add them: the
+# governance authority over agent behaviour is CONSTITUTION.md +
+# GOVERNANCE.md §AI Contributors, both still Tier 1.
 
 # NOTE: MainWindow.cpp/.h are intentionally NOT gated here — they sit on the
 # Tier 3 reviewer default (the `*` line), same as the #3351 decomposition's
