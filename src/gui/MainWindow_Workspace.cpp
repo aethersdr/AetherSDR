@@ -93,26 +93,39 @@ void MainWindow::wireWorkspaceCanvas()
             m_workspaceController, &WorkspaceController::onPanDocked);
 
     // Each applet's title-strip live-move stream feeds the canvas gesture.
-    // Wired per applet at creation; the applet pointer is captured (not the
-    // id) so a band-recall rekey keeps the stream on the right item.
+    // The applet pointer is captured (not the id) so a band-recall rekey
+    // keeps the stream on the right item.
+    auto wirePanApplet = [this](PanadapterApplet* a) {
+        if (!a) {
+            return;
+        }
+        connect(a, &PanadapterApplet::canvasDragBegan,
+                m_workspaceController, [this, a](const QPoint& g) {
+                    m_workspaceController->beginPanItemMove(a->panId(), g);
+                });
+        connect(a, &PanadapterApplet::canvasDragMoved,
+                m_workspaceController, [this](const QPoint& g) {
+                    m_workspaceController->movePanItem(g);
+                });
+        connect(a, &PanadapterApplet::canvasDragEnded,
+                m_workspaceController, [this](const QPoint& g) {
+                    m_workspaceController->endPanItemMove(g);
+                });
+    };
+    // Pre-existing applets FIRST — the same rule the controller ctor
+    // follows for containers.  buildUI() creates the "default" placeholder
+    // pan long before this method runs, and the radio REKEYS that applet
+    // into its first real pan, so panAdded never fires for it: without
+    // this loop the PRIMARY pan of every session has a dead title strip
+    // (the 8600 "can't drag the pan" report) while pans 2+ wire normally.
+    // No double-wiring: addPanadapter() early-returns an existing applet
+    // without re-emitting panAdded.
+    for (PanadapterApplet* a : m_panStack->allApplets()) {
+        wirePanApplet(a);
+    }
     connect(m_panStack, &PanadapterStack::panAdded, this,
-            [this](const QString& panId) {
-                auto* a = m_panStack->panadapter(panId);
-                if (!a) {
-                    return;
-                }
-                connect(a, &PanadapterApplet::canvasDragBegan,
-                        m_workspaceController, [this, a](const QPoint& g) {
-                            m_workspaceController->beginPanItemMove(a->panId(), g);
-                        });
-                connect(a, &PanadapterApplet::canvasDragMoved,
-                        m_workspaceController, [this](const QPoint& g) {
-                            m_workspaceController->movePanItem(g);
-                        });
-                connect(a, &PanadapterApplet::canvasDragEnded,
-                        m_workspaceController, [this](const QPoint& g) {
-                            m_workspaceController->endPanItemMove(g);
-                        });
+            [this, wirePanApplet](const QString& panId) {
+                wirePanApplet(m_panStack->panadapter(panId));
             });
 
     connect(m_workspaceController, &WorkspaceController::enabledChanged,

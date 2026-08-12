@@ -50,6 +50,10 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "stop:0 {{color.text.disabled}}, stop:0.5 {{color.background.1}}, stop:1 #1a2a38); "
         "border-bottom: 1px solid #0a1a28; }");
     m_titleBar->installEventFilter(this);  // drag-to-move when floating
+    // Addressable for the automation bridge (#3646/#4864 pattern): the
+    // canvas live-move stream starts here, and a drag the bridge cannot
+    // aim at is a drag no smoke can regress-test.
+    m_titleBar->setAccessibleName(QStringLiteral("panTitleBar"));
     auto* titleBar = m_titleBar;
 
     auto* barLayout = new QHBoxLayout(titleBar);
@@ -864,8 +868,20 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
                 m_canvasPressed  = true;
                 m_canvasDragging = false;
                 m_canvasPressPos = me->globalPosition().toPoint();
+                // CONSUME the press.  The strip is a plain QWidget whose
+                // default handler IGNORES presses; an ignored press
+                // propagates to the applet and leaves the implicit mouse
+                // grab there, so every subsequent MouseMove bypasses this
+                // filter and the drag can never start (the 8600 "can't
+                // drag the pan" report — the selection that DID happen came
+                // from the canvas's press-raise filter on the propagated
+                // event, which masked the break).  ContainerTitleBar never
+                // had the problem: its reimplemented handler accepts.  The
+                // press's side effect is re-created here since the tail of
+                // this filter is no longer reached:
+                emit activated(m_panId);
+                return true;
             }
-            // fall through: the press still activates the pan below
         } else if (ev->type() == QEvent::MouseMove) {
             if (m_canvasPressed && (me->buttons() & Qt::LeftButton)) {
                 const QPoint g = me->globalPosition().toPoint();
