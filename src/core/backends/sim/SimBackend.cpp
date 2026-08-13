@@ -23,12 +23,23 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     m_signalSource->moveToThread(m_signalThread);
     m_signalThread->start();
 
+    // Gated on m_connected, not plain signal-to-signal: stop() reaches the
+    // worker QUEUED, so frames it emitted before stopping can deliver here
+    // AFTER disconnectRadio() returned — and the seam contract is that a
+    // disconnected backend emits nothing (sim_backend_test pins it; the
+    // unguarded forward was a latent flake that fired on the slower build).
     connect(m_signalSource, &SimSignalSource::audioFrameReady,
-            this, &IRadioBackend::audioFrameReady);
+            this, [this](const QByteArray& pcm) {
+                if (m_connected) emit audioFrameReady(pcm);
+            });
     connect(m_signalSource, &SimSignalSource::sliceAudioFrameReady,
-            this, &IRadioBackend::sliceAudioFrameReady);
+            this, [this](int sliceId, const QByteArray& pcm) {
+                if (m_connected) emit sliceAudioFrameReady(sliceId, pcm);
+            });
     connect(m_signalSource, &SimSignalSource::spectrumFrameReady,
-            this, &IRadioBackend::spectrumFrameReady);
+            this, [this](int panId, const QByteArray& bins) {
+                if (m_connected) emit spectrumFrameReady(panId, bins);
+            });
 
     // ---- Path B (RFC #4288): own a RadioConnection + PanadapterStream in
     // synthetic-demo mode, mirroring FlexBackend's ctor (same load-bearing #502
