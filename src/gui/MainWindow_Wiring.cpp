@@ -2433,10 +2433,14 @@ void MainWindow::onSliceRemoved(int id)
             // it. The re-select branch above reaches updateKeyerAvailability()
             // through setActiveSliceInternal(); this branch has no such call,
             // and without one the row keeps whatever state the departed slice
-            // left it in — a live-looking ASR indicator with nothing to decode,
-            // over an open Copy Assist panel that the (now disabled) indicator
-            // could no longer dismiss. The ASR gate closes the panel on a null
-            // slice for exactly that reason; this call is what runs it (#4825).
+            // left it in.
+            //
+            // Refresh only — deliberately NOT a teardown. The gate leaves an
+            // open Copy Assist panel alone on a null slice, because this branch
+            // is on the band-recall path: with band_persistence the radio drops
+            // and re-creates the slice under the same id (KiwiRebindTracker.h,
+            // #4158), and a single-slice setup passes through here on every band
+            // change (#4932 review).
             updateKeyerAvailability();
         }
     }

@@ -9220,30 +9220,33 @@ void MainWindow::updateKeyerAvailability()
     SliceModel* asrSlice = activeSlice();
     const bool asrIsVoice = asrSlice && isVoiceMode(asrSlice->mode());
     if (m_asrIndicator) {
-        m_asrIndicator->setEnabled(asrIsVoice);
         const bool asrVisible =
             m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
-        // NOT the keyers' shape, deliberately. They require their slice to EXIST
-        // before auto-hiding, so a transient no-TX-slice window during a TX
-        // handoff can't yank an open panel (#4173) — a handoff is frequent and
-        // normal. ASR closes on a null slice too, because "no slice at all" is
-        // not a handoff, and the alternative is a trap: the indicator would be
-        // setEnabled(false) yet styled kActive by the branch below, and a
-        // disabled indicator swallows its own clicks (MainWindow_Shortcuts.cpp)
-        // while the panel carries no close button of its own — leaving an open
-        // Copy Assist the operator cannot dismiss. Closing here keeps the two
-        // states that exist coherent: panel open ⇒ voice mode ⇒ indicator live
-        // and clickable.
+        // Enabled when the mode allows OPENING it, or whenever the panel is
+        // already open so it can always be CLOSED. The second half exists
+        // because a disabled QLabel swallows its own clicks
+        // (MainWindow_Shortcuts.cpp) and CopyAssistPanel has no close button of
+        // its own — without it, any state that leaves the panel open while the
+        // gate says no strands a panel the operator cannot dismiss. Fixing that
+        // here, in the panel's own affordance, is what lets the auto-hide below
+        // keep the conservative shape (PR #4932 review).
+        m_asrIndicator->setEnabled(asrIsVoice || asrVisible);
+        // The keyers' shape, and for the keyers' reason: only a slice that
+        // EXISTS and is in the wrong mode closes an open panel. A slice that is
+        // momentarily ABSENT is not a mode change, and on this radio it is
+        // routinely not even a removal — with band_persistence a FLEX band
+        // recall DROPS the slice and RE-CREATES it under the same id a moment
+        // later (KiwiRebindTracker.h, #4158). On the ordinary single-slice
+        // setup that empties slices(), so a null-slice auto-hide would stop
+        // transcription on every band change and never restore it: this
+        // function only ever hides, showing is user-driven.
         //
-        // The null-slice case is ordinary, not exotic: DISCONNECT reaches it on
-        // every session. RadioModel clears m_slices without emitting
-        // sliceRemoved, so onSliceRemoved() never runs — but capabilitiesChanged
-        // fires on the disconnect edge, applyCapabilitiesToUi() calls this
-        // function, and activeSlice() then answers nullptr. Before this branch
-        // covered null, disconnecting with Copy Assist open left the panel
-        // stranded on screen. (AetherSDR's own ✕ handlers refuse to remove a
-        // last slice, so disconnect and a foreign client are the ways in.)
-        if (!asrIsVoice && asrVisible) {
+        // Disconnect also lands here with a null slice (RadioModel clears
+        // m_slices and capabilitiesChanged drives applyCapabilitiesToUi ->
+        // this function). Leaving the panel up there is the right outcome too —
+        // the last transcript stays readable, and the enabled-while-visible
+        // rule above means it can be closed by hand.
+        if (asrSlice && !asrIsVoice && asrVisible) {
             m_copyAssistApplet->setCopyAssistVisible(false);
             setIndicatorStyle(m_asrIndicator, kDisabled);
         } else if (asrVisible) {
@@ -9251,8 +9254,12 @@ void MainWindow::updateKeyerAvailability()
         } else {
             setIndicatorStyle(m_asrIndicator, asrIsVoice ? kAvail : kDisabled);
         }
-        m_asrIndicator->setCursor(asrIsVoice ? Qt::PointingHandCursor
-                                             : Qt::ArrowCursor);
+        // Cursor tracks the ENABLED state, not the mode, so the hand appears on
+        // exactly the clicks that do something — including the close-an-open-
+        // panel case where the mode gate says no.
+        m_asrIndicator->setCursor((asrIsVoice || asrVisible)
+                                      ? Qt::PointingHandCursor
+                                      : Qt::ArrowCursor);
     }
 #endif
 }

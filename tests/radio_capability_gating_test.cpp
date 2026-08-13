@@ -829,12 +829,16 @@ int main(int argc, char** argv)
                   "voice family member is a voice mode for both indicators");
         }
 
-        // No active slice at all (last slice removed): an empty mode is not a
-        // voice mode, so the indicator closes. This is what the added
-        // updateKeyerAvailability() call in onSliceRemoved()'s no-slices branch
-        // is there to APPLY — without it the gate is right and never evaluated.
+        // No active slice at all: an empty mode is not a voice mode, so the
+        // indicator dims. It does NOT close an open panel — the auto-hide
+        // requires the slice to exist, because a band recall drops and
+        // re-creates the slice under the same id and would otherwise stop
+        // transcription on every band change (KiwiRebindTracker.h, #4158).
+        // The panel stays dismissible in that state because the indicator is
+        // enabled whenever it is visible (#4932 review).
         check(!isVoiceMode(QString()),
-              "no active slice: empty mode is not a voice mode — ASR closes");
+              "no active slice: empty mode is not a voice mode — ASR dims "
+              "(an open panel is left alone; band recall passes through here)");
     }
 
     if (g_failures == 0)

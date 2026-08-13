@@ -29,6 +29,11 @@ Design + decision record: RFC **#4333** (accepted). Engine: **whisper.cpp**
   voice mode** — clicking to a CW slice while Copy Assist is running closes the
   panel and stops transcription, even if the voice slice you were transcribing is
   still audible. Re-select the voice slice and re-open to resume.
+- A slice that momentarily **goes away** is not treated as leaving voice mode: a
+  band-stack recall drops and re-creates the slice, and disconnecting clears them
+  all, so an open panel is left alone in those states rather than torn down. The
+  `ASR` toggle stays clickable whenever the panel is open, so you can always
+  close it by hand even while it is dimmed.
 - The status line shows a **`Queue: N s`** backlog — seconds of received audio not
   yet transcribed. It stays near 0 when the engine keeps up and climbs
   (amber→red) when it can't (e.g. whisper on a Raspberry Pi), so you can see ASR
