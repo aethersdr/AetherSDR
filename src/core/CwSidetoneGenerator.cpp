@@ -145,6 +145,10 @@ void CwSidetoneGenerator::reset() noexcept
     // Drop queued edges (consumer-side drain: only the tail moves).
     m_edgeTail.store(m_edgeHead.load(std::memory_order_acquire),
                      std::memory_order_release);
+    // m_lastQueuedStamp is deliberately NOT cleared: steady_clock is
+    // monotonic, so a retained floor can never sit above a stamp a later
+    // edge carries.  Clearing it changes nothing, while keeping it preserves
+    // the ordering floor for any edge queued after this drain.
 }
 
 void CwSidetoneGenerator::setSampleRateHz(int hz) noexcept

@@ -4219,6 +4219,12 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
         // a sane ceiling (a stale schedule must not warp the counter) and
         // the result is clamped monotonic against the previous send —
         // FlexLib's counter never runs backwards, so ours doesn't either.
+        //
+        // Varying the back-date per edge is safe because the radio
+        // reconstructs element lengths from the DELTAS between consecutive
+        // time= values, not from their absolute value: a per-edge offset
+        // cancels between neighbours, so only the spacing changes — which is
+        // exactly the quantity wake latency was corrupting.
         if (scheduledAt != std::chrono::steady_clock::time_point{}) {
             constexpr qint64 kMaxScheduleAgeMs = 100;
             const qint64 age = std::chrono::duration_cast<std::chrono::milliseconds>(
