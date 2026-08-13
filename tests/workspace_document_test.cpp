@@ -403,6 +403,23 @@ int main()
                     .contains(QStringLiteral("\"closed\"")));
     }
 
+    // ── K6OZY: duplicate labels are repaired at parse, with a warning ────
+    {
+        WorkspaceDocument doc = sample();
+        for (Workspace& w : doc.workspaces) {
+            w.label = QStringLiteral("Same");
+        }
+        WorkspaceDocument parsed;
+        WorkspaceDocument::fromStoredJson(doc.toStoredJson(), &parsed);
+        QSet<QString> labels;
+        bool unique = true;
+        for (const Workspace& w : parsed.workspaces) {
+            if (labels.contains(w.label)) unique = false;
+            labels.insert(w.label);
+        }
+        report("duplicate labels are de-duplicated at parse", unique);
+    }
+
     // ── Phase 6: workspace CRUD invariants ───────────────────────────────
     {
         WorkspaceDocument doc = sample();
@@ -433,9 +450,15 @@ int main()
                doc.renameWorkspace(blank, doc.workspace(blank)->label)
                    && !doc.workspace(blank)->label.contains(
                           QStringLiteral("(2)")));
-        report("rename de-duplicates too",
-               doc.renameWorkspace(blank, doc.workspace(dup)->label)
-                   && doc.workspace(blank)->label != doc.workspace(dup)->label);
+        {
+            // Not vacuous (review, K6OZY: the old form passed with a no-op
+            // rename): assert the VALUE is the dedup form.
+            const QString target = doc.workspace(dup)->label;
+            report("rename de-duplicates too",
+                   doc.renameWorkspace(blank, target)
+                       && doc.workspace(blank)->label
+                              == QStringLiteral("%1 (2)").arg(target));
+        }
 
         // Deleting: bindings drop, active falls back, the last one refuses.
         doc.bindings.insert(QStringLiteral("SomeProfile"), dup);

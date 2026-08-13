@@ -3155,7 +3155,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
-| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event |
+| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event (positive steps = scroll up); drives wheel VFO tuning |
 | `dragAt` | — | dragAt <target> <x> <y> <dx> <dy> [control\|meta\|shift\|alt,...] |
 | `gesture` | — | gesture <begin\|move\|end\|cancel\|status> — phaseful pointer gesture |
 | `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
@@ -3170,7 +3170,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
-| `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters |
+| `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters (add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; remove <id>; enable <0\|1>) |
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
@@ -3178,11 +3178,11 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
-| `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — |
+| `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — |
-| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\| |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864) |
+| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats> — the canvas and its workspaces as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
@@ -3196,7 +3196,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <send <hex>\|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated) |
-| `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter |
+| `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

@@ -294,6 +294,9 @@ private:
 
     // Slot bookkeeping (phase 4).
     int slotForPan(const QString& panId);          // assigns on first sight
+    // enable()'s applet-id snapshot, else the widget catalog's universe —
+    // Classic composition must never run against an empty world.
+    QStringList effectiveKnownAppletIds() const;
     // The real switch: `force` re-places even when `id` is already active
     // (deleteWorkspace retargets the document first, so the ordinary
     // no-change early-return would skip the release/recall).

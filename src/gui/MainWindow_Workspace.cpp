@@ -450,25 +450,36 @@ void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
     });
 
     menu->addSeparator();
-    QString activeLabel;
-    for (const auto& [wid, wlabel] : list) {
-        if (wid == active) { activeLabel = wlabel; break; }
-    }
-    menu->addAction(tr("Rename active…"), this, [this, active, activeLabel] {
+    // "Active" is resolved AT TRIGGER TIME, not menu-build time (review,
+    // K6OZY): a bound-profile recall arriving under an open menu used to
+    // make "Delete active…" delete a different workspace than the dialog
+    // named.
+    menu->addAction(tr("Rename active…"), this, [this] {
+        const QString now = m_workspaceController->activeWorkspaceId();
+        QString nowLabel;
+        for (const auto& [wid, wlabel] : m_workspaceController->workspaceList()) {
+            if (wid == now) { nowLabel = wlabel; break; }
+        }
         // Prefilled with the current name (review M4): an empty field made
         // retyping the same name the easy path, and that used to mangle it.
         const QString l = QInputDialog::getText(
             this, tr("Rename workspace"), tr("Name:"), QLineEdit::Normal,
-            activeLabel);
-        if (!l.isEmpty() && l != activeLabel)
-            m_workspaceController->renameWorkspace(active, l);
+            nowLabel);
+        if (!l.isEmpty() && l != nowLabel)
+            m_workspaceController->renameWorkspace(now, l);
     });
-    QAction* del = menu->addAction(tr("Delete active…"), this, [this, active] {
+    QAction* del = menu->addAction(tr("Delete active…"), this, [this] {
+        const QString now = m_workspaceController->activeWorkspaceId();
+        QString nowLabel;
+        for (const auto& [wid, wlabel] : m_workspaceController->workspaceList()) {
+            if (wid == now) { nowLabel = wlabel; break; }
+        }
         if (QMessageBox::question(
                 this, tr("Delete workspace"),
-                tr("Delete the active workspace? Its arrangement is lost."))
+                tr("Delete workspace \"%1\"? Its arrangement is lost.")
+                    .arg(nowLabel))
             == QMessageBox::Yes) {
-            m_workspaceController->deleteWorkspace(active);
+            m_workspaceController->deleteWorkspace(now);
         }
     });
     del->setEnabled(list.size() > 1);
@@ -496,9 +507,13 @@ void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
             b->setCheckable(true);
             b->setChecked(m_workspaceController->boundWorkspaceFor(prof)
                           == active);
-            connect(b, &QAction::toggled, this, [this, prof, active](bool on) {
-                if (on)  m_workspaceController->bindProfile(prof, active);
-                else     m_workspaceController->unbindProfile(prof);
+            connect(b, &QAction::toggled, this, [this, prof](bool on) {
+                if (on) {
+                    m_workspaceController->bindProfile(
+                        prof, m_workspaceController->activeWorkspaceId());
+                } else {
+                    m_workspaceController->unbindProfile(prof);
+                }
             });
         }
     }
@@ -516,6 +531,12 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
 
     if (action == QLatin1String("status") || action == QLatin1String("query")) {
         out[QStringLiteral("enabled")]  = enabled;
+        // The active workspace, so two workspaces holding identical layouts
+        // no longer give byte-identical status replies (review, K6OZY: a
+        // harness diffing status to verify a switch passed when the switch
+        // did nothing).
+        out[QStringLiteral("activeWorkspace")] =
+            m_workspaceController->activeWorkspaceId();
         out[QStringLiteral("edit")]     = m_workspaceCanvas->isEditMode();
         out[QStringLiteral("gridSnap")] = m_workspaceCanvas->isGridSnapEnabled();
         out[QStringLiteral("selected")] = m_workspaceCanvas->selectedItem();
@@ -576,10 +597,19 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
 
     if (action == QLatin1String("switch")) {
         const QString target = args.trimmed();
-        // Accept an id or a label — the bridge caller usually has the label.
+        // An EXACT ID wins over a label match (review, K6OZY: labels are
+        // operator text, and a workspace *labelled* "ws-1" used to hijack
+        // `switch ws-1` away from the workspace whose id that is).
         QString id = target;
+        bool exactId = false;
         for (const auto& [wsId, wsLabel] : m_workspaceController->workspaceList()) {
-            if (wsLabel == target) { id = wsId; break; }
+            if (wsId == target) { exactId = true; break; }
+        }
+        if (!exactId) {
+            for (const auto& [wsId, wsLabel] :
+                 m_workspaceController->workspaceList()) {
+                if (wsLabel == target) { id = wsId; break; }
+            }
         }
         if (!m_workspaceController->switchWorkspace(id)) {
             out[QStringLiteral("error")] =
@@ -616,6 +646,14 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             return out;
         }
         out[QStringLiteral("id")] = id;
+        // The ACTUAL label (deduplication may have suffixed it) and the
+        // posture change — both script-observable state the reply used to
+        // omit (review, K6OZY: a collision silently yielded "X (2)" and a
+        // script binding by label touched the wrong workspace).
+        for (const auto& [wsId, wsLabel] : m_workspaceController->workspaceList()) {
+            if (wsId == id) { out[QStringLiteral("label")] = wsLabel; break; }
+        }
+        out[QStringLiteral("edit")]   = m_workspaceCanvas->isEditMode();
         out[QStringLiteral("active")] = m_workspaceController->activeWorkspaceId();
         return out;
     }
@@ -646,6 +684,12 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         }
         out[QStringLiteral("bound")] =
             m_workspaceController->boundWorkspaceFor(profile);
+        // Whether the radio currently REPORTS this profile.  Not an error —
+        // binding before the radio connects is a legitimate workflow — but
+        // a script can now catch the typo the Bind submenu cannot show
+        // (review, K6OZY).
+        out[QStringLiteral("knownProfile")] =
+            m_radioModel.globalProfiles().contains(profile);
         return out;
     }
 

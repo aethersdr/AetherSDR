@@ -427,6 +427,21 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
                           QStringLiteral("workspace '%1' had no main surface").arg(ws.id));
         }
 
+        // Labels are identity for humans and for the bridge's switch-by-
+        // label: a duplicate parses but leaves the second workspace
+        // unreachable by name (review, K6OZY).  Same treatment as ids —
+        // repair with a warning rather than drop.
+        for (const Workspace& prior : doc.workspaces) {
+            if (!ws.label.isEmpty() && prior.label == ws.label) {
+                const QString old = ws.label;
+                ws.label = doc.uniqueLabel(ws.label);
+                appendWarning(warnings,
+                              QStringLiteral("workspace '%1' relabelled '%2' "
+                                             "(duplicate label '%3')")
+                                  .arg(ws.id, ws.label, old));
+                break;
+            }
+        }
         doc.workspaces.append(ws);
     }
 

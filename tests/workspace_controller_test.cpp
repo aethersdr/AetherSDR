@@ -719,6 +719,64 @@ int main(int argc, char** argv)
             ctl.sendAppletToCanvas("RX");
         }
 
+        // K6OZY: the boot/replay closed-flag paths — a closed flag skips a
+        // shut applet, and an applet reopened while the mode was OFF beats
+        // its stale flag (cleared and placed on the next enable).
+        {
+            ctl.switchWorkspace(wsA);
+            canvas.setEditMode(true);
+            tx->setContainerVisible(true);
+            if (!tx->isOnCanvas()) ctl.sendAppletToCanvas("TX");
+            tx->setContainerVisible(false);   // closed -> flag written
+            ctl.disable();
+            report("closed flag survives disable",
+                   storedDocument().contains(QStringLiteral("closed")));
+
+            // Case A: still closed -> enable skips it.
+            ctl.enable({"RX", "TX"});
+            report("a closed-flagged applet is not placed at enable",
+                   !canvas.contains("applet:TX") && !tx->isContainerVisible());
+
+            // Case B: reopened while the mode was OFF -> the click wins.
+            ctl.disable();
+            tx->setContainerVisible(true);    // hook is inert while disabled
+            ctl.enable({"RX", "TX"});
+            report("an applet reopened while disabled beats its stale flag",
+                   canvas.contains("applet:TX") && tx->isOnCanvas());
+            canvas.setEditMode(true);
+        }
+
+        // K6OZY: reset composes Classic on the ACTUAL sparse slots — no
+        // global renumber orphaning other workspaces' pan items.
+        {
+            auto* panS = new QWidget(&panOwner);
+            pans.insert(QStringLiteral("0x40000030"), panS);
+            ctl.onPanAdded(QStringLiteral("0x40000030"));   // slot 1
+            const QString twin = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Current,
+                QStringLiteral("SlotTwin"));
+            const QString slot1 = ctl.panItemIdFor(QStringLiteral("0x40000030"));
+            canvas.setEditMode(true);
+            canvas.setItemRect(slot1, NormRect{0.61, 0.11, 0.35, 0.35});
+            ctl.commitPlacement();
+            ctl.switchWorkspace(wsA);
+            // Free slot 0: the map goes sparse {1}.
+            ctl.onPanRemoved(QStringLiteral("0x40000000"));
+            pans.remove(QStringLiteral("0x40000000"));
+            ctl.resetToClassic();
+            ctl.switchWorkspace(twin);
+            report("reset does not renumber slots under other workspaces",
+                   canvas.itemRect(slot1) == NormRect{0.61, 0.11, 0.35, 0.35});
+            // restore the world
+            ctl.switchWorkspace(wsA);
+            ctl.deleteWorkspace(twin);
+            ctl.onPanRemoved(QStringLiteral("0x40000030"));
+            pans.remove(QStringLiteral("0x40000030"));
+            auto* panA2 = new QWidget(&panOwner);
+            pans.insert(QStringLiteral("0x40000000"), panA2);
+            ctl.onPanAdded(QStringLiteral("0x40000000"));
+        }
+
         // Import pop-outs (phase 6): a floated applet and a floated pan
         // land on the canvas at rects mapped from their window geometry.
         {
