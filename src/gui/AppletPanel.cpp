@@ -728,7 +728,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // starts hidden (defaultOn = false).
     m_tunerApplet = new TunerApplet;
     {
-        auto entry = makeEntry("TUN", "Tuner", m_tunerApplet, false,
+        auto entry = makeEntry("TUN", "TGXL", m_tunerApplet, false,
                                m_drawer, m_drawerLayout);
         m_tuneBtn = entry.btn;
         markHardwareConditional("TUN");
@@ -737,7 +737,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_ampApplet = new AmpApplet;
     {
-        auto entry = makeEntry("AMP", "Amplifier", m_ampApplet, false,
+        auto entry = makeEntry("AMP", "PGXL", m_ampApplet, false,
                                m_drawer, m_drawerLayout);
         m_ampBtn = entry.btn;
         markHardwareConditional("AMP");
