@@ -250,6 +250,10 @@ inline QString darkThemeStylesheet()
 // slice colour (slicePrimarySliderStyle) or a TX-warning amber pass
 // their own token here — those overrides still work since the helper
 // just substitutes whatever token name is provided.
+//
+// NOTE: do not add a :hover rule here without first removing the WA_Hover
+// suppression in applyPrimarySliderStyle() below (#4869) — the attribute that
+// gates hover rendering is deliberately cleared on every themed slider.
 inline QString primarySliderStyleTemplate(const QString& accentToken = QStringLiteral("color.slider.foreground"))
 {
     return QStringLiteral(

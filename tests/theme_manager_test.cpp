@@ -1,3 +1,4 @@
+#include "TestEventLoop.h"
 #include "TestSettingsProfile.h"
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
@@ -1483,12 +1484,12 @@ int main(int argc, char** argv)
         layout->addWidget(slider);
 
         host.show();
-        QTest::qWait(50);
-        EXPECT_TRUE(!slider->testAttribute(Qt::WA_Hover));
+        EXPECT_TRUE(AetherTest::waitFor(
+            [&] { return !slider->testAttribute(Qt::WA_Hover); }));
 
         tm.setActiveTheme("Default Light");
-        QTest::qWait(50);
-        EXPECT_TRUE(!slider->testAttribute(Qt::WA_Hover));
+        EXPECT_TRUE(AetherTest::waitFor(
+            [&] { return !slider->testAttribute(Qt::WA_Hover); }));
 
         tm.setActiveTheme("Default Dark");
     }
