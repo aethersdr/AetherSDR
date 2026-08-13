@@ -2473,7 +2473,10 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     m_spotTable->setColumnWidth(SpotTableModel::ColBand, 45);
     m_spotTable->setColumnWidth(SpotTableModel::ColSource, 55);
 
-    // No default sort — insertion order is newest-first
+    // The sort indicator is hidden, but the table IS sorted: setSortingEnabled(true)
+    // above applies the header's default indicator (Qt 6: section 0 — Time —
+    // descending), which happens to match the model's newest-first insertion
+    // order. Verified on Qt 6.8.3 and 6.11.1 (#4889).
     m_spotTable->horizontalHeader()->setSortIndicatorShown(false);
 
     // Column visibility (#4157): Time/Freq/DX Call stay always-on as the
