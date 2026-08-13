@@ -33,6 +33,12 @@ public:
 
     explicit TitleBar(QWidget* parent = nullptr);
 
+    // Canvas mode replaces the applet panel with the workspace canvas, so
+    // the panel's dock/hide/pop-out icons hide with it (8600 field
+    // request) — offering controls for a panel that is not part of the
+    // shell invites arrangements the mode cannot honor.
+    void setAppletPanelControlsVisible(bool visible);
+
     // Embed the menu bar into the left side of the title bar
     void setMenuBar(QMenuBar* mb);
 

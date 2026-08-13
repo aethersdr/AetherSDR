@@ -16,6 +16,7 @@
 #include "BandStackPanel.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
+#include "TitleBar.h"
 #include "containers/ContainerManager.h"
 #include "core/AppSettings.h"
 #include "workspace/WorkspaceCanvas.h"
@@ -178,6 +179,11 @@ void MainWindow::wireWorkspaceCanvas()
                 // Edit Layout is meaningful only while the canvas is up.
                 if (m_workspaceEditAction) {
                     m_workspaceEditAction->setEnabled(on);
+                }
+                // The panel's title-bar controls hide with the panel's role:
+                // canvas mode owns arrangement (8600 field request).
+                if (m_titleBar) {
+                    m_titleBar->setAppletPanelControlsVisible(!on);
                 }
             });
 

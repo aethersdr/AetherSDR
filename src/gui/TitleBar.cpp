@@ -657,6 +657,13 @@ void TitleBar::handleTitleDoubleClick(QMouseEvent* ev)
     }
 }
 
+void TitleBar::setAppletPanelControlsVisible(bool visible)
+{
+    if (m_dockLeftLbl)  m_dockLeftLbl->setVisible(visible);
+    if (m_dockRightLbl) m_dockRightLbl->setVisible(visible);
+    if (m_popOutLbl)    m_popOutLbl->setVisible(visible);
+}
+
 bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
 {
     if (obj == window() && ev->type() == QEvent::WindowStateChange) {
