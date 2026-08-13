@@ -417,7 +417,13 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_sMeterContainer->setContent(sMeterContent);
     connect(m_sMeterContainer, &ContainerWidget::dockModeChanged,
             m_sMeter, [this](ContainerWidget::DockMode mode) {
-                m_sMeter->setFloating(mode == ContainerWidget::DockMode::Floating);
+                // Canvas takes the floating presentation (8600 field
+                // report: an item resized on the canvas kept the rail's
+                // Fixed vertical policy and refused to grow — the meter
+                // must fill the rect the operator drew, exactly as it
+                // fills a pop-out window).
+                m_sMeter->setFloating(
+                    mode != ContainerWidget::DockMode::PanelDocked);
             });
     const bool sMeterOn = AppSettings::instance()
         .value("Applet_VU", "True").toString() == "True";
@@ -716,8 +722,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             connect(container, &ContainerWidget::dockModeChanged,
                     m_crossNeedleApplet,
                     [this](ContainerWidget::DockMode mode) {
+                        // Canvas = floating presentation (see the VU
+                        // handler above).
                         m_crossNeedleApplet->setFloating(
-                            mode == ContainerWidget::DockMode::Floating);
+                            mode != ContainerWidget::DockMode::PanelDocked);
                     });
         }
         m_appletOrder.append(powerEntry);
@@ -912,7 +920,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         if (auto* c = qobject_cast<ContainerWidget*>(catEntry.widget)) {
             connect(c, &ContainerWidget::dockModeChanged, m_catControlApplet,
                     [this](ContainerWidget::DockMode mode) {
-                        m_catControlApplet->setFloating(mode == ContainerWidget::DockMode::Floating);
+                        // Canvas = the full-table floating view (see the
+                        // VU handler above): the operator sized the rect,
+                        // so the simple rail page wastes it.
+                        m_catControlApplet->setFloating(
+                            mode != ContainerWidget::DockMode::PanelDocked);
                     });
         }
     }
