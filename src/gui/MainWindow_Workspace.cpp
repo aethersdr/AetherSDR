@@ -98,6 +98,16 @@ void MainWindow::wireWorkspaceCanvas()
     };
     m_workspaceController->setPanHost(hooks);
 
+    // The widget palette (Add widget ▸): AppletPanel owns the applet
+    // universe and the category taxonomy; the controller only renders it.
+    {
+        QList<WorkspaceController::WidgetCatalogEntry> catalog;
+        for (const auto& e : m_appletPanel->appletCatalog()) {
+            catalog.append({e.id, e.title, e.category});
+        }
+        m_workspaceController->setWidgetCatalog(catalog);
+    }
+
     // Profile-bound recall (phase 6, decisions 6/8): a bound GLOBAL
     // profile switches the workspace; the status bar says so, because the
     // whole surface just changed and the operator deserves the why.

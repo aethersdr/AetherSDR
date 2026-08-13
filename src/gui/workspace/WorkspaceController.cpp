@@ -7,6 +7,8 @@
 #include "gui/workspace/WorkspaceMigration.h"
 #include "gui/workspace/WorkspaceCanvas.h"
 
+#include "core/ThemeManager.h"
+
 #include <QHash>
 #include <QMenu>
 
@@ -1188,6 +1190,54 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
         menu.addSeparator();
     }
 
+    // Add widget ▸ (field request): every applet by functional category.
+    // Ones already on the canvas render as a checked, disabled entry with a
+    // highlight bar — visibly present, not re-addable.
+    if (!m_widgetCatalog.isEmpty()) {
+        QMenu* add = menu.addMenu(QStringLiteral("Add widget"));
+        theme::setContainer(add, QStringLiteral("root"));
+        ThemeManager::instance().applyStyleSheet(add,
+            QStringLiteral("QMenu::item:disabled:checked {"
+                           " background: {{color.accent.dim}};"
+                           " color: {{color.background.0}}; }"));
+        const QPointF canvasPos =
+            m_canvas->rect().isEmpty()
+                ? QPointF(0.5, 0.5)
+                : QPointF(m_canvas->mapFromGlobal(globalPos).x()
+                              / double(m_canvas->width()),
+                          m_canvas->mapFromGlobal(globalPos).y()
+                              / double(m_canvas->height()));
+
+        QStringList categoryOrder;
+        for (const WidgetCatalogEntry& e : m_widgetCatalog) {
+            if (!categoryOrder.contains(e.category)) {
+                categoryOrder.append(e.category);
+            }
+        }
+        for (const QString& category : categoryOrder) {
+            QMenu* catMenu = add->addMenu(category);
+            for (const WidgetCatalogEntry& e : m_widgetCatalog) {
+                if (e.category != category) {
+                    continue;
+                }
+                QAction* a = catMenu->addAction(e.title);
+                ContainerWidget* c = containerForApplet(e.id);
+                if (c && c->isOnCanvas()) {
+                    a->setCheckable(true);
+                    a->setChecked(true);
+                    a->setEnabled(false);
+                } else {
+                    const QString appletId = e.id;
+                    connect(a, &QAction::triggered, this,
+                            [this, appletId, canvasPos] {
+                                addAppletFromPalette(appletId, canvasPos);
+                            });
+                }
+            }
+        }
+        menu.addSeparator();
+    }
+
     QAction* gridSnap = menu.addAction(QStringLiteral("Snap to grid"));
     gridSnap->setCheckable(true);
     gridSnap->setChecked(m_canvas->isGridSnapEnabled());
@@ -1417,6 +1467,48 @@ bool WorkspaceController::switchWorkspace(const QString& id)
     m_store.flush();
     emit workspacesChanged();
     return true;
+}
+
+void WorkspaceController::setWidgetCatalog(const QList<WidgetCatalogEntry>& catalog)
+{
+    m_widgetCatalog = catalog;
+}
+
+bool WorkspaceController::addAppletFromPalette(const QString& appletId,
+                                               const QPointF& canvasPos)
+{
+    if (!m_enabled || !m_canvas->isEditMode()) {
+        return false;
+    }
+    ContainerWidget* c = containerForApplet(appletId);
+    if (!c || c->isOnCanvas()) {
+        return false;   // absent, or already there — the menu shows why
+    }
+
+    const QString itemId = itemIdFor(c);
+    const NormRect rect  = defaultRectFor(c, &canvasPos);
+
+    // Whatever state the applet is in, the palette add ends the same way:
+    // an OPEN applet placed at the click point.  The rect is recorded
+    // first so every path below places from the document — the same
+    // one-placement-path shape import-floats uses.
+    writeItemPresence(itemId, QStringLiteral("applet"), rect,
+                      /*present=*/true, /*flushNow=*/false);
+    writeItemClosed(itemId, false, /*flushNow=*/false);
+
+    if (c->isFloating()) {
+        // An explicit palette add outranks decision 1's leave-it-floating:
+        // the operator asked for it ON the canvas.
+        m_manager->dockContainer(c->id());
+    } else if (!c->isContainerVisible()) {
+        // Opening fires the visibility hook, which sees the item we just
+        // wrote and places at its rect.
+        c->setContainerVisible(true);
+    } else {
+        sendAppletToCanvas(appletId, &rect);
+    }
+    m_store.flush();
+    return c->isOnCanvas();
 }
 
 int WorkspaceController::importFloatingOntoCanvas()

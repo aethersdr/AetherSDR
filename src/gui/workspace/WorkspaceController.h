@@ -162,6 +162,20 @@ public:
     void unbindProfile(const QString& profileName);
     QString boundWorkspaceFor(const QString& profileName) const;
 
+    // The widget palette (phase 6 field request): the context menu's
+    // "Add widget" submenu, fed by MainWindow from AppletPanel's catalog.
+    struct WidgetCatalogEntry {
+        QString id;
+        QString title;
+        QString category;
+    };
+    void setWidgetCatalog(const QList<WidgetCatalogEntry>& catalog);
+
+    // Add one applet from the palette at a canvas position (fractions).
+    // Opens a closed applet, docks a floating one, places an open one —
+    // and refuses an applet already on the canvas.
+    bool addAppletFromPalette(const QString& appletId, const QPointF& canvasPos);
+
     // Import every pop-out — floating applet containers and floating pans —
     // onto the canvas at rects mapped from their window geometry (the RFC's
     // opt-in for pre-canvas float arrangements; migration deliberately
@@ -284,6 +298,7 @@ private:
     WorkspaceCanvas*  m_canvas{nullptr};
     WorkspaceStore    m_store;
     PanHostHooks m_panHost;
+    QList<WidgetCatalogEntry> m_widgetCatalog;
     QHash<QString, int> m_panSlots;   // live panId → document slot
     QPointer<QWidget> m_returnTarget;
     QStringList m_knownAppletIds;   // from enable(), for resetToClassic()

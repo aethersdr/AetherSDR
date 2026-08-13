@@ -249,6 +249,17 @@ public:
     // Applet_<ID> keys and AppletOrder use.  The workspace controller feeds
     // these to the legacy-key migration (RFC #4887 phase 3).
     QStringList appletIds() const;
+
+    // The widget palette (phase 6 field request): every applet with its
+    // display title and functional category, in panel order.  The category
+    // taxonomy lives in ONE table in the .cpp — reshuffling it is a
+    // one-line-per-applet edit.
+    struct AppletCatalogEntry {
+        QString id;
+        QString title;
+        QString category;
+    };
+    QList<AppletCatalogEntry> appletCatalog() const;
     ContainerWidget*  rootSidebarContainer() { return m_rootSidebar; }
 
     // Global controls lock — disables wheel/mouse on sidebar sliders (#745)

@@ -646,6 +646,50 @@ int main(int argc, char** argv)
                    ctl.importFloatingOntoCanvas() == 0);
         }
 
+        // The widget palette (Add widget ▸ engine).
+        {
+            ctl.switchWorkspace(wsA);
+            canvas.setEditMode(true);
+            ctl.setWidgetCatalog({{QStringLiteral("RX"), QStringLiteral("RX Controls"),
+                                   QStringLiteral("Receive")},
+                                  {QStringLiteral("TX"), QStringLiteral("TX Controls"),
+                                   QStringLiteral("Transmit")}});
+
+            // Already on canvas -> refused.
+            rx->setContainerVisible(true);
+            if (!rx->isOnCanvas()) ctl.sendAppletToCanvas("RX");
+            report("palette refuses an applet already on the canvas",
+                   !ctl.addAppletFromPalette(QStringLiteral("RX"),
+                                             QPointF(0.5, 0.5)));
+
+            // Closed applet -> opened and placed at the click point.
+            tx->setContainerVisible(false);
+            report("palette opens a closed applet onto the canvas",
+                   ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                            QPointF(0.25, 0.25))
+                       && tx->isContainerVisible() && tx->isOnCanvas());
+            const NormRect placed = canvas.itemRect("applet:TX");
+            report("...centred on the click point",
+                   qAbs((placed.x + placed.w / 2.0) - 0.25) < 0.05
+                       && qAbs((placed.y + placed.h / 2.0) - 0.25) < 0.05);
+
+            // Floating applet -> docked onto the canvas.
+            mgr.floatContainer("TX");
+            report("palette precondition: TX floats", tx->isFloating());
+            report("palette docks a floating applet onto the canvas",
+                   ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                            QPointF(0.7, 0.7))
+                       && !tx->isFloating() && tx->isOnCanvas());
+
+            // Locked canvas -> the palette is an edit-mode tool.
+            canvas.setEditMode(false);
+            ctl.returnAppletToPanel("TX");
+            report("palette refuses while locked",
+                   !ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                             QPointF(0.5, 0.5)));
+            canvas.setEditMode(true);
+        }
+
         // Mode-off switch only retargets.
         ctl.switchWorkspace(wsA);
         rx->setContainerVisible(true);

@@ -1233,6 +1233,58 @@ void AppletPanel::rebuildStackOrder()
     m_stack->addStretch(1);  // factor 1: absorb all surplus, pin tiles to sizeHint (#3461)
 }
 
+QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
+{
+    // THE category taxonomy — a starting point, deliberately one flat table
+    // so re-homing an applet is a one-line edit.  Order here is category
+    // FIRST-SEEN order and becomes the palette's menu order; applets within
+    // a category keep panel order.
+    static const QMap<QString, QString> kCategory = {
+        {QStringLiteral("RX"),    QStringLiteral("Receive")},
+        {QStringLiteral("MPAN"),  QStringLiteral("Receive")},
+        {QStringLiteral("KSDR"),  QStringLiteral("Receive")},
+        {QStringLiteral("DEMO"),  QStringLiteral("Receive")},
+        {QStringLiteral("TX"),    QStringLiteral("Transmit")},
+        {QStringLiteral("PHNE"),  QStringLiteral("Transmit")},
+        {QStringLiteral("TXDSP"), QStringLiteral("Transmit")},
+        {QStringLiteral("TUN"),   QStringLiteral("Transmit")},
+        {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
+        {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
+        {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
+        {QStringLiteral("DAX"),   QStringLiteral("Audio & DSP")},
+        {QStringLiteral("IQ"),    QStringLiteral("Audio & DSP")},
+        {QStringLiteral("PWR"),   QStringLiteral("Metering")},
+        {QStringLiteral("MTR"),   QStringLiteral("Metering")},
+        {QStringLiteral("HLTH"),  QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("AG"),    QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("SS"),    QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("CAT"),   QStringLiteral("Integration")},
+        {QStringLiteral("TCI"),   QStringLiteral("Integration")},
+        {QStringLiteral("MQTT"),  QStringLiteral("Integration")},
+        {QStringLiteral("RADE"),  QStringLiteral("Integration")},
+        {QStringLiteral("CLOCK"), QStringLiteral("Station")},
+        {QStringLiteral("PROF"),  QStringLiteral("Station")},
+    };
+
+    QList<AppletCatalogEntry> out;
+    out.reserve(m_appletOrder.size());
+    for (const auto& entry : m_appletOrder) {
+        AppletCatalogEntry e;
+        e.id = entry.id;
+        if (auto* c = qobject_cast<ContainerWidget*>(entry.widget)) {
+            e.title = c->title();
+        }
+        if (e.title.isEmpty()) {
+            e.title = entry.id;
+        }
+        e.category = kCategory.value(entry.id, QStringLiteral("Other"));
+        out.append(e);
+    }
+    return out;
+}
+
 QStringList AppletPanel::appletIds() const
 {
     QStringList ids;
