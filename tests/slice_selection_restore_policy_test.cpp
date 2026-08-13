@@ -40,6 +40,10 @@ int main()
           "empty scope ID cannot carry selection");
 
     // Persist guard
+    check(SliceSelectionRestorePolicy::mayAssertTxSlice(true),
+          "TX slice may be asserted when we own transmit");
+    check(!SliceSelectionRestorePolicy::mayAssertTxSlice(false),
+          "TX slice is never asserted when another client owns transmit");
     check(SliceSelectionRestorePolicy::shouldPersist(false, false, false, false),
           "operator selection is persisted");
     check(!SliceSelectionRestorePolicy::shouldPersist(true, false, false, false),

@@ -43,7 +43,9 @@ public:
         return activeOrDisconnecting && liveSliceCount > 0 && txOwnedByUs;
     }
 
-    // May the restore re-assert a stored TX-slice assignment?
+    // TX ownership is the gate between a restored preference and a wire-level
+    // TX assignment. Unpinned, a refactor can drop the term and the regression
+    // is invisible from the client — see the test cases next to shouldPersist().
     static bool mayAssertTxSlice(bool txOwnedByUs) { return txOwnedByUs; }
 
     // May this active-slice change be recorded as the operator's preference?
