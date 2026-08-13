@@ -614,12 +614,17 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         // button on the ContainerTitleBar) back to the tray toggle
         // and settings so everything stays in sync.
         connect(c, &ContainerWidget::visibilityChanged, this,
-                [btn, key](bool visible) {
+                [this, btn, key](bool visible) {
             if (btn) {
                 QSignalBlocker b(btn);
                 btn->setChecked(visible);
             }
-            AppSettings::instance().setValue(key, visible ? "True" : "False");
+            // Recall-driven changes are workspace state, not preference
+            // changes (red-team B2) — the button sync above still runs so
+            // the bar stays honest either way.
+            if (!m_recallInProgress) {
+                AppSettings::instance().setValue(key, visible ? "True" : "False");
+            }
         });
 
         return {id, c, c->titleBar(), btn};
@@ -1269,6 +1274,21 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("PROF"),  QStringLiteral("Station")},
     };
 
+    // Hardware-conditional applets (TGXL/PGXL/ACOM/SPE…) hide from the BAR
+    // when their hardware is absent; the palette must not offer them
+    // either (review M3): on the demo it listed live entries that placed
+    // dead amplifier applets.  The bar's own record — BarButton::
+    // hardwareAvailable, driven by markHardwareConditional()/
+    // updateHardwareAvailability() — is the single source of that truth.
+    auto hardwareHidden = [this](const QString& id) {
+        for (const auto& bb : m_barButtons) {
+            if (bb.id == id) {
+                return !bb.hardwareAvailable;
+            }
+        }
+        return false;   // no bar record: not hardware-conditional
+    };
+
     QList<AppletCatalogEntry> out;
     out.reserve(m_appletOrder.size() + 1);
     // The VU/S-Meter container is created directly on the manager rather
@@ -1280,6 +1300,9 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
                     QStringLiteral("Metering")});
     }
     for (const auto& entry : m_appletOrder) {
+        if (hardwareHidden(entry.id)) {
+            continue;
+        }
         AppletCatalogEntry e;
         e.id = entry.id;
         if (auto* c = qobject_cast<ContainerWidget*>(entry.widget)) {

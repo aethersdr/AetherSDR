@@ -155,6 +155,12 @@ int main(int argc, char** argv)
         return floatingPans.contains(id);
     };
     ctl.setPanHost(hooks);
+    // The recall close-loop is scoped to the widget catalog (red-team B1),
+    // so the switch matrix needs it from the start.
+    ctl.setWidgetCatalog({{QStringLiteral("RX"), QStringLiteral("RX Controls"),
+                           QStringLiteral("Receive")},
+                          {QStringLiteral("TX"), QStringLiteral("TX Controls"),
+                           QStringLiteral("Transmit")}});
 
     // ── Boot before any document exists ──────────────────────────────────
     report("boot with nothing stored asks for nothing", !ctl.boot());
@@ -478,6 +484,12 @@ int main(int argc, char** argv)
                !canvas.contains(WorkspaceController::kBandStackItemId)
                    && bandStack.parentWidget() == &panOwner
                    && !bandStack.isVisible());
+        // The hooks hold a pointer to this block-local panel, and the M1
+        // band-stack recall invokes them on every later switch — detach
+        // before the widget dies (the same lifetime rule as the guard).
+        hooks.bandStack        = {};
+        hooks.reclaimBandStack = {};
+        ctl.setPanHost(hooks);
 
         // A reclaimed widget cannot hide behind a healthy model: steal the
         // pan back to its owner behind the canvas's back (what the stack's
@@ -610,6 +622,103 @@ int main(int argc, char** argv)
                           return false;
                       }());
 
+        // Red-team B1: a container OUTSIDE the catalog (composite children,
+        // the sidebar) is never the recall's business — switches must not
+        // touch it.
+        {
+            auto* inner = mgr.createContainer("gate", "Gate (composite child)");
+            inner->setContent(new QLabel("g"));
+            inner->setContainerVisible(true);
+            ctl.switchWorkspace(wsA);
+            ctl.switchWorkspace(ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Current,
+                QStringLiteral("B1Probe")));
+            report("a non-catalog container survives switches (B1)",
+                   inner->isContainerVisible());
+            ctl.switchWorkspace(wsA);
+            report("...both ways", inner->isContainerVisible());
+        }
+
+        // Red-team B2: recall-driven bulk visibility runs inside the
+        // recall guard, so the panel can suppress preference writes.
+        {
+            int on = 0, off = 0;
+            bool balanced = true, inOrder = true;
+            hooks.recallGuard = [&](bool g) {
+                if (g) { ++on; if (on != off + 1) inOrder = false; }
+                else   { ++off; if (off != on) balanced = false; }
+            };
+            ctl.setPanHost(hooks);
+            const QString probe = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Blank,
+                QStringLiteral("B2Probe"));
+            ctl.switchWorkspace(wsA);
+            report("recall brackets the guard, balanced and ordered (B2)",
+                   on >= 2 && balanced && inOrder);
+            ctl.deleteWorkspace(probe);
+            // The guard captured this block's locals by reference and the
+            // controller keeps the hooks copy — detach it before they die.
+            hooks.recallGuard = {};
+            ctl.setPanHost(hooks);
+        }
+
+        // Blank workspaces cascade multiple pans (agent review): two live
+        // pans with no slot items must land at distinct rects.
+        {
+            auto* panB2 = new QWidget(&panOwner);
+            pans.insert(QStringLiteral("0x40000020"), panB2);
+            ctl.onPanAdded(QStringLiteral("0x40000020"));
+            const QString blank2 = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Blank,
+                QStringLiteral("TwoPanBlank"));
+            const QString id0 = ctl.panItemIdFor(QStringLiteral("0x40000000"));
+            const QString id1 = ctl.panItemIdFor(QStringLiteral("0x40000020"));
+            report("a blank workspace cascades multiple pans",
+                   canvas.contains(id0) && canvas.contains(id1)
+                       && canvas.itemRect(id0).x != canvas.itemRect(id1).x);
+            ctl.deleteWorkspace(blank2);
+            ctl.onPanRemoved(QStringLiteral("0x40000020"));
+            pans.remove(QStringLiteral("0x40000020"));
+            ctl.switchWorkspace(wsA);
+        }
+
+        // m9: the store NEVER holds a dangling activeWorkspace, even
+        // mid-delete of the active one.
+        {
+            const QString doomed = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Current,
+                QStringLiteral("Doomed"));
+            report("delete-active keeps the stored active valid (m9)",
+                   ctl.deleteWorkspace(doomed)
+                       && !storedDocument().contains(QStringLiteral("Doomed"))
+                       && storedDocument().contains(ctl.activeWorkspaceId()));
+        }
+
+        // m8: a closed pop-out must not desert workspaces that list it —
+        // a hidden float participates in recall (reopens as a float).
+        {
+            ctl.switchWorkspace(wsA);
+            canvas.setEditMode(true);
+            rx->setContainerVisible(true);
+            if (!rx->isOnCanvas()) ctl.sendAppletToCanvas("RX");
+            const QString twin = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Current,
+                QStringLiteral("M8Twin"));   // lists RX open
+            ctl.switchWorkspace(wsA);
+            mgr.floatContainer("RX");        // wsA forgets; the twin keeps it
+            rx->setContainerVisible(false);  // operator closes the pop-out
+            report("m8 precondition: hidden float",
+                   rx->isFloating() && !rx->isContainerVisible());
+            ctl.switchWorkspace(twin);
+            report("a workspace that lists a closed pop-out reopens it (m8)",
+                   rx->isContainerVisible());
+            ctl.deleteWorkspace(twin);
+            if (rx->isFloating()) mgr.dockContainer("RX");
+            rx->setContainerVisible(true);
+            ctl.switchWorkspace(wsA);
+            ctl.sendAppletToCanvas("RX");
+        }
+
         // Import pop-outs (phase 6): a floated applet and a floated pan
         // land on the canvas at rects mapped from their window geometry.
         {
@@ -644,6 +753,20 @@ int main(int argc, char** argv)
                        && nearly(panRect.w, 0.4) && nearly(panRect.h, 0.375));
             report("...and nothing left floating to import",
                    ctl.importFloatingOntoCanvas() == 0);
+
+            // m7: an oversized float (maximized on a bigger monitor) must
+            // not bury the canvas as a full-surface item.
+            floatingPans.insert(QStringLiteral("0x40000000"));
+            ctl.onPanFloated(QStringLiteral("0x40000000"));
+            hooks.floatingPanGlobalRect = [&](const QString&) {
+                return QRect(canvas.mapToGlobal(QPoint(-200, -200)),
+                             QSize(4000, 3000));
+            };
+            ctl.setPanHost(hooks);
+            report("an oversized float imports capped below full-surface (m7)",
+                   ctl.importFloatingOntoCanvas() == 1
+                       && canvas.itemRect(ctl.panItemIdFor(
+                              QStringLiteral("0x40000000"))).w <= 0.9 + 1e-9);
         }
 
         // The widget palette (Add widget ▸ engine).
@@ -681,12 +804,15 @@ int main(int argc, char** argv)
                                             QPointF(0.7, 0.7))
                        && !tx->isFloating() && tx->isOnCanvas());
 
-            // Locked canvas -> the palette is an edit-mode tool.
+            // Locked canvas -> the palette still ADDS (review m3): with
+            // the panel hidden it is the only mouse path to open an
+            // applet, and opening a tool is operating.
             canvas.setEditMode(false);
             ctl.returnAppletToPanel("TX");
-            report("palette refuses while locked",
-                   !ctl.addAppletFromPalette(QStringLiteral("TX"),
-                                             QPointF(0.5, 0.5)));
+            report("palette adds while locked (m3)",
+                   ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                            QPointF(0.5, 0.5))
+                       && tx->isOnCanvas());
             canvas.setEditMode(true);
         }
 

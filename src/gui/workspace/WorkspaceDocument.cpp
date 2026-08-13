@@ -171,6 +171,9 @@ bool WorkspaceDocument::renameWorkspace(const QString& id, const QString& label)
 {
     for (Workspace& w : workspaces) {
         if (w.id == id) {
+            // Exclude SELF from the collision scan (review M4): renaming a
+            // workspace to its own label used to come back "Label (2)".
+            w.label.clear();
             w.label = uniqueLabel(label);
             return true;
         }

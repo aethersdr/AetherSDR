@@ -9,6 +9,8 @@
 
 #include "MainWindow.h"
 
+#include "workspace/WorkspaceController.h"
+
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistController.h"
 #include "CopyAssistPanel.h"
@@ -849,6 +851,12 @@ void MainWindow::buildMenuBar()
     // entries being removed.
     auto* popOutShortcut = new QShortcut(QKeySequence("Ctrl+Shift+S"), this);
     connect(popOutShortcut, &QShortcut::activated, this, [this]() {
+        // Not in canvas mode (review m1): the panel is hidden there and its
+        // shell controls are gone — the shortcut popping an invisible panel
+        // out (and persisting the float) bypassed both.
+        if (m_workspaceController && m_workspaceController->isEnabled()) {
+            return;
+        }
         toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
     });
 

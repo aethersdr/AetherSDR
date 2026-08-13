@@ -429,6 +429,10 @@ int main()
                           ->surface(WorkspaceSurface::kMainId)
                           ->items.isEmpty());
 
+        report("rename to the SAME name is stable (review M4)",
+               doc.renameWorkspace(blank, doc.workspace(blank)->label)
+                   && !doc.workspace(blank)->label.contains(
+                          QStringLiteral("(2)")));
         report("rename de-duplicates too",
                doc.renameWorkspace(blank, doc.workspace(dup)->label)
                    && doc.workspace(blank)->label != doc.workspace(dup)->label);

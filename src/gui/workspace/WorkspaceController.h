@@ -105,6 +105,9 @@ public:
         // screen, and the way to dock it.
         std::function<QRect(const QString&)> floatingPanGlobalRect;
         std::function<void(const QString&)> requestDock;
+        // Bracket recall-driven bulk visibility changes (red-team B2): the
+        // panel suppresses its Applet_<ID> preference writes inside.
+        std::function<void(bool)> recallGuard;
     };
     void setPanHost(const PanHostHooks& hooks);
 
@@ -238,6 +241,9 @@ public:
     // Where a live drag out of the canvas may land (the applet panel).
     // Releasing a move over this widget returns the applet to it; anywhere
     // else the drag is an abort (the canvas has already restored the rect).
+    // Since the panel hides in canvas mode this fires only when something
+    // re-shows it; the per-item "Return to panel" action and the palette
+    // are the ordinary paths now (review m2).
     void setReturnTarget(QWidget* target);
 
 signals:
@@ -288,6 +294,10 @@ private:
 
     // Slot bookkeeping (phase 4).
     int slotForPan(const QString& panId);          // assigns on first sight
+    // The real switch: `force` re-places even when `id` is already active
+    // (deleteWorkspace retargets the document first, so the ordinary
+    // no-change early-return would skip the release/recall).
+    bool switchWorkspaceInternal(const QString& id, bool force);
     QString panIdForItem(const QString& itemId) const;
     // The slot-id list migration/reset feed composeClassic ("0", "1", …):
     // as many as the operator's saved pan layout has cells, or the live pan

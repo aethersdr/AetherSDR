@@ -97,6 +97,9 @@ void MainWindow::wireWorkspaceCanvas()
     hooks.requestDock = [this](const QString& id) {
         m_panStack->dockPanadapter(id);
     };
+    hooks.recallGuard = [this](bool on) {
+        m_appletPanel->setRecallInProgress(on);
+    };
     m_workspaceController->setPanHost(hooks);
 
     // The widget palette (Add widget ▸): AppletPanel owns the applet
@@ -114,6 +117,10 @@ void MainWindow::wireWorkspaceCanvas()
     // whole surface just changed and the operator deserves the why.
     connect(&m_radioModel, &RadioModel::profileLoadCompleted,
             m_workspaceController, &WorkspaceController::onRadioProfileLoaded);
+    // Switches hide/recall the band stack; keep its indicator honest
+    // (review M1).
+    connect(m_workspaceController, &WorkspaceController::workspacesChanged,
+            this, [this] { updateBandStackIndicator(); });
     connect(m_workspaceController,
             &WorkspaceController::workspaceSwitchedByProfile, this,
             [this](const QString& profile, const QString& wsLabel) {
@@ -311,8 +318,16 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
         // classic mode returns exactly as the operator had it.  A floating
         // panel docks first via the canonical path (#2584's black-box
         // lesson).
-        if (m_appletPanelFloatWindow) {
+        const bool panelWasFloating = (m_appletPanelFloatWindow != nullptr);
+        if (panelWasFloating) {
             toggleAppletPanelFloating(false);
+            // The dock above persisted AppletPanelFloating=False; the
+            // operator didn't ask for that (review M2 — "visual only"
+            // must cover the pop-out too).  Restore the preference so a
+            // disable, or a restart straight out of canvas mode, brings
+            // the float back.
+            AppSettings::instance().setValue(
+                QStringLiteral("AppletPanelFloating"), QStringLiteral("True"));
         }
         if (m_appletPanel) {
             m_appletPanel->hide();
@@ -350,15 +365,23 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
     m_workspaceCanvas->setParent(this);
     m_workspaceCanvas->hide();
     m_panStack->show();
-    // Restore the panel per the operator's persisted preference — not
+    // Restore the panel per the operator's persisted preferences — not
     // unconditionally: someone who kept it hidden before the canvas keeps
-    // it hidden after.
+    // it hidden after, and someone who had it POPPED OUT gets the float
+    // back (review M2).
     if (m_appletPanel) {
         m_appletPanel->setVisible(
             AppSettings::instance()
                 .value(QStringLiteral("AppletPanelVisible"),
                        QStringLiteral("True"))
                 .toString() == QLatin1String("True"));
+        if (AppSettings::instance()
+                .value(QStringLiteral("AppletPanelFloating"),
+                       QStringLiteral("False"))
+                .toString() == QLatin1String("True")
+            && !m_appletPanelFloatWindow) {
+            toggleAppletPanelFloating(true);
+        }
     }
     if (m_panStack->count() > 1) {
         m_panStack->rearrangeLayout(
@@ -371,6 +394,10 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
 void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
 {
     menu->clear();
+    // clear() deletes actions but ORPHANS submenus (each owns its own
+    // menuAction) — the bind submenu accumulated one QMenu per open
+    // (review m5).
+    qDeleteAll(menu->findChildren<QMenu*>(QString(), Qt::FindDirectChildrenOnly));
     if (!m_workspaceController) {
         return;
     }
@@ -423,9 +450,17 @@ void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
     });
 
     menu->addSeparator();
-    menu->addAction(tr("Rename active…"), this, [this, askLabel, active] {
-        const QString l = askLabel(tr("Rename workspace"));
-        if (!l.isEmpty())
+    QString activeLabel;
+    for (const auto& [wid, wlabel] : list) {
+        if (wid == active) { activeLabel = wlabel; break; }
+    }
+    menu->addAction(tr("Rename active…"), this, [this, active, activeLabel] {
+        // Prefilled with the current name (review M4): an empty field made
+        // retyping the same name the easy path, and that used to mangle it.
+        const QString l = QInputDialog::getText(
+            this, tr("Rename workspace"), tr("Name:"), QLineEdit::Normal,
+            activeLabel);
+        if (!l.isEmpty() && l != activeLabel)
             m_workspaceController->renameWorkspace(active, l);
     });
     QAction* del = menu->addAction(tr("Delete active…"), this, [this, active] {
@@ -600,6 +635,14 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             m_workspaceController->unbindProfile(profile);
         } else {
             m_workspaceController->bindProfile(profile, wsId);
+            if (m_workspaceController->boundWorkspaceFor(profile) != wsId) {
+                // The controller refused silently (unknown workspace); a
+                // script must be able to tell "bound" from "ignored"
+                // (review m4).
+                out[QStringLiteral("error")] =
+                    QStringLiteral("no such workspace: %1").arg(wsId);
+                return out;
+            }
         }
         out[QStringLiteral("bound")] =
             m_workspaceController->boundWorkspaceFor(profile);
@@ -607,6 +650,10 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
     }
 
     if (action == QLatin1String("import-floats")) {
+        if (!enabled) {
+            out[QStringLiteral("error")] = QStringLiteral("canvas mode is off");
+            return out;   // "imported: 0" must mean "nothing was floating"
+        }
         out[QStringLiteral("imported")] =
             m_workspaceController->importFloatingOntoCanvas();
         return out;

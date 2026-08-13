@@ -260,6 +260,15 @@ public:
         QString category;
     };
     QList<AppletCatalogEntry> appletCatalog() const;
+
+    // While true, recall-driven visibility changes do NOT write the
+    // operator's Applet_<ID> preferences (red-team B2): a workspace switch
+    // opens and closes applets in bulk, and persisting those as preference
+    // changes rewrote keys the operator never touched — and, because
+    // readLegacyLayoutState() feeds resetToClassic()/create-from-Classic,
+    // one switch to a blank workspace destroyed Classic itself.  The
+    // operator's own clicks (flag false) keep dual-writing as designed.
+    void setRecallInProgress(bool on) { m_recallInProgress = on; }
     ContainerWidget*  rootSidebarContainer() { return m_rootSidebar; }
 
     // Global controls lock — disables wheel/mouse on sidebar sliders (#745)
@@ -430,6 +439,7 @@ private:
 
     // Ordered list of applets (drag-reorderable)
     QVector<AppletEntry> m_appletOrder;
+    bool m_recallInProgress{false};
     static const QStringList kDefaultOrder;
 };
 
