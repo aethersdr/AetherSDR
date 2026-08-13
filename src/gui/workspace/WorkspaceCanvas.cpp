@@ -98,11 +98,6 @@ WorkspaceCanvas::WorkspaceCanvas(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);   // keyboard placement (phase 5)
     setAccessibleName(QStringLiteral("Workspace canvas"));
 
-    // The bare widget DEFAULTS to edit mode without a setEditMode() call
-    // (the early-return would skip the install there), so the descendant-
-    // press filter starts installed.  Removed/re-added by setEditMode();
-    // Qt drops it automatically when the canvas is destroyed.
-    qApp->installEventFilter(this);
 
     m_frame = new CanvasItemFrame(this);
     m_gestureOverlay = new GestureOverlay(this);
@@ -158,6 +153,16 @@ bool WorkspaceCanvas::addItem(const QString& id,
     content->setParent(this);
     content->installEventFilter(this);
     m_widgets.insert(id, content);
+
+    // The descendant-press filter is app-wide, so it installs only when
+    // there is something to select (red-team #4971 N3: the bare default —
+    // edit mode, zero items — had every stock session running an
+    // application-wide press filter for a feature that was switched off).
+    // installEventFilter() moves an existing registration, so this is
+    // idempotent across items.
+    if (m_editMode) {
+        qApp->installEventFilter(this);
+    }
 
     // If the widget dies without going through takeItem()/removeItem() — a
     // parent destroyed out from under us, or content someone else owns — the
@@ -440,6 +445,15 @@ bool WorkspaceCanvas::eventFilter(QObject* watched, QEvent* ev)
         QWidget* w = qobject_cast<QWidget*>(watched);
         bool matched = false;
         while (w && w != this && !matched) {
+            // Never cross a top-level boundary (red-team #4971 N5): a
+            // combo popup or a dialog opened FROM a canvas applet is
+            // parented to it, so an unbounded walk would select — and
+            // possibly raise, a whole-document write — on a click inside
+            // a popup.  Items are plain children, so every legitimate
+            // press reaches its item before any window boundary.
+            if (w->isWindow()) {
+                break;
+            }
             for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd();
                  ++it) {
                 if (it.value().data() != w) {
@@ -532,9 +546,12 @@ void WorkspaceCanvas::setEditMode(bool on)
     if (on) {
         // Presses land on the deepest willing DESCENDANT of an item, not
         // the item widget itself — only an app-wide filter sees them all.
-        // Install is idempotent (Qt ignores a duplicate), active only in
-        // the one posture where any click on an item must select it.
-        qApp->installEventFilter(this);
+        // Installed only when there is something to select (N3); addItem
+        // covers the items-arrive-later case.  installEventFilter() moves
+        // an existing registration, so double-install cannot happen.
+        if (!m_widgets.isEmpty()) {
+            qApp->installEventFilter(this);
+        }
     } else {
         qApp->removeEventFilter(this);
         // Leaving edit mid-gesture abandons the gesture (rect restored) and

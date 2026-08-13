@@ -736,8 +736,11 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         };
         {
             QVariantMap sm;
-            sm[QStringLiteral("id")]    = WorkspaceSurface::kMainId;
-            sm[QStringLiteral("open")]  = true;
+            sm[QStringLiteral("id")]     = WorkspaceSurface::kMainId;
+            sm[QStringLiteral("open")]   = true;
+            // Uniform with the extra surfaces (red-team #4971 N6): main
+            // is always wanted — it cannot be closed.
+            sm[QStringLiteral("wanted")] = true;
             sm[QStringLiteral("hostedItems")] =
                 reportCanvas(m_workspaceCanvas, WorkspaceSurface::kMainId);
             surfaces.append(sm);
@@ -1040,11 +1043,27 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             return out;
         }
         const QString surfaceId = parts.value(1);
+        // Accurate refusals (red-team #4971 N4, twice): an unknown surface
+        // is its own error, and the closed-home case names itself instead
+        // of hiding behind three reasons that are all false.
+        if (!surfaceId.isEmpty()
+            && surfaceId != WorkspaceSurface::kMainId) {
+            bool known = false;
+            for (const auto& info : m_workspaceController->canvasWindowList()) {
+                if (info.id == surfaceId) { known = true; break; }
+            }
+            if (!known) {
+                out[QStringLiteral("error")] =
+                    QStringLiteral("no such surface: %1").arg(surfaceId);
+                return out;
+            }
+        }
         if (!m_workspaceController->addAppletFromPalette(
                 parts.at(0), QPointF(0.5, 0.5), surfaceId)) {
             out[QStringLiteral("error")] =
                 QStringLiteral("cannot add %1 (on canvas already, absent, "
-                               "or hardware not detected)")
+                               "hardware not detected, or its home window "
+                               "is closed)")
                     .arg(parts.at(0));
             return out;
         }

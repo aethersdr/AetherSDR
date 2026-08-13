@@ -2604,15 +2604,33 @@ bool WorkspaceController::addAppletFromPalette(const QString& appletId,
     // hidden home is no obstacle — but a hidden TARGET is.
     {
         const WorkspaceDocument& doc = m_store.document();
-        if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
-            QString effective = surfaceId;
-            if (effective.isEmpty()) {
-                effective = docSurfaceForItem(*ws, itemId);
+        const Workspace* ws = doc.workspace(doc.activeWorkspace);
+        if (!ws) {
+            return false;
+        }
+        if (!surfaceId.isEmpty()) {
+            const WorkspaceSurface* target = ws->surface(surfaceId);
+            if (!target) {
+                // A typo'd or stale surface must be an ERROR, exactly as
+                // it is for moveItemToSurface — not a silent landing on
+                // main (red-team #4971 N4).
+                return false;
             }
-            if (!effective.isEmpty()) {
-                if (const WorkspaceSurface* surf = ws->surface(effective)) {
+            if (target->hidden) {
+                // An EXPLICIT hidden target is the operator asking to see
+                // it there — the same rule moveItemToSurface states.
+                // Reopening also re-places the window's existing items,
+                // so the add below lands on a live canvas.
+                if (!setCanvasWindowOpen(surfaceId, true)) {
+                    return false;
+                }
+            }
+        } else {
+            const QString home = docSurfaceForItem(*ws, itemId);
+            if (!home.isEmpty()) {
+                if (const WorkspaceSurface* surf = ws->surface(home)) {
                     if (surf->hidden) {
-                        return false;   // its window is closed
+                        return false;   // implicit add: its window is closed
                     }
                 }
             }

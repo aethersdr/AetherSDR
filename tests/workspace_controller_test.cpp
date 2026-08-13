@@ -1123,31 +1123,57 @@ int main(int argc, char** argv)
             // from all five call sites left the suite green).  prepare
             // must precede the landing, finish must follow, and the
             // counts must balance across move, hide, reopen and remove.
+            // Ordering is PER PAN, not global (red-team #4971 N1): the
+            // replay paths deliberately BATCH — prepare(A) prepare(B) …
+            // restoreItems … finish(A) finish(B) — so a global
+            // alternation rule failed a correct implementation the
+            // moment a window held two pans, and the batched multi-pan
+            // shape (the realistic one) went unpinned.  Two live pans
+            // exercise it; the invariants are per-id bracketing and
+            // global balance.
             {
+                QHash<QString, int> pending;   // panId -> open prepares
                 int prep = 0, fin = 0;
                 bool ordered = true;
-                hooks.prepareTopLevelMove = [&](const QString&) {
-                    if (prep != fin) ordered = false;   // unbalanced nesting
+                hooks.prepareTopLevelMove = [&](const QString& id) {
+                    if (pending.value(id) != 0) ordered = false;
+                    pending[id] += 1;
                     ++prep;
                 };
-                hooks.finishTopLevelMove = [&](const QString&) {
+                hooks.finishTopLevelMove = [&](const QString& id) {
+                    if (pending.value(id) <= 0) ordered = false;
+                    pending[id] -= 1;
                     ++fin;
-                    if (fin > prep) ordered = false;    // finish before prepare
                 };
                 ctl.setPanHost(hooks);
+
+                auto* panG2 = new QWidget(&panOwner);
+                pans.insert(QStringLiteral("0x40000050"), panG2);
+                ctl.onPanAdded(QStringLiteral("0x40000050"));
 
                 const QString sidG =
                     ctl.addCanvasWindow(QStringLiteral("GpuProbe"));
                 const QString panItemG =
                     ctl.panItemIdFor(QStringLiteral("0x40000000"));
+                const QString panItemH =
+                    ctl.panItemIdFor(QStringLiteral("0x40000050"));
                 ctl.moveItemToSurface(panItemG, sidG);
+                ctl.moveItemToSurface(panItemH, sidG);
                 const int afterMove = prep;
-                ctl.setCanvasWindowOpen(sidG, false);   // evict -> stack
-                ctl.setCanvasWindowOpen(sidG, true);    // re-place
+                ctl.setCanvasWindowOpen(sidG, false);   // batched evict
+                ctl.setCanvasWindowOpen(sidG, true);    // batched re-place
                 ctl.removeCanvasWindow(sidG);           // evict + re-home
-                report("cross-top-level pan moves are GPU-bracketed (M5)",
-                       afterMove >= 1 && prep >= 4 && prep == fin && ordered);
+                bool allClosed = true;
+                for (int v : pending) {
+                    if (v != 0) allClosed = false;
+                }
+                report("cross-top-level pan moves are GPU-bracketed, "
+                       "batches included (M5/N1)",
+                       afterMove >= 2 && prep >= 8 && prep == fin && ordered
+                           && allClosed);
 
+                ctl.onPanRemoved(QStringLiteral("0x40000050"));
+                pans.remove(QStringLiteral("0x40000050"));
                 hooks.prepareTopLevelMove = {};
                 hooks.finishTopLevelMove  = {};
                 ctl.setPanHost(hooks);   // detach before the locals die
@@ -1199,6 +1225,32 @@ int main(int argc, char** argv)
                            && tx->parentWidget() == &canvas
                            && ctl.surfaceHosting(QStringLiteral("applet:TX"))
                                   == WorkspaceSurface::kMainId);
+
+                // N4: sibling verbs agree.  An unknown target surface is
+                // an ERROR (not a silent landing on main), and an
+                // EXPLICIT hidden target un-hides — the moveItemToSurface
+                // rule, applied to the palette engine.
+                report("add to an unknown surface refuses (N4)",
+                       !ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                                 QPointF(0.5, 0.5),
+                                                 QStringLiteral("nosuch"))
+                           && ctl.surfaceHosting(QStringLiteral("applet:TX"))
+                                  == WorkspaceSurface::kMainId);
+                ctl.setCanvasWindowOpen(sidB, false);
+                ctl.returnAppletToPanel("TX");
+                tx->setContainerVisible(true);
+                report("add to an explicitly-named hidden window un-hides "
+                       "it (N4)",
+                       ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                                QPointF(0.5, 0.5), sidB)
+                           && tx->parentWidget() == wins.value(sidB)
+                           && [&] {
+                                  for (const auto& info :
+                                       ctl.canvasWindowList()) {
+                                      if (info.id == sidB) return info.open;
+                                  }
+                                  return false;
+                              }());
                 ctl.removeCanvasWindow(sidB);
             }
 

@@ -413,6 +413,24 @@ int main(int argc, char** argv)
             report("...without raising it over the applets",
                    canvas.layout().zOf("pan:9") == zBefore);
         }
+
+        // The walk never crosses a top-level boundary (red-team #4971
+        // N5): a popup or dialog opened FROM a canvas applet is parented
+        // to it, and selecting — possibly raising, a whole-document
+        // write — on a click inside one is not what the click meant.
+        {
+            auto* dlg = new QWidget(over, Qt::Window);
+            dlg->resize(60, 40);
+            dlg->show();
+            canvas.clearSelection();
+            QMouseEvent ev(QEvent::MouseButtonPress, QPointF(5, 5),
+                           dlg->mapToGlobal(QPointF(5, 5)),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(dlg, &ev);
+            report("a press inside an item's popup/dialog selects nothing",
+                   canvas.selectedItem().isEmpty());
+            dlg->hide();
+        }
     }
 
     // ── Restoring a saved surface through the widget ─────────────────────

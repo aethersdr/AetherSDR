@@ -84,6 +84,12 @@ void WorkspaceWindow::setSurfaceLabel(const QString& label)
 void WorkspaceWindow::restoreFromHint(const QByteArray& hint, QWidget* anchor)
 {
     m_restoring = true;
+    // A minimized window must come back when asked (red-team #4971 N2):
+    // show() is a no-op on an iconified window and saveGeometry() carries
+    // only maximized/fullScreen, so the Canvas Windows menu and the
+    // bridge's `window open` could never un-minimize — the only in-app
+    // controls for this window, dead against it.
+    setWindowState(windowState() & ~Qt::WindowMinimized);
     bool restored = !hint.isEmpty() && restoreGeometry(hint);
     if (!restored) {
         resize(kDefaultW, kDefaultH);
