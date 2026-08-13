@@ -27,6 +27,19 @@ Q_LOGGING_CATEGORY(lcIcomPan, "aether.icom.pan")
 // wants to switch on after a hang is the stall warning, and nothing else.
 Q_LOGGING_CATEGORY(lcIcomLink, "aether.icom.link")
 
+// EVERY CI-V FRAME, both directions, as hex.
+//
+// The in-memory ring behind `civ trace` already recorded these, but it dies
+// with the backend — disconnect and the evidence is gone, which is exactly
+// when you want it. A log category survives the session and can be read after
+// the fact.
+//
+// This is the difference between three indistinguishable failures: the query
+// was never sent, the radio never answered, or the answer arrived and our
+// decode rejected it. Diagnosing a mode-reporting bug without it means
+// inferring from published state, which cannot tell those apart.
+Q_LOGGING_CATEGORY(lcIcomCiv, "aether.icom.civ")
+
 // Metering is examined this often; the MeterPoller decides what is actually
 // due. Deliberately faster than the fastest meter interval so a due meter is
 // not delayed by up to a whole tick.
@@ -2408,6 +2421,32 @@ void IcomCivBackend::traceCiv(bool outbound, std::span<const std::uint8_t> frame
     m_civTrace.push_back({QDateTime::currentMSecsSinceEpoch(), outbound, hex});
     while (m_civTrace.size() > kCivTraceMax)
         m_civTrace.pop_front();
+
+    // Also to the log, which outlives the backend. Decode the command and
+    // subcommand alongside the raw bytes: `1a 06` means nothing to a reader
+    // scanning a log, and the whole point of switching this on is to answer
+    // "did the 1A 06 query go out, and did the radio answer it".
+    if (lcIcomCiv().isDebugEnabled()) {
+        QString tag;
+        if (frame.size() >= 5) {
+            tag = QStringLiteral(" cmd=%1").arg(frame[4], 2, 16, QLatin1Char('0'));
+            // Which commands carry a subcommand is a per-command fact — the
+            // same enumeration parseFrame() uses. Getting it wrong here would
+            // label command 0x05's first frequency digit as a subcommand.
+            if (frame.size() >= 6) {
+                switch (frame[4]) {
+                case cmd::kLevel: case cmd::kMeter: case cmd::kFunction:
+                case cmd::kPower: case cmd::kReadId: case cmd::kSetting:
+                case cmd::kControl: case cmd::kScope: case cmd::kTuneOffset:
+                    tag += QStringLiteral(" sub=%1").arg(frame[5], 2, 16, QLatin1Char('0'));
+                    break;
+                default: break;
+                }
+            }
+        }
+        qCDebug(lcIcomCiv).noquote().nospace()
+            << (outbound ? "TX -> " : "RX <- ") << hex << tag;
+    }
 }
 
 QVariantList IcomCivBackend::civTrace(bool includeRoutine) const
