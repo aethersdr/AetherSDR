@@ -7,6 +7,12 @@ should follow these conventions to maintain visual consistency across the UI.
 
 ## Color Palette
 
+> **Colours now resolve through ThemeManager tokens** — see
+> [`theme-style-guide.md`](theme-style-guide.md) for the authoritative
+> semantic map. The hex tables below document the historical values
+> these tokens canonicalised from; do not copy them into new code as
+> literals.
+
 ### Core Theme
 
 | Role | Hex | Usage |

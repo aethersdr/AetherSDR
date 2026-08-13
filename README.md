@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.8.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.8.2** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -30,7 +30,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **DAX virtual audio + IQ** — 4 RX + 1 TX channels and raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, and an **APRS client** (station map, GPS beacon, messaging) with a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0
-- **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, and FreeDV Reporter spots with auto-mode switch
+- **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave broadcast schedule, and the KiwiSDR DX Community database, with auto-mode switch and per-feed spot colouring
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key & iambic paddles with full QSK, optional Quindar tones
 - **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence color-coding; CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, and an optional remote OpenAI-compatible endpoint. Not in the Intel macOS build — it would force a macOS 15.5 floor on hardware that mostly cannot reach it (see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md))
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
@@ -66,10 +66,24 @@ Works with any FlexRadio transceiver, including:
 - ML-, CL-, and RT-series devices
 
 Supported external devices include the 4O3A/FlexRadio PGXL (Power Genius XL)
-power amplifier and TGXL (Tuner Genius XL) antenna tuner.
+power amplifier and TGXL (Tuner Genius XL) antenna tuner, and — outside the
+radio seam entirely — ACOM S-series and SPE Expert (1.3K-FA / 1.5K-FA / 2K-FA)
+amplifiers over serial or ser2net TCP.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
+
+**Other radio families** ride the vendor-neutral `IRadioBackend` seam. Neither
+is a supported family yet, and FlexRadio remains the supported target:
+
+- **Hermes-Lite 2** — **experimental**. Four independent receivers, SSB voice,
+  CW/RTTY decoding, AX.25 packet, band switching with hardware filters, manual
+  notch filters, host frequency calibration and per-radio state restore.
+- **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
+  on the IC-705 (receive, scope, transmit, FT8). Only the IC-705 and IC-7300MK2
+  are verified against their own CI-V guides — an unrecognised model gets no
+  scope and no transmit rather than optimistic defaults.
+  transmit rather than optimistic defaults.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
 that generates its own audio and spectrum.
@@ -337,15 +351,20 @@ sudo cmake --install build
 Currently in flight:
 
 - **aetherd** — a vendor-neutral `IRadioBackend` seam so radio-family logic
-  lives behind a stable interface. Three backends ride it today (Flex, HL2,
-  and the demo simulator); the remaining step is the versioned protocol that
-  splits a headless engine from thin UI clients.
+  lives behind a stable interface. Four backends ride it today (Flex, HL2,
+  networked Icom, and the demo simulator); the remaining step is the versioned
+  protocol that splits a headless engine from thin UI clients.
 - **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam, now
   running four independent receivers, the SSB voice chain, CW/RTTY decoding,
-  AX.25 packet, band switching with hardware filters, memory channels and
-  per-radio operating-state restore. Not yet a supported radio family:
-  remaining work is wider mode coverage, panadapter parity with the Flex path,
-  and hardening the raw-IQ DSP chain.
+  AX.25 packet, band switching with hardware filters, memory channels, manual
+  notch filters, host frequency calibration and per-radio operating-state
+  restore. Not yet a supported radio family: remaining work is wider mode
+  coverage, panadapter parity with the Flex path, and hardening the raw-IQ DSP
+  chain.
+- **Networked Icom** — an **early** CI-V/RS-BA1 backend on the same seam,
+  brought up on the IC-705 and IC-7300. Remaining work is transmit confirmation
+  beyond the 705, per-model SET-menu mapping, and the rest of the control
+  surface.
 - **AppSettings nested-JSON refactor** — the storage layer moved to SQLite with
   per-radio versioned feature documents; the remaining work is migrating the
   legacy flat keys.
@@ -378,7 +397,9 @@ PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTI
   [nigelfenton/Aether-gate](https://github.com/nigelfenton/Aether-gate).)*
 
 AetherSDR integrates radios that earn deep native support directly in-engine; the
-gate covers the long tail of legacy/CAT radios and dongles.
+gate covers the long tail of legacy/CAT radios and dongles. Networked Icoms now
+have an in-engine CI-V backend, so for those the gate is the fallback for models
+the native backend does not yet cover.
 
 ---
 

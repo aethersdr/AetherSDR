@@ -25,6 +25,7 @@
 #include "AppletPanel.h"
 #include "ConnectedStationsDialog.h"
 #include "ConnectionPanel.h"
+#include "FloatingRestorePolicy.h"
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
@@ -50,6 +51,10 @@
 #include "DaxIqApplet.h"
 #include "TciApplet.h"
 #include "PanadapterStack.h"
+#include "workspace/WorkspaceController.h"
+#include "gui/MiniPanApplet.h"
+#include "gui/MiniPanScope.h"
+#include "models/PanadapterModel.h"
 #include "SMeterWidget.h"
 #include "core/ThemeManager.h"
 #include "SpectrumWidget.h"
@@ -57,6 +62,8 @@
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
+
+#include <QStatusBar>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -1272,6 +1279,62 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, &MainWindow::onSpectrumReadyForAdaptiveFilter);
 
+    // ── Mini-pan — a VIEW of the pan the active slice already lives on ───────
+    // No dedicated pan, no slice: the applet re-slices this frame down to its
+    // +/-5 or +/-10 kHz window. Gated on the applet being visible so a hidden
+    // tile costs nothing per frame.
+    connect(&m_radioModel, &RadioModel::panFeedSpectrumReady, this,
+            [this](quint32 streamId, const QVector<float>& bins, qint64) {
+        // Same guard the other consumers of this signal open with:
+        // preparePanadapterUiForShutdown() only disconnects the raw
+        // PanadapterStream, so RadioModel-re-emitted frames still arrive after
+        // the widgets have been prepared for teardown.
+        if (m_shuttingDown || !m_panStack) return;
+        if (!m_miniPanFeedWanted || !miniPanApplet()) return;
+        auto* s = activeSlice();
+        if (!s) return;
+        // The slice's OWN pan, not the active pan -- with several pans open the
+        // followed slice may not live on the one the main stack has focused,
+        // and re-slicing the wrong pan would show a window at the right offset
+        // in the wrong part of the band.
+        auto* pan = m_radioModel.panadapter(s->panId());
+        if (!pan || pan->panStreamId() != streamId) return;
+        feedMiniPanFromPanFrame(pan, bins);
+    });
+
+    // ── Mini-pan applet intents ──────────────────────────────────────────────
+    // The applet's visibility is the feature's on/off switch: shown by the tray
+    // button (the only entry point that exists in Minimal Mode), by a float, or
+    // by a layout apply; hidden by the tray button or the container's close.
+    // Nothing radio-side is created or freed -- it only starts and stops
+    // consuming frames the main pan is already sending.
+    if (auto* mini = miniPanApplet()) {
+        connect(mini, &MiniPanApplet::feedWanted, this, [this](bool wanted) {
+            if (wanted == m_miniPanFeedWanted) return;
+            m_miniPanFeedWanted = wanted;
+            if (wanted) refreshMiniPanFollow();   // bind readout/passband to the VFO
+            else        teardownMiniPanFeed();    // unbind + blank the trace
+        });
+        // Span change is purely a display decision now -- the next frame is
+        // re-sliced to the new window. Repaint the labels immediately rather
+        // than waiting for it.
+        connect(mini, &MiniPanApplet::spanChanged, this,
+                [this](double) { refreshMiniPanFollow(); });
+
+        // The show edge may ALREADY have been spent. A mini-pan restored as
+        // FLOATING is shown by ContainerManager::restoreState() during
+        // buildUI(), which runs before this wiring: measured on an offscreen
+        // restore, showEvent fired with receivers=0 and this connect ran 17 ms
+        // later with the applet already visible — so no further showEvent was
+        // ever coming, and the float sat on a blank trace for the whole
+        // session. That is the feature's headline use case. Seed from the
+        // current state rather than waiting for an edge that has passed.
+        if (mini->isVisible() && !m_miniPanFeedWanted) {
+            m_miniPanFeedWanted = true;
+            refreshMiniPanFollow();
+        }
+    }
+
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
             this, [this, profileLoadFrameReady](quint32 streamId,
                                                 const QVector<float>& bins,
@@ -1638,9 +1701,9 @@ void MainWindow::wirePanLifecycle()
                         ? saved
                         : defaultPanLayoutForCount(panCount);
                     const QString floatingPanIds = AppSettings::instance()
-                        .value("FloatingPanIds", "").toString();
+                        .value(kFloatingPanIdsKey, "").toString();
                     m_panStack->rearrangeLayout(layoutId);
-                    AppSettings::instance().setValue("FloatingPanIds", floatingPanIds);
+                    AppSettings::instance().setValue(kFloatingPanIdsKey, floatingPanIds);
 
                     // Defensive re-push xpixels for all pans after layout settles.
                     // Covers race where radio hadn't finished pan init when first push arrived.
@@ -1659,7 +1722,20 @@ void MainWindow::wirePanLifecycle()
 
                 // Restore floating-pan state saved from the previous session.
                 // Runs for any pan count so a single floated pan is also restored.
-                m_panStack->restoreFloatingState();
+                //
+                // NOT while the workspace canvas is on (RFC #4887, maintainer
+                // ruling 2026-08-12): canvas mode owns placement, and replaying
+                // window-persistence floats under it hands the operator an
+                // uncontrollable always-above window that looks exactly like a
+                // broken canvas pan — stale FloatingPanIds from the pre-canvas
+                // era cost a full day of field debugging to identify. The
+                // restored pans have already arrived as canvas items at their
+                // slots by this point; popping out MANUALLY is untouched
+                // (decision 1 — pop-out stays), and the saved key is left
+                // alone so a canvas-off session still restores it.
+                if (!(m_workspaceController && m_workspaceController->isEnabled())) {
+                    m_panStack->restoreFloatingState();
+                }
             });
         }
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -1739,6 +1815,21 @@ void MainWindow::wirePanLifecycle()
     connect(m_panStack, &PanadapterStack::panDocked,
             this, [repushPanDimensions](const QString&) { repushPanDimensions(); });
 #endif
+
+    // The previous session died floating a panadapter, so this one came up
+    // docked rather than replaying the crash (#4617). Say so — otherwise the
+    // pop-out silently fails to return and looks like a second bug.
+    connect(m_panStack, &PanadapterStack::floatingRestoreAbandoned,
+            this, [this](int abandonedPanCount) {
+        // %n carries the count purely for plural agreement — phrased without a
+        // verb that has to agree, so the untranslated English reads correctly
+        // at 1 as well as at 2+.
+        statusBar()->showMessage(
+            tr("%n panadapter(s) restored docked — AetherSDR last closed "
+               "unexpectedly while popping out. Pop out again to retry.",
+               nullptr, abandonedPanCount),
+            15000);
+    });
 
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
@@ -1908,8 +1999,11 @@ void MainWindow::wireCatPorts()
 
     // TCI client count changes no longer auto-create/remove the audio stream.
     // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
-    // the stream overrode the user's explicit PC Audio toggle. Users who need
-    // TCI audio (WSJT-X) should enable PC Audio manually. (#1071)
+    // the stream overrode the user's explicit PC Audio toggle. TCI audio does
+    // not need PC Audio either: on Flex it uses DAX channels acquired by
+    // TciServer::ensureDaxForTci(), and on a host-modulating backend it arrives
+    // over the seam via backendSliceAudioFrameReady — neither path consults
+    // PcAudioEnabled, which gates only remote_audio_rx. (#1071, #1331)
 #endif
 
 }
@@ -2226,6 +2320,23 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
 
     if (!m_automation)
         m_automation = std::make_unique<AutomationServer>();
+
+    // dumpTree reports the status-bar message (#4864) by reading a generic
+    // dynamic property — core/ must not know the QStatusBar type
+    // (engine-boundary EB2).  The gui side owns the widget, and the mirror
+    // lives HERE, with the rest of the bridge wiring it serves (review m13:
+    // it was previously wired inside the workspace-canvas mount, which has
+    // no structural link to it).  Idempotent across re-wires: the property
+    // write is safe to connect once per server start.
+    if (!m_statusMessageMirrorWired) {
+        m_statusMessageMirrorWired = true;
+        connect(statusBar(), &QStatusBar::messageChanged, this,
+                [this](const QString& m) {
+                    statusBar()->setProperty("currentMessage", m);
+                });
+        statusBar()->setProperty("currentMessage",
+                                 statusBar()->currentMessage());
+    }
 
     m_automation->setRadioModel(&radioModel());  // for the get() verb
     m_automation->setAudioEngine(audioEngine());

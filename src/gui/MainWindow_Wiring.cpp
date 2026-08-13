@@ -2418,6 +2418,7 @@ void MainWindow::onSliceRemoved(int id)
             m_activeSliceId = -1;
             if (m_ax25HfPacketDecodeDialog)
                 m_ax25HfPacketDecodeDialog->setAttachedSlice(nullptr);
+            refreshMiniPanFollow();   // no active slice → blank the mini-pan readout/passband
         }
     }
 
@@ -6046,6 +6047,17 @@ void MainWindow::wireMeters()
     // When the PGXL is in STANDBY we fall back to the barefoot scale — only the
     // radio's forward power is reaching the meter, so the 2kW arc would make
     // every reading look tiny and useless.
+    // Redundant-apply skipping (#4845 review) lives in each gauge's own
+    // setPowerScale(), not here. It is worth having because infoChanged is
+    // emitted from ordinary radio status parsing (headphone/lineout gain,
+    // TNF, filter sharpness) and not just the connect-time "info" reply, so
+    // a slider drag on the radio bursts it and every burst would otherwise
+    // re-push an unchanged scale. It has to sit in the widget because a
+    // widget is not always the sole writer of its own scale:
+    // CrossNeedleMeterApplet's "Test 100 W / 4 W reflected" automation
+    // action calls setPowerScale(200, false) straight at the widget, and a
+    // cache out here would then skip the real re-apply that has to
+    // overwrite it.
     auto updatePowerScale = [this]() {
         int maxW = m_radioModel.transmitModel().maxPowerLevel();
         // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
@@ -6064,6 +6076,19 @@ void MainWindow::wireMeters()
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
     connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
+    // Also refresh on infoChanged (#4813): maxPowerLevelChanged only fires when
+    // the numeric value actually changes, which it doesn't on connect if the
+    // radio's exciter limit matches TransmitModel's compiled-in default (100W —
+    // exactly the AU- case above). infoChanged fires once "info" comes back and
+    // model() is populated, so this is what actually catches the initial scale
+    // on connect instead of leaving it wrong until the next real power-level
+    // edge (e.g. a band change that happens to carry a different limit).
+    // infoChanged rather than connectionStateChanged: model() does happen to
+    // be seeded from the discovery packet before that one fires on a LAN
+    // connect (RadioModel.cpp, connectToRadio()), but infoChanged is the
+    // signal actually tied to the info data this branch reads, so it doesn't
+    // depend on that seeding holding for every connect path.
+    connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.
     // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)

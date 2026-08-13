@@ -1,4 +1,6 @@
 #include "SpectrumWidget.h"
+#include "gui/FftHeatMap.h"
+#include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
 #include "DssSupplementalCoverage.h"
@@ -15303,17 +15305,13 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
     const int w = r.width();
     const int h = r.height();
 
-    // Horizontal dB grid lines — adaptive step matching the dBm scale strip
-    float rawDbStep = m_dynamicRange / 5.0f;
-    float dbStep;
-    if      (rawDbStep >= 20.0f) dbStep = 20.0f;
-    else if (rawDbStep >= 10.0f) dbStep = 10.0f;
-    else if (rawDbStep >= 5.0f)  dbStep = 5.0f;
-    else                          dbStep = 2.0f;
+    // Horizontal dB grid lines — adaptive step matching the dBm scale strip.
+    // Shared with the mini-pan so both views rule at the same dB values.
+    const float dbStep = AetherSDR::SpectrumGrid::dbStep(m_dynamicRange);
 
     const float bottomDbm = m_refLevel - m_dynamicRange;
     const float firstDb = std::ceil(bottomDbm / dbStep) * dbStep;
-    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1, Qt::DotLine));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.spectrum.grid"), 1, Qt::DotLine));
     for (float dbm = firstDb; dbm <= m_refLevel; dbm += dbStep) {
         const float frac = (m_refLevel - dbm) / m_dynamicRange;
         const int y = r.top() + static_cast<int>(frac * h);
@@ -15326,7 +15324,7 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
     const double gridStep = effectiveGridStepMhz(w);
     const double firstLine = std::ceil(startMhz / gridStep) * gridStep;
 
-    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1, Qt::DotLine));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.spectrum.grid"), 1, Qt::DotLine));
     for (double f = firstLine; f <= endMhz; f += gridStep)
         p.drawLine(mhzToX(f), r.top(), mhzToX(f), r.bottom());
 }
@@ -15348,24 +15346,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     const int h = r.height();
     const int n = fftBins.size();
 
-    // Heat map: blue(0) → cyan(0.25) → green(0.5) → yellow(0.75) → red(1.0)
-    auto heatColor = [](float t) -> QColor {
-        float cr, cg, cb;
-        if (t < 0.25f) {
-            float s = t / 0.25f;
-            cr = 0.0f; cg = s; cb = 1.0f;
-        } else if (t < 0.5f) {
-            float s = (t - 0.25f) / 0.25f;
-            cr = 0.0f; cg = 1.0f; cb = 1.0f - s;
-        } else if (t < 0.75f) {
-            float s = (t - 0.5f) / 0.25f;
-            cr = s; cg = 1.0f; cb = 0.0f;
-        } else {
-            float s = (t - 0.75f) / 0.25f;
-            cr = 1.0f; cg = 1.0f - s; cb = 0.0f;
-        }
-        return QColor::fromRgbF(cr, cg, cb);
-    };
+    // Heat-map ramp shared with the mini-pan — see gui/FftHeatMap.h.
+    const auto heatColor = &AetherSDR::FftHeatMap::heatColor;
 
     // Pre-compute positions and normalized levels
     struct Pt { float x, y, t; };
@@ -15405,8 +15387,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
             float avgT = (pts[i].t + pts[i + 1].t) * 0.5f;
             QColor top = heatColor(avgT);
             const float swFillAlpha = m_fftFillAlpha;
-            top.setAlphaF(swFillAlpha * 0.3f);
-            QColor bot(0, 0, 77, static_cast<int>(255 * swFillAlpha));
+            top.setAlphaF(swFillAlpha * AetherSDR::FftHeatMap::kTopAlphaScale);
+            const QColor bot = AetherSDR::FftHeatMap::gradientBase(swFillAlpha);
             QLinearGradient grad(0, std::min(pts[i].y, pts[i + 1].y), 0, bottom);
             grad.setColorAt(0.0, top);
             grad.setColorAt(1.0, bot);

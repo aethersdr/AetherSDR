@@ -32,6 +32,9 @@
 #include "CopyAssistController.h"
 #endif
 #include "PanadapterStack.h"
+#include "gui/MiniPanApplet.h"
+#include "gui/MiniPanScope.h"
+#include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
@@ -1950,7 +1953,8 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Title bar: PC Audio, master volume, headphone volume ────────────────
     // The remote_audio_rx stream controls the radio's audio routing:
     // stream exists → audio to PC; stream removed → audio to radio speakers.
-    // Keep the stream alive when TCI clients need it (#1014).
+    // TCI clients get RX audio via DAX (#1331), not this stream, so PC Audio
+    // is free to toggle the stream purely on its own local-sink needs.
     connect(m_titleBar, &TitleBar::pcAudioToggled, this, [this](bool on) {
         if (on) {
             // Restart the local audio sink to recover from stale WASAPI sessions
@@ -1961,9 +1965,10 @@ MainWindow::MainWindow(QWidget* parent)
             });
             m_radioModel.createRxAudioStream();
         } else {
-            // Stop the local sink so audio isn't played locally even when
-            // the remote_audio_rx stream is still alive for a TCI client
-            // (#1571 follow-up).
+            // Stop the local sink so audio isn't played locally, then drop
+            // the remote_audio_rx stream. TCI clients get RX audio via DAX
+            // (#1331), not this stream, so there's no client to keep it
+            // alive for.
             QMetaObject::invokeMethod(m_audio, [this]() {
                 m_audio->stopRxStream();
             });
@@ -2044,6 +2049,7 @@ MainWindow::MainWindow(QWidget* parent)
     // PUDU monitor, RX chain edit) → wireDspApplets()
     // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
     wireDspApplets();
+    wireWorkspaceCanvas();   // RFC #4887 phase 3 — MainWindow_Workspace.cpp
 
     // PROC / NOR / DX / DX+ -> the client compressor, on a radio that modulates
     // on this host. After wireDspApplets(), which is what gives the applet panel
@@ -2478,8 +2484,8 @@ MainWindow::MainWindow(QWidget* parent)
         QList<int> sizes(m_splitter->count(), 0);
         for (int i = 0; i < m_splitter->count(); ++i) {
             QWidget* w = m_splitter->widget(i);
-            if (w == m_panStack)         sizes[i] = centerW;
-            else if (w == m_appletPanel) sizes[i] = appletW;
+            if (w == centralPanWidget())  sizes[i] = centerW;
+            else if (w == m_appletPanel)  sizes[i] = appletW;
         }
         m_splitter->setSizes(sizes);
     });
@@ -3971,6 +3977,34 @@ void MainWindow::showConnectionDialog()
         return;
     }
 
+    // xcb/XWayland (#4725): once this window has been through a hide() —
+    // e.g. the auto-hide-on-successful-connect below — showing it again can
+    // leave it wedged in the ICCCM "Withdrawn" WM_STATE indefinitely, even
+    // though Qt's own show() succeeds and isVisible() reports true. Verified
+    // with `xprop` on the affected system (Ubuntu 26.04, Mutter/XWayland):
+    // WM_STATE stays Withdrawn and the window never reappears in
+    // _NET_CLIENT_LIST_STACKING — genuinely absent from the screen, not just
+    // unfocused or buried. Not reproduced under native Wayland, which has no
+    // ICCCM Withdrawn/Normal state machine to get stuck in — consistent with
+    // the dialog always working there. Forcing Qt to fully destroy and
+    // recreate the native window before every re-show sidesteps whatever
+    // stale state Mutter is keying off of. Explicitly scoped to xcb and to a
+    // genuine re-show (not already visible): destroying/recreating the native
+    // window costs a flicker and drops transient window-manager state, so it
+    // should not fire on platforms that never had this bug, or when the
+    // dialog is merely raised while already open (windowHandle() is also
+    // still null before the very first show, making this a no-op there too).
+    // Skipping the already-visible case does mean this cannot rescue a window
+    // that is *already* wedged — the exact state in which isVisible() lies —
+    // but it never has to: from here on every re-show maps a window the
+    // compositor has not seen before, so that state stops being reachable.
+    const bool isXcb = QGuiApplication::platformName() == QLatin1String("xcb");
+    if (isXcb && !m_connPanel->isVisible()) {
+        if (QWindow* win = m_connPanel->windowHandle()) {
+            win->destroy();
+        }
+    }
+
     // Position above the status bar, centered on the station label, while staying on-screen.
     QPoint statusBarTop = statusBar()->mapToGlobal(QPoint(0, 0));
     QPoint labelCenter = m_stationNickLabel->mapToGlobal(
@@ -3998,8 +4032,29 @@ void MainWindow::showConnectionDialog()
 
     m_connPanel->move(frameTopLeft);
     m_connPanel->show();
-    m_connPanel->raise();
-    m_connPanel->activateWindow();
+
+    const auto raiseAndActivate = [this] {
+        m_connPanel->raise();
+        m_connPanel->activateWindow();
+    };
+    // Under xcb, deferred to a clean event-loop turn rather than fired
+    // synchronously from whatever real input event got us here. Two call
+    // sites reach this function from inside a live X11 input/grab context:
+    // the station label's double-click (still inside the eventFilter's event
+    // dispatch) and the "Connect to Radio..." menu action (still inside the
+    // QMenu popup's own grab teardown). raise()/activateWindow() called
+    // synchronously there can race that context. Mirrors the identical class
+    // of fix already applied to automation-driven button clicks in
+    // AutomationServer.cpp (menu/dialog-popup re-entrancy). The grab being
+    // raced is X11's, so this is scoped to xcb for the same reason the window
+    // recreation above is: every other platform keeps the synchronous
+    // activation it has always had. m_connPanel is the timer's context
+    // object, so the callback is dropped if the panel is destroyed first.
+    if (isXcb) {
+        QTimer::singleShot(0, m_connPanel, raiseAndActivate);
+    } else {
+        raiseAndActivate();
+    }
 }
 
 void MainWindow::hideConnectionDialog()
@@ -5634,10 +5689,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
         // Only start the local RX audio sink if the user wants audio routed
-        // to the PC. When PC Audio is off we may still request a
-        // remote_audio_rx stream for TCI clients; the sink should stay
-        // silent in that case. The PC Audio toggle handler starts/stops
-        // the sink when the user flips it.
+        // to the PC. TCI clients get RX audio via DAX (#1331), not
+        // remote_audio_rx, so PC Audio off means no stream and no sink.
+        // The PC Audio toggle handler starts/stops the sink when the user
+        // flips it.
         // Always sync the button to the setting here so any divergence
         // (e.g. from a profile load before connect) is corrected (#1536).
         {
@@ -5927,7 +5982,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsAutoSaveTimer && m_bsAutoSaveTimer->isActive())
             m_bsAutoSaveTimer->stop();
         if (m_panStack) {
-            m_panStack->setBandStackVisible(false);
+            setBandStackPanelVisible(false);
         }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();
@@ -7412,6 +7467,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     const int prevId = m_activeSliceId;
     m_activeSliceId = sliceId;
 
+    // Keep the mini-pan centred on the active VFO (rebind to the new slice).
+    refreshMiniPanFollow();
+
     // Send "slice set N active=1" only when switching to a different slice
     // (matches SmartSDR pcap — sent on VFO flag click, not on every tune).
     // Guard: don't send if triggered by the radio's own activeChanged echo
@@ -7613,6 +7671,135 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 #endif
 
     qDebug() << "MainWindow: active slice set to" << sliceId;
+}
+
+// ── Mini-pan glue ─────────────────────────────────────────────────────────────
+// The mini-pan applet is pure presentation, and it is a VIEW — it creates no
+// radio objects at all. It re-slices the FFT bins of the pan the active slice
+// already lives on down to a +/-5 or +/-10 kHz window centred on that slice's
+// PASSBAND (MiniPan::passbandCenterOffsetHz — on SSB the carrier sits at the
+// edge of the filter, so centring on it wasted half the view).
+//
+// That is the whole architecture: no dedicated pan (no slot consumed, nothing
+// to leak on quit, no reconnect zombie, no active-pan hijack) and no slice
+// (the FLEX auto-creates one on every pan create, which is where the phantom
+// slice came from). Resolution is the main pan's bin width, so it tracks
+// whatever the operator has the main pan zoomed to. (#4562)
+
+MiniPanApplet* MainWindow::miniPanApplet() const
+{
+    return m_appletPanel ? m_appletPanel->miniPanApplet() : nullptr;
+}
+
+void MainWindow::refreshMiniPanFollow()
+{
+    disconnect(m_miniPanFreqConn);
+    disconnect(m_miniPanFiltConn);
+    auto* applet = miniPanApplet();
+    if (!applet || !m_miniPanFeedWanted) return;
+
+    auto* s = activeSlice();
+    if (!s) {
+        applet->setVfoMhz(0.0);
+        applet->setPassbandHz(0, 0);
+        applet->scope()->updateSpectrum(QVector<float>{});
+        return;
+    }
+    // Everything here is local: the readout and the passband shading are drawn
+    // from model state, and the trace is re-sliced from bins the main pan is
+    // already streaming. Nothing is sent to the radio, so tuning needs no
+    // debounce -- the old "display pan set ... center=" push is gone with the
+    // dedicated pan.
+    //
+    // A filter change moves the VIEW as well as the shading, because the window
+    // is centred on the passband -- feedMiniPanFromPanFrame re-derives that from
+    // the same slice on the next frame, so the two cannot disagree.
+    m_miniPanFreqConn = connect(s, &SliceModel::frequencyChanged, this,
+                                [this](double mhz) {
+        if (auto* a = miniPanApplet()) a->setVfoMhz(mhz);
+    });
+    m_miniPanFiltConn = connect(s, &SliceModel::filterChanged, this,
+                                [this]() {
+        if (auto* cur = activeSlice(); cur)
+            if (auto* a = miniPanApplet())
+                a->setPassbandHz(cur->filterLow(), cur->filterHigh());
+    });
+    applet->setVfoMhz(s->frequency());
+    applet->setPassbandHz(s->filterLow(), s->filterHigh());
+}
+
+void MainWindow::teardownMiniPanFeed()
+{
+    disconnect(m_miniPanFreqConn);
+    disconnect(m_miniPanFiltConn);
+    if (auto* a = miniPanApplet())
+        a->scope()->updateSpectrum(QVector<float>{});
+}
+
+// Re-slice one main-pan FFT frame down to the mini-pan's window. The mapping
+// itself lives in MiniPanReslice.h so it can be unit-tested without a radio.
+void MainWindow::feedMiniPanFromPanFrame(const PanadapterModel* pan,
+                                         const QVector<float>& bins)
+{
+    auto* applet = miniPanApplet();
+    if (!applet || !pan || bins.size() < 2) return;
+    auto* s = activeSlice();
+    if (!s) return;
+
+    const double panBw = pan->bandwidthMhz();
+    if (panBw <= 0.0) return;
+
+    const double span = applet->spanMhz();
+    // Floor for samples outside the pan: the frame's own minimum, so the gap
+    // sits at the bottom of the view instead of inventing a level.
+    const float floorDbm = *std::min_element(bins.cbegin(), bins.cend());
+
+    // Mirror the source pan's display settings so the mini-pan reads as a
+    // magnifier on the main trace rather than a differently-styled second
+    // opinion. Pulled per frame rather than wired signal-by-signal: the values
+    // are plain member reads, the setters are change-gated, and pulling cannot
+    // drift out of sync or miss a control we forgot to connect.
+    //
+    // FFT AVG and FFT FPS need nothing here — both are radio-side pan
+    // properties ("display pan set … average=", requestPanDisplayRates), so
+    // re-slicing this pan's frames already carries them.
+    auto* scope = applet->scope();
+    if (auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : nullptr) {
+        // The vertical window is the WIDGET's refLevel/dynamicRange, not the
+        // pan's min_dbm/max_dbm. FFT Floor slides refLevel client-side
+        // (applyNoiseFloorAutoAdjust) and only pushes a damped, thresholded
+        // min_dbm/max_dbm to the radio afterwards — so mirroring the model
+        // tracked the radio's lagging echo instead of the scale the main pan is
+        // actually drawing with, and the floor slider appeared to do nothing
+        // here. refLevel is the top of the display; the range hangs below it.
+        scope->setDbmRange(sw->refLevel() - sw->dynamicRange(), sw->refLevel());
+        scope->setTraceAppearance(sw->fftLineColor(), sw->fftFillColor(),
+                                  sw->fftFillAlpha(), sw->fftLineWidth());
+        scope->setHeatMap(sw->fftHeatMap());
+        scope->setShowGrid(sw->showGrid());
+    } else {
+        // No applet for this pan (it is not in the main stack): fall back to the
+        // radio-reported range, which is the best available answer.
+        scope->setDbmRange(pan->minDbm(), pan->maxDbm());
+    }
+
+    // Centre the window on the PASSBAND centre, not the carrier: on SSB the
+    // carrier sits at the edge of the filter, so a carrier-centred cut spent
+    // half of an already narrow view on the rejected sideband. Re-derived from
+    // the slice here rather than read back off the applet, so the trace is cut
+    // from this frame's actual filter state; MiniPanScope places the hairline
+    // and the passband wash with the same helper.
+    const double centerMhz =
+        s->frequency()
+        + AetherSDR::MiniPan::passbandCenterOffsetHz(s->filterLow(),
+                                                     s->filterHigh()) / 1.0e6;
+
+    scope->updateSpectrum(
+        AetherSDR::MiniPan::resliceWindow(
+            bins,
+            pan->centerMhz() - panBw / 2.0, panBw,
+            centerMhz - span / 2.0, span,
+            AetherSDR::MiniPan::kResliceOutputBins, floorDbm));
 }
 
 void MainWindow::updateFilterLimitsForMode(const QString& mode)
@@ -8408,7 +8595,7 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // (right dock).  insertWidget()/addWidget() on an already-attached child
     // reparents it to the new index without destroy/recreate.
     if (left) {
-        const int panIdx = m_splitter->indexOf(m_panStack);
+        const int panIdx = m_splitter->indexOf(centralPanWidget());
         if (panIdx < 0) return;
         m_splitter->insertWidget(panIdx, m_appletPanel);
     } else {
@@ -8418,7 +8605,7 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
     for (int i = 0; i < m_splitter->count(); ++i) {
         QWidget* w = m_splitter->widget(i);
-        m_splitter->setStretchFactor(i, w == m_panStack ? 1 : 0);
+        m_splitter->setStretchFactor(i, w == centralPanWidget() ? 1 : 0);
         m_splitter->setCollapsible(i, false);
     }
 
@@ -8442,8 +8629,8 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
         QList<int> newSizes(m_splitter->count(), 0);
         for (int i = 0; i < m_splitter->count(); ++i) {
             QWidget* w = m_splitter->widget(i);
-            if (w == m_panStack)         newSizes[i] = centerW;
-            else if (w == m_appletPanel) newSizes[i] = appletW;
+            if (w == centralPanWidget())  newSizes[i] = centerW;
+            else if (w == m_appletPanel)  newSizes[i] = appletW;
         }
         m_splitter->setSizes(newSizes);
     }
@@ -9398,37 +9585,53 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
     // pan is new is found by DIFFING rather than parsing a create reply: the
     // backend numbers its own pans and skips retired numbers after a close.
     if (!m_radioModel.usesFlexCommandPlane()) {
-        QSet<QString> before;
+        auto before = std::make_shared<QSet<QString>>();
         for (auto* p : m_panStack->allApplets())
-            before.insert(p->panId());
+            before->insert(p->panId());
         for (auto* p : m_radioModel.panadapters())
-            if (p) before.insert(p->panId());
+            if (p) before->insert(p->panId());
 
         m_radioModel.createPanadapter();
 
-        QString createdId;
-        for (auto* p : m_radioModel.panadapters()) {
-            if (p && !before.contains(p->panId())) {
-                createdId = p->panId();
-                break;
+        // The seam create is NOT synchronous for every backend (red-team
+        // M4): HL2's is, but the demo mints its pan over the synthetic wire
+        // — two queued thread hops — so an immediate diff found nothing,
+        // declared "capacity full", and aborted the recursion while the pan
+        // materialised a moment later.  Diff after the create has settled;
+        // 300 ms covers both wire hops with margin and is indistinguishable
+        // from the existing 200 ms inter-create pacing for a synchronous
+        // backend.
+        QTimer::singleShot(300, this,
+                           [this, layoutId, total, panIds, created, before]() {
+            if (m_shuttingDown || !m_panStack) {
+                return;
             }
-        }
-        if (createdId.isEmpty()) {
-            // The backend refused — receiver count, or the link budget at this
-            // span. It has already logged which; surface it and stop rather than
-            // recursing against a limit that will refuse every remaining pan.
-            qWarning() << "applyPanLayout: backend declined pan"
-                       << (created + 1) << "of" << total;
-            showPanadapterSliceCapacityMessage();
-            return;
-        }
-        panIds->append(createdId);
-        qDebug() << "applyPanLayout: created pan" << (created + 1) << "of" << total
-                 << "id:" << createdId;
-        // Same inter-create delay as the Flex path. Adding a receiver restarts
-        // the EP6 stream, so back-to-back creates would stack restarts.
-        QTimer::singleShot(200, this, [this, layoutId, total, panIds, created]() {
-            createPansSequentially(layoutId, total, panIds, created + 1);
+            QString createdId;
+            for (auto* p : m_radioModel.panadapters()) {
+                if (p && !before->contains(p->panId())) {
+                    createdId = p->panId();
+                    break;
+                }
+            }
+            if (createdId.isEmpty()) {
+                // The backend refused — receiver count, or the link budget
+                // at this span. It has already logged which; surface it and
+                // stop rather than recursing against a limit that will
+                // refuse every remaining pan.
+                qWarning() << "applyPanLayout: backend declined pan"
+                           << (created + 1) << "of" << total;
+                showPanadapterSliceCapacityMessage();
+                return;
+            }
+            panIds->append(createdId);
+            qDebug() << "applyPanLayout: created pan" << (created + 1)
+                     << "of" << total << "id:" << createdId;
+            // Same inter-create pacing rationale as the Flex path: adding a
+            // receiver restarts the EP6 stream, so creates stay spaced.
+            QTimer::singleShot(200, this,
+                               [this, layoutId, total, panIds, created]() {
+                createPansSequentially(layoutId, total, panIds, created + 1);
+            });
         });
         return;
     }

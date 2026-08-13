@@ -1121,6 +1121,13 @@ void SMeterWidget::paintEvent(QPaintEvent*)
 
 void SMeterWidget::setPowerScale(int maxWatts, bool hasAmplifier)
 {
+    if (m_havePowerScale && maxWatts == m_lastMaxWatts && hasAmplifier == m_lastHasAmplifier) {
+        return;
+    }
+    m_havePowerScale = true;
+    m_lastMaxWatts = maxWatts;
+    m_lastHasAmplifier = hasAmplifier;
+
     if (hasAmplifier) {
         m_powerScaleMax = 2000.0f;
         m_powerRedStart = 1500.0f;

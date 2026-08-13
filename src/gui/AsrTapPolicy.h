@@ -80,26 +80,46 @@ public:
     QString lockedSource() const { return m_source; }
     QString lockedSourceId() const { return m_sourceId; }
 
-    // Collapse interleaved float32 stereo to mono, matching what
+    // Collapse interleaved float32 audio to mono, matching what
     // AudioEngine::emitRxPostChainScopeFromFloat32Stereo used to hand us —
     // INCLUDING the non-finite guard. AsrEngine does not sanitise its input, and
     // a single NaN reaching the resampler poisons every sample after it, so
     // dropping that clamp when moving off the engine-side tap would trade a
     // known bug for a worse one.
-    static QVector<float> toMono(const QByteArray& stereoFloat32)
+    //
+    // `channels` is the caller's actual channel count (1 or 2), not a guess —
+    // receivePresentationPostDspAudioReady is documented stereo today, but
+    // inferring channel layout from the byte count's parity (#4489) silently
+    // mis-decodes the moment that stops being true: a mono block with an even
+    // sample count would be averaged pairwise into half as many frames while
+    // the caller kept treating it as full-rate audio. A block that isn't a
+    // whole number of frames for the given channel count is malformed, not a
+    // shape to guess at, so it is rejected rather than reinterpreted.
+    static QVector<float> toMono(const QByteArray& pcmFloat32, int channels)
     {
-        const int floatSamples =
-            static_cast<int>(stereoFloat32.size() / static_cast<int>(sizeof(float)));
-        if (floatSamples <= 0) {
+        if (channels != 1 && channels != 2) {
             return {};
         }
-        const bool stereo = (floatSamples % 2) == 0;
-        const int monoSamples = stereo ? floatSamples / 2 : floatSamples;
+        // A byte count that isn't a whole number of floats truncates below —
+        // a block malformed at the sample level, not just the frame level. A
+        // 9-byte block claimed as stereo would otherwise become 2 floats,
+        // pass the frame check below, and silently drop its trailing byte.
+        if (pcmFloat32.size() % static_cast<int>(sizeof(float)) != 0) {
+            return {};
+        }
+        const int totalFloats =
+            static_cast<int>(pcmFloat32.size() / static_cast<int>(sizeof(float)));
+        if (totalFloats <= 0 || totalFloats % channels != 0) {
+            return {};
+        }
+        const int monoSamples = totalFloats / channels;
 
         QVector<float> mono(monoSamples);
-        const auto* src = reinterpret_cast<const float*>(stereoFloat32.constData());
+        const auto* src = reinterpret_cast<const float*>(pcmFloat32.constData());
         for (int i = 0; i < monoSamples; ++i) {
-            const float v = stereo ? (src[2 * i] + src[2 * i + 1]) * 0.5f : src[i];
+            const float v = (channels == 2)
+                ? (src[2 * i] + src[2 * i + 1]) * 0.5f
+                : src[i];
             mono[i] = std::clamp(std::isfinite(v) ? v : 0.0f, -1.0f, 1.0f);
         }
         return mono;

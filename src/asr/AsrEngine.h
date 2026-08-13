@@ -66,6 +66,7 @@ public slots:
     void setMaxSegmentMs(int ms);
     void setSpeechRms(float rms);
     void setHangoverMs(int ms);
+    void setOverlapMs(int ms);
     void setSpeakerThreshold(float t);
     void reset();
 
@@ -93,6 +94,7 @@ private:
     SpeakerClusterer m_clusterer;       // online A/B/C… labeling
     std::string m_speakerModelPath;     // path m_embedder was built from ("" = none)
     bool m_speakerLabelingEnabled = false; // operator intent; embedder presence gates
+    QString m_prevSegmentText;          // last decode's text — tail source for overlap de-dup (#4821)
     std::unique_ptr<Resampler> m_resampler;
     int m_resamplerSrcRate = 0;
     bool m_warnedNoModel = false;
@@ -147,6 +149,9 @@ public:
     void setDecodeBufferMs(int ms);
     void setSpeechRms(float rms);
     void setSilenceDurationMs(int ms);
+    //  - overlap: boundary-word recovery window (ms) carried across a cap-forced
+    //    segment close so a word split at the cut isn't lost (RFC #4821). 0 = off.
+    void setOverlapMs(int ms);
     //  - speaker threshold: cosine match threshold for A/B/C clustering (0..1)
     void setSpeakerThreshold(float threshold);
 
@@ -171,6 +176,7 @@ signals:
     void requestSetMaxSegmentMs(int ms);
     void requestSetSpeechRms(float rms);
     void requestSetHangoverMs(int ms);
+    void requestSetOverlapMs(int ms);
     void requestSetSpeakerThreshold(float threshold);
     void requestReset();
 

@@ -40,6 +40,7 @@ class PhoneApplet;
 class EqApplet;
 class WaveApplet;
 class AetherClockApplet;
+class MiniPanApplet;
 class ClientEqApplet;
 class ClientCompApplet;
 class ClientGateApplet;
@@ -106,6 +107,7 @@ public:
     EqApplet*       eqApplet()       { return m_eqApplet; }
     WaveApplet*     waveApplet() const { return m_waveApplet; }
     AetherClockApplet* aetherClockApplet() const { return m_aetherClockApplet; }
+    MiniPanApplet*  miniPanApplet() const { return m_miniPanApplet; }
     // Phase 7.1: each side has its own CEQ applet — clientEqTxApplet()
     // is the original "ceq" tile bound to TX, clientEqRxApplet() is
     // the new "ceq-rx" tile bound to RX.  clientEqApplet() retained as
@@ -242,6 +244,11 @@ public:
     // for all legacy applets — these accessors exist so new features
     // can opt in to the container system early.
     ContainerManager* containerManager() { return m_containerMgr; }
+
+    // Canonical applet entry ids in current column order — the same ids the
+    // Applet_<ID> keys and AppletOrder use.  The workspace controller feeds
+    // these to the legacy-key migration (RFC #4887 phase 3).
+    QStringList appletIds() const;
     ContainerWidget*  rootSidebarContainer() { return m_rootSidebar; }
 
     // Global controls lock — disables wheel/mouse on sidebar sliders (#745)
@@ -260,6 +267,12 @@ public:
     };
 
     friend class AppletDropArea;
+
+signals:
+    // A canvas-mode container was dropped back onto the panel; the workspace
+    // controller owns the transition (RFC #4887 phase 3).
+    void canvasReturnRequested(const QString& appletId);
+
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -352,6 +365,7 @@ private:
     EqApplet*      m_eqApplet{nullptr};
     WaveApplet*    m_waveApplet{nullptr};
     AetherClockApplet* m_aetherClockApplet{nullptr};
+    MiniPanApplet* m_miniPanApplet{nullptr};
     ClientEqApplet* m_clientEqTxApplet{nullptr};
     ClientEqApplet* m_clientEqRxApplet{nullptr};
     ClientCompApplet* m_clientCompApplet{nullptr};

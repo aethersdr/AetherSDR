@@ -35,9 +35,15 @@ open /Users/patj/aether/AetherSDR/.worktrees/feat-hl2-multi-rx/build/AetherSDR.a
   `Hl2Settings::receiverCount` is retired. If you previously set it, it is
   ignored.
 - Radio: HL2 at `192.168.1.21`. Simulator: `./hpsdrsim -hermeslite2 -P1`.
-- **Do not run the simulator on this Mac while testing the real radio** — this
-  machine is `192.168.1.12`, which is the address `hl2_tx_loopback_test` probes,
-  and a local simulator makes that test run when it should skip.
+- Running the simulator on this Mac alongside the real radio is now safe.
+  `hl2_tx_loopback_test` used to probe a hardcoded `192.168.1.12` — this
+  machine — so a local simulator made it run when it should have skipped. It now
+  defaults to loopback and refuses to key anything that does not answer discovery
+  with hpsdrsim's synthetic `AA:BB:CC:DD:xx:FF` MAC, so it cannot reach the
+  radio. It also skips a simulator that is already streaming to another client,
+  so running the suite cannot take a session out from under an app you have
+  driving it. Point it elsewhere with `AETHER_HL2_SIM_HOST` (an IP literal —
+  names are not resolved) if the simulator is on another box.
 - Only one client per radio. Check nothing else is connected first.
 - Turn on the HL2 log: `QT_LOGGING_RULES="aether.hl2*=true"`. Most rows below
   are confirmed from a log line, not from the screen.
@@ -211,12 +217,24 @@ audio gap there is correct behaviour, not a fault.
 
 ---
 
-## Known-failing, not caused by this work
+## Known-failing, not caused by this work — now fixed
 
-`hl2_tx_loopback_test` fails against the simulator on transmit-sideband checks.
-Commit `256142a6` (pre-multi-DDC) fails **identically**, and the failure count
-varies run to run. Tracked separately. Exclude it when running the suite:
+`hl2_tx_loopback_test` used to fail against the simulator on transmit-sideband
+checks, and commit `256142a6` (pre-multi-DDC) failed identically, so the "not
+caused by this work" call was right. It was not a transmit fault: the test
+expected the fed-back tone BELOW centre, which was correct only against the
+pre-#4471 panadapter that drew the raw wire. #4471 added the receive-side
+conjugation and the expectation went stale. The run-to-run variation was the
+hardcoded `192.168.1.12` reaching a simulator on another machine.
+
+No exclusion is needed any more — run the whole suite:
 
 ```bash
-ctest -j8 -E hl2_tx_loopback_test
+QT_QPA_PLATFORM=offscreen ctest --test-dir build -j22
 ```
+
+It SKIPS cleanly when no simulator is running, so it is safe in CI and on a
+machine connected to real hardware — and the skip is honest rather than silent:
+it exits 77, and `SKIP_RETURN_CODE` on the `add_test` makes ctest report
+`***Skipped`. A run that measured nothing cannot be mistaken for one that keyed
+and passed.

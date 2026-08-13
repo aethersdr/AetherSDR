@@ -5066,9 +5066,22 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // it directly, which ALSO bypassed the neutral consumers (the adaptive RX
     // filter and the S-history markers), so those received nothing at all.
     quint32 streamId = kNeutralPanStreamIdBase + static_cast<quint32>(panId);
-    // m_panadapters is keyed by the panId STRING, so resolve through the same
-    // helper the other backend-signal handlers use (addressed pan, else active).
-    if (auto* pan = resolvePan(neutralPanIdString(panId))) {
+    // The backend's OWN pan for this index first. A backend that claims its
+    // pans over a wire (the demo's Route A) keys m_panadapters by the WIRE
+    // id ("0x40000001"), which the neutral synthesis below can never
+    // produce — so before the multi-pan demo every demo row fell through to
+    // resolvePan()'s active-pan fallback, which is wrong the moment a second
+    // pan exists: every receiver's rows drew into whichever pane was active.
+    // The index↔backend-id pair is allocated by neutralPanIndexFor() when
+    // the pan's geometry first crosses the seam, which precedes any row.
+    PanadapterModel* pan = nullptr;
+    const QString backendPanId = m_backendPanIdByIndex.value(panId);
+    if (!backendPanId.isEmpty())
+        pan = m_panadapters.value(normalizePanadapterId(backendPanId), nullptr);
+    // Else the neutral resolution (HL2 pans; falls back to the active pan).
+    if (!pan)
+        pan = resolvePan(neutralPanIdString(panId));
+    if (pan) {
         if (const quint32 realId = pan->panStreamId())
             streamId = realId;
     }

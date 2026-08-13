@@ -817,6 +817,25 @@ void MainWindow::buildMenuBar()
 
     auto* viewMenu = menuBar()->addMenu("&View");
 
+    // Workspace canvas (RFC #4887 phase 3) — opt-in, reversible.  The check
+    // state persists inside the workspace document itself (Principle V), not
+    // in a settings key: wireWorkspaceCanvas() re-applies it at startup and
+    // enabledChanged keeps the action honest if enabling fails.
+    //
+    // Two postures since the edit-mode field request: Enabled turns the
+    // canvas shell on, Edit Layout arms placement (select/drag/resize/
+    // drops/nudges/dots).  Enabled-but-locked is the OPERATING posture —
+    // interacting with an applet just uses it.  Edit state is session-
+    // transient by design; wireWorkspaceCanvas() syncs both directions.
+    QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas (experimental)");
+    m_workspaceCanvasAction = wsMenu->addAction("&Enabled");
+    m_workspaceCanvasAction->setCheckable(true);
+    connect(m_workspaceCanvasAction, &QAction::toggled, this,
+            [this](bool on) { toggleWorkspaceCanvas(on); });
+    m_workspaceEditAction = wsMenu->addAction("Edit &Layout");
+    m_workspaceEditAction->setCheckable(true);
+    m_workspaceEditAction->setEnabled(false);   // armed by enabledChanged
+
     // Applet-panel show/hide and pop-out are now driven entirely from the
     // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as
     // a window-scoped QShortcut so the keystroke survives the View-menu

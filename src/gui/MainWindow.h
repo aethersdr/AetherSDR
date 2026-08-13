@@ -123,7 +123,10 @@ class SpectrumWidget;
 class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
+class MiniPanApplet;
 class PanadapterStack;
+class WorkspaceCanvas;
+class WorkspaceController;
 class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
@@ -236,6 +239,11 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
+    // disable / place, driven by the `workspace` automation verb.  Returns
+    // an error key instead of throwing, like the other automation hooks.
+    Q_INVOKABLE QVariantMap automationWorkspace(const QString& action,
+                                                const QString& args);
     // Inject one learned VFO-knob CC value through MidiControlManager for
     // automation proof. Returns 0 on acceptance, 1 if MIDI is unavailable,
     // and 2 for an out-of-range MIDI value.
@@ -444,6 +452,17 @@ private:
         RadioSliceSelectionSource source);
     void queueActiveSliceForSpectrumTarget(int sliceId);
     void updateFilterLimitsForMode(const QString& mode);
+
+    // Mini-pan glue. The applet is a VIEW: it creates no radio objects, it just
+    // re-slices the active slice's pan down to a +/-5 or +/-10 kHz window. The
+    // applet's own visibility drives m_miniPanFeedWanted — see the
+    // MiniPanApplet::feedWanted wiring in MainWindow_Session.cpp.
+    MiniPanApplet* miniPanApplet() const;   // null until the applet panel is built
+    void refreshMiniPanFollow();   // rebind readout/passband to the active slice
+    void teardownMiniPanFeed();    // unbind + blank the trace
+    // Re-slice one main-pan FFT frame into the mini-pan's window.
+    void feedMiniPanFromPanFrame(const PanadapterModel* pan,
+                                 const QVector<float>& bins);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
@@ -766,6 +785,14 @@ private:
     // right of the panadapter stack.  Wired from the dock-side icons in
     // the title bar and persisted via "AppletPanelDockedLeft".
     void setAppletPanelDockedLeft(bool left);
+
+    // Workspace canvas (RFC #4887 phase 3) — MainWindow_Workspace.cpp.
+    void wireWorkspaceCanvas();
+    void toggleWorkspaceCanvas(bool on);
+    QWidget* centralPanWidget() const;
+    // One router for band-stack visibility: canvas mode hosts the panel as
+    // a canvas item, classic mode shows it inside the stack (#4887 ph 4).
+    void setBandStackPanelVisible(bool show);
 
     // Show/hide the applet panel — single source of truth that updates the
     // title-bar dock icons and the persisted "AppletPanelVisible" setting.
@@ -1205,6 +1232,19 @@ private:
     ::QSizeGrip*      m_sizeGrip{nullptr};
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
+    // Workspace canvas (RFC #4887 phase 3) — created in wireWorkspaceCanvas()
+    // (MainWindow_Workspace.cpp).  When canvas mode is on, m_workspaceCanvas
+    // sits in the splitter slot m_panStack normally occupies and hosts it as
+    // a canvas item; centralPanWidget() is what splitter size/stretch code
+    // compares against so both arrangements share one code path.
+    WorkspaceCanvas*     m_workspaceCanvas{nullptr};
+    WorkspaceController* m_workspaceController{nullptr};
+    QAction*             m_workspaceCanvasAction{nullptr};
+    QAction*             m_workspaceEditAction{nullptr};
+    bool                 m_statusMessageMirrorWired{false};
+    QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
+    QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
+    bool m_miniPanFeedWanted{false};              // applet visible → consume frames
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
     QPointer<PanadapterApplet> m_cwDecoderApplet;
     QPointer<PanadapterApplet> m_rttyDecoderApplet;

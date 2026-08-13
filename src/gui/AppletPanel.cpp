@@ -19,6 +19,7 @@
 #include "PhoneApplet.h"
 #include "EqApplet.h"
 #include "AetherClockApplet.h"
+#include "MiniPanApplet.h"
 #include "WaveApplet.h"
 #include "ClientEqApplet.h"
 #include "ClientCompApplet.h"
@@ -234,6 +235,12 @@ protected:
             if (m_panel->m_appletOrder[i].id == draggedId) { srcIdx = i; break; }
         }
         if (srcIdx < 0) return;
+
+        // No canvas-return branch here (review m10): phase 5 replaced the
+        // canvas title-bar QDrag with the live gesture stream, so a canvas
+        // item can no longer arrive as a QDrag drop — returns flow through
+        // WorkspaceCanvas::itemDraggedOut and the controller's return
+        // target instead.
 
         // Adjust drop index if moving down (after removing source)
         if (dropIdx > srcIdx) dropIdx--;
@@ -789,6 +796,16 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_aetherClockApplet = new AetherClockApplet;
     m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
 
+    // Mini-Pan — the K4-style narrow scope. Deliberately an applet and NOT a
+    // View-menu item: the menu bar does not exist in Minimal Mode, which is
+    // exactly when the operator wants this. The tray button below is the only
+    // entry point reachable there. Off by default because it is a specialist
+    // view, not because it is expensive — it creates nothing on the radio, it
+    // just re-slices the main pan's frames. Float it out via the container
+    // title bar to keep it over a logging app.
+    m_miniPanApplet = new MiniPanApplet;
+    m_appletOrder.append(makeEntry("MPAN", "Mini-Pan", m_miniPanApplet, false, m_drawer, m_drawerLayout, "MINI"));
+
     // CEQ and CMP intentionally have no toggle button in the tray —
     // their visibility follows DSP bypass state, driven externally
     // from the CHAIN widget and the respective floating editors.
@@ -1203,13 +1220,26 @@ void AppletPanel::rebuildStackOrder()
         auto* item = m_stack->takeAt(0);
         delete item;  // deletes the layout item, NOT the widget
     }
-    // Re-add in current order (skip floating containers to avoid stealing them)
+    // Re-add in current order.  Skip containers the panel does not currently
+    // own: floating ones live in their own window, and canvas ones are
+    // children of a WorkspaceCanvas (RFC #4887 phase 3).  Adding either here
+    // would steal it back out of its placement mid-rebuild.
     for (const auto& entry : m_appletOrder) {
-        if (auto* cw = qobject_cast<ContainerWidget*>(entry.widget); cw && cw->isFloating())
+        auto* cw = qobject_cast<ContainerWidget*>(entry.widget);
+        if (cw && (cw->isFloating() || cw->isOnCanvas()))
             continue;
         m_stack->addWidget(entry.widget);
     }
     m_stack->addStretch(1);  // factor 1: absorb all surplus, pin tiles to sizeHint (#3461)
+}
+
+QStringList AppletPanel::appletIds() const
+{
+    QStringList ids;
+    ids.reserve(m_appletOrder.size());
+    for (const auto& entry : m_appletOrder)
+        ids.append(entry.id);
+    return ids;
 }
 
 void AppletPanel::saveOrder()

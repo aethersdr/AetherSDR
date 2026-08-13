@@ -345,6 +345,17 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         saveInt("AsrSpeakerThreshold", pct);
         m_asr->setSpeakerThreshold(pct / 100.0f); // live, no engine rebuild
     });
+    // Boundary-word recovery / segment overlap (RFC #4821). Set the value before
+    // connecting so this init doesn't fire the slot; applied live afterward.
+    m_settings->setBoundaryOverlapMs(
+        CopyAssistSettings::value(QStringLiteral("AsrBoundaryOverlapMs"), QStringLiteral("0"))
+            .toString().toInt());
+    connect(m_settings, &CopyAssistSettingsDialog::boundaryOverlapChanged, this, [this](int ms) {
+        saveInt("AsrBoundaryOverlapMs", ms);
+        if (m_asr) {
+            m_asr->setOverlapMs(ms); // live, no engine rebuild
+        }
+    });
     connect(m_settings, &CopyAssistSettingsDialog::labelSpeakersToggled, this, [this](bool on) {
         CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
         if (!m_constructed) {
@@ -761,6 +772,7 @@ void CopyAssistController::applyTuning()
     m_asr->setSpeechRms(sensitivityToRms(
         CopyAssistSettings::value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt()));
     m_asr->setSilenceDurationMs(CopyAssistSettings::value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
+    m_asr->setOverlapMs(CopyAssistSettings::value(QStringLiteral("AsrBoundaryOverlapMs"), QStringLiteral("0")).toString().toInt());
 }
 
 void CopyAssistController::onEnableToggled(bool on)

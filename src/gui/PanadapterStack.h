@@ -4,6 +4,9 @@
 #include <QMap>
 #include <QSet>
 #include <QSplitter>
+#include <QStringList>
+
+class QTimer;
 
 namespace AetherSDR {
 
@@ -38,6 +41,7 @@ public:
     SpectrumWidget* spectrum(const QString& panId) const;
     int count() const { return m_pans.size(); }
     QList<PanadapterApplet*> allApplets() const { return m_pans.values(); }
+    QStringList panIds() const { return m_pans.keys(); }
 
     // Active pan (determines which pan the applet column shows controls for)
     QString activePanId() const { return m_activePanId; }
@@ -47,6 +51,10 @@ public:
     void setSplitterOrientation(Qt::Orientation o) { m_splitter->setOrientation(o); }
     BandStackPanel* bandStackPanel() const { return m_bandStackPanel; }
     void setBandStackVisible(bool visible);
+    // Re-home the band-stack panel after workspace-canvas hosting (#4887
+    // phase 4): back to slot 0 of the stack's own layout, left of the
+    // splitter, exactly where the constructor put it.
+    void reclaimBandStackPanel();
     void equalizeSizes();
     void rearrangeLayout(const QString& layoutId);
 
@@ -59,6 +67,29 @@ public:
     // Minimum applets a layout id needs before its rearrangeLayout branch
     // takes it (-1 = unknown id). Mirrors the >= guards — keep in sync.
     static int layoutRequiredPanCount(const QString& layoutId);
+
+    // Automation bridge hook (#4864): drive floatPanadapter()/dockPanadapter()
+    // headlessly, so the reparent + GPU re-initialize path — the #2495/#4319/
+    // #4617 crash lineage — is testable without a live multi-pan radio and a
+    // hidden-button workaround. Rejects unknown pan ids (error map); float on
+    // a floating pan / dock on a docked one is reported as alreadyThere
+    // rather than an error, because the caller asked for a state that holds.
+    // Returns the pan's floating state plus floating/docked counts.
+    Q_INVOKABLE QVariantMap automationFloatDock(const QString& action,
+                                                const QString& panId);
+
+    // Workspace-canvas seam (RFC #4887 phase 4).  The stack stays the pans'
+    // OWNER — creation, wiring, render scheduling, float/dock — and lends
+    // applets to the canvas.  detachForCanvas() only decides WHETHER (a
+    // floating pan stays out; pop-out is its own state and dockPanadapter()
+    // is its way back); the canvas reparents the applet itself, a plain
+    // same-top-level move exactly like applyLayout()'s splitter shuffles —
+    // no GPU dance, which is reserved for real top-level changes (#2495).
+    // returnFromCanvas() re-homes ONE applet into the docked splitter
+    // (addWidget's one-step reparent — never through nullptr, #1344);
+    // callers rebuild the arrangement afterwards via rearrangeLayout().
+    PanadapterApplet* detachForCanvas(const QString& panId);
+    void returnFromCanvas(const QString& panId, PanadapterApplet* applet);
 
     // Float/dock panadapters
     void floatPanadapter(const QString& panId);
@@ -76,15 +107,41 @@ public:
     void saveFloatingState() const;
     void restoreFloatingState();
 
+    // How long a freshly floated panadapter must stay alive before the
+    // crash-loop marker is retired (#4617). The float path's failure mode is
+    // immediate — the reparent, the GPU re-initialize and the first frame in
+    // the new window all land within one event-loop turn — so this only has to
+    // outlast that turn plus the deferred refreshAfterReparent().
+    static constexpr int kFloatingRestoreSettleMs = 5000;
+
     void prepareShutdown();
 
 signals:
     void activePanChanged(const QString& panId);
     void panFloated(const QString& panId);
     void panDocked(const QString& panId);
+    // Pan lifecycle, for the workspace controller (RFC #4887 phase 4).
+    // panAdded fires once per applet however it was created (addPanadapter
+    // or an applyLayout branch); panRemoved fires after the applet is
+    // unregistered and BEFORE it is destroyed, so a canvas can release its
+    // entry rather than relying on the destroyed-watch; panRekeyed follows
+    // the FLEX band-recall id swap (same applet, new id).
+    void panAdded(const QString& panId);
+    void panRemoved(const QString& panId);
+    void panRekeyed(const QString& oldId, const QString& newId);
+    // The previous session died while floating panadapters, so they were
+    // dropped and this one came up docked. Carries how many were dropped —
+    // enough for plural agreement in the operator notice, and nothing more:
+    // the internal 0x4000… pan IDs appear nowhere else in the UI, so they
+    // would give the operator no action they could take.
+    void floatingRestoreAbandoned(int abandonedPanCount);
 
 private:
     void rebuildDockedSplitter();
+    // Arm / retire the persisted "a float is in flight" marker (#4617).
+    void armFloatingRestoreMarker();
+    void clearFloatingRestoreMarker();
+    void announceAbandonedFloatingRestore();
 
     PanadapterRenderScheduler* m_renderScheduler{nullptr};
     BandStackPanel* m_bandStackPanel{nullptr};
@@ -93,8 +150,30 @@ private:
     QMap<QString, PanFloatingWindow*> m_floatingWindows;
     // Preserve floating state for restored pans that were unavailable this run.
     QSet<QString> m_seenPanIds;
+    // Applets currently ON LOAN to the workspace canvas (RFC #4887 phase 4).
+    // THE INVARIANT EVERY REBUILD PATH MUST HONOR: an applet in this set is
+    // not the stack's to arrange.  rebuildDockedSplitter() and
+    // rearrangeLayout() both enumerate m_pans and reparent what they find —
+    // five call sites reach them (float, dock, the connect-time layout
+    // restore, pan close, the layout dialog), and before this set existed
+    // every one of them silently reclaimed canvas-hosted applets into the
+    // hidden stack: the canvas kept a healthy model while the widget on
+    // screen answered to a splitter, which surfaced as "the pan won't snap,
+    // won't stack, won't restore" (the 8600 field report).  detachForCanvas
+    // lends, returnFromCanvas/floatPanadapter/removePanadapter collect.
+    QSet<QString> m_lentToCanvas;
     QString m_activePanId;
     bool m_shutdownPrepared{false};
+    // applyLayout() creates applets in its branches (some via addPanadapter,
+    // some inline); panAdded is suppressed during it and swept at its end so
+    // each applet is announced exactly once.
+    bool m_inApplyLayout{false};
+    // How many pans the constructor discarded because the previous process
+    // never survived floating them. Announced on a zero-timer at launch (once
+    // wirePanLifecycle() has connected to us) and again from
+    // restoreFloatingState(), which consumes it.
+    int m_floatingRestoreAbandonedCount{0};
+    QTimer* m_floatingRestoreSettleTimer{nullptr};
 };
 
 } // namespace AetherSDR

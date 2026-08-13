@@ -8,6 +8,654 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.8.2] — 2026-08-09
+
+### A third radio family: networked Icom · HL2 gets notches and frequency calibration · SPE Expert amplifiers · three new spot overlays · CW timing to spec
+
+57 commits since v26.8.1. The headline is a **new radio family**: `IcomCIV`, an
+`IRadioBackend` implementor for networked Icoms, brought up against a live
+**IC-705** and then against an **IC-9700**. CI-V is Icom's documented command
+plane; it travels inside **RS-BA1**, a three-stream UDP transport Icom documents
+nowhere, implemented behaviourally with kappanhang (MIT) attributed and wfview
+read as specification only. FT8 both decodes and spots on PSK Reporter over two
+wireless hops. The seam now carries **four** backends.
+
+Bringing a third vendor up flushed out a set of defects that were invisible from
+a Flex and affected *every* non-Flex backend: a meter seam that ignored the unit
+it carried, receive-DSP controls that emitted FlexRadio wire text and nothing
+else, a capability that conflated "the host modulates" with "transmit audio
+leaves through the seam" — and **a null-pointer crash on connect that was live
+on `main` and took down HL2 and KiwiSDR too**.
+
+The **Hermes-Lite 2** closed two more gaps against a Flex. **Manual notch
+filters** are placeable from the panadapter, driving a WDSP notch database that
+was vendored but never declared — 33.4 dB measured off-air on WWV. **Frequency
+calibration** gives a radio with a free-running crystal and no calibration
+register a single per-radio ppb correction that covers every band and both
+oscillators. And the **first connect no longer freezes the application** for
+21–82 seconds: the FFTW planning that caused it was already off the GUI thread,
+the GUI thread was simply waiting for it — and the result was then thrown away
+on every exit, so a genuinely one-time cost was being paid on every launch.
+
+Rounding it out: **SPE Expert amplifiers** (1.3K-FA / 1.5K-FA / 2K-FA) join
+ACOM as a supported peripheral; **three new spot and schedule overlays** land in
+SpotHub — N1MM+/DXLog contest bandmap, the EiBi shortwave broadcast schedule,
+and the KiwiSDR DX Community database; **US 60m follows the FCC Report & Order**
+that took effect in February; the local **iambic keyer now keys to spec**
+(30 WPM measured at 29.998 on macOS, against 26.26 before); and **MNR gains
+20 dB of stationary-noise attenuation** it was never delivering.
+
+### Icom — a new radio family
+
+- **`IcomCIV` backend for networked Icom radios (#4784).** Connect and
+  authenticate in ~250 ms, panadapter at 30 sweeps/s, RX audio, TCI RX, and
+  receive handedness certified against WWV (USB/DIGU within 0.5 dB, LSB/DIGL
+  within 0.6 dB). An Icom remembers its own frequency, mode and filter across
+  power cycles, so this backend never pushes restored state and instead *reads*
+  the radio's own levels at connect. Only the IC-705 and IC-7300MK2 are marked
+  `verified` against their own CI-V guides; an unknown radio falls back to no
+  scope and no transmit rather than optimistic defaults.
+
+- **IC-705 bring-up — controls, UX and the CI-V stall (#4799).** RF Gain,
+  preamp and attenuator now say what they mean (the gain slider had been driving
+  the preamp); manual notch is wired to the radio's own `MN` rather than the
+  Flex-only DSP buttons an Icom cannot do; filter buttons follow the mode and
+  read narrow→wide instead of publishing one ladder for every mode; AF gain, TX
+  monitor, VOX, RIT/XIT and the ATU are wired and adopted from the radio at
+  connect. The connect dialog stops flipping the radio type as you type an IP,
+  and the password is staged and saved **after** a successful connect — it used
+  to be written before the attempt, so a failed connect destroyed the stored
+  one. The **60–90 second CI-V stall** was a session token renewed by a single
+  fire-and-forget datagram against a 60 s expiry: one lost packet silently
+  expired the session while the transport stayed healthy. Now a 20 s cadence
+  with a 2.5 s ack grace, up to four retries and a 50 s dead-session failure,
+  proven stable across four renewal windows.
+
+- **IC-9700 support (#4786).** Four faults, one of them not Icom-specific:
+
+  - **A null `PanadapterStream` crashed the GUI thread on connect** — live on
+    `main`, and reachable on **HL2 and KiwiSDR** as well as Icom. `m_panStream`
+    is assigned only on the Flex and Sim paths, so any backend that decodes its
+    own scope was killed by the first dBm range it reported. No user action
+    required; it fired by itself on connect.
+  - **The dBm auto-floor ran away** at a linear 24 dB/s because it waited for an
+    echo a radio with no display-range command plane can never send. New
+    `radioOwnsDbmScale` capability, defaulting `true` so every existing backend
+    is untouched.
+  - **Configuration advice was emitted on a fatal channel**, so a healthy
+    session tore itself down 4 ms after coming up and reconnected every 5 s
+    forever. New `IRadioBackend::configurationWarning` for advice that does not
+    end the session.
+  - **The MOD Input warning was wrong on every non-705 networked Icom** — it
+    demanded `MOD Input = WLAN`, and the IC-9700 is LAN-only. Now gated on the
+    model's `hasWifi` flag.
+
+  Also: CI-V open now retries (one open was not reliably enough — the radio
+  accepted it and sent nothing), and the connection panel gained a CI-V address
+  field.
+
+- **AetherModem transmits on a seam backend (#4812).** The built-in AX.25 modem
+  could not transmit at all on a backend declaring `takesTxAudioOverSeam` — it
+  gated on `hostModulates`, took the DAX branch, and waited on a stream a
+  networked Icom has never had. Nothing logged an error, because every layer was
+  correct by its own lights. Verified on an IC-9700: PTT keys, the T1 retry
+  ladder runs, and TX meters go live.
+
+- **Shared defects the bring-up exposed (#4784).** `MeterModel` ignored the unit
+  it was given — `TX:FWDPWR` was unconditionally converted from dBm, so an
+  honest 5 watts arrived as 0.003 W. `SliceModel::setNr/setNb/setAnf/setSquelch`
+  emitted Flex wire text with no `IRadioBackend` verb behind them, so no other
+  backend could implement them however much it wanted to. And `hostModulates`
+  was answering two questions where there are three cases — split out as
+  `takesTxAudioOverSeam`.
+
+### Hermes-Lite 2
+
+- **Manual notch filters on the panadapter (#4780).** Right-click a signal to
+  add or remove a notch, drag to move, drag vertically to resize. WDSP's
+  vendored snapshot already carried a 1024-entry notch database behind its
+  notched-bandpass stage and none of it was declared in the port shim, so
+  nothing above could reach it. `IRadioBackend` gains typed `createNotch` /
+  `setNotch` / `removeNotch` / `setNotchesEnabled` verbs; Flex rebuilds the
+  identical command strings and is unchanged. RX filter taps go 2048 → 8192,
+  because filter length also sets the *narrowest possible notch* — 2048 floors a
+  notch at 200 Hz, wide enough to swallow a CW signal beside the carrier being
+  notched. **That costs a constant +64.0 ms of RX audio latency on every HL2
+  receiver, whether or not a notch is ever placed**, and the trade is stated
+  rather than implied. Measured off-air against WWV on 10 MHz: 33.4 dB on the
+  carrier, tracking held across two 8 kHz NCO moves, and the mirror frequency
+  left alone within 1.8 dB.
+
+- **Manual frequency calibration (#4783).** A **Calibration** page in Radio
+  Setup, a `freqcal` bridge verb, and one per-radio ppb correction applied to
+  every frequency the app sends. The HL2 tunes off a free-running 38.4 MHz
+  crystal and the NCO scale is a `localparam` in the bitstream — no register in
+  the HPSDR map accepts a correction, so the host applies one or nobody does.
+  Displayed frequency works out to `F/(1+e)` independent of where the NCO sits,
+  so one multiplicative scalar corrects every band. Transmit is corrected
+  identically, because the gateware derives both oscillators from one
+  `freqcomp`. Stored as a MAC-keyed feature document, so an operator with two
+  HL2s does not get one's calibration silently applied to the other.
+
+- **The first connect no longer freezes the app (#4775).** Connecting an HL2 for
+  the first time froze everything for **21–82 seconds** with nothing on screen
+  to explain it — reported as "the client has completely hung". It was FFTW
+  measuring plans for WDSP's `FFTW_PATIENT` channel setup: correctly off the GUI
+  thread, with the GUI thread standing there waiting for all of it through
+  `Qt::BlockingQueuedConnection`. `connectRadio()` now splits into three phases
+  and the UI stays live throughout (219 of 219 automation pings answered, longest
+  gap 0.50 s, against 0 of ~200 before). Separately, **the wisdom was never
+  saved**: export was an `std::atexit` handler, which SIGTERM, a crash and a
+  Force Quit all skip — so anyone who had ever force-quit was paying first-run
+  cost on every run. Export moved to the end of `open()`, write-then-rename, so
+  a concurrent export cannot truncate the shared cache. Next launch: 0.57 s.
+
+- **AM/SAM demodulated audio is DC-blocked (#4774).** The WAVE applet drew two
+  waveforms, the lower one upside down, on AM and SAM. WDSP's AM/SAM detector is
+  an *envelope* detector emitting `sqrt(I²+Q²)`, so the carrier lands in the
+  audio as a DC pedestal — `levelfade` deliberately holds it there, the
+  symmetric AM passband cannot strip it, and AetherSDR had no RX DC blocker at
+  all. Not cosmetic: measured on a 50%-modulated carrier, the pedestal alone sat
+  **79% past full scale** after AGC, so AM audio was clipping against the rails
+  everywhere downstream. A 20 Hz one-pole blocker now runs unconditionally in
+  every mode (a no-op on the already-zero-mean ones).
+
+- **CWX, DVK and FDX are hidden on radios that cannot do them (#4777).** Three
+  Flex-shaped status-bar toggles were nothing but a command-plane verb, so on a
+  backend with no command plane they sat permanently dim — which reads as a
+  fault to go looking for rather than a fact about the radio. Gated by
+  visibility, not enabled state, on three explicit capabilities. The F1–F12
+  keyer shortcuts needed the gate too: an HL2 in CW kept firing `cwx send` into
+  a backend with no such verb.
+
+### Amplifiers & peripherals
+
+- **SPE Expert amplifiers — 1.3K-FA / 1.5K-FA / 2K-FA (#4531).** A second
+  peripheral amplifier following the ACOM precedent, entirely outside the radio
+  seam. Serial (115200 8N1) or ser2net TCP, raw **or** telnet, both verified on
+  real hardware; a 100 ms status poll because the SPE only speaks when spoken
+  to; poll-silence detection, so a ser2net TCP link that outlives the amp being
+  switched off is reported as such; model identification from the status ID
+  field; and an RFC 2217 DTR/RTS **power-ON pulse** that works over the network.
+  A dedicated applet carries power / antenna-SWR / ATU-SWR gauges (the power
+  gauge rescales with the selected LOW/MID/HIGH level, matching the amp's own
+  display), V/I/temperature readouts, a warning and alarm banner, and the
+  front-panel keystrokes. Implemented from SPE's published *Application
+  Programmer's Guide* Rev 1.1.
+
+### Spots, schedules & band data
+
+- **N1MM+ / DXLog contest bandmap spots (#4678).** A SmartSDR-CAT-compatible
+  N1MMSpot UDP XML listener puts contest bandmap spots — including
+  dupe / needed-multiplier / CQ / busy / bust status — directly on the
+  panadapter. Default port 12060, matching the `FocusHelperN1MMPort` SmartSDR
+  documents, so existing broadcast configs work unchanged. Unlike every other
+  feed, N1MM explicitly says when to add, update and remove, so spots are keyed
+  by callsign+band rather than deduped by frequency, with a configurable-lifetime
+  safety net for a logger that exits without sending deletes. Eight configurable
+  status→colour swatches.
+
+- **EiBi shortwave broadcast schedule overlay (#4822).** Downloads, caches and
+  parses the EiBi schedule into a dedicated SpotHub tab: auto-start, a live spot
+  counter, forced re-download, cache and next-fetch timestamps, conditional
+  `If-Modified-Since` updates on a 7-day threshold, and a customisable spot
+  colour that repaints active markers live. Resolves 289 country codes, 560
+  language/mode codes, target-area codes and 1,629 transmitter sites into
+  rich-text tooltips.
+
+- **KiwiSDR DX Community spots overlay (#4828).** KiwiSDR's community-curated DX
+  database bundled as an independent, **opt-in** overlay layer for shortwave
+  utility, beacon, broadcast and DX spots. Cyan diamond markers on the band-plan
+  strip, hover tooltips with frequency, station, mode, passband cuts and notes,
+  and click-to-tune that sets frequency, RX filter bandwidth and — when SpotHub's
+  **Auto** button is on — the operating mode, through a normalising whitelist so
+  an unrecognised mode string can never reach the radio as a command.
+
+- **US 60m follows the FCC Report & Order effective 13 Feb 2026 (#4762).** The
+  ARRL plan still carried the pre-2026 five-channel allocation, so it drew a
+  100 W channel over spectrum capped at 9.15 W ERP and omitted 15 kHz US
+  operators have had since February. The new **5351.5 – 5366.5 kHz** segment is
+  added with its own colour so the power boundary reads off the panadapter, the
+  retired 5358.5 kHz channel is removed, the four retained channels keep their
+  historic numbering (1, 2, 4, 5) so markers still agree with existing logs, and
+  emission labels go `USB` → `CW/USB/DATA`. Separately, the 60m band edges in
+  `BandDefs.h` clipped the top 1.3 kHz of the 5405 kHz channel — every
+  frequency→band lookup reported "not 60m" in that sliver, so band-stack entries
+  saved under "Other", the per-band auto-save cap skipped them, and digital-mode
+  band matching failed. Reported by @csylvain (KB3CS), who caught that the
+  automated triage was arguing from superseded law.
+
+- **The SpotHub Time column sorts (#4751).** Clicking it did nothing — only the
+  Freq column returned a sort value — so once you had sorted by frequency there
+  was no way back to time order.
+
+- **A status-message field in the FreeDV Reporter panel (#4757).** The panel was
+  read-only, so changing your status message meant a trip to SpotHub → FreeDV.
+  Both surfaces read and write the same setting and stay in sync. The row
+  disables itself and says why when reporting is off, with the explanation on an
+  always-enabled container — Qt does not deliver tooltips to disabled widgets,
+  so putting it on the field would have hidden it in exactly the state that
+  needs explaining.
+
+- **KiwiSDR receiver lists import and export as CSV (#4753).** Moves a saved
+  receiver list between machines and operating systems without hand-copying
+  entries. **Passwords are never exported** — they live in the OS keychain,
+  keyed by profile id. Import merges on a normalised-endpoint match, so
+  re-importing the same file is idempotent and keeps existing ids and passwords.
+
+### Spectrum, waterfall & 3D FFT
+
+- **K4-style mini-pan (#4562).** A small, detachable window showing a narrow
+  ±5/±10 kHz slice of spectrum centred on the active VFO, independent of the
+  main panadapter and usable when it is hidden (Minimal Mode) or alongside
+  third-party contest logging. It is an independent top-level window, so it
+  floats over other applications and survives AetherSDR being minimised. Live on
+  a FLEX-6500 at ~26 Hz/bin, five times finer than the 200 kHz main pan. The pan
+  is owned but never becomes the active pan and never takes a slice slot.
+
+- **The 3D stacked-trace wedges close (#4779).** Every row covered the same
+  frequency span while the far rows narrowed with perspective, leaving two empty
+  black triangles flanking the surface. Rows now *cover* a wider span rather
+  than being *placed* differently, so the near rows run off both edges and the
+  existing depth narrowing walks them back in. The projection is deliberately
+  untouched — the converging slant of a signal through depth, the frequency
+  ruler and every marker stay exactly where they were. A new **3D Span** slider
+  under Display → 3D VIEW; **0 restores today's rendering exactly**.
+
+- **3D FFT works on the Raspberry Pi 5 (#4754).** `dss_mesh` is the only shader
+  using the `flat` qualifier, which is legal only in GLSL 130 and later — and
+  `qsb`'s default target set bakes a 120 slice. The Pi's v3d driver reports GLSL
+  1.40, no 140 slice existed, QRhi fell back to 120, and the shader failed to
+  compile, silently disabling the 3D FFT on every RPi5. Desktop GPUs reporting
+  GL 3.2+ picked the 150 slice and were unaffected, which is why CI never saw
+  it. `dss_mesh` now bakes 130/140/150/300es; no shader source changed.
+
+- **3D FFT history outlines render on Linux/OpenGL (#4730).** The dedicated
+  OpenGL outline pipeline rasterised its geometry but observed flat or stale
+  mesh-height data, so the leading edge was static or absent and the pan preview
+  did not update. Metal, D3D11 and other backends keep the dedicated pipeline
+  unchanged.
+
+- **Windows panadapters are no longer blank under software OpenGL (#4748).**
+  With `AETHER_NO_GPU` or `QT_OPENGL=software` set, the panadapter selected
+  OpenGL while the hidden WAVE scope had already selected D3D11 for the same
+  top-level window. Qt rejects mixed QRhi APIs in one backing store, producing
+  13,804 `QRhiWidget: No QRhi` messages and leaving every panadapter
+  transparent. Every `QRhiWidget` in the main window now honours the same
+  software-OpenGL request; the default D3D11 path is unchanged.
+
+- **A headless Wayland session automatically prefers xcb (#4755).** With no
+  physical monitor — the typical VNC/wayvnc remote case — there is no DRM
+  scanout, so the driver cannot allocate a GL window surface and every frame's
+  `makeCurrent` fails with `EGL_BAD_MATCH`. The panadapter renders black, and
+  `AETHER_NO_GPU=1` does not help, because the failure is the wayland-egl
+  *surface*, not the renderer. Detection is a tri-state — xcb is forced only
+  when at least one connector reports `disconnected` and none reports
+  `connected`; an all-`unknown` set keeps the native-Wayland default, because
+  DPI, composite TV-out and some fixed DSI panels report `unknown` with a panel
+  physically attached. The decision is logged at startup so it is diagnosable
+  from a support bundle, and a user-set `QT_QPA_PLATFORM` still wins.
+
+- **Waterfall interpolation is clamped at history boundaries (#4794).** Both GPU
+  waterfall shaders derived their four cubic taps in wrapped physical texture
+  coordinates, so a tap just past the newest or oldest logical row could alias
+  the opposite end of the circular texture and blend an unrelated row — an
+  occasional bright, dark or scrambled horizontal line during rapid pan or zoom.
+  Taps are now computed as logical source ages, clamped, and only then mapped
+  through the circular write-row origin.
+
+- **Waterfall Blanker rows stay in one frequency frame (#4802).** The blanker
+  cached only the viewport pixels of the last accepted row, so a rejection
+  during pan or zoom combined historical pixels with the rejected tile's
+  supplemental pixels and labelled the result with the current viewport frame —
+  permanently retaining a shifted or internally inconsistent row. A replacement
+  is now one coherent transaction, and substituted rows are kept out of temporal
+  interpolation.
+
+- **QRhi spectrum failures are visible (#4787).** `QRhiWidget::renderFailed()`
+  fired with nothing listening, so a GPU that failed mid-session left a blank
+  panadapter and no explanation. Each GPU `SpectrumWidget` now surfaces a
+  persistent warning card over the affected pan, updates renderer diagnostics,
+  and exposes the state through `get rhi`.
+
+- **Off-screen slice indicators centre on a single click (#4795).** The active
+  indicator emitted nothing, so the one slice you were most likely to be chasing
+  ignored single clicks; inactive ones followed generic reveal behaviour instead
+  of centring. Centring now goes through MainWindow's canonical path, preserving
+  Center Lock, profile-load deferral, Kiwi/widget-local centring and cross-pan
+  ownership.
+
+- **The remaining `SpectrumOverlayMenu` panel stylesheets are scoped (#4847).**
+  An un-scoped `QWidget { background; border }` rule cascades into Qt's tooltip
+  `QLabel` and every other bare container in the panel, because a Qt type
+  selector matches subclasses and propagates to descendants. Following #4440,
+  every panel sheet in the file is now scoped to its own object name through one
+  helper, which also drops two hardcoded `#304050` literals in favour of a theme
+  token — so the light theme themes those borders correctly instead of pinning
+  the dark value. Removing the cascade also removes accidental frames it was
+  drawing on bare containers in the Ant panel.
+
+### Receive DSP & audio
+
+- **MNR delivers the attenuation it advertised (#4807).** Its minimum-statistics
+  estimator took a raw minimum across 25 periodograms, systematically
+  underestimating stationary noise power and leaving the Wiener gain near unity;
+  the decision-directed recurrence mixed raw FFT power into a dimensionless SNR
+  term; and the strength-blended output gain fed back into the adaptive state.
+  Maximum-strength stationary attenuation was **4.54 dB**. It is now
+  **24.4 dB**, scale-invariant within 1 dB, with +18.8 dB SNR improvement on
+  speech-like input for −2.8 dB of desired-signal level. The redundant
+  `Enable MNR` checkbox and its dead settings wiring are removed — the method
+  selector is the sole enable, consistent with the other AetherDSP methods.
+
+- **DFNR no longer pumps on stereo (#4788).** It routed its mono denoised
+  waveform through `MonoDspStereoAdapter`, which switched to delayed dry stereo
+  whenever the input channels were not effectively identical, then drove that
+  dry signal with a fast processed-to-dry power envelope — the same
+  speech-dependent pumping family already fixed in RN2. The processed mono
+  waveform is now authoritative and the dry stereo is used only to estimate a
+  slow left/right balance.
+
+- **The AetherVoice EQ canvas caches its layers (#4808).** It rebuilt the
+  full-width band response plus static grid, labels and band-plan decoration on
+  every analyzer frame, on the GUI thread, scaling with strip width. Split into
+  DPR-aware cached background and response layers with only the live FFT trace
+  dynamic: measured on the same Windows VM, 73.1% → 37.4% of one core at
+  1280×900 and 82.8% → 43.1% at 2200×1300.
+
+- **Audio mute commands reach the model (#4772).** `RadioModel`'s three
+  audio-mute setters sent their command and returned — never assigning, never
+  emitting — while their immediate neighbours `setLineoutGain()` /
+  `setHeadphoneGain()` did both. `FlexBackend` is the only parser of those mute
+  statuses, so on every other backend the flags sat at their `false` initialisers
+  for the life of the session: mute the headphones, nudge the volume, and the
+  glyph silently flipped back to unmuted from the stale flag under a signal
+  blocker. The three mutes are now also cleared on disconnect.
+
+- **The title bar headphone mute reconciles with the radio (#4733).** It sent a
+  hand-written mixer command and never updated from radio status, so a second
+  Multi-Flex client changing headphone mute left the icon lying.
+
+- **The header speaker emoji follows local PC audio mute (#4628).** It now
+  tracks `AudioEngine`'s mute state, while clicking the same button still
+  commands the radio's line out.
+
+### CW
+
+- **Mode B no longer drops the trailing element on a clean simultaneous release
+  (#4810).** The memory latch ran only at condition-variable wakes, and a wake
+  caused by a release always observes post-release state — so when both paddles
+  came up in one combined update the "opposite paddle was held" fact was
+  overwritten before it could be observed and the keyer behaved like Mode A.
+  Routine on the serial path, where a 10 ms poll collapses both edges into one
+  event. The opposite paddle is now snapshotted at element start, in addition to
+  the existing live checks. Reported by @rsaue with a root-cause analysis that
+  verified accurate in full.
+
+- **Iambic sidetone timing — absolute-grid scheduling and sample-accurate edges
+  (#4823).** Two independent halves, both measured from @williamscody's own
+  attachments. `workerLoop()` armed each deadline as `now() + duration`, read
+  *after* the previous wait returned and after the key-edge callback ran, so
+  every element ran long by a fresh strictly-positive error that never
+  self-corrected — a one-sided +4 ms mean, ~10% slow at 30 WPM on the reporter's
+  M2. Deadlines now advance on an absolute `steady_clock` grid anchored at
+  squeeze start, the same pattern `CwxLocalKeyer` got in #3644, tracked in
+  nanoseconds so 23 WPM no longer runs permanently fast of spec.
+  `CwSidetoneGenerator` read its key gate once per audio block and applied it to
+  the whole buffer, quantising every precisely-timed edge to a block boundary;
+  transitions are now timestamped into a lock-free ring and mapped to exact
+  sample offsets, splitting the block mid-buffer. **Measured on real hardware
+  (Intel MBP, HaliKey Serial): 45.70 ms/unit → 40.002 ms/unit at a 30 WPM
+  setting, i.e. 26.26 WPM → 29.998 WPM.**
+
+### Copy Assist (speech-to-text)
+
+- **A GPU that cannot be used falls back to CPU instead of taking the app down
+  (#4767).** On a machine whose Vulkan stack enumerates GPUs but cannot create a
+  logical device, Copy Assist crashed the process silently — with no dialog and
+  nothing in the app log. **It is the second GPU attempt that kills it, not the
+  first**: whisper catches the first throw internally, but ggml-vulkan's
+  instance state is sticky, so a later init short-circuits against a
+  half-initialised instance and faults through a null dispatch pointer. Nothing
+  in `try`/`catch` can intercept that, so the fix is to never make the second
+  attempt: guards on the three ggml entry points, a one-shot CPU retry, and a
+  one-way per-session failure latch so a failed device is never handed another
+  attempt however it is chosen. The selector now labels unusable devices,
+  resolves to the first usable one (else CPU), does not persist a computed
+  resolution over the saved preference, and says in plain language when a
+  fallback has happened — previously the dialog went on naming a GPU that was
+  running nothing while the queue grew from 7.6 s to 22.5 s with no explanation.
+
+- **Enabling speaker labels no longer freezes the GUI (#4739).** The speaker
+  toggle, model-ready and custom-model paths rebuilt `AsrEngine` on the GUI
+  thread, and destroying the old engine performs an unbounded worker-thread
+  join — so ONNX work already in flight blocked Qt event processing and could
+  starve radio servicing. Preparation stays on the ASR worker thread, rapid
+  off/on requests are deduplicated, and only the audio tap is paused while
+  loading.
+
+- **Segment overlap for boundary-word recovery (#4837, RFC #4821).** When an
+  utterance is force-closed by the max-length cap — speech still ongoing, not a
+  real pause — the cut can fall mid-word, and because each segment is decoded
+  independently the straddling word is mangled or dropped. A small window of
+  trailing audio is now carried into the next segment and the repeated boundary
+  words de-duplicated at the text level, which adds zero inference cost, needs
+  no whisper-param change, and works uniformly across the whisper, sherpa-onnx
+  and remote backends. **Opt-in, off by default** — a "Boundary overlap" slider
+  at 0 ms.
+
+- **`AsrTapPolicy::toMono()` takes an explicit channel count (#4846).** It
+  decided stereo-vs-mono by testing whether the float count was even, standing
+  in for a channel count the caller actually knows: a genuinely mono block with
+  an even float count was averaged pairwise, handing the engine half as many
+  samples at the wrong duration. Latent today, live the moment any RX source
+  emits mono on that signal. A block that is not a whole number of frames for
+  the stated channel count is now rejected rather than reinterpreted.
+
+### Controllers & MIDI
+
+- **Rotary action mapping for the Ulanzi Dial (#4702).** A *Tuning:* rotary
+  action selector covering frequency, filter bandwidth, slice and master volume,
+  panadapter zoom, RIT/XIT, AGC-T, RF gain, APF, CW speed and RF power, with the
+  dial-press combo relabelled *Single tap:*. Follow-ups scale filter-preset
+  stepping by the magnitude of the rotary step rather than discarding it, and
+  document why the rotary zoom factor (1.25) differs from the keyboard one
+  (1.5) (#4758). An unrecognised action ID from a hand-edited settings document
+  or an external controller is now validated before dispatch and short-circuits
+  as a harmless no-op (#4834).
+
+- **Manual MIDI binding entry and per-row editing (#4790).** A **Manual…**
+  button beside Learn types in a binding's channel (Any / 1–16), message type
+  and note/CC number directly, and a ✎ button on each row reopens the same form
+  pre-filled to correct a binding Learn captured wrong — without re-learning.
+  Learn is unchanged and remains the default flow; the settings format is
+  untouched, so a file written by this build loads in older ones. A
+  duplicate-source guard catches the case where two bindings on one source
+  silently leave only the last one working. Verified on a HaliKey MIDI with a
+  paddle on the key jack.
+
+### TCI
+
+- **A use-after-free in the DAX RX path (#4789).** The path kept a `const
+  float*` into its accumulation buffer, then cleared and squeezed that buffer
+  before gain conversion and frame construction. The deterministic trigger is a
+  client switching from a resampled rate such as 48 kHz to native 24 kHz with
+  sub-threshold samples still staged. Reproduced under ASan as
+  `heap-use-after-free` on the parent commit.
+
+- **Malformed `volume:` and `modulation:` input is rejected, not reinterpreted
+  (#4848).** `volume:` with an empty argument parsed to `0.0` — and 0 dB is the
+  *top* of the volume range, so the malformed command landed on the loudest
+  value it can express. An unrecognised modulation name fell through a
+  `QMap::value(key, "USB")` default and silently set USB, while the notification
+  echoed the client's own wrong name, producing two conflicting broadcasts a
+  second client cannot reconcile. Both now match the ignore-silently posture the
+  parser already takes for unrecognised commands.
+
+- **The `aether.cat` log category names TCI (#4761).** It was labelled
+  "CAT/rigctld" in Support & Diagnostics, which names the minority user:
+  `TciServer.cpp` is 53 of the category's 76 call sites, 69.7%. An operator
+  chasing a TCI problem scanned the checkbox grid, saw no mention of TCI, and
+  reasonably concluded there was no TCI logging to turn on. Relabelled to
+  "TCI / CAT / rigctld" — labels only, since the id is what filter rules and
+  saved preferences are built from.
+
+### Windows
+
+- **`vcomp140.dll` ships app-local (#4782).** `AetherSDR.exe` genuinely imports
+  the MSVC OpenMP runtime — ggml is compiled with `/openmp` and the prebuilt
+  whisper libs are linked straight in — and our packaging never shipped it.
+  `stage-msvc-runtime.ps1` searched only `Microsoft.VC*.CRT`, which does not
+  hold `vcomp140.dll`; `windeployqt` was invoked without `--compiler-runtime`.
+  So we shipped everything else app-local and left this one file as the single
+  machine-wide dependency in the entire payload — any other installer that
+  repaired, downgraded or removed the VC++ redistributable took AetherSDR down,
+  and reinstalling AetherSDR could not fix it. All three artifacts were
+  affected. The OpenMP redist is now staged as a *sibling* of the chosen CRT
+  directory, so the two cannot diverge into a version mismatch, and a missing
+  one is a hard failure. **New `check-deploy-dependencies.ps1` CI gate** walks
+  every PE in the payload and fails when an MSVC runtime import is not
+  app-local — checked *before* the System32 probe, because build machines have
+  the redistributable installed, which is exactly how this shipped unnoticed
+  through every release since ASR landed. The gate runs before any artifact is
+  built.
+
+### Linux
+
+- **The Connect to Radio dialog reopens reliably under xcb (#4803).** Once
+  connected the dialog auto-hides, and reopening it called `show()`
+  successfully — `isVisible()` reported `true` — yet nothing appeared, not even
+  in the window switcher, making it impossible to disconnect. Confirmed with
+  `xprop`: the second show left the window wedged in the ICCCM `Withdrawn`
+  `WM_STATE` under Mutter/XWayland, genuinely unmapped. The native window is now
+  destroyed and recreated before every re-show, and `raise()`/`activateWindow()`
+  deferred to an event-loop turn since both call sites reach this from inside a
+  live X11 grab context. Matters because `QT_QPA_PLATFORM=xcb` is the practical
+  workaround for #4725's native-Wayland render stalls, which look like a Qt
+  platform-plugin defect rather than anything AetherSDR controls.
+
+### GUI & workflow
+
+- **Thumbnail view for the Choose Background Image dialog (#4726).** The dialog
+  must use Qt's non-native file picker for theming, which shows only generic
+  per-filetype icons. Two Explorer-style view buttons switch between small icons
+  and real decoded thumbnails, with a preview pane that grows with the dialog
+  instead of staying pinned. Decoding happens off the GUI thread with the same
+  decompression-bomb guard used for callsign photos, cached in a bounded
+  mtime-keyed cache, and the filter widens to every format `QImageReader` can
+  decode.
+
+- **The analog power gauge picks the right scale at connect (#4845).** On an
+  AU-520 the meter came up on the 120 W scale every time and only corrected
+  after a band change. `updatePowerScale()` was wired to signals but never
+  called once at connect, and the AU- branch that bumps the scale hangs off a
+  `maxPowerLevelChanged` that a 100 W exciter limit does not move against the
+  100 W default. It now also runs on `infoChanged`, with each gauge
+  early-returning when nothing actually changed so a status burst during a
+  slider drag costs nothing.
+
+- **The FFTW wisdom popup stopped strobing (#4729).** A deliberate infinite
+  opacity animation past 90% caused the reported flashing and, supplying no
+  elapsed time or status, left a slow process still looking frozen. Replaced
+  with a low-key activity indicator, a monotonic elapsed timer, and a
+  "still working" explanation after 10 quiet seconds. One tracked dialog is
+  reused, so repeated NR2 requests cannot spawn a second worker, and the window
+  stays visible on macOS when AetherSDR is not frontmost.
+
+- **The PGXL fan-mode dropdown fits its widest item (#4731, #4752).** Its
+  hand-rolled stylesheet set a 10px font on the combo but not on its popup —
+  a separate top-level window that does not inherit it — and nothing let the
+  combo's width grow to its widest item, so on a large enough default font
+  "Fan: Contest" was elided. Root cause and fix worked out by the triage bot on
+  the issue.
+
+- **Every model-lifetime callback is installed once (#4599, #4626).**
+  `RadioModel::setupBackend()` is rerunnable, but two of its self-connections
+  were owned by the `RadioModel` rather than the replaceable backend, so every
+  Flex → HL2 → Sim family switch accumulated another capability publication and
+  TX-power push. Both are now installed once in the constructor, with the sweep
+  extended to the three `TransmitModel` senders that have the same ownership
+  shape.
+
+### Tests & tooling
+
+- **`hl2_tx_loopback_test` runs green, and the exclusion is retired (#4800).**
+  It had been carried in `HERMES.md` and the multi-DDC test matrix as
+  "pre-existing, fails non-deterministically, exclude it". The "pre-existing"
+  call was right and everything else was a misdiagnosis — **it was never a
+  transmit fault**. The test asserted the tone appears *below* centre, which was
+  correct when written, but #4471 added the receive-side conjugation and from
+  that commit the same tone correctly reads *above* centre. The
+  "non-determinism" was a hardcoded `192.168.1.12`, which on this LAN belongs to
+  a different machine — the test was silently driving *that* box's simulator.
+  Fixed properly rather than by flipping a sign: the test now takes an
+  independent bearing on the receive end using hpsdrsim's own scene tones before
+  believing anything the transmitter puts in the spectrum, because the loop
+  conjugates twice and a handedness error at both ends cancels exactly. It also
+  **refuses to key anything that is not the simulator** — it defaults to
+  loopback and fingerprints the responder's synthetic MAC, skipping rather than
+  failing when it finds a real radio.
+
+- **An undefined downcast that aborted the sanitizer job (#4740, #4741).**
+  `cellActivatedIsUnconnected()` borrowed a protected `QObject::receivers()` by
+  declaring a local `Probe` subclass and `static_cast`-ing the real
+  `QTableWidget` to it. No `Probe` is ever constructed, so UBSan's vptr check
+  rejected it — and because the workflow builds with
+  `-fno-sanitize-recover=undefined`, the finding **aborted the process before a
+  single result line was printed**. Access control was the only constraint that
+  needed satisfying, not the object model: a pointer-to-member formed inside the
+  derived class does the job with no fake type and no cast of the instance.
+
+### Documentation
+
+- **`HidEncoderManager::reportSize()` documents that it bounds a write
+  (#4820).** Its return value is passed straight to `hid_read()` as the length
+  bound on a write into a fixed 64-byte buffer, so overriding this virtual is
+  quietly a memory-safety decision — and the declaration said nothing about it.
+  Nothing to fix today (all six parsers return ≤ 64), but `TMate2Parser` returns
+  *exactly* 64, so the headroom is zero rather than comfortable. Comment only.
+
+- `HERMES.md` gains §22 on WDSP channel-open cost and FFTW wisdom, an AM/SAM DC
+  pedestal subsection in §5, and a corrected §14.6 on what the transmit loopback
+  structurally could not have caught. `docs/CERTIFICATION.md` gains lessons
+  1.19–1.31 from the Icom bring-up — the first radio brought up with `radiocert`
+  in hand rather than after the fact. New design notes for the SPE amplifier,
+  the Icom CI-V backend, and HL2 frequency calibration.
+
+### Contributors
+
+Big thanks to **@rfoust** (13 PRs — the MNR estimator rebuild, DFNR stereo,
+the AetherVoice EQ layer cache, the waterfall interpolation and Blanker frame
+fixes, QRhi failure surfacing, the software-OpenGL and Linux/OpenGL 3D FFT
+fixes, the TCI RX buffer lifetime, the ASR speaker-label freeze, the FFTW wisdom
+popup, off-screen slice centring, and the model-lifetime callback sweep),
+**@jensenpat** (9 PRs — HL2 manual notch filters and frequency calibration, the
+first-connect freeze and wisdom persistence, AM/SAM DC blocking, the CWX/DVK/FDX
+capability gates, the transmit-loopback test rehabilitation, the Icom CI-V
+backend and the IC-705 bring-up, and the 60m band-plan update),
+**@M7HNF-Ian** (8 PRs — the SpotHub Time sort, the PGXL fan-mode dropdown,
+KiwiSDR CSV import/export, the FreeDV Reporter message field, the power-gauge
+scale fix, the ASR tap channel-count fix, the overlay-menu stylesheet scoping,
+and the TCI input-validation fixes), **@nonoo** (6 PRs — the Ulanzi rotary
+action mapping and its two follow-ups, the EiBi and KiwiSDR DX spot overlays,
+and the header speaker-mute glyph), **@nigelfenton** (5 PRs — IC-9700 support
+including the null-panadapter crash, the AetherModem seam-backend TX fix, the
+`aether.cat` relabel, the sanitizer downcast fix, and the HID report-size note),
+**@skerker** (4 PRs — the ASR GPU failure latch and CPU fallback, manual MIDI
+binding entry, and both CW keyer fixes), **@K5PTB** (3 PRs — the RPi5 shader
+dialect fix, headless-Wayland platform selection, and ASR segment overlap),
+**@ten9876** (3 PRs — the audio-mute model mirror, the 3D stacked-trace wedge
+closure, and the Windows OpenMP runtime packaging with its CI gate),
+**@opalito** (SPE Expert amplifier support), **@nreed97** (N1MM/DXLog spot
+ingestion), **@motoham88** (the K4-style mini-pan), **@wa2n-code** (the
+background-image thumbnail dialog), **@g4ivv** (the xcb Connect dialog reopen),
+and **@Krishnanand-G** (the title-bar headphone mute reconcile). Thanks also to
+**@csylvain** (KB3CS) for catching that the 60m triage was arguing from
+superseded law, **@rsaue** for the Mode B root-cause analysis, and
+**@williamscody** for the keyer timing logs that made both halves measurable.
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
+
 ## [v26.8.1] — 2026-08-02
 
 ### Hermes-Lite 2 grows up · settings move to SQLite · capability-gated UI · Qt 6.8 across every build · TCI PTT routing fixed
