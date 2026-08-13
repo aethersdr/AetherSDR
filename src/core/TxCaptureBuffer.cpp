@@ -22,6 +22,12 @@ qint64 alignDown(qint64 bytes, qint64 frameBytes)
     return bytes - (bytes % frameBytes);
 }
 
+qint64 alignUp(qint64 bytes, qint64 frameBytes)
+{
+    const qint64 remainder = bytes % frameBytes;
+    return remainder == 0 ? bytes : bytes + (frameBytes - remainder);
+}
+
 } // namespace
 
 BoundedRead readLatestBoundedInt16(QIODevice* device, int inputChannels)
@@ -69,8 +75,12 @@ qint64 trimToLatestBoundedInt16(QByteArray& block, int inputChannels)
         return 0;
     }
 
-    const qint64 discarded = block.size() - alignedLimit;
-    block = block.last(alignedLimit);
+    // Cut a whole number of frames off the front. Rounding the discard UP keeps
+    // the retained tail starting on a frame boundary even when the push buffer
+    // itself ended mid-frame — trimming a bare byte count there would shift the
+    // block by a sample and swap L/R for the rest of it.
+    const qint64 discarded = alignUp(block.size() - alignedLimit, frameBytes);
+    block = block.last(block.size() - discarded);
     return discarded;
 }
 

@@ -439,6 +439,13 @@ void testPushModeBlockIsTrimmedToLatest()
     report("a push-mode block that already fits is left alone",
            TxCaptureBuffer::trimToLatestBoundedInt16(small, 2) == 0
                && small.size() == 4096);
+
+    // A push buffer that ended mid-frame must not shift the retained tail by a
+    // sample, which would swap L/R for the rest of the block.
+    QByteArray ragged(TxCaptureBuffer::kMaxReadBytes + 4098, 'x');
+    const qint64 raggedDiscard = TxCaptureBuffer::trimToLatestBoundedInt16(ragged, 2);
+    report("a mid-frame push block is cut on a frame boundary",
+           raggedDiscard % 4 == 0 && ragged.size() <= TxCaptureBuffer::kMaxReadBytes);
 }
 
 void testLargeUpsampledDaxBlockIsAccepted()
