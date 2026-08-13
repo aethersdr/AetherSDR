@@ -284,6 +284,13 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             m_workspaceCanvas->setParent(this);
             m_workspaceCanvas->hide();
             m_panStack->show();
+            if (m_appletPanel) {
+                m_appletPanel->setVisible(
+                    AppSettings::instance()
+                        .value(QStringLiteral("AppletPanelVisible"),
+                               QStringLiteral("True"))
+                        .toString() == QLatin1String("True"));
+            }
             if (m_workspaceCanvasAction) {
                 QSignalBlocker blocker(m_workspaceCanvasAction);
                 m_workspaceCanvasAction->setChecked(false);
@@ -295,6 +302,20 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
 
         if (bandStackWasVisible) {
             m_workspaceController->setBandStackVisible(true);
+        }
+
+        // The panel hides with its controls (8600 field request): the
+        // widget palette owns adding in canvas mode, and full recall owns
+        // open/closed — a visible panel column is dead space.  VISUAL only:
+        // the persisted AppletPanelVisible preference is untouched, so
+        // classic mode returns exactly as the operator had it.  A floating
+        // panel docks first via the canonical path (#2584's black-box
+        // lesson).
+        if (m_appletPanelFloatWindow) {
+            toggleAppletPanelFloating(false);
+        }
+        if (m_appletPanel) {
+            m_appletPanel->hide();
         }
 
         for (int i = 0; i < m_splitter->count(); ++i) {
@@ -329,6 +350,16 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
     m_workspaceCanvas->setParent(this);
     m_workspaceCanvas->hide();
     m_panStack->show();
+    // Restore the panel per the operator's persisted preference — not
+    // unconditionally: someone who kept it hidden before the canvas keeps
+    // it hidden after.
+    if (m_appletPanel) {
+        m_appletPanel->setVisible(
+            AppSettings::instance()
+                .value(QStringLiteral("AppletPanelVisible"),
+                       QStringLiteral("True"))
+                .toString() == QLatin1String("True"));
+    }
     if (m_panStack->count() > 1) {
         m_panStack->rearrangeLayout(
             AppSettings::instance()
