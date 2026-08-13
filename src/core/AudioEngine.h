@@ -887,6 +887,7 @@ private:
                                 bool forceRadioDaxRoute);
     void observeTxCaptureState(QAudio::State state);
     void recordTxCaptureLocalTxAttempt();
+    void noteTxCaptureBacklogDiscard(qint64 discardedBytes);
     void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
     void logTxCaptureHealthSummary(const QString& reason, bool anomaly);
 

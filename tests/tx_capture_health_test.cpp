@@ -104,6 +104,19 @@ int main()
                == Event::BufferSaturatedDuringTci,
            "Active-to-Idle with unread bytes remains a saturation fallback");
 
+    TxCaptureHealthTracker backlog;
+    backlog.reset(CaptureState::Active, 0);
+    expect(backlog.recordBacklogDiscard(0) == Event::None,
+           "a zero-byte discard is not an event");
+    expect(backlog.recordBacklogDiscard(1048576) == Event::CaptureBacklogDiscarded,
+           "the first stale-backlog discard reports an event");
+    expect(backlog.recordBacklogDiscard(524288) == Event::None,
+           "repeat discards stay rate-limited so a lagging backend cannot spam");
+    const TxCaptureHealthTracker::Snapshot backlogSnapshot = backlog.snapshot(100);
+    expect(backlogSnapshot.captureBacklogDiscards == 2
+               && backlogSnapshot.captureBacklogDiscardedBytes == 1572864,
+           "every discard is still counted for the support summary");
+
     std::printf("\n%d of %d TX capture health tests failed.\n", g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

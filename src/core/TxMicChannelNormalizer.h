@@ -6,6 +6,14 @@
 
 namespace AetherSDR::TxMicChannelNormalizer {
 
+// The largest realtime block this normalizer will accept. Sized to match the
+// pull-mode capture chunk so a bounded read can never be rejected, but owned
+// HERE because the radio-native DAX route reaches this validator without going
+// through TxCaptureBuffer at all — raising the mic read chunk must not silently
+// loosen DSP validation on an unrelated route. TxMicChannelNormalizer.cpp
+// static_asserts the relationship in both directions.
+inline constexpr qsizetype kMaxRealtimeBlockBytes = 256 * 1024;
+
 enum class ChannelMode : uint8_t {
     Auto = 0,
     Left,
@@ -36,6 +44,11 @@ struct Diagnostics {
     int inputSampleRate{0};
     int frames{0};
     qsizetype inputBytes{0};
+    // Trailing bytes dropped because the block did not end on a frame boundary.
+    // The whole frames ahead of them are still processed.
+    qsizetype partialFrameBytes{0};
+    // Set only when the entire block was refused as oversized — a real fault
+    // worth logging, unlike an ordinary short or empty block.
     bool inputRejected{false};
 };
 

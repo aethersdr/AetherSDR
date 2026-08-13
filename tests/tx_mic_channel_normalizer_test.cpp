@@ -315,11 +315,52 @@ void testCaptureReadIsBounded()
     QBuffer device(&backlog);
     device.open(QIODevice::ReadOnly);
 
-    const QByteArray block = TxCaptureBuffer::readBoundedInt16(&device, 2);
+    const TxCaptureBuffer::BoundedRead read =
+        TxCaptureBuffer::readLatestBoundedInt16(&device, 2);
     report("pull-mode capture reads at most one bounded block",
-           block.size() == TxCaptureBuffer::kMaxReadBytes);
-    report("bounded capture leaves excess backend residue for later callbacks",
-           device.bytesAvailable() == 4096);
+           read.block.size() == TxCaptureBuffer::kMaxReadBytes);
+    report("a within-catch-up residue is left for later callbacks, not dropped",
+           device.bytesAvailable() == 4096 && read.discardedBytes == 0);
+}
+
+void testCaptureReadDropsToLatestPastCatchUpThreshold()
+{
+    // The freshest block must be the one transmitted: mark the backlog so the
+    // returned bytes can only have come from its tail.
+    const qint64 backlogBytes = TxCaptureBuffer::kCatchUpThresholdBytes + 64 * 1024;
+    QByteArray backlog(backlogBytes, 's');           // stale head
+    backlog.replace(backlogBytes - TxCaptureBuffer::kMaxReadBytes,
+                    TxCaptureBuffer::kMaxReadBytes,
+                    QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));  // fresh tail
+    QBuffer device(&backlog);
+    device.open(QIODevice::ReadOnly);
+
+    const TxCaptureBuffer::BoundedRead read =
+        TxCaptureBuffer::readLatestBoundedInt16(&device, 2);
+
+    report("catch-up returns one bounded block",
+           read.block.size() == TxCaptureBuffer::kMaxReadBytes);
+    report("catch-up transmits the newest audio, not the oldest",
+           read.block == QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));
+    report("catch-up reports the stale bytes it skipped",
+           read.discardedBytes == backlogBytes - TxCaptureBuffer::kMaxReadBytes);
+    report("catch-up leaves the device drained",
+           device.bytesAvailable() == 0);
+}
+
+void testCaptureReadAlignsToRealChannelCount()
+{
+    // 6-channel Int16 frames are 12 bytes, which 256 KiB does not divide: the
+    // read must round down so later reads stay on frame boundaries.
+    QByteArray backlog(TxCaptureBuffer::kMaxReadBytes + 4096, 'x');
+    QBuffer device(&backlog);
+    device.open(QIODevice::ReadOnly);
+
+    const TxCaptureBuffer::BoundedRead read =
+        TxCaptureBuffer::readLatestBoundedInt16(&device, 6);
+    report("bounded read is frame-aligned for the negotiated channel count",
+           read.block.size() % 12 == 0 && read.block.size() <= TxCaptureBuffer::kMaxReadBytes
+               && read.block.size() > TxCaptureBuffer::kMaxReadBytes - 12);
 }
 
 void testDumpSizedMicBlockIsRejectedBeforeDereference()
@@ -343,8 +384,11 @@ void testDumpSizedMicBlockIsRejectedBeforeDereference()
            diag.inputBytes == dumpInputBytes && diag.frames == 0);
 }
 
-void testMisalignedMicBlockIsRejected()
+void testMisalignedMicBlockIsTruncatedToFrameBoundary()
 {
+    // A trailing partial frame costs one sample, not the whole block: dropping
+    // the block would be an audible dropout, and a device that stays misaligned
+    // would drop every block thereafter.
     const QByteArray malformed(6, '\0'); // stereo Int16 requires 4-byte frames
     Diagnostics diag;
     const QByteArray out = canonicalizeInt16ToMonoStereo(
@@ -355,8 +399,46 @@ void testMisalignedMicBlockIsRejected()
         nullptr,
         &diag);
 
-    report("partial stereo Int16 frame is rejected at the boundary",
-           out.isEmpty() && diag.inputRejected && diag.inputBytes == malformed.size());
+    report("partial stereo Int16 frame is truncated, whole frames survive",
+           out.size() == 4 && diag.frames == 1 && !diag.inputRejected);
+    report("truncation is recorded in the diagnostics",
+           diag.partialFrameBytes == 2 && diag.inputBytes == malformed.size());
+}
+
+void testShortBlockBelowOneFrameIsDroppedQuietly()
+{
+    const QByteArray tooShort(2, '\0'); // less than one stereo Int16 frame
+    Diagnostics diag;
+    const QByteArray out = canonicalizeInt16ToMonoStereo(
+        tooShort,
+        2,
+        48000,
+        ChannelMode::Auto,
+        nullptr,
+        &diag);
+
+    report("a sub-frame block yields nothing and is not flagged a fault",
+           out.isEmpty() && diag.frames == 0 && !diag.inputRejected);
+}
+
+void testOversizedDaxBlockIsRejected()
+{
+    // The DAX float32 route shares this validator without going through
+    // TxCaptureBuffer, so its ceiling is the normalizer's own constant.
+    char sentinel = 0;
+    const QByteArray oversized = QByteArray::fromRawData(
+        &sentinel, AetherSDR::TxMicChannelNormalizer::kMaxRealtimeBlockBytes + 8);
+    Diagnostics diag;
+    const QByteArray out = collapseFloat32ToInt16MonoBigEndian(
+        oversized,
+        2,
+        24000,
+        ChannelMode::Average,
+        nullptr,
+        &diag);
+
+    report("oversized DAX float32 block is rejected before dereference",
+           out.isEmpty() && diag.inputRejected && diag.frames == 0);
 }
 
 int main()
@@ -373,8 +455,12 @@ int main()
     testOpusFrameSizingAfterNormalization();
     testDaxRadioNativeCollapseKeepsOneSidedLevel();
     testCaptureReadIsBounded();
+    testCaptureReadDropsToLatestPastCatchUpThreshold();
+    testCaptureReadAlignsToRealChannelCount();
     testDumpSizedMicBlockIsRejectedBeforeDereference();
-    testMisalignedMicBlockIsRejected();
+    testMisalignedMicBlockIsTruncatedToFrameBoundary();
+    testShortBlockBelowOneFrameIsDroppedQuietly();
+    testOversizedDaxBlockIsRejected();
 
     std::printf("\n%s\n", g_failed == 0 ? "All tests passed." : "Some tests failed.");
     return g_failed == 0 ? 0 : 1;

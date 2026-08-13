@@ -2736,6 +2736,9 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     tx["idle_during_tci_transitions"] = static_cast<double>(txHealth.idleDuringTciTransitions);
     tx["post_tci_local_tx_while_saturated"] =
         static_cast<double>(txHealth.postTciLocalTxWhileSaturated);
+    tx["capture_backlog_discards"] = static_cast<double>(txHealth.captureBacklogDiscards);
+    tx["capture_backlog_discarded_bytes"] =
+        static_cast<double>(txHealth.captureBacklogDiscardedBytes);
     tx["last_mic_read_age_ms"] = txHealth.lastMicReadAgeMs >= 0
         ? QJsonValue(static_cast<double>(txHealth.lastMicReadAgeMs))
         : QJsonValue();
@@ -7472,6 +7475,21 @@ void AudioEngine::recordTxCaptureLocalTxAttempt()
     }
 }
 
+void AudioEngine::noteTxCaptureBacklogDiscard(qint64 discardedBytes)
+{
+    const TxCaptureHealthTracker::Event event =
+        m_txCaptureHealth.recordBacklogDiscard(discardedBytes);
+    if (event == TxCaptureHealthTracker::Event::None) {
+        return;
+    }
+    // Dropping stale capture is deliberate, but it means the backend outran the
+    // consumer — worth one warning per lifecycle even without the support
+    // debug toggle, since it is the symptom the soak test is looking for.
+    qCWarning(lcAudio) << "AudioEngine: discarded stale TX capture backlog"
+                       << "bytes:" << discardedBytes;
+    logTxCaptureHealthEvent(event);
+}
+
 void AudioEngine::logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event)
 {
     switch (event) {
@@ -7480,6 +7498,9 @@ void AudioEngine::logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event)
         break;
     case TxCaptureHealthTracker::Event::LocalTxWhileSaturated:
         logTxCaptureHealthSummary(QStringLiteral("local TX with saturated post-TCI capture"), true);
+        break;
+    case TxCaptureHealthTracker::Event::CaptureBacklogDiscarded:
+        logTxCaptureHealthSummary(QStringLiteral("stale capture backlog discarded"), true);
         break;
     case TxCaptureHealthTracker::Event::None:
         break;
@@ -8035,18 +8056,34 @@ void AudioEngine::onTxAudioReady()
         if (event != TxCaptureHealthTracker::Event::None) {
             logTxCaptureHealthEvent(event);
         }
-#ifndef Q_OS_MAC
-        // Pull-mode capture must keep consuming while TCI owns TX audio. An
-        // unread Qt/PipeWire ring stops producing readyRead edges (#4230), and
-        // Qt/WASAPI appends every unread block to an unbounded residue. The
-        // latter crossed 2 GiB after multi-hour TCI sessions and crashed the
-        // Int16 normalizer when local mic processing resumed. Discard one
-        // bounded block per callback so neither backend can accumulate.
+        // Capture must keep being consumed while TCI owns TX audio, on every
+        // platform — all three backends accumulate, just in different memory.
+#ifdef Q_OS_MAC
+        // Push mode: QAudioSource writes into m_micBuffer, which only the
+        // unsuppressed path below clears. Left alone it grows for the whole TCI
+        // session (~192 KB/s at 48 kHz stereo Int16) — the same multi-GB
+        // residue WASAPI builds, except it is our own resident memory, which
+        // the Store sandbox is least forgiving about.
+        if (m_micBuffer && m_micBuffer->isOpen() && m_micBuffer->pos() > 0) {
+            m_micBuffer->buffer().clear();
+            m_micBuffer->seek(0);
+            m_txCaptureHealth.recordMicRead(txCaptureNowMs());
+        }
+#else
+        // Pull mode: an unread Qt/PipeWire ring stops producing readyRead edges
+        // (#4230), and Qt/WASAPI appends every unread block to an unbounded
+        // residue. The latter crossed 2 GiB after multi-hour TCI sessions and
+        // crashed the Int16 normalizer when local mic processing resumed.
+        // Discard one bounded block per callback so neither can accumulate.
         if (m_micDevice) {
-            const QByteArray discarded = TxCaptureBuffer::readBoundedInt16(
-                m_micDevice.data(), m_txInputChannels);
-            if (!discarded.isEmpty()) {
+            const TxCaptureBuffer::BoundedRead drained =
+                TxCaptureBuffer::readLatestBoundedInt16(m_micDevice.data(),
+                                                        m_txInputChannels);
+            if (!drained.block.isEmpty() || drained.discardedBytes > 0) {
                 m_txCaptureHealth.recordMicRead(txCaptureNowMs());
+            }
+            if (drained.discardedBytes > 0) {
+                noteTxCaptureBacklogDiscard(drained.discardedBytes);
             }
         }
 #endif
@@ -8071,8 +8108,15 @@ void AudioEngine::onTxAudioReady()
 #else
     if (!m_micDevice
         || (!m_hostModulation && m_txStreamId == 0 && m_remoteTxStreamId == 0)) return;
-    QByteArray data = TxCaptureBuffer::readBoundedInt16(
-        m_micDevice.data(), m_txInputChannels);
+    // Drop-to-latest: if a residue survived the drain above, transmit the
+    // freshest block rather than walking a backlog of hours-old audio onto the
+    // air 1.36 s at a time.
+    const TxCaptureBuffer::BoundedRead micRead =
+        TxCaptureBuffer::readLatestBoundedInt16(m_micDevice.data(), m_txInputChannels);
+    if (micRead.discardedBytes > 0) {
+        noteTxCaptureBacklogDiscard(micRead.discardedBytes);
+    }
+    QByteArray data = micRead.block;
     if (data.isEmpty()) return;
     m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
 #endif
@@ -8092,7 +8136,7 @@ void AudioEngine::onTxAudioReady()
         &channelDiagnostics);
     if (data.isEmpty()) {
         if (channelDiagnostics.inputRejected) {
-            qCWarning(lcAudio) << "AudioEngine: rejected invalid TX mic block"
+            qCWarning(lcAudio) << "AudioEngine: rejected oversized TX mic block"
                                << "bytes:" << channelDiagnostics.inputBytes
                                << "rate:" << channelDiagnostics.inputSampleRate
                                << "channels:" << channelDiagnostics.inputChannels;
@@ -8793,7 +8837,19 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         m_daxRadioTxChannelMode,
         &m_daxRadioTxChannelState,
         &daxDiagnostics);
-    if (mono.isEmpty()) return;
+    if (mono.isEmpty()) {
+        // Before the block cap an empty return here could only mean "fewer than
+        // one whole frame", which is unremarkable. It can now also mean the
+        // block was refused as oversized, which is a real fault that would
+        // otherwise drop TX audio with nothing in the log at any level.
+        if (daxDiagnostics.inputRejected) {
+            qCWarning(lcAudio) << "AudioEngine: rejected oversized DAX TX block"
+                               << "bytes:" << daxDiagnostics.inputBytes
+                               << "rate:" << daxDiagnostics.inputSampleRate
+                               << "channels:" << daxDiagnostics.inputChannels;
+        }
+        return;
+    }
     logTxInputChannelDiagnostics(daxDiagnostics, "DAX radio");
 
     m_txFloatAccumulator.append(mono);
