@@ -429,17 +429,41 @@ void WorkspaceCanvas::resizeEvent(QResizeEvent* ev)
 bool WorkspaceCanvas::eventFilter(QObject* watched, QEvent* ev)
 {
     if (m_editMode && ev->type() == QEvent::MouseButtonPress) {
-        for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd(); ++it) {
-            if (it.value().data() == watched) {
+        // Walk UP from wherever the press landed: an item's children
+        // consume presses before the item widget sees them — the pan's
+        // title strip eats every left press for its drag machinery, so
+        // matching `watched` directly meant the selection frame only
+        // appeared on the clicks nothing swallowed (in practice, right
+        // clicks — the 8600 field report, twice).  The app-wide filter
+        // installed for edit mode is what routes descendant presses here
+        // at all; this walk is what makes them count.
+        QWidget* w = qobject_cast<QWidget*>(watched);
+        bool matched = false;
+        while (w && w != this && !matched) {
+            for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd();
+                 ++it) {
+                if (it.value().data() != w) {
+                    continue;
+                }
                 // bringItemToFront() is false when the item was already
-                // frontmost, and then nothing is emitted.  Without that, every
-                // click anywhere on the canvas would look like an edit and
-                // cost a whole-document write after the debounce — the same
-                // rule resizeEvent() follows (PR #4900 review, M2).
-                bringItemToFront(it.key());
+                // frontmost, and then nothing is emitted.  Without that,
+                // every click anywhere on the canvas would look like an
+                // edit and cost a whole-document write after the debounce
+                // — the same rule resizeEvent() follows (PR #4900 review,
+                // M2).  Pans are exempt from the raise entirely: they are
+                // the surface the station sits on, and click-raising one
+                // over the applets would undo the phase-4 stacking rule
+                // until the next replay repaired it.
+                const CanvasItem* item = m_layout.item(it.key());
+                if (!item
+                    || item->contentType != QStringLiteral("panadapter")) {
+                    bringItemToFront(it.key());
+                }
                 selectItem(it.key());
+                matched = true;
                 break;
             }
+            w = w->parentWidget();
         }
     }
     // Never consumed: raising is incidental to whatever the press was for.
@@ -505,7 +529,14 @@ void WorkspaceCanvas::setEditMode(bool on)
         return;
     }
     m_editMode = on;
-    if (!on) {
+    if (on) {
+        // Presses land on the deepest willing DESCENDANT of an item, not
+        // the item widget itself — only an app-wide filter sees them all.
+        // Install is idempotent (Qt ignores a duplicate), active only in
+        // the one posture where any click on an item must select it.
+        qApp->installEventFilter(this);
+    } else {
+        qApp->removeEventFilter(this);
         // Leaving edit mid-gesture abandons the gesture (rect restored) and
         // the selection with it — a locked canvas shows no frame.
         cancelGesture();

@@ -344,9 +344,19 @@ int main(int argc, char** argv)
         // content consumes presses before the item widget sees them, so
         // the resize frame only appeared on right-clicks — the one press
         // nothing swallowed).  The app-wide filter walks up from wherever
-        // the press landed; left and right buttons alike.
+        // the press landed; left and right buttons alike.  The child
+        // ACCEPTS its presses, like the pan title strip does — a plain
+        // QWidget ignores them and Qt re-delivers to the parent, which
+        // let the pre-fix direct-match pass this test while the field
+        // stayed broken (the second 8600 report).
+        class PressEater : public QWidget {
+        public:
+            using QWidget::QWidget;
+        protected:
+            void mousePressEvent(QMouseEvent* e) override { e->accept(); }
+        };
         {
-            auto* child = new QWidget(over);
+            auto* child = new PressEater(over);
             child->setGeometry(2, 2, 20, 20);
             child->show();
             canvas.clearSelection();
@@ -378,6 +388,30 @@ int main(int argc, char** argv)
             report("...but never while locked",
                    canvas.selectedItem().isEmpty());
             canvas.setEditMode(true);
+        }
+
+        // A pan item selects on descendant press but is NOT raised: pans
+        // are the surface the station sits on (phase-4 stacking rule),
+        // and click-raising one over the applets would undo it until the
+        // next replay.
+        {
+            auto* pan = new QWidget;
+            canvas.addItem("pan:9", pan, NormRect{0.2, 0.2, 0.5, 0.5},
+                           QStringLiteral("panadapter"));
+            canvas.sendItemToBack("pan:9");
+            auto* strip = new PressEater(pan);
+            strip->setGeometry(2, 2, 30, 10);
+            strip->show();
+            canvas.clearSelection();
+            const int zBefore = canvas.layout().zOf("pan:9");
+            QMouseEvent ev(QEvent::MouseButtonPress, QPointF(3, 3),
+                           strip->mapToGlobal(QPointF(3, 3)),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(strip, &ev);
+            report("a pan's descendant press selects it",
+                   canvas.selectedItem() == QStringLiteral("pan:9"));
+            report("...without raising it over the applets",
+                   canvas.layout().zOf("pan:9") == zBefore);
         }
     }
 
