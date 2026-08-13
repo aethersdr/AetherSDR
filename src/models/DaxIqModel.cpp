@@ -1,5 +1,6 @@
 #include "DaxIqModel.h"
 #include "core/LogManager.h"
+#include "core/ShutdownTrace.h"
 
 #include <QDebug>
 #include <QMetaMethod>
@@ -102,6 +103,7 @@ DaxIqModel::DaxIqModel(QObject* parent)
 
 DaxIqModel::~DaxIqModel()
 {
+    ShutdownTrace trace("dax_iq.thread.join");
     m_workerThread.quit();
     m_workerThread.wait();
 }

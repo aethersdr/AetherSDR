@@ -3,6 +3,7 @@
 #include "asr/SileroVad.h"
 #include "asr/SpeakerEmbedder.h"
 #include "core/Resampler.h"
+#include "core/ShutdownTrace.h"
 
 #include <QLoggingCategory>
 #include <QRegularExpression>
@@ -522,6 +523,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
 
 AsrEngine::~AsrEngine()
 {
+    ShutdownTrace trace("asr.thread.join");
     if (m_thread != nullptr) {
         if (m_worker != nullptr) {
             // Qt's own quit() already stops the worker from starting any FURTHER

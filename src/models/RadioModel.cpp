@@ -13,6 +13,7 @@
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
+#include "core/ShutdownTrace.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceModeRegistry.h"
 #include "core/DigitalVoiceWaveformProcess.h"
@@ -2134,6 +2135,7 @@ RadioModel::~RadioModel()
     // their worker threads: ~FlexBackend runs the exact #502 teardown ordering
     // (BlockingQueued disconnect/stop → deleteLater → thread quit/wait) that
     // used to live here. (aetherd 2.2b)
+    ShutdownTrace trace("radio.backend.destroy");
     teardownBackend();
 }
 
