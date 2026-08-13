@@ -1246,6 +1246,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("DEMO"),  QStringLiteral("Receive")},
         {QStringLiteral("TX"),    QStringLiteral("Transmit")},
         {QStringLiteral("PHNE"),  QStringLiteral("Transmit")},
+        {QStringLiteral("P/CW"),  QStringLiteral("Transmit")},
         {QStringLiteral("TXDSP"), QStringLiteral("Transmit")},
         {QStringLiteral("TUN"),   QStringLiteral("Transmit")},
         {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
