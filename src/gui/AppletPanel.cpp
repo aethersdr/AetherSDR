@@ -888,7 +888,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // marketing name for the whole TX-DSP composite.  Settings ID
     // stays TXDSP for persistence.
     {
-        auto entry = makeEntry("TXDSP", "VUDU", txDsp, false,
+        auto entry = makeEntry("TXDSP", "Channel Strip", txDsp, false,
                                m_drawer, m_drawerLayout, "VUDU");
         // Make the composite's drag MIME match its owning AppletEntry.id
         // so the drop handler's fast lookup hits directly.  Container
