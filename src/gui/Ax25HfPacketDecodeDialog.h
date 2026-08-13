@@ -144,6 +144,13 @@ public:
     QJsonObject automationCommand(const QString& verb, const QString& action,
                                   const QString& value);
 
+    // `modem txprobe [text]` — build what WOULD be transmitted and report each
+    // seam of the chain (frame encode, modulation, the queue gate, and the
+    // audio route to the radio) without keying. Separates "the modulator emits
+    // nothing coherent" from "no bytes ever reached the modulator", which every
+    // whole-chain measurement conflates.
+    QJsonObject automationTxProbe(const QString& text);
+
 protected:
     // Command history (Up/Down) on the terminal input line.
     bool eventFilter(QObject* watched, QEvent* event) override;

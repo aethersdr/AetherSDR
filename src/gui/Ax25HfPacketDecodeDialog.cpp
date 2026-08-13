@@ -1618,6 +1618,177 @@ QJsonObject linkSnapshot(const Ax25Connection& link)
 
 } // namespace
 
+QJsonObject Ax25HfPacketDecodeDialog::automationTxProbe(const QString& text)
+{
+    // Walk the transmit chain one stage at a time and report each transition,
+    // WITHOUT keying. The failure this exists for is a transmit that keys the
+    // radio, emits RF, and reports txBytes=0 with the receiver seeing no frame
+    // structure at all (rejectBadFcs=0 against thousands of HDLC candidates) —
+    // three symptoms that are equally consistent with "the modulator emits
+    // nothing coherent" and with "no bytes ever reached the modulator". A
+    // measurement of the whole chain cannot tell those apart; a measurement of
+    // each seam can.
+    //
+    // Deliberately does NOT transmit: it builds what WOULD be sent. That keeps
+    // it usable with no radio, off the air, and outside the TX gate — the
+    // diagnostic should not need the permission whose absence it may be
+    // diagnosing.
+    const QString payload = text.trimmed().isEmpty()
+        ? QStringLiteral("PROBE") : text.trimmed();
+
+    QJsonArray stages;
+    auto stage = [&stages](const char* name, bool ok, const QString& detail,
+                           QJsonObject extra = {}) {
+        extra.insert(QStringLiteral("stage"), QString::fromLatin1(name));
+        extra.insert(QStringLiteral("ok"), ok);
+        if (!detail.isEmpty())
+            extra.insert(QStringLiteral("detail"), detail);
+        stages.append(extra);
+    };
+
+    // ── stage 1: text → AX.25 frame → modulated PCM ────────────────────────
+    // ax25BuildTransmitAudio does both in one call, but its result carries the
+    // intermediate frame, so the two are still separately observable.
+    const Ax25TransmitResult tx =
+        ax25BuildTransmitAudio(m_shimConfig, payload, defaultTransmitSource());
+
+    stage("build", tx.ok, tx.ok ? QString() : tx.error);
+    if (!tx.ok) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), tx.error},
+                           {QStringLiteral("txprobe"), stages}};
+    }
+
+    stage("frame", tx.frameBytes > 0,
+          tx.frameBytes > 0 ? QString()
+                            : QStringLiteral("frame encoded to zero bytes"),
+          QJsonObject{
+              {QStringLiteral("source"), tx.frame.source},
+              {QStringLiteral("destination"), tx.frame.destination},
+              {QStringLiteral("path"), tx.frame.path.join(QStringLiteral(","))},
+              {QStringLiteral("control"), int(tx.frame.control)},
+              {QStringLiteral("pid"), int(tx.frame.pid)},
+              {QStringLiteral("payloadText"), tx.frame.payloadText},
+              {QStringLiteral("payloadHex"), tx.frame.payloadHex},
+              {QStringLiteral("frameBytes"), tx.frameBytes},
+          });
+
+    // ── stage 2: is the PCM real audio, or silence? ────────────────────────
+    // A modulator that returns the right NUMBER of samples but leaves them at
+    // zero looks identical to a working one from every counter AE keeps. Peak
+    // and RMS are what separate them.
+    const int floatCount =
+        int(tx.stereoFloat32Pcm.size() / qsizetype(sizeof(float)));
+    double peak = 0.0;
+    double sumSquares = 0.0;
+    if (floatCount > 0) {
+        const auto* s =
+            reinterpret_cast<const float*>(tx.stereoFloat32Pcm.constData());
+        for (int i = 0; i < floatCount; ++i) {
+            const double v = std::abs(double(s[i]));
+            if (std::isfinite(v)) {
+                peak = std::max(peak, v);
+                sumSquares += v * v;
+            }
+        }
+    }
+    const double rms = floatCount > 0 ? std::sqrt(sumSquares / floatCount) : 0.0;
+    const auto dbfs = [](double lin) {
+        return lin > 1e-12 ? 20.0 * std::log10(lin) : -140.0;
+    };
+    const int frames = tx.sampleRate > 0 ? floatCount / 2 : 0;
+    const double durationMs =
+        tx.sampleRate > 0 ? 1000.0 * frames / tx.sampleRate : 0.0;
+
+    // Silence is the interesting failure, so it is called out by name rather
+    // than left for the reader to infer from a -140 dBFS reading.
+    const bool audible = peak > 1e-6;
+    stage("modulate", audible,
+          audible ? QString()
+                  : QStringLiteral("PCM is digital silence — the modulator "
+                                   "produced samples but no signal"),
+          QJsonObject{
+              {QStringLiteral("sampleRate"), tx.sampleRate},
+              {QStringLiteral("baud"), tx.baud},
+              {QStringLiteral("markHz"), tx.markHz},
+              {QStringLiteral("spaceHz"), tx.spaceHz},
+              {QStringLiteral("preambleFlags"), tx.preambleFlags},
+              {QStringLiteral("postambleFlags"), tx.postambleFlags},
+              {QStringLiteral("pcmBytes"), int(tx.stereoFloat32Pcm.size())},
+              {QStringLiteral("frames"), frames},
+              {QStringLiteral("durationMs"), std::round(durationMs * 10.0) / 10.0},
+              {QStringLiteral("peakDbfs"), std::round(dbfs(peak) * 10.0) / 10.0},
+              {QStringLiteral("rmsDbfs"), std::round(dbfs(rms) * 10.0) / 10.0},
+          });
+
+    // ── stage 3: would the queue actually release it? ──────────────────────
+    // maybeStartNextKissTx() defers while the radio reports transmitting, and
+    // a radio stuck keyed therefore starves the queue for ever while every
+    // counter stays at zero. Report the gate's inputs rather than its verdict,
+    // so a reader can see WHICH condition is holding it.
+    const bool haveAudio = m_audio != nullptr;
+    const bool haveRadio = m_radio != nullptr;
+    const bool radioTransmitting =
+        haveRadio && (m_radio->isRadioTransmitting()
+                      || m_radio->transmitModel().isTransmitting());
+    const bool queueClear = !m_txActive && !m_txPendingStream;
+    const bool wouldSend =
+        haveAudio && haveRadio && queueClear && !radioTransmitting;
+    stage("txgate", wouldSend,
+          wouldSend ? QString()
+                    : QStringLiteral("a transmit started now would be deferred "
+                                     "or dropped, not sent"),
+          QJsonObject{
+              {QStringLiteral("audioEngine"), haveAudio},
+              {QStringLiteral("radioModel"), haveRadio},
+              {QStringLiteral("radioTransmitting"), radioTransmitting},
+              {QStringLiteral("txActive"), m_txActive},
+              {QStringLiteral("txPendingStream"), m_txPendingStream},
+              {QStringLiteral("queuedFrames"), int(m_kissTxQueue.size())},
+          });
+
+    // ── stage 4: the route the PCM would take to the radio ─────────────────
+    // A host-modulating or seam backend takes the direct path; anything else
+    // waits for a DAX TX stream, and waits for ever if the backend has none.
+    QJsonObject route{{QStringLiteral("bypassesDax"), false},
+                      {QStringLiteral("txStreamId"), 0}};
+    bool routeOk = false;
+    QString routeDetail = QStringLiteral("no radio connected");
+    if (haveRadio) {
+        const RadioCapabilities caps = m_radio->backendCapabilities();
+        const bool bypasses = txAudioBypassesDax();
+        const int streamId = haveAudio ? int(m_audio->txStreamId()) : 0;
+        route = QJsonObject{
+            {QStringLiteral("hostModulates"), caps.hostModulates},
+            {QStringLiteral("takesTxAudioOverSeam"), caps.takesTxAudioOverSeam},
+            {QStringLiteral("hasDaxStreams"), caps.hasDaxStreams},
+            {QStringLiteral("bypassesDax"), bypasses},
+            {QStringLiteral("txStreamId"), streamId},
+        };
+        routeOk = bypasses || streamId != 0;
+        if (!routeOk)
+            routeDetail = QStringLiteral(
+                "needs a DAX TX stream and none is open — TX would wait for a "
+                "stream that may never arrive");
+        else
+            routeDetail.clear();
+    }
+    stage("route", routeOk, routeDetail, route);
+
+    bool allOk = true;
+    for (const QJsonValue& v : std::as_const(stages)) {
+        if (!v.toObject().value(QStringLiteral("ok")).toBool())
+            allOk = false;
+    }
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("chainOk"), allOk},
+        {QStringLiteral("text"), payload},
+        {QStringLiteral("txprobe"), stages},
+    };
+}
+
 QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                                                         const QString& action,
                                                         const QString& value)
@@ -1677,9 +1848,11 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                     "TXDELAY flags out of range 0-127 (got %1)").arg(flags));
             m_terminalTxPreamble->setValue(flags);
             applyTerminalConfigFromUi(true);
+        } else if (action == QLatin1String("txprobe")) {
+            return automationTxProbe(value);
         } else if (!action.isEmpty() && action != QLatin1String("status")) {
             return automationError(QStringLiteral(
-                "unknown modem action '%1' (status|profile|on|off|preamble)").arg(action));
+                "unknown modem action '%1' (status|profile|on|off|preamble|txprobe)").arg(action));
         }
 
         QJsonObject modem{
