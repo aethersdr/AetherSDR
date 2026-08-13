@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QStyle>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -34,17 +35,25 @@ QLabel* makeValueLabel(QWidget* parent)
     // (PGXL, same power range) already uses for the same reason.
     lbl->setFixedWidth(72);
     lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl,
+        "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }");
     return lbl;
 }
 
-QString activeBtnStyle(const QString& bg, const QString& border, const QString& fg)
+// Builds the QSS for one named [vkState="..."] variant. Combined with
+// neutralBtnStyle() into a single template applied ONCE per button (see
+// makeStateBtnStyle() below) -- state changes then just toggle the
+// vkState dynamic property and repolish (setBtnState()), instead of
+// calling applyStyleSheet() again on every transition. Same pattern as
+// AppletPanel::setScrollHandleActive()/RxApplet's squelch slider.
+QString activeStateStyle(const QString& state, const QString& bg, const QString& border, const QString& fg)
 {
     return QStringLiteral(
-        "QPushButton { background: %1; border: 2px solid %2; border-radius: 4px; "
-        "color: %3; font-size: 10px; font-weight: bold; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12); } "
-        "QPushButton:hover { background: %1; border: 2px solid %2; } "
-        "QPushButton:pressed { background: %1; border: 2px solid %2; }").arg(bg, border, fg);
+        "QPushButton[vkState=\"%1\"] { background: %2; border: 2px solid %3; border-radius: 4px; "
+        "color: %4; font-size: 10px; font-weight: bold; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12); } "
+        "QPushButton[vkState=\"%1\"]:hover { background: %2; border: 2px solid %3; } "
+        "QPushButton[vkState=\"%1\"]:pressed { background: %2; border: 2px solid %3; }")
+        .arg(state, bg, border, fg);
 }
 
 QString neutralBtnStyle()
@@ -53,7 +62,32 @@ QString neutralBtnStyle()
         "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
         "QPushButton:hover { background: {{color.background.1}}; }"
-        "QPushButton:disabled { background: #181c22; border: 1px solid #232a33; color: #3a4552; }");
+        "QPushButton:disabled { background: {{color.background.0}}; border: 1px solid {{color.border.subtle}}; "
+        "color: {{color.text.disabled}}; }");
+}
+
+// Combines the always-present neutral rules with however many named
+// active-state variants a given button needs (bypass/AMP ON has two;
+// everything else has one), so the whole thing can be handed to
+// applyStyleSheet() a single time.
+QString makeStateBtnStyle(std::initializer_list<QString> stateVariants)
+{
+    QString sheet = neutralBtnStyle();
+    for (const auto& variant : stateVariants) {
+        sheet += variant;
+    }
+    return sheet;
+}
+
+// Switches which named QSS state a button paints as, without re-calling
+// setStyleSheet() -- the full template (neutral + every active variant)
+// is already resolved and set once at construction time.
+void setBtnState(QPushButton* btn, const QString& state)
+{
+    if (btn->property("vkState").toString() == state) return;
+    btn->setProperty("vkState", state);
+    btn->style()->unpolish(btn);
+    btn->style()->polish(btn);
 }
 
 QPushButton* makeSmallButton(const QString& text, QWidget* parent)
@@ -75,9 +109,10 @@ VkampApplet::VkampApplet(QWidget* parent)
 
     // ── Header: status pill ─────────────────────────────────────────────────
     m_statusPill = new QLabel("—", this);
-    m_statusPill->setStyleSheet(
-        "QLabel { background: #1c222a; color: #6b7684; border: 1px solid #303a44; "
-        "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusPill,
+        "QLabel { background: {{color.background.1}}; color: {{color.text.label}}; "
+        "border: 1px solid {{color.border.strong}}; border-radius: 3px; font-size: 9px; "
+        "font-weight: bold; padding: 2px 6px; }");
     m_statusPill->setAlignment(Qt::AlignCenter);
     auto* headerRow = new QHBoxLayout;
     headerRow->addStretch();
@@ -124,18 +159,19 @@ VkampApplet::VkampApplet(QWidget* parent)
     vbox->addSpacing(4);
 
     // ── Info grid: temp / volts / current, band / antenna / fault ──────────
-    static const char* kTelStyle = "QLabel { color: #c8d8e8; font-size: 10px; }";
+    const QString kTelStyle = "QLabel { color: {{color.text.primary}}; font-size: 10px; }";
+    auto& theme = AetherSDR::ThemeManager::instance();
 
     m_tempLabel = new QLabel("TEMP  — C", this);
-    m_tempLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_tempLabel, kTelStyle);
     m_voltsLabel = new QLabel("SUPPLY  — V", this);
-    m_voltsLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_voltsLabel, kTelStyle);
     m_currentLabel = new QLabel("CURR  — A", this);
-    m_currentLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_currentLabel, kTelStyle);
     m_bandLabel = new QLabel("BAND  —", this);
-    m_bandLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_bandLabel, kTelStyle);
     m_antennaLabel = new QLabel("ANT  —", this);
-    m_antennaLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(m_antennaLabel, kTelStyle);
 
     auto* infoGrid = new QGridLayout;
     infoGrid->setHorizontalSpacing(12);
@@ -156,19 +192,27 @@ VkampApplet::VkampApplet(QWidget* parent)
     // codebase).
     m_faultLabel = new QLabel(this);
     m_faultLabel->setWordWrap(true);
-    m_faultLabel->setStyleSheet("QLabel { color: #ff8080; font-size: 10px; font-weight: bold; }");
+    theme.applyStyleSheet(m_faultLabel, "QLabel { color: {{color.accent.danger}}; font-size: 10px; font-weight: bold; }");
     m_faultLabel->hide();
     vbox->addWidget(m_faultLabel);
 
     // ── Bypass / Cooling row ─────────────────────────────────────────────────
     m_bypassBtn = makeSmallButton("BYPASS", this);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bypassBtn, neutralBtnStyle());
+    // activeStateStyle("ampOn", ...) has no :disabled rule (unlike
+    // neutralBtnStyle), so the green "AMP ON" state is only reachable
+    // while actually connected -- see setBypass()'s own comment.
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bypassBtn,
+        makeStateBtnStyle({
+            activeStateStyle("bypass", "{{color.background.1}}", "{{color.background.2}}", "{{color.accent.warning}}"),
+            activeStateStyle("ampOn", "{{color.background.0}}", "{{color.accent.success}}", "{{color.accent.success}}"),
+        }));
     connect(m_bypassBtn, &QPushButton::clicked, this, [this]() { emit bypassToggled(!m_bypassed); });
 
     m_coolingBtn = makeSmallButton("COOLING", this);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_coolingBtn, neutralBtnStyle());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_coolingBtn,
+        makeStateBtnStyle({activeStateStyle("active", "{{color.background.1}}", "{{color.background.2}}", "{{color.text.primary}}")}));
     connect(m_coolingBtn, &QPushButton::clicked, this, [this]() {
-        emit coolingToggled(m_coolingBtn->property("active").toBool() ? false : true);
+        emit coolingToggled(m_coolingBtn->property("vkState").toString() != "active");
     });
 
     auto* toggleRow = new QHBoxLayout;
@@ -179,12 +223,14 @@ VkampApplet::VkampApplet(QWidget* parent)
 
     // ── Antenna row ───────────────────────────────────────────────────────
     auto* antLabel = new QLabel("ANT", this);
-    antLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(antLabel, kTelStyle);
     m_ant1Btn = makeSmallButton("1", this);
     m_ant2Btn = makeSmallButton("2", this);
     m_ant3Btn = makeSmallButton("3", this);
+    const QString antBtnStyle = makeStateBtnStyle(
+        {activeStateStyle("active", "{{color.background.1}}", "{{color.accent}}", "{{color.text.primary}}")});
     for (auto* btn : {m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
-        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, neutralBtnStyle());
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, antBtnStyle);
     }
     // Read-only display, not an optimistic latch -- see setAntenna()'s own
     // doc comment. Clicking just asks; the label/highlight only moves once
@@ -207,11 +253,13 @@ VkampApplet::VkampApplet(QWidget* parent)
     // buttons are disabled while bypassed (refreshVoltageButtons()) -- a
     // real-hardware safety finding, not a cosmetic choice.
     auto* railLabel = new QLabel("RAIL", this);
-    railLabel->setStyleSheet(kTelStyle);
+    theme.applyStyleSheet(railLabel, kTelStyle);
     m_voltLowBtn = makeSmallButton("LOW", this);
     m_voltHighBtn = makeSmallButton("HIGH", this);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltLowBtn, neutralBtnStyle());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltHighBtn, neutralBtnStyle());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltLowBtn,
+        makeStateBtnStyle({activeStateStyle("active", "{{color.background.0}}", "{{color.accent.danger}}", "{{color.text.primary}}")}));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltHighBtn,
+        makeStateBtnStyle({activeStateStyle("active", "{{color.background.1}}", "{{color.accent}}", "{{color.text.primary}}")}));
     connect(m_voltLowBtn, &QPushButton::clicked, this, [this]() { emit voltageSelected(true); });
     connect(m_voltHighBtn, &QPushButton::clicked, this, [this]() { emit voltageSelected(false); });
 
@@ -231,11 +279,12 @@ VkampApplet::VkampApplet(QWidget* parent)
     // (see e.g. ProfileManagerDialog's delete-profile confirm).
     m_resetBtn = new QPushButton("RESET", this);
     m_resetBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_resetBtn,
-        "QPushButton { background: #2a2210; border: 1px solid #5a4a1a; "
-        "border-radius: 3px; color: #ffb84d; font-size: 10px; font-weight: bold; padding: 2px 8px; }"
-        "QPushButton:hover { background: #3a2e14; }"
-        "QPushButton:disabled { background: #181c22; border: 1px solid #232a33; color: #3a4552; }");
+    theme.applyStyleSheet(m_resetBtn,
+        "QPushButton { background: {{color.background.tx}}; border: 1px solid {{color.border.tx}}; "
+        "border-radius: 3px; color: {{color.accent.warning}}; font-size: 10px; font-weight: bold; padding: 2px 8px; }"
+        "QPushButton:hover { background: {{color.background.tx}}; }"
+        "QPushButton:disabled { background: {{color.background.0}}; border: 1px solid {{color.border.subtle}}; "
+        "color: {{color.text.disabled}}; }");
     connect(m_resetBtn, &QPushButton::clicked, this, [this]() {
         const auto reply = QMessageBox::question(this, "Reset Amplifier",
             "Reset the VK3AMP? The amp needs the reset command held for about "
@@ -329,10 +378,9 @@ void VkampApplet::setAntenna(int port)
     m_antennaPort = port;
     m_bandDirty = true;  // reuses the same throttle flag as band -- both are low-rate status fields
 
-    auto& theme = AetherSDR::ThemeManager::instance();
-    theme.applyStyleSheet(m_ant1Btn, port == 1 ? activeBtnStyle("#123440", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
-    theme.applyStyleSheet(m_ant2Btn, port == 2 ? activeBtnStyle("#123440", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
-    theme.applyStyleSheet(m_ant3Btn, port == 3 ? activeBtnStyle("#123440", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
+    setBtnState(m_ant1Btn, port == 1 ? "active" : QString());
+    setBtnState(m_ant2Btn, port == 2 ? "active" : QString());
+    setBtnState(m_ant3Btn, port == 3 ? "active" : QString());
 }
 
 void VkampApplet::setBypass(bool on)
@@ -345,28 +393,20 @@ void VkampApplet::setBypass(bool on)
         QAccessibleEvent event(m_bypassBtn, QAccessible::NameChanged);
         QAccessible::updateAccessibility(&event);
     }
-    auto& theme = AetherSDR::ThemeManager::instance();
-    // activeBtnStyle has no :disabled rule (unlike neutralBtnStyle), so the
-    // green "AMP ON" style is only applied while actually connected -- bypass
-    // is always forced false on disconnect (see setConnected()), and without
-    // this guard that would paint a bright, undimmed "AMP ON" button while
-    // the amp is disconnected, which is actively misleading rather than just
-    // visually inconsistent.
-    theme.applyStyleSheet(m_bypassBtn,
-        on ? activeBtnStyle("#3a2a12", "#6a4a1a", "#ffb84d")
-           : (m_connected
-                  // Green, matching the "CONNECTED" status pill's own
-                  // palette -- AMP ON is the normal/good operating state.
-                  ? activeBtnStyle("#0f2a1c", "#4dd87a", "#6be899")
-                  : neutralBtnStyle()));
+    // "ampOn" has no :disabled rule (unlike neutral), so the green "AMP ON"
+    // state is only reachable while actually connected -- bypass is always
+    // forced false on disconnect (see setConnected()), and without this
+    // guard that would paint a bright, undimmed "AMP ON" button while the
+    // amp is disconnected, which is actively misleading rather than just
+    // visually inconsistent. Green matches the "CONNECTED" status pill's
+    // own palette -- AMP ON is the normal/good operating state.
+    setBtnState(m_bypassBtn, on ? "bypass" : (m_connected ? "ampOn" : QString()));
     refreshVoltageButtons();
 }
 
 void VkampApplet::setCoolingOverride(bool on)
 {
-    m_coolingBtn->setProperty("active", on);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_coolingBtn,
-        on ? activeBtnStyle("#12222e", "#2a5a70", "{{color.text.primary}}") : neutralBtnStyle());
+    setBtnState(m_coolingBtn, on ? "active" : QString());
 }
 
 void VkampApplet::setVoltageLow(bool low)
@@ -381,13 +421,10 @@ void VkampApplet::refreshVoltageButtons()
     // updateVoltageButtonsEnabled() logic exactly -- neither button shows
     // active while bypassed, and both are disabled (not just visually
     // muted) for the entire time bypass is on. See design doc Section 5.
-    auto& theme = AetherSDR::ThemeManager::instance();
     const bool lowActive = m_voltageLow && !m_bypassed;
     const bool highActive = !m_voltageLow && !m_bypassed;
-    theme.applyStyleSheet(m_voltLowBtn,
-        lowActive ? activeBtnStyle("#2a1c12", "#ff8d5c", "#fff4ee") : neutralBtnStyle());
-    theme.applyStyleSheet(m_voltHighBtn,
-        highActive ? activeBtnStyle("#102f3d", "#5ad3ff", "#ecfbff") : neutralBtnStyle());
+    setBtnState(m_voltLowBtn, lowActive ? "active" : QString());
+    setBtnState(m_voltHighBtn, highActive ? "active" : QString());
     const bool enabled = m_connected && !m_bypassed;
     m_voltLowBtn->setEnabled(enabled);
     m_voltHighBtn->setEnabled(enabled);
@@ -434,11 +471,13 @@ void VkampApplet::setConnected(bool connected)
     refreshVoltageButtons();
 
     m_statusPill->setText(connected ? QStringLiteral("CONNECTED") : QStringLiteral("—"));
-    m_statusPill->setStyleSheet(connected
-        ? "QLabel { background: #0f2a1c; color: #6be899; border: 1px solid #4dd87a; "
-          "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }"
-        : "QLabel { background: #1c222a; color: #6b7684; border: 1px solid #303a44; "
-          "border-radius: 3px; font-size: 9px; font-weight: bold; padding: 2px 6px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusPill, connected
+        ? "QLabel { background: {{color.background.0}}; color: {{color.accent.success}}; "
+          "border: 1px solid {{color.accent.success}}; border-radius: 3px; font-size: 9px; "
+          "font-weight: bold; padding: 2px 6px; }"
+        : "QLabel { background: {{color.background.1}}; color: {{color.text.label}}; "
+          "border: 1px solid {{color.border.strong}}; border-radius: 3px; font-size: 9px; "
+          "font-weight: bold; padding: 2px 6px; }");
 
     if (!connected) {
         setFaultCode(0);
@@ -449,7 +488,7 @@ void VkampApplet::setConnected(bool connected)
         m_bandLabel->setText("BAND  —");
         m_antennaLabel->setText("ANT  —");
         for (auto* btn : {m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
-            AetherSDR::ThemeManager::instance().applyStyleSheet(btn, neutralBtnStyle());
+            setBtnState(btn, QString());
         }
         m_tempC = 0.0f;
         m_volts = 0.0f;

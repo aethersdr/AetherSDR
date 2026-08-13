@@ -7776,12 +7776,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         const int row = 7;
 
         auto* devLbl = new QLabel("VK3AMP Amplifier");
-        devLbl->setStyleSheet(kLabelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(devLbl, kLabelStyle);
         grid->addWidget(devLbl, row, 0);
 
         auto* ipEdit = new QLineEdit;
         ipEdit->setPlaceholderText("e.g. 192.168.1.50");
-        ipEdit->setStyleSheet(kEditStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(ipEdit, kEditStyle);
         ipEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
         grid->addWidget(ipEdit, row, 1);
 
@@ -7793,30 +7793,33 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
         grid->addWidget(portSpin, row, 2);
 
+        static const QString kVkampConnectedStyle = "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        static const QString kVkampDisconnectedStyle = "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+        static const QString kVkampErrorStyle = "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
+        static const QString kVkampConnectingStyle = "QLabel { color: {{color.accent.warning}}; font-size: 11px; }";
+
         auto* statusLbl = new QLabel(m_vkamp->isConnected() ? "Connected" : "Not connected");
-        statusLbl->setStyleSheet(m_vkamp->isConnected()
-            ? "QLabel { color: #00e060; font-size: 11px; }"
-            : "QLabel { color: #8aa8c0; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+            m_vkamp->isConnected() ? kVkampConnectedStyle : kVkampDisconnectedStyle);
         grid->addWidget(statusLbl, row, 4);
 
         auto* vkampBtn = new QPushButton(m_vkamp->isConnected() ? "Disconnect" : "Connect");
-        vkampBtn->setStyleSheet(kBtnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(vkampBtn, kBtnStyle);
         grid->addWidget(vkampBtn, row, 3);
 
         auto updateVkampState = [this, vkampBtn, statusLbl]() {
             const bool conn = m_vkamp->isConnected();
             vkampBtn->setText(conn ? "Disconnect" : "Connect");
             statusLbl->setText(conn ? "Connected" : "Not connected");
-            statusLbl->setStyleSheet(conn
-                ? "QLabel { color: #00e060; font-size: 11px; }"
-                : "QLabel { color: #8aa8c0; font-size: 11px; }");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                conn ? kVkampConnectedStyle : kVkampDisconnectedStyle);
         };
         connect(m_vkamp, &VkampConnection::connected, this, updateVkampState);
         connect(m_vkamp, &VkampConnection::disconnected, this, updateVkampState);
         connect(m_vkamp, &VkampConnection::connectionFailed, this,
                 [statusLbl](const QString& err) {
             statusLbl->setText("Error: " + err);
-            statusLbl->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampErrorStyle);
         });
 
         connect(vkampBtn, &QPushButton::clicked, this, [=, this]() {
@@ -7839,7 +7842,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             // Overwritten by updateVkampState()/the connectionFailed handler
             // below as soon as the real outcome lands.
             statusLbl->setText("Connecting…");
-            statusLbl->setStyleSheet("QLabel { color: #e0a000; font-size: 11px; }");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampConnectingStyle);
             m_vkamp->connectNetwork(ip, static_cast<quint16>(port));
         });
 
@@ -7867,15 +7870,15 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         // W2000 (the originally-confirmed unit) rather than blocking on a
         // choice.
         auto* variantLbl = new QLabel("Amplifier Model");
-        variantLbl->setStyleSheet(kLabelStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(variantLbl, kLabelStyle);
         grid->addWidget(variantLbl, row + 1, 0);
 
         auto* variantCombo = new QComboBox;
         static const QString kVariantComboStyle =
-            "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
-            "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
             "QComboBox::drop-down { border: none; }";
-        variantCombo->setStyleSheet(kVariantComboStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(variantCombo, kVariantComboStyle);
         for (auto v : {Vkamp::Variant::W600, Vkamp::Variant::W1000, Vkamp::Variant::W2000}) {
             variantCombo->addItem(Vkamp::variantLabel(v), static_cast<int>(v));
         }
