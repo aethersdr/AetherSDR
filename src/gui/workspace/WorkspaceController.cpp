@@ -1377,6 +1377,7 @@ void WorkspaceController::resetToClassic()
         }
         for (const QString& sid : extras) {
             if (m_extraCanvases.contains(sid)) {
+                m_wiredCanvases.remove(m_extraCanvases.value(sid).data());
                 m_extraCanvases.remove(sid);
                 if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(sid);
             }
@@ -1905,6 +1906,7 @@ bool WorkspaceController::removeCanvasWindow(const QString& surfaceId)
     // deleted below, so this is best-effort.
     if (m_extraCanvases.contains(surfaceId)) {
         evictSurfaceTransiently(surfaceId);
+        m_wiredCanvases.remove(m_extraCanvases.value(surfaceId).data());
         m_extraCanvases.remove(surfaceId);
         if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(surfaceId);
     }
@@ -2165,6 +2167,10 @@ void WorkspaceController::prepareShutdown()
         // and the panel every container — a window deleted around them
         // would take them along (they are its children at this point).
         evictSurfaceTransiently(sid);
+        // Forget the canvas pointer in the wire-once set too: a later
+        // allocation could reuse the address and would silently never be
+        // wired.
+        m_wiredCanvases.remove(m_extraCanvases.value(sid).data());
         m_extraCanvases.remove(sid);
         if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(sid);
     }
