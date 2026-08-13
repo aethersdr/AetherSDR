@@ -1223,10 +1223,13 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
                 }
                 QAction* a = catMenu->addAction(menuText(e.title));
                 ContainerWidget* c = containerForApplet(e.id);
-                if (!c) {
-                    // Catalogued but not constructed in this session — a
-                    // live-looking entry that silently no-ops is worse
-                    // than a grey one (review M3).
+                if (!c || (m_widgetAvailable && !m_widgetAvailable(e.id))) {
+                    // Catalogued but not constructed, or its hardware is
+                    // not (currently) detected — GREY, never hidden: the
+                    // category and the taxonomy stay visible (the 8600
+                    // amplifier regression), the dead-add stays impossible
+                    // (review M3), and the entry recovers on the next menu
+                    // open once detection flips.
                     a->setEnabled(false);
                 } else if (c->isOnCanvas()) {
                     a->setCheckable(true);
@@ -1593,6 +1596,12 @@ void WorkspaceController::setWidgetCatalog(const QList<WidgetCatalogEntry>& cata
     m_widgetCatalog = catalog;
 }
 
+void WorkspaceController::setWidgetAvailabilityHook(
+    std::function<bool(const QString&)> hook)
+{
+    m_widgetAvailable = std::move(hook);
+}
+
 bool WorkspaceController::addAppletFromPalette(const QString& appletId,
                                                const QPointF& canvasPos)
 {
@@ -1602,6 +1611,9 @@ bool WorkspaceController::addAppletFromPalette(const QString& appletId,
     ContainerWidget* c = containerForApplet(appletId);
     if (!c || c->isOnCanvas()) {
         return false;   // absent, or already there — the menu shows why
+    }
+    if (m_widgetAvailable && !m_widgetAvailable(appletId)) {
+        return false;   // hardware not detected — the menu greys these
     }
 
     const QString itemId = itemIdFor(c);

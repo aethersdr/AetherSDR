@@ -1274,21 +1274,6 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("PROF"),  QStringLiteral("Station")},
     };
 
-    // Hardware-conditional applets (TGXL/PGXL/ACOM/SPE…) hide from the BAR
-    // when their hardware is absent; the palette must not offer them
-    // either (review M3): on the demo it listed live entries that placed
-    // dead amplifier applets.  The bar's own record — BarButton::
-    // hardwareAvailable, driven by markHardwareConditional()/
-    // updateHardwareAvailability() — is the single source of that truth.
-    auto hardwareHidden = [this](const QString& id) {
-        for (const auto& bb : m_barButtons) {
-            if (bb.id == id) {
-                return !bb.hardwareAvailable;
-            }
-        }
-        return false;   // no bar record: not hardware-conditional
-    };
-
     QList<AppletCatalogEntry> out;
     out.reserve(m_appletOrder.size() + 1);
     // The VU/S-Meter container is created directly on the manager rather
@@ -1299,10 +1284,14 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         out.append({QStringLiteral("VU"), m_sMeterContainer->title(),
                     QStringLiteral("Metering")});
     }
+    // Every applet, ALWAYS — the catalog is the recall universe (red-team
+    // B1) and the palette's taxonomy, and FILTERING here was the 8600
+    // amplifier regression: the catalog is snapshotted at construction,
+    // before any radio connects, so hardware detected later (TGXL/PGXL
+    // discovery is post-connect) stayed missing from the palette — and
+    // from workspace recall — forever.  Availability is a LIVE question,
+    // answered per menu-open through appletHardwareAvailable().
     for (const auto& entry : m_appletOrder) {
-        if (hardwareHidden(entry.id)) {
-            continue;
-        }
         AppletCatalogEntry e;
         e.id = entry.id;
         if (auto* c = qobject_cast<ContainerWidget*>(entry.widget)) {
@@ -1315,6 +1304,20 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         out.append(e);
     }
     return out;
+}
+
+bool AppletPanel::appletHardwareAvailable(const QString& id) const
+{
+    // The bar's own record — BarButton::hardwareAvailable, driven by
+    // markHardwareConditional()/updateHardwareAvailability() — read LIVE,
+    // so the palette greys exactly what the bar currently hides (review
+    // M3) and recovers the moment detection flips it.
+    for (const auto& bb : m_barButtons) {
+        if (bb.id == id) {
+            return bb.hardwareAvailable;
+        }
+    }
+    return true;   // no bar record: not hardware-conditional
 }
 
 QStringList AppletPanel::appletIds() const

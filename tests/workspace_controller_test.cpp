@@ -872,6 +872,31 @@ int main(int argc, char** argv)
                                             QPointF(0.5, 0.5))
                        && tx->isOnCanvas());
             canvas.setEditMode(true);
+
+            // Hardware availability is a LIVE question, never a catalog
+            // filter (the 8600 amplifier regression: TGXL/PGXL detection
+            // is post-connect, but the catalog snapshot is taken at
+            // construction — filtering there erased the Amplifiers
+            // category, and the amps' recall membership, permanently).
+            // The engine refuses while the hook says unavailable and
+            // recovers the instant it flips — no re-snapshot needed.
+            bool ampDetected = false;
+            ctl.setWidgetAvailabilityHook(
+                [&ampDetected](const QString& id) {
+                    return id != QStringLiteral("TX") || ampDetected;
+                });
+            ctl.returnAppletToPanel("TX");
+            tx->setContainerVisible(false);
+            report("palette refuses undetected hardware (live hook)",
+                   !ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                             QPointF(0.5, 0.5))
+                       && !tx->isOnCanvas());
+            ampDetected = true;
+            report("palette recovers when detection flips, no re-wire",
+                   ctl.addAppletFromPalette(QStringLiteral("TX"),
+                                            QPointF(0.5, 0.5))
+                       && tx->isOnCanvas());
+            ctl.setWidgetAvailabilityHook({});
         }
 
         // Mode-off switch only retargets.

@@ -110,6 +110,10 @@ void MainWindow::wireWorkspaceCanvas()
             catalog.append({e.id, e.title, e.category});
         }
         m_workspaceController->setWidgetCatalog(catalog);
+        m_workspaceController->setWidgetAvailabilityHook(
+            [this](const QString& id) {
+                return m_appletPanel->appletHardwareAvailable(id);
+            });
     }
 
     // Profile-bound recall (phase 6, decisions 6/8): a bound GLOBAL

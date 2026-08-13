@@ -173,6 +173,10 @@ public:
         QString category;
     };
     void setWidgetCatalog(const QList<WidgetCatalogEntry>& catalog);
+    // Live per-applet hardware availability (the 8600 amplifier
+    // regression: availability is post-connect state and must never be
+    // baked into the catalog snapshot).  Unset = everything available.
+    void setWidgetAvailabilityHook(std::function<bool(const QString&)> hook);
 
     // Add one applet from the palette at a canvas position (fractions).
     // Opens a closed applet, docks a floating one, places an open one —
@@ -312,6 +316,7 @@ private:
     WorkspaceStore    m_store;
     PanHostHooks m_panHost;
     QList<WidgetCatalogEntry> m_widgetCatalog;
+    std::function<bool(const QString&)> m_widgetAvailable;
     QHash<QString, int> m_panSlots;   // live panId → document slot
     QPointer<QWidget> m_returnTarget;
     QStringList m_knownAppletIds;   // from enable(), for resetToClassic()

@@ -260,6 +260,8 @@ public:
         QString category;
     };
     QList<AppletCatalogEntry> appletCatalog() const;
+    // Live hardware availability for one applet (the bar's own record).
+    bool appletHardwareAvailable(const QString& id) const;
 
     // While true, recall-driven visibility changes do NOT write the
     // operator's Applet_<ID> preferences (red-team B2): a workspace switch
