@@ -101,6 +101,10 @@ public:
         std::function<void(const QString&)> requestFloat;       // pop out
         std::function<QWidget*()> bandStack;                    // the panel
         std::function<void(QWidget*)> reclaimBandStack;         // re-home it
+        // Import pop-outs (phase 6): where a floating pan's window sits on
+        // screen, and the way to dock it.
+        std::function<QRect(const QString&)> floatingPanGlobalRect;
+        std::function<void(const QString&)> requestDock;
     };
     void setPanHost(const PanHostHooks& hooks);
 
@@ -157,6 +161,12 @@ public:
     void bindProfile(const QString& profileName, const QString& workspaceId);
     void unbindProfile(const QString& profileName);
     QString boundWorkspaceFor(const QString& profileName) const;
+
+    // Import every pop-out — floating applet containers and floating pans —
+    // onto the canvas at rects mapped from their window geometry (the RFC's
+    // opt-in for pre-canvas float arrangements; migration deliberately
+    // never did this).  Returns how many landed.
+    int importFloatingOntoCanvas();
 
 public slots:
     // Wired to RadioModel::profileLoadCompleted by MainWindow_Workspace.

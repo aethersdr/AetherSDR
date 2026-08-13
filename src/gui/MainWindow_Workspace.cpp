@@ -85,6 +85,17 @@ void MainWindow::wireWorkspaceCanvas()
     hooks.reclaimBandStack = [this](QWidget*) {
         m_panStack->reclaimBandStackPanel();
     };
+    hooks.floatingPanGlobalRect = [this](const QString& id) -> QRect {
+        if (auto* a = m_panStack->panadapter(id)) {
+            if (QWidget* win = a->window(); win && win != this) {
+                return win->geometry();
+            }
+        }
+        return QRect();
+    };
+    hooks.requestDock = [this](const QString& id) {
+        m_panStack->dockPanadapter(id);
+    };
     m_workspaceController->setPanHost(hooks);
 
     // Profile-bound recall (phase 6, decisions 6/8): a bound GLOBAL
@@ -373,6 +384,15 @@ void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
         }
     });
     del->setEnabled(list.size() > 1);
+
+    menu->addSeparator();
+    menu->addAction(tr("Import pop-outs onto canvas"), this, [this] {
+        const int n = m_workspaceController->importFloatingOntoCanvas();
+        statusBar()->showMessage(
+            n > 0 ? tr("%n pop-out(s) imported onto the canvas", nullptr, n)
+                  : tr("No pop-outs to import"),
+            5000);
+    });
 
     // Bindings: which GLOBAL radio profiles recall the ACTIVE workspace.
     // Toggling binds/unbinds profile → active (decisions 5/6/8).

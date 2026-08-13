@@ -69,6 +69,21 @@ QRect toPixels(const NormRect& r, const QSize& canvas)
     return QRect(left, top, right - left, bottom - top);
 }
 
+NormRect normRectFromGlobal(const QRect& windowGlobal, const QRect& canvasGlobal)
+{
+    if (windowGlobal.isEmpty() || canvasGlobal.isEmpty()) {
+        return NormRect{};
+    }
+    NormRect r;
+    r.x = (windowGlobal.x() - canvasGlobal.x())
+          / double(canvasGlobal.width());
+    r.y = (windowGlobal.y() - canvasGlobal.y())
+          / double(canvasGlobal.height());
+    r.w = windowGlobal.width()  / double(canvasGlobal.width());
+    r.h = windowGlobal.height() / double(canvasGlobal.height());
+    return clampToBounds(r);
+}
+
 NormRect fromPixels(const QRect& px, const QSize& canvas)
 {
     if (!canvasUsable(canvas)) {

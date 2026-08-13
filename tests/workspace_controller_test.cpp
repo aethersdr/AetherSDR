@@ -603,6 +603,42 @@ int main(int argc, char** argv)
                           return false;
                       }());
 
+        // Import pop-outs (phase 6): a floated applet and a floated pan
+        // land on the canvas at rects mapped from their window geometry.
+        {
+            ctl.switchWorkspace(wsA);
+            canvas.setEditMode(true);
+            mgr.floatContainer("RX");
+            report("import precondition: RX floats", rx->isFloating());
+
+            floatingPans.insert(QStringLiteral("0x40000000"));
+            ctl.onPanFloated(QStringLiteral("0x40000000"));
+            QRect fakePanWin(canvas.mapToGlobal(QPoint(100, 100)),
+                             QSize(400, 300));
+            hooks.floatingPanGlobalRect = [fakePanWin](const QString&) {
+                return fakePanWin;
+            };
+            hooks.requestDock = [&](const QString& id) {
+                floatingPans.remove(id);
+                ctl.onPanDocked(id);
+            };
+            ctl.setPanHost(hooks);
+
+            const int n = ctl.importFloatingOntoCanvas();
+            report("import lands both pop-outs",
+                   n == 2 && rx->isOnCanvas() && !rx->isFloating()
+                       && canvas.contains(ctl.panItemIdFor(
+                              QStringLiteral("0x40000000"))));
+            const NormRect panRect = canvas.itemRect(
+                ctl.panItemIdFor(QStringLiteral("0x40000000")));
+            // Canvas is 1000x800: 100px -> 0.1/0.125, 400x300 -> 0.4/0.375.
+            report("...the pan at its window's mapped rect",
+                   nearly(panRect.x, 0.1) && nearly(panRect.y, 0.125)
+                       && nearly(panRect.w, 0.4) && nearly(panRect.h, 0.375));
+            report("...and nothing left floating to import",
+                   ctl.importFloatingOntoCanvas() == 0);
+        }
+
         // Mode-off switch only retargets.
         ctl.switchWorkspace(wsA);
         rx->setContainerVisible(true);

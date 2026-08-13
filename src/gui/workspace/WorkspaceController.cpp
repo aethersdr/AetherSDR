@@ -1415,6 +1415,68 @@ bool WorkspaceController::switchWorkspace(const QString& id)
     return true;
 }
 
+int WorkspaceController::importFloatingOntoCanvas()
+{
+    if (!m_enabled) {
+        return 0;
+    }
+    const QRect canvasGlobal(m_canvas->mapToGlobal(QPoint(0, 0)),
+                             m_canvas->size());
+    int imported = 0;
+
+    // Floating applet containers: record the mapped rect as the item FIRST,
+    // then dock — the existing dockModeChanged hook sees a surviving item
+    // and sends the applet to the canvas at exactly that rect.  One
+    // placement path, not a special import one.
+    for (ContainerWidget* c : m_manager->allContainers()) {
+        if (!c || !c->isFloating()) {
+            continue;
+        }
+        QWidget* win = c->window();
+        const NormRect mapped = normRectFromGlobal(
+            win ? win->geometry() : QRect(), canvasGlobal);
+        if (!mapped.isValid()) {
+            continue;
+        }
+        writeItemPresence(itemIdFor(c), QStringLiteral("applet"), mapped,
+                          /*present=*/true, /*flushNow=*/false);
+        writeItemClosed(itemIdFor(c), false, /*flushNow=*/false);
+        m_manager->dockContainer(c->id());
+        if (c->isOnCanvas()) {
+            ++imported;
+        }
+    }
+
+    // Floating pans: same shape through the pan seam — store the mapped
+    // rect at the pan's slot, then dock; onPanDocked() places from it.
+    if (m_panHost.panIds && m_panHost.isFloating && m_panHost.requestDock) {
+        const QStringList pans = m_panHost.panIds();
+        for (const QString& panId : pans) {
+            if (!m_panHost.isFloating(panId)) {
+                continue;
+            }
+            const QRect floatRect = m_panHost.floatingPanGlobalRect
+                                        ? m_panHost.floatingPanGlobalRect(panId)
+                                        : QRect();
+            const NormRect mapped = normRectFromGlobal(floatRect, canvasGlobal);
+            if (mapped.isValid()) {
+                writeItemPresence(panItemIdFor(panId),
+                                  QStringLiteral("panadapter"), mapped,
+                                  /*present=*/true, /*flushNow=*/false);
+            }
+            m_panHost.requestDock(panId);
+            if (m_canvas->contains(panItemIdFor(panId))) {
+                ++imported;
+            }
+        }
+    }
+
+    if (imported > 0) {
+        m_store.flush();
+    }
+    return imported;
+}
+
 void WorkspaceController::bindProfile(const QString& profileName,
                                       const QString& workspaceId)
 {

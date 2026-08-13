@@ -239,6 +239,21 @@ int main()
                left.contains(0.5, 0.5) != right.contains(0.5, 0.5));
     }
 
+    // ── normRectFromGlobal (phase 6 import pop-outs) ─────────────────────
+    {
+        const QRect canvas(100, 50, 1000, 800);
+        const NormRect in = AetherSDR::normRectFromGlobal(QRect(600, 250, 200, 160), canvas);
+        report("a window inside the canvas maps to its fractions",
+               nearly(in.x, 0.5) && nearly(in.y, 0.25)
+                   && nearly(in.w, 0.2) && nearly(in.h, 0.2));
+        const NormRect off = AetherSDR::normRectFromGlobal(QRect(-500, -500, 200, 160), canvas);
+        report("an off-screen window is clamped back into bounds",
+               off.isValid() && off.x >= 0.0 && off.y >= 0.0);
+        report("degenerate input maps to an invalid rect",
+               !AetherSDR::normRectFromGlobal(QRect(), canvas).isValid()
+                   && !AetherSDR::normRectFromGlobal(QRect(0, 0, 10, 10), QRect()).isValid());
+    }
+
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");
     return g_failures == 0 ? 0 : 1;
 }

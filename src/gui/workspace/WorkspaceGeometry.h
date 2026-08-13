@@ -59,6 +59,13 @@ struct NormRect {
 // clamping through clampToCanvas() with a minimum pixel size.
 QRect toPixels(const NormRect& r, const QSize& canvas);
 
+// Map a floating window's GLOBAL rect into canvas fractions (phase 6's
+// "import pop-outs"): translate into the canvas's global frame, normalize,
+// then clampToBounds() so an off-screen or oversized window still lands as
+// a usable item.  Pure; returns a default NormRect when either rect is
+// degenerate.
+NormRect normRectFromGlobal(const QRect& windowGlobal, const QRect& canvasGlobal);
+
 // Inverse of toPixels().  Returns a default-constructed NormRect for a
 // degenerate canvas rather than dividing by zero.
 NormRect fromPixels(const QRect& px, const QSize& canvas);
