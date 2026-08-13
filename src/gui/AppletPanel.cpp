@@ -1678,6 +1678,22 @@ void AppletPanel::setShackSwitchVisible(bool visible)
     applyBarLayout();
 }
 
+void AppletPanel::setDemoVisible(bool visible)
+{
+    // DEMO's "hardware" is the connected radio being the simulator — a
+    // live connection edge exactly like the six detected-device setters
+    // above.  Availability must ride this edge or the palette greys
+    // Demo Noise forever (#4968 red-team B1): markHardwareConditional
+    // set the bit false at construction and nothing else ever wrote it,
+    // so on the one radio the applet exists for it was refused at the
+    // door and a workspace switch could close it with no way back.
+    updateHardwareAvailability("DEMO", "Applet_DEMO", visible);
+    applyBarLayout();
+    // The tile additionally auto-opens with the demo connection and
+    // auto-closes when it drops (RFC #4288) — unchanged.
+    setAppletVisible(QStringLiteral("DEMO"), visible);
+}
+
 bool AppletPanel::controlsLocked() const
 {
     return ControlsLock::isLocked();

@@ -599,6 +599,39 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         return out;
     }
 
+    if (action == QLatin1String("palette")) {
+        // The Add-widget menu itself is a stack-local QMenu no bridge
+        // verb can reach (it would block inside exec()), so this reports
+        // the same classification the menu renders — the #4968 red-team
+        // could not verify the greying at runtime; now anything can.
+        QVariantList entries;
+        for (const auto& pe : m_workspaceController->paletteState()) {
+            QVariantMap m;
+            m[QStringLiteral("id")]       = pe.id;
+            m[QStringLiteral("title")]    = pe.title;
+            m[QStringLiteral("category")] = pe.category;
+            using S = WorkspaceController::PaletteEntry::State;
+            switch (pe.state) {
+            case S::Addable:
+                m[QStringLiteral("state")] = QStringLiteral("addable");
+                break;
+            case S::OnCanvas:
+                m[QStringLiteral("state")] = QStringLiteral("on-canvas");
+                break;
+            case S::NotDetected:
+                m[QStringLiteral("state")] = QStringLiteral("not-detected");
+                break;
+            case S::Absent:
+                m[QStringLiteral("state")] = QStringLiteral("absent");
+                break;
+            }
+            entries.append(m);
+        }
+        out[QStringLiteral("entries")] = entries;
+        out[QStringLiteral("count")]   = entries.size();
+        return out;
+    }
+
     if (action == QLatin1String("list")) {
         QVariantList wsList;
         for (const auto& [id, label] : m_workspaceController->workspaceList()) {

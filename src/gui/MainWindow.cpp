@@ -5637,7 +5637,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
     if (m_appletPanel) {
         auto* conn = m_radioModel.connection();
         const bool demo = connected && conn && conn->isSyntheticDemo();
-        m_appletPanel->setAppletVisible(QStringLiteral("DEMO"), demo);
+        m_appletPanel->setDemoVisible(demo);
         if (demo) {
             if (auto* applet = m_appletPanel->demoApplet())
                 applet->pushSceneToEngine();

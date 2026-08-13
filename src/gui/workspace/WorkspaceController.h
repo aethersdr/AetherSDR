@@ -178,6 +178,24 @@ public:
     // baked into the catalog snapshot).  Unset = everything available.
     void setWidgetAvailabilityHook(std::function<bool(const QString&)> hook);
 
+    // One catalog entry as the palette would render it.  The menu is a
+    // stack-local QMenu no test or bridge verb can reach, so the
+    // CLASSIFICATION lives here where both can (#4968 red-team M1): the
+    // menu consumes this verbatim, the unit suite pins it, and the
+    // `workspace palette` verb reports it.
+    struct PaletteEntry {
+        QString id;
+        QString title;
+        QString category;
+        enum class State {
+            Addable,       // enabled entry; click adds it
+            OnCanvas,      // checked + disabled — already placed
+            NotDetected,   // greyed: hardware-conditional, not detected
+            Absent,        // greyed: catalogued but not constructed
+        } state = State::Addable;
+    };
+    QList<PaletteEntry> paletteState() const;
+
     // Add one applet from the palette at a canvas position (fractions).
     // Opens a closed applet, docks a floating one, places an open one —
     // and refuses an applet already on the canvas.

@@ -178,6 +178,9 @@ public:
 
     // Show/hide the ShackSwitch applet based on device presence.
     void setShackSwitchVisible(bool visible);
+    // DEMO's availability edge — its "hardware" is the connected radio
+    // being the simulator (#4968 red-team B1).
+    void setDemoVisible(bool visible);
 
     // Show/hide the PROF button and applet based on whether the connected radio
     // has an on-radio profile store (RadioCapabilities::hasProfiles).

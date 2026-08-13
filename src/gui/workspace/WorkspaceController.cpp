@@ -11,6 +11,7 @@
 
 #include <QHash>
 #include <QMenu>
+#include <QToolTip>
 
 #include <algorithm>
 #include <QPoint>
@@ -1209,38 +1210,68 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
                           m_canvas->mapFromGlobal(globalPos).y()
                               / double(m_canvas->height()));
 
+        const QList<PaletteEntry> pal = paletteState();
         QStringList categoryOrder;
-        for (const WidgetCatalogEntry& e : m_widgetCatalog) {
+        for (const PaletteEntry& e : pal) {
             if (!categoryOrder.contains(e.category)) {
                 categoryOrder.append(e.category);
             }
         }
         for (const QString& category : categoryOrder) {
             QMenu* catMenu = add->addMenu(menuText(category));
-            for (const WidgetCatalogEntry& e : m_widgetCatalog) {
+            for (const PaletteEntry& e : pal) {
                 if (e.category != category) {
                     continue;
                 }
-                QAction* a = catMenu->addAction(menuText(e.title));
-                ContainerWidget* c = containerForApplet(e.id);
-                if (!c || (m_widgetAvailable && !m_widgetAvailable(e.id))) {
-                    // Catalogued but not constructed, or its hardware is
-                    // not (currently) detected — GREY, never hidden: the
-                    // category and the taxonomy stay visible (the 8600
-                    // amplifier regression), the dead-add stays impossible
-                    // (review M3), and the entry recovers on the next menu
-                    // open once detection flips.
-                    a->setEnabled(false);
-                } else if (c->isOnCanvas()) {
+                switch (e.state) {
+                case PaletteEntry::State::OnCanvas: {
+                    QAction* a = catMenu->addAction(menuText(e.title));
                     a->setCheckable(true);
                     a->setChecked(true);
                     a->setEnabled(false);
-                } else {
+                    break;
+                }
+                case PaletteEntry::State::NotDetected: {
+                    // GREY, never hidden — the category and taxonomy stay
+                    // visible (the 8600 amplifier regression) and the
+                    // entry recovers on the next menu open once detection
+                    // flips.  The suffix says WHY it is dimmed: a screen
+                    // reader hears "disabled" and nothing else, and this
+                    // grey means three different things (#4968 m3, a11y
+                    // commitment in #4896).
+                    QAction* a = catMenu->addAction(
+                        menuText(e.title)
+                        + tr(" (not detected)"));
+                    a->setEnabled(false);
+                    break;
+                }
+                case PaletteEntry::State::Absent: {
+                    // Catalogued but not constructed in this session — a
+                    // live-looking entry that silently no-ops is worse
+                    // than a grey one (review M3).
+                    QAction* a = catMenu->addAction(menuText(e.title));
+                    a->setEnabled(false);
+                    break;
+                }
+                case PaletteEntry::State::Addable: {
+                    QAction* a = catMenu->addAction(menuText(e.title));
                     const QString appletId = e.id;
+                    const QString title    = e.title;
                     connect(a, &QAction::triggered, this,
-                            [this, appletId, canvasPos] {
-                                addAppletFromPalette(appletId, canvasPos);
+                            [this, appletId, title, canvasPos, globalPos] {
+                                if (!addAppletFromPalette(appletId,
+                                                          canvasPos)) {
+                                    // Detection flipped between menu build
+                                    // and click (#4968 m1) — a refused add
+                                    // must never be a silent no-op.
+                                    QToolTip::showText(
+                                        globalPos,
+                                        tr("%1 is not available right now")
+                                            .arg(title));
+                                }
                             });
+                    break;
+                }
                 }
             }
         }
@@ -1543,6 +1574,12 @@ bool WorkspaceController::switchWorkspaceInternal(const QString& id, bool force)
     // recall guard so the panel's preference dual-write stays silent
     // (red-team B2) — workspace recall is not the operator editing their
     // Classic preferences.
+    // Hardware availability (m_widgetAvailable) is deliberately NOT
+    // consulted here: the document is the operator's own recorded intent,
+    // and detection can lag connect by seconds — gating recall on it
+    // would make a switch racy and recall workspaces incomplete.  Recall
+    // outranks availability; only ADDING via the palette is gated
+    // (#4968 red-team M2, ruled by the maintainer).
     if (m_panHost.recallGuard) m_panHost.recallGuard(true);
     for (const WidgetCatalogEntry& entry : m_widgetCatalog) {
         ContainerWidget* c = containerForApplet(entry.id);
@@ -1602,6 +1639,34 @@ void WorkspaceController::setWidgetAvailabilityHook(
     m_widgetAvailable = std::move(hook);
 }
 
+QList<WorkspaceController::PaletteEntry> WorkspaceController::paletteState() const
+{
+    QList<PaletteEntry> out;
+    out.reserve(m_widgetCatalog.size());
+    for (const WidgetCatalogEntry& e : m_widgetCatalog) {
+        PaletteEntry p;
+        p.id       = e.id;
+        p.title    = e.title;
+        p.category = e.category;
+        ContainerWidget* c = containerForApplet(e.id);
+        // Order matters (#4968 red-team M2): an applet ON the canvas is
+        // reported as such even while its hardware is undetected —
+        // recall outranks availability, so that state is legitimate and
+        // the entry must show "placed", not "unavailable".
+        if (c && c->isOnCanvas()) {
+            p.state = PaletteEntry::State::OnCanvas;
+        } else if (!c) {
+            p.state = PaletteEntry::State::Absent;
+        } else if (m_widgetAvailable && !m_widgetAvailable(e.id)) {
+            p.state = PaletteEntry::State::NotDetected;
+        } else {
+            p.state = PaletteEntry::State::Addable;
+        }
+        out.append(p);
+    }
+    return out;
+}
+
 bool WorkspaceController::addAppletFromPalette(const QString& appletId,
                                                const QPointF& canvasPos)
 {
@@ -1613,7 +1678,12 @@ bool WorkspaceController::addAppletFromPalette(const QString& appletId,
         return false;   // absent, or already there — the menu shows why
     }
     if (m_widgetAvailable && !m_widgetAvailable(appletId)) {
-        return false;   // hardware not detected — the menu greys these
+        // Hardware not detected — the menu greys these.  Availability
+        // gates ADDING only: recall (switchWorkspaceInternal) and
+        // placement deliberately ignore it, because the workspace
+        // document is the operator's own recorded intent (#4968 M2
+        // ruling).
+        return false;
     }
 
     const QString itemId = itemIdFor(c);
