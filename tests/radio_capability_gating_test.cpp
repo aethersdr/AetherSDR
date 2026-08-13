@@ -771,18 +771,22 @@ int main(int argc, char** argv)
     // who turns TX off (antenna disconnected, bench work) or listens receive-only
     // lost the feature outright.
     //
-    // WHAT THIS BLOCK DOES NOT PIN, stated plainly because the assertions read
-    // like they cover the fix and they do not: every check here calls
-    // isVoiceMode(), and the PRE-FIX code used the same mode list. This block
-    // would pass, green, against the bug. It pins the mode list — which is worth
-    // pinning, it is now shared by two indicators — while the slice SOURCE, the
-    // actual subject of #4825, is out of reach: MainWindow is not linkable from
-    // this target (it links aethercore, not the GUI), so nothing here can ask
-    // updateKeyerAvailability() which slice it read. Same compromise the keyer
-    // helpers above make, and the same one the file header warns about. The fix
-    // itself was verified on hardware (a FLEX-6500 with TX off, and a two-slice
-    // TX=CW / active=USB pair); if that ever needs to become a test, the tri-state
-    // decision has to move out of MainWindow into VoiceModeGate.h first.
+    // WHAT THE MODE CHECKS BELOW DO NOT PIN, stated plainly because they read
+    // like they cover the fix and they do not: every isVoiceMode() check here
+    // would pass, green, against the bug — the PRE-FIX code used the same mode
+    // list. They pin the mode list, which is worth pinning now that two
+    // indicators share it. The slice SOURCE, the actual subject of #4825, is
+    // still out of reach: MainWindow is not linkable from this target (it links
+    // aethercore, not the GUI), so nothing here can ask
+    // updateKeyerAvailability() which slice it read. That half rests on the
+    // hardware verification (a FLEX-6500 with TX off, and a two-slice TX=CW /
+    // active=USB pair).
+    //
+    // The teardown decision IS pinned, in the second block below.
+    // shouldAutoHideCopyAssist() was moved into VoiceModeGate.h for exactly the
+    // reason this comment used to give for not pinning it, so the clause that
+    // keeps a band recall from stopping a running transcription has a test that
+    // fails when it is removed.
     {
         // TX off: no slice carries isTxSlice(), so txSlice() is null and
         // updateKeyerAvailability() reads an empty TX mode.
@@ -830,15 +834,68 @@ int main(int argc, char** argv)
         }
 
         // No active slice at all: an empty mode is not a voice mode, so the
-        // indicator dims. It does NOT close an open panel — the auto-hide
-        // requires the slice to exist, because a band recall drops and
-        // re-creates the slice under the same id and would otherwise stop
-        // transcription on every band change (KiwiRebindTracker.h, #4158).
-        // The panel stays dismissible in that state because the indicator is
-        // enabled whenever it is visible (#4932 review).
+        // indicator dims. Whether that also CLOSES an open panel is a separate
+        // decision, pinned in the next block.
         check(!isVoiceMode(QString()),
-              "no active slice: empty mode is not a voice mode — ASR dims "
-              "(an open panel is left alone; band recall passes through here)");
+              "no active slice: empty mode is not a voice mode — ASR dims");
+    }
+
+    // ---- Copy Assist auto-hide: what may tear down a RUNNING transcription ----
+    //
+    // Hiding the panel calls setAsrEnabled(false) — the audio tap is dropped and
+    // Enable is unticked — and updateKeyerAvailability() only ever hides, never
+    // shows. So a hide the operator did not ask for cannot be undone by any
+    // later refresh, which is why every clause of this predicate exists to say
+    // NO. Two of them were regressions caught in review on this PR, and this
+    // block is what stops them coming back.
+    {
+        const QString usb = QStringLiteral("USB");
+        const QString cw  = QStringLiteral("CW");
+
+        // The one case that SHOULD tear down: the operator selected a live
+        // slice that carries nothing transcribable, with no rebuild in flight.
+        check(shouldAutoHideCopyAssist(/*panelVisible=*/true,
+                                       /*haveActiveSlice=*/true, cw,
+                                       /*bandRecallInFlight=*/false),
+              "operator selects a live CW slice: an open panel closes — this is "
+              "the auto-hide's whole purpose (#4825)");
+
+        // Nothing open, nothing to tear down.
+        check(!shouldAutoHideCopyAssist(false, true, cw, false),
+              "panel already closed: nothing to hide");
+
+        // A voice slice never closes it, recall or not.
+        check(!shouldAutoHideCopyAssist(true, true, usb, false),
+              "live USB slice: the panel stays open");
+
+        // #4158 / single-slice band recall, and disconnect: the slice is ABSENT.
+        // band_persistence drops the slice and re-creates it under the same id a
+        // moment later; on a single-slice setup that empties slices() and lands
+        // here. Closing would stop transcription on every band change and never
+        // restore it.
+        check(!shouldAutoHideCopyAssist(true, /*haveActiveSlice=*/false,
+                                        QString(), false),
+              "no active slice (single-slice band recall, or disconnect): the "
+              "panel is left alone — an absent slice is not a mode change");
+
+        // #4158 again, one slice further along, and the regression this PR's
+        // review caught second: with a SECOND slice on the pan, onSliceRemoved()
+        // re-selects it (slices.first()) instead of taking the empty-slices
+        // branch, so the gate is handed a live CW slice mid-rebuild and
+        // haveActiveSlice no longer protects anything. Only the recall window
+        // tells this apart from the operator clicking that CW slice themselves.
+        check(!shouldAutoHideCopyAssist(true, /*haveActiveSlice=*/true, cw,
+                                        /*bandRecallInFlight=*/true),
+              "band recall in flight with a surviving CW slice: the panel is "
+              "left alone — Copy Assist survives a band change on a multi-slice "
+              "pan too (#4932 review)");
+
+        // The guard is scoped to the recall window, not a blanket suppression:
+        // once it expires, selecting that same CW slice closes the panel again.
+        check(shouldAutoHideCopyAssist(true, true, cw, false)
+                  != shouldAutoHideCopyAssist(true, true, cw, true),
+              "the band-recall window is the ONLY thing separating those two "
+              "cases — remove it and a band change stops transcription");
     }
 
     if (g_failures == 0)

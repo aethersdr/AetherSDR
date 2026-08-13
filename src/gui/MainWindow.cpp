@@ -9220,17 +9220,6 @@ void MainWindow::updateKeyerAvailability()
     SliceModel* asrSlice = activeSlice();
     const bool asrIsVoice = asrSlice && isVoiceMode(asrSlice->mode());
     if (m_asrIndicator) {
-        const bool asrVisible =
-            m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
-        // Enabled when the mode allows OPENING it, or whenever the panel is
-        // already open so it can always be CLOSED. The second half exists
-        // because a disabled QLabel swallows its own clicks
-        // (MainWindow_Shortcuts.cpp) and CopyAssistPanel has no close button of
-        // its own — without it, any state that leaves the panel open while the
-        // gate says no strands a panel the operator cannot dismiss. Fixing that
-        // here, in the panel's own affordance, is what lets the auto-hide below
-        // keep the conservative shape (PR #4932 review).
-        m_asrIndicator->setEnabled(asrIsVoice || asrVisible);
         // The keyers' shape, and for the keyers' reason: only a slice that
         // EXISTS and is in the wrong mode closes an open panel. A slice that is
         // momentarily ABSENT is not a mode change, and on this radio it is
@@ -9245,15 +9234,61 @@ void MainWindow::updateKeyerAvailability()
         // m_slices and capabilitiesChanged drives applyCapabilitiesToUi ->
         // this function). Leaving the panel up there is the right outcome too —
         // the last transcript stays readable, and the enabled-while-visible
-        // rule above means it can be closed by hand.
-        if (asrSlice && !asrIsVoice && asrVisible) {
+        // rule below means it can be closed by hand.
+        //
+        // A non-null slice is NOT enough on its own, because a band recall does
+        // not have to empty slices() to reach here. With a second slice on the
+        // pan, onSliceRemoved() re-selects it (slices.first(), TopologyFallback)
+        // instead of taking the empty branch — so recalling a band on the
+        // transcribed slice hands the gate a surviving CW/DIGx slice, and a
+        // slice-exists guard alone sees a live slice in the wrong mode and
+        // tears the panel down. Same #4158 rebuild, one slice further along.
+        // m_bandRecallSelection is the window that already answers "this pan is
+        // mid-rebuild, treat radio-driven selection as synchronization-only"
+        // (BandRecallSelectionGuard.h, armed on the band write and refreshed by
+        // onSliceRemoved()), which is exactly the question being asked here.
+        //
+        // The decision itself lives in VoiceModeGate.h so a test can pin it —
+        // this function is not reachable from the gating-test target — and the
+        // reason each clause is there is stated with it (#4932 review).
+        const bool bandRecallInFlight =
+            asrSlice
+            && m_bandRecallSelection.isActive(asrSlice->panId(),
+                                              QDateTime::currentMSecsSinceEpoch());
+        if (shouldAutoHideCopyAssist(
+                m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible(),
+                asrSlice != nullptr,
+                asrSlice ? asrSlice->mode() : QString(),
+                bandRecallInFlight)) {
             m_copyAssistApplet->setCopyAssistVisible(false);
-            setIndicatorStyle(m_asrIndicator, kDisabled);
-        } else if (asrVisible) {
-            setIndicatorStyle(m_asrIndicator, kActive);
-        } else {
-            setIndicatorStyle(m_asrIndicator, asrIsVoice ? kAvail : kDisabled);
         }
+
+        // Read visibility AFTER the auto-hide, not before. The enabled state
+        // and the cursor both key off it, and computing them from the pre-hide
+        // value left the indicator enabled with a pointing hand over a panel
+        // that had just been closed: the click passed the isEnabled() guard in
+        // MainWindow_Shortcuts.cpp, showCopyAssist() re-opened the panel, and
+        // this function closed it again in the same handler — an affordance
+        // that promised something and did nothing, until some unrelated
+        // refresh happened along (PR #4932 review).
+        const bool asrVisible =
+            m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
+
+        // Enabled when the mode allows OPENING it, or whenever the panel is
+        // already open so it can always be CLOSED. The second half exists
+        // because a disabled QLabel swallows its own clicks
+        // (MainWindow_Shortcuts.cpp) and CopyAssistPanel has no close button of
+        // its own — without it, any state that leaves the panel open while the
+        // gate says no strands a panel the operator cannot dismiss. Fixing that
+        // here, in the panel's own affordance, is what lets the auto-hide above
+        // keep the conservative shape (PR #4932 review).
+        m_asrIndicator->setEnabled(asrIsVoice || asrVisible);
+        // An open panel reads kActive whatever the mode says — including the
+        // band-recall and disconnect cases the auto-hide deliberately skips,
+        // where ASR is genuinely still running.
+        setIndicatorStyle(m_asrIndicator,
+                          asrVisible ? kActive
+                                     : (asrIsVoice ? kAvail : kDisabled));
         // Cursor tracks the ENABLED state, not the mode, so the hand appears on
         // exactly the clicks that do something — including the close-an-open-
         // panel case where the mode gate says no.

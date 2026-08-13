@@ -28,12 +28,17 @@ Design + decision record: RFC **#4333** (accepted). Engine: **whisper.cpp**
   ASR off. "Leaving voice mode" includes **selecting a slice that is not in a
   voice mode** — clicking to a CW slice while Copy Assist is running closes the
   panel and stops transcription, even if the voice slice you were transcribing is
-  still audible. Re-select the voice slice and re-open to resume.
-- A slice that momentarily **goes away** is not treated as leaving voice mode: a
-  band-stack recall drops and re-creates the slice, and disconnecting clears them
-  all, so an open panel is left alone in those states rather than torn down. The
-  `ASR` toggle stays clickable whenever the panel is open, so you can always
-  close it by hand even while it is dimmed.
+  still audible. To resume, re-select the voice slice, re-open the panel and
+  tick **Enable** again — closing the panel unticks it.
+- A **band-stack recall is not** leaving voice mode, and neither is a disconnect.
+  A recall drops the slice and re-creates it on the new band a moment later, and
+  a disconnect clears every slice, so an open panel is left alone in both states
+  rather than torn down — transcription survives a band change. That holds
+  whether or not another slice survives the recall: with a second slice on the
+  pan the client re-selects it while the radio rebuilds, and a surviving CW or
+  DIGx slice does not count as you leaving voice mode either.
+- Whenever the panel is open the `ASR` toggle is **lit and clickable**, in every
+  one of those states, so you can always close it by hand.
 - The status line shows a **`Queue: N s`** backlog — seconds of received audio not
   yet transcribed. It stays near 0 when the engine keeps up and climbs
   (amber→red) when it can't (e.g. whisper on a Raspberry Pi), so you can see ASR
