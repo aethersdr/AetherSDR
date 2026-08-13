@@ -1312,9 +1312,13 @@ QString WorkspaceController::createWorkspace(NewWorkspaceSource source,
     emit workspacesChanged();
 
     // Creating is arranging: while the mode is on, the new workspace
-    // becomes the active one immediately.
+    // becomes the active one immediately — and opens EDITING (field
+    // request): the operator just named a canvas to lay out, and greeting
+    // them with a locked surface would send them straight back to the menu.
+    // The same reasoning as the first-enable-after-migration rule.
     if (m_enabled) {
         switchWorkspace(newId);
+        m_canvas->setEditMode(true);
     }
     return newId;
 }

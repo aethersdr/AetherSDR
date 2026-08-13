@@ -531,6 +531,13 @@ int main(int argc, char** argv)
         report("create-from-current switches to the copy",
                !wsB.isEmpty() && ctl.activeWorkspaceId() == wsB
                    && canvas.contains("applet:RX") && canvas.contains("applet:TX"));
+        report("...and a fresh canvas opens EDITING (field request)",
+               canvas.isEditMode());
+        canvas.setEditMode(false);
+        report("...while a plain switch keeps the posture",
+               ctl.switchWorkspace(wsA) && !canvas.isEditMode()
+                   && ctl.switchWorkspace(wsB));
+        canvas.setEditMode(true);
         report("...and the switcher lists both",
                ctl.workspaceList().size() >= 2);
 
