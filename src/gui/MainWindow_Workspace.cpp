@@ -323,11 +323,13 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             toggleAppletPanelFloating(false);
             // The dock above persisted AppletPanelFloating=False; the
             // operator didn't ask for that (review M2 — "visual only"
-            // must cover the pop-out too).  Restore the preference so a
-            // disable, or a restart straight out of canvas mode, brings
-            // the float back.
+            // must cover the pop-out too).  Restore the preference AND
+            // persist it — the toggle's own save already ran, so a bare
+            // setValue sat cache-only and a crash lost the pop-out (found
+            // by the 8600 bridge pass: the crash below made it real).
             AppSettings::instance().setValue(
                 QStringLiteral("AppletPanelFloating"), QStringLiteral("True"));
+            AppSettings::instance().save();
         }
         if (m_appletPanel) {
             m_appletPanel->hide();
@@ -380,7 +382,20 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
                        QStringLiteral("False"))
                 .toString() == QLatin1String("True")
             && !m_appletPanelFloatWindow) {
-            toggleAppletPanelFloating(true);
+            // DEFERRED a turn: re-floating synchronously inside the same
+            // event-loop turn as the shell swap created the float window
+            // against surfaces mid-teardown — on Wayland that is a
+            // wl_subsurface "no parent" protocol error and the compositor
+            // KILLS the client (found live on the 8600 bridge pass).  One
+            // turn lets Qt commit the reparented tree first — the same
+            // deferral discipline the boot mount uses.
+            QTimer::singleShot(0, this, [this] {
+                if (m_workspaceController
+                    && !m_workspaceController->isEnabled()
+                    && !m_appletPanelFloatWindow) {
+                    toggleAppletPanelFloating(true);
+                }
+            });
         }
     }
     if (m_panStack->count() > 1) {
