@@ -762,6 +762,24 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         if (frame.data.size() >= 2 && frame.data[1] >= 1 && frame.data[1] <= 3)
             m_filter = frame.data[1];
         publishModeFromRadio();
+
+        // RE-ASK FOR THE DATA FLAG. The radio pushes a mode frame when the
+        // operator changes mode OR presses DATA, but it NEVER volunteers 1A 06
+        // — measured on an IC-9700 (2026-08-12): across a whole session the
+        // only 1A 06 frame was the answer to our own connect-time query, while
+        // mode frames arrived both on connect and on a front-panel DATA press.
+        //
+        // Without this re-query m_dataMode is radio-authoritative exactly once,
+        // at connect, and stale for the rest of the session: clearing DATA on
+        // the front panel left AetherSDR publishing DFM for a radio sitting in
+        // plain FM. That is the misreport #4930's review identified, reproduced
+        // live before this line existed.
+        //
+        // The reply lands in the kSetting case below and republishes the mode
+        // if the flag actually moved, so a mode change with no flag change
+        // costs one frame and emits nothing.
+        if (m_model && m_model->hasDataModeCommand && m_session)
+            m_session->sendCiv(cmdReadDataMode(m_session->civAddress()));
         return;
     }
 
