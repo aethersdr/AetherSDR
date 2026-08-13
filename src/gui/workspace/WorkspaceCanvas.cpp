@@ -98,6 +98,12 @@ WorkspaceCanvas::WorkspaceCanvas(QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);   // keyboard placement (phase 5)
     setAccessibleName(QStringLiteral("Workspace canvas"));
 
+    // The bare widget DEFAULTS to edit mode without a setEditMode() call
+    // (the early-return would skip the install there), so the descendant-
+    // press filter starts installed.  Removed/re-added by setEditMode();
+    // Qt drops it automatically when the canvas is destroyed.
+    qApp->installEventFilter(this);
+
     m_frame = new CanvasItemFrame(this);
     m_gestureOverlay = new GestureOverlay(this);
 

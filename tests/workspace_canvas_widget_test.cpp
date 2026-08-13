@@ -339,6 +339,46 @@ int main(int argc, char** argv)
         // Pressing it again is now a no-op.
         press(under);
         report("pressing it again emits nothing", stackSpy.count() == 1);
+
+        // A press on a DESCENDANT selects too (8600 field report: applet
+        // content consumes presses before the item widget sees them, so
+        // the resize frame only appeared on right-clicks — the one press
+        // nothing swallowed).  The app-wide filter walks up from wherever
+        // the press landed; left and right buttons alike.
+        {
+            auto* child = new QWidget(over);
+            child->setGeometry(2, 2, 20, 20);
+            child->show();
+            canvas.clearSelection();
+            QMouseEvent ev(QEvent::MouseButtonPress, QPointF(3, 3),
+                           child->mapToGlobal(QPointF(3, 3)),
+                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(child, &ev);
+            report("a press on an item's descendant selects it",
+                   canvas.selectedItem() == QStringLiteral("over"));
+
+            canvas.clearSelection();
+            QMouseEvent right(QEvent::MouseButtonPress, QPointF(3, 3),
+                              child->mapToGlobal(QPointF(3, 3)),
+                              Qt::RightButton, Qt::RightButton,
+                              Qt::NoModifier);
+            QCoreApplication::sendEvent(child, &right);
+            report("...right-press selects the same way",
+                   canvas.selectedItem() == QStringLiteral("over"));
+
+            // Locked canvas: descendant presses select NOTHING — the
+            // app-wide filter leaves with edit mode.
+            canvas.setEditMode(false);
+            canvas.clearSelection();
+            QMouseEvent lockedEv(QEvent::MouseButtonPress, QPointF(3, 3),
+                                 child->mapToGlobal(QPointF(3, 3)),
+                                 Qt::LeftButton, Qt::LeftButton,
+                                 Qt::NoModifier);
+            QCoreApplication::sendEvent(child, &lockedEv);
+            report("...but never while locked",
+                   canvas.selectedItem().isEmpty());
+            canvas.setEditMode(true);
+        }
     }
 
     // ── Restoring a saved surface through the widget ─────────────────────
