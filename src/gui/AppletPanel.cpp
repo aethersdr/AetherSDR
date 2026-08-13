@@ -1270,7 +1270,15 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
     };
 
     QList<AppletCatalogEntry> out;
-    out.reserve(m_appletOrder.size());
+    out.reserve(m_appletOrder.size() + 1);
+    // The VU/S-Meter container is created directly on the manager rather
+    // than through makeEntry (it predates the m_appletOrder plumbing), so
+    // the iteration below never sees it — the one applet that needs an
+    // explicit row (8600 field report: "where is the VU meter?").
+    if (m_sMeterContainer) {
+        out.append({QStringLiteral("VU"), m_sMeterContainer->title(),
+                    QStringLiteral("Metering")});
+    }
     for (const auto& entry : m_appletOrder) {
         AppletCatalogEntry e;
         e.id = entry.id;
