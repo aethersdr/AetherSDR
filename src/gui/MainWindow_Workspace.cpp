@@ -471,6 +471,94 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         return out;
     }
 
+    if (action == QLatin1String("list")) {
+        QVariantList wsList;
+        for (const auto& [id, label] : m_workspaceController->workspaceList()) {
+            QVariantMap w;
+            w[QStringLiteral("id")]     = id;
+            w[QStringLiteral("label")]  = label;
+            w[QStringLiteral("active")] =
+                (id == m_workspaceController->activeWorkspaceId());
+            wsList.append(w);
+        }
+        out[QStringLiteral("workspaces")] = wsList;
+        out[QStringLiteral("active")] = m_workspaceController->activeWorkspaceId();
+        return out;
+    }
+
+    if (action == QLatin1String("switch")) {
+        const QString target = args.trimmed();
+        // Accept an id or a label — the bridge caller usually has the label.
+        QString id = target;
+        for (const auto& [wsId, wsLabel] : m_workspaceController->workspaceList()) {
+            if (wsLabel == target) { id = wsId; break; }
+        }
+        if (!m_workspaceController->switchWorkspace(id)) {
+            out[QStringLiteral("error")] =
+                QStringLiteral("no such workspace: %1").arg(target);
+            return out;
+        }
+        out[QStringLiteral("active")] = m_workspaceController->activeWorkspaceId();
+        return out;
+    }
+
+    if (action == QLatin1String("create")) {
+        const QStringList parts = args.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty()) {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "create wants <current|classic|blank> [label]");
+            return out;
+        }
+        WorkspaceController::NewWorkspaceSource src;
+        if (parts.first() == QLatin1String("current"))
+            src = WorkspaceController::NewWorkspaceSource::Current;
+        else if (parts.first() == QLatin1String("classic"))
+            src = WorkspaceController::NewWorkspaceSource::Classic;
+        else if (parts.first() == QLatin1String("blank"))
+            src = WorkspaceController::NewWorkspaceSource::Blank;
+        else {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "create wants <current|classic|blank> [label]");
+            return out;
+        }
+        const QString label = parts.mid(1).join(QLatin1Char(' '));
+        const QString id = m_workspaceController->createWorkspace(src, label);
+        if (id.isEmpty()) {
+            out[QStringLiteral("error")] = QStringLiteral("create failed");
+            return out;
+        }
+        out[QStringLiteral("id")] = id;
+        out[QStringLiteral("active")] = m_workspaceController->activeWorkspaceId();
+        return out;
+    }
+
+    if (action == QLatin1String("bind")) {
+        // bind <workspaceId|-> <profile name with spaces>
+        const QString a = args.trimmed();
+        const int sp = a.indexOf(QLatin1Char(' '));
+        if (sp <= 0) {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "bind wants <workspaceId|-> <global profile name>");
+            return out;
+        }
+        const QString wsId    = a.left(sp);
+        const QString profile = a.mid(sp + 1).trimmed();
+        if (wsId == QLatin1String("-")) {
+            m_workspaceController->unbindProfile(profile);
+        } else {
+            m_workspaceController->bindProfile(profile, wsId);
+        }
+        out[QStringLiteral("bound")] =
+            m_workspaceController->boundWorkspaceFor(profile);
+        return out;
+    }
+
+    if (action == QLatin1String("import-floats")) {
+        out[QStringLiteral("imported")] =
+            m_workspaceController->importFloatingOntoCanvas();
+        return out;
+    }
+
     if (action == QLatin1String("edit")) {
         // Operator posture only — `place` stays available in BOTH postures
         // (the bridge is not an operator, and tests must be able to arrange
@@ -539,8 +627,9 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
     }
 
     out[QStringLiteral("error")] =
-        QStringLiteral("unknown workspace action: %1 "
-                       "(status|enable|disable|edit|place)").arg(action);
+        QStringLiteral("unknown workspace action: %1 (status|enable|disable|"
+                       "edit|place|list|switch|create|bind|import-floats)")
+            .arg(action);
     return out;
 }
 
