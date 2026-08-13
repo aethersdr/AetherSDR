@@ -791,9 +791,10 @@ void MainWindow::registerShortcutActions()
         {"band_6m",  "6m",  50.125},  {"band_2m",  "2m",  146.000},
     };
     for (const auto& b : bands) {
+        QString bandName = QString::fromLatin1(b.name);
         double freq = b.mhz;
         m_shortcutManager.registerAction(b.id, b.name, "Band",
-            QKeySequence(), [this, freq]() {
+            QKeySequence(), [this, bandName, freq]() {
                 if (!m_radioModel.isConnected()) return;
                 auto* s = activeSlice();
                 if (!s) return;
@@ -801,17 +802,7 @@ void MainWindow::registerShortcutActions()
                     s->notifyTuneBlockedByLock();
                     return;
                 }
-                TuneCenteringResult result;
-                if (auto* pan = m_radioModel.panadapter(s->panId())) {
-                    result.oldCenterMhz = pan->centerMhz();
-                    result.bandwidthMhz = pan->bandwidthMhz();
-                }
-                result.newCenterMhz = freq;
-                result.followRevealTriggered = true;
-                result.hardCenterUsed = true;
-                logTunePolicyDecision("band-shortcut", TuneIntent::AbsoluteJump,
-                                      s->frequency(), freq, result);
-                s->tuneAndRecenter(freq);
+                selectBand(s->panId(), bandName, freq, QString());
             });
     }
 

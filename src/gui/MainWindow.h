@@ -414,6 +414,13 @@ private:
                                                        const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
+    // Shared band-selection implementation: radio-authoritative Flex
+    // band-stack recall (display pan set <panId> band=<key>) when the
+    // command plane supports it, else a local tune to freqMhz/mode.
+    // Used by both the SpectrumOverlayMenu band buttons and the band_*
+    // shortcut/MIDI actions so they behave identically (#4543).
+    void selectBand(const QString& panId, const QString& bandName, double freqMhz,
+                    const QString& mode, const QString& stackKeyHint = QString());
     // Lock / SWR-sweep guards shared by every tune source.  Returns true if the
     // tune must be blocked (and, for a locked active slice, restores the VFO
     // readout).  Lets the edge-pan tune path — which bypasses applyTuneRequest
