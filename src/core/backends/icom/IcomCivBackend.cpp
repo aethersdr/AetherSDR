@@ -2427,18 +2427,35 @@ void IcomCivBackend::traceCiv(bool outbound, std::span<const std::uint8_t> frame
     // scanning a log, and the whole point of switching this on is to answer
     // "did the 1A 06 query go out, and did the radio answer it".
     if (lcIcomCiv().isDebugEnabled()) {
+        // THE TWO CALL SITES PASS DIFFERENT LAYOUTS, so the command index is a
+        // parameter and not an assumption:
+        //
+        //   TX (sendUserCommand) — the raw wire frame from buildFrame:
+        //       FE FE <to> <from> <cmd> [<sub>] <data…> FD   -> cmd at 4
+        //   RX (onCivFrame)      — re-serialised, envelope deliberately dropped
+        //       <cmd> [<sub>] <data…>                        -> cmd at 0
+        //
+        // Reading index 4 for both printed a payload byte as the command on
+        // every received frame, and silently printed NOTHING for any RX frame
+        // shorter than five bytes — which is most of them. `1a 06 01 01`, the
+        // reply this whole category was added to make visible, is four bytes
+        // and came out undecorated. Exactly the wrong-but-plausible output the
+        // comment below warns about, in the direction that was not checked.
+        const int cmdIdx = outbound ? 4 : 0;
         QString tag;
-        if (frame.size() >= 5) {
-            tag = QStringLiteral(" cmd=%1").arg(frame[4], 2, 16, QLatin1Char('0'));
+        if (frame.size() > static_cast<std::size_t>(cmdIdx)) {
+            const std::uint8_t c = frame[cmdIdx];
+            tag = QStringLiteral(" cmd=%1").arg(c, 2, 16, QLatin1Char('0'));
             // Which commands carry a subcommand is a per-command fact — the
             // same enumeration parseFrame() uses. Getting it wrong here would
             // label command 0x05's first frequency digit as a subcommand.
-            if (frame.size() >= 6) {
-                switch (frame[4]) {
+            if (frame.size() > static_cast<std::size_t>(cmdIdx) + 1) {
+                switch (c) {
                 case cmd::kLevel: case cmd::kMeter: case cmd::kFunction:
                 case cmd::kPower: case cmd::kReadId: case cmd::kSetting:
                 case cmd::kControl: case cmd::kScope: case cmd::kTuneOffset:
-                    tag += QStringLiteral(" sub=%1").arg(frame[5], 2, 16, QLatin1Char('0'));
+                    tag += QStringLiteral(" sub=%1")
+                               .arg(frame[cmdIdx + 1], 2, 16, QLatin1Char('0'));
                     break;
                 default: break;
                 }
