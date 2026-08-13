@@ -1038,7 +1038,10 @@ bool MainWindow::startDax()
 #endif
 
     m_daxBridge = new DaxBridge(this);
-    if (!m_daxBridge->open()) {
+    // Open only as many DAX RX devices as the radio has slices — the audio
+    // device list follows the radio (#4854). maxSlices() is known here: this
+    // runs on the 3 s post-connect timer, well after the radio reported it.
+    if (!m_daxBridge->open(m_radioModel.maxSlices())) {
         qWarning() << "MainWindow: failed to open DAX audio bridge";
         QMessageBox::warning(this, "DAX Audio Bridge Error",
             "AetherSDR could not open the DAX audio bridge.\n\n"
@@ -1053,7 +1056,7 @@ bool MainWindow::startDax()
     // statusReceived hooks with divergent filtering.
 
     // Acquire DAX channels only for slices with a channel assigned.
-    // FlexLib creates streams on demand, not all 4 unconditionally.
+    // FlexLib creates streams on demand, not all 8 unconditionally.
     // Creating unused streams causes the radio to round-robin audio
     // across all of them, starving the active channels.
     m_daxSliceLastCh.clear();

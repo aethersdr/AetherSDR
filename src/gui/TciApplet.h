@@ -29,6 +29,12 @@ public:
     void setRadioModel(RadioModel* model);
     void setTciServer(TciServer* tci);
 
+    // Bound the operator-facing RX row count to the radio's slice capacity
+    // (mirrors DaxApplet). Rows above n are HIDDEN, not destroyed — kChannels
+    // stays the allocation. Fed by MainWindow from RadioModel::maxSlices().
+    // (#4854 review)
+    void setMaxDaxChannels(int n);
+
     // Sync Enable button state (called by MainWindow on autostart)
     void setTciEnabled(bool on);
     void setTciRxLevel(int channel, float rms);  // channel 1-4
@@ -48,11 +54,13 @@ private:
 
     RadioModel* m_model{nullptr};
     TciServer*  m_tciServer{nullptr};
+    int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton* m_tciEnable{nullptr};
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 
+    QWidget*     m_rxRow[kChannels]{};  // per-channel row container — hidden to gate to maxSlices()
     MeterSlider* m_rxMeter[kChannels]{};
     QLabel*      m_rxStatus[kChannels]{};
     MeterSlider* m_txMeter{nullptr};

@@ -86,16 +86,19 @@ static bool openShmSegment(const char* name, int& fd, DaxShmBlock*& block)
     return true;
 }
 
-bool VirtualAudioBridge::open()
+bool VirtualAudioBridge::open(int activeChannels)
 {
     if (m_open.load(std::memory_order_acquire)) return true;
 
-    // Open NUM_CHANNELS (8) RX shared memory segments
-    // The 8 is unconditional: this bridge opens before the radio slices=N
-    // capacity is known, so a 2-slice radio still opens 8 (extras stay idle).
-    // The operator-facing count is bounded in DaxApplet::setMaxDaxChannels();
-    // resizing the opened set after connect is a follow-up (see issue 4935).
-    for (int i = 0; i < NUM_CHANNELS; ++i) {
+    // Open only as many RX shm segments as the radio has slices (the device
+    // list follows the radio — product decision, #4854). open() is reached
+    // from MainWindow::startDax(), which runs on a 3 s post-connect timer, so
+    // RadioModel::maxSlices() is already known and passed in here. NUM_CHANNELS
+    // stays the compile-time array bound; only this open loop is bounded.
+    // Growing/shrinking the opened set on a later slice-count change is a
+    // follow-up (see issue #4935).
+    m_activeChannels = std::clamp(activeChannels, 1, NUM_CHANNELS);
+    for (int i = 0; i < m_activeChannels; ++i) {
         int ch = i + 1;
         QByteArray name = shmName(ch).toUtf8();
 

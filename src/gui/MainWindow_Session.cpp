@@ -1912,12 +1912,29 @@ void MainWindow::wireCatPorts()
     applyCatPortCount();
     m_appletPanel->daxApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->daxIqApplet()->setRadioModel(&m_radioModel);
+    // DAX RX row count follows the radio's slice capacity (#4854 review),
+    // mirroring the AetherClock DAX-chooser wiring in setupAetherClock().
+    if (auto* daxApplet = m_appletPanel->daxApplet()) {
+        daxApplet->setMaxDaxChannels(m_radioModel.maxSlices());
+        connect(&m_radioModel, &RadioModel::infoChanged, daxApplet,
+                [this, daxApplet] { daxApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+        connect(&m_radioModel, &RadioModel::connectionStateChanged, daxApplet,
+                [this, daxApplet](bool) { daxApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+    }
 #ifdef HAVE_WEBSOCKETS
     // Owned by the session — no QObject parent (see RadioSession docs, #2385).
     m_session->setTciServer(new TciServer(&m_radioModel, nullptr));
     tciServer()->setAudioEngine(m_audio);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->tciApplet()->setTciServer(tciServer());
+    // TCI RX row count follows the radio's slice capacity too (#4854 review).
+    if (auto* tciApplet = m_appletPanel->tciApplet()) {
+        tciApplet->setMaxDaxChannels(m_radioModel.maxSlices());
+        connect(&m_radioModel, &RadioModel::infoChanged, tciApplet,
+                [this, tciApplet] { tciApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+        connect(&m_radioModel, &RadioModel::connectionStateChanged, tciApplet,
+                [this, tciApplet](bool) { tciApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+    }
 
     // TCI applet sliders → TciServer gain setters
     connect(m_appletPanel->tciApplet(), &TciApplet::tciRxGainChanged,

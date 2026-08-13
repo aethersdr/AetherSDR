@@ -39,7 +39,12 @@ public:
     explicit VirtualAudioBridge(QObject* parent = nullptr);
     ~VirtualAudioBridge() override;
 
-    bool open();
+    // activeChannels = how many RX shm segments to actually open (the radio's
+    // slice capacity, RadioModel::maxSlices()). Clamped to [1, NUM_CHANNELS].
+    // NUM_CHANNELS stays the compile-time array bound; this only bounds the
+    // open loop so the device list follows the radio (#4854). Dynamic resize
+    // after connect is a follow-up (issue #4935).
+    bool open(int activeChannels = NUM_CHANNELS);
     void close();
     bool isOpen() const { return m_open.load(std::memory_order_acquire); }
 
@@ -87,6 +92,10 @@ private:
     // DaxApplet slider).  std::atomic gives the formal happens-before guarantee
     // that plain bool/float load/store would lack on weakly-ordered archs.
     std::atomic_bool m_open{false};
+    // How many RX shm segments open() actually opened (bounded by maxSlices()).
+    // Teardown loops still walk the full NUM_CHANNELS bound — closing an
+    // unopened slot is a no-op. (#4854)
+    int m_activeChannels{NUM_CHANNELS};
     float m_gain{0.5f};  // -6 dB default — GUI-only
     std::atomic<float> m_channelGain[NUM_CHANNELS]{0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
     float m_txGain{0.5f};

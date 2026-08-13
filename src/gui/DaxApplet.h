@@ -23,6 +23,12 @@ public:
 
     void setRadioModel(RadioModel* model);
 
+    // Bound the operator-facing RX row count to the radio's slice capacity
+    // (Principle I): a 6300 exposes 2, a 6700 eight. Rows above n are HIDDEN,
+    // not destroyed — kChannels stays the allocation. Fed by MainWindow from
+    // RadioModel::maxSlices(); see #4854 review.
+    void setMaxDaxChannels(int n);
+
     // Sync Enable button state (called by MainWindow on autostart)
     void setDaxEnabled(bool on);
     void setDaxRxLevel(int channel, float rms);  // channel 1-8
@@ -37,8 +43,10 @@ private:
     void buildUI();
 
     RadioModel* m_model{nullptr};
+    int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton*  m_daxEnable{nullptr};
+    QWidget*      m_daxRxRow[kChannels]{};  // per-channel row container — hidden to gate to maxSlices()
     MeterSlider*  m_daxRxMeter[kChannels]{};
     QLabel*       m_daxRxStatus[kChannels]{};
     MeterSlider*  m_daxTxMeter{nullptr};

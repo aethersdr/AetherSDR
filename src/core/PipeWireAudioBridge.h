@@ -17,7 +17,8 @@ class PipeWireNativeRxSource;
 #endif
 
 // DAX virtual audio bridge for Linux using PulseAudio pipe modules.
-// Creates named pipes in /tmp and loads module-pipe-source (RX, 4 channels)
+// Creates named pipes in /tmp and loads module-pipe-source (RX, up to
+// NUM_CHANNELS — open() opens only maxSlices() of them, following the radio)
 // and module-pipe-sink (TX, 1 channel) so that apps like WSJT-X, VARA, fldigi
 // see "AetherSDR DAX 1-8" as audio input and "AetherSDR TX" as audio output.
 // Works with both PulseAudio and PipeWire (via pipewire-pulse).
@@ -36,7 +37,12 @@ public:
     explicit PipeWireAudioBridge(QObject* parent = nullptr);
     ~PipeWireAudioBridge() override;
 
-    bool open();
+    // activeChannels = how many RX sources to actually open (the radio's
+    // slice capacity, RadioModel::maxSlices()). Clamped to [1, NUM_CHANNELS].
+    // NUM_CHANNELS stays the compile-time array bound; this only bounds the
+    // open loop so the device list follows the radio (#4854). Dynamic resize
+    // after connect is a follow-up (issue #4935).
+    bool open(int activeChannels = NUM_CHANNELS);
     void close();
     bool isOpen() const { return m_open; }
 
@@ -85,6 +91,10 @@ private:
     void feedSilenceToAllPipes();
 
     std::atomic_bool m_open{false};
+    // How many RX sources open() actually opened (bounded by maxSlices()).
+    // Teardown loops still walk the full NUM_CHANNELS bound — closing an
+    // unopened slot is a no-op. (#4854)
+    int m_activeChannels{NUM_CHANNELS};
     float m_gain{0.5f};
     // m_channelGain is read on PanadapterStream's network thread (DirectConnection
     // fast path) and written from the main thread (DaxApplet slider).  Float
