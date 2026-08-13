@@ -177,6 +177,35 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
 void IcomCivBackend::publishCapabilities() { emit capabilitiesChanged(); }
 
+// Publish the radio's CURRENT mode as a neutral name, with the passband that
+// belongs to it.
+//
+// Extracted so the two inputs that can change the answer share one path: the
+// mode reply (0x06 / Transceive) and the DATA-flag reply (1A 06). The neutral
+// name is a function of BOTH — FM vs DFM, USB vs DIGU — so a flag-only change
+// must republish even though m_mode did not move. Before this was shared, only
+// the mode reply published, and a front-panel FM-D never reached the UI.
+void IcomCivBackend::publishModeFromRadio()
+{
+    const QString neutral = QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
+    if (neutral.isEmpty())
+        return;   // D-STAR: a waveform, not a demodulator setting
+    SliceDelta s;
+    s.mode = neutral;
+    // The passband travels WITH the mode, in the same delta, because the
+    // radio will never send one. Applied after the mode by SliceModel's own
+    // ordering, which is what stops a narrow CW window surviving into DIGU.
+    const auto [low, high] =
+        passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
+    s.filterLow  = low;
+    s.filterHigh = high;
+    emit sliceChanged(sliceId(), s);
+    // The filter LADDER changes with the mode, so the buttons have to be
+    // rebuilt from the new one. Change-gated inside the models, so the
+    // repeat this produces on an unchanged mode costs nothing.
+    publishCapabilities();
+}
+
 void IcomCivBackend::publishScopeDbmRange()
 {
     // kUnknown has hasScope=false, so this is a quiet no-op on a backend whose
@@ -361,6 +390,18 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
                                       setting::kDataOffModInput));
     m_session->sendCiv(cmdReadSetting(m_session->civAddress(),
                                       setting::kDataModInput));
+
+    // ASK FOR THE DATA FLAG, because 0x06's mode reply does not carry it and
+    // m_dataMode would otherwise be seeded from nothing but our own last write.
+    // That asymmetry is the bug: m_mode and m_filter are adopted from the radio
+    // (including unsolicited Transceive frames when the operator turns the front
+    // panel knob), so publishing modeToNeutral(m_mode, m_dataMode) mixes a
+    // radio-sourced value with a client-only one. An operator who selects FM-D
+    // on the radio then sees plain FM in the UI — and the next mode write takes
+    // the radio back out of data mode. Constitution II: read radio state as
+    // truth. Same "the reading half was missing" defect as the levels below.
+    if (m_model && m_model->hasDataModeCommand)
+        m_session->sendCiv(cmdReadDataMode(m_session->civAddress()));
 
     // ADOPT THE RADIO'S OWN LEVELS. Constitution II/III says an Icom is
     // authoritative over its operating state and the client must never push a
@@ -720,23 +761,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // changing the filter on the radio's own front panel.
         if (frame.data.size() >= 2 && frame.data[1] >= 1 && frame.data[1] <= 3)
             m_filter = frame.data[1];
-        const QString neutral = QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
-        if (neutral.isEmpty())
-            return;   // D-STAR: a waveform, not a demodulator setting
-        SliceDelta s;
-        s.mode = neutral;
-        // The passband travels WITH the mode, in the same delta, because the
-        // radio will never send one. Applied after the mode by SliceModel's own
-        // ordering, which is what stops a narrow CW window surviving into DIGU.
-        const auto [low, high] =
-            passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
-        s.filterLow  = low;
-        s.filterHigh = high;
-        emit sliceChanged(sliceId(), s);
-        // The filter LADDER changes with the mode, so the buttons have to be
-        // rebuilt from the new one. Change-gated inside the models, so the
-        // repeat this produces on an unchanged mode costs nothing.
-        publishCapabilities();
+        publishModeFromRadio();
         return;
     }
 
@@ -939,6 +964,29 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
     }
 
     case cmd::kSetting: {
+        // 1A 06 — the DATA flag. Handled BEFORE the 1A 05 gate below, which
+        // rejects every other subcommand and was silently dropping this reply.
+        //
+        // This is what makes m_dataMode radio-authoritative rather than a echo
+        // of our own last write. It arrives both as the answer to the connect
+        // query and unsolicited via Transceive when the operator changes the
+        // mode on the front panel, so turning the knob to plain FM now clears
+        // the flag here instead of leaving it stale and publishing DFM for a
+        // mode the radio is not in.
+        if (frame.hasSub && frame.sub == setting::kDataMode) {
+            const auto reply = parseDataModeReply(frame);
+            if (!reply)
+                return;
+            const bool changed = (m_dataMode != reply->dataMode);
+            m_dataMode = reply->dataMode;
+            // Republish the mode: the neutral name depends on this flag, so a
+            // flag-only change (FM -> FM-D on the front panel) alters what the
+            // rest of the app should be showing even though m_mode did not move.
+            if (changed)
+                publishModeFromRadio();
+            return;
+        }
+
         // 1A 05 <item hi> <item lo> <value>
         if (!frame.hasSub || frame.sub != 0x05 || frame.data.size() < 3)
             return;

@@ -144,6 +144,9 @@ private slots:
 
 private:
     void publishCapabilities();
+    // Publish the radio's current mode + passband. Shared by the mode reply and
+    // the DATA-flag reply, because the neutral name depends on both.
+    void publishModeFromRadio();
     // Publish the scope's dBm axis, derived from the SAME ScopeCalibration that
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.

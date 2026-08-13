@@ -321,6 +321,56 @@ static void testCommands()
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0x00, 0x00, 0xFD}),
           "data mode OFF is 00 00, not 00 plus the filter slot");
 
+    // ── READING the flag back. Without this the client can only ever know what
+    // it last wrote, so a front-panel FM-D is invisible and the next mode write
+    // cancels it. See parseDataModeReply().
+    check(bytesAre(cmdReadDataMode(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0xFD}),
+          "the data-mode QUERY is a bare 1A 06 with no payload");
+
+    {
+        auto on = parseFrame(std::vector<std::uint8_t>{
+            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x06, 0x01, 0x02, 0xFD});
+        check(on.has_value(), "a 1A 06 ON reply parses as a frame");
+        auto r = parseDataModeReply(*on);
+        check(r.has_value() && r->dataMode && r->filter == 2,
+              "1A 06 01 02 decodes as data mode ON, filter 2");
+
+        auto off = parseFrame(std::vector<std::uint8_t>{
+            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x06, 0x00, 0x00, 0xFD});
+        auto ro = parseDataModeReply(*off);
+        // Filter 0, NOT an invented FIL1: the guide pairs OFF with a 00 slot,
+        // and the real filter travels with 0x06. Fabricating one here would
+        // fight the mode reply.
+        check(ro.has_value() && !ro->dataMode && ro->filter == 0,
+              "1A 06 00 00 decodes as OFF with no meaningful filter slot");
+
+        // A DIFFERENT 1A subcommand must not be mistaken for this one. 1A 05 is
+        // the menu-item read living next door, and it carries three data bytes.
+        auto menu = parseFrame(std::vector<std::uint8_t>{
+            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x05, 0x00, 0x62, 0x01, 0xFD});
+        check(menu.has_value() && !parseDataModeReply(*menu).has_value(),
+              "a 1A 05 menu reply is NOT decoded as a data-mode reply");
+
+        // ON without a slot is malformed — refuse rather than guess a filter.
+        auto trunc = parseFrame(std::vector<std::uint8_t>{
+            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x06, 0x01, 0xFD});
+        check(trunc.has_value() && !parseDataModeReply(*trunc).has_value(),
+              "data mode ON with no filter byte is rejected, not guessed");
+
+        // Out-of-range slot is refused too: 0 and 4 are not FIL1..3.
+        auto bad = parseFrame(std::vector<std::uint8_t>{
+            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x06, 0x01, 0x04, 0xFD});
+        check(bad.has_value() && !parseDataModeReply(*bad).has_value(),
+              "a filter slot outside 1..3 is rejected");
+
+        // The bare query echoed back is not an answer.
+        auto echo = parseFrame(std::vector<std::uint8_t>{
+            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x06, 0xFD});
+        check(echo.has_value() && !parseDataModeReply(*echo).has_value(),
+              "an empty 1A 06 (the query itself) is not treated as a reply");
+    }
+
     // BOTH scope switches exist and both are needed — enabling only the first
     // turns the scope on the radio's screen and sends us nothing.
     check(bytesAre(cmdScopeOnOff(kIc705, true), {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x10, 0x01, 0xFD}),

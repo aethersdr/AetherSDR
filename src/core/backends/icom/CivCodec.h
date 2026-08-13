@@ -385,6 +385,21 @@ enum class CivMode : std::uint8_t {
 // ⚠ Per the guide, the OFF frame is `00 00` — when the flag is 00 the filter
 // byte must be 00 too, not the current slot. cmdSetDataMode enforces that.
 [[nodiscard]] std::vector<std::uint8_t> cmdSetDataMode(std::uint8_t to, bool dataMode, int filter);
+// READ the DATA flag. Required, not optional: the flag is the ONLY thing that
+// distinguishes FM-D from FM (and DIGU from USB) on this radio, and 0x06's mode
+// reply does not carry it. Without this read the client's idea of the flag can
+// only ever come from its own last write, so an operator selecting FM-D on the
+// front panel leaves the client believing plain FM — and the next mode change
+// silently takes the radio back out of data mode. Constitution II: radio state
+// is read as truth. See parseDataModeReply().
+[[nodiscard]] std::vector<std::uint8_t> cmdReadDataMode(std::uint8_t to);
+// Decode a 1A 06 reply -> {dataMode, filter}. nullopt when the frame is not that
+// reply, or is too short to trust.
+struct DataModeReply {
+    bool dataMode;
+    int  filter;      // 1..3; 0 when the flag is off (the guide's own `00 00`)
+};
+[[nodiscard]] std::optional<DataModeReply> parseDataModeReply(const CivFrame& frame);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadMeter(std::uint8_t to, std::uint8_t which);
 // The READ forms of 0x14 and 0x16 — same subcommand, no payload. The radio

@@ -496,6 +496,40 @@ std::vector<std::uint8_t> cmdSetDataMode(std::uint8_t to, bool dataMode, int fil
     return buildFrameSub(to, cmd::kSetting, setting::kDataMode, body);
 }
 
+std::vector<std::uint8_t> cmdReadDataMode(std::uint8_t to)
+{
+    // 1A 06 with no payload asks; the radio answers 1A 06 <flag> <filter>.
+    return buildFrameSub(to, cmd::kSetting, setting::kDataMode, std::array<std::uint8_t, 0>{});
+}
+
+std::optional<DataModeReply> parseDataModeReply(const CivFrame& frame)
+{
+    // Must be 1A 06 specifically. The 1A 05 handler next door hard-rejects any
+    // sub != 0x05, which is exactly why this reply was being dropped before it
+    // reached any logic — a different subcommand needs its own decode.
+    if (frame.cmd != cmd::kSetting || !frame.hasSub || frame.sub != setting::kDataMode)
+        return std::nullopt;
+    if (frame.data.empty())
+        return std::nullopt;   // the bare query echoed back, not an answer
+
+    DataModeReply out{};
+    out.dataMode = frame.data[0] != 0x00;
+    // The guide pairs `00` with a `00` filter byte, so an OFF reply carries no
+    // meaningful slot. Report 0 rather than inventing FIL1 — the filter travels
+    // with 0x06 anyway, and a fabricated slot here would fight it.
+    if (!out.dataMode) {
+        out.filter = 0;
+        return out;
+    }
+    if (frame.data.size() < 2)
+        return std::nullopt;   // ON without a slot is malformed; do not guess
+    const int slot = frame.data[1];
+    if (slot < 1 || slot > 3)
+        return std::nullopt;
+    out.filter = slot;
+    return out;
+}
+
 std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value)
 {
     const auto bcd = encodeLevel(std::clamp(value, 0, 255));
