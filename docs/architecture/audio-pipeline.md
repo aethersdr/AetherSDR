@@ -338,9 +338,12 @@ flowchart TD
   which would otherwise grow in the app's own memory at the same ~192 KB/s. A
   multi-hour residue exceeded 2 GiB in v26.8.2 and overflowed the normalizer's
   old signed-`int` output-size calculation.
-- Pull-mode capture is drop-to-latest. Past 1 MiB of unread residue (about
-  5.5 s at 48 kHz stereo Int16) the stale head is skipped without allocating it,
-  so the block that reaches the air is the newest audio the backend holds rather
+- Capture is drop-to-latest on every platform. In pull mode, past 1 MiB of
+  unread residue (about 5.5 s at 48 kHz stereo Int16) the stale head is skipped
+  without allocating it; in macOS push mode, a block larger than the 256 KiB
+  ceiling — which a stalled audio thread produces, since nothing bounds what the
+  callback appends between 5 ms polls — is trimmed to its newest 256 KiB. Either
+  way the audio that reaches the air is the freshest the backend holds rather
   than a backlog replayed 1.36 s per callback. Discards are counted for the
   lifecycle and reported once as a capture-health event.
 
@@ -355,10 +358,13 @@ before the voice TX chain or early RADE/DAX branches:
 - The actual negotiated channel count is stored as `m_txInputChannels`.
 - Oversized realtime blocks are rejected before sample access or allocation on
   both the mic and radio-native DAX routes, and each rejection is logged. The
-  limit belongs to the normalizer, not to the capture read, so the DAX route —
-  which never passes through `TxCaptureBuffer` — is not bound to a microphone
-  constant. A trailing partial frame is truncated to the frame boundary rather
-  than dropping the block, and is recorded in the diagnostics. Buffer-size
+  limits belong to the normalizer rather than to the capture read, and the two
+  routes carry separate ones: the Int16 mic path matches the 256 KiB capture
+  chunk, while the float32 DAX path allows 1 MiB because it is fed by TCI, not
+  by a bounded device read, and its blocks arrive already upsampled — a 64 KiB
+  message from a conforming 8 kHz client expands roughly twelvefold (#3306).
+  A trailing partial frame is truncated to the frame boundary rather than
+  dropping the block, and is recorded in the diagnostics. Buffer-size
   calculations use `qsizetype`.
 - Mono input is duplicated to stereo with no level change.
 - Stereo input is reduced to one canonical mono voice signal before any

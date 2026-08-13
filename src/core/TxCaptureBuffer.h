@@ -36,4 +36,11 @@ struct BoundedRead {
 // audio the backend holds rather than the oldest.
 BoundedRead readLatestBoundedInt16(QIODevice* device, int inputChannels);
 
+// Same drop-to-latest policy for push mode, where there is no read to bound:
+// macOS hands over everything the capture callback accumulated since the last
+// poll, so a stalled audio thread produces one oversized block. Trims block in
+// place to its newest frame-aligned kMaxReadBytes and returns the bytes
+// dropped (zero when it already fits).
+qint64 trimToLatestBoundedInt16(QByteArray& block, int inputChannels);
+
 } // namespace AetherSDR::TxCaptureBuffer

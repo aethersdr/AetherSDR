@@ -421,13 +421,54 @@ void testShortBlockBelowOneFrameIsDroppedQuietly()
            out.isEmpty() && diag.frames == 0 && !diag.inputRejected);
 }
 
+void testPushModeBlockIsTrimmedToLatest()
+{
+    // macOS hands over everything accumulated since the last 5 ms poll, so a
+    // stalled audio thread produces one oversized block.
+    QByteArray block(TxCaptureBuffer::kMaxReadBytes, 's');
+    block.append(QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));  // newest tail
+
+    const qint64 discarded = TxCaptureBuffer::trimToLatestBoundedInt16(block, 2);
+    report("push-mode stall is trimmed to one bounded block",
+           block.size() == TxCaptureBuffer::kMaxReadBytes
+               && discarded == TxCaptureBuffer::kMaxReadBytes);
+    report("push-mode trim keeps the newest audio",
+           block == QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));
+
+    QByteArray small(4096, 'x');
+    report("a push-mode block that already fits is left alone",
+           TxCaptureBuffer::trimToLatestBoundedInt16(small, 2) == 0
+               && small.size() == 4096);
+}
+
+void testLargeUpsampledDaxBlockIsAccepted()
+{
+    // A conforming 8 kHz TCI client can send a 64 KiB int16 mono frame, which
+    // expands ~12x to ~768 KiB of stereo float32 before reaching this collapse
+    // (#3306). The mic capture chunk would have rejected it outright, so the
+    // float route carries its own, larger ceiling.
+    constexpr qsizetype worstCaseTciExpansion = 768 * 1024;
+    const QByteArray large(worstCaseTciExpansion, '\0');
+    Diagnostics diag;
+    const QByteArray out = collapseFloat32ToInt16MonoBigEndian(
+        large,
+        2,
+        24000,
+        ChannelMode::Average,
+        nullptr,
+        &diag);
+
+    report("worst-case upsampled TCI block is not rejected",
+           !out.isEmpty() && !diag.inputRejected
+               && diag.frames == worstCaseTciExpansion / 8);
+}
+
 void testOversizedDaxBlockIsRejected()
 {
-    // The DAX float32 route shares this validator without going through
-    // TxCaptureBuffer, so its ceiling is the normalizer's own constant.
+    // Past its own ceiling the float route still rejects before dereference.
     char sentinel = 0;
     const QByteArray oversized = QByteArray::fromRawData(
-        &sentinel, AetherSDR::TxMicChannelNormalizer::kMaxRealtimeBlockBytes + 8);
+        &sentinel, AetherSDR::TxMicChannelNormalizer::kMaxRealtimeFloatBlockBytes + 8);
     Diagnostics diag;
     const QByteArray out = collapseFloat32ToInt16MonoBigEndian(
         oversized,
@@ -460,6 +501,8 @@ int main()
     testDumpSizedMicBlockIsRejectedBeforeDereference();
     testMisalignedMicBlockIsTruncatedToFrameBoundary();
     testShortBlockBelowOneFrameIsDroppedQuietly();
+    testPushModeBlockIsTrimmedToLatest();
+    testLargeUpsampledDaxBlockIsAccepted();
     testOversizedDaxBlockIsRejected();
 
     std::printf("\n%s\n", g_failed == 0 ? "All tests passed." : "Some tests failed.");

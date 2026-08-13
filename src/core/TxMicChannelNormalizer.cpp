@@ -10,14 +10,17 @@
 
 namespace AetherSDR::TxMicChannelNormalizer {
 
-// A bounded capture read must never be refused as oversized, and the block cap
-// must stay small enough that the int frame counts below cannot overflow.
-// Asserting both here keeps the two constants honest if either one moves.
+// A bounded capture read must never be refused as oversized, and neither cap
+// may grow past the point where the int frame counts below can overflow.
+// Asserting here keeps the constants honest if any of them moves.
 static_assert(kMaxRealtimeBlockBytes >= TxCaptureBuffer::kMaxReadBytes,
               "a bounded capture read must never be rejected as oversized");
 static_assert(kMaxRealtimeBlockBytes / static_cast<qsizetype>(sizeof(int16_t))
                   <= static_cast<qsizetype>(std::numeric_limits<int>::max()),
-              "validated frame counts must stay representable as int");
+              "validated Int16 frame counts must stay representable as int");
+static_assert(kMaxRealtimeFloatBlockBytes / static_cast<qsizetype>(sizeof(float))
+                  <= static_cast<qsizetype>(std::numeric_limits<int>::max()),
+              "validated float32 frame counts must stay representable as int");
 
 namespace {
 constexpr float kSilenceFloor = 0.0005623413f; // -65 dBFS
@@ -33,6 +36,7 @@ constexpr int kDefaultSampleRate = 24000;
 bool boundRealtimeBlock(const QByteArray& input,
                         qsizetype bytesPerSample,
                         int channels,
+                        qsizetype maxBlockBytes,
                         Diagnostics& diagnostics)
 {
     diagnostics.inputBytes = input.size();
@@ -42,7 +46,7 @@ bool boundRealtimeBlock(const QByteArray& input,
         return false;
     }
 
-    if (input.size() > kMaxRealtimeBlockBytes) {
+    if (input.size() > maxBlockBytes) {
         diagnostics.inputRejected = true;
         return false;
     }
@@ -245,7 +249,8 @@ QByteArray canonicalizeInt16ToMonoStereo(const QByteArray& input,
     Diagnostics diag;
     diag.inputChannels = channels;
     diag.inputSampleRate = inputSampleRate;
-    if (!boundRealtimeBlock(input, sizeof(int16_t), channels, diag)) {
+    if (!boundRealtimeBlock(input, sizeof(int16_t), channels,
+                            kMaxRealtimeBlockBytes, diag)) {
         if (diagnostics) {
             *diagnostics = diag;
         }
@@ -329,7 +334,8 @@ QByteArray collapseFloat32ToInt16MonoBigEndian(const QByteArray& input,
     Diagnostics diag;
     diag.inputChannels = channels;
     diag.inputSampleRate = inputSampleRate;
-    if (!boundRealtimeBlock(input, sizeof(float), channels, diag)) {
+    if (!boundRealtimeBlock(input, sizeof(float), channels,
+                            kMaxRealtimeFloatBlockBytes, diag)) {
         if (diagnostics) {
             *diagnostics = diag;
         }

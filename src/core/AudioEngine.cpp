@@ -7450,8 +7450,13 @@ bool AudioEngine::tciAudioFresh() const
 
 void AudioEngine::observeTxCaptureState(QAudio::State state)
 {
+    observeTxCaptureState(state, txCaptureBufferedBytes());
+}
+
+void AudioEngine::observeTxCaptureState(QAudio::State state, qint64 bufferedBytes)
+{
     const TxCaptureHealthTracker::Event event = m_txCaptureHealth.observeState(
-        txCaptureState(state), tciAudioFresh(), txCaptureBufferedBytes());
+        txCaptureState(state), tciAudioFresh(), bufferedBytes);
     if (event != TxCaptureHealthTracker::Event::None) {
         logTxCaptureHealthEvent(event);
     }
@@ -8051,8 +8056,13 @@ void AudioEngine::onTxAudioReady()
     // produces continuous ambient packets. The 200 ms window comfortably
     // covers the 50 ms TCI frame cadence.
     if (tciAudioFresh()) {
+        // Sample the unread depth BEFORE the drain below empties it. The
+        // Active-to-Idle saturation fallback keys off "state went idle while
+        // bytes were still unread", so re-reading it afterwards would report
+        // zero every time and silently retire that signal.
+        const qint64 bufferedBeforeDrain = txCaptureBufferedBytes();
         const TxCaptureHealthTracker::Event event = m_txCaptureHealth.recordSuppressedCallback(
-            txCaptureBufferedBytes(), txCaptureBufferCapacityBytes());
+            bufferedBeforeDrain, txCaptureBufferCapacityBytes());
         if (event != TxCaptureHealthTracker::Event::None) {
             logTxCaptureHealthEvent(event);
         }
@@ -8088,7 +8098,7 @@ void AudioEngine::onTxAudioReady()
         }
 #endif
         if (m_audioSource) {
-            observeTxCaptureState(m_audioSource->state());
+            observeTxCaptureState(m_audioSource->state(), bufferedBeforeDrain);
         }
         return;
     }
@@ -8105,6 +8115,19 @@ void AudioEngine::onTxAudioReady()
     m_micBuffer->buffer().clear();
     m_micBuffer->seek(0);
     if (data.isEmpty()) return;
+    // Push mode has no read to bound: the capture callback keeps appending
+    // between 5 ms polls, so a stalled audio thread hands over one block as
+    // large as the stall. Apply the same drop-to-latest policy the pull path
+    // gets, or a stall past ~1.4 s would produce a block the normalizer refuses
+    // as oversized and the whole thing would be dropped instead of the stale
+    // part of it.
+    {
+        const qint64 stale = TxCaptureBuffer::trimToLatestBoundedInt16(
+            data, m_txInputChannels);
+        if (stale > 0) {
+            noteTxCaptureBacklogDiscard(stale);
+        }
+    }
 #else
     if (!m_micDevice
         || (!m_hostModulation && m_txStreamId == 0 && m_remoteTxStreamId == 0)) return;
