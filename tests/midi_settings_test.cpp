@@ -287,6 +287,21 @@ int main(int argc, char** argv)
         writeImportFile("trunc.xml", "<MidiProfile><Binding param=\"x\""), validator);
     ok &= expect(!r7.ok(), "truncated XML fails loudly");
 
+    // Oversized files are refused before the read allocates them. The content
+    // is valid profile XML followed by padding, so the only thing that can
+    // reject it is the size cap — not the dialect sniff or the parser.
+    {
+        QByteArray huge = "<MidiProfile>"
+                          "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\" number=\"7\"/>"
+                          "</MidiProfile>\n";
+        huge.append(QByteArray((1 << 20) + 1 - huge.size(), ' '));
+        const auto rBig = settings.importProfile(writeImportFile("huge.xml", huge), validator);
+        ok &= expect(!rBig.ok() && rBig.importedCount == 0,
+                     "an oversized file is refused, not imported");
+        ok &= expect(rBig.errors.size() == 1 && rBig.errors.first().contains("too large"),
+                     "the oversize refusal is a named error");
+    }
+
     // A row whose value is present but not a number must be a named skip, not
     // a silent 0: channel 0 is MIDI channel 1, not the any-channel wildcard,
     // and number 0 is CC 0 — either would bind the row to the wrong control.

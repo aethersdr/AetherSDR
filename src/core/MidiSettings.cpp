@@ -562,6 +562,16 @@ MidiImportResult MidiSettings::importProfile(
                                   file.errorString());
         return result;
     }
+    // A profile is kilobytes — the vendor CTR2-Quad map is a few. Refuse
+    // anything absurd before readAll() allocates it, so pointing the dialog at
+    // the wrong file is a message rather than an allocation failure.
+    constexpr qint64 kMaxProfileBytes = 1 << 20;
+    if (file.size() > kMaxProfileBytes) {
+        result.errors << QStringLiteral("%1 is too large to be a MIDI profile (%2 bytes).")
+                             .arg(QDir::toNativeSeparators(filePath))
+                             .arg(file.size());
+        return result;
+    }
     const QByteArray bytes = file.readAll();
     file.close();
 
@@ -595,6 +605,13 @@ MidiImportResult MidiSettings::importProfile(
     // suffix is the reversible default. Dots are replaced because the store
     // round-trips names through QFileInfo::baseName(), which cuts at the
     // first dot — a dotted name would list, load, and collide wrongly.
+    //
+    // completeBaseName() operates on fileName(), so any directory component of
+    // the chosen path is already stripped: "../../evil.map" yields "evil". That
+    // is what keeps this call site safe, because saveProfile() — and its load
+    // and delete siblings — concatenate the name straight into profileDir()
+    // with no sanitizing. Do not swap this for a name taken from the document
+    // body or from filePath without stripping separators first.
     QString name = QFileInfo(filePath).completeBaseName().trimmed();
     name.replace(QLatin1Char('.'), QLatin1Char('_'));
     if (name.isEmpty())
