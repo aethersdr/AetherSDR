@@ -829,7 +829,7 @@ void MainWindow::buildMenuBar()
     // drops/nudges/dots).  Enabled-but-locked is the OPERATING posture —
     // interacting with an applet just uses it.  Edit state is session-
     // transient by design; wireWorkspaceCanvas() syncs both directions.
-    QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas (experimental)");
+    QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas");
     m_workspaceCanvasAction = wsMenu->addAction("&Enabled");
     m_workspaceCanvasAction->setCheckable(true);
     connect(m_workspaceCanvasAction, &QAction::toggled, this,
