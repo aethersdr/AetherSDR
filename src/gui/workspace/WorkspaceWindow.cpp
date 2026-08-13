@@ -4,6 +4,7 @@
 
 #include "core/AppSettings.h"
 #include "gui/FramelessResizer.h"
+#include "gui/FramelessWindowTitleBar.h"
 #include "gui/Theme.h"
 
 #include <QCloseEvent>
@@ -43,6 +44,19 @@ WorkspaceWindow::WorkspaceWindow(const QString& surfaceId, QWidget* parent)
     m_layout->setContentsMargins(0, 0, 0, 0);
     m_layout->setSpacing(0);
 
+    // Move/close chrome (8600 field report: a frameless canvas window had
+    // no way to be moved at all — FramelessResizer only owns the edges).
+    // FramelessWindowTitleBar brings drag-to-move via FramelessMoveHelper
+    // (the #4725 native-Wayland path), min/max/close, and double-click
+    // maximize.  Its close button calls window()->close(), which lands in
+    // closeEvent below — so chrome-close IS hide-and-keep, same as the
+    // WM's.  Native decorations already provide all of this, so the bar
+    // exists only in frameless mode.
+    if (frameless) {
+        m_titleBar = new FramelessWindowTitleBar(surfaceId, this);
+        m_layout->addWidget(m_titleBar);
+    }
+
     m_canvas = new WorkspaceCanvas(this);
     // dumpTree/grab targeting: every canvas needs a distinct name once
     // there is more than one.
@@ -60,7 +74,11 @@ WorkspaceWindow::WorkspaceWindow(const QString& surfaceId, QWidget* parent)
 
 void WorkspaceWindow::setSurfaceLabel(const QString& label)
 {
-    setWindowTitle(label.isEmpty() ? m_surfaceId : label);
+    const QString title = label.isEmpty() ? m_surfaceId : label;
+    setWindowTitle(title);
+    if (m_titleBar) {
+        m_titleBar->setTitleText(title);
+    }
 }
 
 void WorkspaceWindow::restoreFromHint(const QByteArray& hint, QWidget* anchor)

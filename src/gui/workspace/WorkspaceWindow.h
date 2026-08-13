@@ -30,6 +30,7 @@ class QVBoxLayout;
 
 namespace AetherSDR {
 
+class FramelessWindowTitleBar;
 class WorkspaceCanvas;
 
 class WorkspaceWindow : public QWidget {
@@ -79,6 +80,10 @@ protected:
 private:
     QString m_surfaceId;
     WorkspaceCanvas* m_canvas{nullptr};
+    // Present only in frameless mode: the window's move/close chrome.
+    // With native decorations the desktop provides both and a second
+    // bar would be duplication.
+    FramelessWindowTitleBar* m_titleBar{nullptr};
     QVBoxLayout* m_layout{nullptr};
     QTimer m_hintTimer;
     bool m_restoring{false};
