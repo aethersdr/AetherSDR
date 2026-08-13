@@ -3706,6 +3706,17 @@ target_include_directories(band_edges_test PRIVATE src)
 target_link_libraries(band_edges_test PRIVATE Qt6::Core)
 add_test(NAME band_edges_test COMMAND band_edges_test)
 
+# Pins the kBands (BandDefs.h) data that MainWindow_Shortcuts.cpp's band_*
+# shortcut/MIDI actions now look up instead of keeping their own frequency/
+# mode table. #4967 review: that local table had drifted from the UI's
+# BAND_GRID (17m/12m/6m/2m frequencies, and no mode at all) — invisible on
+# Flex, wrong on non-Flex radios.
+add_executable(band_shortcut_data_test
+    tests/band_shortcut_data_test.cpp
+)
+target_include_directories(band_shortcut_data_test PRIVATE src)
+add_test(NAME band_shortcut_data_test COMMAND band_shortcut_data_test)
+
 # Band-plan segment labels feed isVoiceSegmentLabel(), which gates S-History /
 # QRM voice detection — a label carrying no recognised emission token silently
 # switches voice markers off for that spectrum. Reads the shipped resource, so

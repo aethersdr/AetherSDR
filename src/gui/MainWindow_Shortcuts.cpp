@@ -35,6 +35,7 @@
 #include "core/DigitalVoiceFeature.h"
 #include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
+#include "models/BandDefs.h"
 #include "models/SliceModel.h"
 
 #include <QAbstractSlider>
@@ -51,6 +52,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 
 namespace AetherSDR {
@@ -781,20 +783,32 @@ void MainWindow::registerShortcutActions()
         });
 
     // ── Band ────────────────────────────────────────────────────────────
-    struct BandDef { const char* id; const char* name; double mhz; };
-    static const BandDef bands[] = {
-        {"band_160m", "160m", 1.900}, {"band_80m", "80m", 3.800},
-        {"band_60m", "60m", 5.357},   {"band_40m", "40m", 7.200},
-        {"band_30m", "30m", 10.125},  {"band_20m", "20m", 14.225},
-        {"band_17m", "17m", 18.118},  {"band_15m", "15m", 21.300},
-        {"band_12m", "12m", 24.940},  {"band_10m", "10m", 28.400},
-        {"band_6m",  "6m",  50.125},  {"band_2m",  "2m",  146.000},
+    // Sourced from the canonical kBands (BandDefs.h) rather than a local
+    // copy so freq/mode can never drift from the UI's BAND_GRID again
+    // (#4967 review). This list intentionally names only the 12 bands that
+    // have always had shortcut/MIDI bindings — it is not "every kBands
+    // entry" and adding to it means adding a new shortcut, not just data.
+    static constexpr const char* kShortcutBandNames[] = {
+        "160m", "80m", "60m", "40m", "30m", "20m",
+        "17m",  "15m", "12m", "10m", "6m",  "2m",
     };
-    for (const auto& b : bands) {
-        QString bandName = QString::fromLatin1(b.name);
-        double freq = b.mhz;
-        m_shortcutManager.registerAction(b.id, b.name, "Band",
-            QKeySequence(), [this, bandName, freq]() {
+    for (const char* name : kShortcutBandNames) {
+        const auto it = std::find_if(std::begin(kBands), std::end(kBands),
+            [name](const BandDef& b) { return std::strcmp(b.name, name) == 0; });
+        // kShortcutBandNames is a fixed, hand-checked list, so a miss means
+        // it fell out of sync with kBands — fail loudly in dev/CI builds
+        // rather than silently dropping a shortcut. Still guarded for
+        // release builds, where Q_ASSERT_X compiles out.
+        Q_ASSERT_X(it != std::end(kBands), "registerBandShortcuts",
+                   "kShortcutBandNames entry missing from kBands");
+        if (it == std::end(kBands))
+            continue;
+        QString bandName = QString::fromLatin1(it->name);
+        double freq = it->defaultFreqMhz;
+        QString mode = QString::fromLatin1(it->defaultMode);
+        const QString id = QStringLiteral("band_%1").arg(bandName);
+        m_shortcutManager.registerAction(id, bandName, "Band",
+            QKeySequence(), [this, bandName, freq, mode]() {
                 if (!m_radioModel.isConnected()) return;
                 auto* s = activeSlice();
                 if (!s) return;
@@ -802,7 +816,7 @@ void MainWindow::registerShortcutActions()
                     s->notifyTuneBlockedByLock();
                     return;
                 }
-                selectBand(s->panId(), bandName, freq, QString());
+                selectBand(s->panId(), bandName, freq, mode);
             });
     }
 
