@@ -136,9 +136,18 @@ private:
     // that anchor clamps and element durations collapse to block multiples
     // (measured: 5.0 ms elements rendering as 2.8 ms) — the exact defect this
     // change exists to remove.
-    static constexpr int kAnchorSlackCapMs = 100;
+    static constexpr int kAnchorSlackCapMs = 40;
     static_assert(kAnchorSlackCapMs < kReanchorIdleMs,
                   "carried slack must leave the staleness guard margin");
+    // The assert pins the SAFETY relationship, but it is not the binding
+    // constraint on this value: slack IS onset latency, so the ceiling that
+    // matters is the 30-100 ms radio round trip this generator exists to beat
+    // (see m_anchorSlack).  A cap at the top of that range would let the
+    // client tone silently become no better than the radio's.  40 ms keeps it
+    // clearly ahead while leaving room for several refills' worth of learning:
+    // a 22 s hand-keyed session measured 5.5 ms of total learned slack, and
+    // the deliberate 800 ms pump stall in the decay test needs only enough to
+    // clear one refill.
 
     void applyKeyEdge(bool down) noexcept;  // state-machine transition
 

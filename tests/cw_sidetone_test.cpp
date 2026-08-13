@@ -69,6 +69,12 @@ int toneBursts(const std::vector<float>& buf)
 }
 
 // Key one element of `ms` on, `ms` off, spinning on the real clock.
+//
+// The spin is this file's convention, not an oversight: every timing test here
+// advances the same real clock the generator reads, and the element durations
+// they assert on are only as tight as the wait that produces them.  Swapping in
+// sleep_for() would be a file-wide change with those assertions downstream of
+// it, so it wants to be one deliberate decision rather than a local edit.
 void keyElement(CwSidetoneGenerator& gen, int ms)
 {
     using clock = std::chrono::steady_clock;

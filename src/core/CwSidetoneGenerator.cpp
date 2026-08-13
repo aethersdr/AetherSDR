@@ -323,6 +323,12 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
             // durations collapse to block multiples (5.0 ms rendering as
             // 2.8 ms) — reintroducing the defect this branch removes.
             // Only the CARRIED slack is capped, below.
+            //
+            // m_anchorTime is deliberately NOT advanced alongside m_anchorPos.
+            // That asymmetry is what makes the guard quantity come out as
+            // S(now - e.t) — wall time since THIS edge — rather than a running
+            // total: moving both would turn the guard back into an accumulator
+            // and reintroduce the mid-burst re-anchor this design rules out.
             const int64_t deficit = blockStart - target;
             m_anchorPos += deficit;
             m_anchorSlack = std::min<int64_t>(
