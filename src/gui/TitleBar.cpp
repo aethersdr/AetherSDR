@@ -662,6 +662,10 @@ void TitleBar::setAppletPanelControlsVisible(bool visible)
     if (m_dockLeftLbl)  m_dockLeftLbl->setVisible(visible);
     if (m_dockRightLbl) m_dockRightLbl->setVisible(visible);
     if (m_popOutLbl)    m_popOutLbl->setVisible(visible);
+    // The trio is BRACKETED by separators; with the icons gone the two
+    // dividers sit adjacent and one dangles (8600 field report).  The
+    // trailing one belongs to the cluster and hides with it.
+    if (m_dockSep)      m_dockSep->setVisible(visible);
 }
 
 bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
