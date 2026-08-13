@@ -836,6 +836,13 @@ void MainWindow::buildMenuBar()
     m_workspaceEditAction->setCheckable(true);
     m_workspaceEditAction->setEnabled(false);   // armed by enabledChanged
 
+    // The workspace switcher (phase 6): rebuilt on every open so the list,
+    // check states and bindings are never stale.
+    wsMenu->addSeparator();
+    QMenu* switcher = wsMenu->addMenu("&Workspaces");
+    connect(switcher, &QMenu::aboutToShow, this,
+            [this, switcher] { rebuildWorkspaceSwitcherMenu(switcher); });
+
     // Applet-panel show/hide and pop-out are now driven entirely from the
     // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as
     // a window-scoped QShortcut so the keystroke survives the View-menu

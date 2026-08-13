@@ -22,6 +22,9 @@
 #include "workspace/WorkspaceController.h"
 
 #include <QAction>
+#include <QInputDialog>
+#include <QMenu>
+#include <QMessageBox>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QSplitter>
@@ -83,6 +86,19 @@ void MainWindow::wireWorkspaceCanvas()
         m_panStack->reclaimBandStackPanel();
     };
     m_workspaceController->setPanHost(hooks);
+
+    // Profile-bound recall (phase 6, decisions 6/8): a bound GLOBAL
+    // profile switches the workspace; the status bar says so, because the
+    // whole surface just changed and the operator deserves the why.
+    connect(&m_radioModel, &RadioModel::profileLoadCompleted,
+            m_workspaceController, &WorkspaceController::onRadioProfileLoaded);
+    connect(m_workspaceController,
+            &WorkspaceController::workspaceSwitchedByProfile, this,
+            [this](const QString& profile, const QString& wsLabel) {
+                statusBar()->showMessage(
+                    tr("Workspace \"%1\" (profile %2)").arg(wsLabel, profile),
+                    6000);
+            });
 
     connect(m_panStack, &PanadapterStack::panAdded,
             m_workspaceController, &WorkspaceController::onPanAdded);
@@ -291,6 +307,92 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             AppSettings::instance()
                 .value(QStringLiteral("PanadapterLayout"), QStringLiteral("1"))
                 .toString());
+    }
+}
+
+void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
+{
+    menu->clear();
+    if (!m_workspaceController) {
+        return;
+    }
+    const QList<QPair<QString, QString>> list =
+        m_workspaceController->workspaceList();
+    const QString active = m_workspaceController->activeWorkspaceId();
+
+    if (list.isEmpty()) {
+        QAction* none = menu->addAction(tr("Enable the canvas to create workspaces"));
+        none->setEnabled(false);
+        return;
+    }
+
+    for (const auto& [id, label] : list) {
+        QAction* a = menu->addAction(label);
+        a->setCheckable(true);
+        a->setChecked(id == active);
+        connect(a, &QAction::triggered, this, [this, id] {
+            m_workspaceController->switchWorkspace(id);
+        });
+    }
+
+    menu->addSeparator();
+    auto askLabel = [this](const QString& title) {
+        return QInputDialog::getText(this, title, tr("Name:"));
+    };
+    menu->addAction(tr("New from current layout…"), this, [this, askLabel] {
+        const QString l = askLabel(tr("New workspace"));
+        if (!l.isEmpty())
+            m_workspaceController->createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Current, l);
+    });
+    menu->addAction(tr("New from Classic…"), this, [this, askLabel] {
+        const QString l = askLabel(tr("New workspace"));
+        if (!l.isEmpty())
+            m_workspaceController->createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Classic, l);
+    });
+    menu->addAction(tr("New blank…"), this, [this, askLabel] {
+        const QString l = askLabel(tr("New workspace"));
+        if (!l.isEmpty())
+            m_workspaceController->createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Blank, l);
+    });
+
+    menu->addSeparator();
+    menu->addAction(tr("Rename active…"), this, [this, askLabel, active] {
+        const QString l = askLabel(tr("Rename workspace"));
+        if (!l.isEmpty())
+            m_workspaceController->renameWorkspace(active, l);
+    });
+    QAction* del = menu->addAction(tr("Delete active…"), this, [this, active] {
+        if (QMessageBox::question(
+                this, tr("Delete workspace"),
+                tr("Delete the active workspace? Its arrangement is lost."))
+            == QMessageBox::Yes) {
+            m_workspaceController->deleteWorkspace(active);
+        }
+    });
+    del->setEnabled(list.size() > 1);
+
+    // Bindings: which GLOBAL radio profiles recall the ACTIVE workspace.
+    // Toggling binds/unbinds profile → active (decisions 5/6/8).
+    menu->addSeparator();
+    QMenu* bindMenu = menu->addMenu(tr("Bind to radio profile"));
+    const QStringList profiles = m_radioModel.globalProfiles();
+    if (profiles.isEmpty()) {
+        QAction* none = bindMenu->addAction(tr("(no radio profiles)"));
+        none->setEnabled(false);
+    } else {
+        for (const QString& prof : profiles) {
+            QAction* b = bindMenu->addAction(prof);
+            b->setCheckable(true);
+            b->setChecked(m_workspaceController->boundWorkspaceFor(prof)
+                          == active);
+            connect(b, &QAction::toggled, this, [this, prof, active](bool on) {
+                if (on)  m_workspaceController->bindProfile(prof, active);
+                else     m_workspaceController->unbindProfile(prof);
+            });
+        }
     }
 }
 

@@ -1125,6 +1125,22 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
     editToggle->setChecked(m_canvas->isEditMode());
     connect(editToggle, &QAction::toggled, this,
             [this](bool on) { m_canvas->setEditMode(on); });
+
+    // The workspace switcher rides in BOTH postures (phase 6): switching is
+    // operating, not editing.
+    const QList<QPair<QString, QString>> wsList = workspaceList();
+    if (wsList.size() > 1) {
+        QMenu* switcher = menu.addMenu(QStringLiteral("Workspace"));
+        const QString active = activeWorkspaceId();
+        for (const auto& [wsId, wsLabel] : wsList) {
+            QAction* a = switcher->addAction(wsLabel);
+            a->setCheckable(true);
+            a->setChecked(wsId == active);
+            connect(a, &QAction::triggered, this,
+                    [this, wsId] { switchWorkspace(wsId); });
+        }
+    }
+
     if (!m_canvas->isEditMode()) {
         menu.exec(globalPos);
         return;

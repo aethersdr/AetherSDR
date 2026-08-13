@@ -793,6 +793,9 @@ private:
     // One router for band-stack visibility: canvas mode hosts the panel as
     // a canvas item, classic mode shows it inside the stack (#4887 ph 4).
     void setBandStackPanelVisible(bool show);
+    // Rebuilds the View-menu workspace switcher on every open (phase 6) —
+    // a dynamic menu is never stale and needs no change bookkeeping.
+    void rebuildWorkspaceSwitcherMenu(QMenu* menu);
 
     // Show/hide the applet panel — single source of truth that updates the
     // title-bar dock icons and the persisted "AppletPanelVisible" setting.
