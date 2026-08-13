@@ -170,6 +170,12 @@ void MainWindow::wireWorkspaceCanvas()
             }
             return QByteArray();
         };
+        wh.applyGeometryHint = [this](const QString& surfaceId,
+                                      const QByteArray& hint) {
+            if (WorkspaceWindow* w = m_workspaceWindows.value(surfaceId)) {
+                w->restoreFromHint(hint, this);
+            }
+        };
         m_workspaceController->setWindowHost(wh);
     }
 
@@ -740,7 +746,14 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             QVariantMap sm;
             sm[QStringLiteral("id")]    = info.id;
             sm[QStringLiteral("label")] = info.label;
-            sm[QStringLiteral("open")]  = info.open;
+            // `open` is the LIVE truth (a window exists right now);
+            // `wanted` is the document's intent.  They differ while the
+            // mode is off and during the deferred enable turn — the same
+            // honesty split the per-item `hosted` flag draws (red-team
+            // #4971 M3: `open` used to read the document and reported
+            // windows that did not exist).
+            sm[QStringLiteral("open")]   = info.live;
+            sm[QStringLiteral("wanted")] = info.open;
             if (WorkspaceCanvas* canvas =
                     m_workspaceController->canvasForSurface(info.id)) {
                 sm[QStringLiteral("hostedItems")] =
@@ -936,9 +949,10 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             QVariantList wins;
             for (const auto& info : m_workspaceController->canvasWindowList()) {
                 QVariantMap w;
-                w[QStringLiteral("id")]    = info.id;
-                w[QStringLiteral("label")] = info.label;
-                w[QStringLiteral("open")]  = info.open;
+                w[QStringLiteral("id")]     = info.id;
+                w[QStringLiteral("label")]  = info.label;
+                w[QStringLiteral("open")]   = info.live;   // live truth (M3)
+                w[QStringLiteral("wanted")] = info.open;   // document intent
                 wins.append(w);
             }
             out[QStringLiteral("windows")] = wins;

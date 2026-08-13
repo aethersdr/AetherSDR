@@ -144,6 +144,12 @@ public:
             setWindowLabel;
         // The live geometry hint, for persisting at shutdown.
         std::function<QByteArray(const QString& surfaceId)> geometryHint;
+        // Re-apply a stored hint to an ALREADY-OPEN window — a workspace
+        // switch reuses windows by surface id, and each workspace records
+        // its own geometry (red-team #4971 L2: the target's hint was
+        // never applied, and the debounced write cross-pollinated).
+        std::function<void(const QString& surfaceId, const QByteArray& hint)>
+            applyGeometryHint;
     };
     void setWindowHost(const WindowHostHooks& hooks);
 
@@ -162,7 +168,14 @@ public:
     struct CanvasWindowInfo {
         QString id;
         QString label;
+        // The document's intent: the operator has not closed this window.
         bool open{false};
+        // The LIVE truth: a real window is attached right now.  False
+        // while the mode is off and during the deferred enable turn —
+        // the honesty distinction the per-item `hosted` flag draws
+        // (red-team #4971 M3: `open` read the document and reported
+        // windows that did not exist).
+        bool live{false};
     };
     QList<CanvasWindowInfo> canvasWindowList() const;
 
@@ -408,7 +421,7 @@ private:
     // Open the active workspace's non-hidden extra windows and attach
     // their canvases (idempotent); close/detach ones that should not be
     // open.  Placement is the caller's business.
-    void reconcileWindowsWithActiveWorkspace();
+    void reconcileWindowsWithActiveWorkspace(bool reapplyHints = false);
     // Evict one surface's widgets transiently (hide-and-keep): applets
     // close under the recall guard with no document writes, pans restore
     // to the (hidden) stack.

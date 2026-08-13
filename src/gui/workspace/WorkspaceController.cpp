@@ -436,6 +436,34 @@ void WorkspaceController::disable()
     releaseAllItems(/*returnPansToStack=*/true, /*hideBandStack=*/false);
     m_applying = false;
 
+    // Reopen what hide-and-keep transiently closed (red-team #4971 M2):
+    // an applet recorded open on a HIDDEN window is on no canvas, so the
+    // release sweep above never touched it — and Classic came up with an
+    // applet missing that Applet_<ID> says is open.  Disabling is not a
+    // statement about any applet; give them back to the panel, silently.
+    {
+        const WorkspaceDocument& d = m_store.document();
+        if (const Workspace* ws = d.workspace(d.activeWorkspace)) {
+            if (m_panHost.recallGuard) m_panHost.recallGuard(true);
+            m_applying = true;
+            for (const WorkspaceSurface& surf : ws->surfaces) {
+                if (!surf.hidden) continue;
+                for (const CanvasItem& it : surf.items) {
+                    if (!it.id.startsWith(kAppletItemPrefix) || it.closed) {
+                        continue;
+                    }
+                    ContainerWidget* c = containerForApplet(
+                        it.id.mid(kAppletItemPrefix.size()));
+                    if (c && !c->isContainerVisible() && !c->isFloating()) {
+                        c->setContainerVisible(true);
+                    }
+                }
+            }
+            m_applying = false;
+            if (m_panHost.recallGuard) m_panHost.recallGuard(false);
+        }
+    }
+
     // Extra canvas windows close with the mode (their hidden flags are
     // untouched — disabling is not a statement about any window); their
     // geometry hints are captured first, since hiding is how they would
@@ -478,6 +506,14 @@ void WorkspaceController::wireCanvas(WorkspaceCanvas* canvas)
         return;   // a reopened window hands back the same canvas object
     }
     m_wiredCanvases.insert(canvas);
+    // Forget the pointer the moment the canvas dies — whatever deletes it
+    // (removeCanvasWindow, resetToClassic, shutdown, or the host's own
+    // teardown).  A destroyed-watch beats manual removal at every destroy
+    // site: red-team #4971 M1 found hidden windows deleted through paths
+    // no manual remove covered, and a recycled allocation landing on a
+    // stale set entry comes up dead (e85f9c81).
+    connect(canvas, &QObject::destroyed, this,
+            [this, canvas] { m_wiredCanvases.remove(canvas); });
     canvas->setDropMimeType(kAppletMime);
 
     connect(canvas, &WorkspaceCanvas::dropReceived, this,
@@ -573,7 +609,7 @@ QString WorkspaceController::surfaceHosting(const QString& itemId) const
     return QString();
 }
 
-void WorkspaceController::reconcileWindowsWithActiveWorkspace()
+void WorkspaceController::reconcileWindowsWithActiveWorkspace(bool reapplyHints)
 {
     const WorkspaceDocument& doc = m_store.document();
     const Workspace* ws = doc.workspace(doc.activeWorkspace);
@@ -604,6 +640,15 @@ void WorkspaceController::reconcileWindowsWithActiveWorkspace()
         if (m_extraCanvases.value(s.id)) {
             if (m_windowHost.setWindowLabel) {
                 m_windowHost.setWindowLabel(s.id, s.label);
+            }
+            // On a workspace SWITCH the same surface id reuses the open
+            // window, but each workspace records its own geometry — apply
+            // the target's hint (red-team #4971 L2).  Not on every
+            // reconcile: re-applying a possibly-stale stored hint outside
+            // a switch would snap back a window the operator just dragged
+            // (the debounce is 400 ms wide).
+            if (reapplyHints && m_windowHost.applyGeometryHint) {
+                m_windowHost.applyGeometryHint(s.id, s.windowGeometry);
             }
             continue;
         }
@@ -1245,53 +1290,81 @@ void WorkspaceController::writeItemPresence(const QString& itemId,
     for (Workspace& ws : doc.workspaces) {
         if (ws.id != doc.activeWorkspace) continue;
 
-        // An EXISTING item is updated (or removed) on whichever surface
-        // holds it — presence is not a move (phase 7).  A NEW item lands
-        // on the surface whose canvas currently hosts the widget, else
-        // main.
-        for (WorkspaceSurface& s : ws.surfaces) {
-            for (int i = 0; i < s.items.size(); ++i) {
-                if (s.items.at(i).id != itemId) continue;
-                if (present) {
-                    s.items[i].rect = rect;
-                    // Making an item PRESENT is the one statement that its
-                    // applet is wanted on the surface — the closed flag
-                    // clears here, in one place, instead of at whichever
-                    // call sites remembered to (review, K6OZY: two of four
-                    // compensated by hand and the reopen-while-disabled
-                    // path cleared nothing).
-                    s.items[i].closed = false;
-                } else {
-                    s.items.removeAt(i);
+        // Find the surface that currently holds the item, if any.
+        int surfIdx = -1, itemIdx = -1;
+        for (int si = 0; si < ws.surfaces.size(); ++si) {
+            for (int ii = 0; ii < ws.surfaces.at(si).items.size(); ++ii) {
+                if (ws.surfaces.at(si).items.at(ii).id == itemId) {
+                    surfIdx = si;
+                    itemIdx = ii;
+                    break;
                 }
+            }
+            if (surfIdx >= 0) break;
+        }
+
+        if (!present) {
+            if (surfIdx >= 0) {
+                ws.surfaces[surfIdx].items.removeAt(itemIdx);
                 m_store.setDocument(doc);
                 if (flushNow) m_store.flush();
-                return;
             }
-        }
-        if (!present) {
             return;   // removing something untracked is a no-op
         }
+
+        // An EXPLICIT surfaceId is the caller stating intent — it
+        // RELOCATES an existing entry (red-team #4971 B1: the palette's
+        // target surface was silently discarded whenever the applet
+        // already had a home, so 'Add widget' on a canvas window placed
+        // on the wrong surface at the wrong size).  An IMPLICIT write
+        // (empty surfaceId) updates in place: presence is not a move.
         QString targetSurface = surfaceId;
         if (targetSurface.isEmpty()) {
-            targetSurface = surfaceHosting(itemId);
+            targetSurface = (surfIdx >= 0) ? ws.surfaces.at(surfIdx).id
+                                           : surfaceHosting(itemId);
         }
         if (targetSurface.isEmpty() || !ws.surface(targetSurface)) {
             targetSurface = WorkspaceSurface::kMainId;
         }
-        for (WorkspaceSurface& s : ws.surfaces) {
-            if (s.id != targetSurface) continue;
-            CanvasItem item;
+
+        CanvasItem item;
+        if (surfIdx >= 0) {
+            item = ws.surfaces.at(surfIdx).items.at(itemIdx);
+            if (ws.surfaces.at(surfIdx).id == targetSurface) {
+                // Making an item PRESENT is the one statement that its
+                // applet is wanted on the surface — the closed flag
+                // clears here, in one place, instead of at whichever
+                // call sites remembered to (review, K6OZY: two of four
+                // compensated by hand and the reopen-while-disabled
+                // path cleared nothing).
+                ws.surfaces[surfIdx].items[itemIdx].rect   = rect;
+                ws.surfaces[surfIdx].items[itemIdx].closed = false;
+                m_store.setDocument(doc);
+                if (flushNow) m_store.flush();
+                return;
+            }
+            ws.surfaces[surfIdx].items.removeAt(itemIdx);
+        } else {
             item.id          = itemId;
             item.contentType = contentType;
-            item.rect        = rect;
-            WorkspaceCanvas* canvas = canvasForSurface(targetSurface);
-            item.z = canvas ? canvas->layout().zOf(itemId) : 0;
-            s.items.append(item);
-            m_store.setDocument(doc);
-            if (flushNow) m_store.flush();
-            return;
         }
+        item.rect   = rect;
+        item.closed = false;
+        {
+            WorkspaceCanvas* canvas = canvasForSurface(targetSurface);
+            // Never below zero (red-team #4971 L4): the widget lands
+            // after this write, so zOf() answers -1 and a fresh applet
+            // sorted below the pans at replay.
+            item.z = canvas ? qMax(0, canvas->layout().zOf(itemId)) : 0;
+        }
+        for (WorkspaceSurface& s : ws.surfaces) {
+            if (s.id != targetSurface) continue;
+            s.items.append(item);
+            break;
+        }
+        m_store.setDocument(doc);
+        if (flushNow) m_store.flush();
+        return;
     }
 }
 
@@ -1376,11 +1449,9 @@ void WorkspaceController::resetToClassic()
             }
         }
         for (const QString& sid : extras) {
-            if (m_extraCanvases.contains(sid)) {
-                m_wiredCanvases.remove(m_extraCanvases.value(sid).data());
-                m_extraCanvases.remove(sid);
-                if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(sid);
-            }
+            m_extraCanvases.remove(sid);
+            // Unconditional — hidden windows too (red-team #4971 M1).
+            if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(sid);
             doc.removeSurface(doc.activeWorkspace, sid);
         }
     }
@@ -1769,6 +1840,7 @@ void WorkspaceController::evictSurfaceTransiently(const QString& surfaceId)
     if (!canvas || canvas == m_canvas) {
         return;   // the main surface never evicts wholesale
     }
+    const bool wasApplying = m_applying;   // nest-safe (review L6)
     m_applying = true;
     if (m_panHost.recallGuard) m_panHost.recallGuard(true);
     const QStringList ids = canvas->layout().ids();
@@ -1798,7 +1870,7 @@ void WorkspaceController::evictSurfaceTransiently(const QString& surfaceId)
         }
     }
     if (m_panHost.recallGuard) m_panHost.recallGuard(false);
-    m_applying = false;
+    m_applying = wasApplying;
 }
 
 void WorkspaceController::placeSurfaceItems(const QString& surfaceId)
@@ -1814,6 +1886,7 @@ void WorkspaceController::placeSurfaceItems(const QString& surfaceId)
         return;
     }
 
+    const bool wasApplying = m_applying;   // nest-safe (review L6)
     m_applying = true;
     if (m_panHost.recallGuard) m_panHost.recallGuard(true);
 
@@ -1868,7 +1941,7 @@ void WorkspaceController::placeSurfaceItems(const QString& surfaceId)
     }
 
     if (m_panHost.recallGuard) m_panHost.recallGuard(false);
-    m_applying = false;
+    m_applying = wasApplying;
 }
 
 QString WorkspaceController::addCanvasWindow(const QString& label)
@@ -1906,10 +1979,14 @@ bool WorkspaceController::removeCanvasWindow(const QString& surfaceId)
     // deleted below, so this is best-effort.
     if (m_extraCanvases.contains(surfaceId)) {
         evictSurfaceTransiently(surfaceId);
-        m_wiredCanvases.remove(m_extraCanvases.value(surfaceId).data());
         m_extraCanvases.remove(surfaceId);
-        if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(surfaceId);
     }
+    // Destroy UNCONDITIONALLY (red-team #4971 M1): a hidden window is out
+    // of m_extraCanvases but its WorkspaceWindow is alive in the host —
+    // gating on the map leaked it (and re-minting its surface id later
+    // resurrected the corpse).  The host's destroy is a no-op for ids it
+    // does not hold.
+    if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(surfaceId);
     if (!doc.removeSurface(doc.activeWorkspace, surfaceId)) {
         return false;
     }
@@ -1926,6 +2003,9 @@ bool WorkspaceController::removeCanvasWindow(const QString& surfaceId)
 bool WorkspaceController::renameCanvasWindow(const QString& surfaceId,
                                              const QString& label)
 {
+    if (!m_enabled) {
+        return false;   // consistency with the rest of the window CRUD
+    }
     WorkspaceDocument doc = m_store.document();
     if (!doc.renameSurface(doc.activeWorkspace, surfaceId, label)) {
         return false;
@@ -2009,6 +2089,7 @@ WorkspaceController::canvasWindowList() const
             info.id    = s.id;
             info.label = s.label.isEmpty() ? s.id : s.label;
             info.open  = !s.hidden;
+            info.live  = (canvasForSurface(s.id) != nullptr);
             out.append(info);
         }
     }
@@ -2120,6 +2201,18 @@ bool WorkspaceController::moveItemToSurface(const QString& itemId,
                 source->takeItem(itemId);
                 m_manager->returnFromCanvas(c->id(), c);
             }
+            // Coming OFF a hidden window: hide-and-keep left the applet
+            // transiently closed and on no canvas.  The move to a live
+            // surface is the operator asking to SEE it — reopen under the
+            // guard, exactly as placeSurfaceItems does on window reopen
+            // (red-team #4971 M4: the document moved, nothing appeared,
+            // and the divergence popped the applet open at the next full
+            // recall with no user action).
+            if (!moved.closed && !c->isContainerVisible() && !c->isFloating()) {
+                if (m_panHost.recallGuard) m_panHost.recallGuard(true);
+                c->setContainerVisible(true);
+                if (m_panHost.recallGuard) m_panHost.recallGuard(false);
+            }
             if (c->isContainerVisible() && !c->isFloating()
                 && m_manager->detachForCanvas(c->id()) == c) {
                 target->addItem(itemId, c, moved.rect,
@@ -2167,13 +2260,13 @@ void WorkspaceController::prepareShutdown()
         // and the panel every container — a window deleted around them
         // would take them along (they are its children at this point).
         evictSurfaceTransiently(sid);
-        // Forget the canvas pointer in the wire-once set too: a later
-        // allocation could reuse the address and would silently never be
-        // wired.
-        m_wiredCanvases.remove(m_extraCanvases.value(sid).data());
         m_extraCanvases.remove(sid);
         if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(sid);
     }
+    // Hidden windows are NOT in m_extraCanvases and their widgets are
+    // already evicted — the HOST sweeps its whole window map after this
+    // (red-team #4971 M1: disable-then-quit left every canvas window to
+    // ~QWidget, the exact #2495 shape this method exists to prevent).
 }
 
 // ── Workspaces (RFC #4887 phase 6) ───────────────────────────────────────
@@ -2324,6 +2417,17 @@ bool WorkspaceController::switchWorkspaceInternal(const QString& id, bool force)
         return true;
     }
 
+    // The OLD workspace's window geometry is captured before the pivot —
+    // the hint writes must land on the workspace that owns those windows,
+    // not the one we are switching to (red-team #4971 L2).
+    for (auto it = m_extraCanvases.constBegin();
+         it != m_extraCanvases.constEnd(); ++it) {
+        if (m_windowHost.geometryHint) {
+            noteWindowGeometryHint(it.key(), m_windowHost.geometryHint(it.key()));
+        }
+    }
+    doc = m_store.document();   // the hint writes made the local copy stale
+
     // THE DOCUMENT PIVOTS FIRST (review, K6OZY): releaseAllItems() reaches
     // ContainerManager::saveState() — a real disk flush, deliberately — and
     // between it and the old document write sat the reparent storm.  A kill
@@ -2349,8 +2453,9 @@ bool WorkspaceController::switchWorkspaceInternal(const QString& id, bool force)
     // into the document.
     // Windows first (phase 7): close the ones the target does not want,
     // open the ones it does — placement below needs the canvases to
-    // exist.  The widgets were all released above.
-    reconcileWindowsWithActiveWorkspace();
+    // exist.  The widgets were all released above.  Hints re-apply: each
+    // workspace owns its windows' geometry (L2).
+    reconcileWindowsWithActiveWorkspace(/*reapplyHints=*/true);
 
     QSet<QString> wanted;
     if (const Workspace* ws = doc.workspace(id)) {
@@ -2489,6 +2594,31 @@ bool WorkspaceController::addAppletFromPalette(const QString& appletId,
     }
 
     const QString itemId = itemIdFor(c);
+
+    // Refusals come BEFORE any write (red-team #4971 B2: a refused add
+    // had already committed writeItemPresence, mangling a hidden
+    // window's stored rect with coordinates from a different canvas).
+    // With no explicit surface, the add lands wherever the item lives —
+    // and a hidden home means there is nothing to place on: refuse as a
+    // genuine no-op.  An explicit surface is intent and relocates, so a
+    // hidden home is no obstacle — but a hidden TARGET is.
+    {
+        const WorkspaceDocument& doc = m_store.document();
+        if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
+            QString effective = surfaceId;
+            if (effective.isEmpty()) {
+                effective = docSurfaceForItem(*ws, itemId);
+            }
+            if (!effective.isEmpty()) {
+                if (const WorkspaceSurface* surf = ws->surface(effective)) {
+                    if (surf->hidden) {
+                        return false;   // its window is closed
+                    }
+                }
+            }
+        }
+    }
+
     const NormRect rect  = defaultRectFor(c, &canvasPos,
                                           canvasForSurface(surfaceId));
 
@@ -2496,7 +2626,8 @@ bool WorkspaceController::addAppletFromPalette(const QString& appletId,
     // an OPEN applet placed at the click point ON THE CANVAS THE MENU WAS
     // OPENED OVER (phase 7).  The rect is recorded first so every path
     // below places from the document — the same one-placement-path shape
-    // import-floats uses — and recording carries the surface.
+    // import-floats uses — and recording carries the surface (an explicit
+    // surface relocates a previous home, red-team #4971 B1).
     writeItemPresence(itemId, QStringLiteral("applet"), rect,
                       /*present=*/true, /*flushNow=*/false, surfaceId);
 
@@ -2552,8 +2683,14 @@ int WorkspaceController::importFloatingOntoCanvas()
             continue;
         }
         capImportRect(&mapped);
+        // Explicit main (red-team #4971 L1): the rects are mapped against
+        // the MAIN canvas, and an applet whose item lived on an extra
+        // window would otherwise import onto that window at main-mapped
+        // coordinates.  Import is main-surface by design; the explicit
+        // surface relocates a stray home.
         writeItemPresence(itemIdFor(c), QStringLiteral("applet"), mapped,
-                          /*present=*/true, /*flushNow=*/false);
+                          /*present=*/true, /*flushNow=*/false,
+                          WorkspaceSurface::kMainId);
         writeItemClosed(itemIdFor(c), false, /*flushNow=*/false);
         m_manager->dockContainer(c->id());
         if (c->isOnCanvas()) {
@@ -2584,7 +2721,8 @@ int WorkspaceController::importFloatingOntoCanvas()
             capImportRect(&mapped);
             writeItemPresence(panItemIdFor(panId),
                               QStringLiteral("panadapter"), mapped,
-                              /*present=*/true, /*flushNow=*/false);
+                              /*present=*/true, /*flushNow=*/false,
+                              WorkspaceSurface::kMainId);
             m_panHost.requestDock(panId);
             // Correct while docking places synchronously (it does — the
             // panDocked emission is direct); a future queued dock would
