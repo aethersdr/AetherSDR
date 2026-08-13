@@ -99,6 +99,32 @@ public:
     // "no binding" is a normal answer, not a failure.
     QString boundWorkspace(const QString& radioProfile) const;
 
+    // ── Workspace CRUD (phase 6) ─────────────────────────────────────────
+    //
+    // The DOCUMENT owns identity: sequential unique ids ("ws-N") and
+    // de-duplicated labels ("CW Contest (2)"), so no two call sites can
+    // mint colliding workspaces.  Composing CONTENT for a new workspace
+    // (Classic cells, live pan slots) is the controller's business — the
+    // document only clones or creates empty.
+    QString uniqueWorkspaceId() const;
+    QString uniqueLabel(const QString& base) const;
+
+    // Append a clone of `sourceId` — surfaces, items, rects, z, closed
+    // flags, the whole arrangement — under a fresh id.  Returns the new id,
+    // empty when the source does not exist.
+    QString addDuplicateOf(const QString& sourceId, const QString& label);
+
+    // Append an empty workspace (a main surface, no items).
+    QString addBlank(const QString& label);
+
+    bool renameWorkspace(const QString& id, const QString& label);
+
+    // Refuses the last workspace (a document with none cannot describe the
+    // shell).  Bindings pointing at it drop — the same rule the parser
+    // applies to dangling targets — and if it was active, the first
+    // remaining workspace becomes active.
+    bool removeWorkspace(const QString& id);
+
     // ── Serialisation ────────────────────────────────────────────────────
     QJsonObject toJson() const;
 

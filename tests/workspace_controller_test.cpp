@@ -513,6 +513,108 @@ int main(int argc, char** argv)
         ctl.disable();
     }
 
+    // ── Phase 6: workspaces — CRUD, full-recall switching, bindings ──────
+    {
+        report("re-enable for the phase 6 block",
+               ctl.enable({"RX", "TX"}) && canvas.contains("pan:0"));
+        canvas.setEditMode(true);
+        rx->setContainerVisible(true);
+        tx->setContainerVisible(true);
+        if (!rx->isOnCanvas()) ctl.sendAppletToCanvas("RX");
+        if (!tx->isOnCanvas()) ctl.sendAppletToCanvas("TX");
+        const QString wsA = ctl.activeWorkspaceId();
+
+        // Create-from-current duplicates and switches to the copy.
+        const QString wsB = ctl.createWorkspace(
+            WorkspaceController::NewWorkspaceSource::Current,
+            QStringLiteral("Contest"));
+        report("create-from-current switches to the copy",
+               !wsB.isEmpty() && ctl.activeWorkspaceId() == wsB
+                   && canvas.contains("applet:RX") && canvas.contains("applet:TX"));
+        report("...and the switcher lists both",
+               ctl.workspaceList().size() >= 2);
+
+        // Close TX here: the workspace remembers it as closed.
+        tx->setContainerVisible(false);
+        report("closing writes the closed flag to the active workspace",
+               storedDocument().contains(QStringLiteral("closed")));
+
+        // Switch back to A: FULL RECALL reopens TX (open there).
+        report("switching restores the other workspace's open set",
+               ctl.switchWorkspace(wsA)
+                   && tx->isContainerVisible() && tx->isOnCanvas()
+                   && rx->isOnCanvas());
+
+        // Switch to B again: TX closes (closed there), RX stays.
+        report("...and the closed set on the way back",
+               ctl.switchWorkspace(wsB)
+                   && !tx->isContainerVisible()
+                   && rx->isOnCanvas());
+        report("a switch is a whole-surface change: undo is cleared",
+               !ctl.canUndo());
+
+        // Pans: rects are per-workspace.
+        const NormRect inB = canvas.itemRect("pan:0");
+        ctl.switchWorkspace(wsA);
+        canvas.setItemRect("pan:0", NormRect{0.05, 0.05, 0.4, 0.4});
+        ctl.switchWorkspace(wsB);
+        report("pan rects are per-workspace",
+               canvas.itemRect("pan:0") == inB);
+        ctl.switchWorkspace(wsA);
+        report("...both ways",
+               canvas.itemRect("pan:0") == NormRect{0.05, 0.05, 0.4, 0.4});
+
+        // Blank starts empty; live pans land at cascade defaults.
+        const QString wsC = ctl.createWorkspace(
+            WorkspaceController::NewWorkspaceSource::Blank,
+            QStringLiteral("Bare"));
+        report("blank workspace: pans placed, no applets",
+               ctl.activeWorkspaceId() == wsC
+                   && canvas.contains("pan:0")
+                   && !canvas.contains("applet:RX")
+                   && !rx->isContainerVisible());
+
+        // Bindings: a bound global profile recall switches; tx-type and
+        // unbound recalls do not (decisions 6/8).
+        ctl.bindProfile(QStringLiteral("CW Heavy"), wsB);
+        ctl.onRadioProfileLoaded(QStringLiteral("tx"), QStringLiteral("CW Heavy"));
+        report("a tx-profile recall never switches",
+               ctl.activeWorkspaceId() == wsC);
+        ctl.onRadioProfileLoaded(QStringLiteral("global"),
+                                 QStringLiteral("CW Heavy"));
+        report("a bound global recall switches",
+               ctl.activeWorkspaceId() == wsB);
+        ctl.onRadioProfileLoaded(QStringLiteral("global"),
+                                 QStringLiteral("Unbound Profile"));
+        report("an unbound recall leaves the workspace alone (decision 8)",
+               ctl.activeWorkspaceId() == wsB);
+
+        // Delete the active workspace: real switch to the fallback.
+        report("deleting the active workspace falls back and re-places",
+               ctl.deleteWorkspace(wsB)
+                   && ctl.activeWorkspaceId() != wsB
+                   && canvas.contains("pan:0"));
+        report("rename reflects in the list",
+               ctl.renameWorkspace(wsC, QStringLiteral("Renamed"))
+                   && [&] {
+                          for (const auto& p : ctl.workspaceList())
+                              if (p.second == QStringLiteral("Renamed"))
+                                  return true;
+                          return false;
+                      }());
+
+        // Mode-off switch only retargets.
+        ctl.switchWorkspace(wsA);
+        rx->setContainerVisible(true);
+        tx->setContainerVisible(true);
+        ctl.disable();
+        report("a mode-off switch retargets without touching widgets",
+               ctl.switchWorkspace(wsC)
+                   && ctl.activeWorkspaceId() == wsC
+                   && rx->isContainerVisible());
+        ctl.switchWorkspace(wsA);
+    }
+
     // ── The field report: boot replay against a pre-layout canvas ────────
     //
     // The bug as reported: enable ran in the MainWindow constructor before

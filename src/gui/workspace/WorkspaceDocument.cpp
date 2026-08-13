@@ -53,6 +53,9 @@ QJsonObject itemToJson(const CanvasItem& it)
     if (!it.contentType.isEmpty()) {
         o[QStringLiteral("type")] = it.contentType;
     }
+    if (it.closed) {
+        o[QStringLiteral("closed")] = true;
+    }
     if (it.collapsed) {
         o[QStringLiteral("collapsed")] = true;
     }
@@ -106,6 +109,96 @@ QString WorkspaceDocument::boundWorkspace(const QString& radioProfile) const
 {
     const QString id = bindings.value(radioProfile);
     return contains(id) ? id : QString();
+}
+
+QString WorkspaceDocument::uniqueWorkspaceId() const
+{
+    int n = 1;
+    while (contains(QStringLiteral("ws-%1").arg(n))) {
+        ++n;
+    }
+    return QStringLiteral("ws-%1").arg(n);
+}
+
+QString WorkspaceDocument::uniqueLabel(const QString& base) const
+{
+    const QString wanted = base.trimmed().isEmpty()
+                               ? QStringLiteral("Workspace")
+                               : base.trimmed();
+    auto taken = [this](const QString& l) {
+        for (const Workspace& w : workspaces) {
+            if (w.label == l) return true;
+        }
+        return false;
+    };
+    if (!taken(wanted)) {
+        return wanted;
+    }
+    int n = 2;
+    while (taken(QStringLiteral("%1 (%2)").arg(wanted).arg(n))) {
+        ++n;
+    }
+    return QStringLiteral("%1 (%2)").arg(wanted).arg(n);
+}
+
+QString WorkspaceDocument::addDuplicateOf(const QString& sourceId,
+                                          const QString& label)
+{
+    const Workspace* src = workspace(sourceId);
+    if (!src) {
+        return QString();
+    }
+    Workspace w = *src;   // deep copy: surfaces and items are value types
+    w.id    = uniqueWorkspaceId();
+    w.label = uniqueLabel(label);
+    workspaces.append(w);
+    return w.id;
+}
+
+QString WorkspaceDocument::addBlank(const QString& label)
+{
+    Workspace w;
+    w.id    = uniqueWorkspaceId();
+    w.label = uniqueLabel(label);
+    WorkspaceSurface main;
+    main.id = WorkspaceSurface::kMainId;
+    w.surfaces.append(main);
+    workspaces.append(w);
+    return w.id;
+}
+
+bool WorkspaceDocument::renameWorkspace(const QString& id, const QString& label)
+{
+    for (Workspace& w : workspaces) {
+        if (w.id == id) {
+            w.label = uniqueLabel(label);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WorkspaceDocument::removeWorkspace(const QString& id)
+{
+    if (workspaces.size() <= 1 || !contains(id)) {
+        return false;
+    }
+    for (int i = 0; i < workspaces.size(); ++i) {
+        if (workspaces.at(i).id == id) {
+            workspaces.removeAt(i);
+            break;
+        }
+    }
+    // Bindings to the removed workspace drop — the parser's dangling-target
+    // rule, applied at the edit instead of waiting for the next load.
+    for (auto it = bindings.begin(); it != bindings.end();) {
+        if (it.value() == id) it = bindings.erase(it);
+        else ++it;
+    }
+    if (activeWorkspace == id) {
+        activeWorkspace = workspaces.first().id;
+    }
+    return true;
 }
 
 QJsonObject WorkspaceDocument::toJson() const
@@ -311,6 +404,7 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
                 item.contentType = io.value(QStringLiteral("type")).toString();
                 item.z           = io.value(QStringLiteral("z")).toInt();
                 item.collapsed   = io.value(QStringLiteral("collapsed")).toBool();
+                item.closed      = io.value(QStringLiteral("closed")).toBool();
 
                 seenItemIds.insert(item.id);
                 surface.items.append(item);

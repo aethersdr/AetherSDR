@@ -315,6 +315,11 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
         if (!item.id.startsWith(kAppletItemPrefix)) {
             continue;
         }
+        // A closed-flagged item belongs to the workspace but its applet is
+        // shut (phase 6 full recall) — placement skips it outright.
+        if (item.closed) {
+            continue;
+        }
         ContainerWidget* c = containerForApplet(item.id.mid(kAppletItemPrefix.size()));
         // Closed applets keep their home but are not placed; floating ones
         // stay out (pop-out stays, RFC decision 1) until they dock.
@@ -338,37 +343,7 @@ void WorkspaceController::disable()
     }
 
     m_applying = true;
-    const QStringList ids = m_canvas->layout().ids();
-    for (const QString& itemId : ids) {
-        if (itemId.startsWith(kPanItemPrefix)) {
-            // Back into the stack's splitter — release, never take: the
-            // restore hook reparents in ONE step (addWidget), and the
-            // nullptr detour is forbidden for QRhi children (#1344).
-            QWidget* w = m_canvas->releaseItem(itemId);
-            const QString panId = panIdForItem(itemId);
-            if (w && !panId.isEmpty() && m_panHost.restore) {
-                m_panHost.restore(panId, w);
-            }
-            continue;
-        }
-        if (itemId == kBandStackItemId) {
-            QWidget* w = m_canvas->releaseItem(itemId);
-            if (w && m_panHost.reclaimBandStack) {
-                m_panHost.reclaimBandStack(w);   // stays visible: it was
-            }
-            continue;
-        }
-        if (itemId == kPanStackItemId) {
-            // Phase-3 document robustness: released parentless; MainWindow
-            // puts it back in the splitter.
-            m_canvas->takeItem(itemId);
-            continue;
-        }
-        QWidget* w = m_canvas->takeItem(itemId);
-        if (auto* c = qobject_cast<ContainerWidget*>(w)) {
-            m_manager->returnFromCanvas(c->id(), c);
-        }
-    }
+    releaseAllItems(/*returnPansToStack=*/true, /*hideBandStack=*/false);
     m_applying = false;
 
     // Placement is kept — switching the mode off is not a statement about
@@ -817,6 +792,9 @@ void WorkspaceController::wireContainer(ContainerWidget* c)
         if (m_applying || !m_enabled) return;
         if (!visible && c->isOnCanvas()) {
             evictFromCanvas(c, /*forgetHome=*/false);
+            // Full recall (phase 6): the workspace remembers this applet as
+            // closed, so switching back does not resurrect it.
+            writeItemClosed(itemIdFor(c), true, /*flushNow=*/true);
         } else if (visible && !c->isOnCanvas() && !c->isFloating()) {
             const WorkspaceDocument& doc = m_store.document();
             if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
@@ -824,6 +802,10 @@ void WorkspaceController::wireContainer(ContainerWidget* c)
                         ws->surface(WorkspaceSurface::kMainId)) {
                     for (const CanvasItem& it : main->items) {
                         if (it.id == itemIdFor(c)) {
+                            // The operator's click outranks the document: a
+                            // stale closed flag must never trap an applet.
+                            writeItemClosed(itemIdFor(c), false,
+                                            /*flushNow=*/false);
                             sendAppletToCanvas(appletIdFor(c));
                             break;
                         }
@@ -889,6 +871,26 @@ void WorkspaceController::writeItemRect(const QString& itemId, const NormRect& r
     } else if (itemId == kPanStackItemId) {
         writeItemPresence(itemId, QStringLiteral("panstack"), rect,
                           /*present=*/true, flushNow);
+    }
+}
+
+void WorkspaceController::writeItemClosed(const QString& itemId, bool closed,
+                                          bool flushNow)
+{
+    WorkspaceDocument doc = m_store.document();
+    for (Workspace& ws : doc.workspaces) {
+        if (ws.id != doc.activeWorkspace) continue;
+        for (WorkspaceSurface& s : ws.surfaces) {
+            if (s.id != WorkspaceSurface::kMainId) continue;
+            for (CanvasItem& it : s.items) {
+                if (it.id == itemId && it.closed != closed) {
+                    it.closed = closed;
+                    m_store.setDocument(doc);
+                    if (flushNow) m_store.flush();
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -1185,6 +1187,267 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
                    [this] { resetToClassic(); });
 
     menu.exec(globalPos);
+}
+
+void WorkspaceController::releaseAllItems(bool returnPansToStack,
+                                          bool hideBandStack)
+{
+    const QStringList ids = m_canvas->layout().ids();
+    for (const QString& itemId : ids) {
+        if (itemId.startsWith(kPanItemPrefix)) {
+            // Release, never take: the restore hook reparents in ONE step
+            // (addWidget), and the nullptr detour is forbidden for QRhi
+            // children (#1344).  On a workspace SWITCH the pan stays
+            // parented to the canvas — the placement that follows re-adds
+            // it, a canvas→canvas move.
+            QWidget* w = m_canvas->releaseItem(itemId);
+            const QString panId = panIdForItem(itemId);
+            if (returnPansToStack && w && !panId.isEmpty() && m_panHost.restore) {
+                m_panHost.restore(panId, w);
+            }
+            continue;
+        }
+        if (itemId == kBandStackItemId) {
+            QWidget* w = m_canvas->releaseItem(itemId);
+            if (w && m_panHost.reclaimBandStack) {
+                m_panHost.reclaimBandStack(w);
+            }
+            if (w && hideBandStack) {
+                w->hide();   // session-transient; a switch starts it hidden
+            }
+            continue;
+        }
+        if (itemId == kPanStackItemId) {
+            // Phase-3 document robustness: released parentless; MainWindow
+            // puts it back in the splitter.
+            m_canvas->takeItem(itemId);
+            continue;
+        }
+        QWidget* w = m_canvas->takeItem(itemId);
+        if (auto* c = qobject_cast<ContainerWidget*>(w)) {
+            m_manager->returnFromCanvas(c->id(), c);
+        }
+    }
+}
+
+// ── Workspaces (RFC #4887 phase 6) ───────────────────────────────────────
+
+QString WorkspaceController::activeWorkspaceId() const
+{
+    return m_store.document().activeWorkspace;
+}
+
+QList<QPair<QString, QString>> WorkspaceController::workspaceList() const
+{
+    QList<QPair<QString, QString>> out;
+    const WorkspaceDocument& doc = m_store.document();
+    for (const Workspace& w : doc.workspaces) {
+        out.append({w.id, w.label.isEmpty() ? w.id : w.label});
+    }
+    return out;
+}
+
+QString WorkspaceController::createWorkspace(NewWorkspaceSource source,
+                                             const QString& label)
+{
+    if (!m_store.isLoaded()) {
+        return QString();
+    }
+    WorkspaceDocument doc = m_store.document();
+
+    QString newId;
+    switch (source) {
+    case NewWorkspaceSource::Current:
+        newId = doc.addDuplicateOf(doc.activeWorkspace, label);
+        break;
+    case NewWorkspaceSource::Blank:
+        newId = doc.addBlank(label);
+        break;
+    case NewWorkspaceSource::Classic: {
+        newId = doc.addBlank(label);
+        if (!newId.isEmpty()) {
+            // One definition of Classic, used everywhere: composed from the
+            // live legacy keys, exactly as resetToClassic() does.
+            const WorkspaceDocument classic = buildClassicDocument(
+                readLegacyLayoutState(m_knownAppletIds), migrationPanSlotIds());
+            if (const Workspace* freshWs =
+                    classic.workspace(classicWorkspaceId())) {
+                if (const WorkspaceSurface* freshMain =
+                        freshWs->surface(WorkspaceSurface::kMainId)) {
+                    for (Workspace& w : doc.workspaces) {
+                        if (w.id != newId) continue;
+                        for (WorkspaceSurface& surf : w.surfaces) {
+                            if (surf.id == WorkspaceSurface::kMainId) {
+                                surf.items = freshMain->items;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        break;
+    }
+    }
+    if (newId.isEmpty()) {
+        return QString();
+    }
+    m_store.setDocument(doc);
+    m_store.flush();
+    emit workspacesChanged();
+
+    // Creating is arranging: while the mode is on, the new workspace
+    // becomes the active one immediately.
+    if (m_enabled) {
+        switchWorkspace(newId);
+    }
+    return newId;
+}
+
+bool WorkspaceController::renameWorkspace(const QString& id, const QString& label)
+{
+    WorkspaceDocument doc = m_store.document();
+    if (!doc.renameWorkspace(id, label)) {
+        return false;
+    }
+    m_store.setDocument(doc);
+    m_store.flush();
+    emit workspacesChanged();
+    return true;
+}
+
+bool WorkspaceController::deleteWorkspace(const QString& id)
+{
+    WorkspaceDocument doc = m_store.document();
+    const bool wasActive = (doc.activeWorkspace == id);
+    if (!doc.removeWorkspace(id)) {
+        return false;
+    }
+    if (wasActive && m_enabled) {
+        // The document already fell back to its first workspace; perform
+        // the real switch to it (release + full recall).
+        const QString fallback = doc.activeWorkspace;
+        doc.activeWorkspace = id;      // switchWorkspace needs a change to act
+        m_store.setDocument(doc);
+        switchWorkspace(fallback);
+    } else {
+        m_store.setDocument(doc);
+        m_store.flush();
+    }
+    emit workspacesChanged();
+    return true;
+}
+
+bool WorkspaceController::switchWorkspace(const QString& id)
+{
+    WorkspaceDocument doc = m_store.document();
+    if (!doc.contains(id)) {
+        return false;
+    }
+    if (doc.activeWorkspace == id) {
+        return true;   // the state the caller asked for
+    }
+
+    if (!m_enabled) {
+        // Mode off: just retarget — the next enable places the new active.
+        doc.activeWorkspace = id;
+        m_store.setDocument(doc);
+        m_store.flush();
+        emit workspacesChanged();
+        return true;
+    }
+
+    m_applying = true;
+    releaseAllItems(/*returnPansToStack=*/false, /*hideBandStack=*/true);
+
+    doc.activeWorkspace = id;
+
+    // FULL RECALL (maintainer ruling): the target workspace decides which
+    // applets are open.  Belonging means an item with closed=false; every
+    // other OPEN applet closes.  All visibility changes run under
+    // m_applying so the visibilityChanged hook does not echo them back
+    // into the document.
+    QSet<QString> wanted;
+    if (const Workspace* ws = doc.workspace(id)) {
+        if (const WorkspaceSurface* main = ws->surface(WorkspaceSurface::kMainId)) {
+            for (const CanvasItem& it : main->items) {
+                if (it.id.startsWith(kAppletItemPrefix) && !it.closed) {
+                    wanted.insert(it.id.mid(kAppletItemPrefix.size()));
+                }
+            }
+        }
+    }
+    for (ContainerWidget* c : m_manager->allContainers()) {
+        if (!c) continue;
+        const QString appletId = appletIdFor(c);
+        const bool shouldBeOpen = wanted.contains(appletId);
+        if (c->isFloating()) {
+            continue;   // pop-out stays (decision 1) — recall never yanks it
+        }
+        if (c->isContainerVisible() != shouldBeOpen) {
+            c->setContainerVisible(shouldBeOpen);
+        }
+    }
+
+    bool docChanged = false;
+    placeActiveWorkspaceItems(doc, &docChanged);
+    m_applying = false;
+
+    m_undoItemId.clear();   // whole-surface change; a one-rect undo would lie
+    m_store.setDocument(doc);
+    m_store.flush();
+    emit workspacesChanged();
+    return true;
+}
+
+void WorkspaceController::bindProfile(const QString& profileName,
+                                      const QString& workspaceId)
+{
+    if (profileName.trimmed().isEmpty()) {
+        return;
+    }
+    WorkspaceDocument doc = m_store.document();
+    if (!doc.contains(workspaceId)) {
+        return;
+    }
+    doc.bindings.insert(profileName, workspaceId);
+    m_store.setDocument(doc);
+    m_store.flush();
+    emit workspacesChanged();
+}
+
+void WorkspaceController::unbindProfile(const QString& profileName)
+{
+    WorkspaceDocument doc = m_store.document();
+    if (doc.bindings.remove(profileName) > 0) {
+        m_store.setDocument(doc);
+        m_store.flush();
+        emit workspacesChanged();
+    }
+}
+
+QString WorkspaceController::boundWorkspaceFor(const QString& profileName) const
+{
+    return m_store.document().boundWorkspace(profileName);
+}
+
+void WorkspaceController::onRadioProfileLoaded(const QString& profileType,
+                                               const QString& profileName)
+{
+    // Decisions 6 and 8: a bound GLOBAL profile switches the workspace; an
+    // unbound one leaves it alone.  Other profile types (tx/mic) are not
+    // operating layouts and never participate.
+    if (profileType != QLatin1String("global") || !m_enabled) {
+        return;
+    }
+    const QString target = boundWorkspaceFor(profileName);
+    if (target.isEmpty() || target == activeWorkspaceId()) {
+        return;
+    }
+    if (switchWorkspace(target)) {
+        const Workspace* ws = m_store.document().workspace(target);
+        emit workspaceSwitchedByProfile(
+            profileName, ws && !ws->label.isEmpty() ? ws->label : target);
+    }
 }
 
 // ── Geometry helpers ─────────────────────────────────────────────────────

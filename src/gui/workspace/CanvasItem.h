@@ -45,6 +45,15 @@ struct CanvasItem {
     // rect alone; the collapse animation and the height override belong with
     // the container work in phase 3.
     bool collapsed = false;
+
+    // The item belongs to this workspace but its applet is CLOSED (phase 6,
+    // full-recall ruling): switching to the workspace does not open it, and
+    // close-keeps-home still works within a workspace.  Absent-when-false in
+    // the stored form, so phase-3/4/5 documents parse unchanged and a
+    // downgraded build merely drops a flag whose recall it does not do.
+    // Meaningful for applet items only; pans are the surface and never close
+    // this way.
+    bool closed = false;
 };
 
 }  // namespace AetherSDR
