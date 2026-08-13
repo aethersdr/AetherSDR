@@ -347,8 +347,14 @@ void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
         return;
     }
 
+    // Menu text is mnemonic text: double the ampersands in anything
+    // data-driven (workspace labels, profile names) or Qt renders "&" as an
+    // accelerator underline.
+    auto menuText = [](const QString& t) {
+        return QString(t).replace(QLatin1Char('&'), QStringLiteral("&&"));
+    };
     for (const auto& [id, label] : list) {
-        QAction* a = menu->addAction(label);
+        QAction* a = menu->addAction(menuText(label));
         a->setCheckable(true);
         a->setChecked(id == active);
         connect(a, &QAction::triggered, this, [this, id] {
@@ -414,7 +420,7 @@ void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
         none->setEnabled(false);
     } else {
         for (const QString& prof : profiles) {
-            QAction* b = bindMenu->addAction(prof);
+            QAction* b = bindMenu->addAction(menuText(prof));
             b->setCheckable(true);
             b->setChecked(m_workspaceController->boundWorkspaceFor(prof)
                           == active);

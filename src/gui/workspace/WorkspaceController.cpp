@@ -20,6 +20,17 @@ namespace AetherSDR {
 
 namespace {
 
+// Menu text is MNEMONIC text: a bare '&' marks an accelerator and renders
+// as an underline (or eats the character entirely) — "Audio & DSP" showed
+// as "Audio _DSP" (8600 field report).  Everything data-driven that enters
+// a menu goes through here.
+QString menuText(const QString& s)
+{
+    QString t = s;
+    t.replace(QLatin1Char('&'), QStringLiteral("&&"));
+    return t;
+}
+
 const QString kAppletItemPrefix = QStringLiteral("applet:");
 
 // The MIME type the panel's title-bar drags already carry (#3057); the
@@ -1135,7 +1146,7 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
         QMenu* switcher = menu.addMenu(QStringLiteral("Workspace"));
         const QString active = activeWorkspaceId();
         for (const auto& [wsId, wsLabel] : wsList) {
-            QAction* a = switcher->addAction(wsLabel);
+            QAction* a = switcher->addAction(menuText(wsLabel));
             a->setCheckable(true);
             a->setChecked(wsId == active);
             connect(a, &QAction::triggered, this,
@@ -1215,12 +1226,12 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
             }
         }
         for (const QString& category : categoryOrder) {
-            QMenu* catMenu = add->addMenu(category);
+            QMenu* catMenu = add->addMenu(menuText(category));
             for (const WidgetCatalogEntry& e : m_widgetCatalog) {
                 if (e.category != category) {
                     continue;
                 }
-                QAction* a = catMenu->addAction(e.title);
+                QAction* a = catMenu->addAction(menuText(e.title));
                 ContainerWidget* c = containerForApplet(e.id);
                 if (c && c->isOnCanvas()) {
                     a->setCheckable(true);
