@@ -127,6 +127,7 @@ class MiniPanApplet;
 class PanadapterStack;
 class WorkspaceCanvas;
 class WorkspaceController;
+class WorkspaceWindow;
 class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
@@ -796,6 +797,7 @@ private:
     // Rebuilds the View-menu workspace switcher on every open (phase 6) —
     // a dynamic menu is never stale and needs no change bookkeeping.
     void rebuildWorkspaceSwitcherMenu(QMenu* menu);
+    void rebuildCanvasWindowsMenu(QMenu* menu);
 
     // Show/hide the applet panel — single source of truth that updates the
     // title-bar dock icons and the persisted "AppletPanelVisible" setting.
@@ -1243,6 +1245,10 @@ private:
     WorkspaceCanvas*     m_workspaceCanvas{nullptr};
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
+    // Additional canvas windows (phase 7), keyed by surface id.  A hidden
+    // window stays in the map (hide-and-keep reuses its canvas object);
+    // only remove/shutdown deletes.
+    QHash<QString, WorkspaceWindow*> m_workspaceWindows;
     QAction*             m_workspaceEditAction{nullptr};
     bool                 m_statusMessageMirrorWired{false};
     QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre

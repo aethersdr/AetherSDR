@@ -11,6 +11,7 @@
 
 #include <QHash>
 #include <QMenu>
+#include <QTimer>
 #include <QToolTip>
 
 #include <algorithm>
@@ -42,7 +43,18 @@ const QByteArray kAppletMime = QByteArrayLiteral("application/x-aethersdr-applet
 
 namespace {
 const QString kPanItemPrefix = QStringLiteral("pan:");
+
+// The surface an item BELONGS to per the document; empty when untracked.
+QString docSurfaceForItem(const Workspace& ws, const QString& itemId)
+{
+    for (const WorkspaceSurface& s : ws.surfaces) {
+        for (const CanvasItem& it : s.items) {
+            if (it.id == itemId) return s.id;
+        }
+    }
+    return QString();
 }
+}  // namespace
 
 const QString WorkspaceController::kPanStackItemId = QStringLiteral("panstack");
 const QString WorkspaceController::kBandStackItemId = QStringLiteral("bandstack");
@@ -57,35 +69,7 @@ WorkspaceController::WorkspaceController(ContainerManager* manager,
     Q_ASSERT(m_manager);
     Q_ASSERT(m_canvas);
 
-    m_canvas->setDropMimeType(kAppletMime);
-
-    connect(m_canvas, &WorkspaceCanvas::dropReceived,
-            this, &WorkspaceController::onDropReceived);
-    connect(m_canvas, &WorkspaceCanvas::itemRectChanged,
-            this, &WorkspaceController::onItemRectChanged);
-    connect(m_canvas, &WorkspaceCanvas::itemStackingChanged,
-            this, [this](const QString&) {
-                if (m_applying || !m_enabled) return;
-                writeStackingFromCanvas();
-            });
-
-    // Gestures (phase 5): snapshot for undo at the start, flush the debounced
-    // rect stream at the end — the auto-commit gesture boundary.
-    connect(m_canvas, &WorkspaceCanvas::gestureStarted,
-            this, [this](const QString& itemId, const NormRect& startRect) {
-                if (m_applying || !m_enabled) return;
-                m_undoItemId = itemId;
-                m_undoRect   = startRect;
-            });
-    connect(m_canvas, &WorkspaceCanvas::gestureFinished,
-            this, [this](const QString&) {
-                if (m_applying || !m_enabled) return;
-                m_store.flush();
-            });
-    connect(m_canvas, &WorkspaceCanvas::itemDraggedOut,
-            this, &WorkspaceController::onItemDraggedOut);
-    connect(m_canvas, &WorkspaceCanvas::contextMenuRequested,
-            this, &WorkspaceController::onContextMenuRequested);
+    wireCanvas(m_canvas);
 
     // Leaving the canvas through the manager — the title-bar "return to
     // panel" button, or the detour a float takes — always forgets the
@@ -204,6 +188,26 @@ bool WorkspaceController::enable(const QStringList& knownAppletIds, QString* why
     // enable and opened editing on a later one that was not first: m8.)
     m_canvas->setEditMode(justMigrated);
 
+    // Extra canvas windows open one event-loop turn later: enable() runs
+    // inside the shell-swap turn, and creating top-level surfaces there is
+    // the wl_subsurface "no parent" hazard the disable path already dodges
+    // (the compositor kills the client).  One turn lets Qt commit the
+    // reparented tree first; the windows' items place scoped, exactly as
+    // a reopened window's do.
+    QTimer::singleShot(0, this, [this] {
+        if (!m_enabled) return;
+        reconcileWindowsWithActiveWorkspace();
+        const WorkspaceDocument& d = m_store.document();
+        if (const Workspace* w = d.workspace(d.activeWorkspace)) {
+            for (const WorkspaceSurface& surf : w->surfaces) {
+                if (surf.id != WorkspaceSurface::kMainId && !surf.hidden
+                    && canvasForSurface(surf.id)) {
+                    placeSurfaceItems(surf.id);
+                }
+            }
+        }
+    });
+
     emit enabledChanged(true);
     return true;
 }
@@ -225,8 +229,13 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
         return;
     }
 
-    QList<CanvasItem> toPlace;
-    QHash<QString, QWidget*> widgets;
+    // Per-surface batches (phase 7): each surface restores onto its own
+    // canvas.  A hidden surface (window closed, hide-and-keep) or one
+    // whose window is not open yet places nothing — its items stay
+    // recorded, its pans stay in the (hidden) stack.
+    QHash<QString, QList<CanvasItem>> toPlace;
+    QHash<QString, QHash<QString, QWidget*>> widgets;
+    QStringList crossMovedPans;   // pans placed onto another top level
 
     // ── One-time split: the phase-3 reserved panstack item becomes per-pan
     // slot items (#4887 phase 4).  Deterministic even with zero live pans:
@@ -267,7 +276,7 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
         break;
     }
 
-    // ── Normalize: pans BELOW everything else, always ────────────────────
+    // ── Normalize: pans BELOW everything else, always — on EVERY surface ─
     //
     // The document's z is otherwise replayed verbatim, and a document that
     // lived through the frontmost-arrival bug (or any future mishap) would
@@ -276,8 +285,8 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
     // enforcing that at replay costs a deliberate pan-over-applet stacking
     // across restarts (nothing supports one today — phase 6's pinning is
     // where that would live) and buys layouts that cannot rot.
-    {
-        QList<CanvasItem> ordered = main->items;
+    for (WorkspaceSurface& surf : ws->surfaces) {
+        QList<CanvasItem> ordered = surf.items;
         std::stable_sort(ordered.begin(), ordered.end(),
                          [](const CanvasItem& a, const CanvasItem& b) {
                              return a.z < b.z;
@@ -293,11 +302,11 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
                 zChanged = true;
             }
         }
-        main->items = ordered;
+        surf.items = ordered;
         if (zChanged && docChanged) *docChanged = true;
     }
 
-    // ── Pans, from their slot items ──────────────────────────────────────
+    // ── Pans, from their slot items — routed to their owning surface ─────
     const QStringList livePans =
         m_panHost.panIds ? m_panHost.panIds() : QStringList{};
     for (const QString& panId : livePans) {
@@ -305,9 +314,18 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
             continue;   // pop-out stays (RFC decision 1)
         }
         const QString itemId = panItemIdFor(panId);
+        QString surfId = docSurfaceForItem(*ws, itemId);
+        WorkspaceSurface* surf = nullptr;
+        for (WorkspaceSurface& candidate : ws->surfaces) {
+            if (candidate.id == surfId) { surf = &candidate; break; }
+        }
+        if (!surf) {
+            surf   = main;
+            surfId = WorkspaceSurface::kMainId;
+        }
         CanvasItem item;
         bool found = false;
-        for (const CanvasItem& it : main->items) {
+        for (const CanvasItem& it : surf->items) {
             if (it.id == itemId) { item = it; found = true; break; }
         }
         if (!found) {
@@ -320,51 +338,92 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
             const double step = 0.05 * (slot % 5);
             item.rect        = NormRect{0.15 + step, 0.15 + step, 0.6, 0.6};
             item.z           = 0;
-            main->items.append(item);
+            surf->items.append(item);
             if (docChanged) *docChanged = true;
         }
-        item.minimumSize = QSize(320, 180);
-        QWidget* w = m_panHost.detach ? m_panHost.detach(panId) : nullptr;
-        if (!w) continue;
-        toPlace.append(item);
-        widgets.insert(itemId, w);
-    }
-
-    for (const CanvasItem& item : main->items) {
-        if (!item.id.startsWith(kAppletItemPrefix)) {
+        // A hidden window's pans stay in the (hidden) stack — the item is
+        // kept, nothing is placed (hide-and-keep).
+        if (surf->hidden || !canvasForSurface(surfId)) {
             continue;
         }
-        ContainerWidget* c = containerForApplet(item.id.mid(kAppletItemPrefix.size()));
-        // A closed-flagged item belongs to the workspace but its applet is
-        // shut (phase 6 full recall) — placement skips it.  UNLESS the
-        // applet is currently OPEN: it was reopened while the mode was off
-        // (the visibility hook early-returns there), and the operator's
-        // click outranks the stale flag (review, K6OZY) — clear and place.
-        if (item.closed) {
+        item.minimumSize = QSize(320, 180);
+        const bool cross = (surfId != WorkspaceSurface::kMainId);
+        // A pan headed for another top level takes the floatPanadapter
+        // GPU recipe: prepare BEFORE the detach-and-reparent, finish
+        // (deferred refresh + show) after restoreItems — the
+        // #2495/#4617/#4319 lineage.
+        if (cross && m_panHost.prepareTopLevelMove) {
+            m_panHost.prepareTopLevelMove(panId);
+        }
+        QWidget* w = m_panHost.detach ? m_panHost.detach(panId) : nullptr;
+        if (!w) continue;
+        toPlace[surfId].append(item);
+        widgets[surfId].insert(itemId, w);
+        if (cross) crossMovedPans.append(panId);
+    }
+
+    // ── Applets, per surface ─────────────────────────────────────────────
+    for (WorkspaceSurface& surf : ws->surfaces) {
+        WorkspaceCanvas* canvas = canvasForSurface(surf.id);
+        const bool placeable = !surf.hidden && canvas;
+        for (const CanvasItem& item : surf.items) {
+            if (!item.id.startsWith(kAppletItemPrefix)) {
+                continue;
+            }
+            ContainerWidget* c =
+                containerForApplet(item.id.mid(kAppletItemPrefix.size()));
+            if (!placeable) {
+                // Hide-and-keep: an applet recorded on a closed window is
+                // transiently shut so it cannot sit open-but-invisible
+                // behind the hidden panel.  No document write — the item
+                // and its closed flag are exactly as recorded.
+                if (c && !item.closed && c->isContainerVisible()
+                    && !c->isFloating()) {
+                    if (m_panHost.recallGuard) m_panHost.recallGuard(true);
+                    c->setContainerVisible(false);
+                    if (m_panHost.recallGuard) m_panHost.recallGuard(false);
+                }
+                continue;
+            }
+            // A closed-flagged item belongs to the workspace but its applet
+            // is shut (phase 6 full recall) — placement skips it.  UNLESS
+            // the applet is currently OPEN: it was reopened while the mode
+            // was off (the visibility hook early-returns there), and the
+            // operator's click outranks the stale flag (review, K6OZY) —
+            // clear and place.
+            if (item.closed) {
+                if (!c || !c->isContainerVisible() || c->isFloating()) {
+                    continue;
+                }
+                for (CanvasItem& live : surf.items) {
+                    if (live.id == item.id) {
+                        live.closed = false;
+                        if (docChanged) *docChanged = true;
+                        break;
+                    }
+                }
+            }
+            // Closed applets keep their home but are not placed; floating
+            // ones stay out (pop-out stays, RFC decision 1) until they dock.
             if (!c || !c->isContainerVisible() || c->isFloating()) {
                 continue;
             }
-            for (CanvasItem& live : main->items) {
-                if (live.id == item.id) {
-                    live.closed = false;
-                    if (docChanged) *docChanged = true;
-                    break;
-                }
+            if (m_manager->detachForCanvas(c->id()) != c) {
+                continue;
             }
+            toPlace[surf.id].append(item);
+            widgets[surf.id].insert(item.id, c);
         }
-        // Closed applets keep their home but are not placed; floating ones
-        // stay out (pop-out stays, RFC decision 1) until they dock.
-        if (!c || !c->isContainerVisible() || c->isFloating()) {
-            continue;
-        }
-        if (m_manager->detachForCanvas(c->id()) != c) {
-            continue;
-        }
-        toPlace.append(item);
-        widgets.insert(item.id, c);
     }
 
-    m_canvas->restoreItems(toPlace, widgets);
+    for (auto it = toPlace.constBegin(); it != toPlace.constEnd(); ++it) {
+        if (WorkspaceCanvas* canvas = canvasForSurface(it.key())) {
+            canvas->restoreItems(it.value(), widgets.value(it.key()));
+        }
+    }
+    for (const QString& panId : crossMovedPans) {
+        if (m_panHost.finishTopLevelMove) m_panHost.finishTopLevelMove(panId);
+    }
 }
 
 void WorkspaceController::disable()
@@ -376,6 +435,19 @@ void WorkspaceController::disable()
     m_applying = true;
     releaseAllItems(/*returnPansToStack=*/true, /*hideBandStack=*/false);
     m_applying = false;
+
+    // Extra canvas windows close with the mode (their hidden flags are
+    // untouched — disabling is not a statement about any window); their
+    // geometry hints are captured first, since hiding is how they would
+    // otherwise be lost.
+    const QStringList openWindows = m_extraCanvases.keys();
+    for (const QString& sid : openWindows) {
+        if (m_windowHost.geometryHint) {
+            noteWindowGeometryHint(sid, m_windowHost.geometryHint(sid));
+        }
+        m_extraCanvases.remove(sid);
+        if (m_windowHost.closeWindow) m_windowHost.closeWindow(sid);
+    }
 
     // Placement is kept — switching the mode off is not a statement about
     // any applet — only the flag changes.
@@ -391,6 +463,168 @@ void WorkspaceController::disable()
 void WorkspaceController::setPanHost(const PanHostHooks& hooks)
 {
     m_panHost = hooks;
+}
+
+void WorkspaceController::setWindowHost(const WindowHostHooks& hooks)
+{
+    m_windowHost = hooks;
+}
+
+// ── Multi-surface plumbing (phase 7) ─────────────────────────────────────
+
+void WorkspaceController::wireCanvas(WorkspaceCanvas* canvas)
+{
+    if (m_wiredCanvases.contains(canvas)) {
+        return;   // a reopened window hands back the same canvas object
+    }
+    m_wiredCanvases.insert(canvas);
+    canvas->setDropMimeType(kAppletMime);
+
+    connect(canvas, &WorkspaceCanvas::dropReceived, this,
+            [this, canvas](const QString& payload, const QPointF& pos) {
+                onDropReceived(canvas, payload, pos);
+            });
+    connect(canvas, &WorkspaceCanvas::itemRectChanged,
+            this, &WorkspaceController::onItemRectChanged);
+    connect(canvas, &WorkspaceCanvas::itemStackingChanged,
+            this, [this](const QString&) {
+                if (m_applying || !m_enabled) return;
+                writeStackingFromCanvas();
+            });
+
+    // Gestures (phase 5): snapshot for undo at the start, flush the debounced
+    // rect stream at the end — the auto-commit gesture boundary.
+    connect(canvas, &WorkspaceCanvas::gestureStarted,
+            this, [this](const QString& itemId, const NormRect& startRect) {
+                if (m_applying || !m_enabled) return;
+                m_undoItemId = itemId;
+                m_undoRect   = startRect;
+            });
+    connect(canvas, &WorkspaceCanvas::gestureFinished,
+            this, [this](const QString&) {
+                if (m_applying || !m_enabled) return;
+                m_store.flush();
+            });
+    connect(canvas, &WorkspaceCanvas::itemDraggedOut,
+            this, &WorkspaceController::onItemDraggedOut);
+    connect(canvas, &WorkspaceCanvas::contextMenuRequested, this,
+            [this, canvas](const QString& itemId, const QPoint& globalPos) {
+                onContextMenuRequested(canvas, itemId, globalPos);
+            });
+
+    // Edit posture is CONTROLLER-wide (one Edit Layout toggles every
+    // surface): mirror any canvas's flip onto all the others, guarded
+    // against the echo.
+    connect(canvas, &WorkspaceCanvas::editModeChanged, this,
+            [this](bool on) {
+                if (m_syncingEditMode) return;
+                m_syncingEditMode = true;
+                for (WorkspaceCanvas* c : attachedCanvases()) {
+                    if (c->isEditMode() != on) c->setEditMode(on);
+                }
+                m_syncingEditMode = false;
+            });
+}
+
+QList<WorkspaceCanvas*> WorkspaceController::attachedCanvases() const
+{
+    QList<WorkspaceCanvas*> out;
+    out.append(m_canvas);
+    for (auto it = m_extraCanvases.constBegin();
+         it != m_extraCanvases.constEnd(); ++it) {
+        if (it.value()) out.append(it.value().data());
+    }
+    return out;
+}
+
+WorkspaceCanvas* WorkspaceController::canvasForSurface(const QString& surfaceId) const
+{
+    if (surfaceId.isEmpty() || surfaceId == WorkspaceSurface::kMainId) {
+        return m_canvas;
+    }
+    return m_extraCanvases.value(surfaceId).data();
+}
+
+WorkspaceCanvas* WorkspaceController::canvasHolding(const QString& itemId) const
+{
+    for (WorkspaceCanvas* c : attachedCanvases()) {
+        if (c->contains(itemId)) return c;
+    }
+    return nullptr;
+}
+
+QString WorkspaceController::surfaceOf(const WorkspaceCanvas* canvas) const
+{
+    if (canvas == m_canvas) {
+        return WorkspaceSurface::kMainId;
+    }
+    for (auto it = m_extraCanvases.constBegin();
+         it != m_extraCanvases.constEnd(); ++it) {
+        if (it.value().data() == canvas) return it.key();
+    }
+    return WorkspaceSurface::kMainId;
+}
+
+QString WorkspaceController::surfaceHosting(const QString& itemId) const
+{
+    for (WorkspaceCanvas* c : attachedCanvases()) {
+        if (c->contains(itemId)) return surfaceOf(c);
+    }
+    return QString();
+}
+
+void WorkspaceController::reconcileWindowsWithActiveWorkspace()
+{
+    const WorkspaceDocument& doc = m_store.document();
+    const Workspace* ws = doc.workspace(doc.activeWorkspace);
+
+    // Close (hide) every open window the target does not want open.  The
+    // widgets were already released by the caller.
+    const QStringList openIds = m_extraCanvases.keys();
+    for (const QString& sid : openIds) {
+        bool wanted = false;
+        if (ws) {
+            for (const WorkspaceSurface& s : ws->surfaces) {
+                if (s.id == sid && !s.hidden) { wanted = true; break; }
+            }
+        }
+        if (!wanted) {
+            m_extraCanvases.remove(sid);
+            if (m_windowHost.closeWindow) m_windowHost.closeWindow(sid);
+        }
+    }
+    if (!ws) {
+        return;
+    }
+    // Open the target's visible extra surfaces and attach their canvases.
+    for (const WorkspaceSurface& s : ws->surfaces) {
+        if (s.id == WorkspaceSurface::kMainId || s.hidden) {
+            continue;
+        }
+        if (m_extraCanvases.value(s.id)) {
+            if (m_windowHost.setWindowLabel) {
+                m_windowHost.setWindowLabel(s.id, s.label);
+            }
+            continue;
+        }
+        if (!m_windowHost.openWindow) {
+            continue;
+        }
+        WorkspaceCanvas* canvas =
+            m_windowHost.openWindow(s.id, s.label, s.windowGeometry);
+        if (!canvas) {
+            continue;
+        }
+        wireCanvas(canvas);   // idempotent per canvas object
+        m_extraCanvases.insert(s.id, canvas);
+        // Posture follows the controller, and locked is the operating
+        // default — same rule as enable().
+        if (canvas->isEditMode() != m_canvas->isEditMode()) {
+            m_syncingEditMode = true;
+            canvas->setEditMode(m_canvas->isEditMode());
+            m_syncingEditMode = false;
+        }
+    }
 }
 
 // ── Pans as items (RFC #4887 phase 4) ────────────────────────────────────
@@ -471,31 +705,46 @@ bool WorkspaceController::sendPanToCanvas(const QString& panId)
         return false;   // pop-out stays (RFC decision 1)
     }
     const QString itemId = panItemIdFor(panId);
-    if (m_canvas->contains(itemId)) {
-        QWidget* placed = m_canvas->itemWidget(itemId);
-        if (placed && placed->parentWidget() == m_canvas) {
+
+    // The pan belongs to whichever surface its item is recorded on
+    // (phase 7); untracked pans land on main.  A hidden surface keeps the
+    // pan in the stack — hide-and-keep.
+    QString surfId = WorkspaceSurface::kMainId;
+    bool haveStored = false;
+    NormRect rect{0.2, 0.2, 0.6, 0.6};
+    const WorkspaceDocument& doc = m_store.document();
+    if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
+        const QString owner = docSurfaceForItem(*ws, itemId);
+        if (!owner.isEmpty()) {
+            surfId = owner;
+            if (const WorkspaceSurface* surf = ws->surface(owner)) {
+                if (surf->hidden) {
+                    return false;   // window closed; the item stands
+                }
+                for (const CanvasItem& it : surf->items) {
+                    if (it.id == itemId) {
+                        rect       = it.rect;
+                        haveStored = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    WorkspaceCanvas* canvas = canvasForSurface(surfId);
+    if (!canvas) {
+        return false;   // window not open yet; placement follows it
+    }
+    if (canvas->contains(itemId)) {
+        QWidget* placed = canvas->itemWidget(itemId);
+        if (placed && placed->parentWidget() == canvas) {
             return true;   // genuinely placed — the state the caller asked for
         }
         // The entry is a lie: the widget was reclaimed behind the canvas's
         // back (a stack rebuild that predates the loan set, or any future
         // path that forgets it).  Heal instead of trusting: drop the stale
         // entry and fall through to a fresh detach-and-place.
-        m_canvas->releaseItem(itemId);
-    }
-
-    bool haveStored = false;
-    NormRect rect{0.2, 0.2, 0.6, 0.6};
-    const WorkspaceDocument& doc = m_store.document();
-    if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
-        if (const WorkspaceSurface* main = ws->surface(WorkspaceSurface::kMainId)) {
-            for (const CanvasItem& it : main->items) {
-                if (it.id == itemId) {
-                    rect       = it.rect;
-                    haveStored = true;
-                    break;
-                }
-            }
-        }
+        canvas->releaseItem(itemId);
     }
     if (!haveStored) {
         // Cascade, not one shared rect (red-team B3): every defaulted pan
@@ -509,14 +758,21 @@ bool WorkspaceController::sendPanToCanvas(const QString& panId)
         rect.y = 0.15 + step;
     }
 
+    const bool cross = (surfId != WorkspaceSurface::kMainId);
+    if (cross && m_panHost.prepareTopLevelMove) {
+        m_panHost.prepareTopLevelMove(panId);   // the GPU recipe (#4617)
+    }
     QWidget* w = m_panHost.detach ? m_panHost.detach(panId) : nullptr;
     if (!w) {
         return false;
     }
-    if (!m_canvas->addItem(itemId, w, rect, QStringLiteral("panadapter"),
-                           QSize(320, 180))) {
+    if (!canvas->addItem(itemId, w, rect, QStringLiteral("panadapter"),
+                         QSize(320, 180))) {
         if (m_panHost.restore) {
             m_panHost.restore(panId, w);   // never strand a detached applet
+        }
+        if (cross && m_panHost.finishTopLevelMove) {
+            m_panHost.finishTopLevelMove(panId);
         }
         return false;
     }
@@ -528,20 +784,23 @@ bool WorkspaceController::sendPanToCanvas(const QString& panId)
     // a DEFAULTED rect is a deliberate new pan, and burying it under the
     // older pans made `pan create` invisible (red-team B3, maintainer
     // ruling): it stacks ABOVE the other pans, still below all applets.
-    m_canvas->sendItemToBack(itemId);
+    canvas->sendItemToBack(itemId);
     if (!haveStored) {
         int otherPans = 0;
-        for (const CanvasItem& it : m_canvas->layout().itemsByZ()) {
+        for (const CanvasItem& it : canvas->layout().itemsByZ()) {
             if (it.id != itemId && it.id.startsWith(kPanItemPrefix)) {
                 ++otherPans;
             }
         }
         for (int i = 0; i < otherPans; ++i) {
-            m_canvas->raiseItem(itemId);
+            canvas->raiseItem(itemId);
         }
     }
+    if (cross && m_panHost.finishTopLevelMove) {
+        m_panHost.finishTopLevelMove(panId);
+    }
     writeItemPresence(itemId, QStringLiteral("panadapter"),
-                      m_canvas->itemRect(itemId), /*present=*/true,
+                      canvas->itemRect(itemId), /*present=*/true,
                       /*flushNow=*/true);
     return true;
 }
@@ -562,7 +821,10 @@ void WorkspaceController::onPanRemoved(const QString& panId)
     // a statement about its spot, and the next pan in this slot takes it.
     const auto it = m_panSlots.constFind(panId);
     if (it != m_panSlots.constEnd()) {
-        m_canvas->releaseItem(kPanItemPrefix + QString::number(it.value()));
+        const QString itemId = kPanItemPrefix + QString::number(it.value());
+        if (WorkspaceCanvas* canvas = canvasHolding(itemId)) {
+            canvas->releaseItem(itemId);
+        }
         m_panSlots.erase(it);
     }
 }
@@ -587,7 +849,10 @@ void WorkspaceController::onPanFloated(const QString& panId)
     // docking brings it back (unlike applets, floating forgets nothing).
     const auto it = m_panSlots.constFind(panId);
     if (it != m_panSlots.constEnd()) {
-        m_canvas->releaseItem(kPanItemPrefix + QString::number(it.value()));
+        const QString itemId = kPanItemPrefix + QString::number(it.value());
+        if (WorkspaceCanvas* canvas = canvasHolding(itemId)) {
+            canvas->releaseItem(itemId);
+        }
     }
 }
 
@@ -607,22 +872,24 @@ void WorkspaceController::beginPanItemMove(const QString& panId, const QPoint& g
         return;
     }
     const QString itemId = panItemIdFor(panId);
-    if (m_canvas->contains(itemId)) {
-        m_canvas->beginMoveGesture(itemId, globalPos);
+    if (WorkspaceCanvas* canvas = canvasHolding(itemId)) {
+        canvas->beginMoveGesture(itemId, globalPos);
+        m_gestureCanvas = canvas;
     }
 }
 
 void WorkspaceController::movePanItem(const QPoint& globalPos)
 {
-    if (m_enabled) {
-        m_canvas->moveGesture(globalPos);
+    if (m_enabled && m_gestureCanvas) {
+        m_gestureCanvas->moveGesture(globalPos);
     }
 }
 
 void WorkspaceController::endPanItemMove(const QPoint& globalPos)
 {
-    if (m_enabled) {
-        m_canvas->endGesture(globalPos);
+    if (m_enabled && m_gestureCanvas) {
+        m_gestureCanvas->endGesture(globalPos);
+        m_gestureCanvas = nullptr;
     }
 }
 
@@ -689,34 +956,49 @@ bool WorkspaceController::sendAppletToCanvas(const QString& appletId,
 
     const QString itemId = itemIdFor(c);
 
+    // The applet belongs to whichever surface its item is recorded on
+    // (phase 7); untracked ones land on main.  A hidden surface keeps the
+    // applet off-canvas — hide-and-keep.
+    QString surfId = WorkspaceSurface::kMainId;
     // Placement priority: the caller's rect (a drop point), else the
     // document's remembered home, else a default sized from the widget.
     NormRect rect;
-    if (where) {
-        rect = *where;
-    } else {
-        bool haveStored = false;
+    bool haveStored = false;
+    {
         const WorkspaceDocument& doc = m_store.document();
         if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
-            if (const WorkspaceSurface* main = ws->surface(WorkspaceSurface::kMainId)) {
-                for (const CanvasItem& it : main->items) {
-                    if (it.id == itemId) {
-                        rect       = it.rect;
-                        haveStored = true;
-                        break;
+            const QString owner = docSurfaceForItem(*ws, itemId);
+            if (!owner.isEmpty()) {
+                surfId = owner;
+                if (const WorkspaceSurface* surf = ws->surface(owner)) {
+                    if (surf->hidden) {
+                        return false;   // window closed; the item stands
+                    }
+                    for (const CanvasItem& it : surf->items) {
+                        if (it.id == itemId) {
+                            rect       = it.rect;
+                            haveStored = true;
+                            break;
+                        }
                     }
                 }
             }
         }
-        if (!haveStored) {
-            rect = defaultRectFor(c, nullptr);
-        }
+    }
+    WorkspaceCanvas* canvas = canvasForSurface(surfId);
+    if (!canvas) {
+        return false;   // window not open yet; placement follows it
+    }
+    if (where) {
+        rect = *where;
+    } else if (!haveStored) {
+        rect = defaultRectFor(c, nullptr);
     }
 
     if (m_manager->detachForCanvas(c->id()) != c) {
         return false;
     }
-    if (!m_canvas->addItem(itemId, c, rect, QStringLiteral("applet"))) {
+    if (!canvas->addItem(itemId, c, rect, QStringLiteral("applet"))) {
         // Should not happen (id collisions are checked above), but never
         // strand a detached widget: put it straight back.
         m_manager->returnFromCanvas(c->id(), c);
@@ -725,7 +1007,7 @@ bool WorkspaceController::sendAppletToCanvas(const QString& appletId,
 
     // The canvas clamped the rect; persist what is actually on screen.
     writeItemPresence(itemId, QStringLiteral("applet"),
-                      m_canvas->itemRect(itemId), /*present=*/true,
+                      canvas->itemRect(itemId), /*present=*/true,
                       /*flushNow=*/true);
     return true;
 }
@@ -753,13 +1035,17 @@ void WorkspaceController::evictFromCanvas(ContainerWidget* c, bool forgetHome)
                           /*present=*/false, /*flushNow=*/true);
     }
 
-    m_canvas->takeItem(itemId);
+    if (WorkspaceCanvas* canvas = canvasHolding(itemId)) {
+        canvas->takeItem(itemId);
+    }
     m_manager->returnFromCanvas(c->id(), c);
 }
 
 // ── Canvas events ────────────────────────────────────────────────────────
 
-void WorkspaceController::onDropReceived(const QString& payload, const QPointF& pos)
+void WorkspaceController::onDropReceived(WorkspaceCanvas* canvas,
+                                         const QString& payload,
+                                         const QPointF& pos)
 {
     if (!m_enabled) {
         return;
@@ -768,23 +1054,40 @@ void WorkspaceController::onDropReceived(const QString& payload, const QPointF& 
     if (!c) {
         return;
     }
+    const QString itemId = itemIdFor(c);
 
     if (c->isOnCanvas()) {
+        WorkspaceCanvas* holder = canvasHolding(itemId);
+        if (holder && holder != canvas) {
+            // Dragged from one window's panel strip onto ANOTHER canvas:
+            // that is a move between surfaces (phase 7), through the one
+            // path that owns cross-top-level reparents.
+            moveItemToSurface(itemId, surfaceOf(canvas));
+            holder = canvasHolding(itemId);
+        }
+        if (!holder) {
+            return;
+        }
         // Move: keep the size, centre the item on the drop point, and let
         // the canvas clamp.  itemRectChanged writes the document; this is a
         // discrete gesture, so flush behind it.
-        const QString itemId = itemIdFor(c);
-        const NormRect cur   = m_canvas->itemRect(itemId);
-        NormRect moved       = cur;
-        moved.x              = pos.x() - cur.w / 2.0;
-        moved.y              = pos.y() - cur.h / 2.0;
-        m_canvas->setItemRect(itemId, moved);
+        const NormRect cur = holder->itemRect(itemId);
+        NormRect moved     = cur;
+        moved.x            = pos.x() - cur.w / 2.0;
+        moved.y            = pos.y() - cur.h / 2.0;
+        holder->setItemRect(itemId, moved);
         m_store.flush();
         return;
     }
 
-    NormRect rect = defaultRectFor(c, &pos);
+    // A drop lands on the canvas it was dropped on: record the home there
+    // first, then send — sendAppletToCanvas routes by the document.
+    NormRect rect = defaultRectFor(c, &pos, canvas);
+    writeItemPresence(itemId, QStringLiteral("applet"), rect,
+                      /*present=*/true, /*flushNow=*/false,
+                      surfaceOf(canvas));
     sendAppletToCanvas(appletIdFor(c), &rect);
+    m_store.flush();
 }
 
 void WorkspaceController::onItemRectChanged(const QString& itemId, const NormRect& rect)
@@ -812,20 +1115,23 @@ void WorkspaceController::wireContainer(ContainerWidget* c)
     // session makes the item follow the cursor with snapping.
     connect(c, &ContainerWidget::canvasDragBegan, this,
             [this, c](const QPoint& g) {
-                if (m_enabled && c->isOnCanvas()) {
-                    m_canvas->beginMoveGesture(itemIdFor(c), g);
+                if (!m_enabled || !c->isOnCanvas()) return;
+                if (WorkspaceCanvas* canvas = canvasHolding(itemIdFor(c))) {
+                    canvas->beginMoveGesture(itemIdFor(c), g);
+                    m_gestureCanvas = canvas;
                 }
             });
     connect(c, &ContainerWidget::canvasDragMoved, this,
             [this, c](const QPoint& g) {
-                if (m_enabled && c->isOnCanvas()) {
-                    m_canvas->moveGesture(g);
+                if (m_enabled && c->isOnCanvas() && m_gestureCanvas) {
+                    m_gestureCanvas->moveGesture(g);
                 }
             });
     connect(c, &ContainerWidget::canvasDragEnded, this,
             [this, c](const QPoint& g) {
-                if (m_enabled && c->isOnCanvas()) {
-                    m_canvas->endGesture(g);
+                if (m_enabled && c->isOnCanvas() && m_gestureCanvas) {
+                    m_gestureCanvas->endGesture(g);
+                    m_gestureCanvas = nullptr;
                 }
             });
 
@@ -846,16 +1152,11 @@ void WorkspaceController::wireContainer(ContainerWidget* c)
         } else if (visible && !c->isOnCanvas() && !c->isFloating()) {
             const WorkspaceDocument& doc = m_store.document();
             if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
-                if (const WorkspaceSurface* main =
-                        ws->surface(WorkspaceSurface::kMainId)) {
-                    for (const CanvasItem& it : main->items) {
-                        if (it.id == itemIdFor(c)) {
-                            // sendAppletToCanvas's writeItemPresence clears
-                            // the closed flag — the invariant lives there.
-                            sendAppletToCanvas(appletIdFor(c));
-                            break;
-                        }
-                    }
+                if (!docSurfaceForItem(*ws, itemIdFor(c)).isEmpty()) {
+                    // sendAppletToCanvas's writeItemPresence clears the
+                    // closed flag — the invariant lives there — and the
+                    // send routes to the item's own surface (phase 7).
+                    sendAppletToCanvas(appletIdFor(c));
                 }
             }
         }
@@ -872,14 +1173,8 @@ void WorkspaceController::wireContainer(ContainerWidget* c)
                 if (!c->isContainerVisible()) return;
                 const WorkspaceDocument& doc = m_store.document();
                 if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
-                    if (const WorkspaceSurface* main =
-                            ws->surface(WorkspaceSurface::kMainId)) {
-                        for (const CanvasItem& it : main->items) {
-                            if (it.id == itemIdFor(c)) {
-                                sendAppletToCanvas(appletIdFor(c));
-                                break;
-                            }
-                        }
+                    if (!docSurfaceForItem(*ws, itemIdFor(c)).isEmpty()) {
+                        sendAppletToCanvas(appletIdFor(c));
                     }
                 }
             });
@@ -893,8 +1188,9 @@ void WorkspaceController::writeItemRect(const QString& itemId, const NormRect& r
     WorkspaceDocument doc = m_store.document();
     for (Workspace& ws : doc.workspaces) {
         if (ws.id != doc.activeWorkspace) continue;
+        // Item ids are workspace-wide identity: whichever surface holds
+        // the item is where the rect lands (phase 7).
         for (WorkspaceSurface& s : ws.surfaces) {
-            if (s.id != WorkspaceSurface::kMainId) continue;
             for (CanvasItem& it : s.items) {
                 if (it.id == itemId) {
                     it.rect = rect;
@@ -927,7 +1223,6 @@ void WorkspaceController::writeItemClosed(const QString& itemId, bool closed,
     for (Workspace& ws : doc.workspaces) {
         if (ws.id != doc.activeWorkspace) continue;
         for (WorkspaceSurface& s : ws.surfaces) {
-            if (s.id != WorkspaceSurface::kMainId) continue;
             for (CanvasItem& it : s.items) {
                 if (it.id == itemId && it.closed != closed) {
                     it.closed = closed;
@@ -943,41 +1238,56 @@ void WorkspaceController::writeItemClosed(const QString& itemId, bool closed,
 void WorkspaceController::writeItemPresence(const QString& itemId,
                                             const QString& contentType,
                                             const NormRect& rect, bool present,
-                                            bool flushNow)
+                                            bool flushNow,
+                                            const QString& surfaceId)
 {
     WorkspaceDocument doc = m_store.document();
     for (Workspace& ws : doc.workspaces) {
         if (ws.id != doc.activeWorkspace) continue;
+
+        // An EXISTING item is updated (or removed) on whichever surface
+        // holds it — presence is not a move (phase 7).  A NEW item lands
+        // on the surface whose canvas currently hosts the widget, else
+        // main.
         for (WorkspaceSurface& s : ws.surfaces) {
-            if (s.id != WorkspaceSurface::kMainId) continue;
-
-            int found = -1;
             for (int i = 0; i < s.items.size(); ++i) {
-                if (s.items.at(i).id == itemId) { found = i; break; }
-            }
-
-            if (present) {
-                if (found >= 0) {
-                    s.items[found].rect = rect;
+                if (s.items.at(i).id != itemId) continue;
+                if (present) {
+                    s.items[i].rect = rect;
                     // Making an item PRESENT is the one statement that its
                     // applet is wanted on the surface — the closed flag
                     // clears here, in one place, instead of at whichever
                     // call sites remembered to (review, K6OZY: two of four
                     // compensated by hand and the reopen-while-disabled
                     // path cleared nothing).
-                    s.items[found].closed = false;
+                    s.items[i].closed = false;
                 } else {
-                    CanvasItem item;
-                    item.id          = itemId;
-                    item.contentType = contentType;
-                    item.rect        = rect;
-                    item.z           = m_canvas->layout().zOf(itemId);
-                    s.items.append(item);
+                    s.items.removeAt(i);
                 }
-            } else if (found >= 0) {
-                s.items.removeAt(found);
+                m_store.setDocument(doc);
+                if (flushNow) m_store.flush();
+                return;
             }
-
+        }
+        if (!present) {
+            return;   // removing something untracked is a no-op
+        }
+        QString targetSurface = surfaceId;
+        if (targetSurface.isEmpty()) {
+            targetSurface = surfaceHosting(itemId);
+        }
+        if (targetSurface.isEmpty() || !ws.surface(targetSurface)) {
+            targetSurface = WorkspaceSurface::kMainId;
+        }
+        for (WorkspaceSurface& s : ws.surfaces) {
+            if (s.id != targetSurface) continue;
+            CanvasItem item;
+            item.id          = itemId;
+            item.contentType = contentType;
+            item.rect        = rect;
+            WorkspaceCanvas* canvas = canvasForSurface(targetSurface);
+            item.z = canvas ? canvas->layout().zOf(itemId) : 0;
+            s.items.append(item);
             m_store.setDocument(doc);
             if (flushNow) m_store.flush();
             return;
@@ -991,9 +1301,10 @@ void WorkspaceController::writeStackingFromCanvas()
     for (Workspace& ws : doc.workspaces) {
         if (ws.id != doc.activeWorkspace) continue;
         for (WorkspaceSurface& s : ws.surfaces) {
-            if (s.id != WorkspaceSurface::kMainId) continue;
+            WorkspaceCanvas* canvas = canvasForSurface(s.id);
+            if (!canvas) continue;   // hidden window: stored z stands
             for (CanvasItem& it : s.items) {
-                const int z = m_canvas->layout().zOf(it.id);
+                const int z = canvas->layout().zOf(it.id);
                 if (z >= 0) it.z = z;
             }
         }
@@ -1014,14 +1325,15 @@ bool WorkspaceController::undoLastPlacement()
     if (!m_enabled || !canUndo()) {
         return false;
     }
-    if (!m_canvas->layout().contains(m_undoItemId)) {
+    WorkspaceCanvas* canvas = canvasHolding(m_undoItemId);
+    if (!canvas) {
         m_undoItemId.clear();
         return false;
     }
     // Swap current and remembered: undoing twice toggles, which is the
     // single-slot version of redo.
-    const NormRect current = m_canvas->itemRect(m_undoItemId);
-    m_canvas->setItemRect(m_undoItemId, m_undoRect);
+    const NormRect current = canvas->itemRect(m_undoItemId);
+    canvas->setItemRect(m_undoItemId, m_undoRect);
     m_undoRect = current;
     m_store.flush();
     return true;
@@ -1035,39 +1347,42 @@ void WorkspaceController::resetToClassic()
 
     m_applying = true;
 
-    // Everything off the surface: applets back to their panel slots, pans
-    // merely RELEASED (they stay parented to the canvas; the re-place below
-    // re-adds them — no nullptr detour, #1344), the band stack re-homed and
-    // hidden (Classic is the stock shell, and the stock shell shows none).
-    const QStringList ids = m_canvas->layout().ids();
-    for (const QString& itemId : ids) {
-        if (itemId.startsWith(kPanItemPrefix)) {
-            m_canvas->releaseItem(itemId);
-            continue;
-        }
-        if (itemId == kBandStackItemId) {
-            QWidget* w = m_canvas->releaseItem(itemId);
-            if (w && m_panHost.reclaimBandStack) {
-                m_panHost.reclaimBandStack(w);
-            }
-            if (w) w->hide();
-            continue;
-        }
-        if (itemId == kPanStackItemId) {
-            m_canvas->takeItem(itemId);
-            continue;
-        }
-        QWidget* w = m_canvas->takeItem(itemId);
-        if (auto* c = qobject_cast<ContainerWidget*>(w)) {
-            m_manager->returnFromCanvas(c->id(), c);
-        }
-    }
+    // Everything off EVERY surface: applets back to their panel slots
+    // (open), main-canvas pans merely released (they stay parented; the
+    // re-place below re-adds them — no nullptr detour, #1344), extra-
+    // window pans back to the stack through the GPU recipe, the band
+    // stack re-homed and hidden (Classic is the stock shell, and the
+    // stock shell shows none).
+    releaseAllItems(/*returnPansToStack=*/false, /*hideBandStack=*/true);
 
     // Classic is re-derived from the same legacy keys the first enable
     // migrated from — the panel still dual-writes them, so this reflects
     // the operator's CURRENT open applets and order, not a stale snapshot.
     // One definition of Classic, used everywhere (WorkspaceMigration).
     WorkspaceDocument doc = m_store.document();
+
+    // Classic is the STOCK shell, and the stock shell is one window: the
+    // active workspace's extra surfaces collapse (phase 7).  removeSurface
+    // parks their items on main, where the fresh Classic composition below
+    // overwrites them — reset is authoritative, that is its whole promise
+    // ("back to a sane shell in one action").
+    {
+        QStringList extras;
+        if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
+            for (const WorkspaceSurface& surf : ws->surfaces) {
+                if (surf.id != WorkspaceSurface::kMainId) {
+                    extras.append(surf.id);
+                }
+            }
+        }
+        for (const QString& sid : extras) {
+            if (m_extraCanvases.contains(sid)) {
+                m_extraCanvases.remove(sid);
+                if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(sid);
+            }
+            doc.removeSurface(doc.activeWorkspace, sid);
+        }
+    }
     // Classic is composed against the pans' ACTUAL slots — sparse and all
     // (review, K6OZY): the old global renumber fixed the active workspace
     // and orphaned every OTHER workspace's pan items, since slots are the
@@ -1103,17 +1418,21 @@ void WorkspaceController::resetToClassic()
     m_undoItemId.clear();   // a whole-surface change; a one-rect undo would lie
     m_store.setDocument(doc);
     m_store.flush();
+    emit workspacesChanged();   // the window list may have collapsed
 }
 
-void WorkspaceController::tidyLayout()
+void WorkspaceController::tidyLayout(WorkspaceCanvas* canvas)
 {
     if (!m_enabled) {
         return;
     }
+    if (!canvas) {
+        canvas = m_canvas;
+    }
 
     QList<CanvasItem> items;
     QStringList fixedIds{kPanStackItemId};
-    for (const CanvasItem& it : m_canvas->layout().itemsByZ()) {
+    for (const CanvasItem& it : canvas->layout().itemsByZ()) {
         items.append(it);
         // Every pan item is fixed: an applet overlapping the spectrum is a
         // feature (the phase-5 rule), and tidy shoving the spectrum itself
@@ -1125,7 +1444,7 @@ void WorkspaceController::tidyLayout()
     const QList<TidyMove> moves = tidyOverlaps(items, fixedIds);
 
     for (const TidyMove& mv : moves) {
-        m_canvas->setItemRect(mv.id, mv.rect);   // rect stream → touch
+        canvas->setItemRect(mv.id, mv.rect);   // rect stream → touch
     }
     if (!moves.isEmpty()) {
         m_undoItemId.clear();   // multi-item change; single-slot undo is out
@@ -1155,10 +1474,11 @@ void WorkspaceController::onItemDraggedOut(const QString& itemId,
     }
 }
 
-void WorkspaceController::onContextMenuRequested(const QString& itemId,
+void WorkspaceController::onContextMenuRequested(WorkspaceCanvas* canvas,
+                                                 const QString& itemId,
                                                  const QPoint& globalPos)
 {
-    if (!m_enabled) {
+    if (!m_enabled || !canvas) {
         return;
     }
 
@@ -1166,10 +1486,10 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
 
     // Edit Layout leads in BOTH postures — it is the door between them —
     // and everything below it is placement, so a locked canvas shows only
-    // the door.
+    // the door.  Posture is controller-wide; any canvas answers for all.
     QAction* editToggle = menu.addAction(QStringLiteral("Edit layout"));
     editToggle->setCheckable(true);
-    editToggle->setChecked(m_canvas->isEditMode());
+    editToggle->setChecked(canvas->isEditMode());
     connect(editToggle, &QAction::toggled, this,
             [this](bool on) { m_canvas->setEditMode(on); });
 
@@ -1203,12 +1523,13 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
                            " background: {{color.accent.dim}};"
                            " color: {{color.background.0}}; }"));
         const QPointF canvasPos =
-            m_canvas->rect().isEmpty()
+            canvas->rect().isEmpty()
                 ? QPointF(0.5, 0.5)
-                : QPointF(m_canvas->mapFromGlobal(globalPos).x()
-                              / double(m_canvas->width()),
-                          m_canvas->mapFromGlobal(globalPos).y()
-                              / double(m_canvas->height()));
+                : QPointF(canvas->mapFromGlobal(globalPos).x()
+                              / double(canvas->width()),
+                          canvas->mapFromGlobal(globalPos).y()
+                              / double(canvas->height()));
+        const QString menuSurface = surfaceOf(canvas);
 
         const QList<PaletteEntry> pal = paletteState();
         QStringList categoryOrder;
@@ -1258,9 +1579,11 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
                     const QString appletId = e.id;
                     const QString title    = e.title;
                     connect(a, &QAction::triggered, this,
-                            [this, appletId, title, canvasPos, globalPos] {
+                            [this, appletId, title, canvasPos, globalPos,
+                             menuSurface] {
                                 if (!addAppletFromPalette(appletId,
-                                                          canvasPos)) {
+                                                          canvasPos,
+                                                          menuSurface)) {
                                     // Detection flipped between menu build
                                     // and click (#4968 m1) — a refused add
                                     // must never be a silent no-op.
@@ -1279,7 +1602,7 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
     }
 
 
-    if (!m_canvas->isEditMode()) {
+    if (!canvas->isEditMode()) {
         menu.exec(globalPos);
         return;
     }
@@ -1288,6 +1611,44 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
     const bool onApplet =
         !itemId.isEmpty() && itemId.startsWith(kAppletItemPrefix);
     const bool onPan = !itemId.isEmpty() && itemId.startsWith(kPanItemPrefix);
+
+    // Move to ▸ (phase 7, maintainer ruling: the menu IS the move
+    // mechanism this phase) — one deliberate action through the one path
+    // that owns cross-top-level reparents.  Applets and pans only; the
+    // band stack and the phase-3 panstack are shell furniture.
+    if (onApplet || onPan) {
+        QMenu* moveMenu = menu.addMenu(QStringLiteral("Move to"));
+        const QString here = surfaceOf(canvas);
+        if (here != WorkspaceSurface::kMainId) {
+            moveMenu->addAction(QStringLiteral("Main window"), this,
+                                [this, itemId] {
+                                    moveItemToSurface(
+                                        itemId, WorkspaceSurface::kMainId);
+                                });
+        }
+        for (const CanvasWindowInfo& info : canvasWindowList()) {
+            if (info.id == here) continue;
+            const QString sid = info.id;
+            // A hidden window is a legal target: moving something to it
+            // reopens it (moveItemToSurface clears the flag).
+            moveMenu->addAction(
+                menuText(info.label)
+                    + (info.open ? QString() : tr(" (closed)")),
+                this, [this, itemId, sid] {
+                    moveItemToSurface(itemId, sid);
+                });
+        }
+        moveMenu->addSeparator();
+        moveMenu->addAction(QStringLiteral("New canvas window"), this,
+                            [this, itemId] {
+                                const QString sid =
+                                    addCanvasWindow(QString());
+                                if (!sid.isEmpty()) {
+                                    moveItemToSurface(itemId, sid);
+                                }
+                            });
+        menu.addSeparator();
+    }
 
     if (onPan) {
         const QString panId = panIdForItem(itemId);
@@ -1306,7 +1667,7 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
         // Deliberate pan-over-applet layering arrives with phase 6's
         // pinning, as a property the normalization respects.
         menu.addAction(QStringLiteral("Send to back"), this,
-                       [this, itemId] { m_canvas->sendItemToBack(itemId); });
+                       [canvas, itemId] { canvas->sendItemToBack(itemId); });
         menu.addSeparator();
     }
     if (itemId == kBandStackItemId) {
@@ -1320,23 +1681,23 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
         menu.addAction(QStringLiteral("Return to panel"), this,
                        [this, appletId] { returnAppletToPanel(appletId); });
         menu.addAction(QStringLiteral("Bring to front"), this,
-                       [this, itemId] { m_canvas->bringItemToFront(itemId); });
+                       [canvas, itemId] { canvas->bringItemToFront(itemId); });
         menu.addAction(QStringLiteral("Send to back"), this,
-                       [this, itemId] { m_canvas->sendItemToBack(itemId); });
+                       [canvas, itemId] { canvas->sendItemToBack(itemId); });
         menu.addSeparator();
     }
 
     QAction* gridSnap = menu.addAction(QStringLiteral("Snap to grid"));
     gridSnap->setCheckable(true);
-    gridSnap->setChecked(m_canvas->isGridSnapEnabled());
+    gridSnap->setChecked(canvas->isGridSnapEnabled());
     connect(gridSnap, &QAction::toggled, this,
-            [this](bool on) { m_canvas->setGridSnapEnabled(on); });
+            [canvas](bool on) { canvas->setGridSnapEnabled(on); });
 
     QAction* undo = menu.addAction(QStringLiteral("Undo last placement"), this,
                                    [this] { undoLastPlacement(); });
     undo->setEnabled(canUndo());
     menu.addAction(QStringLiteral("Tidy layout"), this,
-                   [this] { tidyLayout(); });
+                   [this, canvas] { tidyLayout(canvas); });
     menu.addAction(QStringLiteral("Reset layout to Classic"), this,
                    [this] { resetToClassic(); });
 
@@ -1346,41 +1707,466 @@ void WorkspaceController::onContextMenuRequested(const QString& itemId,
 void WorkspaceController::releaseAllItems(bool returnPansToStack,
                                           bool hideBandStack)
 {
-    const QStringList ids = m_canvas->layout().ids();
+    for (WorkspaceCanvas* canvas : attachedCanvases()) {
+        // A pan leaving an EXTRA canvas crosses top levels either way —
+        // back to the stack now, or detached again by the placement that
+        // follows — so it always returns to the stack here, wrapped in
+        // the GPU recipe.  Main-canvas pans keep the fast path: on a
+        // switch they stay parented and the re-place is same-top-level.
+        const bool cross = (canvas != m_canvas);
+        const QStringList ids = canvas->layout().ids();
+        for (const QString& itemId : ids) {
+            if (itemId.startsWith(kPanItemPrefix)) {
+                // Release, never take: the restore hook reparents in ONE
+                // step (addWidget), and the nullptr detour is forbidden
+                // for QRhi children (#1344).
+                const QString panId = panIdForItem(itemId);
+                const bool toStack = returnPansToStack || cross;
+                if (cross && !panId.isEmpty()
+                    && m_panHost.prepareTopLevelMove) {
+                    m_panHost.prepareTopLevelMove(panId);
+                }
+                QWidget* w = canvas->releaseItem(itemId);
+                if (toStack && w && !panId.isEmpty() && m_panHost.restore) {
+                    m_panHost.restore(panId, w);
+                }
+                if (cross && !panId.isEmpty()
+                    && m_panHost.finishTopLevelMove) {
+                    m_panHost.finishTopLevelMove(panId);
+                }
+                continue;
+            }
+            if (itemId == kBandStackItemId) {
+                QWidget* w = canvas->releaseItem(itemId);
+                if (w && m_panHost.reclaimBandStack) {
+                    m_panHost.reclaimBandStack(w);
+                }
+                if (w && hideBandStack) {
+                    w->hide();   // session-transient; a switch starts it hidden
+                }
+                continue;
+            }
+            if (itemId == kPanStackItemId) {
+                // Phase-3 document robustness: released parentless;
+                // MainWindow puts it back in the splitter.
+                canvas->takeItem(itemId);
+                continue;
+            }
+            QWidget* w = canvas->takeItem(itemId);
+            if (auto* c = qobject_cast<ContainerWidget*>(w)) {
+                m_manager->returnFromCanvas(c->id(), c);
+            }
+        }
+    }
+}
+
+// ── Additional canvas windows (RFC #4887 phase 7) ────────────────────────
+
+void WorkspaceController::evictSurfaceTransiently(const QString& surfaceId)
+{
+    WorkspaceCanvas* canvas = canvasForSurface(surfaceId);
+    if (!canvas || canvas == m_canvas) {
+        return;   // the main surface never evicts wholesale
+    }
+    m_applying = true;
+    if (m_panHost.recallGuard) m_panHost.recallGuard(true);
+    const QStringList ids = canvas->layout().ids();
     for (const QString& itemId : ids) {
         if (itemId.startsWith(kPanItemPrefix)) {
-            // Release, never take: the restore hook reparents in ONE step
-            // (addWidget), and the nullptr detour is forbidden for QRhi
-            // children (#1344).  On a workspace SWITCH the pan stays
-            // parented to the canvas — the placement that follows re-adds
-            // it, a canvas→canvas move.
-            QWidget* w = m_canvas->releaseItem(itemId);
             const QString panId = panIdForItem(itemId);
-            if (returnPansToStack && w && !panId.isEmpty() && m_panHost.restore) {
-                m_panHost.restore(panId, w);
+            if (!panId.isEmpty() && m_panHost.prepareTopLevelMove) {
+                m_panHost.prepareTopLevelMove(panId);
+            }
+            QWidget* w = canvas->releaseItem(itemId);
+            if (w && !panId.isEmpty() && m_panHost.restore) {
+                m_panHost.restore(panId, w);   // back to the hidden stack
+            }
+            if (!panId.isEmpty() && m_panHost.finishTopLevelMove) {
+                m_panHost.finishTopLevelMove(panId);
             }
             continue;
         }
-        if (itemId == kBandStackItemId) {
-            QWidget* w = m_canvas->releaseItem(itemId);
-            if (w && m_panHost.reclaimBandStack) {
-                m_panHost.reclaimBandStack(w);
-            }
-            if (w && hideBandStack) {
-                w->hide();   // session-transient; a switch starts it hidden
-            }
-            continue;
-        }
-        if (itemId == kPanStackItemId) {
-            // Phase-3 document robustness: released parentless; MainWindow
-            // puts it back in the splitter.
-            m_canvas->takeItem(itemId);
-            continue;
-        }
-        QWidget* w = m_canvas->takeItem(itemId);
+        QWidget* w = canvas->takeItem(itemId);
         if (auto* c = qobject_cast<ContainerWidget*>(w)) {
             m_manager->returnFromCanvas(c->id(), c);
+            // Transiently closed (hide-and-keep): no document write, so
+            // the item and its closed flag stay exactly as recorded and
+            // reopening the window restores this applet open.  The guard
+            // keeps the panel's Applet_<ID> dual-write silent too.
+            c->setContainerVisible(false);
         }
+    }
+    if (m_panHost.recallGuard) m_panHost.recallGuard(false);
+    m_applying = false;
+}
+
+void WorkspaceController::placeSurfaceItems(const QString& surfaceId)
+{
+    WorkspaceCanvas* canvas = canvasForSurface(surfaceId);
+    if (!canvas) {
+        return;
+    }
+    WorkspaceDocument doc = m_store.document();
+    const Workspace* ws = doc.workspace(doc.activeWorkspace);
+    const WorkspaceSurface* surf = ws ? ws->surface(surfaceId) : nullptr;
+    if (!surf || surf->hidden) {
+        return;
+    }
+
+    m_applying = true;
+    if (m_panHost.recallGuard) m_panHost.recallGuard(true);
+
+    QList<CanvasItem> toPlace;
+    QHash<QString, QWidget*> widgets;
+    QStringList crossPans;
+    const bool cross = (surfaceId != WorkspaceSurface::kMainId);
+
+    for (const CanvasItem& item : surf->items) {
+        if (item.id.startsWith(kPanItemPrefix)) {
+            const QString panId = panIdForItem(item.id);
+            if (panId.isEmpty()) continue;   // no live pan in this slot
+            if (m_panHost.isFloating && m_panHost.isFloating(panId)) {
+                continue;   // pop-out stays (RFC decision 1)
+            }
+            if (canvas->contains(item.id)) continue;
+            if (cross && m_panHost.prepareTopLevelMove) {
+                m_panHost.prepareTopLevelMove(panId);
+            }
+            QWidget* w = m_panHost.detach ? m_panHost.detach(panId) : nullptr;
+            if (!w) continue;
+            CanvasItem placed = item;
+            placed.minimumSize = QSize(320, 180);
+            toPlace.append(placed);
+            widgets.insert(item.id, w);
+            if (cross) crossPans.append(panId);
+            continue;
+        }
+        if (!item.id.startsWith(kAppletItemPrefix) || item.closed) {
+            continue;
+        }
+        ContainerWidget* c =
+            containerForApplet(item.id.mid(kAppletItemPrefix.size()));
+        if (!c || c->isOnCanvas() || c->isFloating()) {
+            continue;
+        }
+        // Reopen the transient close the hide performed — under the guard,
+        // so neither the document nor the panel's preferences hear it.
+        if (!c->isContainerVisible()) {
+            c->setContainerVisible(true);
+        }
+        if (m_manager->detachForCanvas(c->id()) != c) {
+            continue;
+        }
+        toPlace.append(item);
+        widgets.insert(item.id, c);
+    }
+
+    canvas->restoreItems(toPlace, widgets);
+    for (const QString& panId : crossPans) {
+        if (m_panHost.finishTopLevelMove) m_panHost.finishTopLevelMove(panId);
+    }
+
+    if (m_panHost.recallGuard) m_panHost.recallGuard(false);
+    m_applying = false;
+}
+
+QString WorkspaceController::addCanvasWindow(const QString& label)
+{
+    if (!m_enabled || !m_store.isLoaded()) {
+        return QString();
+    }
+    WorkspaceDocument doc = m_store.document();
+    const QString sid = doc.addSurface(doc.activeWorkspace, label);
+    if (sid.isEmpty()) {
+        return QString();
+    }
+    m_store.setDocument(doc);
+    if (!m_store.flush()) {
+        qWarning() << "WorkspaceController: workspace edit did not persist (read-only session?)";
+    }
+    reconcileWindowsWithActiveWorkspace();
+    // Creating is arranging — the same reasoning as createWorkspace(): a
+    // fresh, empty window greets the operator ready to receive widgets.
+    if (canvasForSurface(sid)) {
+        m_canvas->setEditMode(true);   // mirrored to every surface
+    }
+    emit workspacesChanged();
+    return sid;
+}
+
+bool WorkspaceController::removeCanvasWindow(const QString& surfaceId)
+{
+    if (!m_enabled || surfaceId == WorkspaceSurface::kMainId) {
+        return false;
+    }
+    WorkspaceDocument doc = m_store.document();
+    // Capture the window's last geometry hint before it goes, purely so a
+    // future re-add starts somewhere sensible — the surface itself is
+    // deleted below, so this is best-effort.
+    if (m_extraCanvases.contains(surfaceId)) {
+        evictSurfaceTransiently(surfaceId);
+        m_extraCanvases.remove(surfaceId);
+        if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(surfaceId);
+    }
+    if (!doc.removeSurface(doc.activeWorkspace, surfaceId)) {
+        return false;
+    }
+    m_store.setDocument(doc);
+    if (!m_store.flush()) {
+        qWarning() << "WorkspaceController: workspace edit did not persist (read-only session?)";
+    }
+    // The orphans moved to the main surface; the forced re-place brings
+    // them (and everything else) up in one pass, transient closes undone.
+    switchWorkspaceInternal(doc.activeWorkspace, /*force=*/true);
+    return true;
+}
+
+bool WorkspaceController::renameCanvasWindow(const QString& surfaceId,
+                                             const QString& label)
+{
+    WorkspaceDocument doc = m_store.document();
+    if (!doc.renameSurface(doc.activeWorkspace, surfaceId, label)) {
+        return false;
+    }
+    m_store.setDocument(doc);
+    if (!m_store.flush()) {
+        qWarning() << "WorkspaceController: workspace edit did not persist (read-only session?)";
+    }
+    if (const Workspace* ws = m_store.document().workspace(
+            m_store.document().activeWorkspace)) {
+        if (const WorkspaceSurface* surf = ws->surface(surfaceId)) {
+            if (m_windowHost.setWindowLabel) {
+                m_windowHost.setWindowLabel(surfaceId, surf->label);
+            }
+        }
+    }
+    emit workspacesChanged();
+    return true;
+}
+
+bool WorkspaceController::setCanvasWindowOpen(const QString& surfaceId, bool open)
+{
+    if (!m_enabled || surfaceId == WorkspaceSurface::kMainId) {
+        return false;
+    }
+    WorkspaceDocument doc = m_store.document();
+    Workspace* ws = nullptr;
+    for (Workspace& w : doc.workspaces) {
+        if (w.id == doc.activeWorkspace) ws = &w;
+    }
+    if (!ws) {
+        return false;
+    }
+    WorkspaceSurface* surf = nullptr;
+    for (WorkspaceSurface& candidate : ws->surfaces) {
+        if (candidate.id == surfaceId) surf = &candidate;
+    }
+    if (!surf) {
+        return false;
+    }
+    if (surf->hidden == !open) {
+        return true;   // the state the caller asked for
+    }
+
+    if (!open) {
+        // HIDE-AND-KEEP (maintainer ruling): widgets evicted transiently,
+        // items untouched, geometry hint captured, window hidden.
+        if (m_windowHost.geometryHint) {
+            surf->windowGeometry = m_windowHost.geometryHint(surfaceId);
+        }
+        surf->hidden = true;
+        m_store.setDocument(doc);
+        if (!m_store.flush()) {
+            qWarning() << "WorkspaceController: workspace edit did not persist (read-only session?)";
+        }
+        evictSurfaceTransiently(surfaceId);
+        m_extraCanvases.remove(surfaceId);
+        if (m_windowHost.closeWindow) m_windowHost.closeWindow(surfaceId);
+    } else {
+        surf->hidden = false;
+        m_store.setDocument(doc);
+        if (!m_store.flush()) {
+            qWarning() << "WorkspaceController: workspace edit did not persist (read-only session?)";
+        }
+        reconcileWindowsWithActiveWorkspace();
+        placeSurfaceItems(surfaceId);
+    }
+    emit workspacesChanged();
+    return true;
+}
+
+QList<WorkspaceController::CanvasWindowInfo>
+WorkspaceController::canvasWindowList() const
+{
+    QList<CanvasWindowInfo> out;
+    const WorkspaceDocument& doc = m_store.document();
+    if (const Workspace* ws = doc.workspace(doc.activeWorkspace)) {
+        for (const WorkspaceSurface& s : ws->surfaces) {
+            if (s.id == WorkspaceSurface::kMainId) continue;
+            CanvasWindowInfo info;
+            info.id    = s.id;
+            info.label = s.label.isEmpty() ? s.id : s.label;
+            info.open  = !s.hidden;
+            out.append(info);
+        }
+    }
+    return out;
+}
+
+bool WorkspaceController::moveItemToSurface(const QString& itemId,
+                                            const QString& surfaceId)
+{
+    if (!m_enabled) {
+        return false;
+    }
+    if (itemId == kBandStackItemId || itemId == kPanStackItemId) {
+        return false;   // shell furniture stays on the main surface
+    }
+    WorkspaceDocument doc = m_store.document();
+    Workspace* ws = nullptr;
+    for (Workspace& w : doc.workspaces) {
+        if (w.id == doc.activeWorkspace) ws = &w;
+    }
+    if (!ws || !ws->surface(surfaceId)) {
+        return false;
+    }
+    const QString from = docSurfaceForItem(*ws, itemId);
+    if (from == surfaceId) {
+        return true;   // the state the caller asked for
+    }
+
+    // DOCUMENT FIRST (the switch-pivot lesson): the item entry moves
+    // surfaces atomically, so a crash mid-reparent boots into a document
+    // that already says where the item lives.
+    CanvasItem moved;
+    bool found = false;
+    for (WorkspaceSurface& surf : ws->surfaces) {
+        for (int i = 0; i < surf.items.size(); ++i) {
+            if (surf.items.at(i).id == itemId) {
+                moved = surf.items.takeAt(i);
+                found = true;
+                break;
+            }
+        }
+        if (found) break;
+    }
+    if (!found) {
+        // Untracked but live (a pan placed this session): synthesize from
+        // the canvas.
+        WorkspaceCanvas* holder = canvasHolding(itemId);
+        if (!holder) {
+            return false;
+        }
+        moved.id          = itemId;
+        moved.contentType = itemId.startsWith(kPanItemPrefix)
+                                ? QStringLiteral("panadapter")
+                                : QStringLiteral("applet");
+        moved.rect        = holder->itemRect(itemId);
+    }
+    for (WorkspaceSurface& surf : ws->surfaces) {
+        if (surf.id == surfaceId) {
+            // Moving something TO a window is asking to see it there.
+            surf.hidden = false;
+            surf.items.append(moved);
+            break;
+        }
+    }
+    m_store.setDocument(doc);
+    if (!m_store.flush()) {
+        qWarning() << "WorkspaceController: workspace edit did not persist (read-only session?)";
+    }
+    reconcileWindowsWithActiveWorkspace();
+
+    WorkspaceCanvas* target = canvasForSurface(surfaceId);
+    WorkspaceCanvas* source = canvasHolding(itemId);
+    if (!target) {
+        emit workspacesChanged();
+        return true;   // recorded; the window will place it when it opens
+    }
+
+    // ── The widget follows, in ONE step ──────────────────────────────────
+    // A cross-window move is a cross-TOP-LEVEL reparent — the
+    // #2495/#4617/#4319 crash lineage — so pans take the floatPanadapter
+    // recipe through the pan-host hooks and applets go through the
+    // manager's reparent preparation (returnFromCanvas/detachForCanvas
+    // both call prepareRhiChildrenForReparent).
+    m_applying = true;
+    if (itemId.startsWith(kPanItemPrefix)) {
+        const QString panId = panIdForItem(itemId);
+        if (!panId.isEmpty()) {
+            if (m_panHost.prepareTopLevelMove) {
+                m_panHost.prepareTopLevelMove(panId);
+            }
+            QWidget* w = source ? source->releaseItem(itemId) : nullptr;
+            if (!w && m_panHost.detach) {
+                w = m_panHost.detach(panId);   // e.g. still in the stack
+            }
+            if (w) {
+                target->addItem(itemId, w, moved.rect,
+                                QStringLiteral("panadapter"), QSize(320, 180));
+                target->sendItemToBack(itemId);
+            }
+            if (m_panHost.finishTopLevelMove) {
+                m_panHost.finishTopLevelMove(panId);
+            }
+        }
+    } else if (itemId.startsWith(kAppletItemPrefix)) {
+        ContainerWidget* c =
+            containerForApplet(itemId.mid(kAppletItemPrefix.size()));
+        if (c) {
+            if (c->isOnCanvas() && source) {
+                source->takeItem(itemId);
+                m_manager->returnFromCanvas(c->id(), c);
+            }
+            if (c->isContainerVisible() && !c->isFloating()
+                && m_manager->detachForCanvas(c->id()) == c) {
+                target->addItem(itemId, c, moved.rect,
+                                QStringLiteral("applet"));
+            }
+        }
+    }
+    m_applying = false;
+
+    emit workspacesChanged();
+    return true;
+}
+
+void WorkspaceController::noteWindowGeometryHint(const QString& surfaceId,
+                                                 const QByteArray& hint)
+{
+    WorkspaceDocument doc = m_store.document();
+    for (Workspace& ws : doc.workspaces) {
+        if (ws.id != doc.activeWorkspace) continue;
+        for (WorkspaceSurface& s : ws.surfaces) {
+            if (s.id != surfaceId) continue;
+            if (s.windowGeometry == hint) return;
+            s.windowGeometry = hint;
+            m_store.setDocument(doc);   // touch — the store debounces
+            return;
+        }
+    }
+}
+
+void WorkspaceController::prepareShutdown()
+{
+    // BEFORE the pan/container teardown (MainWindow's ordered shutdown):
+    // capture every open window's geometry hint, flush the document once,
+    // then destroy the windows — explicitly, the #2495 lesson: a floating
+    // top-level left to ~QWidget cleanup crashed on macOS at exit.
+    const QStringList openWindows = m_extraCanvases.keys();
+    for (const QString& sid : openWindows) {
+        if (m_windowHost.geometryHint) {
+            noteWindowGeometryHint(sid, m_windowHost.geometryHint(sid));
+        }
+    }
+    m_store.flush();
+    for (const QString& sid : openWindows) {
+        // Evict BEFORE destroying: the stack still owns every pan applet
+        // and the panel every container — a window deleted around them
+        // would take them along (they are its children at this point).
+        evictSurfaceTransiently(sid);
+        m_extraCanvases.remove(sid);
+        if (m_windowHost.destroyWindow) m_windowHost.destroyWindow(sid);
     }
 }
 
@@ -1555,10 +2341,19 @@ bool WorkspaceController::switchWorkspaceInternal(const QString& id, bool force)
     // other OPEN applet closes.  All visibility changes run under
     // m_applying so the visibilityChanged hook does not echo them back
     // into the document.
+    // Windows first (phase 7): close the ones the target does not want,
+    // open the ones it does — placement below needs the canvases to
+    // exist.  The widgets were all released above.
+    reconcileWindowsWithActiveWorkspace();
+
     QSet<QString> wanted;
     if (const Workspace* ws = doc.workspace(id)) {
-        if (const WorkspaceSurface* main = ws->surface(WorkspaceSurface::kMainId)) {
-            for (const CanvasItem& it : main->items) {
+        for (const WorkspaceSurface& surf : ws->surfaces) {
+            if (surf.hidden) {
+                continue;   // hide-and-keep: a closed window's applets
+                            // stay transiently shut until it reopens
+            }
+            for (const CanvasItem& it : surf.items) {
                 if (it.id.startsWith(kAppletItemPrefix) && !it.closed) {
                     wanted.insert(it.id.mid(kAppletItemPrefix.size()));
                 }
@@ -1668,7 +2463,8 @@ QList<WorkspaceController::PaletteEntry> WorkspaceController::paletteState() con
 }
 
 bool WorkspaceController::addAppletFromPalette(const QString& appletId,
-                                               const QPointF& canvasPos)
+                                               const QPointF& canvasPos,
+                                               const QString& surfaceId)
 {
     if (!m_enabled) {
         return false;   // adding is allowed in BOTH postures (review m3)
@@ -1687,14 +2483,16 @@ bool WorkspaceController::addAppletFromPalette(const QString& appletId,
     }
 
     const QString itemId = itemIdFor(c);
-    const NormRect rect  = defaultRectFor(c, &canvasPos);
+    const NormRect rect  = defaultRectFor(c, &canvasPos,
+                                          canvasForSurface(surfaceId));
 
     // Whatever state the applet is in, the palette add ends the same way:
-    // an OPEN applet placed at the click point.  The rect is recorded
-    // first so every path below places from the document — the same
-    // one-placement-path shape import-floats uses.
+    // an OPEN applet placed at the click point ON THE CANVAS THE MENU WAS
+    // OPENED OVER (phase 7).  The rect is recorded first so every path
+    // below places from the document — the same one-placement-path shape
+    // import-floats uses — and recording carries the surface.
     writeItemPresence(itemId, QStringLiteral("applet"), rect,
-                      /*present=*/true, /*flushNow=*/false);
+                      /*present=*/true, /*flushNow=*/false, surfaceId);
 
     if (c->isFloating()) {
         // An explicit palette add outranks decision 1's leave-it-floating:
@@ -1857,12 +2655,13 @@ void WorkspaceController::onRadioProfileLoaded(const QString& profileType,
 // ── Geometry helpers ─────────────────────────────────────────────────────
 
 NormRect WorkspaceController::defaultRectFor(const ContainerWidget* c,
-                                             const QPointF* center) const
+                                             const QPointF* center,
+                                             const WorkspaceCanvas* canvas) const
 {
     // Size from the widget's own hint, normalized against the canvas — so a
     // dropped applet arrives at roughly its panel size instead of a house
     // number.  The canvas clamps against its minimum floor either way.
-    const QSize canvasSize = m_canvas->size();
+    const QSize canvasSize = (canvas ? canvas : m_canvas)->size();
     const QSize hint = c ? c->sizeHint() : QSize();
 
     NormRect r;

@@ -91,6 +91,16 @@ public:
     PanadapterApplet* detachForCanvas(const QString& panId);
     void returnFromCanvas(const QString& panId, PanadapterApplet* applet);
 
+    // Bracket a canvas-driven reparent of this pan's widget ACROSS TOP
+    // LEVELS (RFC #4887 phase 7: additional canvas windows).  Same GPU
+    // recipe as floatPanadapter()/dockPanadapter() — hide + release the
+    // QRhi resources BEFORE the move, deferred refresh + show after —
+    // because a QRhiWidget crossing a top-level boundary without it is
+    // the #2495/#4617/#4319/#1344 crash lineage.  The move itself (a
+    // one-step reparent) is the caller's; these only own the GPU side.
+    void preparePanForTopLevelMove(const QString& panId);
+    void finishPanTopLevelMove(const QString& panId);
+
     // Float/dock panadapters
     void floatPanadapter(const QString& panId);
     void dockPanadapter(const QString& panId);

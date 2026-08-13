@@ -1014,6 +1014,7 @@ set(GUI_SOURCES
     src/gui/workspace/WorkspaceGeometry.cpp
     src/gui/workspace/WorkspaceMigration.cpp
     src/gui/workspace/WorkspaceStore.cpp
+    src/gui/workspace/WorkspaceWindow.cpp
     src/gui/ClientCompApplet.cpp
     src/gui/ClientCompCurveWidget.cpp
     src/gui/ClientCompKnob.cpp

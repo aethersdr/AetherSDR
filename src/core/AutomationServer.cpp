@@ -3089,8 +3089,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
 
         add("workspace", {},
             "workspace <status|enable|disable|edit|place|list|switch|create|"
-            "bind|import-floats|palette> — the canvas and its workspaces as "
-            "data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6)",
+            "bind|import-floats|palette|window|move|add> — the canvas, its "
+            "workspaces and its extra windows as data; arg shapes in "
+            "docs/automation-bridge.md (#4887 ph4/ph6/ph7)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 Q_UNUSED(s);

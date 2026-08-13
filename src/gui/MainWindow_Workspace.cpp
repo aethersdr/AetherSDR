@@ -21,6 +21,7 @@
 #include "core/AppSettings.h"
 #include "workspace/WorkspaceCanvas.h"
 #include "workspace/WorkspaceController.h"
+#include "workspace/WorkspaceWindow.h"
 
 #include <QAction>
 #include <QInputDialog>
@@ -100,7 +101,77 @@ void MainWindow::wireWorkspaceCanvas()
     hooks.recallGuard = [this](bool on) {
         m_appletPanel->setRecallInProgress(on);
     };
+    // Cross-top-level pan moves (phase 7): the floatPanadapter GPU recipe,
+    // split around the controller's one-step reparent.
+    hooks.prepareTopLevelMove = [this](const QString& id) {
+        m_panStack->preparePanForTopLevelMove(id);
+    };
+    hooks.finishTopLevelMove = [this](const QString& id) {
+        m_panStack->finishPanTopLevelMove(id);
+    };
     m_workspaceController->setPanHost(hooks);
+
+    // ── Additional canvas windows (RFC #4887 phase 7) ────────────────────
+    //
+    // The controller owns surface policy; this window owns the real
+    // top-level WorkspaceWindows, following FloatingContainerWindow's
+    // frameless/shutdown contract.  A hidden window is kept (its canvas
+    // object is reused on reopen — the controller's wire-once guard
+    // depends on that); only destroyWindow deletes.
+    {
+        WorkspaceController::WindowHostHooks wh;
+        wh.openWindow = [this](const QString& surfaceId, const QString& label,
+                               const QByteArray& hint) -> WorkspaceCanvas* {
+            WorkspaceWindow* w = m_workspaceWindows.value(surfaceId);
+            if (!w) {
+                w = new WorkspaceWindow(surfaceId, window());
+                m_workspaceWindows.insert(surfaceId, w);
+                connect(w, &WorkspaceWindow::closeRequested, this,
+                        [this](const QString& sid) {
+                            if (m_workspaceController) {
+                                m_workspaceController->setCanvasWindowOpen(
+                                    sid, false);
+                            }
+                        });
+                connect(w, &WorkspaceWindow::geometryHintChanged, this,
+                        [this](const QString& sid, const QByteArray& h) {
+                            if (m_workspaceController) {
+                                m_workspaceController->noteWindowGeometryHint(
+                                    sid, h);
+                            }
+                        });
+            }
+            w->setSurfaceLabel(label);
+            w->restoreFromHint(hint, this);
+            w->show();
+            w->raise();
+            return w->canvas();
+        };
+        wh.closeWindow = [this](const QString& surfaceId) {
+            if (WorkspaceWindow* w = m_workspaceWindows.value(surfaceId)) {
+                w->hide();
+            }
+        };
+        wh.destroyWindow = [this](const QString& surfaceId) {
+            if (WorkspaceWindow* w = m_workspaceWindows.take(surfaceId)) {
+                w->prepareShutdown();
+                delete w;
+            }
+        };
+        wh.setWindowLabel = [this](const QString& surfaceId,
+                                   const QString& label) {
+            if (WorkspaceWindow* w = m_workspaceWindows.value(surfaceId)) {
+                w->setSurfaceLabel(label);
+            }
+        };
+        wh.geometryHint = [this](const QString& surfaceId) -> QByteArray {
+            if (WorkspaceWindow* w = m_workspaceWindows.value(surfaceId)) {
+                return w->currentGeometryHint();
+            }
+            return QByteArray();
+        };
+        m_workspaceController->setWindowHost(wh);
+    }
 
     // The widget palette (Add widget ▸): AppletPanel owns the applet
     // universe and the category taxonomy; the controller only renders it.
@@ -538,6 +609,74 @@ void MainWindow::rebuildWorkspaceSwitcherMenu(QMenu* menu)
     }
 }
 
+void MainWindow::rebuildCanvasWindowsMenu(QMenu* menu)
+{
+    menu->clear();
+    qDeleteAll(menu->findChildren<QMenu*>(QString(), Qt::FindDirectChildrenOnly));
+    if (!m_workspaceController) {
+        return;
+    }
+    const bool enabled = m_workspaceController->isEnabled();
+    auto menuText = [](const QString& t) {
+        return QString(t).replace(QLatin1Char('&'), QStringLiteral("&&"));
+    };
+
+    const auto windows = m_workspaceController->canvasWindowList();
+    for (const auto& info : windows) {
+        // Checked = open.  Toggling is hide-and-keep in both directions.
+        QAction* a = menu->addAction(menuText(info.label));
+        a->setCheckable(true);
+        a->setChecked(info.open);
+        a->setEnabled(enabled);
+        const QString sid = info.id;
+        connect(a, &QAction::triggered, this, [this, sid](bool on) {
+            m_workspaceController->setCanvasWindowOpen(sid, on);
+        });
+    }
+    if (!windows.isEmpty()) {
+        menu->addSeparator();
+    }
+
+    QAction* add = menu->addAction(tr("New canvas window…"));
+    add->setEnabled(enabled);
+    connect(add, &QAction::triggered, this, [this] {
+        const QString label = QInputDialog::getText(
+            this, tr("New canvas window"), tr("Name:"));
+        if (!label.isEmpty()) {
+            m_workspaceController->addCanvasWindow(label);
+        }
+    });
+
+    if (windows.isEmpty()) {
+        return;
+    }
+    QMenu* renameMenu = menu->addMenu(tr("Rename"));
+    QMenu* removeMenu = menu->addMenu(tr("Remove"));
+    renameMenu->setEnabled(enabled);
+    removeMenu->setEnabled(enabled);
+    for (const auto& info : windows) {
+        const QString sid   = info.id;
+        const QString label = info.label;
+        renameMenu->addAction(menuText(label), this, [this, sid, label] {
+            const QString l = QInputDialog::getText(
+                this, tr("Rename canvas window"), tr("Name:"),
+                QLineEdit::Normal, label);
+            if (!l.isEmpty() && l != label) {
+                m_workspaceController->renameCanvasWindow(sid, l);
+            }
+        });
+        removeMenu->addAction(menuText(label), this, [this, sid, label] {
+            if (QMessageBox::question(
+                    this, tr("Remove canvas window"),
+                    tr("Remove \"%1\"? Its widgets move back to the main "
+                       "window.").arg(label))
+                == QMessageBox::Yes) {
+                m_workspaceController->removeCanvasWindow(sid);
+            }
+        });
+    }
+}
+
 QVariantMap MainWindow::automationWorkspace(const QString& action,
                                             const QString& args)
 {
@@ -559,27 +698,59 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         out[QStringLiteral("edit")]     = m_workspaceCanvas->isEditMode();
         out[QStringLiteral("gridSnap")] = m_workspaceCanvas->isGridSnapEnabled();
         out[QStringLiteral("selected")] = m_workspaceCanvas->selectedItem();
+        // Every surface's canvas (phase 7), each item tagged with its
+        // surface so a harness can tell two windows' layouts apart.
         QVariantList items;
-        for (const CanvasItem& it : m_workspaceCanvas->layout().itemsByZ()) {
-            QVariantMap m;
-            m[QStringLiteral("id")]   = it.id;
-            m[QStringLiteral("type")] = it.contentType;
-            m[QStringLiteral("x")]    = it.rect.x;
-            m[QStringLiteral("y")]    = it.rect.y;
-            m[QStringLiteral("w")]    = it.rect.w;
-            m[QStringLiteral("h")]    = it.rect.h;
-            m[QStringLiteral("z")]    = m_workspaceCanvas->layout().zOf(it.id);
-            // Whether the widget is REALLY a canvas child right now — the
-            // model can be healthy while a stack rebuild has reclaimed the
-            // widget (the 8600 theft), and this is how a smoke proves the
-            // difference without trusting the model it is auditing.
-            QWidget* w = m_workspaceCanvas->itemWidget(it.id);
-            m[QStringLiteral("hosted")] =
-                (w && w->parentWidget() == m_workspaceCanvas);
-            items.append(m);
+        QVariantList surfaces;
+        auto reportCanvas = [&items](WorkspaceCanvas* canvas,
+                                     const QString& surfaceId) {
+            int hostedCount = 0;
+            for (const CanvasItem& it : canvas->layout().itemsByZ()) {
+                QVariantMap m;
+                m[QStringLiteral("id")]      = it.id;
+                m[QStringLiteral("type")]    = it.contentType;
+                m[QStringLiteral("surface")] = surfaceId;
+                m[QStringLiteral("x")]       = it.rect.x;
+                m[QStringLiteral("y")]       = it.rect.y;
+                m[QStringLiteral("w")]       = it.rect.w;
+                m[QStringLiteral("h")]       = it.rect.h;
+                m[QStringLiteral("z")]       = canvas->layout().zOf(it.id);
+                // Whether the widget is REALLY a child of the canvas that
+                // claims it — the model can be healthy while a stack
+                // rebuild has reclaimed the widget (the 8600 theft), and
+                // this is how a smoke proves the difference without
+                // trusting the model it is auditing.
+                QWidget* w = canvas->itemWidget(it.id);
+                const bool hosted = (w && w->parentWidget() == canvas);
+                m[QStringLiteral("hosted")] = hosted;
+                if (hosted) ++hostedCount;
+                items.append(m);
+            }
+            return hostedCount;
+        };
+        {
+            QVariantMap sm;
+            sm[QStringLiteral("id")]    = WorkspaceSurface::kMainId;
+            sm[QStringLiteral("open")]  = true;
+            sm[QStringLiteral("hostedItems")] =
+                reportCanvas(m_workspaceCanvas, WorkspaceSurface::kMainId);
+            surfaces.append(sm);
         }
-        out[QStringLiteral("items")] = items;
-        out[QStringLiteral("count")] = items.size();
+        for (const auto& info : m_workspaceController->canvasWindowList()) {
+            QVariantMap sm;
+            sm[QStringLiteral("id")]    = info.id;
+            sm[QStringLiteral("label")] = info.label;
+            sm[QStringLiteral("open")]  = info.open;
+            if (WorkspaceCanvas* canvas =
+                    m_workspaceController->canvasForSurface(info.id)) {
+                sm[QStringLiteral("hostedItems")] =
+                    reportCanvas(canvas, info.id);
+            }
+            surfaces.append(sm);
+        }
+        out[QStringLiteral("surfaces")] = surfaces;
+        out[QStringLiteral("items")]    = items;
+        out[QStringLiteral("count")]    = items.size();
         return out;
     }
 
@@ -755,6 +926,146 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         return out;
     }
 
+    if (action == QLatin1String("window")) {
+        // window new [label] | list | open <id> | close <id> |
+        //        remove <id> | rename <id> <label>
+        const QStringList parts =
+            args.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        const QString sub = parts.value(0);
+        if (sub == QLatin1String("list") || sub.isEmpty()) {
+            QVariantList wins;
+            for (const auto& info : m_workspaceController->canvasWindowList()) {
+                QVariantMap w;
+                w[QStringLiteral("id")]    = info.id;
+                w[QStringLiteral("label")] = info.label;
+                w[QStringLiteral("open")]  = info.open;
+                wins.append(w);
+            }
+            out[QStringLiteral("windows")] = wins;
+            out[QStringLiteral("count")]   = wins.size();
+            return out;
+        }
+        if (!enabled) {
+            out[QStringLiteral("error")] = QStringLiteral("canvas mode is off");
+            return out;
+        }
+        if (sub == QLatin1String("new")) {
+            const QString label = parts.mid(1).join(QLatin1Char(' '));
+            const QString sid = m_workspaceController->addCanvasWindow(label);
+            if (sid.isEmpty()) {
+                out[QStringLiteral("error")] = QStringLiteral("create failed");
+                return out;
+            }
+            out[QStringLiteral("id")] = sid;
+            for (const auto& info : m_workspaceController->canvasWindowList()) {
+                if (info.id == sid) {
+                    // The ACTUAL label (dedup may have suffixed it) — the
+                    // create-verb lesson (review, K6OZY).
+                    out[QStringLiteral("label")] = info.label;
+                    break;
+                }
+            }
+            return out;
+        }
+        const QString sid = parts.value(1);
+        if (sub == QLatin1String("open") || sub == QLatin1String("close")) {
+            if (!m_workspaceController->setCanvasWindowOpen(
+                    sid, sub == QLatin1String("open"))) {
+                out[QStringLiteral("error")] =
+                    QStringLiteral("no such canvas window: %1").arg(sid);
+                return out;
+            }
+            out[QStringLiteral("id")]   = sid;
+            out[QStringLiteral("open")] = (sub == QLatin1String("open"));
+            return out;
+        }
+        if (sub == QLatin1String("remove")) {
+            if (!m_workspaceController->removeCanvasWindow(sid)) {
+                out[QStringLiteral("error")] =
+                    QStringLiteral("no such canvas window: %1").arg(sid);
+                return out;
+            }
+            out[QStringLiteral("removed")] = sid;
+            return out;
+        }
+        if (sub == QLatin1String("rename")) {
+            const QString label = parts.mid(2).join(QLatin1Char(' '));
+            if (label.isEmpty()
+                || !m_workspaceController->renameCanvasWindow(sid, label)) {
+                out[QStringLiteral("error")] = QStringLiteral(
+                    "rename wants <id> <label> naming an existing window");
+                return out;
+            }
+            out[QStringLiteral("id")] = sid;
+            for (const auto& info : m_workspaceController->canvasWindowList()) {
+                if (info.id == sid) {
+                    out[QStringLiteral("label")] = info.label;
+                    break;
+                }
+            }
+            return out;
+        }
+        out[QStringLiteral("error")] = QStringLiteral(
+            "window wants new|list|open|close|remove|rename");
+        return out;
+    }
+
+    if (action == QLatin1String("add")) {
+        // add <appletId> [surfaceId] — the palette engine over the bridge:
+        // opens/docks/places at the target surface's centre, refusing
+        // exactly what the menu greys (on-canvas, absent, undetected).
+        if (!enabled) {
+            out[QStringLiteral("error")] = QStringLiteral("canvas mode is off");
+            return out;
+        }
+        const QStringList parts =
+            args.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty()) {
+            out[QStringLiteral("error")] =
+                QStringLiteral("add wants <appletId> [surfaceId]");
+            return out;
+        }
+        const QString surfaceId = parts.value(1);
+        if (!m_workspaceController->addAppletFromPalette(
+                parts.at(0), QPointF(0.5, 0.5), surfaceId)) {
+            out[QStringLiteral("error")] =
+                QStringLiteral("cannot add %1 (on canvas already, absent, "
+                               "or hardware not detected)")
+                    .arg(parts.at(0));
+            return out;
+        }
+        out[QStringLiteral("id")] = QStringLiteral("applet:") + parts.at(0);
+        out[QStringLiteral("surface")] = m_workspaceController->surfaceHosting(
+            QStringLiteral("applet:") + parts.at(0));
+        return out;
+    }
+
+    if (action == QLatin1String("move")) {
+        if (!enabled) {
+            out[QStringLiteral("error")] = QStringLiteral("canvas mode is off");
+            return out;
+        }
+        const QStringList parts =
+            args.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.size() != 2) {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "move wants <itemId> <surfaceId>");
+            return out;
+        }
+        if (!m_workspaceController->moveItemToSurface(parts.at(0),
+                                                      parts.at(1))) {
+            out[QStringLiteral("error")] =
+                QStringLiteral("cannot move %1 to %2 (unknown item or "
+                               "surface, or shell furniture)")
+                    .arg(parts.at(0), parts.at(1));
+            return out;
+        }
+        out[QStringLiteral("id")]      = parts.at(0);
+        out[QStringLiteral("surface")] =
+            m_workspaceController->surfaceHosting(parts.at(0));
+        return out;
+    }
+
     if (action == QLatin1String("edit")) {
         // Operator posture only — `place` stays available in BOTH postures
         // (the bridge is not an operator, and tests must be able to arrange
@@ -784,13 +1095,19 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
             return out;
         }
         const QString itemId = parts.at(0);
-        if (!m_workspaceCanvas->contains(itemId)) {
+        // The item may live on any surface (phase 7) — place targets the
+        // canvas that hosts it.
+        const QString surfId = m_workspaceController->surfaceHosting(itemId);
+        WorkspaceCanvas* canvas =
+            surfId.isEmpty() ? nullptr
+                             : m_workspaceController->canvasForSurface(surfId);
+        if (!canvas) {
             out[QStringLiteral("error")] =
                 QStringLiteral("no such item: %1").arg(itemId);
             return out;
         }
         bool okX = false, okY = false, okW = true, okH = true;
-        NormRect r = m_workspaceCanvas->itemRect(itemId);
+        NormRect r = canvas->itemRect(itemId);
         r.x = parts.at(1).toDouble(&okX);
         r.y = parts.at(2).toDouble(&okY);
         if (parts.size() == 5) {
@@ -811,10 +1128,11 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
                 "coordinates must be finite with positive size");
             return out;
         }
-        m_workspaceCanvas->setItemRect(itemId, r);   // clamped; the
-        m_workspaceController->commitPlacement();    // controller records it
-        const NormRect applied = m_workspaceCanvas->itemRect(itemId);
-        out[QStringLiteral("id")] = itemId;
+        canvas->setItemRect(itemId, r);            // clamped; the
+        m_workspaceController->commitPlacement();  // controller records it
+        const NormRect applied = canvas->itemRect(itemId);
+        out[QStringLiteral("id")]      = itemId;
+        out[QStringLiteral("surface")] = surfId;
         out[QStringLiteral("x")]  = applied.x;
         out[QStringLiteral("y")]  = applied.y;
         out[QStringLiteral("w")]  = applied.w;
@@ -824,7 +1142,8 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
 
     out[QStringLiteral("error")] =
         QStringLiteral("unknown workspace action: %1 (status|enable|disable|"
-                       "edit|place|list|switch|create|bind|import-floats)")
+                       "edit|place|list|switch|create|bind|import-floats|"
+                       "palette|window|move|add)")
             .arg(action);
     return out;
 }

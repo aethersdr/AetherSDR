@@ -845,6 +845,12 @@ void MainWindow::buildMenuBar()
     connect(switcher, &QMenu::aboutToShow, this,
             [this, switcher] { rebuildWorkspaceSwitcherMenu(switcher); });
 
+    // Additional canvas windows (phase 7): rebuilt on every open, same
+    // staleness rule as the switcher.
+    QMenu* canvasWindows = wsMenu->addMenu("Canvas Wi&ndows");
+    connect(canvasWindows, &QMenu::aboutToShow, this,
+            [this, canvasWindows] { rebuildCanvasWindowsMenu(canvasWindows); });
+
     // Applet-panel show/hide and pop-out are now driven entirely from the
     // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as
     // a window-scoped QShortcut so the keystroke survives the View-menu

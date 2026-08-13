@@ -181,6 +181,112 @@ bool WorkspaceDocument::renameWorkspace(const QString& id, const QString& label)
     return false;
 }
 
+QString WorkspaceDocument::uniqueSurfaceId(const QString& workspaceId) const
+{
+    const Workspace* w = workspace(workspaceId);
+    if (!w) {
+        return QString();
+    }
+    int n = 2;
+    while (w->surface(QStringLiteral("canvas%1").arg(n))) {
+        ++n;
+    }
+    return QStringLiteral("canvas%1").arg(n);
+}
+
+QString WorkspaceDocument::addSurface(const QString& workspaceId,
+                                      const QString& label)
+{
+    for (Workspace& w : workspaces) {
+        if (w.id != workspaceId) continue;
+        WorkspaceSurface s;
+        s.id = uniqueSurfaceId(workspaceId);
+        // Labels are de-duplicated within the workspace, same reasoning as
+        // workspace labels: the window-list menu and the bridge address
+        // surfaces by label as operator text.
+        const QString wanted = label.trimmed().isEmpty()
+                                   ? QStringLiteral("Canvas")
+                                   : label.trimmed();
+        auto taken = [&w](const QString& l) {
+            for (const WorkspaceSurface& surf : w.surfaces) {
+                if (surf.label == l) return true;
+            }
+            return false;
+        };
+        QString unique = wanted;
+        int n = 2;
+        while (taken(unique)) {
+            unique = QStringLiteral("%1 (%2)").arg(wanted).arg(n++);
+        }
+        s.label = unique;
+        w.surfaces.append(s);
+        return s.id;
+    }
+    return QString();
+}
+
+bool WorkspaceDocument::removeSurface(const QString& workspaceId,
+                                      const QString& surfaceId)
+{
+    if (surfaceId == WorkspaceSurface::kMainId) {
+        return false;
+    }
+    for (Workspace& w : workspaces) {
+        if (w.id != workspaceId) continue;
+        int idx = -1;
+        for (int i = 0; i < w.surfaces.size(); ++i) {
+            if (w.surfaces.at(i).id == surfaceId) { idx = i; break; }
+        }
+        if (idx < 0) {
+            return false;
+        }
+        const QList<CanvasItem> orphans = w.surfaces.at(idx).items;
+        w.surfaces.removeAt(idx);
+        for (WorkspaceSurface& s : w.surfaces) {
+            if (s.id == WorkspaceSurface::kMainId) {
+                // Identity is workspace-wide (the parser enforces it), so a
+                // straight append cannot collide.
+                s.items.append(orphans);
+                break;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+bool WorkspaceDocument::renameSurface(const QString& workspaceId,
+                                      const QString& surfaceId,
+                                      const QString& label)
+{
+    for (Workspace& w : workspaces) {
+        if (w.id != workspaceId) continue;
+        for (WorkspaceSurface& s : w.surfaces) {
+            if (s.id != surfaceId) continue;
+            const QString wanted = label.trimmed().isEmpty()
+                                       ? QStringLiteral("Canvas")
+                                       : label.trimmed();
+            // Exclude self from the collision scan (the workspace-rename
+            // M4 lesson, applied on arrival).
+            auto taken = [&w, &s](const QString& l) {
+                for (const WorkspaceSurface& other : w.surfaces) {
+                    if (&other != &s && other.label == l) return true;
+                }
+                return false;
+            };
+            QString unique = wanted;
+            int n = 2;
+            while (taken(unique)) {
+                unique = QStringLiteral("%1 (%2)").arg(wanted).arg(n++);
+            }
+            s.label = unique;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 bool WorkspaceDocument::removeWorkspace(const QString& id)
 {
     if (workspaces.size() <= 1 || !contains(id)) {
@@ -224,6 +330,9 @@ QJsonObject WorkspaceDocument::toJson() const
             if (!s.windowGeometry.isEmpty()) {
                 so[QStringLiteral("windowGeometry")] =
                     QString::fromLatin1(s.windowGeometry.toBase64());
+            }
+            if (s.hidden) {
+                so[QStringLiteral("hidden")] = true;
             }
             surfaceArray.append(so);
         }
@@ -318,6 +427,11 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
                           QStringLiteral("workspace '%1' has a non-array surfaces field")
                               .arg(ws.id));
         }
+        // Item ids are WORKSPACE-wide identity (phase 7): an item on two
+        // surfaces of one workspace would be placed twice by the replay
+        // and fight itself.  The dedup set therefore spans the surface
+        // loop, not each surface.
+        QSet<QString> seenItemIds;
         for (const QJsonValue& sValue : wo.value(QStringLiteral("surfaces")).toArray()) {
             if (!sValue.isObject()) {
                 appendWarning(warnings,
@@ -366,6 +480,15 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
                 }
             }
 
+            surface.hidden = so.value(QStringLiteral("hidden")).toBool(false);
+            if (surface.hidden && surface.id == WorkspaceSurface::kMainId) {
+                // The main window's canvas cannot be "closed" — repair.
+                surface.hidden = false;
+                appendWarning(warnings,
+                              QStringLiteral("main surface of '%1' was marked "
+                                             "hidden").arg(ws.id));
+            }
+
             if (so.contains(QStringLiteral("items"))
                 && !so.value(QStringLiteral("items")).isArray()) {
                 appendWarning(warnings,
@@ -373,7 +496,6 @@ bool WorkspaceDocument::fromJson(const QJsonObject& root,
                                   .arg(ws.id, surface.id));
             }
 
-            QSet<QString> seenItemIds;
             for (const QJsonValue& iValue : so.value(QStringLiteral("items")).toArray()) {
                 if (!iValue.isObject()) {
                     appendWarning(warnings,

@@ -3189,7 +3189,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
 | `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864) |
-| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|palette> — the canvas and its workspaces as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6) |
+| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |

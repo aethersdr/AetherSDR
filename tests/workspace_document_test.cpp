@@ -477,6 +477,137 @@ int main()
         Q_UNUSED(before);
     }
 
+    // ── Surface CRUD + hide-and-keep flag (RFC #4887 phase 7) ────────────
+    {
+        WorkspaceDocument doc;
+        const QString ws = doc.addBlank(QStringLiteral("Main"));
+        doc.activeWorkspace = ws;
+
+        const QString s1 = doc.addSurface(ws, QStringLiteral("Right"));
+        const QString s2 = doc.addSurface(ws, QStringLiteral("Right"));
+        report("addSurface mints sequential ids and de-dups labels",
+               s1 == QStringLiteral("canvas2") && s2 == QStringLiteral("canvas3")
+                   && doc.workspace(ws)->surface(s2)->label
+                          == QStringLiteral("Right (2)"));
+        report("rename to own label is a no-op, not a suffix",
+               doc.renameSurface(ws, s1, QStringLiteral("Right"))
+                   && doc.workspace(ws)->surface(s1)->label
+                          == QStringLiteral("Right"));
+        report("main cannot be removed",
+               !doc.removeSurface(ws, WorkspaceSurface::kMainId));
+
+        // hidden round-trips, absent-when-false; a hidden MAIN repairs.
+        for (Workspace& w : doc.workspaces) {
+            for (WorkspaceSurface& surf : w.surfaces) {
+                if (surf.id == s1) surf.hidden = true;
+            }
+        }
+        {
+            const QByteArray blob = doc.toStoredJson();
+            report("hidden serializes on the closed window only",
+                   blob.contains("\"hidden\"")
+                       && blob.count("\"hidden\"") == 1);
+            WorkspaceDocument back;
+            report("...and round-trips",
+                   WorkspaceDocument::fromStoredJson(blob, &back)
+                       && back.workspace(ws)->surface(s1)->hidden
+                       && !back.workspace(ws)->surface(s2)->hidden);
+        }
+        {
+            QJsonObject root = doc.toJson();
+            QJsonArray wsArr = root.value(QStringLiteral("workspaces")).toArray();
+            QJsonObject w0   = wsArr.at(0).toObject();
+            QJsonArray surfs = w0.value(QStringLiteral("surfaces")).toArray();
+            QJsonObject main = surfs.at(0).toObject();
+            main[QStringLiteral("hidden")] = true;
+            surfs[0] = main;
+            w0[QStringLiteral("surfaces")] = surfs;
+            wsArr[0] = w0;
+            root[QStringLiteral("workspaces")] = wsArr;
+            WorkspaceDocument repaired;
+            QStringList warnings;
+            report("a hidden MAIN surface is repaired with a warning",
+                   WorkspaceDocument::fromJson(root, &repaired, nullptr,
+                                               &warnings)
+                       && !repaired.workspace(ws)
+                               ->surface(WorkspaceSurface::kMainId)
+                               ->hidden
+                       && !warnings.isEmpty());
+        }
+
+        // Item ids are WORKSPACE-wide identity: a duplicate on another
+        // surface is dropped at parse, not placed twice.
+        {
+            QJsonObject root = doc.toJson();
+            QJsonArray wsArr = root.value(QStringLiteral("workspaces")).toArray();
+            QJsonObject w0   = wsArr.at(0).toObject();
+            QJsonArray surfs = w0.value(QStringLiteral("surfaces")).toArray();
+            QJsonObject item;
+            item[QStringLiteral("id")]   = QStringLiteral("applet:DUP");
+            item[QStringLiteral("rect")] =
+                QJsonArray{0.1, 0.1, 0.5, 0.5};
+            for (int i = 0; i < 2; ++i) {
+                QJsonObject so   = surfs.at(i).toObject();
+                QJsonArray items = so.value(QStringLiteral("items")).toArray();
+                items.append(item);
+                so[QStringLiteral("items")] = items;
+                surfs[i] = so;
+            }
+            w0[QStringLiteral("surfaces")] = surfs;
+            wsArr[0] = w0;
+            root[QStringLiteral("workspaces")] = wsArr;
+            WorkspaceDocument back;
+            QStringList warnings;
+            int found = 0;
+            const bool ok =
+                WorkspaceDocument::fromJson(root, &back, nullptr, &warnings);
+            if (ok) {
+                for (const WorkspaceSurface& surf :
+                     back.workspace(ws)->surfaces) {
+                    for (const CanvasItem& it : surf.items) {
+                        if (it.id == QStringLiteral("applet:DUP")) ++found;
+                    }
+                }
+            }
+            report("duplicate item ids are deduped ACROSS surfaces",
+                   ok && found == 1 && !warnings.isEmpty());
+        }
+
+        // removeSurface parks the orphans on main.
+        {
+            for (Workspace& w : doc.workspaces) {
+                for (WorkspaceSurface& surf : w.surfaces) {
+                    if (surf.id == s2) {
+                        CanvasItem it;
+                        it.id   = QStringLiteral("applet:ORPHAN");
+                        it.rect = NormRect{0.2, 0.2, 0.4, 0.4};
+                        surf.items.append(it);
+                    }
+                }
+            }
+            report("removeSurface moves items to main",
+                   doc.removeSurface(ws, s2)
+                       && !doc.workspace(ws)->surface(s2)
+                       && [&] {
+                              for (const CanvasItem& it :
+                                   doc.workspace(ws)
+                                       ->surface(WorkspaceSurface::kMainId)
+                                       ->items) {
+                                  if (it.id == QStringLiteral("applet:ORPHAN"))
+                                      return true;
+                              }
+                              return false;
+                          }());
+        }
+        // duplicate deep-copies surfaces (pre-existing behaviour, now
+        // load-bearing for phase 7).
+        const QString clone = doc.addDuplicateOf(ws, QStringLiteral("Clone"));
+        report("duplicating a workspace clones its extra surfaces",
+               !clone.isEmpty()
+                   && doc.workspace(clone)->surface(s1) != nullptr
+                   && doc.workspace(clone)->surface(s1)->hidden);
+    }
+
     std::printf("\n%s\n", g_failures == 0 ? "All checks passed." : "FAILURES present.");
     return g_failures == 0 ? 0 : 1;
 }

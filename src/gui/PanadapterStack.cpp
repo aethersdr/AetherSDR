@@ -972,6 +972,30 @@ PanadapterApplet* PanadapterStack::detachForCanvas(const QString& panId)
     return applet;
 }
 
+void PanadapterStack::preparePanForTopLevelMove(const QString& panId)
+{
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr;
+    if (!sw) return;
+    sw->hide();
+    sw->prepareForTopLevelChange();
+    sw->resetGpuResources();
+}
+
+void PanadapterStack::finishPanTopLevelMove(const QString& panId)
+{
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr;
+    if (!sw) return;
+    // Deferred like floatPanadapter(): the graphics API binds to the new
+    // native surface before the first render, never during the turn that
+    // moved it.
+    QTimer::singleShot(0, this, [this, sw]() {
+        refreshAfterReparent(sw);
+        sw->show();
+    });
+}
+
 void PanadapterStack::returnFromCanvas(const QString& panId,
                                        PanadapterApplet* applet)
 {

@@ -49,6 +49,13 @@ struct WorkspaceSurface {
     // business.  Never authoritative — see the file comment.
     QByteArray windowGeometry;
 
+    // An extra canvas window the operator closed (hide-and-keep, phase 7
+    // maintainer ruling): the surface and its items stay recorded, the
+    // window just does not open until asked.  Meaningless for "main".
+    // Absent-when-false in the stored form, so phase-6 documents parse
+    // unchanged and a downgrade merely drops the flag.
+    bool hidden = false;
+
     QList<CanvasItem> items;
 };
 
@@ -118,6 +125,26 @@ public:
     QString addBlank(const QString& label);
 
     bool renameWorkspace(const QString& id, const QString& label);
+
+    // ── Surface CRUD (phase 7 — additional canvas windows) ──────────────
+    //
+    // Same ownership rule as workspace CRUD: the document owns identity
+    // (sequential unique ids "canvas2", "canvas3", … and per-workspace
+    // de-duplicated labels); which WINDOW realises a surface is the
+    // controller's business.
+    QString uniqueSurfaceId(const QString& workspaceId) const;
+
+    // Append an empty extra surface to `workspaceId`.  Returns the new
+    // surface id, empty when the workspace does not exist.
+    QString addSurface(const QString& workspaceId, const QString& label);
+
+    // Refuses "main".  The surface's items move to the END of the main
+    // surface (identity is workspace-wide, so no collision is possible);
+    // the caller re-places them.
+    bool removeSurface(const QString& workspaceId, const QString& surfaceId);
+
+    bool renameSurface(const QString& workspaceId, const QString& surfaceId,
+                       const QString& label);
 
     // Refuses the last workspace (a document with none cannot describe the
     // shell).  Bindings pointing at it drop — the same rule the parser

@@ -26,6 +26,9 @@
 #include <QApplication>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMap>
 #include <QSet>
@@ -931,6 +934,165 @@ int main(int argc, char** argv)
             report("palette: available applet classifies addable",
                    stateOf(QStringLiteral("RX")) == PE::State::Addable);
             ctl.setWidgetAvailabilityHook({});
+        }
+
+        // ── Additional canvas windows (RFC #4887 phase 7) ────────────
+        {
+            ctl.switchWorkspace(wsA);
+            ctl.setWidgetCatalog(
+                {{QStringLiteral("RX"), QStringLiteral("RX Controls"),
+                  QStringLiteral("Receive")},
+                 {QStringLiteral("TX"), QStringLiteral("TX Controls"),
+                  QStringLiteral("Transmit")}});
+            rx->setContainerVisible(true);
+            tx->setContainerVisible(true);
+            if (!rx->isOnCanvas()) ctl.sendAppletToCanvas("RX");
+            if (!tx->isOnCanvas()) ctl.sendAppletToCanvas("TX");
+            // The LIVE widget for this pan id — an earlier block replaced
+            // the original (slot reuse test), so never assert against the
+            // stale panA pointer.
+            QWidget* livePan = pans.value(QStringLiteral("0x40000000"));
+
+            // The window host provides bare canvases — the controller
+            // must never construct a real window; headless testability is
+            // the seam's whole point (the PanHostHooks rule again).
+            QMap<QString, WorkspaceCanvas*> wins;
+            QStringList closedWins, destroyedWins;
+            WorkspaceController::WindowHostHooks wh;
+            wh.openWindow = [&](const QString& sid, const QString&,
+                                const QByteArray&) -> WorkspaceCanvas* {
+                if (!wins.contains(sid)) {
+                    auto* c = new WorkspaceCanvas;
+                    c->resize(1000, 800);
+                    c->show();
+                    wins.insert(sid, c);
+                }
+                return wins.value(sid);
+            };
+            wh.closeWindow = [&](const QString& sid) {
+                closedWins.append(sid);   // hide — the canvas object stays
+            };
+            wh.destroyWindow = [&](const QString& sid) {
+                delete wins.take(sid);
+                destroyedWins.append(sid);
+            };
+            wh.geometryHint = [](const QString&) {
+                return QByteArrayLiteral("HINT");
+            };
+            ctl.setWindowHost(wh);
+
+            auto itemClosedInDoc = [&](const QString& itemId) {
+                const QJsonDocument d =
+                    QJsonDocument::fromJson(storedDocument().toUtf8());
+                for (const QJsonValue& w :
+                     d.object().value(QStringLiteral("workspaces")).toArray()) {
+                    for (const QJsonValue& sv :
+                         w.toObject().value(QStringLiteral("surfaces")).toArray()) {
+                        for (const QJsonValue& iv :
+                             sv.toObject().value(QStringLiteral("items")).toArray()) {
+                            if (iv.toObject().value(QStringLiteral("id"))
+                                    .toString() == itemId) {
+                                return iv.toObject()
+                                    .value(QStringLiteral("closed"))
+                                    .toBool(false);
+                            }
+                        }
+                    }
+                }
+                return false;
+            };
+
+            const QString sid =
+                ctl.addCanvasWindow(QStringLiteral("Right monitor"));
+            report("addCanvasWindow opens a window surface",
+                   !sid.isEmpty() && wins.contains(sid));
+            {
+                bool listed = false, open = false;
+                for (const auto& info : ctl.canvasWindowList())
+                    if (info.id == sid) { listed = true; open = info.open; }
+                report("...listed and open", listed && open);
+            }
+            report("...and persisted", storedDocument().contains(sid));
+
+            // Cross-surface move: document first, widget follows.
+            report("moveItemToSurface moves an applet's widget",
+                   ctl.moveItemToSurface(QStringLiteral("applet:RX"), sid)
+                       && rx->parentWidget() == wins.value(sid)
+                       && wins.value(sid)->contains("applet:RX")
+                       && !canvas.contains("applet:RX"));
+            report("...surfaceHosting agrees",
+                   ctl.surfaceHosting(QStringLiteral("applet:RX")) == sid);
+            const QString panItem =
+                ctl.panItemIdFor(QStringLiteral("0x40000000"));
+            report("moveItemToSurface moves a pan's widget",
+                   ctl.moveItemToSurface(panItem, sid)
+                       && livePan->parentWidget() == wins.value(sid));
+            report("...pans stay below applets on the new surface",
+                   wins.value(sid)->layout().zOf(panItem) == 0);
+
+            // A rect edit on the window canvas persists like any other.
+            wins.value(sid)->setItemRect("applet:RX",
+                                         NormRect{0.6, 0.6, 0.3, 0.3});
+            ctl.commitPlacement();
+
+            // HIDE-AND-KEEP (maintainer ruling): closing evicts
+            // transiently — the applet shuts with NO closed flag recorded,
+            // the pan returns to the stack — and reopening restores both.
+            report("closing the window hides and keeps",
+                   ctl.setCanvasWindowOpen(sid, false)
+                       && closedWins.contains(sid)
+                       && !rx->isContainerVisible()
+                       && livePan->parentWidget() != wins.value(sid));
+            report("...items stay recorded, closed flag ABSENT",
+                   storedDocument().contains(QStringLiteral("applet:RX"))
+                       && !itemClosedInDoc(QStringLiteral("applet:RX")));
+            report("reopening re-places applet and pan",
+                   ctl.setCanvasWindowOpen(sid, true)
+                       && rx->isContainerVisible()
+                       && rx->parentWidget() == wins.value(sid)
+                       && livePan->parentWidget() == wins.value(sid));
+            report("...at the edited rect",
+                   nearly(wins.value(sid)->itemRect("applet:RX").x, 0.6,
+                          0.05));
+
+            // A switch closes windows the target lacks and reopens them on
+            // the way back — with the arrangement intact.
+            const int closesBefore = closedWins.size();
+            const QString plain = ctl.createWorkspace(
+                WorkspaceController::NewWorkspaceSource::Blank,
+                QStringLiteral("NoWindows"));
+            report("switching away closes the window (hide, not destroy)",
+                   closedWins.size() > closesBefore
+                       && destroyedWins.isEmpty()
+                       && ctl.canvasWindowList().isEmpty());
+            ctl.switchWorkspace(wsA);
+            report("switching back reopens and re-places",
+                   rx->parentWidget() == wins.value(sid)
+                       && livePan->parentWidget() == wins.value(sid));
+            ctl.deleteWorkspace(plain);
+
+            // Removing the window moves its items home to main.
+            report("removeCanvasWindow destroys and re-homes",
+                   ctl.removeCanvasWindow(sid)
+                       && destroyedWins.contains(sid)
+                       && rx->isOnCanvas()
+                       && rx->parentWidget() == &canvas
+                       && livePan->parentWidget() == &canvas
+                       && ctl.canvasWindowList().isEmpty());
+
+            // Reset to Classic collapses extra surfaces: the stock shell
+            // is one window.
+            const QString sid2 =
+                ctl.addCanvasWindow(QStringLiteral("Doomed"));
+            ctl.moveItemToSurface(QStringLiteral("applet:TX"), sid2);
+            ctl.resetToClassic();
+            report("resetToClassic collapses extra windows",
+                   destroyedWins.contains(sid2)
+                       && ctl.canvasWindowList().isEmpty()
+                       && !storedDocument().contains(sid2)
+                       && tx->parentWidget() == &canvas);
+
+            ctl.setWindowHost({});
         }
 
         // Mode-off switch only retargets.
