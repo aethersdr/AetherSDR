@@ -1494,6 +1494,10 @@ void MainWindow::wirePanLifecycle()
             const bool clientOwnsRfGain =
                 m_radioModel.backendCapabilities().clientSettingsDomains.testFlag(
                     RadioCapabilities::ClientSettingsDomain::RfGain);
+            // Flex deliberately declares no client-owned RF-gain domain: the
+            // radio persists and reports its pan gain. Sim likewise regenerates
+            // its scene. Only a backend that explicitly delegates this domain
+            // (currently HL2) may receive a saved client replay.
             const bool restoreSavedRfGain = clientOwnsRfGain && haveSavedRfGain;
             PanadapterModel* activePan = m_radioModel.activePanadapter();
             const int rfGain = restoreSavedRfGain

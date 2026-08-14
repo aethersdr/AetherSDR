@@ -274,6 +274,7 @@ private:
     bool    m_xitOn = false;
     int     m_ritOffsetHz = 0;
     int     m_controlPollPhase = 0;
+    qint64  m_controlPollQuietUntilMs = 0;
     bool    m_rxAntennaExternal = false;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
@@ -359,6 +360,10 @@ private:
     // 1 s and a user-command guard can defer it — short enough that an operator
     // has not yet had time to wonder why the S-meter stopped.
     static constexpr qint64 kCivStallMs = 5000;
+    // Reconciliation must yield after an operator write.  This prevents the
+    // next one-second phase from placing stale reads directly behind a set;
+    // RFC #4983 will replace this coarse window with response-aware scheduling.
+    static constexpr qint64 kControlPollQuietMs = 500;
     // Note the id for a frame we are about to send or have just decoded.
     void noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub);

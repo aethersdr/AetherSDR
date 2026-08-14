@@ -193,13 +193,13 @@ constexpr std::array kSpecs = {
 
     // ---- Receive antenna (0x12) ----------------------------------------
     ControlSpec{"rx.antenna", 0x12, 0x00, true, "Receive-only antenna",
-                Plane::Slice, Encoding::OnOff, Wiring::Both,
+                Plane::Slice, Encoding::OnOff, Wiring::SendOnly,
                 0, 1, "main/rx", 0, 1,
                 "setSliceRxAntenna", "sliceRxAntennaBtn", true,
                 "IC-7300MK2-specific: 00 uses ANT1 for receive; 01 selects the "
                 "RX-ANT input. Live B6 firmware returns bare FB to the official "
-                "read form, so the last explicit selection is persisted and "
-                "reasserted on reconnect; no read subscription is claimed."},
+                "read form. The operator command is therefore optimistic for "
+                "this session only; reconnect does not invent or replay state."},
 
     // ---- Control (0x1C) --------------------------------------------------
     ControlSpec{"ptt", 0x1C, 0x00, true, "PTT",

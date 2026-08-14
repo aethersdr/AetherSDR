@@ -150,10 +150,10 @@ radio remains authoritative across reconnects.
 The IC-7300MK2 RX-ANT switch is the measured exception. Its official guide says
 `12 00` with no data reads the selection, but the live B6 radio returned only a
 bare `FB` acknowledgement. The backend therefore does not poll that ambiguous
-form or claim a subscription. It persists only the last explicit AetherSDR
-ANT1/RX-ANT choice and reasserts it on reconnect so the hardware and UI cannot
-silently disagree. This is model-scoped in `IcomSettings`; it is not added to a
-generic client-settings domain and does not affect IC-705, Flex, or HL2.
+form or claim a subscription. An explicit AetherSDR ANT1/RX-ANT choice is sent
+and shown optimistically for that session only. Reconnect advertises both
+choices without claiming either one and never replays client state. This keeps
+the radio authoritative and does not affect IC-705, Flex, or HL2.
 
 ### Seam additions made for the second-model bring-up
 
@@ -278,17 +278,19 @@ Reliable remote state therefore has three layers:
 2. accept unsolicited Transceive frames when they arrive; and
 3. rotate explicit reads on the link timer for states the model guide permits.
 
-Poll slowly enough to leave command latency and meter traffic headroom. NR/NB
-function and level reads rotate at about three seconds on the current backend;
-TX state is faster because it gates transmit-only meters. A reply is radio
+Poll slowly enough to leave command latency and meter traffic headroom. The
+current backend uses six one-second phases, with at most four adjacent control
+reads in a phase, and gives operator writes a 500 ms quiet window. NR/NB
+function and level reads therefore rotate at about six seconds; TX state is
+faster because it gates transmit-only meters. A reply is radio
 authority and updates the model without reflecting a new command back down.
 Radio-authoritative Icom state must not be replayed from client persistence on
 reconnect.
 
 The one measured exception is a write-only-in-practice register such as the
-IC-7300MK2 RX-ANT selection: its documented read produced only `FB`. Scope that
-exception to the model, persist only an explicit AetherSDR choice, and document
-why it cannot participate in the ordinary polling contract.
+IC-7300MK2 RX-ANT selection: its documented read produced only `FB`. Scope the
+send-only control to the model, keep its optimistic state session-local, and
+document why it cannot participate in the ordinary polling contract.
 
 #### A 0000–0255 level is not a 0–255 meter
 

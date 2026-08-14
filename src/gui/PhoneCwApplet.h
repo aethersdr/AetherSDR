@@ -85,6 +85,7 @@ private:
     QComboBox* m_micProfileCombo{nullptr};
 
     QComboBox*   m_micSourceCombo{nullptr};
+    bool          m_selectableMicInputs{true};
     QSlider*     m_micLevelSlider{nullptr};
     QLabel*      m_micLevelLabel{nullptr};
     QPushButton* m_accBtn{nullptr};

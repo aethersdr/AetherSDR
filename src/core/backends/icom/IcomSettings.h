@@ -52,13 +52,6 @@ public:
     static std::uint8_t civAddress();
     static void setCivAddress(std::uint8_t address);
 
-    // IC-7300MK2 RX-ANT fallback. The official 12 00 read form is documented
-    // as returning state, but live B6 firmware answers it with a bare FB. Keep
-    // the last operator selection so reconnect can make the radio and UI agree
-    // without pretending that acknowledgement was a subscription.
-    static bool rxAntennaExternal();
-    static void setRxAntennaExternal(bool external);
-
     // Exposed so the connect UI can tell "the operator chose this" from "nobody
     // has set one", and leave its field blank in the second case rather than
     // presenting the IC-705's address as a deliberate choice.

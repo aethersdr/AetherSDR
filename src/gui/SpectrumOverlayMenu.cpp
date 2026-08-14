@@ -552,7 +552,13 @@ void SpectrumOverlayMenu::buildAntPanel()
         if (targetSlice) {
             emit flexRxAntennaSelected(targetSlice->sliceId());
         }
-        if (targetSlice) {
+        if (m_radioModel && m_radioModel->usesFlexCommandPlane()) {
+            // Flex assigns receive antenna on the panadapter.  SliceModel's
+            // command targets a different object and was never equivalent.
+            m_radioModel->sendCommand(
+                QStringLiteral("display pan set %1 rxant=%2")
+                    .arg(m_panId, ant));
+        } else if (targetSlice) {
             targetSlice->setRxAntenna(ant);
         }
         updateLoopButtonVisibility();

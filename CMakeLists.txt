@@ -6056,6 +6056,21 @@ add_test(NAME tx_applet_power_reconciliation_test
 set_tests_properties(tx_applet_power_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(phone_cw_mic_gain_authority_test
+    tests/phone_cw_mic_gain_authority_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_mic_gain_authority_test PRIVATE src)
+target_link_libraries(phone_cw_mic_gain_authority_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_cw_mic_gain_authority_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_mic_gain_authority_test
+         COMMAND phone_cw_mic_gain_authority_test)
+set_tests_properties(phone_cw_mic_gain_authority_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(container_manager_test
     tests/container_manager_test.cpp
     src/gui/FramelessResizer.cpp

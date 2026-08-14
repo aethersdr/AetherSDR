@@ -53,18 +53,15 @@ int main(int argc, char** argv)
     check(IcomSettings::serialPort() == icom::kSerialPort, "default serial port 50002");
     check(IcomSettings::audioPort() == icom::kAudioPort, "default audio port 50003");
     check(IcomSettings::civAddress() == 0xA4, "default CI-V address is the IC-705's 0xA4");
-    check(!IcomSettings::rxAntennaExternal(), "RX-ANT defaults to the main antenna");
 
     IcomSettings::setUsername(QStringLiteral("beer"));
     IcomSettings::setLastHost(QStringLiteral("ic-705.local"));
     IcomSettings::setPorts(51001, 51002, 51003);
     IcomSettings::setCivAddress(0xB6);
-    IcomSettings::setRxAntennaExternal(true);
     check(IcomSettings::username() == QStringLiteral("beer"), "username round-trips");
     check(IcomSettings::lastHost() == QStringLiteral("ic-705.local"), "host round-trips");
     check(IcomSettings::serialPort() == 51002, "ports round-trip");
     check(IcomSettings::civAddress() == 0xB6, "the MK2's address round-trips");
-    check(IcomSettings::rxAntennaExternal(), "the MK2 RX-ANT selection round-trips");
 
     // A hand-edited or truncated file must not command a nonsense port — 0 in
     // particular would bind an ephemeral local port and then tell the radio to

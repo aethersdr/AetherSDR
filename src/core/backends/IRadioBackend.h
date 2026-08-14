@@ -377,8 +377,8 @@ public:
     // separate from the diagnostic receive-during-TX gate above.
     virtual void setTxMonitor(bool on, int level)
     {
+        Q_UNUSED(on);
         Q_UNUSED(level);
-        setTxAudioMonitor(on);
     }
 
     // Tune carrier on/off, at the operator's TUNE power (percent, 0..100).

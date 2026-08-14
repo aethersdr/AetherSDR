@@ -1158,7 +1158,14 @@ void RadioModel::setupBackend(const QString& family)
     // synchronously from the matching decode*Status() calls in the status
     // handlers (main-thread AutoConnection → DirectConnection).
     connect(m_backend.get(), &IRadioBackend::transmitChanged, this,
-            [this](const TransmitDelta& delta) { m_transmitModel.applyChanges(delta); });
+            [this](const TransmitDelta& delta) {
+                // A backend-reported MOX edge is radio state, not local intent.
+                // Keep it out of TransmitModel::moxChanged, whose consumers
+                // own this client's audio, DAX, recorder and serial PTT.
+                if (delta.mox)
+                    publishBackendTransmitEdge(*delta.mox);
+                m_transmitModel.applyChanges(delta);
+            });
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,

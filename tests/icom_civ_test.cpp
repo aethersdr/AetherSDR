@@ -59,10 +59,6 @@ static void testFraming()
     check(bytesAre(rxAntOn,
                    {0xFE, 0xFE, 0xB6, 0xE0, 0x12, 0x00, 0x01, 0xFD}),
           "IC-7300MK2 RX-ANT enable frame");
-    const auto rxAntRead = cmdReadRxAntenna(0xB6);
-    check(bytesAre(rxAntRead,
-                   {0xFE, 0xFE, 0xB6, 0xE0, 0x12, 0x00, 0xFD}),
-          "IC-7300MK2 RX-ANT read frame");
     const auto parsedRxAnt = parseFrame(rxAntOn);
     check(parsedRxAnt && parsedRxAnt->hasSub && parsedRxAnt->sub == 0x00
               && parsedRxAnt->data == std::vector<std::uint8_t>{0x01},

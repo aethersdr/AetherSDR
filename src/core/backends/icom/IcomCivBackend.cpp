@@ -278,6 +278,12 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    // TUNE temporarily replaces the ordinary RF-power setpoint. Restore it
+    // while the command path still exists; clearing the sentinel first left
+    // the physical radio at tune power after an operator disconnect.
+    if (m_tuning && m_session && m_connected)
+        setTune(false, m_preTuneTxPowerPercent);
+
     for (QTimer** t : {&m_meterTimer, &m_linkTimer}) {
         if (*t) {
             (*t)->stop();
@@ -388,15 +394,6 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // The attenuator is NOT sub-addressed, so it needs its own read rather than
     // a slot in the loop above.
     m_session->sendCiv(cmdReadAttenuator(m_session->civAddress()));
-    if (m_model && m_model->civAddress == 0xB6) {
-        // Live IC-7300MK2 firmware answers the guide's read form (12 00) with
-        // bare FB rather than 12 00 <state>. Do not poll an ambiguous command:
-        // restore the last explicit selection and make hardware + UI agree.
-        m_rxAntennaExternal = IcomSettings::rxAntennaExternal();
-        m_session->sendCiv(cmdSetRxAntenna(m_session->civAddress(),
-                                           m_rxAntennaExternal));
-    }
-
     // RIT / XIT and the antenna tuner. All four were write-only: the controls
     // opened at OUR defaults, so an operator who set RIT on the radio and
     // reconnected saw zero on a rig that was still offset.
@@ -445,8 +442,9 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
                                       QStringLiteral("RX-ANT")};
         s.txAntennaList = QStringList{QStringLiteral("ANT1")};
         s.txAntenna = QStringLiteral("ANT1");
-        s.rxAntenna = m_rxAntennaExternal
-            ? QStringLiteral("RX-ANT") : QStringLiteral("ANT1");
+        // The documented read form returns only FB on live B6 firmware, so no
+        // current selection is claimed here. A user selection is optimistic
+        // for this session; reconnect never replays client-owned state.
     }
     emit sliceChanged(sliceId(), s);
 
@@ -968,25 +966,6 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         return;
     }
 
-    case cmd::kRxAntenna: {
-        if (!frame.hasSub || frame.sub != 0x00 || frame.data.empty()
-            || !m_model || m_model->civAddress != 0xB6)
-            return;
-        const QString antenna = frame.data[0] != 0
-            ? QStringLiteral("RX-ANT") : QStringLiteral("ANT1");
-        m_rxAntennaExternal = frame.data[0] != 0;
-        if (IcomSettings::rxAntennaExternal() != m_rxAntennaExternal)
-            IcomSettings::setRxAntennaExternal(m_rxAntennaExternal);
-        SliceDelta d;
-        d.rxAntennaList = QStringList{QStringLiteral("ANT1"),
-                                      QStringLiteral("RX-ANT")};
-        d.rxAntenna = antenna;
-        emit sliceChanged(sliceId(), d);
-        emit panAntennaListChanged(panId(), *d.rxAntennaList);
-        emit panRxAntennaChanged(panId(), antenna);
-        return;
-    }
-
     case cmd::kSetting: {
         // 1A 05 <item hi> <item lo> <value>
         if (!frame.hasSub || frame.sub != 0x05 || frame.data.size() < 3)
@@ -1273,7 +1252,9 @@ void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
         return;
     // Tell the scheduler a real command just went out, so metering yields and
     // the command is not stuck behind a queue of polls.
-    m_meters.noteUserCommand(QDateTime::currentMSecsSinceEpoch());
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_meters.noteUserCommand(now);
+    m_controlPollQuietUntilMs = now + kControlPollQuietMs;
     traceCiv(/*outbound=*/true, frame);
     // Record WHICH registry row this frame belongs to. Byte 4 is the command and
     // byte 5 the subcommand when the row has one — the same layout buildFrame
@@ -1578,7 +1559,6 @@ void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)
     const bool external = antenna.compare(QStringLiteral("RX-ANT"),
                                           Qt::CaseInsensitive) == 0;
     m_rxAntennaExternal = external;
-    IcomSettings::setRxAntennaExternal(external);
     sendUserCommand(cmdSetRxAntenna(m_session ? m_session->civAddress() : 0xB6,
                                     external));
 }
@@ -1893,7 +1873,8 @@ void IcomCivBackend::noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool ha
         // this control is set to" — the half that does not require the operator
         // to have touched it. Only sendCiv-issued connect reads reach here;
         // they are the reads whose answers populate the mirrors.
-        m_controlsValueKnown.insert(id);
+        if (c.wiring != icom::Wiring::SendOnly)
+            m_controlsValueKnown.insert(id);
     });
 }
 
@@ -2544,32 +2525,46 @@ void IcomCivBackend::onLinkTick()
     // warning that repeats every second is one nobody reads.
     if (!m_connected)
         return;
-    // CI-V transceive does not announce most knob/switch changes. Poll a
-    // rotating group so front-panel state reaches the UI without flooding the
-    // command stream shared with tuning and meters.
-    const std::uint8_t addr = m_session->civAddress();
-    switch (m_controlPollPhase++ % 3) {
-    case 0:
-        for (std::uint8_t which : {level::kRf, level::kRfPower,
-                                   level::kMicGain, level::kMonitor})
-            m_session->sendCiv(cmdReadLevel(addr, which));
-        break;
-    case 1:
-        for (std::uint8_t which : {level::kVoxGain, level::kNotchPos,
-                                   level::kNrLevel, level::kNbLevel})
-            m_session->sendCiv(cmdReadLevel(addr, which));
-        for (std::uint8_t fn : {func::kMonitorFn, func::kVox,
-                                func::kAutoNotch, func::kManualNotch,
-                                func::kNoiseReduce, func::kNoiseBlanker})
-            m_session->sendCiv(cmdReadFunction(addr, fn));
-        break;
-    default:
-        m_session->sendCiv(cmdReadFunction(addr, func::kPreamp));
-        m_session->sendCiv(cmdReadAttenuator(addr));
-        m_session->sendCiv(cmdReadTuner(addr));
-        break;
-    }
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    // CI-V transceive does not announce most knob/switch changes. Poll small,
+    // rotating groups so front-panel state reaches the UI without a ten-frame
+    // burst, and yield briefly after operator writes so reconciliation cannot
+    // immediately overtake intent. RFC #4983 centralizes this policy later.
+    const std::uint8_t addr = m_session->civAddress();
+    if (now >= m_controlPollQuietUntilMs) {
+        switch (m_controlPollPhase++ % 6) {
+        case 0:
+            m_session->sendCiv(cmdReadLevel(addr, level::kRf));
+            if (!m_tuning)
+                m_session->sendCiv(cmdReadLevel(addr, level::kRfPower));
+            m_session->sendCiv(cmdReadLevel(addr, level::kMicGain));
+            break;
+        case 1:
+            for (std::uint8_t which : {level::kMonitor, level::kVoxGain,
+                                       level::kNotchPos})
+                m_session->sendCiv(cmdReadLevel(addr, which));
+            break;
+        case 2:
+            for (std::uint8_t which : {level::kNrLevel, level::kNbLevel})
+                m_session->sendCiv(cmdReadLevel(addr, which));
+            for (std::uint8_t fn : {func::kMonitorFn, func::kVox})
+                m_session->sendCiv(cmdReadFunction(addr, fn));
+            break;
+        case 3:
+            for (std::uint8_t fn : {func::kAutoNotch, func::kManualNotch,
+                                    func::kNoiseReduce, func::kNoiseBlanker})
+                m_session->sendCiv(cmdReadFunction(addr, fn));
+            break;
+        case 4:
+            m_session->sendCiv(cmdReadFunction(addr, func::kPreamp));
+            m_session->sendCiv(cmdReadAttenuator(addr));
+            break;
+        default:
+            m_session->sendCiv(cmdReadTuner(addr));
+            break;
+        }
+    }
     if (m_lastInboundCivAtMs <= 0) {
         m_lastInboundCivAtMs = now;   // start the clock at the first tick
         return;

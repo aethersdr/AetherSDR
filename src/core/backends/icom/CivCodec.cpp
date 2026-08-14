@@ -503,11 +503,6 @@ std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
     return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
 }
 
-std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to)
-{
-    return buildFrameSub(to, cmd::kRxAntenna, 0x00);
-}
-
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)
 {
     return buildFrameSub(to, cmd::kTuneOffset, sub);

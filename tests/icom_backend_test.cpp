@@ -717,7 +717,24 @@ int main(int argc, char** argv)
         check(h.values.contains(QStringLiteral("model")), "the resolved model is reported");
     }
 
+    // An operator disconnect while TUNE is active must unkey and restore the
+    // borrowed RF-power register before the serial command path disappears.
+    backend.setTxPower(37);
+    QTest::qWait(80);
+    backend.setTune(true, 10);
+    QTest::qWait(80);
+    radio.clearCivLog();
     backend.disconnectRadio();
+    QTest::qWait(100);
+    const auto restoreOnDisconnect = std::find_if(
+        radio.civCommands().begin(), radio.civCommands().end(),
+        [](const CivFrame& f) {
+            return f.cmd == cmd::kLevel && f.hasSub
+                && f.sub == level::kRfPower
+                && decodeLevel(f.data).value_or(-1) >= 93;
+        });
+    check(restoreOnDisconnect != radio.civCommands().end(),
+          "disconnect during TUNE restores ordinary RF power before teardown");
     check(!backend.isConnected(), "the backend disconnects cleanly");
 
     if (g_failures == 0)

@@ -527,6 +527,7 @@ private:
     QStackedWidget* m_tabStack{nullptr};
     QWidget*        m_tabBar{nullptr};
     int m_activeTab{-1};
+    int m_daxTabIndex{-1};
     QPointer<QWidget> m_shadowWidget;
 
     // Tab content widgets

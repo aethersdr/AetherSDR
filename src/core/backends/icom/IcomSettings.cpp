@@ -12,8 +12,7 @@ namespace {
 
 // Single nested-JSON key holding this backend's config (Principle V).
 // Shape: {"username":string, "lastHost":string, "controlPort":int,
-//         "serialPort":int, "audioPort":int, "civAddress":int,
-//         "rxAntennaExternal":bool}
+//         "serialPort":int, "audioPort":int, "civAddress":int}
 //
 // Deliberately NO password field. See the header.
 const QString kRootKey = QStringLiteral("Icom");
@@ -24,7 +23,6 @@ constexpr const char* kFieldControlPort = "controlPort";
 constexpr const char* kFieldSerialPort  = "serialPort";
 constexpr const char* kFieldAudioPort   = "audioPort";
 constexpr const char* kFieldCivAddress  = "civAddress";
-constexpr const char* kFieldRxAntennaExternal = "rxAntennaExternal";
 
 // Validate a port on the way OUT, not just on the way in. A hand-edited or
 // truncated settings file must not be able to command a nonsense port
@@ -131,18 +129,6 @@ void IcomSettings::setCivAddress(std::uint8_t address)
 {
     QJsonObject obj = readObj();
     obj[QLatin1String(kFieldCivAddress)] = int(address);
-    writeObj(obj);
-}
-
-bool IcomSettings::rxAntennaExternal()
-{
-    return readObj().value(QLatin1String(kFieldRxAntennaExternal)).toBool(false);
-}
-
-void IcomSettings::setRxAntennaExternal(bool external)
-{
-    QJsonObject obj = readObj();
-    obj[QLatin1String(kFieldRxAntennaExternal)] = external;
     writeObj(obj);
 }
 

@@ -75,13 +75,12 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
-    if (assign(d.mox, m_mox)) {
-        changed = true;
-        // A backend status edge is authoritative TX state, not merely a value
-        // to retain for later. This is how hardware PTT / VOX reaches every
-        // consumer that gates live TX presentation, including the power meter.
-        setTransmitting(m_mox);
-    }
+    // Backend MOX is observed radio state, not this client's transmit intent.
+    // RadioModel publishes it on radioTransmittingChanged for presentation
+    // consumers.  Routing it through setTransmitting() would emit moxChanged
+    // and could open this client's mic/DAX/serial-PTT paths when hardware PTT
+    // or another network client keys the radio.
+    changed |= assign(d.mox, m_mox);
     changed |= assign(d.transmitFreq, m_transmitFreq);
 
     // ── Mic / monitor / processor ──

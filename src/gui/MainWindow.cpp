@@ -2232,9 +2232,13 @@ MainWindow::MainWindow(QWidget* parent)
         // what the readout may claim. A backend that declares the rail but has
         // not yet received a meter definition is still not entitled to print a
         // number. Same separation as the DAX capability and its crash guard.
+        const auto& meters = m_radioModel.meterModel();
         m_supplyVoltLabel->setText(
-            m_radioModel.meterModel().hasSupplyVoltage()
-                ? QString("Vd %1 V").arg(supplyVolts, 0, 'f', 2)
+            meters.hasSupplyVoltage()
+                ? QStringLiteral("%1%2 V")
+                      .arg(meters.hasPaCurrentMeter()
+                               ? QStringLiteral("Vd ") : QString(),
+                           QString::number(supplyVolts, 'f', 2))
                 : QStringLiteral("—"));
 
         // Update station label (nickname arrives via status after connect)

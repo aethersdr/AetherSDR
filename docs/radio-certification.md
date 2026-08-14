@@ -306,6 +306,12 @@ mic controls, monitor, VOX, notch, preamp, attenuator, and tuner state need a
 bounded periodic poll. Allow at least two poll periods before declaring an
 external-change failure.
 
+A send-only control is different. The IC-7300MK2 RX-ANT command is shown
+optimistically after an operator click because live firmware acknowledges the
+documented read form with bare `FB` instead of returning state. Certification
+must not call that a subscription or a restart-persistence pass: reconnect may
+list ANT1/RX-ANT, but it must neither claim a selection nor replay client state.
+
 For 0000–0255 percentage controls, compute expected wire values independently
 using the radio display contract: write `ceil(percent * 255 / 100)`, read
 `floor(raw * 100 / 255)`. Do not reuse that conversion for meters. Meter values

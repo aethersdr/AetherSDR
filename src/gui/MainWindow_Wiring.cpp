@@ -1528,8 +1528,18 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
         // Absent SWR keeps the widget's idle value rather than a stale ratio.
         vfo->setTxSwr(swrValid ? swr : 0.0f);
     });
+    auto updateVfoTxGate = [this, vfo]() {
+        const auto& tx = m_radioModel.transmitModel();
+        vfo->setTransmitting(tx.isTransmitting() || tx.isTuning()
+                             || m_radioModel.isRadioTransmitting());
+    };
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            vfo, &VfoWidget::setTransmitting);
+            vfo, [updateVfoTxGate](bool) { updateVfoTxGate(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+            vfo, [updateVfoTxGate](bool) { updateVfoTxGate(); });
+    connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
+            vfo, [updateVfoTxGate](bool) { updateVfoTxGate(); });
+    updateVfoTxGate();
     connect(&m_radioModel, &RadioModel::antListChanged,
             vfo, &VfoWidget::setAntennaList);
 }
@@ -6204,8 +6214,19 @@ void MainWindow::wireMeters()
     // sample and reset the hold on un-key. (#2561)
     connect(&m_radioModel.meterModel(), &MeterModel::txPeakChanged,
             m_appletPanel->txApplet(), &TxApplet::updatePeakPower);
+    auto updateTxMeterGate = [this]() {
+        const auto& tx = m_radioModel.transmitModel();
+        m_appletPanel->txApplet()->setTransmitting(
+            tx.isTransmitting() || tx.isTuning()
+            || m_radioModel.isRadioTransmitting());
+    };
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            m_appletPanel->txApplet(), &TxApplet::setTransmitting);
+            this, [updateTxMeterGate](bool) { updateTxMeterGate(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+            this, [updateTxMeterGate](bool) { updateTxMeterGate(); });
+    connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
+            this, [updateTxMeterGate](bool) { updateTxMeterGate(); });
+    updateTxMeterGate();
     m_appletPanel->txApplet()->setTransmitModel(&m_radioModel.transmitModel());
     m_appletPanel->txApplet()->setTunerModel(&m_radioModel.tunerModel());
     // ATU right-click → pre-tune dialog needs RadioModel for slice access
