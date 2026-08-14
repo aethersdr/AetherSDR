@@ -38,6 +38,10 @@
             "spectrum": "{color.gray.950}",
             "app":      "{color.gray.900}"
           },
+          "canvas": {
+            "background": "#7b7b7c",
+            "dots":       "#501a2a3a"
+          },
           "accent":         "{color.blue.500}",
           "accent.bright":  "{color.blue.300}",
           "accent.dim":     "{color.blue.700}",

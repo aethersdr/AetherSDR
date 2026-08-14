@@ -4,6 +4,11 @@ Thanks for your interest in AetherSDR! We're building a native SmartSDR
 client for FlexRadio on Linux, macOS, and Windows. Community contributions
 are welcome.
 
+This file is the **policy** side of contributing: what we accept, who
+reviews what, and the ground rules. The **operational** side — architecture,
+protocol, coding conventions, commit signing — lives in
+[`docs/DEVELOPER-GUIDE.md`](docs/DEVELOPER-GUIDE.md).
+
 See [GOVERNANCE.md](GOVERNANCE.md) for project roles, decision-making, and
 the RFC process for significant changes.
 
@@ -40,7 +45,7 @@ the RFC process for significant changes.
 
 **Development tool:** AetherSDR is developed using [Claude Code](https://claude.com/claude-code)
 as the primary development environment. We **strongly encourage all contributors to use
-Claude Code** — it has full codebase context via `CLAUDE.md` and naturally produces code
+Claude Code** — it has full codebase context via `AGENTS.md` and naturally produces code
 that matches our conventions.
 
 1. **Fork the repo** and create a feature branch from `main`.
@@ -60,201 +65,26 @@ that matches our conventions.
    honors (e.g. `Principle V.` for nested-JSON persistence or
    `Principle X.` for verified-base patch generation).
 3. **One issue per PR.** Keep changes focused and reviewable.
-4. **Follow the coding conventions** below.
+4. **Follow the coding conventions** in
+   [`docs/DEVELOPER-GUIDE.md`](docs/DEVELOPER-GUIDE.md#coding-conventions).
 5. **Test your changes** against a real FlexRadio if possible.
-6. **Sign your commits** (required by branch protection — SSH or GPG;
-   see [Commit Signing](#commit-signing) below).
+6. **Sign your commits** (required by branch protection — SSH or GPG; see
+   [Commit Signing](docs/DEVELOPER-GUIDE.md#commit-signing)).
 7. **Open a pull request** against `main` with a clear description.
 
 ---
 
-## Project Architecture
+## Developer documentation
 
-The full architecture is documented in [CLAUDE.md](CLAUDE.md) including
-the complete file tree, data pipelines, thread architecture (12 threads),
-protocol specification, and implementation patterns. Read it before making
-changes.
+Everything you need to actually write the code:
 
-### Key Patterns
-
-- **Model → Radio**: Model setters emit `commandReady(cmd)` →
-  `RadioModel` sends to radio via TCP.
-- **Radio → Model**: Status messages (`S` lines) → `RadioModel::onStatusReceived()`
-  → routes to model's `applyStatus()`.
-- **Model → GUI**: Models emit signals → GUI widgets update via slots.
-- **GUI → Model**: GUI widgets call model setters. Use `QSignalBlocker` or
-  `m_updatingFromModel` guards to prevent echo loops.
-- **Settings**: Use `AppSettings`, **never** `QSettings`. Keys are PascalCase.
-  Booleans are `"True"` / `"False"` strings. The store is SQLite
-  (`AetherSDR.db`, RFC #4603) — never include `sqlite3.h` outside
-  `SettingsDatabase.cpp`, and **never put a credential in the settings
-  store**: QtKeychain only (see AGENTS.md "Settings Persistence").
-- **Settings authority is capability-shaped** (RFC #4603): on a radio that
-  persists its own state (Flex), never persist or override radio-managed
-  settings client-side (frequency, mode, filter, AGC, TX power, per-pan
-  state, …) and never write a radio-echoed status value into a setter that
-  also persists (the recurring #4261 anti-pattern). On a radio that persists
-  NOTHING (HL2), the client is its memory — but only for the domains the
-  backend declares in `RadioCapabilities::clientSettingsDomains`, and only
-  through `RadioStateMemory`'s document, never flat `AppSettings` keys or
-  ad-hoc paths. See AGENTS.md "Settings Authority Policy" for the full rules.
-- **Radio-scoped config** goes in `radio_settings` feature documents via
-  `RadioModel::settingsScope()` — one versioned JSON document per feature
-  (Principle V), atomic whole-document writes, write failures surfaced. See
-  AGENTS.md "Radio-Scoped Feature Documents".
-
-### Working in MainWindow
-
-`MainWindow` was a ~19,500-line monolith; **#3351 decomposed it** into one class
-spread across `MainWindow.cpp` + a family of nine `MainWindow_*.cpp` sibling TUs
-(controllers, menus, shortcuts, wiring, digital modes, SWR sweep, spots,
-session, DSP applets). It's still one class — the siblings hold `MainWindow::`
-method bodies.
-
-**Don't add new feature code to `MainWindow.cpp`.** Put a feature's
-lifecycle/handlers in the matching sibling TU, signal wiring in
-`MainWindow_Wiring.cpp`, and reserve `MainWindow.{h,cpp}` for genuinely
-cross-cutting code. The full TU map and a "where does my change go?" table are in
-[`docs/architecture/mainwindow-decomposition.md`](docs/architecture/mainwindow-decomposition.md)
-— read it before touching anything named `MainWindow*`.
-
-### Thread Architecture
-
-| Thread | Components |
-|--------|-----------|
-| **Main** | GUI rendering, RadioModel, all sub-models, user input |
-| **Connection** | RadioConnection (TCP 4992 I/O) |
-| **Audio** | AudioEngine (RX/TX audio; NR2/RN2/NR4/DFNR/BNR/MNR DSP) |
-| **Network** | PanadapterStream (VITA-49 UDP parsing) |
-| **ExtControllers** | FlexControl, MIDI, SerialPort |
-| **Spot** | DX Cluster, RBN, WSJT-X, POTA, FreeDV clients |
-
-Cross-thread communication uses auto-queued signals exclusively.
-
-### Multi-Flex (Multi-Client) Safety
-
-When another client (SmartSDR, Maestro) is connected, filter all status
-updates and VITA-49 packets by `client_handle`. Do not process data from
-other clients' slices or panadapters.
-
----
-
-## SmartSDR Protocol Reference
-
-ASCII over TCP (port 4992) + VITA-49 binary over UDP.
-
-| Prefix | Direction | Meaning |
-|--------|-----------|---------|
-| `V` | Radio→Client | Firmware version |
-| `H` | Radio→Client | Client handle (hex) |
-| `C` | Client→Radio | Command: `C<seq>\|<cmd>\n` |
-| `R` | Radio→Client | Response: `R<seq>\|<hex_code>\|<body>` |
-| `S` | Radio→Client | Status: `S<handle>\|<object> key=val ...` |
-| `M` | Radio→Client | Informational message |
-
-### FlexLib Reference
-
-The FlexLib C# source at `~/build/FlexLib/` is the authoritative protocol
-reference. Use it to understand behavior, but **write clean-room C++** —
-do not copy-paste.
-
-Key files: `Slice.cs`, `Radio.cs`, `Panadapter.cs`, `Transmit.cs`,
-`Meter.cs`, `APD.cs`, `TNF.cs`, `CWX.cs`, `DVK.cs`.
-
----
-
-## Coding Conventions
-
-### C++ Style
-
-- **C++20 / Qt6** — modern idioms (`std::ranges`, `auto`, structured bindings).
-- **RAII everywhere.** No naked `new`/`delete`. Use Qt parent-child ownership.
-- **Qt signals/slots** for cross-object communication.
-- **`QSignalBlocker`** to prevent feedback loops.
-- **Keep classes small** and single-responsibility.
-
-### Naming
-
-- Classes: `PascalCase` (`SliceModel`, `SpectrumWidget`)
-- Methods: `camelCase` (`setFrequency()`, `applyStatus()`)
-- Members: `m_camelCase` (`m_frequency`, `m_sliceId`)
-- Signals: past tense (`frequencyChanged`, `commandReady`)
-- AppSettings keys: `PascalCase` (`LastConnectedRadioSerial`)
-
-### Widget Guidelines
-
-- All GUI follows the dark theme: `#0f0f1a` background, `#c8d8e8` text,
-  `#00b4d8` accent, `#203040` borders.
-- Use `GuardedSlider` (from `GuardedSlider.h`) instead of `QSlider` — it
-  prevents wheel events from leaking to parent widgets.
-- Use `GuardedComboBox` for combo boxes in scrollable areas.
-- Disable `autoDefault` on QPushButtons inside QDialogs.
-
-### Optional Dependencies
-
-Features gated behind compile-time flags:
-
-| Flag | Package | Feature |
-|------|---------|---------|
-| `HAVE_SERIALPORT` | `Qt6::SerialPort` | FlexControl, serial PTT/CW |
-| `HAVE_WEBSOCKETS` | `Qt6::WebSockets` | FreeDV Reporter, TCI server |
-| `HAVE_KEYCHAIN` | `Qt6Keychain` | SmartLink credential persistence |
-| `HAVE_MIDI` | Bundled RtMidi | MIDI controller mapping |
-| `HAVE_RADE` | Bundled RADE/Opus | FreeDV digital voice |
-| `HAVE_SPECBLEACH` | libspecbleach (clang-cl on Win) | NR4 spectral noise reduction |
-| `HAVE_DFNR` | Bundled DeepFilterNet3 | DFNR neural noise reduction |
-| `HAVE_BNR` | NVIDIA NIM container | GPU noise removal |
-| `HAVE_MQTT` | Bundled libmosquitto | MQTT applet |
-
-Use `#ifdef HAVE_*` guards. Features must degrade gracefully when unavailable.
-
-### Commit Messages
-
-- Imperative mood: "Add band stacking" not "Added band stacking".
-- First line under 72 characters.
-- Reference issues: `Fixes #42` or `Closes #42`.
-
-### Commit Signing
-
-All commits to `main` must be signed (branch protection enforces this).
-SSH and GPG signing are both supported; **SSH signing is recommended**
-if you already push via SSH because it reuses your existing key.
-
-**Full setup guide:** [`docs/COMMIT-SIGNING.md`](docs/COMMIT-SIGNING.md)
-— covers Windows, macOS, Linux, WSL, and Raspberry Pi OS, with both
-SSH and GPG paths. **The top of that doc has explicit AI-assistant
-instructions**, so if you'd rather have your AI coding assistant walk
-you through setup, just tell it
-*"read `docs/COMMIT-SIGNING.md` and help me set up commit signing"*
-and it will follow the algorithm there.
-
-#### Quick reference (SSH signing, the simple path)
-
-```bash
-# 1. Confirm or generate an SSH key
-ls -la ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519 -C "you@example.com"
-
-# 2. Configure git to sign with it
-git config --global gpg.format ssh
-git config --global user.signingkey ~/.ssh/id_ed25519.pub
-git config --global commit.gpgsign true
-git config --global tag.gpgsign true
-git config --global user.email "you@example.com"   # must match GitHub
-
-# 3. Register the key on GitHub
-cat ~/.ssh/id_ed25519.pub
-# Paste at GitHub > Settings > SSH and GPG keys > New SSH key
-# Set Key Type: "Signing Key" (NOT Authentication — that's a different
-# role on the same key; you may need both entries for the same pubkey)
-
-# 4. Verify
-git commit --allow-empty -m "signing test"
-git log --show-signature -1   # expect "Good \"git\" signature"
-```
-
-For GPG, Windows-specific tweaks, Touch ID integration on macOS, or
-troubleshooting "Unverified" badges, see
-[`docs/COMMIT-SIGNING.md`](docs/COMMIT-SIGNING.md).
+| Document | Covers |
+|---|---|
+| [`docs/DEVELOPER-GUIDE.md`](docs/DEVELOPER-GUIDE.md) | Project architecture, thread model, `MainWindow` rules, SmartSDR protocol reference, C++/Qt conventions, optional-dependency flags, commit signing |
+| [`docs/PR-WORKFLOW.md`](docs/PR-WORKFLOW.md) | Draft-PR conventions, stale-branch policy, recovering from a red `main` |
+| [`AGENTS.md`](AGENTS.md) | The canonical, exhaustive project guide — the source every AI tool reads |
+| [`docs/COMMIT-SIGNING.md`](docs/COMMIT-SIGNING.md) | Full cross-platform signing setup (SSH and GPG) |
+| [`docs/first-contribution-cheatsheet.md`](docs/first-contribution-cheatsheet.md) | Beginner's on-ramp |
 
 ---
 
@@ -267,16 +97,22 @@ GitHub on every tier — your own PR always needs review from someone else.
 | Tier | Paths | Who can approve |
 |---|---|---|
 | **Source (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking) |
-| **Infrastructure (Tier 2)** | `tests/`, `docs/`, `*.md`, `CMakeLists.txt`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat) |
-| **Maintainer-only (Tier 1)** | governance/security docs (`CONSTITUTION.md`, `GOVERNANCE.md`, `CONTRIBUTING.md`, `SECURITY*`, `LICENSE`, `ROADMAP.md`, `CODE_OF_CONDUCT.md`), `.github/CODEOWNERS`, `.github/codeql/`, the release signing/publish + CodeQL-scan workflows (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`), and the AI-instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/commands/`) | `@aethersdr/maintainers` (@ten9876) |
+| **Infrastructure (Tier 2)** | `tests/`, `docs/`, `*.md` (including `README.md`, `CHANGELOG.md`, `ROADMAP.md`, and the AI-instruction files `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `.github/copilot-instructions.md`), `.claude/commands/`, `CMakeLists.txt`, `THIRD_PARTY_LICENSES`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat, @rfoust) |
+| **Maintainer-only (Tier 1)** | Governance docs (`CONSTITUTION.md` **and its canonical copy `.specify/memory/constitution.md`**, `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`), security/compliance (`SECURITY*`, `.github/CODEOWNERS`, `.github/codeql/`, `docs/RELEASE-SIGNING-KEY.pub.asc`), and the workflows that hold release secrets, feed bytes into a signed artifact, or form part of the CodeQL scanner's trust chain (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`) | `@aethersdr/maintainers` (@ten9876) |
 
-The maintainer-only tier covers *governance and security-critical* paths:
-project policy and governance docs, the CODEOWNERS file and CodeQL config, the
-release signing/publish pipeline, and the AI-instruction files. Per
-[CLAUDE.md](CLAUDE.md#autonomous-agent-boundaries), changes here need
-maintainer eyes regardless of who wrote them. (The routine CI workflows and the
-build config sit at Tier 2 so day-to-day CI iteration isn't maintainer-gated;
-only the security-sensitive workflows are carved back to Tier 1.)
+The maintainer-only tier is deliberately narrow: it covers the rules of the
+project and the paths that can compromise a signed release. Everything that
+is *documentation about how to build the thing* — including the AI-instruction
+files — sits at Tier 2, so day-to-day iteration isn't maintainer-gated.
+
+`AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` are Tier 2 because their content is
+operational: architecture, build steps, style guide, protocol notes. The policy
+those files must not contradict lives in [`CONSTITUTION.md`](CONSTITUTION.md)
+and [`GOVERNANCE.md`](GOVERNANCE.md), which remain Tier 1 and outrank them.
+
+The routine CI workflows and build config sit at Tier 2 as well; only the
+security-sensitive workflows — the ones that hold release secrets or feed bytes
+into a signed artifact — are carved back to Tier 1.
 
 `MainWindow` is **not** maintainer-gated. With the #3351 decomposition
 complete, the core **`MainWindow.{h,cpp}`** and its extracted **`MainWindow_*.cpp`
@@ -291,52 +127,11 @@ tier simply means low-risk changes (test additions, documentation tweaks,
 dependency bumps, template updates) need an infrastructure owner rather than a
 maintainer.
 
-### Draft PR conventions
+For the mechanics around this gate — draft-PR conventions, the stale-branch
+policy, and how to recover a red `main` — see
+[`docs/PR-WORKFLOW.md`](docs/PR-WORKFLOW.md).
 
-Draft status carries different meaning depending on who opened the PR:
-
-- **Human-authored draft** — work-in-progress; reviewers should skip
-  these until the author marks Ready for Review.
-- **`@AetherClaude` / `aethersdr-agent[bot]` draft** — auto-generated
-  from an issue and **awaiting human review**. The draft state holds
-  the PR back from auto-merge; it is not "WIP". Treat it like a
-  ready-to-review PR for triage purposes.
-
-Triage scripts and review agents should include bot drafts in their
-sweep and skip only human drafts.
-
-### Stale-branch policy
-
-We **do not** require PR branches to be up to date with `main` before
-merging. The reasoning:
-
-- Squash-merge already runs a fresh three-way merge against `main`, so
-  textual conflicts are caught at merge time regardless of branch age.
-- Forcing every PR to rebase after every other merge cost ~15–25 min
-  of CI per stale PR per batch day, which adds up fast when AetherClaude
-  is processing a queue of triaged issues.
-- Post-merge CI on `main` runs on every commit (see
-  [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and
-  [`.github/workflows/codeql.yml`](.github/workflows/codeql.yml)), so
-  semantic conflicts that slip through three-way merge are caught on
-  the merged result within ~10 min.
-
-### Recovering from a red main
-
-If post-merge CI on `main` fails after a merge:
-
-1. Check the failing workflow run linked from the email/GitHub
-   notification. Identify the offending merge commit.
-2. **Prefer fix-forward** if the issue is small (one or two file edits):
-   open a normal PR titled `fix(ci): repair main after <SHA>` and let
-   it land through the usual flow.
-3. **Use revert** if fix-forward isn't obvious or the regression is
-   broad: `git revert -m 1 <merge-sha>` on a new branch, push, open a
-   PR, merge. Never force-push `main`.
-4. For agent-authored regressions: re-open the source issue, remove
-   the `aetherclaude-eligible` label, then re-add it. The orchestrator's
-   State Override C (`failed` → `implement` re-entry) creates a fresh
-   worktree from current `main` and retries the implementation.
+---
 
 ## What We Will Not Accept
 
@@ -369,29 +164,19 @@ plain English, and the AI generates a well-structured GitHub issue.
 
 ## Notes for AI Agents
 
-Read [CLAUDE.md](CLAUDE.md) first — it is the authoritative project context.
+Read [`AGENTS.md`](AGENTS.md) first — it is the authoritative project context
+for every AI tool. The task-to-file quick reference and the AI-to-AI
+coordination protocol are in
+[`docs/DEVELOPER-GUIDE.md`](docs/DEVELOPER-GUIDE.md#notes-for-ai-agents).
 
-### Quick reference
+`AGENTS.md` is documentation, not policy: where it appears to conflict with
+[`CONSTITUTION.md`](CONSTITUTION.md) or [`GOVERNANCE.md`](GOVERNANCE.md),
+those files win, and the conflict is a bug in `AGENTS.md` worth reporting.
 
-| Task | Start here |
-|------|-----------|
-| New slice property | `SliceModel.h/.cpp` — getter/setter/signal, parse in `applyStatus()` |
-| New TX property | `TransmitModel.h/.cpp` — same pattern |
-| New GUI control | `RxApplet.cpp` for patterns, `VfoWidget.cpp` for tab panels |
-| New applet | Copy `EqApplet` as template, register in `AppletPanel` |
-| New overlay sub-menu | `SpectrumOverlayMenu.cpp` — `buildBandPanel()` as template |
-| New status object | `RadioModel::onStatusReceived()` — add routing |
-| New meter display | `MeterModel` parses all meters — wire to a gauge |
-| New Radio Setup tab | `RadioSetupDialog.cpp` — follow existing tab patterns |
-| New spot source | `DxClusterDialog.cpp` — follow existing tab patterns |
-| Protocol command | Check FlexLib for syntax, test with radio logs |
-
-### AI-to-AI coordination
-
-If your AI agent hits an issue requiring maintainer coordination, open a
-GitHub issue with: your analysis, relevant log output, code references,
-and proposed fix. The maintainer's Claude instance monitors issues and
-will respond.
+The limits on what an automated agent may change without a human deciding are
+defined in [`GOVERNANCE.md`](GOVERNANCE.md#ai-contributors) §AI Contributors,
+which is Tier 1. `AGENTS.md` §"Autonomous Agent Boundaries" elaborates them
+but may not widen them.
 
 ---
 

@@ -39,12 +39,22 @@ END = "<!-- END GENERATED VERB TABLE -->"
 # and aliases may be bare "x" or QStringLiteral("x"); either way the alias
 # spelling is the quoted string inside the {…} block. DOTALL so the help can
 # sit on the line after the aliases (7 verbs do this).
+# The help capture accepts ADJACENT STRING LITERALS ("a" "b" — how every long
+# help string in AutomationServer.cpp is written): the old single-literal
+# capture silently truncated six verbs' help at the first literal boundary,
+# and --check compared the doc against the same truncated render, so the gate
+# could never fail on that class of loss (PR #4964 review, K6OZY).
 _ADD_RE = re.compile(
     r'\badd\(\s*"(?P<name>[^"]+)"\s*,\s*'
     r'\{(?P<aliases>[^}]*)\}\s*,\s*'
-    r'"(?P<help>(?:[^"\\]|\\.)*)"',
+    r'(?P<help>"(?:[^"\\]|\\.)*"(?:\s*"(?:[^"\\]|\\.)*")*)',
     re.DOTALL,
 )
+
+
+def _join_literals(raw):
+    # "abc" "def"  ->  abcdef (per-literal unescape happens in _unescape)
+    return "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', raw, re.DOTALL))
 _ALIAS_RE = re.compile(r'"([^"]+)"')
 # Loose "there's a registration here" probe: just `add("name"`, independent of
 # the full-shape match above. Used to cross-check that the strict parser didn't
@@ -73,7 +83,8 @@ def extract_registry(cpp_path):
     verbs = []
     for m in _ADD_RE.finditer(src):
         aliases = _ALIAS_RE.findall(m.group("aliases"))
-        verbs.append((m.group("name"), aliases, _unescape(m.group("help"))))
+        verbs.append((m.group("name"), aliases,
+                      _unescape(_join_literals(m.group("help")))))
 
     parsed = {name for name, _, _ in verbs}
     sites = set(_NAME_RE.findall(src))

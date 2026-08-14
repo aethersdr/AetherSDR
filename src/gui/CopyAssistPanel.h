@@ -46,10 +46,19 @@ public:
     // The ↵ newline-on-silence toggle — exposed so the controller can apply the
     // themed applet-toggle style (panel stays ThemeManager-free).
     QPushButton* newlineButton() const { return m_newline; }
+    // The "Context" context-carry toggle (RFC #4818) — exposed so the controller
+    // can apply the themed applet-toggle style (panel stays ThemeManager-free).
+    QPushButton* contextCarryButton() const { return m_contextCarry; }
 
     // When on, each utterance (VAD end-of-speech) begins on a new line.
     void setNewlineOnSilence(bool on);
     bool newlineOnSilence() const { return m_newlineOnSilence; }
+
+    // Context-carry (RFC #4818) header toggle. setContextCarryChecked reflects the
+    // persisted state without re-emitting; setContextCarryAvailable greys it out
+    // on the non-whisper tiers whose backends can't honor it (with a tooltip).
+    void setContextCarryChecked(bool on);
+    void setContextCarryAvailable(bool available);
 
     // Decode-buffer size in milliseconds (1000–20000). The slider works in
     // whole seconds; setBufferMs rounds/clamps into range.
@@ -82,6 +91,7 @@ signals:
     void silenceMsChanged(int ms);
     void fontPxChanged(int px);
     void newlineOnSilenceChanged(bool on);
+    void contextCarryToggled(bool on);
 
 private:
     static QString colorForConfidence(float confidence);
@@ -96,6 +106,7 @@ private:
     QTextEdit* m_text = nullptr;
     QPushButton* m_enable = nullptr;   // checkable: "Enable" / "Disable"
     QPushButton* m_newline = nullptr;  // checkable ↵: newline on each silence
+    QPushButton* m_contextCarry = nullptr; // checkable: carry context across segments
     QPushButton* m_settings = nullptr; // ⚙: opens the modeless settings dialog
     QLabel* m_status = nullptr;
     QLabel* m_backlog = nullptr; // always-visible transcription backlog (seconds)

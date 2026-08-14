@@ -5,7 +5,8 @@ Before opening the PR, please:
 - Read AGENTS.md if this is your first contribution (or your AI tool's
   first contribution) — it has the conventions every contributor agent
   is expected to follow.
-- Read CONTRIBUTING.md for the commit-signing and branch-protection
+- Read CONTRIBUTING.md for contribution policy and the review tiers, and
+  docs/DEVELOPER-GUIDE.md for the commit-signing and branch-protection
   rules.
 - If you're an AI agent: claim the originating issue first by assigning
   yourself via `gh issue edit <N> --add-assignee <handle>`. Double-

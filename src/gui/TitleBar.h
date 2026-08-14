@@ -24,7 +24,20 @@ class TitleBar : public QWidget {
     Q_OBJECT
 
 public:
+    // The fixed height set on `this` in the constructor. Named so
+    // MainWindow can pass it as FramelessResizer's topMoveReserve without
+    // duplicating the literal — the two must stay in lockstep, or the edge-
+    // resize margin either overlaps the title bar (#4886) or leaves a dead
+    // strip below it.
+    static constexpr int kHeight = 32;
+
     explicit TitleBar(QWidget* parent = nullptr);
+
+    // Canvas mode replaces the applet panel with the workspace canvas, so
+    // the panel's dock/hide/pop-out icons hide with it (8600 field
+    // request) — offering controls for a panel that is not part of the
+    // shell invites arrangements the mode cannot honor.
+    void setAppletPanelControlsVisible(bool visible);
 
     // Embed the menu bar into the left side of the title bar
     void setMenuBar(QMenuBar* mb);

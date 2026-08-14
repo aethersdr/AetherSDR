@@ -81,6 +81,9 @@ public:
     // boundary isn't lost. 0 = off (the default). Opt-in.
     void setBoundaryOverlapMs(int ms);
     int boundaryOverlapMs() const;
+    // Context-carry (RFC #4818) has no control here — it lives on the panel
+    // header (CopyAssistPanel::contextCarryButton) so it can be toggled without
+    // opening this dialog.
 
 signals:
     void tierChanged(const QString& tierId);

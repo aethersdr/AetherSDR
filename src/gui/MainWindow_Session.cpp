@@ -25,6 +25,7 @@
 #include "AppletPanel.h"
 #include "ConnectedStationsDialog.h"
 #include "ConnectionPanel.h"
+#include "FloatingRestorePolicy.h"
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
@@ -50,6 +51,7 @@
 #include "DaxIqApplet.h"
 #include "TciApplet.h"
 #include "PanadapterStack.h"
+#include "workspace/WorkspaceController.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
 #include "models/PanadapterModel.h"
@@ -60,6 +62,8 @@
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
+
+#include <QStatusBar>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -560,6 +564,17 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
         dissolveAllSliceLinks(connected ? "radio connected" : "radio disconnected");
+    });
+    // A momentary-keying release that arrives while disconnected is discarded
+    // by the per-path isConnected() gates before their flag bookkeeping runs,
+    // so a key held across a disconnect strands its flag and eats the first
+    // press after reconnect (#4638). Release the whole family here instead of
+    // weakening those gates: the fail-safe no-ops when nothing is keyed, and
+    // its un-key requests are harmless on a radio that is already gone.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (!connected)
+            failSafeMomentaryKeyingToRx("radio-disconnect");
     });
     // Local microphone capture for a backend that MODULATES ON THE HOST.
     //
@@ -1697,9 +1712,9 @@ void MainWindow::wirePanLifecycle()
                         ? saved
                         : defaultPanLayoutForCount(panCount);
                     const QString floatingPanIds = AppSettings::instance()
-                        .value("FloatingPanIds", "").toString();
+                        .value(kFloatingPanIdsKey, "").toString();
                     m_panStack->rearrangeLayout(layoutId);
-                    AppSettings::instance().setValue("FloatingPanIds", floatingPanIds);
+                    AppSettings::instance().setValue(kFloatingPanIdsKey, floatingPanIds);
 
                     // Defensive re-push xpixels for all pans after layout settles.
                     // Covers race where radio hadn't finished pan init when first push arrived.
@@ -1718,7 +1733,20 @@ void MainWindow::wirePanLifecycle()
 
                 // Restore floating-pan state saved from the previous session.
                 // Runs for any pan count so a single floated pan is also restored.
-                m_panStack->restoreFloatingState();
+                //
+                // NOT while the workspace canvas is on (RFC #4887, maintainer
+                // ruling 2026-08-12): canvas mode owns placement, and replaying
+                // window-persistence floats under it hands the operator an
+                // uncontrollable always-above window that looks exactly like a
+                // broken canvas pan — stale FloatingPanIds from the pre-canvas
+                // era cost a full day of field debugging to identify. The
+                // restored pans have already arrived as canvas items at their
+                // slots by this point; popping out MANUALLY is untouched
+                // (decision 1 — pop-out stays), and the saved key is left
+                // alone so a canvas-off session still restores it.
+                if (!(m_workspaceController && m_workspaceController->isEnabled())) {
+                    m_panStack->restoreFloatingState();
+                }
             });
         }
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -1798,6 +1826,21 @@ void MainWindow::wirePanLifecycle()
     connect(m_panStack, &PanadapterStack::panDocked,
             this, [repushPanDimensions](const QString&) { repushPanDimensions(); });
 #endif
+
+    // The previous session died floating a panadapter, so this one came up
+    // docked rather than replaying the crash (#4617). Say so — otherwise the
+    // pop-out silently fails to return and looks like a second bug.
+    connect(m_panStack, &PanadapterStack::floatingRestoreAbandoned,
+            this, [this](int abandonedPanCount) {
+        // %n carries the count purely for plural agreement — phrased without a
+        // verb that has to agree, so the untranslated English reads correctly
+        // at 1 as well as at 2+.
+        statusBar()->showMessage(
+            tr("%n panadapter(s) restored docked — AetherSDR last closed "
+               "unexpectedly while popping out. Pop out again to retry.",
+               nullptr, abandonedPanCount),
+            15000);
+    });
 
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
@@ -1967,8 +2010,11 @@ void MainWindow::wireCatPorts()
 
     // TCI client count changes no longer auto-create/remove the audio stream.
     // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
-    // the stream overrode the user's explicit PC Audio toggle. Users who need
-    // TCI audio (WSJT-X) should enable PC Audio manually. (#1071)
+    // the stream overrode the user's explicit PC Audio toggle. TCI audio does
+    // not need PC Audio either: on Flex it uses DAX channels acquired by
+    // TciServer::ensureDaxForTci(), and on a host-modulating backend it arrives
+    // over the seam via backendSliceAudioFrameReady — neither path consults
+    // PcAudioEnabled, which gates only remote_audio_rx. (#1071, #1331)
 #endif
 
 }
@@ -2285,6 +2331,23 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
 
     if (!m_automation)
         m_automation = std::make_unique<AutomationServer>();
+
+    // dumpTree reports the status-bar message (#4864) by reading a generic
+    // dynamic property — core/ must not know the QStatusBar type
+    // (engine-boundary EB2).  The gui side owns the widget, and the mirror
+    // lives HERE, with the rest of the bridge wiring it serves (review m13:
+    // it was previously wired inside the workspace-canvas mount, which has
+    // no structural link to it).  Idempotent across re-wires: the property
+    // write is safe to connect once per server start.
+    if (!m_statusMessageMirrorWired) {
+        m_statusMessageMirrorWired = true;
+        connect(statusBar(), &QStatusBar::messageChanged, this,
+                [this](const QString& m) {
+                    statusBar()->setProperty("currentMessage", m);
+                });
+        statusBar()->setProperty("currentMessage",
+                                 statusBar()->currentMessage());
+    }
 
     m_automation->setRadioModel(&radioModel());  // for the get() verb
     m_automation->setAudioEngine(audioEngine());

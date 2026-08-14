@@ -39,6 +39,12 @@ ContainerWidget::ContainerWidget(const QString& id, const QString& title,
             this, &ContainerWidget::alwaysOnTopToggled);
     connect(m_titleBar, &ContainerTitleBar::dragStartRequested,
             this, &ContainerWidget::onTitleBarDragStart);
+    connect(m_titleBar, &ContainerTitleBar::canvasDragBegan,
+            this, &ContainerWidget::canvasDragBegan);
+    connect(m_titleBar, &ContainerTitleBar::canvasDragMoved,
+            this, &ContainerWidget::canvasDragMoved);
+    connect(m_titleBar, &ContainerTitleBar::canvasDragEnded,
+            this, &ContainerWidget::canvasDragEnded);
 }
 
 ContainerWidget::~ContainerWidget() = default;
@@ -134,7 +140,13 @@ void ContainerWidget::setDockMode(DockMode mode)
 {
     if (mode == m_dockMode) return;
     m_dockMode = mode;
-    if (m_titleBar) m_titleBar->setFloatingState(mode == DockMode::Floating);
+    if (m_titleBar) {
+        // Order matters: setFloatingState() repaints the docked/floating
+        // visuals, and setCanvasState() overrides them only when the new
+        // mode is Canvas.
+        m_titleBar->setFloatingState(mode == DockMode::Floating);
+        m_titleBar->setCanvasState(mode == DockMode::Canvas);
+    }
     // Re-apply the width policy to every body child for the new mode:
     // floating lifts width caps so content fills the window; docking
     // restores each child's original cap. (#3451)
@@ -150,11 +162,17 @@ void ContainerWidget::setDockMode(DockMode mode)
 void ContainerWidget::applyWidthPolicyTo(QWidget* child)
 {
     if (!child) return;
-    if (m_dockMode == DockMode::Floating) {
+    if (m_dockMode == DockMode::Floating || m_dockMode == DockMode::Canvas) {
         // Remember the docked cap once, then lift it so width-capped
         // applets fill the floating window instead of hugging the left
         // edge.  Uncapped content (maximumWidth == QWIDGETSIZE_MAX) is a
         // no-op here. (#3451)
+        //
+        // Canvas takes the same branch for the same reason: a canvas item is
+        // sized by the operator's rect, not by the panel's fixed column
+        // width, so a container that kept its docked cap would leave dead
+        // space to the right of its own content inside the rect the operator
+        // drew — the exact #3451 symptom, one placement mode over.
         if (!m_savedMaxWidths.contains(child))
             m_savedMaxWidths.insert(child, child->maximumWidth());
         child->setMaximumWidth(QWIDGETSIZE_MAX);
@@ -171,7 +189,11 @@ void ContainerWidget::restoreWidthPolicy(QWidget* child)
 
 void ContainerWidget::onTitleBarFloatToggle()
 {
-    if (isFloating()) emit dockRequested();
+    // On the canvas the button means "return to panel", which is a dock:
+    // ContainerManager routes it through the canvas evictor.  Floating from
+    // the canvas is the two-step return-then-float, so every transition uses
+    // the one reparent path that already exists for it.
+    if (isFloating() || isOnCanvas()) emit dockRequested();
     else              emit floatRequested();
 }
 

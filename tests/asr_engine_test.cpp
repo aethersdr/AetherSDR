@@ -6,15 +6,18 @@
 #include "asr/AsrEngine.h"
 #include "asr/IAsrBackend.h"
 #include "asr/SpeakerEmbedder.h"
+#include "asr/WhisperAsrBackend.h"
 #include "gui/CopyAssistController.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QSignalSpy>
 #include <QThread>
 #include <QTimer>
 #include <QVector>
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -147,6 +150,55 @@ AsrBackendFactory slowFactory(int delayMs)
     return [delayMs] { return std::unique_ptr<IAsrBackend>(new SlowBackend(delayMs)); };
 }
 
+// Records the context-carry control calls so the engine's wiring can be checked
+// from the test thread. Counters are atomic (the backend lives on the worker).
+class ContextFake : public IAsrBackend {
+public:
+    bool load(const QString&, QString*) override { m_loaded = true; return true; }
+    bool isLoaded() const override { return m_loaded; }
+    AsrTranscript transcribe(const std::vector<float>& pcm, QString*) override
+    {
+        if (pcm.empty()) {
+            return {};
+        }
+        return AsrTranscript{QStringLiteral("OVER"), 0.9f};
+    }
+    void unload() override { m_loaded = false; }
+    void setContextCarryEnabled(bool on) override { carryEnabled.store(on); }
+    void resetContext() override { resets.fetch_add(1); }
+
+    std::atomic<bool> carryEnabled{false};
+    std::atomic<int> resets{0};
+
+private:
+    bool m_loaded = false;
+};
+
+// Factory that also publishes the constructed backend pointer so the test can
+// read its counters. The engine owns the instance; the sink is a non-owning view
+// valid until the engine is destroyed.
+AsrBackendFactory contextFactory(std::atomic<ContextFake*>* sink)
+{
+    return [sink] {
+        auto* b = new ContextFake();
+        sink->store(b, std::memory_order_release);
+        return std::unique_ptr<IAsrBackend>(b);
+    };
+}
+
+// Spin the event loop until pred() holds or the timeout elapses.
+template <typename Pred>
+bool waitUntil(Pred pred, int timeoutMs)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!pred() && t.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(5);
+    }
+    return pred();
+}
+
 // Deterministic stand-in for building the ~24 MB ECAPA session: the sleep is
 // what the caller must not wait on. `succeed` picks which completion branch of
 // AsrWorker::loadSpeakerModel() runs. The success branch hands back a default-
@@ -187,6 +239,25 @@ QVector<float> silence(int ms)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    // ---- Context-carry confidence gate (RFC #4818) ------------------------
+    // The gate is the whole recovery story: it decides whether a decode's text
+    // seeds the next decode's prompt. Pinned here as a pure function so the three
+    // cases can't regress silently (an inverted comparison or a 0.0 threshold).
+    {
+        expect(asrShouldCarryContext(QStringLiteral("CQ DE K5PTB"), 0.90f),
+               "gate: confident non-empty text carries");
+        expect(!asrShouldCarryContext(QStringLiteral("garbled"), 0.40f),
+               "gate: sub-threshold confidence does not carry (prev prompt stays)");
+        expect(!asrShouldCarryContext(QString(), 0.99f),
+               "gate: empty text never carries, regardless of confidence");
+        // Boundary: kContextCarryMinConfidence itself carries; just under does not.
+        expect(asrShouldCarryContext(QStringLiteral("x"), kContextCarryMinConfidence),
+               "gate: confidence exactly at the floor carries");
+        expect(!asrShouldCarryContext(QStringLiteral("x"),
+                                      kContextCarryMinConfidence - 0.01f),
+               "gate: just below the floor does not carry");
+    }
 
     // ---- Engine replacement discards only per-engine speaker state --------
     {
@@ -620,6 +691,40 @@ int main(int argc, char** argv)
         // may complete — the rest of the backlog must be dropped.
         expect(textSpy.count() <= 1,
                "disabling drops the backlog instead of transcribing all of it");
+    }
+
+    // ---- Context-carry control reaches the backend (RFC #4818) ------------
+    // The engine must marshal setContextCarryEnabled() to the backend, flush its
+    // context on a long idle-silence gap, and flush again on clearContext()
+    // (the Copy Assist Clear button). Verified via a fake that counts the calls.
+    {
+        std::atomic<ContextFake*> sink{nullptr};
+        AsrEngine engine(contextFactory(&sink));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "context test: engine ready");
+        expect(waitUntil([&] { return sink.load() != nullptr; }, 2000),
+               "fake backend was constructed on the worker");
+        ContextFake* backend = sink.load();
+
+        engine.setEnabled(true);
+        engine.setContextCarryEnabled(true);
+        expect(waitUntil([&] { return backend->carryEnabled.load(); }, 2000),
+               "setContextCarryEnabled reaches the backend");
+
+        // A real pause (idle silence past longGapMs = 2500) flushes the context.
+        const int resetsBeforeGap = backend->resets.load();
+        engine.pushAudio(tone(400), kSrcRate);
+        engine.pushAudio(silence(400), kSrcRate);   // hangover closes the utterance
+        engine.pushAudio(silence(3000), kSrcRate);  // > 2500 ms idle -> long gap
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeGap; }, 5000),
+               "a long silence gap flushes the carried context");
+
+        // The Clear button flushes it too.
+        const int resetsBeforeClear = backend->resets.load();
+        engine.clearContext();
+        expect(waitUntil([&] { return backend->resets.load() > resetsBeforeClear; }, 5000),
+               "clearContext() flushes the carried context");
     }
 
     // ---- Load failure surfaces loadFailed(), not ready() ------------------
