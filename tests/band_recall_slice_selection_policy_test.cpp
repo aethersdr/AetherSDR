@@ -96,18 +96,22 @@ int main()
 
     // TopologyFallback is the ONLY source that may assert the selection — it
     // fires when the active slice was removed and the radio needs to be told
-    // which one takes over. Guard that this stays a single exception.
-    const RadioSliceSelectionSource kSuppressingSources[] = {
+    // which one takes over. Guard that this stays a single exception across
+    // all sources.
+    const RadioSliceSelectionSource kAllSources[] = {
         RadioSliceSelectionSource::ActiveStatus,
+        RadioSliceSelectionSource::TopologyFallback,
         RadioSliceSelectionSource::InitialEnumeration,
     };
-    bool onlyFallbackAsserts =
-        !radioSliceSelectionDecision(
-             false, RadioSliceSelectionSource::TopologyFallback)
-             .suppressActiveCommand;
-    for (const RadioSliceSelectionSource source : kSuppressingSources) {
-        onlyFallbackAsserts = onlyFallbackAsserts
-            && radioSliceSelectionDecision(false, source).suppressActiveCommand;
+    bool onlyFallbackAsserts = true;
+    for (const RadioSliceSelectionSource source : kAllSources) {
+        const RadioSliceSelectionDecision decision =
+            radioSliceSelectionDecision(false, source);
+        const bool expectedSuppress =
+            (source != RadioSliceSelectionSource::TopologyFallback);
+        if (decision.suppressActiveCommand != expectedSuppress) {
+            onlyFallbackAsserts = false;
+        }
     }
     check(onlyFallbackAsserts,
           "only topology fallback asserts active=1 outside a recall");
