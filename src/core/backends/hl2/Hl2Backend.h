@@ -91,9 +91,9 @@ public:
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
 
     // Canonical receiver IQ for TCI skimmers and any other consumer (#4955).
-    // Always present: whether it has endpoints is a question about the running
+    // ALWAYS present: whether it has endpoints is a question about the running
     // receivers, not about the family. The HL2 has no DAX stream plane, so
-    // hasDaxStreams stays false and this is what gates IQ instead.
+    // hasDaxStreams stays false and THIS is what gates IQ instead.
     IqProvider* iqProvider() override { return m_iqProvider; }
     void setTxPower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
@@ -358,8 +358,8 @@ private:
     // per-receiver signal handlers that resolve through it are queued onto this
     // thread.
     Hl2ReceiverMap m_ids;
-    // Owned; parented to this. Reads its route table on the I/O thread and its
-    // lease state on the GUI thread, both guarded inside the provider.
+    // Owned; parented to this. Its route table is written on the GUI thread and
+    // read on the I/O thread by feedWireBlock(), guarded inside the provider.
     Hl2IqProvider* m_iqProvider{nullptr};
 
     // The receiver that owns transmit, and whose slice is the TX slice. The HL2
@@ -387,12 +387,12 @@ private:
     [[nodiscard]] int ddcForSlice(int sliceId) const;
     [[nodiscard]] int ddcForPan(const QString& panId) const;
 
-    // Rebuild the provider's DDC route table from m_ids/m_rx. Called wherever
-    // receivers, the shared rate, or a DDC's NCO change — the mapping from a
+    // Rebuild the provider's DDC route table from m_ids/m_rx. Called from
+    // publishIoDsps() — the one place the receiver set is already republished —
+    // and wherever the shared rate or a DDC's NCO moves. The mapping from a
     // stable pan id to a CONTIGUOUS wire DDC index is the thing that must never
     // go stale, because a stale one is a subscription pointed at another band.
     void publishIqRoutes();
-
 
     // Create/destroy the receiver set. Called on connect once the count is
     // known, and on teardown. Not idempotent by accident: buildReceivers()

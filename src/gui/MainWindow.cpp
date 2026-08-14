@@ -1634,6 +1634,9 @@ MainWindow::MainWindow(QWidget* parent)
     // audioDataReady carries Flex RX audio itself, so a missed rebind is
     // silence rather than a degraded feature).
     wirePanStreamRxAudioSinks();
+    // Canonical IQ ingress for the Flex adapter (#4955). Stream-bound, so it
+    // goes through the same helper the post-swap rebind calls.
+    wirePanStreamIqProviderSink();
     // The taps that listen alongside the speaker — QSO recorder RX, CW and RTTY
     // — ride RadioModel's normalized bus instead, so they are wired ONCE here
     // and are never part of the rebind. RadioModel outlives the swap.

@@ -10,13 +10,13 @@ namespace AetherSDR {
 QString iqRefusalText(IqRefusal r)
 {
     switch (r) {
-    case IqRefusal::None:            return QStringLiteral("granted");
-    case IqRefusal::NoProvider:      return QStringLiteral("this radio exposes no IQ source");
-    case IqRefusal::NotConnected:    return QStringLiteral("radio not connected");
-    case IqRefusal::UnknownEndpoint: return QStringLiteral("no such receiver");
-    case IqRefusal::CapacityExceeded:return QStringLiteral("no IQ capacity left");
-    case IqRefusal::RateUnavailable: return QStringLiteral("requested sample rate unavailable");
-    case IqRefusal::BackendRefused:  return QStringLiteral("refused by the radio backend");
+    case IqRefusal::None:             return QStringLiteral("granted");
+    case IqRefusal::NoProvider:       return QStringLiteral("this radio exposes no IQ source");
+    case IqRefusal::NotConnected:     return QStringLiteral("radio not connected");
+    case IqRefusal::UnknownEndpoint:  return QStringLiteral("no such receiver");
+    case IqRefusal::CapacityExceeded: return QStringLiteral("no IQ capacity left");
+    case IqRefusal::RateUnavailable:  return QStringLiteral("requested sample rate unavailable");
+    case IqRefusal::BackendRefused:   return QStringLiteral("refused by the radio backend");
     }
     return QStringLiteral("refused");
 }
@@ -40,7 +40,8 @@ std::optional<IqEndpoint> IqProvider::endpoint(const QString& endpointId) const
 {
     if (endpointId.isEmpty())
         return std::nullopt;
-    for (const IqEndpoint& e : endpoints()) {
+    const QVector<IqEndpoint> all = endpoints();
+    for (const IqEndpoint& e : all) {
         if (e.id == endpointId)
             return e;
     }
@@ -61,8 +62,8 @@ IqLease IqProvider::acquire(const QString& endpointId, const void* subscriber,
     }
 
     // The adapter hook runs OUTSIDE the lease lock: it talks to the radio, and
-    // a backend that called back into isLeased()/noteAchieved() while we held
-    // the lock would deadlock on its own success path.
+    // a backend that called back into isLeased()/noteAchieved() on its own
+    // success path would deadlock against a lock held across the call.
     IqLease lease = alreadyOpen ? adjustRate(endpointId, requestedRateHz)
                                 : openEndpoint(endpointId, requestedRateHz);
     if (!lease.granted)
@@ -90,7 +91,7 @@ void IqProvider::release(const QString& endpointId, const void* subscriber)
         auto it = m_subscribers.find(endpointId);
         if (it == m_subscribers.end())
             return;
-        if (it->remove(subscriber) == false)
+        if (!it->remove(subscriber))
             return;                     // not ours to release
         if (it->isEmpty()) {
             m_subscribers.erase(it);
@@ -132,7 +133,7 @@ int IqProvider::subscriberCount(const QString& endpointId) const
 {
     std::lock_guard<std::mutex> g(m_leaseMutex);
     const auto it = m_subscribers.constFind(endpointId);
-    return it == m_subscribers.constEnd() ? 0 : it->size();
+    return it == m_subscribers.constEnd() ? 0 : static_cast<int>(it->size());
 }
 
 bool IqProvider::isLeased(const QString& endpointId) const

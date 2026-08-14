@@ -12,7 +12,7 @@
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
-#include "core/FlexIqProvider.h"   // #4955 backend-neutral IQ (Flex adapter)
+#include "core/backends/flex/FlexIqProvider.h"   // #4955 IQ seam, Flex adapter
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none

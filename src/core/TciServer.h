@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include "TciProtocol.h"
+#include "core/IqProvider.h"   // #4955 backend-neutral IQ contract
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 
@@ -113,14 +114,25 @@ public:
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
     void wireSpotModel();
+    // Bind to the session's IQ provider (#4955). Idempotent, and safe to call
+    // with a null provider (a family with no IQ) — every live subscription is
+    // then ended rather than left hanging off a destroyed backend.
+    void setIqProvider(AetherSDR::IqProvider* provider);
     void notifySpotClicked(int spotIndex, SliceModel* slice = nullptr);
     void rearmDaxForProfileLoad();
 
 public slots:
     // RX audio from DAX pipeline (float32 stereo, 24 kHz)
     void onDaxAudioReady(int channel, const QByteArray& pcm);
-    // IQ data from DAX IQ stream (big-endian float32 I/Q pairs)
-    void onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
+    // Canonical IQ from the backend-neutral provider (#4955). TCI no longer
+    // knows whether these samples came from a Flex DAX-IQ stream, an HL2 DDC or
+    // a test fixture — only which receiver they belong to.
+    void onIqBlockReady(const QString& endpointId, AetherSDR::IqBlockPtr block);
+    // The provider dropped this endpoint's leases (radio gone, receiver
+    // removed). The subscription is ENDED, never rebound: re-attaching by index
+    // is exactly how a live skimmer ends up decoding another band.
+    void onIqLeaseInvalidated(const QString& endpointId, AetherSDR::IqRefusal reason,
+                              const QString& detail);
     // Waterfall row from PanadapterStream — forwarded to spectrum_event subscribers
     void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                              double lowMhz, double highMhz,
@@ -251,7 +263,12 @@ private:
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
         bool         iqEnabled{false};       // client sent IQ_START
-        int          iqChannel{0};           // TCI TRX → DAX IQ channel (0-based)
+        int          iqChannel{0};           // the TCI TRX index this IQ is for
+        // The provider endpoint this client leased (#4955). The stable receiver
+        // identity — a pan id — NOT a DAX channel number or a wire DDC index,
+        // so a receiver rebuild can invalidate the lease instead of silently
+        // re-serving it from whatever now occupies that slot.
+        QString      iqEndpointId;
         bool         spectrumEnabled{false}; // client sent spectrum_event:on;
     };
 
@@ -260,12 +277,24 @@ private:
     // for acceptable latency in digital modes.
     static constexpr int kAccumMinFrames = 512;
 
+    // Resolve a TCI TRX index to the provider endpoint that serves it, or an
+    // empty string when the receiver has no pan behind it (#4955).
+    QString iqEndpointForTrx(int trx) const;
+    AetherSDR::IqProvider* iqProvider() const;
+    // Take/refresh this client's lease, or end it. Both report honestly rather
+    // than acknowledging a subscription the radio cannot serve.
+    void startClientIq(ClientState& client, int trx);
+    void stopClientIq(ClientState& client);
+
     void ensureDaxForTci();
     void releaseDaxForTci();
     void scheduleDaxRelease();   // debounced releaseDaxForTci — cancel on reconnect
     void cancelDaxRelease();
 
     QPointer<RadioModel> m_model;  // QPointer auto-clears when RadioModel is destroyed (#2385)
+    // Non-owning. QPointer because the provider belongs to the backend and a
+    // family swap destroys it under us (#4955).
+    QPointer<AetherSDR::IqProvider> m_iqProvider;
     AudioEngine*      m_audio{nullptr};
     QWebSocketServer* m_server{nullptr};
     QList<ClientState> m_clients;

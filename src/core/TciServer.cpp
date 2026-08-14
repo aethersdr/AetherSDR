@@ -9,7 +9,6 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
-#include "models/DaxIqModel.h"
 #include "models/MeterModel.h"
 #include "models/TransmitModel.h"
 #include "models/SpotModel.h"
@@ -748,24 +747,14 @@ void TciServer::onClientDisconnected()
             if (ws == m_tciPttClient || ws == m_txChronoClient) {
                 abortTciPtt();
             }
-            // Clean up IQ stream if this client started one
-            if (m_clients[i].iqEnabled && m_model) {
-                int ch = m_clients[i].iqChannel + 1;  // TRX 0 → DAX channel 1
-                // Only remove if no other client uses the same IQ channel
-                bool otherUsing = false;
-                for (int j = 0; j < m_clients.size(); ++j) {
-                    if (j != i && m_clients[j].iqEnabled &&
-                        m_clients[j].iqChannel == m_clients[i].iqChannel) {
-                        otherUsing = true;
-                        break;
-                    }
-                }
-                if (!otherUsing) {
-                    QMetaObject::invokeMethod(m_model, [this, ch]() {
-                        m_model->daxIqModel().removeStream(ch);
-                    }, Qt::QueuedConnection);
-                }
-            }
+            // Release this client's IQ tap. The hand-rolled scan that used to
+            // live here — walk the other clients, remove the DAX-IQ stream only
+            // when none of them held the same channel (#4951) — is the same
+            // reference count, now expressed once in the lease layer and in
+            // terms every backend can honour. releaseAll() covers a client that
+            // somehow held more than one endpoint. (#4955)
+            if (IqProvider* provider = iqProvider())
+                provider->releaseAll(ws);
             delete m_clients[i].protocol;
             qDeleteAll(m_clients[i].resamplers);
             m_clients.removeAt(i);
@@ -1053,12 +1042,7 @@ void TciServer::onTextMessage(const QString& msg)
         if (trimmed.startsWith("iq_start:")) {
             int colonIdx2 = trimmed.indexOf(':');
             int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt();
-            client.iqEnabled = true;
-            client.iqChannel = trx;
-            qCInfo(lcCat) << "TCI: IQ started for client"
-                          << ws->peerAddress().toString()
-                          << "trx=" << trx;
-            // Forward to protocol to create DAX IQ stream on the radio
+            startClientIq(client, trx);
             QString response = client.protocol->handleCommand(cmd.trimmed());
             if (!response.isEmpty())
                 replyText(ws,response);
@@ -1069,10 +1053,7 @@ void TciServer::onTextMessage(const QString& msg)
             int colonIdx2 = trimmed.indexOf(':');
             int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt();
             if (client.iqChannel == trx)
-                client.iqEnabled = false;
-            qCInfo(lcCat) << "TCI: IQ stopped for client"
-                          << ws->peerAddress().toString()
-                          << "trx=" << trx;
+                stopClientIq(client);
             QString response = client.protocol->handleCommand(cmd.trimmed());
             if (!response.isEmpty())
                 replyText(ws,response);
@@ -3314,38 +3295,166 @@ void TciServer::onDaxStreamUnregistered(int channel, quint32 /*streamId*/)
     m_channelTrx.remove(channel);
 }
 
-void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate)
+AetherSDR::IqProvider* TciServer::iqProvider() const
 {
-    // Check if any client wants IQ for this channel
-    bool anyIq = false;
-    int trx = channel - 1;  // DAX IQ channel 1 → TRX 0
-    for (const auto& cs : m_clients) {
-        if (cs.iqEnabled && cs.iqChannel == trx) { anyIq = true; break; }
-    }
-    if (!anyIq) return;
+    if (m_iqProvider)
+        return m_iqProvider.data();
+    return m_model ? m_model->iqProvider() : nullptr;
+}
 
-    // dax_iq payloads are LITTLE-endian float32 (the radio reports
-    // payload_endian=little for this stream type, unlike pan/wf/meter/audio
-    // which are big-endian network order). Reading them big-endian byte-reverses
-    // every float into a denormal ≈ 0, so the skimmer (SDC / CW Skimmer) sees a
-    // dead, flat IQ stream. Read little-endian to native (a no-op on an LE host),
-    // matching DaxIqModel::feedRawIqPacket's handling of the same payload.
-    const int numFloats = rawPayload.size() / 4;
-    QByteArray swapped(rawPayload.size(), Qt::Uninitialized);
-    const quint32* src = reinterpret_cast<const quint32*>(rawPayload.constData());
-    quint32* dst = reinterpret_cast<quint32*>(swapped.data());
-    for (int i = 0; i < numFloats; ++i)
-        dst[i] = qFromLittleEndian(src[i]);
+void TciServer::setIqProvider(AetherSDR::IqProvider* provider)
+{
+    if (m_iqProvider == provider)
+        return;
+    if (m_iqProvider)
+        disconnect(m_iqProvider, nullptr, this, nullptr);
 
-    // Build TCI IQ binary frame (type=0, channels=2 for I/Q pair)
-    const int iqFrames = numFloats / 2;  // I/Q pairs
-    QByteArray frame = buildAudioFrame(trx, 0 /*IQ*/, sampleRate, 2,
-                                       reinterpret_cast<const float*>(swapped.constData()),
-                                       iqFrames);
-
+    // The old provider is going away with its backend, so every subscription
+    // that referenced it is over. Ending them here — rather than letting them
+    // sit enabled and silent — is what stops a client believing it is still
+    // receiving IQ from a radio that has been replaced. (#4955)
     for (auto& cs : m_clients) {
-        if (cs.iqEnabled && cs.iqChannel == trx)
-            cs.socket->sendBinaryMessage(frame);
+        if (cs.iqEnabled)
+            stopClientIq(cs);
+    }
+
+    m_iqProvider = provider;
+    if (provider) {
+        connect(provider, &IqProvider::iqBlockReady,
+                this, &TciServer::onIqBlockReady, Qt::UniqueConnection);
+        connect(provider, &IqProvider::leaseInvalidated,
+                this, &TciServer::onIqLeaseInvalidated, Qt::UniqueConnection);
+    }
+    qCInfo(lcCat) << "TCI: IQ provider" << (provider ? "bound" : "cleared");
+}
+
+// The TCI receiver → provider endpoint mapping. The stable TCI TRX map stays
+// authoritative for which slice a TRX index means; the endpoint is that slice's
+// PAN, because IQ is a per-panadapter/per-DDC stream on every family we have.
+QString TciServer::iqEndpointForTrx(int trx) const
+{
+    if (!m_model)
+        return {};
+    const SliceModel* s = sliceForTrx(trx);
+    return s ? s->panId() : QString();
+}
+
+void TciServer::startClientIq(ClientState& client, int trx)
+{
+    IqProvider* provider = iqProvider();
+    const QString endpointId = iqEndpointForTrx(trx);
+
+    // A backend with no IQ source, or a TRX with no receiver behind it, gets a
+    // refusal that is logged rather than an acknowledgement followed by
+    // silence. The previous behaviour emitted FlexRadio `stream create
+    // type=dax_iq` and `display pan set … daxiq_channel=` at WHATEVER backend
+    // was active — dead traffic at an HL2, and a client waiting forever.
+    if (!provider || endpointId.isEmpty()) {
+        client.iqEnabled = false;
+        client.iqEndpointId.clear();
+        client.protocol->setIqEndpoint(QString());
+        qCWarning(lcCat) << "TCI: iq_start refused for trx" << trx
+                         << (provider ? "— no receiver behind that TRX"
+                                      : "— this radio exposes no IQ source");
+        return;
+    }
+
+    // Re-acquiring on a different receiver releases the old tap first, so a
+    // client that moves cannot hold two leases and keep a stream alive.
+    if (client.iqEnabled && client.iqEndpointId != endpointId)
+        stopClientIq(client);
+
+    const IqLease lease = provider->acquire(endpointId, client.socket);
+    if (!lease.granted) {
+        client.iqEnabled = false;
+        client.iqEndpointId.clear();
+        client.protocol->setIqEndpoint(QString());
+        qCWarning(lcCat) << "TCI: iq_start refused for trx" << trx
+                         << "endpoint" << endpointId << "—" << lease.detail;
+        return;
+    }
+
+    client.iqEnabled    = true;
+    client.iqChannel    = trx;
+    client.iqEndpointId = endpointId;
+    client.protocol->setIqEndpoint(endpointId);
+    qCInfo(lcCat) << "TCI: IQ started for client"
+                  << (client.socket ? client.socket->peerAddress().toString() : QString())
+                  << "trx=" << trx << "endpoint" << endpointId
+                  << "achieved" << lease.achievedRateHz << "Hz centre"
+                  << lease.centerHz << "Hz";
+}
+
+void TciServer::stopClientIq(ClientState& client)
+{
+    if (IqProvider* provider = iqProvider()) {
+        if (!client.iqEndpointId.isEmpty())
+            provider->release(client.iqEndpointId, client.socket);
+    }
+    qCInfo(lcCat) << "TCI: IQ stopped for client"
+                  << (client.socket ? client.socket->peerAddress().toString() : QString())
+                  << "trx=" << client.iqChannel;
+    client.iqEnabled = false;
+    client.iqEndpointId.clear();
+    if (client.protocol)
+        client.protocol->setIqEndpoint(QString());
+}
+
+void TciServer::onIqLeaseInvalidated(const QString& endpointId,
+                                     AetherSDR::IqRefusal reason, const QString& detail)
+{
+    Q_UNUSED(reason);
+    bool any = false;
+    for (auto& cs : m_clients) {
+        if (cs.iqEnabled && cs.iqEndpointId == endpointId) {
+            // ENDED, not rebound. Re-attaching this subscription to whatever
+            // receiver now occupies the vacated slot is precisely how a live
+            // skimmer silently starts decoding another band.
+            cs.iqEnabled = false;
+            cs.iqEndpointId.clear();
+            if (cs.protocol)
+                cs.protocol->setIqEndpoint(QString());
+            any = true;
+        }
+    }
+    if (any) {
+        qCWarning(lcCat) << "TCI: IQ subscription ended for endpoint" << endpointId
+                         << "—" << detail;
+        emit clientsChanged();
+    }
+}
+
+// ── Canonical IQ → TCI binary frames (type=0) ────────────────────────────────
+
+void TciServer::onIqBlockReady(const QString& endpointId, AetherSDR::IqBlockPtr block)
+{
+    if (!block || block->samples.empty())
+        return;
+
+    // TCI's wire carries a RECEIVER index, so the endpoint is resolved back to
+    // whichever subscribed clients asked for it. One client may be on TRX 0 and
+    // another on TRX 2 for the same physical receiver; each is framed with the
+    // index it asked under.
+    //
+    // No byte-swapping and no format knowledge here: the provider already
+    // delivered native-endian complex float32 in the canonical orientation, and
+    // std::complex<float> is layout-compatible with the interleaved I/Q pairs
+    // buildAudioFrame expects. (#4955)
+    const auto* interleaved = reinterpret_cast<const float*>(block->samples.data());
+    const int frames = static_cast<int>(block->samples.size());
+
+    QHash<int, QByteArray> frameByTrx;
+    for (auto& cs : m_clients) {
+        if (!cs.iqEnabled || cs.iqEndpointId != endpointId || !cs.socket)
+            continue;
+        auto it = frameByTrx.constFind(cs.iqChannel);
+        if (it == frameByTrx.constEnd()) {
+            it = frameByTrx.insert(cs.iqChannel,
+                                   buildAudioFrame(cs.iqChannel, 0 /*IQ*/,
+                                                   block->sampleRateHz, 2,
+                                                   interleaved, frames));
+        }
+        cs.socket->sendBinaryMessage(*it);
     }
 }
 

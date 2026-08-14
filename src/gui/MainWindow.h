@@ -504,6 +504,8 @@ private:
     void wirePanStreamTxSink();               // MainWindow_Session.cpp
     void wirePanStreamTciSinks();             // MainWindow_Session.cpp
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
+    void wirePanStreamIqProviderSink();       // MainWindow_Session.cpp (#4955)
+    void wireTciIqProvider();                 // MainWindow_Session.cpp (#4955)
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
     // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to

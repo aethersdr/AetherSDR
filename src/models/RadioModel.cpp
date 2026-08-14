@@ -1564,6 +1564,30 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<GpsDelta>();
     qRegisterMetaType<MemoryDelta>();
 
+    // The Flex adapter for the backend-neutral IQ seam (#4955). Wired once,
+    // here, because everything it needs — the DAX-IQ plane, the command plane,
+    // and the panadapter set — lives on this model rather than inside
+    // FlexBackend. Resolvers rather than a published route table: a pan centre
+    // moves on every tune, and a resolver is always current where a snapshot
+    // would be one status behind.
+    m_flexIqProvider.setDaxIqModel(&m_daxIqModel);
+    m_flexIqProvider.setCommandSink([this](const QString& cmd) { sendCommand(cmd); });
+    m_flexIqProvider.setPanResolvers(
+        [this]() {
+            QStringList ids;
+            const QList<PanadapterModel*> pans = panadapters();
+            ids.reserve(pans.size());
+            for (const PanadapterModel* p : pans)
+                ids << p->panId();
+            return ids;
+        },
+        [this](const QString& panId) -> long long {
+            const PanadapterModel* pan = panadapter(panId);
+            if (!pan || !pan->centerKnown())
+                return 0;
+            return static_cast<long long>(std::llround(pan->centerMhz() * 1e6));
+        });
+
     // Watch both sides of the TX filter so a cut that silences the transmit
     // audio can be reported to the operator instead of failing silently (#4649).
     connect(&m_meterModel, &MeterModel::txFilterLevelsChanged,
@@ -5157,8 +5181,32 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
 }
 
 
+// The session's canonical IQ source (#4955).
+//
+// Backend first: a family that owns its own IQ (HL2's DDCs) answers for itself.
+// The Flex adapter is the fallback rather than a FlexBackend member because the
+// DAX-IQ plane it wraps lives in this model's DaxIqModel, not in the backend.
+//
+// Returns null for a family with neither, and null is what TCI's iq_start reads
+// as "refuse honestly" — the alternative, which shipped, was emitting Flex
+// `stream create type=dax_iq` at a Metis backend and acknowledging success.
+IqProvider* RadioModel::iqProvider()
+{
+    if (m_backend) {
+        if (IqProvider* p = m_backend->iqProvider())
+            return p;
+    }
+    // No PanadapterStream means no Flex VITA-49 transport to carry DAX-IQ, so
+    // there is nothing for the adapter to serve however willing it is.
+    return m_panStream ? &m_flexIqProvider : nullptr;
+}
+
 void RadioModel::onConnected()
 {
+    // Leases may be taken from here on; before this the adapter refuses with
+    // NotConnected rather than posting stream commands into a dead link.
+    m_flexIqProvider.setConnected(m_panStream != nullptr);
+
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
@@ -6282,6 +6330,11 @@ void RadioModel::onDisconnected()
     // registrations are cleared just above); otherwise stale `exists` makes
     // restoreEnabledChannels() skip persisted channels on reconnect. (#3522)
     m_daxIqModel.handleDisconnect();
+    // Same reasoning one level up: a lease that outlived the session would be
+    // re-served from a DAX-IQ channel the radio is about to hand to somebody
+    // else, which is exactly the "silently moved to another band" failure the
+    // seam exists to prevent (#4955).
+    m_flexIqProvider.setConnected(false);
     m_pendingPanStatuses.clear();
     m_radioDisplayPans.clear();           // #3856 Layer B — radio re-dumps on reconnect
     m_radioDisplayWaterfalls.clear();

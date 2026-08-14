@@ -10,7 +10,7 @@
 #include "models/TransmitModel.h"
 #include "models/EqualizerModel.h"
 #include "models/SpotModel.h"
-#include "models/DaxIqModel.h"
+#include "core/IqProvider.h"   // #4955: backend-neutral IQ, no DaxIqModel here
 
 #include <QList>
 #include <QMetaObject>
@@ -201,6 +201,17 @@ long long TciProtocol::ddsCenterHz(RadioModel* model, const SliceModel* slice)
         return 0;
     }
     if (model) {
+        // The PROVIDER's reported IQ centre first (#4955). It is the frequency
+        // the samples a skimmer is decoding are actually about, which on the
+        // HL2 is the DDC's NCO rather than anything the pan model has been
+        // told. Falling through to the pan keeps #4172's behaviour for a
+        // session with no IQ lease open.
+        if (IqProvider* provider = model->iqProvider()) {
+            if (const auto ep = provider->endpoint(slice->panId())) {
+                if (ep->centerHz != 0)
+                    return ep->centerHz;
+            }
+        }
         PanadapterModel* pan = model->panadapter(slice->panId());
         if (pan && pan->centerKnown()) {
             return mhzToHz(pan->centerMhz());
@@ -1517,74 +1528,63 @@ QString TciProtocol::cmdCwMacrosStop()
 
 QString TciProtocol::cmdIqStart(const QStringList& args)
 {
-    if (!m_model || args.isEmpty()) return {};
-    const int trx = args[0].toInt();
-    const int channel = trx + 1;  // TRX 0 → DAX IQ channel 1
-    if (channel < 1 || channel > 4) return {};
-    // Creating the dax_iq stream is not enough to make IQ flow: on FlexRadio
-    // `daxiq_channel` is a Panadapter property, so the radio streams nothing
-    // (or a stale pan's IQ) until a panadapter is routed to this channel with
-    // `display pan set <panId> daxiq_channel=N`. The GUI does this from the
-    // spectrum overlay menu, but a TCI skimmer client (SDC / CW Skimmer) has no
-    // such hook — so bind the requested TRX's pan here. Mirrors the only other
-    // non-GUI IQ consumer, WfmDemodulator, and centers the stream on the same
-    // pan whose center is reported to the client via dds: (#3910/#3913).
-    const SliceModel* s = sliceForTrx(trx);
-    const QString panId = s ? s->panId() : QString();
-    QMetaObject::invokeMethod(m_model, [model = m_model, channel, panId]() {
-        model->daxIqModel().createStream(channel);
-        if (!panId.isEmpty())
-            model->sendCommand(QStringLiteral("display pan set %1 daxiq_channel=%2")
-                                   .arg(panId).arg(channel));
-    }, Qt::QueuedConnection);
+    // The LEASE is taken by TciServer, which is the layer that knows which
+    // socket asked and therefore who to reference-count against (#4955). This
+    // used to map trx → DAX-IQ channel trx+1 and emit two raw FlexRadio
+    // commands from here; on a backend with no DAX plane those went out as
+    // dead traffic followed by a cheerful acknowledgement, which is worse than
+    // a refusal because the client then waits forever for samples.
+    Q_UNUSED(args);
     return {};
 }
 
 QString TciProtocol::cmdIqStop(const QStringList& args)
 {
-    if (!m_model || args.isEmpty()) return {};
-    int channel = args[0].toInt() + 1;
-    if (channel < 1 || channel > 4) return {};
-    QMetaObject::invokeMethod(m_model, [model = m_model, channel]() {
-        model->daxIqModel().removeStream(channel);
-    }, Qt::QueuedConnection);
+    // Symmetrically: TciServer releases this client's tap. Releasing the
+    // physical endpoint is the lease layer's decision, and it makes it only
+    // when the LAST subscriber leaves.
+    Q_UNUSED(args);
     return {};
 }
 
 QString TciProtocol::cmdIqSampleRate(const QStringList& args, bool isSet)
 {
-    if (!isSet) {
-        if (m_model) {
-            int rate = m_model->daxIqModel().stream(1).sampleRate;
-            return QStringLiteral("iq_samplerate:%1;").arg(rate);
+    IqProvider* provider = m_model ? m_model->iqProvider() : nullptr;
+
+    // Requested and ACHIEVED are separate values, and this reply carries the
+    // achieved one. A skimmer (CW Skimmer / SDC) blocks waiting for it and then
+    // decodes at whatever it is told, so reporting a rate the radio is not
+    // actually producing gives a client that hears nothing and cannot say why.
+    const auto achievedRate = [&]() -> int {
+        if (provider) {
+            if (const auto ep = provider->endpoint(m_iqEndpoint)) {
+                if (ep->achievedRateHz > 0)
+                    return ep->achievedRateHz;
+            }
         }
-        return QStringLiteral("iq_samplerate:48000;");
-    }
+        return 48000;
+    };
+
+    if (!isSet)
+        return QStringLiteral("iq_samplerate:%1;").arg(achievedRate());
 
     if (args.isEmpty()) return {};
-    const int rate = args[0].toInt();
-    if (rate != 24000 && rate != 48000 && rate != 96000 && rate != 192000) {
-        // Reject without hanging the requester: report the rate that remains
-        // in force. No pending notification is set because other clients saw
-        // no state change (#3913 review).
-        const int currentRate = m_model
-            ? m_model->daxIqModel().stream(1).sampleRate
-            : 48000;
-        return QStringLiteral("iq_samplerate:%1;").arg(currentRate);
-    }
-    if (m_model) {
-        QMetaObject::invokeMethod(m_model, [model = m_model, rate]() {
-            model->daxIqModel().setSampleRate(1, rate);
-        }, Qt::QueuedConnection);
-    }
+    const int requested = args[0].toInt();
+
+    // No provider, or no lease yet: there is nothing to negotiate against, so
+    // report what stands rather than hanging the requester. (#3913 review)
+    if (!provider || m_iqEndpoint.isEmpty())
+        return QStringLiteral("iq_samplerate:%1;").arg(achievedRate());
+
+    const IqLease l = provider->requestRate(m_iqEndpoint, requested);
+    const int achieved = l.granted ? l.achievedRateHz : achievedRate();
+
     // Echo the achieved rate to BOTH the requester and other clients. The
-    // server is authoritative for the rate (it clamps/rejects above), so a
-    // skimmer (CW Skimmer / SDC) blocks waiting for this confirmation. The
     // dispatcher sends the return value to the requesting socket and the
     // pendingNotification to all *other* sockets, so each client gets exactly
     // one copy — without the return, the requester got no reply at all. (#3910)
-    m_pendingNotification = QStringLiteral("iq_samplerate:%1;").arg(rate);
-    return QStringLiteral("iq_samplerate:%1;").arg(rate);
+    m_pendingNotification = QStringLiteral("iq_samplerate:%1;").arg(achieved);
+    return QStringLiteral("iq_samplerate:%1;").arg(achieved);
 }
 
 // ── CW keyer (straight key via TCI) ────────────────────────────────────────

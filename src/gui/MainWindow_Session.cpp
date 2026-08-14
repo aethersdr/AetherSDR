@@ -187,8 +187,13 @@ void MainWindow::wireDiscovery()
     // UDP/1024, which the Flex discovery above never sees. Feed them into the
     // same picker slots, tagged family="hl2" so RadioModel routes the connect
     // through the IRadioBackend seam instead of the Flex RadioConnection.
-    connect(&m_radioModel, &RadioModel::backendRebuilt,
-            this, &MainWindow::rewirePanStreamAfterBackendSwap);
+    connect(&m_radioModel, &RadioModel::backendRebuilt, this, [this]() {
+        rewirePanStreamAfterBackendSwap();
+        // Not inside that helper: it returns early when the new backend has no
+        // PanadapterStream, and an HL2 (which has none) is exactly the case
+        // where TCI most needs to be repointed at the new provider (#4955).
+        wireTciIqProvider();
+    });
 
     // RX audio from a backend that demodulates in-process (HL2). Flex audio
     // arrives on the PanadapterStream path instead and never reaches here, so
@@ -1976,6 +1981,7 @@ void MainWindow::wireCatPorts()
     // audio_mute doesn't kill TCI audio (#1331). Stream-bound, so it goes through
     // the shared helper the post-swap rebind also calls (#4448).
     wirePanStreamTciSinks();
+    wireTciIqProvider();   // #4955: TCI's IQ source, whatever family serves it
 
     // RX audio for a backend that demodulates in-process (HL2). That backend has
     // no PanadapterStream, so wirePanStreamTciSinks() above binds nothing and TCI
@@ -2143,8 +2149,6 @@ void MainWindow::wirePanStreamTciSinks()
         return;
     connect(ps, &PanadapterStream::daxAudioReady,
             tciServer(), &TciServer::onDaxAudioReady);
-    connect(ps, &PanadapterStream::iqDataReady,
-            tciServer(), &TciServer::onIqDataReady);
     connect(ps, &PanadapterStream::waterfallRowReady,
             tciServer(), &TciServer::onWaterfallRowReady);
     // F6 (#4448): keeps TCI's channel→TRX routing cache truthful; previously
@@ -2165,6 +2169,31 @@ void MainWindow::wirePanStreamDaxIqSink()
             &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
 }
 
+// DAX-IQ raw packets → the Flex IQ provider (#4955). Separate from the applet
+// sink above because it must exist whether or not the applet does: a TCI
+// skimmer is a consumer in its own right, and the provider is what normalises
+// the little-endian payload once for all of them.
+void MainWindow::wirePanStreamIqProviderSink()
+{
+    auto* ps = m_radioModel.panStream();
+    if (!ps)
+        return;
+    connect(ps, &PanadapterStream::iqDataReady,
+            &m_radioModel.flexIqProvider(), &FlexIqProvider::feedRawIqPacket);
+}
+
+// Point TCI at whatever IQ source this session actually has (#4955). Called at
+// wiring time and again after a family swap, because the provider belongs to
+// the backend and a swap replaces it — an HL2 arriving after a Flex must not
+// keep serving TCI from a destroyed DAX-IQ adapter.
+void MainWindow::wireTciIqProvider()
+{
+#ifdef HAVE_WEBSOCKETS
+    if (tciServer())
+        tciServer()->setIqProvider(m_radioModel.iqProvider());
+#endif
+}
+
 void MainWindow::rewirePanStreamAfterBackendSwap()
 {
     // RadioModel replaced the backend because the operator picked a radio of a
@@ -2178,6 +2207,7 @@ void MainWindow::rewirePanStreamAfterBackendSwap()
     wirePanStreamRxAudioSinks();
     wirePanStreamTxSink();
     wirePanStreamTciSinks();
+    wirePanStreamIqProviderSink();
     wirePanStreamDaxIqSink();
 
     qCDebug(lcProtocol) << "MainWindow: re-bound PanadapterStream signals after backend swap";

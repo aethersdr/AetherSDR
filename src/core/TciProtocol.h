@@ -144,6 +144,18 @@ private:
     QString cmdIqStart(const QStringList& args);
     QString cmdIqStop(const QStringList& args);
     QString cmdIqSampleRate(const QStringList& args, bool isSet);
+public:
+    // The IQ endpoint THIS client currently holds a lease on, set by TciServer
+    // when the lease is granted and cleared on release (#4955).
+    //
+    // It exists because iq_samplerate is a per-connection question that the
+    // protocol layer previously answered from DAX-IQ channel 1 unconditionally
+    // — the get AND the set — so a client on TRX 1..3 read, and wrote, a rate
+    // belonging to another receiver entirely.
+    void setIqEndpoint(const QString& endpointId) { m_iqEndpoint = endpointId; }
+    [[nodiscard]] QString iqEndpoint() const { return m_iqEndpoint; }
+private:
+    QString m_iqEndpoint;
     QString cmdKeyer(const QStringList& args);
     QString cmdCwKeyerSpeed(const QStringList& args, bool isSet);
     QString cmdCwMacrosDelay(const QStringList& args, bool isSet);

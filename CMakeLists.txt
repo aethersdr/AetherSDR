@@ -604,6 +604,7 @@ set(AETHER_SETTINGS_SOURCES
 set(CORE_SOURCES
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexIqProvider.cpp # #4955 Flex DAX-IQ adapter, below the seam
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -614,9 +615,9 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Receivers.cpp   # per-receiver index-space map (HERMES.md §12.5)
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/hl2/Hl2IqProvider.cpp  # #4955 canonical IQ endpoints (one per DDC)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
-    src/core/backends/hl2/Hl2IqProvider.cpp  # #4955 HL2 DDC IQ adapter
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
@@ -718,9 +719,8 @@ set(CORE_SOURCES
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
-    src/core/IqProvider.cpp                  # #4955 backend-neutral receiver IQ
-    src/core/FlexIqProvider.cpp              # #4955 Flex DAX-IQ adapter
-    src/core/SimulatedIqProvider.cpp         # #4955 deterministic IQ fixture
+    src/core/IqProvider.cpp                  # #4955 backend-neutral IQ seam
+    src/core/SimIqProvider.cpp               # #4955 deterministic provider (tests, replay)
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
@@ -5200,6 +5200,15 @@ if(Qt6WebSockets_FOUND)
     )
     add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
 endif()
+
+# The backend-neutral IQ seam (#4955). Deliberately OUTSIDE the websockets
+# guard: the provider contract, the handedness invariant and the lease
+# reference counting are core behaviour that must be verified on Linux, macOS
+# and Windows whether or not TCI is built.
+add_executable(iq_provider_test tests/iq_provider_test.cpp)
+target_include_directories(iq_provider_test PRIVATE src)
+target_link_libraries(iq_provider_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME iq_provider_test COMMAND iq_provider_test)
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
 add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)
