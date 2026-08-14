@@ -373,12 +373,26 @@ void RadioCertification::stageControlEffect(const Options& o)
     // to. It previously reported `rfPowerRestoredTo`, which named a restore that
     // never happened — in a report whose entire value is that it does not
     // overstate what it verified. The power row in docs/radio-certification.md
-    // is certified by TX:FWDPWR dropping ~6 dB on a halving; FWDPWR IS published
-    // on this backend now (in dBm, through an uncalibrated reference curve), so
-    // that row is unimplemented rather than unrunnable. A halving is a RATIO, so
-    // the uncalibrated scale cancels and the check is available as soon as
-    // someone writes it — the reason it is still absent is that the sweep has to
-    // run inside the automation power ceiling without ever raising drive.
+    // used to be certified by TX:FWDPWR dropping ~6 dB on a halving. FWDPWR IS
+    // published on this backend now (in dBm, through an uncalibrated reference
+    // curve), so that row is no longer blocked on a missing meter — but the
+    // HALVING STIMULUS ITSELF IS NOT USABLE ON THIS RADIO, and the ratio does
+    // not rescue it. Two independent reasons, both measured:
+    //
+    //   * The gateware decodes only the drive register's TOP NIBBLE, so a
+    //     slider halving is not a drive halving. Slider 44 % and 50 % both land
+    //     on nibble 7 (1.984 W vs 2.001 W — six points of travel doing
+    //     nothing), and 51 % jumps +1.25 dB. 100→50→25 % is nibble 15→7→3.
+    //   * HL2FilterE3 is nonlinear as well as uncalibrated, so the scale does
+    //     not cancel out of a ratio taken across a wide span.
+    //
+    // Measured live: −4.44 dB (100→50 %) and −2.33 dB (50→25 %) against the
+    // −6.02 dB a true halving would give. If the scale cancelled, both would
+    // read −6.02. So a failing delta cannot be attributed to the control rather
+    // than to the curve, and radiocert must not report one as a control defect.
+    // What this control CAN certify by effect is monotonicity — one nibble up,
+    // FWDPWR rises — which is the stimulus docs/radio-certification.md now
+    // carries. See HERMES.md 17.5 and 17.7 for both measurements.
     QJsonObject m{
         {QStringLiteral("micGain100Dbfs"), micFull},
         {QStringLiteral("micGain50Dbfs"), micHalf},

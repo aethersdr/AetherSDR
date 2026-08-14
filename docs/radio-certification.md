@@ -37,10 +37,10 @@ Hermes-Lite 2 can physically produce it.
 | `TX:MICPEAK` | dBFS | yes | tracks input | inject −20 dBFS tone → reads −20 | **±1 dB** |
 | `TX:SWR` | SWR | yes | 1.0–1.5 into a dummy load | key with audio | **±0.3** |
 | `TX:SWR` idle | SWR | yes | **absent** | key with no audio | present-while-idle means the ratio saturated |
-| `TX:FWDPWR` | dBm | yes | rises with drive | halve RF power → drops ≈6 dB | ±3 dB |
+| `TX:FWDPWR` | dBm | yes | rises with drive | raise the drive **one nibble** → rises | see the note below on halving |
 | `TX:REFPWR` | dBm | yes | ≪ forward into a load | key into a dummy load | ≥15 dB below forward |
-| `TX:ALC` | dBFS | **host-side** | post-ALC transmit peak | inject a tone → tracks the envelope | ±3 dB |
-| `TX:COMPPEAK` | dB | host-side | compression applied | PROC on → reads the gain reduction | reads 0 with PROC off |
+| `TX:ALC` | dBFS | **host-side** | post-ALC transmit peak | sweep the input 20 dB → reading does **not** move | **±1 dB across the sweep** |
+| `TX:COMPPEAK` | dB | host-side | compression applied | PROC on → rises above 0 | reads 0 with PROC off |
 | `TX:MIC` | dBFS | host-side | pre-gain mic level | — | not yet wired |
 | `TX:HWALC` | dBFS | **no** | — | Flex RCA jack; no HL2 equivalent | — |
 
@@ -50,6 +50,30 @@ estimate, not a measurement, and the meter descriptions say so. Uncalibrated is
 not the same as absent, and this table said "counts only" long after they were
 being published; a stale not-fed claim is what switches off the check that
 would notice the meter regressing (CERTIFICATION.md 1.32).
+
+**Why `TX:FWDPWR`'s stimulus is a nibble step and not a halving.** The obvious
+check — halve the drive, expect −6.02 dB — cannot be run on this radio, for two
+independent reasons, neither of which is a fault in the control:
+
+1. The gateware decodes only the drive register's **top nibble**, so a slider
+   halving is not a drive halving: 100 → 50 → 25 % is nibble 15 → 7 → 3, and
+   sliders 44 % and 50 % both land on nibble 7 (`HERMES.md` 17.7).
+2. The reference curve is nonlinear as well as uncalibrated, so the scale does
+   not cancel out of a ratio taken across a wide span (`HERMES.md` 17.5).
+
+Measured live: **−4.44 dB** (100→50 %) and **−2.33 dB** (50→25 %) against the
+−6.02 dB a true halving would give — the second is outside even a ±3 dB
+tolerance, on a radio that is working correctly. A failing delta therefore
+cannot be attributed to the control rather than to the curve, so `radiocert`
+must not report one as a control defect. Monotonicity under a one-nibble step is
+what this control can honestly certify by effect.
+
+Likewise `TX:ALC`'s stimulus is a **20 dB input sweep with no movement**, not
+envelope tracking. A post-ALC peak meter has a known answer available with no
+calibration at all: it must stay constant while its input does not. Swept
+−10 → −30 dBFS it read −1.41 dBFS at every level while `TX:MICPEAK` tracked the
+same sweep to within 0.02 dB. A check written to "tracks the envelope" would
+fail a correct meter by roughly 17 dB.
 
 ### Radio / hardware
 
@@ -236,11 +260,11 @@ this table, which is the same rule the report itself follows.
 
 | Control | Range | HL2 path | Observable effect | Tolerance | Certified |
 |---|---|---|---|---|---|
-| `TransmitModel::setRfPower` | 0–100 | drive `0x09[31:28]` + PA enable | halve → `TX:FWDPWR` drops ≈6 dB | ±3 dB | **no — unrunnable** |
-| `TransmitModel::setRfPower(0)` | — | disables the PA | forward power to the floor | — | **no — unrunnable** |
+| `TransmitModel::setRfPower` | 0–100 | drive register, **top nibble only** | one nibble up → `TX:FWDPWR` rises | monotonic; ≈6 dB not applicable | **partly — monotonic proved by hand** |
+| `TransmitModel::setRfPower(0)` | — | disables the PA | forward power to the floor | — | **yes — 0 % reads the 0.001 W floor** |
 | `AudioEngine::setPcMicGain` | 0–100 | host-side, pre-modulator | halve → `TX:MICPEAK` drops ≈6 dB | ±1 dB | **yes — 6.023 dB measured** |
 | `SliceModel::setAgcThreshold` | 0–100 | WDSP `SetRXAAGCTop` | raise → audio floor rises | ±3 dB | no |
-| RF Gain slider | dB | AD9866 LNA `0x0a[5:0]` | step the gain → S-meter must **not** move (the display reference tracks it) | ±3 dB of 0 | yes — `meters` phase |
+| RF Gain slider | dB | AD9866 LNA `0x0a[5:0]` | step the gain → the pan echoes the value the hardware took | echo must equal the request | **yes — `control-effect` phase** |
 | `SliceModel::setRfGain` | dB | **dead end** | Flex wire text; the slider does not call it — see below | — | n/a |
 | `TransmitModel::setTunePower` | 0–100 | **NOT WIRED** | tune uses full drive | — | n/a |
 | `SliceModel::setSquelch` | on/off | **NOT WIRED** | — | — | n/a |
@@ -249,12 +273,14 @@ this table, which is the same rule the report itself follows.
 
 ### Gaps this table makes visible
 
-- **The RF power rows are unimplemented, not unrunnable.** Certifying them by
-  effect needs `TX:FWDPWR`, which IS published now (in dBm, through the
-  uncalibrated reference curve). A halving is a ratio, so the missing
-  calibration cancels and the check is available as soon as someone writes it;
-  until then `radiocert` reports `rfPowerExercised: false` rather than implying
-  a sweep happened.
+- **The RF power rows are runnable but not conclusive.** They were listed as
+  unrunnable because `TX:FWDPWR` was defined-but-never-fed. It is fed, and a
+  sweep runs — but neither premise of the ≈6 dB criterion holds on this radio
+  (the control is 16-step, the instrument is another board's calibration), so a
+  failing delta cannot separate a control fault from a curve error. See the note
+  under the transmit table. `radiocert` still reports `rfPowerExercised: false`,
+  which remains the right answer: the verb does not drive the slider, and the
+  sweep that produced these numbers was manual.
 - **`SliceModel::setRfGain` is a dead end, and the RF Gain slider does not use
   it.** The setter's whole body is `slice set N rfgain=X`, Flex wire text no
   seam backend can receive — but `SpectrumOverlayMenu` emits `rfGainChanged`
@@ -265,6 +291,22 @@ this table, which is the same rule the report itself follows.
   `0x0a[5:0]` at runtime. `radiocert` used to assert the opposite as a
   hardcoded, family-gated finding on every HL2 run; it now MEASURES the
   control instead, which is what let the gate go (CERTIFICATION.md 1.14, 1.35).
+- **The RF gain check's verdict rests on the echo, and its S-meter delta is
+  evidence only.** The tempting expectation — an 8 dB LNA step must move
+  `SLC:LEVEL` by 8 dB — is wrong twice over. `Hl2DbReference` is moved in the
+  same call as the gain and both the spectrum and the S-meter render through it,
+  precisely so a gain change does **not** slide the display (`HERMES.md` 17.4),
+  so the expected delta is **0 dB**, not the step size. And a reading near
+  −step has two causes this measurement cannot separate: the register never took
+  the value, or the reading is dominated by converter noise that does not rise
+  with the gain. Measured on a quiet 20 m, an 8 dB step moved `SLC:LEVEL` by
+  −6.3 dB — within 2 dB of the defect signature — while the raw dBFS behind it
+  *rose* 1.74 dB, proving the register **had** been written. So the stage
+  publishes both hypotheses (`sLevelExpectedDeltaDb`,
+  `sLevelDeltaIfRegisterNotWrittenDb`), marks the delta
+  `sLevelDeltaIsConclusive: false`, and raises its one concern on a missing
+  echo. Closing the effect half needs the raw pre-reference dBFS, which the seam
+  does not expose (CERTIFICATION.md 2.4).
 - **`TX:FWDPWR` and `TX:REFPWR` are published and uncalibrated**, not absent.
   They read in dBm through a reference curve for a different board. The gap is
   a per-unit calibration, not a missing meter.
