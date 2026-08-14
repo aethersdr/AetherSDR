@@ -1554,6 +1554,13 @@ if (ENABLE_ASR)
             set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
             set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
             message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+            # The pack is produced by a stock in-tree build (GGML_NATIVE=OFF →
+            # ggml's fixed x86-64 feature set; MSVC /arch:AVX2 additionally
+            # implies FMA+F16C). Recorded here for the startup inventory
+            # (#4986) because the GGML_* options that would say so only exist
+            # when ggml's own CMake runs — which this branch skips. Re-derive
+            # if the pack is ever rebuilt with different ISA settings.
+            set(_aether_prebuilt_ggml_baseline "SSE42,AVX,AVX2,FMA,F16C,BMI2")
         else()
             # Build whisper/ggml as static objects, not .so's.
             set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
@@ -2707,14 +2714,27 @@ target_compile_definitions(aethercore PUBLIC
 # builds (their baseline is the distro's choice and unknowable here) and on
 # non-x86 hosts (all options default OFF there), which the code reports as
 # "unknown"/skips.
-set(_aether_ggml_baseline "")
-foreach(_aether_isa SSE42 AVX AVX2 FMA F16C BMI2)
-    if (DEFINED GGML_${_aether_isa} AND GGML_${_aether_isa})
-        list(APPEND _aether_ggml_baseline ${_aether_isa})
-    endif()
-endforeach()
-if (_aether_ggml_baseline)
+if (DEFINED _aether_prebuilt_ggml_baseline)
+    # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
+    # the baseline comes from the pack's recorded build settings above.
+    set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")
+elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
+    # x86 targets only: ggml defines these options unguarded on every
+    # architecture (INS_ENB defaults them ON whenever GGML_NATIVE is forced
+    # OFF on a native build), so on ARM they sit ON in the cache while the
+    # compile ignores them — scanning them there would stamp an x86 baseline
+    # into an ARM binary.
+    set(_aether_ggml_baseline "")
+    foreach(_aether_isa SSE42 AVX AVX2 FMA F16C BMI2)
+        if (DEFINED GGML_${_aether_isa} AND GGML_${_aether_isa})
+            list(APPEND _aether_ggml_baseline ${_aether_isa})
+        endif()
+    endforeach()
     list(JOIN _aether_ggml_baseline "," _aether_ggml_baseline_str)
+else()
+    set(_aether_ggml_baseline_str "")
+endif()
+if (NOT _aether_ggml_baseline_str STREQUAL "")
     target_compile_definitions(aethercore PUBLIC
         AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}"
     )

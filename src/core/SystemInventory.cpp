@@ -79,6 +79,16 @@ SystemInventory::CpuInfo SystemInventory::detectCpu()
 {
     CpuInfo info;
     info.arch = QSysInfo::currentCpuArchitecture();
+#if defined(Q_OS_MACOS) && !defined(Q_PROCESSOR_X86)
+    // Apple Silicon: no cpuid, but the kernel publishes the marketing name
+    // ("Apple M2" …) — a bug report saying "arm64" alone is much weaker.
+    {
+        char brand[64] = {};
+        size_t len = sizeof(brand) - 1;
+        if (sysctlbyname("machdep.cpu.brand_string", brand, &len, nullptr, 0) == 0)
+            info.brand = QString::fromLatin1(brand).simplified();
+    }
+#endif
 #if defined(Q_PROCESSOR_X86)
     info.x86 = true;
     info.brand = cpuBrandString();
@@ -172,17 +182,24 @@ void SystemInventory::logSystemInventory()
         << "OS:" << QSysInfo::prettyProductName()
         << "kernel" << QSysInfo::kernelVersion()
         << "arch" << cpu.arch;
-    qCInfo(lcSysInfo).noquote()
-        << "CPU:" << (cpu.brand.isEmpty() ? cpu.arch : cpu.brand)
-        << (cpu.x86 ? QStringLiteral("features: %1").arg(
-                          presentFeatures(cpu).join(QLatin1Char(' ')))
-                    : QString());
+    if (cpu.x86) {
+        qCInfo(lcSysInfo).noquote()
+            << "CPU:" << (cpu.brand.isEmpty() ? cpu.arch : cpu.brand)
+            << QStringLiteral("features: %1").arg(
+                   presentFeatures(cpu).join(QLatin1Char(' ')));
+    } else {
+        qCInfo(lcSysInfo).noquote()
+            << "CPU:" << (cpu.brand.isEmpty() ? cpu.arch : cpu.brand);
+    }
     qCInfo(lcSysInfo).noquote() << "RAM:" << ramMb << "MB";
 
     const QString baseline = compiledGgmlBaseline();
+    // Empty when the build can't know it: system-libwhisper builds (the
+    // distro chose the flags) and non-x86 hosts (the x86 option set is all
+    // OFF there).
     qCInfo(lcSysInfo).noquote()
         << "Speech engine CPU baseline:"
-        << (baseline.isEmpty() ? QStringLiteral("unknown (system libwhisper)")
+        << (baseline.isEmpty() ? QStringLiteral("not recorded for this build")
                                : baseline);
 
     const QStringList missing = missingCpuFeatures(cpu, baseline);
@@ -200,8 +217,11 @@ QString SystemInventory::cpuSummary()
 {
     const CpuInfo cpu = detectCpu();
     const QString name = cpu.brand.isEmpty() ? cpu.arch : cpu.brand;
-    if (!cpu.x86)
-        return name;
+    if (!cpu.x86) {
+        return cpu.brand.isEmpty()
+            ? name
+            : QStringLiteral("%1 (%2)").arg(name, cpu.arch);
+    }
     const QStringList features = presentFeatures(cpu);
     return QStringLiteral("%1 (%2; %3)")
         .arg(name, cpu.arch,

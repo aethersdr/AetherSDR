@@ -3848,7 +3848,7 @@ add_executable(system_inventory_test
 )
 target_include_directories(system_inventory_test PRIVATE src)
 target_link_libraries(system_inventory_test PRIVATE Qt6::Core)
-if (_aether_ggml_baseline)
+if (NOT _aether_ggml_baseline_str STREQUAL "")
     target_compile_definitions(system_inventory_test PRIVATE
         AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
 endif()
