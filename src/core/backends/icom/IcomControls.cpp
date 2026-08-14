@@ -28,9 +28,26 @@ constexpr std::array kSpecs = {
                 Plane::Slice, Encoding::ModeFilter, Wiring::Both,
                 0, 3, "enum", 0, 0,
                 "setSliceMode", "vfoModeCombo", true,
-                "The SECOND payload byte is the filter slot (1..3) and carries the "
+                "ORDINARY mode only — DATA on/off is NOT in this frame, which is why "
+                "writes go out as 0x26 (the data.mode row) on every model that has "
+                "it and fall back to 0x06 only on an unrecognised radio. The radio "
+                "still READS and REPORTS here (0x04, and 0x01 unsolicited). The "
+                "SECOND payload byte is the filter slot (1..3) and carries the "
                 "passband: an IC-705 cannot report a passband in Hz, so the slot is "
                 "the only source. SAM/DRM/DSB have no equivalent and are refused."},
+    ControlSpec{"data.mode", 0x26, 0x00, true, "Mode + DATA on/off + filter slot",
+                Plane::Slice, Encoding::Enum, Wiring::Both,
+                0, 3, "enum", 0, 0,
+                "setSliceMode", "vfoModeCombo", true,
+                "WHAT MAKES DIGU DIFFERENT FROM USB. Commands 01/04/06 carry only "
+                "the mode byte, and USB and USB-D share it — 26 is the only command "
+                "that tells them apart, in either direction. It states mode, DATA "
+                "and filter slot for the selected VFO in ONE frame, so a mode "
+                "change cannot clear DATA and a filter change cannot leave DATA "
+                "behind. Written on every mode and filter change, confirmed by a "
+                "read, and adopted from the radio at connect and after every "
+                "front-panel mode change. Unselected VFO (26 01) is split, which "
+                "this backend does not yet model."},
     ControlSpec{"filter", 0x06, 0, false, "IF filter slot",
                 Plane::Slice, Encoding::ModeFilter, Wiring::Both,
                 1, 3, "slot", 1, 3,

@@ -87,6 +87,7 @@ int main(int argc, char** argv)
     // nine that arrived in their own frames a millisecond earlier.
     SliceDelta lastSliceState;
     TransmitDelta lastTransmitState;
+    std::vector<QString> publishedModes;
     const auto mergeSlice = [&lastSliceState](const SliceDelta& d) {
         if (d.nr) lastSliceState.nr = d.nr;
         if (d.nb) lastSliceState.nb = d.nb;
@@ -99,9 +100,16 @@ int main(int argc, char** argv)
         if (d.ritOn) lastSliceState.ritOn = d.ritOn;
         if (d.xitOn) lastSliceState.xitOn = d.xitOn;
         if (d.ritFreq) lastSliceState.ritFreq = d.ritFreq;
+        if (d.mode) lastSliceState.mode = d.mode;
+        if (d.filterLow) lastSliceState.filterLow = d.filterLow;
+        if (d.filterHigh) lastSliceState.filterHigh = d.filterHigh;
     };
     QObject::connect(&backend, &IRadioBackend::sliceChanged, &app,
-                     [&](int, const SliceDelta& d) { mergeSlice(d); });
+                     [&](int, const SliceDelta& d) {
+                         mergeSlice(d);
+                         if (d.mode)
+                             publishedModes.push_back(*d.mode);
+                     });
     QObject::connect(&backend, &IRadioBackend::transmitChanged, &app,
                      [&](const TransmitDelta& d) {
         if (d.speechProcEnable) lastTransmitState.speechProcEnable = d.speechProcEnable;
@@ -405,6 +413,148 @@ int main(int argc, char** argv)
         check(sl.ritFreq.value_or(0) == -1230,
               "and the RIT OFFSET comes back SIGNED — folding the sign byte into "
               "the magnitude tunes the wrong way");
+
+        // DATA MODE, read from 26 and NOT inferrable from anything else.
+        // The fake radio sits in USB-D; mode byte 0x01 is plain USB, so a client
+        // that decodes only 04 reports USB on a radio the operator has already
+        // put in a data mode. That is not cosmetic — it is the state that
+        // decides whether the radio modulates from the network or the mic.
+        check(sl.mode.value_or(QString()) == QLatin1String("DIGU"),
+              "the radio's own DATA-ON state is adopted at connect, so USB-D "
+              "reads as DIGU rather than as plain USB");
+    }
+
+    // ---- DATA MODE IS SENT, AND ADOPTED (#4984) ---------------------------
+    //
+    // DIGU and USB are the SAME mode byte on the wire. The only thing that
+    // separates them is command 26, and until it was wired the backend inferred
+    // DATA from the neutral name and told the radio nothing: selecting DIGU on
+    // a radio in DATA OFF left it in plain USB, modulating from the MICROPHONE,
+    // while AetherSDR's mode indicator, passband and capabilities all said
+    // DIGU. Nothing errored — digital transmit looked wired and made no output.
+    //
+    // The three halves of that, each checked below: we SEND it, we ADOPT what
+    // the radio reports, and the radio's report WINS over what we asked for.
+    {
+        // --- app-originated: one frame carries all three -------------------
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("DIGU"));
+        QTest::qWait(150);
+
+        const auto& sent = radio.civCommands();
+        auto write26 = std::find_if(sent.begin(), sent.end(), [](const CivFrame& f) {
+            return f.cmd == cmd::kVfoMode && f.hasSub && f.sub == vfoMode::kSelected
+                && f.data.size() >= 3;
+        });
+        check(write26 != sent.end(),
+              "selecting DIGU sends 26 00 — the only command that can express "
+              "the DATA flag at all");
+        check(write26 != sent.end()
+                  && write26->data[0] == static_cast<std::uint8_t>(CivMode::Usb)
+                  && write26->data[1] == 0x01,
+              "carrying mode USB *and* DATA ON — without the flag the radio "
+              "stays in plain USB and transmits from the microphone");
+        check(write26 != sent.end() && write26->data[2] >= 1 && write26->data[2] <= 3,
+              "and the filter slot in the SAME frame, so mode, DATA and slot "
+              "are applied or refused as one unit");
+        // The negative half, and the one that matters: 06 is what CLEARS DATA
+        // on the radio. A mode change that still sent it would undo the flag it
+        // had just asked for, depending only on which frame the radio saw last.
+        check(std::none_of(sent.begin(), sent.end(), [](const CivFrame& f) {
+                  return f.cmd == cmd::kSetMode && !f.data.empty();
+              }),
+              "and NO bare 06 goes out alongside it — 06 clears DATA, so the two "
+              "together would be a race with the radio's own side effects");
+        check(std::any_of(sent.begin(), sent.end(), [](const CivFrame& f) {
+                  return f.cmd == cmd::kVfoMode && f.hasSub
+                      && f.sub == vfoMode::kSelected && f.data.empty();
+              }),
+              "followed by a CONFIRMATION read — the write is a request, only "
+              "the radio's answer is state (Constitution II)");
+        check(waitFor([&] { return radio.m_dataOn; }),
+              "and the radio ends up actually in DATA mode");
+
+        // --- ...and back off again -----------------------------------------
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        check(waitFor([&] { return !radio.m_dataOn; }),
+              "selecting plain USB clears DATA on the radio rather than leaving "
+              "a data mode latched under a voice-mode indicator");
+
+        // --- a filter change must not drop the radio out of DATA ------------
+        //
+        // The whole reason the three travel together. Sent as 06 this took an
+        // operator running FT8 in USB-D back to plain USB — and their transmit
+        // audio back to the microphone — from a button that says nothing about
+        // the mode.
+        backend.setSliceMode(0, QStringLiteral("DIGU"));
+        check(waitFor([&] { return radio.m_dataOn; }), "back into DATA for the check");
+        radio.clearCivLog();
+        backend.setSliceFilter(0, -1800, 0);   // 1.8 kHz — the SSB ladder's FIL3
+        check(waitFor([&] { return radio.m_filter == 3; }),
+              "the filter request reaches the radio and selects FIL3");
+        check(radio.m_dataOn,
+              "and leaves it IN DATA — a filter button must not silently take an "
+              "FT8 operator back to microphone audio");
+        check(std::none_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           [](const CivFrame& f) {
+                               return f.cmd == cmd::kSetMode && !f.data.empty();
+                           }),
+              "because the slot went out as 26 restating DATA, not as a bare 06 "
+              "— which is the frame that clears it");
+        check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                          [](const CivFrame& f) {
+                              return f.cmd == cmd::kVfoMode && f.hasSub
+                                  && f.sub == vfoMode::kSelected && f.data.empty();
+                          }),
+              "and the filter write is confirmed by reading the compound state back");
+
+        // --- front-panel adoption -------------------------------------------
+        //
+        // The radio pushes 01 <mode> <filter> when the operator turns the MODE
+        // knob, and that frame CANNOT carry DATA. Following the DATA half means
+        // asking, which is what the 26 read on the unsolicited form does.
+        lastSliceState.mode.reset();
+        publishedModes.clear();
+        radio.frontPanelMode(static_cast<std::uint8_t>(CivMode::Lsb), 1, /*dataOn=*/true);
+        check(waitFor([&] {
+                  return lastSliceState.mode.value_or(QString()) == QLatin1String("DIGL");
+              }),
+              "a front-panel LSB-D reaches the model as DIGL — the 01 push says "
+              "only LSB, so this proves the DATA half was asked for and adopted");
+        check(std::all_of(publishedModes.begin(), publishedModes.end(), [](const QString& m) {
+                  return m == QLatin1String("DIGL");
+              }),
+              "without first publishing a stale voice/DATA combination");
+
+        lastSliceState.mode.reset();
+        publishedModes.clear();
+        radio.frontPanelMode(static_cast<std::uint8_t>(CivMode::Lsb), 1, /*dataOn=*/false);
+        check(waitFor([&] {
+                  return lastSliceState.mode.value_or(QString()) == QLatin1String("LSB");
+              }),
+              "and leaving DATA on the front panel comes back as plain LSB, so "
+              "the flag clears as well as sets");
+        check(std::all_of(publishedModes.begin(), publishedModes.end(), [](const QString& m) {
+                  return m == QLatin1String("LSB");
+              }),
+              "without transiently republishing DIGL from the stale DATA flag");
+
+        // --- the radio wins over our optimistic publish ----------------------
+        //
+        // Constitution II: setSliceMode publishes DIGU immediately because the
+        // passband cannot come from anywhere else, but that is a guess. A radio
+        // that refuses DATA must pull the indicator back rather than leaving it
+        // claiming a mode the radio is not in.
+        radio.m_refuseDataMode = true;
+        lastSliceState.mode.reset();
+        backend.setSliceMode(0, QStringLiteral("DIGU"));
+        check(waitFor([&] {
+                  return lastSliceState.mode.value_or(QString()) == QLatin1String("USB");
+              }),
+              "when the radio REFUSES DATA, its own report corrects the "
+              "optimistic DIGU back to USB instead of the indicator lying");
+        radio.m_refuseDataMode = false;
     }
 
     // ---- shared 0..255 percentage write buckets --------------------------

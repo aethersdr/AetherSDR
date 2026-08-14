@@ -196,7 +196,33 @@ inline constexpr std::uint8_t kRxAntenna   = 0x12;
 // RIT / dTX. Icom calls transmit incremental tuning "dTX"; the operator-facing
 // name everywhere else is XIT, and they are the same control.
 inline constexpr std::uint8_t kTuneOffset   = 0x21;
+// OPERATING MODE, DATA STATE AND IF FILTER — ALL THREE IN ONE FRAME.
+//
+// This is the command that tells USB from USB-D. Commands 01/04/06 carry only
+// the mode byte, and USB and USB-D share it (0x01), so nothing in that family
+// can express or report the DATA flag. 0x26 carries mode, DATA on/off and the
+// filter slot together, per VFO, and it is both readable and writable.
+//
+// ONE FRAME MATTERS, not just one command. Setting the three separately lets
+// them clobber each other: on a real radio an ordinary-mode write can clear
+// DATA, so a mode change followed by a DATA write is a race with the radio's
+// own side effects, and a filter change sent as a plain mode write drops the
+// operator straight out of DATA. 0x26 makes the three a single transaction the
+// radio applies or refuses as a unit.
+inline constexpr std::uint8_t kVfoMode      = 0x26;
 }  // namespace cmd
+
+// The subcommand of 0x26 is the VFO it addresses.
+//
+// SELECTED ONLY, today. The unselected VFO is where split lives, and modelling
+// split needs a second frequency the backend does not yet carry — publishing
+// the unselected VFO's mode without it would be a mode indicator for a VFO
+// nothing else in the app knows about. The constant is named so the split work
+// has somewhere to land rather than a bare 0x01 appearing later.
+namespace vfoMode {
+inline constexpr std::uint8_t kSelected   = 0x00;
+inline constexpr std::uint8_t kUnselected = 0x01;
+}  // namespace vfoMode
 
 namespace level {
 inline constexpr std::uint8_t kAf        = 0x01;
@@ -341,6 +367,17 @@ enum class CivMode : std::uint8_t {
                                                       bool& dataModeOut);
 [[nodiscard]] std::string modeToNeutral(CivMode mode, bool dataMode);
 
+// The three things command 0x26 carries about one VFO.
+struct VfoModeState {
+    CivMode mode = CivMode::Usb;
+    bool dataMode = false;
+    // 1..3, or 0 when the radio named a slot outside that range. Zero means
+    // "unspecified", NOT slot 0: the filter ladder is defined over 1..3, and
+    // adopting an out-of-range byte as a slot would drop the operator's IF
+    // filter out of it. The caller keeps whatever slot it already had.
+    int filter = 0;
+};
+
 // Filter selection. The IC-705 offers three fixed IF filters, not a continuous
 // passband, so a request in Hz can only SNAP. Returns 1, 2 or 3.
 //
@@ -384,6 +421,17 @@ enum class CivMode : std::uint8_t {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadFrequency(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetMode(std::uint8_t to, CivMode mode, int filter);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadMode(std::uint8_t to);
+// Command 0x26 — the selected VFO's mode, DATA state and filter, read and
+// written as one unit. See cmd::kVfoMode for why the three travel together.
+[[nodiscard]] std::vector<std::uint8_t> cmdReadVfoMode(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetVfoMode(std::uint8_t to, CivMode mode,
+                                                      bool dataMode, int filter);
+// Decode the PAYLOAD of a 0x26 frame — the bytes after the VFO subcommand.
+// Returns nullopt for anything the radio could not have meant: short of three
+// bytes, or a DATA byte that is neither 00 nor 01. The frames this parses
+// arrive from the network, so it validates rather than indexes (Constitution
+// VII).
+[[nodiscard]] std::optional<VfoModeState> decodeVfoMode(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadMeter(std::uint8_t to, std::uint8_t which);
 // The READ forms of 0x14 and 0x16 — same subcommand, no payload. The radio

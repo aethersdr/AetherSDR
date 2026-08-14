@@ -34,6 +34,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*hasTransmit*/ true, /*txPowerMaxWatts*/ 10.0,
         /*tuningMinHz*/ 30'000ULL, /*tuningMaxHz*/ 470'000'000ULL,
         /*verified*/ true,
+        /*hasVfoModeCommand*/ true,
     },
     {
         // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),
@@ -110,6 +111,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, 100.0,
         30'000ULL, 74'800'000ULL,
         /*verified*/ true,
+        /*hasVfoModeCommand*/ true,
     },
     {
         // SIX-BYTE FREQUENCIES above 10 GHz. A codec written against a
@@ -136,6 +138,9 @@ constexpr IcomModel kUnknown{
     /*hasTransmit*/ false, /*txPowerMaxWatts*/ 0.0,
     /*tuningMinHz*/ 0, /*tuningMaxHz*/ 0,
     /*verified*/ false,
+    // No 0x26: see the field's comment. An unknown radio gets the mode command
+    // every Icom has had for decades and no DATA control.
+    /*hasVfoModeCommand*/ false,
 };
 
 }  // namespace

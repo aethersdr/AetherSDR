@@ -225,6 +225,27 @@ QString IcomCivBackend::currentLadderMode() const
     return currentNeutralMode();
 }
 
+void IcomCivBackend::publishModeState()
+{
+    const QString neutral = currentNeutralMode();
+    if (neutral.isEmpty())
+        return;   // D-STAR: a waveform, not a demodulator setting
+    SliceDelta s;
+    s.mode = neutral;
+    // The passband travels WITH the mode, in the same delta, because the radio
+    // will never send one. Applied after the mode by SliceModel's own ordering,
+    // which is what stops a narrow CW window surviving into DIGU.
+    const auto [low, high] =
+        passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
+    s.filterLow  = low;
+    s.filterHigh = high;
+    emit sliceChanged(sliceId(), s);
+    // The filter LADDER changes with the mode, so the buttons have to be
+    // rebuilt from the new one. Change-gated inside the models, so the repeat
+    // this produces on an unchanged mode costs nothing.
+    publishCapabilities();
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -356,6 +377,15 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_session->sendCiv(cmdReadId(m_session->civAddress()));
     m_session->sendCiv(cmdReadFrequency(m_session->civAddress()));
     m_session->sendCiv(cmdReadMode(m_session->civAddress()));
+    // ...AND WHETHER THAT MODE IS A DATA MODE. 04 answers USB for both USB and
+    // USB-D, so without this a radio the operator left in USB-D was adopted as
+    // plain USB at every connect — the mode indicator, the passband and the
+    // modulation-source diagnostic all decided for the wrong mode, and the
+    // first thing AetherSDR wrote pushed the radio the rest of the way out of
+    // DATA. 26 00 reports mode, DATA and filter together, so it also corrects
+    // the 04 above if the two ever disagree.
+    if (m_model->hasVfoModeCommand)
+        m_session->sendCiv(cmdReadVfoMode(m_session->civAddress()));
 
     // ASK WHERE THE RADIO TAKES ITS MODULATION FROM. Not cosmetic: if this is
     // not WLAN, everything else about transmit can be perfect and the operator
@@ -740,23 +770,30 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // changing the filter on the radio's own front panel.
         if (frame.data.size() >= 2 && frame.data[1] >= 1 && frame.data[1] <= 3)
             m_filter = frame.data[1];
-        const QString neutral = QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
-        if (neutral.isEmpty())
-            return;   // D-STAR: a waveform, not a demodulator setting
-        SliceDelta s;
-        s.mode = neutral;
-        // The passband travels WITH the mode, in the same delta, because the
-        // radio will never send one. Applied after the mode by SliceModel's own
-        // ordering, which is what stops a narrow CW window surviving into DIGU.
-        const auto [low, high] =
-            passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
-        s.filterLow  = low;
-        s.filterHigh = high;
-        emit sliceChanged(sliceId(), s);
-        // The filter LADDER changes with the mode, so the buttons have to be
-        // rebuilt from the new one. Change-gated inside the models, so the
-        // repeat this produces on an unchanged mode costs nothing.
-        publishCapabilities();
+        // ASK WHETHER THIS MODE IS A DATA MODE, because the frame that just
+        // arrived cannot say. 0x01 is the unsolicited push the radio sends when
+        // the operator turns the MODE knob, and USB→USB-D on the front panel
+        // produces exactly the same 01 01 xx as USB→USB. Nothing else in the
+        // protocol announces that change, so following it means asking — and
+        // 0x26 is the only command that can answer.
+        //
+        // Event-driven, not a timer: one read per front-panel mode change, on
+        // the unsolicited form only. Answering our own 04 poll with another
+        // read would be a second poll of a state the connect snapshot and this
+        // path already cover, and the confirmation read in setSliceMode covers
+        // app-originated changes.
+        // Do not publish a capable radio's 04/01 frame: it cannot refresh
+        // m_dataMode, so combining it with the new ordinary mode would expose a
+        // transient false DIGU/DIGL (or false voice mode) until 26 answered.
+        // Command 26 is the single authoritative publication for these models.
+        if (frame.cmd == cmd::kSetModeTrx && m_session && m_model->hasVfoModeCommand) {
+            m_session->sendCiv(cmdReadVfoMode(m_session->civAddress()));
+        } else if (!m_model->hasVfoModeCommand) {
+            // This model has no verified DATA readback. An ordinary mode frame
+            // can only justify an ordinary mode claim.
+            m_dataMode = false;
+            publishModeState();
+        }
         return;
     }
 
@@ -963,6 +1000,45 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         }
         m_attenStep = reported;
         emit panAttenuatorChanged(panId(), reported);
+        return;
+    }
+
+    // 26 00 <mode> <data> <filter> — MODE, DATA STATE AND FILTER TOGETHER.
+    //
+    // This case is what makes a front-panel USB-D visible. Mode byte 0x01 is
+    // USB whether or not DATA is on, so until this decoded, a radio the
+    // operator had put in USB-D read as plain USB indefinitely — and every
+    // AetherSDR decision that follows from the mode name (the indicator, the
+    // passband, whether the mod-input warning applies) was taken for the wrong
+    // mode.
+    //
+    // RADIO-AUTHORITATIVE (Constitution II): this OVERWRITES whatever
+    // setSliceMode optimistically assumed. The optimistic value exists only to
+    // fill the gap until this arrives; when the two disagree the radio is
+    // right, including when the radio simply refused the change.
+    case cmd::kVfoMode: {
+        // THE SELECTED VFO ONLY. A reply for the unselected one describes a VFO
+        // the app does not model, and adopting it would publish the other VFO's
+        // mode on the slice the operator is listening to.
+        if (!frame.hasSub || frame.sub != vfoMode::kSelected)
+            return;
+        const auto st = decodeVfoMode(frame.data);
+        if (!st)
+            return;
+        m_mode = st->mode;
+        m_dataMode = st->dataMode;
+        // Zero means the radio named a slot outside 1..3 — see VfoModeState.
+        // Keeping the previous slot is what stops mode and filter clobbering
+        // each other, which is the whole reason the three travel in one frame.
+        if (st->filter != 0)
+            m_filter = st->filter;
+        publishModeState();
+        // NOT a modulation-source re-check. checkModInput() reads DATA OFF MOD
+        // and DATA MOD together and warns if either is wrong, so its answer
+        // does not depend on which of the two the radio is currently in — but
+        // its usefulness did: until this decoded, "DATA MOD is set to WLAN"
+        // could be true while the radio sat in DATA OFF and modulated from the
+        // microphone anyway. That gap closes here, by the mode being right.
         return;
     }
 
@@ -1332,12 +1408,44 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     // report never comes at all. The radio's report corrects this if it
     // disagrees, exactly as it does for the preamp.
     m_mode = *civ;
-    m_dataMode = data;
     // KEEP THE FILTER SLOT across a mode change. Hardcoding FIL1 here meant
     // every mode change jumped to the widest filter, so an operator working a
     // narrow CW filter lost it the moment they visited another mode and came
     // back.
-    sendUserCommand(cmdSetMode(m_session ? m_session->civAddress() : 0xA4, *civ, m_filter));
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
+    // MODE AND THE DATA FLAG IN ONE FRAME, because command 06 cannot carry the
+    // flag at all.
+    //
+    // THE BUG THIS FIXES: DIGU and USB are the same mode byte. Sending 06 01
+    // alone asked for plain USB, so an operator selecting DIGU on a radio
+    // sitting in DATA OFF got a radio modulating from the MICROPHONE while
+    // AetherSDR's indicator, passband and capabilities all said DIGU. Digital
+    // transmit looked completely wired and produced no output — no error
+    // anywhere, because nothing was wrong except which modulator the radio was
+    // listening to.
+    //
+    // ONE FRAME, not an ordered pair. Writing the ordinary mode is what clears
+    // DATA on the radio, so mode-then-DATA is a sequence whose correctness
+    // depends on both frames landing and landing in order; 26 states all three
+    // at once and the radio applies or refuses them as a unit.
+    if (m_model->hasVfoModeCommand) {
+        m_dataMode = data;
+        sendUserCommand(cmdSetVfoMode(addr, *civ, data, m_filter));
+    } else {
+        // A radio we cannot characterise. 06 has existed on every Icom for
+        // decades; 26 has not, and a mode change the radio answers NG to is a
+        // mode change that silently does not happen. No DATA control here, which
+        // is what an unknown radio had before this existed.
+        m_dataMode = false;
+        sendUserCommand(cmdSetMode(addr, *civ, m_filter));
+    }
+    // CONFIRM. Everything above is a request; only the radio's own answer is
+    // state (Constitution II). This read is what corrects the optimistic
+    // publish below if the radio refused or altered the change — a mode with no
+    // DATA variant, a band where the radio will not enter it. One extra frame
+    // on the operator's own mode change, not a new poll.
+    if (m_session && m_model->hasVfoModeCommand)
+        m_session->sendCiv(cmdReadVfoMode(addr));
 
     // PUBLISH THE PASSBAND NOW, from the mode we just commanded.
     //
@@ -1347,9 +1455,11 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     // exactly that — CW then DIGU left the window at the previous mode's width,
     // so a decoder in a wide mode saw a narrow slot. The radio owns its DSP and
     // sends no passband, so this is the only place it can come from.
-    const auto [low, high] = passbandForModeAndFilter(mode.toStdString(), m_filter);
+    const QString publishedMode = currentNeutralMode();
+    const auto [low, high] =
+        passbandForModeAndFilter(publishedMode.toStdString(), m_filter);
     SliceDelta d;
-    d.mode = mode.toUpper();
+    d.mode = publishedMode;
     d.filterLow  = low;
     d.filterHigh = high;
     emit sliceChanged(sliceId(), d);
@@ -1372,7 +1482,27 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
     // filter, in both directions.
     const int filter = filterForWidthHz(neutral.toStdString(), width);
     m_filter = filter;
-    sendUserCommand(cmdSetMode(m_session ? m_session->civAddress() : 0xA4, m_mode, filter));
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
+    // THE FILTER BUTTON MUST NOT DROP THE RADIO OUT OF DATA. Command 06 carries
+    // mode and slot with no DATA byte, and writing it is what clears DATA on
+    // the radio — so a filter change sent as 06 took an operator running FT8 in
+    // USB-D back to plain USB and their transmit audio back to the microphone,
+    // from a button that says nothing about the mode. 26 restates DATA with the
+    // new slot in the same frame.
+    //
+    // m_dataMode here is the RADIO's reported state, not a guess: it is read at
+    // connect, re-read after every front-panel mode change, and confirmed after
+    // every mode write, so this re-asserts what the radio said (Constitution
+    // II) rather than pushing a client belief over it.
+    if (m_model->hasVfoModeCommand)
+        sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
+    else
+        sendUserCommand(cmdSetMode(addr, m_mode, filter));
+    // A write is intent; the radio's own reply is state. This also corrects the
+    // optimistic passband below if the radio clamps or refuses the requested
+    // slot while CI-V Transceive is disabled.
+    if (m_session && m_model->hasVfoModeCommand)
+        m_session->sendCiv(cmdReadVfoMode(addr));
 
     // PUBLISH THE PASSBAND NOW, for the same reason setSliceMode does: the
     // radio's mode report only comes back if CI-V Transceive is on, and the
@@ -1842,8 +1972,14 @@ static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
     default: break;
     }
 
+    // A 26 frame states MODE, DATA AND FILTER, so it satisfies three rows, not
+    // one. Without this the mode and filter rows read as never-sent the moment
+    // writes moved onto 26 — `controls.map` would report two controls
+    // unexercised on a session that had just exercised both.
+    const bool alsoModeRows = cmd == cmd::kVfoMode && hasSub && sub == vfoMode::kSelected;
+
     for (const auto& c : icom::controlSpecs()) {
-        if (c.cmd != setCmd)
+        if (c.cmd != setCmd && !(alsoModeRows && c.cmd == cmd::kSetMode))
             continue;
         if (c.hasSub && (!hasSub || c.sub != sub))
             continue;
@@ -2218,7 +2354,18 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         setSliceFrequency(slice, static_cast<double>(m_frequencyHz));
         return true;
     }
-    if (id == QLatin1String("mode") || id == QLatin1String("filter")) {
+    // No verified 0x26 means there is no frame that can carry data.mode. Report
+    // NOT-TESTED, not MISSING after driving an unrelated bare 0x06 mode write.
+    if (id == QLatin1String("data.mode") && !m_model->hasVfoModeCommand)
+        return false;
+    if (id == QLatin1String("mode") || id == QLatin1String("filter")
+        || id == QLatin1String("data.mode")) {
+        // data.mode rides the same verb: setSliceMode states mode, DATA and
+        // slot in one 26 frame, so re-asserting the mode re-asserts the DATA
+        // flag with it and the scrub sees it go out. The round-trip guard below
+        // is what makes that safe — m_dataMode is now the RADIO's reported
+        // state, so the re-assertion carries what the radio said rather than a
+        // client guess.
         const QString m = currentNeutralMode();
         if (m.isEmpty())
             return false;

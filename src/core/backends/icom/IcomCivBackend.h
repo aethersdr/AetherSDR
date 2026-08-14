@@ -158,6 +158,12 @@ private:
     // only where a radio mode has no neutral equivalent but does have its own
     // IF widths — RTTY today. See the definition.
     QString currentLadderMode() const;
+    // Publish the current mode, its passband and the filter ladder from
+    // m_mode/m_dataMode/m_filter. SHARED, because the mode arrives on two
+    // different commands — 01/04 carry mode and slot, 26 carries mode, DATA and
+    // slot — and a 26 that did not republish would decode the DATA flag into a
+    // mode indicator that never changed.
+    void publishModeState();
     void publishMeterDefs();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void applyScopeStartup();

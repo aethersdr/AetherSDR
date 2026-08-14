@@ -346,6 +346,78 @@ static void testCommands()
           "out-of-range reference clamps to +20.0 rather than wrapping");
 }
 
+// DATA mode — command 26.
+//
+// The command that tells USB from USB-D. Every check here is about the fact
+// that DATA is NOT in the mode byte: commands 01/04/06 cannot carry it, and 26
+// carries it together with the mode and the filter slot so the three cannot
+// clobber each other.
+static void testDataMode()
+{
+    check(bytesAre(cmdReadVfoMode(kIc705), {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0xFD}),
+          "the mode/DATA/filter read is 26 00 with no payload");
+    check(bytesAre(cmdSetVfoMode(kIc705, CivMode::Usb, true, 2),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0x01, 0x01, 0x02, 0xFD}),
+          "USB-D on FIL2 is 26 00 01 01 02");
+    check(bytesAre(cmdSetVfoMode(kIc705, CivMode::Usb, false, 2),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0x01, 0x00, 0x02, 0xFD}),
+          "plain USB on FIL2 differs ONLY in the DATA byte — the mode byte is "
+          "the same 0x01, which is why 06 alone can never express the pair");
+    check(bytesAre(cmdSetVfoMode(kIc705, CivMode::Lsb, true, 9),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0x00, 0x01, 0x03, 0xFD}),
+          "an out-of-range slot clamps to 1..3 rather than reaching the radio");
+
+    // Exercise the complete receive path, including parseFrame's per-command
+    // sub-address classification. Direct payload tests cannot catch a selector
+    // byte accidentally left at data[0].
+    const std::array<std::uint8_t, 10> reply{
+        0xFE, 0xFE, 0xE0, 0xA4, 0x26, 0x00, 0x01, 0x01, 0x02, 0xFD};
+    const auto parsed = parseFrame(reply);
+    check(parsed && parsed->cmd == cmd::kVfoMode && parsed->hasSub
+              && parsed->sub == vfoMode::kSelected,
+          "a full 26 00 reply parses the selected-VFO byte as a subcommand");
+    check(parsed && parsed->data.size() == 3 && parsed->data[0] == 0x01
+              && parsed->data[1] == 0x01 && parsed->data[2] == 0x02,
+          "and presents exactly mode, DATA and filter to the decoder");
+
+    // 0x06 is untouched. It is still what an unrecognised radio gets, and a
+    // builder that had started emitting 26 for it would send a command that
+    // model may not implement.
+    check(bytesAre(cmdSetMode(kIc705, CivMode::Usb, 1),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x06, 0x01, 0x01, 0xFD}),
+          "the plain mode command is still 06, unchanged");
+
+    const std::array<std::uint8_t, 3> on{0x01, 0x01, 0x02};
+    const auto dOn = decodeVfoMode(on);
+    check(dOn && dOn->mode == CivMode::Usb && dOn->dataMode && dOn->filter == 2,
+          "01 01 02 decodes as USB, DATA on, FIL2");
+
+    const std::array<std::uint8_t, 3> off{0x01, 0x00, 0x03};
+    const auto dOff = decodeVfoMode(off);
+    check(dOff && dOff->mode == CivMode::Usb && !dOff->dataMode && dOff->filter == 3,
+          "the same mode byte with DATA off decodes as plain USB");
+
+    // The slot is the only thing an out-of-range byte may cost. Returning 0 —
+    // "unspecified" — lets the caller keep the slot it already had rather than
+    // dropping the operator's IF filter out of the 1..3 the ladder is defined
+    // over, while the mode and DATA state are still adopted.
+    const std::array<std::uint8_t, 3> badSlot{0x03, 0x00, 0x09};
+    const auto dBad = decodeVfoMode(badSlot);
+    check(dBad && dBad->mode == CivMode::Cw && dBad->filter == 0,
+          "a slot outside 1..3 decodes as unspecified, not as slot 0");
+
+    check(!decodeVfoMode({}), "an empty payload decodes to nothing");
+    const std::array<std::uint8_t, 2> short2{0x01, 0x01};
+    check(!decodeVfoMode(short2), "a payload short of all three fields is refused");
+    const std::array<std::uint8_t, 4> long4{0x00, 0x01, 0x01, 0x02};
+    check(!decodeVfoMode(long4),
+          "a payload longer than the three documented fields is refused as mis-parsed");
+    const std::array<std::uint8_t, 3> bogus{0x01, 0x07, 0x02};
+    check(!decodeVfoMode(bogus),
+          "a DATA byte that is neither 00 nor 01 is refused rather than coerced "
+          "to a bool — an invented DATA state is the lie this command removes");
+}
+
 int main()
 {
     testFraming();
@@ -353,6 +425,7 @@ int main()
     testReassembler();
     testModes();
     testCommands();
+    testDataMode();
 
     if (g_failures == 0)
         std::printf("icom_civ_test: all checks passed\n");

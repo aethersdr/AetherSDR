@@ -89,6 +89,10 @@ std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
     // could not tell an enable from an offset and dropped all three.
     case cmd::kTuneOffset:
     case cmd::kRxAntenna:
+    // 0x26 is sub-addressed by VFO: 26 00 is the selected VFO, 26 01 the
+    // unselected one. Without this the selector stays in the payload and every
+    // mode/DATA/filter field is decoded one byte off.
+    case cmd::kVfoMode:
         f.hasSub = true;
         f.sub    = frame[bodyBegin];
         f.data.assign(frame.begin() + bodyBegin + 1, frame.begin() + bodyEnd);
@@ -462,6 +466,40 @@ std::vector<std::uint8_t> cmdSetMode(std::uint8_t to, CivMode mode, int filter)
 std::vector<std::uint8_t> cmdReadMode(std::uint8_t to)
 {
     return buildFrame(to, cmd::kReadMode);
+}
+
+std::vector<std::uint8_t> cmdReadVfoMode(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kVfoMode, vfoMode::kSelected);
+}
+
+std::vector<std::uint8_t> cmdSetVfoMode(std::uint8_t to, CivMode mode, bool dataMode,
+                                        int filter)
+{
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>(mode),
+        static_cast<std::uint8_t>(dataMode ? 0x01 : 0x00),
+        static_cast<std::uint8_t>(std::clamp(filter, 1, 3)),
+    };
+    return buildFrameSub(to, cmd::kVfoMode, vfoMode::kSelected, body);
+}
+
+std::optional<VfoModeState> decodeVfoMode(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3)
+        return std::nullopt;
+    // The DATA byte is a two-valued flag. Anything else is a frame we have
+    // mis-parsed — a resync artefact, or a model whose payload is not this
+    // shape — and guessing "on" from it would put the radio's modulation source
+    // somewhere the operator did not ask for.
+    if (payload[1] > 0x01)
+        return std::nullopt;
+    VfoModeState s;
+    s.mode = static_cast<CivMode>(payload[0]);
+    s.dataMode = payload[1] != 0;
+    if (payload[2] >= 1 && payload[2] <= 3)
+        s.filter = payload[2];
+    return s;
 }
 
 std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value)

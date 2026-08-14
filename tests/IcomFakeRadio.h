@@ -396,6 +396,51 @@ private:
                      frame->sub, on, kCivEom});
             return;
         }
+        // MODE, DATA STATE AND FILTER SLOT — held as the three separate
+        // registers a real radio holds, reachable through two different
+        // commands that see different amounts of them.
+        //
+        // 04/06 CANNOT SEE DATA, DELIBERATELY. USB and USB-D are the same mode
+        // byte 0x01; only 0x26 tells them apart. A fake that let 04 report DATA
+        // would pass a client that never sends 26 — which is the entire bug
+        // this radio exists to catch.
+        if (frame->cmd == cmd::kReadMode) {
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kReadMode,
+                     m_mode, m_filter, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kSetMode && frame->data.size() >= 2) {
+            m_mode = frame->data[0];
+            m_filter = frame->data[1];
+            // WRITING THE ORDINARY MODE CLEARS DATA, which is what a real radio
+            // does — and the reason a filter change must not go out as 06 while
+            // the operator is in a data mode.
+            m_dataOn = false;
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kVfoMode && frame->hasSub
+            && frame->sub == vfoMode::kSelected) {
+            if (frame->data.empty()) {   // the read form
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kVfoMode,
+                         vfoMode::kSelected, m_mode,
+                         static_cast<std::uint8_t>(m_dataOn ? 0x01 : 0x00),
+                         m_filter, kCivEom});
+                return;
+            }
+            if (frame->data.size() < 3)
+                return;
+            // A radio that will not enter DATA — a mode or band with no data
+            // variant. It takes the mode and slot, ACKs, and stays DATA OFF,
+            // which is the case an optimistic client cannot tell from success
+            // without reading back.
+            m_mode = frame->data[0];
+            m_dataOn = m_refuseDataMode ? false : frame->data[1] != 0;
+            if (frame->data[2] >= 1 && frame->data[2] <= 3)
+                m_filter = frame->data[2];
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
         if (frame->cmd == cmd::kControl && frame->hasSub
             && frame->sub == control::kTuner && frame->data.empty()) {
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kControl,
@@ -436,6 +481,26 @@ public:
         {level::kNotchPos, 128},  // ~50 %
         {level::kVoxGain, 204},   // ~80 %
     };
+    // USB-D on FIL2 — NOT the client's construction default (USB, FIL1), so a
+    // test asserting DIGU is asserting the client actually read 26 rather than
+    // kept its own guess.
+    std::uint8_t m_mode = static_cast<std::uint8_t>(CivMode::Usb);
+    std::uint8_t m_filter = 2;
+    bool m_dataOn = true;
+    bool m_refuseDataMode = false;
+
+    // Simulate the operator turning the MODE knob: the radio pushes an
+    // unsolicited 01 (which cannot carry DATA) and nothing else. Following the
+    // DATA half means the client has to ASK.
+    void frontPanelMode(std::uint8_t mode, std::uint8_t filter, bool dataOn)
+    {
+        m_mode = mode;
+        m_filter = filter;
+        m_dataOn = dataOn;
+        pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetModeTrx,
+                 m_mode, m_filter, kCivEom});
+    }
+
     int  m_ritHz = -1230;
     bool m_ritOn = true;
     bool m_xitOn = false;

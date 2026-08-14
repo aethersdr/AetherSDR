@@ -419,6 +419,17 @@ mic controls, monitor, VOX, notch, preamp, attenuator, and tuner state need a
 bounded periodic poll. Allow at least two poll periods before declaring an
 external-change failure.
 
+DATA mode needs its own row in that table, because it is invisible in the
+command every other mode check uses. Commands `01`, `04` and `06` carry one
+mode byte, and USB and USB-D share it — a certification pass that reads back
+`04` and sees `01` cannot tell them apart, and will pass a client that never
+sent DATA at all. Command `26` carries mode, DATA state and filter slot for the
+selected VFO together, so certify against `26 00` in both directions and verify
+DATA on the radio's own display, not only in AetherSDR's mode text. The
+same-frame property is the point: a filter change that goes out as `06` clears
+DATA on the radio, so "changed the IF filter, still in USB-D" is a required
+check, not an incidental one.
+
 A send-only control is different. The IC-7300MK2 RX-ANT command is shown
 optimistically after an operator click because live firmware acknowledges the
 documented read form with bare `FB` instead of returning state. Certification
