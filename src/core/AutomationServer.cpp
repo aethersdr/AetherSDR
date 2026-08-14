@@ -7241,7 +7241,7 @@ QJsonObject AutomationServer::doLiveness()
         // several units, and asking "are these the same string" reported a
         // healthy meter as broken forever. Through the shared predicate in
         // MeterSurfaces.h, because a private copy of it here is how the
-        // `radiocert` table went on emitting the old answer (§1.33).
+        // `radiocert` table went on emitting the old answer (§1.38).
         const bool disagrees = def && !meterUnitAccepted(accepted, declared);
         if (disagrees) {
             unitDisagreements

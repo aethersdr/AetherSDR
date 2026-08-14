@@ -47,7 +47,7 @@ namespace {
 // a healthy meter. Only one of the two tables was updated, so every HL2 run
 // went on reporting `UNIT MISMATCH … TX:ALC (declared dBFS, expected dB)` on a
 // correct meter, and ranked it above every real concern (CERTIFICATION.md
-// 1.33). The unit expectation now has exactly one home: kMeterSurfaces, joined
+// 1.38). The unit expectation now has exactly one home: kMeterSurfaces, joined
 // by key. A row here whose key has no surface entry gets no unit verdict, which
 // is the honest answer rather than a comparison against a value nobody wrote.
 struct MeterSpec {
@@ -69,7 +69,7 @@ struct MeterSpec {
     // A strictly stronger condition than needsKey, and the distinction is the
     // point: TX:SWR, TX:FWDPWR and TX:REFPWR measure RF that did not happen
     // even when the key went down cleanly. Reporting them as "defined but never
-    // fed" after a silent key is the false finding CERTIFICATION.md 1.32
+    // fed" after a silent key is the false finding CERTIFICATION.md 1.37
     // records — and its own concern text recommends deleting the meter.
     bool needsForwardPower;
 
@@ -589,7 +589,7 @@ void RadioCertification::stageMeterInventory()
     // — because with the operator's drive slider at zero every keyed stage
     // succeeded, keyRefusals was 0, every precondition passed, and the radio
     // radiated nothing. The report then blamed TX:SWR and recommended deleting
-    // it (CERTIFICATION.md 1.32).
+    // it (CERTIFICATION.md 1.37).
     const bool rfConfirmed = keyedRfConfirmed();
     const bool anyKeyedWindow = m_keyedWindows > 0;
     // ASK THE MODEL, do not report the observation flag. m_fwdPowerMeterDefined
@@ -627,7 +627,7 @@ void RadioCertification::stageMeterInventory()
         // The set comes from kMeterSurfaces, the one table that owns it, and
         // the membership test from the one predicate that answers it. This used
         // to be a private single-value column compared by equality, which
-        // flagged a correct TX:ALC on every HL2 run (CERTIFICATION.md 1.33).
+        // flagged a correct TX:ALC on every HL2 run (CERTIFICATION.md 1.38).
         const MeterDef* def = idx >= 0 ? meters.meterDef(idx) : nullptr;
         const QString declared = def ? def->unit : QString();
         const MeterSurface* surface = meterSurfaceFor(key);
@@ -852,7 +852,7 @@ void RadioCertification::stageMeterScale(const Options& o)
     // inventory stage that reports it runs after stageControlEffect has unkeyed
     // and settled 700 ms — so it was reading the one instant the value is
     // guaranteed absent, and reported 0.001 W in a run that measured 2.0 W
-    // (CERTIFICATION.md 1.34).
+    // (CERTIFICATION.md 1.39).
     if (keyedOk) {
         m_renderedWhileKeyed = renderedSnapshot();
         observeKeyedRf();

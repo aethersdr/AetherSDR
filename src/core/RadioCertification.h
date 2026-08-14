@@ -212,7 +212,7 @@ private:
     // Record forward power seen INSIDE a keyed window. Called from every stage
     // that keys, because "did this radio actually radiate" is a precondition of
     // every transmit-meter verdict and cannot be answered from the meter whose
-    // silence is being judged (CERTIFICATION.md 1.32).
+    // silence is being judged (CERTIFICATION.md 1.37).
     void observeKeyedRf();
 
     // Was a transmission ever CONFIRMED to have produced RF during this run?
@@ -257,7 +257,7 @@ private:
     // The consumer-side reading taken while the radio was actually keyed.
     // stageMeterInventory runs after stageControlEffect has unkeyed and settled
     // 700 ms, so sampling there is sampling the one moment a transmit-only
-    // quantity is guaranteed absent (CERTIFICATION.md 1.34).
+    // quantity is guaranteed absent (CERTIFICATION.md 1.39).
     QJsonObject m_renderedWhileKeyed;
 };
 

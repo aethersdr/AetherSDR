@@ -123,7 +123,7 @@ inline constexpr std::array<MeterSurface, 9> kMeterSurfaces{{
 // Does the consumer understand what the backend declared?
 //
 // THE one implementation of this question, and it is a function rather than
-// three copies of a split-and-compare loop because §1.33 is precisely what
+// three copies of a split-and-compare loop because §1.38 is precisely what
 // happens when two places answer it differently. `acceptedUnits` was widened
 // from a single value to a set here, the automation `meters` join was updated,
 // and `kMeterTable` in RadioCertification.cpp was not — so `radiocert meters`

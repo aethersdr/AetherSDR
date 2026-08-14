@@ -552,9 +552,14 @@ void SpectrumOverlayMenu::buildAntPanel()
         if (targetSlice) {
             emit flexRxAntennaSelected(targetSlice->sliceId());
         }
-        if (m_radioModel && m_radioModel->usesFlexCommandPlane()) {
+        if (m_radioModel && !m_panId.isEmpty()
+            && m_radioModel->usesFlexCommandPlane()) {
             // Flex assigns receive antenna on the panadapter.  SliceModel's
             // command targets a different object and was never equivalent.
+            // The empty-id check is not decoration: a pan applet exists before
+            // the radio hands back its id, and without it a click landing in
+            // that window puts `display pan set  rxant=ANT1` — no id, double
+            // space — on the wire. Same defect the clone path hit in #4881.
             m_radioModel->sendCommand(
                 QStringLiteral("display pan set %1 rxant=%2")
                     .arg(m_panId, ant));

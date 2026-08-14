@@ -58,7 +58,7 @@ a failure by anyone who ran it, on a meter that turns out to be exact.
 estimate, not a measurement, and the meter descriptions say so. Uncalibrated is
 not the same as absent, and this table said "counts only" long after they were
 being published; a stale not-fed claim is what switches off the check that
-would notice the meter regressing (CERTIFICATION.md 1.32).
+would notice the meter regressing (CERTIFICATION.md 1.37).
 
 Both of the changed stimulus cells above are measurements, not preferences —
 `TX:FWDPWR`'s nibble step replaces a halving the hardware refutes, and
@@ -374,7 +374,7 @@ this table, which is the same rule the report itself follows.
   → `applyLnaGainDb` → `MetisClient::setLnaGainDb`, writing AD9866
   `0x0a[5:0]` at runtime. `radiocert` used to assert the opposite as a
   hardcoded, family-gated finding on every HL2 run; it now MEASURES the
-  control instead, which is what let the gate go (CERTIFICATION.md 1.14, 1.35).
+  control instead, which is what let the gate go (CERTIFICATION.md 1.14, 1.40).
 - **The RF gain check's verdict rests on the echo, and its S-meter delta is
   evidence only.** The tempting expectation — an 8 dB LNA step must move
   `SLC:LEVEL` by 8 dB — is wrong twice over. `Hl2DbReference` is moved in the
