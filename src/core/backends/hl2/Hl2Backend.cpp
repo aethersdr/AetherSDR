@@ -3759,6 +3759,43 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         valid.filterLowHz = state.filterLowHz;
         valid.filterHighHz = state.filterHighHz;
     }
+    // PRE-#4914 CW DOCUMENTS, dropped rather than replayed.
+    //
+    // #4914 changed what filterLowHz/HighHz MEAN for CW: they are now measured
+    // from the carrier ({-250, 250}) instead of from the audio the carrier
+    // becomes ({350, 850} at a 600 Hz pitch). Passband is a declared
+    // clientSettingsDomain for this backend, so an operator who last quit in CW
+    // has the old-domain pair on disk right now, and nothing above rejects it —
+    // the pair is ordered and inside ±12 kHz.
+    //
+    // Replayed, dspFilterHz() adds the BFO to a value that already had it:
+    //
+    //     stored {350, 850} + BFO 600  ->  DSP {950, 1450}
+    //     the marker's tone lands at   ->  +600 Hz
+    //     600 is outside {950, 1450}   ->  silence on the marker
+    //
+    // and notifyOperatingStateChanged() then writes the bad pair straight back,
+    // so it never heals. setSliceMode()'s default adoption does not rescue it
+    // either: that fires only when the mode CHANGES, and the restore arrives
+    // already in CW.
+    //
+    // The test is exact rather than heuristic. In the new domain a CW passband
+    // must CONTAIN the carrier, because every producer builds it that way —
+    // defaultPassbandForMode() returns {-250, 250} and
+    // VfoWidget::applyFilterPreset builds {-w/2, +w/2}. So a CW pair sitting
+    // entirely to one side of zero is a pre-#4914 document, with no false
+    // positives. Drop it and let pushInitialState() derive the mode default;
+    // the next capture writes the new-domain value and the document heals.
+    if (cwBfoOffsetHz(valid.mode, m_cwPitchHz) != 0.0
+        && !(valid.filterLowHz < 0.0 && valid.filterHighHz > 0.0))
+    {
+        const auto [lo, hi] = defaultPassbandForMode(valid.mode);
+        qCInfo(lcHl2) << "HL2: dropping pre-#4914 CW passband"
+                      << valid.filterLowHz << ".." << valid.filterHighHz
+                      << "for" << valid.mode << "-> mode default" << lo << ".." << hi;
+        valid.filterLowHz  = static_cast<double>(lo);
+        valid.filterHighHz = static_cast<double>(hi);
+    }
     if (state.sampleRateHz > 0)
         valid.sampleRateHz = nearestIqSampleRateHz(state.sampleRateHz);
 

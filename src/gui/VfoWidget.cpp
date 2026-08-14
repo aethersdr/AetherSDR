@@ -5716,8 +5716,13 @@ void VfoWidget::applyFilterPreset(int widthHz)
         int mid = -shift / 2;
         lo = mid - widthHz / 2;
         hi = mid + widthHz / 2;
-    } else if (mode == "CW" || mode == "CWL") {
-        // Centered on carrier — radio's BFO handles pitch offset
+    } else if (mode == "CW" || mode == "CWL" || mode == "CWU") {
+        // Centered on carrier — radio's BFO handles pitch offset.
+        // CWU belongs with the other two spellings: it was falling through to
+        // the final else and getting a USB-shaped {95, width} with no carrier
+        // in it. It is reachable — NetSchedulerDialog lists it as a schedulable
+        // mode and RadioSetupDialog has it as the CWU/CWL sideband toggle — and
+        // it was wrong under the old passband convention too, just less visibly.
         lo = -widthHz / 2;
         hi =  widthHz / 2;
     } else if (mode == "AM" || mode == "SAM" || mode == "DSB"

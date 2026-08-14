@@ -489,5 +489,49 @@ int main(int argc, char** argv)
               "a memoryless radio does not inherit the previous radio's TX cuts");
     }
 
+    // ---- pre-#4914 CW passbands are dropped, not replayed ----------------
+    //
+    // #4914 flipped the CW passband domain from audio-relative ({350, 850} at a
+    // 600 Hz pitch) to carrier-relative ({-250, 250}). Passband is a declared
+    // clientSettingsDomain, so those old pairs are on operators' disks. Replayed
+    // they get the BFO added a second time and the demodulator opens a whole
+    // pitch above the marker — silence, which capture then writes back.
+    {
+        hl2::Hl2Backend backend;
+        RestoredRadioState stale;
+        stale.mode = QStringLiteral("CWU");
+        stale.filterLowHz  = 350.0;    // the old audio-relative domain
+        stale.filterHighHz = 850.0;
+        backend.applyRestoredState(stale);
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.filterLowHz < 0.0 && snap.filterHighHz > 0.0,
+              "a pre-#4914 CW passband is dropped for one that contains the carrier");
+
+        // The same pair under a NON-CW mode is legitimate and must survive:
+        // the guard keys on the mode, not on the numbers.
+        hl2::Hl2Backend usb;
+        RestoredRadioState ssb;
+        ssb.mode = QStringLiteral("USB");
+        ssb.filterLowHz  = 350.0;
+        ssb.filterHighHz = 850.0;
+        usb.applyRestoredState(ssb);
+        const RestoredRadioState usbSnap = usb.currentOperatingState();
+        check(usbSnap.filterLowHz == 350.0 && usbSnap.filterHighHz == 850.0,
+              "a one-sided passband under USB is untouched by the CW guard");
+
+        // And a NEW-domain CW pair must pass through unchanged, or the guard
+        // would be rewriting the operator's own width on every connect.
+        hl2::Hl2Backend cw;
+        RestoredRadioState fresh;
+        fresh.mode = QStringLiteral("CWL");
+        fresh.filterLowHz  = -150.0;
+        fresh.filterHighHz =  150.0;
+        cw.applyRestoredState(fresh);
+        const RestoredRadioState cwSnap = cw.currentOperatingState();
+        check(cwSnap.filterLowHz == -150.0 && cwSnap.filterHighHz == 150.0,
+              "a new-domain CW passband survives the guard unchanged");
+    }
+
     return g_failures == 0 ? 0 : 1;
 }
