@@ -187,12 +187,13 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 
 std::span<const CurvePoint> powerCurveFor(const IcomModel& model)
 {
-    // Only the IC-705 has a measured curve. Every other model returns EMPTY so
-    // the caller reports percent — handing back the IC-705's curve for an
-    // IC-9700 would produce a watts figure an operator would act on, derived
-    // from a different radio's PA.
+    // Only models with their own verified conversion are named here. Every
+    // other model returns EMPTY so the caller reports percent rather than a
+    // watts figure derived from a different radio's PA.
     if (model.civAddress == 0xA4)
         return powerCurveIc705();
+    if (model.civAddress == 0xB6)
+        return powerCurveIc7300Mk2();
     return {};
 }
 
@@ -203,7 +204,7 @@ std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
     // is published once rather than rewritten on every band change under an
     // operator who may be mid-adjustment.
     static constexpr std::array<std::string_view, 3> kIc705{"OFF", "P.AMP1", "P.AMP2"};
-    if (model.civAddress == 0xA4)
+    if (model.civAddress == 0xA4 || model.civAddress == 0xB6)
         return kIc705;
     return {};
 }
@@ -214,7 +215,7 @@ std::span<const AttenStep> attenStepsFor(const IcomModel& model)
     // where the preamp positions are not, because the guide publishes it. HF
     // and 50 MHz only; higher bands ignore the request and report OFF.
     static constexpr std::array<AttenStep, 2> kIc705{{{"OFF", 0}, {"20 dB", 20}}};
-    if (model.civAddress == 0xA4)
+    if (model.civAddress == 0xA4 || model.civAddress == 0xB6)
         return kIc705;
     return {};
 }

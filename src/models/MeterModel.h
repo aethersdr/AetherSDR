@@ -208,6 +208,10 @@ public:
 
     // Convenience: PA heatsink temperature (°C).
     float paTemp() const { return m_paTemp; }
+    bool hasPaTemp() const { return m_hasPaTempValue; }
+    float paCurrent() const { return m_paCurrent; }
+    bool hasPaCurrentMeter() const { return m_paCurrentIdx >= 0; }
+    bool hasPaCurrent() const { return m_hasPaCurrentValue; }
 
     // Convenience: supply voltage (Volts, from "+13.8A" meter — measurement point A, before fuse).
     float supplyVolts() const { return m_supplyVolts; }
@@ -277,6 +281,7 @@ signals:
 
     // Emitted when hardware telemetry meters change (PA temp, supply voltage).
     void hwTelemetryChanged(float paTemp, float supplyVolts);
+    void paCurrentChanged(float amps);
 
     // Emitted when amplifier meters change (PGXL fwd power, SWR, temp).
     void ampMetersChanged(float fwdPower, float swr, float temp);
@@ -352,6 +357,7 @@ private:
     QMap<int, int> m_scFilt2IdxByTxSource;  // "TX" / "SC_FILT_2"
     QMap<int, int> m_scFilt2IdxBySlice;
     int m_paTempIdx{-1};     // "RAD" / "PATEMP"
+    int m_paCurrentIdx{-1};  // "RAD" / "PACURRENT"
     int m_supplyIdx{-1};     // "RAD" / "+13.8A" (supply voltage, point A = before fuse)
     int m_ampFwdPwrIdx{-1};  // "AMP" / "FWD" (PGXL)
     int m_ampSwrIdx{-1};     // "AMP" / "RL" (PGXL)
@@ -395,6 +401,9 @@ private:
     bool m_hasScFilt1Value{false};
     bool m_hasScFilt2Value{false};
     float m_paTemp{0.0f};
+    bool m_hasPaTempValue{false};
+    float m_paCurrent{0.0f};
+    bool m_hasPaCurrentValue{false};
     float m_supplyVolts{0.0f};
     // Set when a "+13.8A" value packet lands, cleared wherever m_supplyIdx is,
     // so it can never outlive the meter it describes. See hasSupplyVoltage().

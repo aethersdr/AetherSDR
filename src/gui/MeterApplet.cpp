@@ -154,11 +154,13 @@ void MeterApplet::setMeterModel(MeterModel* model)
 
     connect(model, &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyV) {
-        m_paTemp    = paTemp;
-        m_hasPaTemp = true;
-        const float dispTemp = m_tempFahrenheit ? toFahrenheit(paTemp) : paTemp;
-        m_paTempGauge->setValue(dispTemp);
-        m_paTempGauge->setLabel(formatTemp(paTemp, m_tempFahrenheit));
+        if (m_model->hasPaTemp()) {
+            m_paTemp    = paTemp;
+            m_hasPaTemp = true;
+            const float dispTemp = m_tempFahrenheit ? toFahrenheit(paTemp) : paTemp;
+            m_paTempGauge->setValue(dispTemp);
+            m_paTempGauge->setLabel(formatTemp(paTemp, m_tempFahrenheit));
+        }
 
         m_supplyGauge->setValue(supplyV);
         m_supplyGauge->setLabel(QString("+%1V").arg(supplyV, 0, 'f', 2));

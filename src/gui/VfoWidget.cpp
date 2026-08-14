@@ -1421,6 +1421,7 @@ void VfoWidget::buildUI()
             sep->setFixedWidth(6);
             sep->setAlignment(Qt::AlignCenter);
             tabLayout->addWidget(sep);
+            m_tabSeparators.append(sep);
         }
         auto* btn = new QPushButton(tabLabels[i]);
         btn->setFlat(true);
@@ -2823,6 +2824,20 @@ void VfoWidget::showTab(int index)
         }
     }
     relayoutToCurrentContent();
+}
+
+void VfoWidget::setDaxVisible(bool visible)
+{
+    constexpr int kDaxTab = 4;
+    if (m_tabBtns.size() <= kDaxTab)
+        return;
+    if (!visible && m_activeTab == kDaxTab)
+        closeActiveTab();
+    m_tabBtns[kDaxTab]->setVisible(visible);
+    // Separator i sits immediately before tab i+1; hide the DAX separator too
+    // so an Icom VFO does not retain an orphan trailing bar.
+    if (m_tabSeparators.size() >= kDaxTab)
+        m_tabSeparators[kDaxTab - 1]->setVisible(visible);
 }
 
 void VfoWidget::updateDspTabAccent()

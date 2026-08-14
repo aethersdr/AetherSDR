@@ -166,6 +166,8 @@ void MeterModel::defineMeter(const MeterDef& def)
     }
     else if (def.source != "AMP" && def.name == "PATEMP")
         m_paTempIdx = def.index;
+    else if (def.source == "RAD" && def.name == "PACURRENT")
+        m_paCurrentIdx = def.index;
     else if (def.name == "+13.8A")
         m_supplyIdx = def.index;
     // Amplifier meters (source "AMP")
@@ -260,7 +262,14 @@ void MeterModel::removeMeter(int index)
     if (index == activeScMic)   m_hasScMicValue = false;
     if (index == activeScFilt1) m_hasScFilt1Value = false;
     if (index == activeScFilt2) m_hasScFilt2Value = false;
-    if (index == m_paTempIdx)    m_paTempIdx = -1;
+    if (index == m_paTempIdx) {
+        m_paTempIdx = -1;
+        m_hasPaTempValue = false;
+    }
+    if (index == m_paCurrentIdx) {
+        m_paCurrentIdx = -1;
+        m_hasPaCurrentValue = false;
+    }
     if (index == m_supplyIdx) {
         m_supplyIdx = -1;
         m_hasSupplyVoltsValue = false;   // the sample cannot outlive its meter
@@ -355,6 +364,9 @@ void MeterModel::clear()
     m_swAlcIdx = -1;
     m_swAlcUnit.clear();
     m_paTempIdx = -1;
+    m_paCurrentIdx = -1;
+    m_hasPaTempValue = false;
+    m_hasPaCurrentValue = false;
     m_scMicIdxByTxSource.clear();
     m_scMicIdxBySlice.clear();
     m_scFilt1IdxByTxSource.clear();
@@ -392,6 +404,7 @@ void MeterModel::clear()
     m_hwAlc = 0.0f;
     m_swAlc = 0.0f;
     m_paTemp = 0.0f;
+    m_paCurrent = 0.0f;
     m_supplyVolts = 0.0f;
     m_ampFwdPwr = 0.0f;
     m_ampSwr = 1.0f;
@@ -803,7 +816,12 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             txFilterLevelsChangedFlag = true;
         } else if (idx == m_paTempIdx) {
             m_paTemp = v;
+            m_hasPaTempValue = true;
             hwChanged = true;
+        } else if (idx == m_paCurrentIdx) {
+            m_paCurrent = v;
+            m_hasPaCurrentValue = true;
+            emit paCurrentChanged(m_paCurrent);
         } else if (idx == m_supplyIdx) {
             m_supplyVolts = v;  // "+13.8A" = supply voltage at point A (before fuse)
             m_hasSupplyVoltsValue = true;   // a SAMPLE, not just a definition

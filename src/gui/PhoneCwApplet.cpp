@@ -185,6 +185,17 @@ void PhoneCwApplet::setMicLevelMeterAvailable(bool available)
         m_levelGauge->setVisible(available);
 }
 
+void PhoneCwApplet::setDaxVisible(bool visible)
+{
+    if (!m_daxBtn)
+        return;
+    m_daxBtn->setVisible(visible);
+    if (!visible) {
+        const QSignalBlocker blocker(m_daxBtn);
+        m_daxBtn->setChecked(false);
+    }
+}
+
 void PhoneCwApplet::buildPhonePanel()
 {
     m_phonePanel = new QWidget;
@@ -817,7 +828,7 @@ void PhoneCwApplet::syncPhoneFromModel()
 
     // PC mic gain and RADE mic gain are both client-authoritative (radio returns 0 for PC,
     // and is unused for RADE TX). Both share the PcMicGain setting.
-    if (m_model->micSelection() == "PC" || m_radeActive) {
+    if (m_radeActive) {
         int pcGain = AppSettings::instance().value("PcMicGain", 100).toInt();
         m_micLevelSlider->setValue(pcGain);
         m_micLevelLabel->setText(QString::number(pcGain));

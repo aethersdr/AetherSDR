@@ -75,7 +75,13 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
-    changed |= assign(d.mox, m_mox);
+    if (assign(d.mox, m_mox)) {
+        changed = true;
+        // A backend status edge is authoritative TX state, not merely a value
+        // to retain for later. This is how hardware PTT / VOX reaches every
+        // consumer that gates live TX presentation, including the power meter.
+        setTransmitting(m_mox);
+    }
     changed |= assign(d.transmitFreq, m_transmitFreq);
 
     // ── Mic / monitor / processor ──
@@ -274,6 +280,7 @@ void TransmitModel::setRfPower(int power)
         emit stateChanged();
     }
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
+    emit rfPowerCommandIssued(power);
 }
 
 void TransmitModel::setTunePower(int power)
@@ -542,6 +549,7 @@ void TransmitModel::setSbMonitor(bool on)
         emit micStateChanged();
     }
     emit commandReady(QString("transmit set mon=%1").arg(on ? 1 : 0));
+    emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
 }
 
 void TransmitModel::setMonGainSb(int gain)
@@ -550,6 +558,7 @@ void TransmitModel::setMonGainSb(int gain)
     m_monGainSb = gain;
     emit micStateChanged();
     emit commandReady(QString("transmit set mon_gain_sb=%1").arg(gain));
+    emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
 }
 
 void TransmitModel::loadMicProfile(const QString& name)

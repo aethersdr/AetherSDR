@@ -78,12 +78,14 @@ public:
     void setPanRfGain(const QString& panId, int gainDb) override;
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
+    void setSliceRxAntenna(int sliceId, const QString& antenna) override;
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
     void setSpeechProcessor(bool on, int level) override;
     void setMicGain(int gainPercent) override;
     void setTxAudioMonitor(bool on) override;
+    void setTxMonitor(bool on, int level) override;
     void setSliceNoiseReduction(int sliceId, bool on, int level) override;
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setSliceAutoNotch(int sliceId, bool on) override;
@@ -257,6 +259,7 @@ private:
     int     m_compLevelPercent = 0;
     bool    m_compEnable = false;
     bool    m_monitorOn = false;
+    int     m_monitorLevelPercent = 0;
     QString m_agcMode = QStringLiteral("med");
     int     m_afGainPercent = 0;
     bool    m_voxOn = false;
@@ -270,6 +273,8 @@ private:
     bool    m_ritOn = false;
     bool    m_xitOn = false;
     int     m_ritOffsetHz = 0;
+    int     m_controlPollPhase = 0;
+    bool    m_rxAntennaExternal = false;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //
@@ -290,6 +295,7 @@ private:
     // being generated on a timer, so its cadence is the transmit callback's
     // cadence and it cannot drift against the stream it is riding.
     bool m_tuning = false;
+    int m_preTuneTxPowerPercent = -1;
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;
     // -6 dBFS. Loud enough for a tuner to read instantly, short of the clipping

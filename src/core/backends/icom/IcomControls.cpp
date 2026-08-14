@@ -104,12 +104,11 @@ constexpr std::array kSpecs = {
                 0, 255, "%", 0, 100,
                 "setSliceNoiseBlanker", "dspNBBtn", true, ""},
     ControlSpec{"monitor.level", 0x14, 0x15, true, "Monitor level",
-                Plane::Transmit, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
-                "", "", false,
-                "DELIBERATELY not sent: no seam verb carries a monitor level, so "
-                "writing it would overwrite whatever the operator dialled in on "
-                "the radio. 16 45 toggles the function and is wired."},
+                "setTxMonitor", "phoneMonitorSlider", true,
+                "14 15 carries the level and 16 45 carries enable; both are read "
+                "from the radio and operator intent crosses one neutral seam verb."},
 
     // ---- Functions (0x16) ------------------------------------------------
     ControlSpec{"preamp", 0x16, 0x02, true, "Preamp",
@@ -146,7 +145,7 @@ constexpr std::array kSpecs = {
     ControlSpec{"monitor", 0x16, 0x45, true, "TX monitor",
                 Plane::Transmit, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "setTxAudioMonitor", "txMonitorBtn", true,
+                "setTxMonitor", "txMonitorBtn", true,
                 "The reply used to fall through the 0x16 switch's default and be "
                 "dropped, so the button opened at OUR default on a radio that may "
                 "have had the monitor on."},
@@ -161,8 +160,8 @@ constexpr std::array kSpecs = {
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
                 "setVox", "phoneVoxSlider", true,
-                "The trigger threshold. Only pushed while VOX is enabled: the "
-                "register survives the function being switched off."},
+                "The trigger threshold. An operator slider change is pushed even "
+                "while VOX is off because the register defines the next enable."},
     ControlSpec{"break.in", 0x16, 0x47, true, "Break-in",
                 Plane::Transmit, Encoding::Enum, Wiring::Declared,
                 0, 2, "step", 0, 2,
@@ -192,6 +191,16 @@ constexpr std::array kSpecs = {
                 "(0x00 off, 0x20 = 20 dB). HF and 50 MHz only — the radio ignores "
                 "it above and reports OFF."},
 
+    // ---- Receive antenna (0x12) ----------------------------------------
+    ControlSpec{"rx.antenna", 0x12, 0x00, true, "Receive-only antenna",
+                Plane::Slice, Encoding::OnOff, Wiring::Both,
+                0, 1, "main/rx", 0, 1,
+                "setSliceRxAntenna", "sliceRxAntennaBtn", true,
+                "IC-7300MK2-specific: 00 uses ANT1 for receive; 01 selects the "
+                "RX-ANT input. Live B6 firmware returns bare FB to the official "
+                "read form, so the last explicit selection is persisted and "
+                "reasserted on reconnect; no read subscription is claimed."},
+
     // ---- Control (0x1C) --------------------------------------------------
     ControlSpec{"ptt", 0x1C, 0x00, true, "PTT",
                 Plane::Transmit, Encoding::OnOff, Wiring::Both,
@@ -203,9 +212,9 @@ constexpr std::array kSpecs = {
                 Plane::Transmit, Encoding::Enum, Wiring::Both,
                 0, 2, "step", 0, 2,
                 "setAtu", "txAtuBtn", true,
-                "NOT a tune carrier — it runs an EXTERNAL AH-705 matching cycle, "
-                "and it KEYS. There is no command to ask whether a tuner is "
-                "attached, so capabilities().hasTuner follows canTransmit and the "
+                "NOT a tune carrier — it runs the model's internal or external "
+                "antenna-tuner matching cycle and it KEYS. There is no universal "
+                "attachment query, so capabilities().hasTuner follows canTransmit and the "
                 "button is honest about the OUTCOME (00 none / 01 matched / 02 "
                 "tuning) rather than about the hardware."},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",

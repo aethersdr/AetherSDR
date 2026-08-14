@@ -111,6 +111,7 @@ int main(int argc, char** argv)
         if (d.sbMonitor) lastTransmitState.sbMonitor = d.sbMonitor;
         if (d.voxEnable) lastTransmitState.voxEnable = d.voxEnable;
         if (d.voxLevel) lastTransmitState.voxLevel = d.voxLevel;
+        if (d.transmitFreq) lastTransmitState.transmitFreq = d.transmitFreq;
         if (d.atuEnabled) lastTransmitState.atuEnabled = d.atuEnabled;
         if (d.atuStatusRaw) lastTransmitState.atuStatusRaw = d.atuStatusRaw;
     });
@@ -324,6 +325,34 @@ int main(int argc, char** argv)
               "and stops again on unkey");
     }
 
+    // TUNE temporarily borrows the RF-power register. Releasing it must put
+    // the operator's ordinary drive back; otherwise a low-power tune silently
+    // changes the next voice/data transmission (and the UI follows the poll).
+    {
+        backend.setTxPower(37);
+        QTest::qWait(80);
+        radio.clearCivLog();
+        backend.setTune(true, 10);
+        QTest::qWait(80);
+        backend.setTune(false);
+        QTest::qWait(120);
+
+        std::vector<int> powerWrites;
+        for (const CivFrame& f : radio.civCommands()) {
+            if (f.cmd == cmd::kLevel && f.hasSub && f.sub == level::kRfPower) {
+                if (const auto raw = decodeLevel(f.data))
+                    powerWrites.push_back(*raw);
+            }
+        }
+        check(powerWrites.size() >= 2, "TUNE writes a temporary drive and a restore");
+        if (powerWrites.size() >= 2) {
+            check(std::abs(powerWrites.front() - 25) <= 1,
+                  "TUNE applies the requested 10% temporary drive");
+            check(std::abs(powerWrites.back() - 94) <= 1,
+                  "TUNE release restores the operator's prior 37% RF power");
+        }
+    }
+
     // ---- THE CONNECT-TIME STATE PULL --------------------------------------
     //
     // An Icom remembers its own settings across power cycles and reports them on
@@ -368,12 +397,42 @@ int main(int argc, char** argv)
         check(tx.atuEnabled.value_or(false) && tx.atuStatusRaw.has_value(),
               "the antenna tuner reports its own state, so the ATU button opens "
               "where the radio is");
+        check(std::fabs(tx.transmitFreq.value_or(0.0) - 14.074) < 1e-6,
+              "the Icom VFO also seeds TX frequency for frequency-aware ATU toggling");
 
         check(sl.ritOn.value_or(false), "RIT ON is adopted");
         check(!sl.xitOn.value_or(true), "XIT OFF is adopted");
         check(sl.ritFreq.value_or(0) == -1230,
               "and the RIT OFFSET comes back SIGNED — folding the sign byte into "
               "the magnitude tunes the wrong way");
+    }
+
+    // ---- shared 0..255 percentage write buckets --------------------------
+    // RF power, mic gain and monitor level were the three visible reports, but
+    // they all use the same Icom register scale. Prove the real setter frames
+    // select raw 26 for 10%; raw 25 is what the old floor encoder sent and the
+    // radio's front panel correctly displays that as 9.
+    {
+        radio.clearCivLog();
+        backend.setTxPower(10);
+        backend.setMicGain(10);
+        backend.setTxMonitor(true, 10);
+        QTest::qWait(150);
+
+        const auto rawFor = [&](std::uint8_t sub) -> std::optional<int> {
+            const auto& frames = radio.civCommands();
+            auto it = std::find_if(frames.begin(), frames.end(), [=](const CivFrame& f) {
+                return f.cmd == cmd::kLevel && f.hasSub && f.sub == sub
+                    && !f.data.empty();
+            });
+            return it == frames.end() ? std::nullopt : decodeLevel(it->data);
+        };
+        check(rawFor(level::kRfPower).value_or(-1) == 26,
+              "RF power 10 writes raw 26, which the radio displays as 10");
+        check(rawFor(level::kMicGain).value_or(-1) == 26,
+              "mic gain 10 uses the same radio-exact bucket");
+        check(rawFor(level::kMonitor).value_or(-1) == 26,
+              "monitor level 10 uses the same radio-exact bucket");
     }
 
     // ---- the CI-V stall detector ------------------------------------------
@@ -417,6 +476,21 @@ int main(int argc, char** argv)
         check(backend.isConnected(),
               "and isConnected() still reports true — the lie the detector exists "
               "to break");
+
+        const auto periodicallyRead = [&](std::uint8_t command, std::uint8_t sub) {
+            return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                               [=](const CivFrame& f) {
+                return f.cmd == command && f.hasSub && f.sub == sub && f.data.empty();
+            });
+        };
+        check(periodicallyRead(cmd::kFunction, func::kNoiseReduce),
+              "NR state is periodically read instead of relying on CI-V transceive");
+        check(periodicallyRead(cmd::kFunction, func::kNoiseBlanker),
+              "NB state is periodically read instead of relying on CI-V transceive");
+        check(periodicallyRead(cmd::kLevel, level::kNrLevel),
+              "NR level is periodically reconciled too");
+        check(periodicallyRead(cmd::kLevel, level::kNbLevel),
+              "NB level is periodically reconciled too");
 
         radio.setCivSilent(false);
         QTest::qWait(300);

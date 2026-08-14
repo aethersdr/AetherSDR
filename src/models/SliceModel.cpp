@@ -316,6 +316,7 @@ void SliceModel::setRxAntenna(const QString& ant)
     if (m_rxAntenna == ant) return;
     m_rxAntenna = ant;
     sendCommand(QString("slice set %1 rxant=%2").arg(m_id).arg(ant));
+    emit rxAntennaCommandIssued(ant);
     emit rxAntennaChanged(ant);
 }
 

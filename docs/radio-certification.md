@@ -120,11 +120,36 @@ means anything without an envelope.
 > Reading a neighbouring subsystem's counter and believing it is the same class
 > of error as trusting a meter that is defined but never fed.
 
-The remaining rows have **not** been certified by effect —
-they are correctly quiet while receiving, which is a different statement from
-working. Certifying them needs a keyed run, and Appendix C of the Icom design
-doc records a live unit-contract defect on `TX:FWDPWR` and `TX:ALC` that a
-keyed `radiocert meters` pass will have to resolve first.
+The remaining rows in the original idle snapshot were not certified by that
+snapshot. The keyed evidence above resolved the earlier `TX:FWDPWR` and
+`TX:ALC` unit-contract defect; Appendix C of the Icom design doc retains the
+failure history because it is the reusable lesson.
+
+### Certified controls and presentation, 2026-08-13 (IC-7300MK2, CI-V B6)
+
+This pass followed protocol bytes through the model into the actual widget and
+then repeated the state checks after a complete AetherSDR restart. The operator
+subsequently completed the remaining manual surface checks and confirmed the
+controls behaved correctly.
+
+| Surface | Wire/live evidence | Product evidence |
+|---|---|---|
+| RF Power 7 % | `14 0A 00 18` (raw 18) | model and actual slider 7 before and after restart |
+| Mic Gain 10 % | `14 0B 00 26` (raw 26) | model and actual slider 10 before and after restart |
+| Monitor Level 10 % | `14 15 00 26` (raw 26) | model and actual slider 10 before and after restart |
+| ATU successful → bypass | click emitted/read back `1C 01 00` | button changed to Bypass without keying |
+| NR/NB external changes | raw `16 40` / `16 22`, then periodic replies at about 3 s | model and actual DSP buttons followed on/off |
+| Forward power at idle | backend retained the last 16 W sample after emergency unkey | actual power gauge cleared to 0 immediately and stayed 0 after late replies |
+
+The 0–255 control cases establish the radio's integer display contract: decode
+with floor and encode with ceiling. They do **not** establish a generic meter
+scale; power and other `15 xx` meters remain model-calibrated.
+
+The 16 W sample was also a safety finding. Both an ATU cycle and two-tone at a
+10 percent Tune Power setting exceeded the authorized 10 W according to the
+radio's calibrated CI-V Po meter, and the run unkeyed immediately. It proves
+that a percentage ceiling is not a watt ceiling and that two-tone's drive comes
+from Tune Power, not RF Power.
 
 ### Non-meter telemetry that still needs surfacing
 
@@ -261,6 +286,53 @@ this table, which is the same rule the report itself follows.
   whether their mic gain is sane.
 - **Tune power is not separable from transmit power.** TUNE keys at whatever
   drive is set, which on a fresh connect is the operator's full RF power.
+
+---
+
+## Remote-control convergence checklist
+
+Treat each operator control as four paths, not one:
+
+| Path | Evidence required |
+|---|---|
+| Set | actual widget → model intent → backend verb → expected protocol bytes |
+| Same-session reply | radio response → model value → actual widget value |
+| External change | front panel or safe raw command → periodic poll/unsolicited frame → widget |
+| Restart | close the application, reconnect, and adopt radio state without replaying a client default |
+
+For Icom, connect-time reads plus CI-V Transceive are insufficient. Transceive
+is not a complete subscription, so readable NR/NB functions and levels, RF and
+mic controls, monitor, VOX, notch, preamp, attenuator, and tuner state need a
+bounded periodic poll. Allow at least two poll periods before declaring an
+external-change failure.
+
+For 0000–0255 percentage controls, compute expected wire values independently
+using the radio display contract: write `ceil(percent * 255 / 100)`, read
+`floor(raw * 100 / 255)`. Do not reuse that conversion for meters. Meter values
+use published, often model-specific calibration curves.
+
+### Transmit safety and presentation gate
+
+Before any automated key:
+
+1. require explicit authorization naming the exact dummy-load antenna port and
+   physical watt limit;
+2. assert that exact live port from `dumpTree`; unreadable is failure;
+3. require tuner bypass unless an ATU cycle is separately authorized;
+4. stage and verify both RF Power and Tune Power — two-tone uses Tune Power;
+5. apply the bridge percentage ceiling, but never describe it as watts;
+6. require a fresh calibrated forward-power sample and force-unkey on an
+   over-limit value, missing telemetry, high SWR, timeout, or disconnect; and
+7. confirm radio/model transmitting false and the visible power gauge zero.
+
+The watt watchdog is reactive. If even a brief overshoot is unacceptable, use
+an external interlock or do not run unattended. Never use an ATU tune cycle to
+restore state after a test unless its drive is inside the authorization.
+
+For TX meters, certify the presentation lifetime as well as calibration:
+startup idle = zero, active key = live value, immediate unkey = zero, and late
+post-unkey reply = still zero. A backend retaining the last sample for
+diagnostics is acceptable; a visible gauge retaining it is not.
 
 ---
 

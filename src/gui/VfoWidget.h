@@ -76,6 +76,7 @@ public:
     void setTxPower(float fwdPowerW);
     void setTxCompression(float compPeakDb);
     void setTransmitting(bool tx);
+    void setDaxVisible(bool visible);
 
     // Split mode: call whenever TX assignment or active slice changes.
     //   isTxSlice  — this VFO's slice has tx=1
@@ -522,6 +523,7 @@ private:
 
     // Sub-menu tabs
     QVector<QPushButton*> m_tabBtns;
+    QVector<QLabel*> m_tabSeparators;
     QStackedWidget* m_tabStack{nullptr};
     QWidget*        m_tabBar{nullptr};
     int m_activeTab{-1};

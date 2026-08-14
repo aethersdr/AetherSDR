@@ -55,6 +55,19 @@ static void testFraming()
     check(pf.has_value() && !pf->hasSub, "set-frequency has no subcommand");
     check(pf->data.size() == 5, "all five frequency bytes survive as data");
 
+    const auto rxAntOn = cmdSetRxAntenna(0xB6, true);
+    check(bytesAre(rxAntOn,
+                   {0xFE, 0xFE, 0xB6, 0xE0, 0x12, 0x00, 0x01, 0xFD}),
+          "IC-7300MK2 RX-ANT enable frame");
+    const auto rxAntRead = cmdReadRxAntenna(0xB6);
+    check(bytesAre(rxAntRead,
+                   {0xFE, 0xFE, 0xB6, 0xE0, 0x12, 0x00, 0xFD}),
+          "IC-7300MK2 RX-ANT read frame");
+    const auto parsedRxAnt = parseFrame(rxAntOn);
+    check(parsedRxAnt && parsedRxAnt->hasSub && parsedRxAnt->sub == 0x00
+              && parsedRxAnt->data == std::vector<std::uint8_t>{0x01},
+          "RX-ANT reply keeps subcommand separate from value");
+
     // FB / FA acknowledgements.
     auto ok = parseFrame(std::vector<std::uint8_t>{0xFE, 0xFE, 0xE0, 0xA4, 0xFB, 0xFD});
     check(ok.has_value() && ok->isOk(), "FB is an acknowledgement");
@@ -110,6 +123,21 @@ static void testBcd()
     check(decodeLevel(lvl).value_or(-1) == 255, "level round-trips");
     check(decodeLevel(std::array<std::uint8_t, 2>{0x01, 0x20}).value_or(-1) == 120,
           "S9 raw value 120 decodes");
+
+    // The radio displays level registers by truncating 0..255 into 0..100.
+    // Every requested percentage must therefore be encoded into the FIRST raw
+    // value in that display bucket. The old floor-write / nearest-read pair
+    // made the app one point ahead of the radio across roughly half the range.
+    for (int pct = 0; pct <= 100; ++pct) {
+        const int raw = percentToLevelRaw(pct);
+        check(raw >= 0 && raw <= 255, "percent encoding stays inside 0..255");
+        check(levelRawToPercent(raw) == pct,
+              "every displayed percentage round-trips through the Icom register");
+    }
+    check(percentToLevelRaw(10) == 26,
+          "10% selects raw 26, whose radio display is 10 (raw 25 displays 9)");
+    check(levelRawToPercent(25) == 9,
+          "raw 25 follows the radio's truncated display instead of rounding up");
 
     check(encodeBcdByte(11) == 0x11, "division 11 is BCD 0x11, not 0x0b");
     check(decodeBcdByte(0x11) == 11, "and decodes back");
@@ -276,6 +304,12 @@ static void testCommands()
     check(bytesAre(cmdSetLevel(kIc705, level::kRfPower, 255),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0x02, 0x55, 0xFD}),
           "RF power 100% is 14 0A 0255");
+    check(bytesAre(cmdSetTuner(kIc705, 0x02),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x01, 0x02, 0xFD}),
+          "ATU start is 1C 01 02");
+    check(bytesAre(cmdSetTuner(kIc705, 0x00),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x01, 0x00, 0xFD}),
+          "ATU bypass is 1C 01 00");
 
     // BOTH scope switches exist and both are needed — enabling only the first
     // turns the scope on the radio's screen and sends us nothing.

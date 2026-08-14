@@ -155,6 +155,14 @@ inline constexpr std::size_t kFreqBytes = 5;
 [[nodiscard]] std::array<std::uint8_t, 2> encodeLevel(int value);
 [[nodiscard]] std::optional<int> decodeLevel(std::span<const std::uint8_t> bcd);
 
+// Icom continuous controls expose a 0000..0255 register while the radio's
+// front panel and AetherSDR both present 0..100. The front panel truncates on
+// read, so writes must select the first raw value in the requested percentage
+// bucket. Keeping the pair here prevents individual controls from drifting by
+// one through different rounding rules.
+[[nodiscard]] int percentToLevelRaw(int percent);
+[[nodiscard]] int levelRawToPercent(int raw);
+
 // A single BCD byte, 00..99.
 [[nodiscard]] std::uint8_t encodeBcdByte(int value);
 [[nodiscard]] int decodeBcdByte(std::uint8_t b);
@@ -183,6 +191,8 @@ inline constexpr std::uint8_t kScope        = 0x27;
 // (20 dB, HF and 50 MHz only); other models publish other steps, which is
 // why the backend advertises the positions rather than assuming them.
 inline constexpr std::uint8_t kAttenuator  = 0x11;
+// IC-7300MK2 receive-only antenna switch: sub 00, 00=main antenna, 01=RX-ANT.
+inline constexpr std::uint8_t kRxAntenna   = 0x12;
 // RIT / dTX. Icom calls transmit incremental tuning "dTX"; the operator-facing
 // name everywhere else is XIT, and they are the same control.
 inline constexpr std::uint8_t kTuneOffset   = 0x21;
@@ -388,6 +398,8 @@ enum class CivMode : std::uint8_t {
 // IC-705), encoded as one BCD byte. The read form carries no payload.
 [[nodiscard]] std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
 // `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);

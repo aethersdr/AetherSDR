@@ -216,6 +216,11 @@ public:
         Q_UNUSED(panId);
         Q_UNUSED(step);
     }
+    virtual void setSliceRxAntenna(int sliceId, const QString& antenna)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(antenna);
+    }
 
     // How often the operator wants panadapter frames, in frames per second.
     //
@@ -367,6 +372,14 @@ public:
     //
     // Default OFF. Turning it on outside a measurement will be unpleasant.
     virtual void setTxAudioMonitor(bool on) { Q_UNUSED(on); }
+
+    // The operator-facing radio MON switch and level. This is deliberately
+    // separate from the diagnostic receive-during-TX gate above.
+    virtual void setTxMonitor(bool on, int level)
+    {
+        Q_UNUSED(level);
+        setTxAudioMonitor(on);
+    }
 
     // Tune carrier on/off, at the operator's TUNE power (percent, 0..100).
     //

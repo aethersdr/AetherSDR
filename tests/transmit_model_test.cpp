@@ -45,6 +45,18 @@ int main(int argc, char** argv)
 
     bool ok = true;
 
+    // A backend's MOX delta is the radio's live PTT answer. It must drive the
+    // actual-transmitting signal, otherwise hardware PTT/VOX can move TX meters
+    // internally while the visible TX meter remains gated off (or stays stale
+    // after un-key).
+    QList<bool> radioTxEdges;
+    QObject::connect(&tx, &TransmitModel::transmittingChanged,
+                     [&radioTxEdges](bool on) { radioTxEdges.append(on); });
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
+    ok &= expect(radioTxEdges == QList<bool>({true, false}),
+                 "radio-reported MOX drives live transmitting edges");
+
     // ---- forced mic selection is ADOPTED, never commanded --------------------
     //
     // On a radio whose input a client cannot choose (an Icom picks its own from

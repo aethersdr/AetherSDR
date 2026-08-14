@@ -87,6 +87,12 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Power, 255, kS9DbmHf), 12.0), "raw 255 is 12 W, above rated");
     check(meterValue(MeterId::Power, 240, kS9DbmHf) > 10.0, "and the region between is reachable");
 
+    // Same CI-V addresses, different radio-specific faces.
+    check(near(meterValue(MeterId::Power, 143, kS9DbmHf, 0xB6), 50.0),
+          "IC-7300MK2 raw 143 is 50 W");
+    check(near(meterValue(MeterId::Power, 213, kS9DbmHf, 0xB6), 100.0),
+          "IC-7300MK2 raw 213 is its rated 100 W");
+
     check(near(meterValue(MeterId::Swr, 0, 0), 1.0), "SWR 1.0 at zero");
     check(near(meterValue(MeterId::Swr, 48, 0), 1.5), "SWR 1.5");
     check(near(meterValue(MeterId::Swr, 120, 0), 3.0), "SWR 3.0");
@@ -98,6 +104,10 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Comp, 130, 0), 15.0), "COMP 15 dB");
     check(near(meterValue(MeterId::Vd, 75, 0), 5.0), "Vd 5 V");
     check(near(meterValue(MeterId::Id, 121, 0), 2.0), "Id 2 A");
+    check(near(meterValue(MeterId::Vd, 13, 0, 0xB6), 10.0),
+          "IC-7300MK2 Vd uses its desktop calibration");
+    check(near(meterValue(MeterId::Id, 97, 0, 0xB6), 10.0),
+          "IC-7300MK2 Id uses its 25 A face");
 
     // ALC full scale is 120, NOT 255 — the guide says so. Scaling by 255 makes
     // a fully-driven ALC read 47%.

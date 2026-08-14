@@ -28,6 +28,7 @@ public:
     // microphone-peak meter at all — the face would be permanently at its floor
     // and read as a fault rather than as an absence.
     void setMicLevelMeterAvailable(bool available);
+    void setDaxVisible(bool visible);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);

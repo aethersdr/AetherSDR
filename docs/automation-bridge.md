@@ -662,6 +662,13 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 > load), set `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
 > `src/core/TxKeyingMarker.h`.
+>
+> `AETHER_AUTOMATION_TX_MAX_POWER=N` is a **0–100 control-percentage ceiling**
+> for RF Power and Tune Power. It is not a physical-watt limit: radios map the
+> setpoint differently, two-tone can use Tune Power rather than RF Power, and an
+> ATU cycle can have its own drive policy. Hardware-in-the-loop tests need a
+> separate authorized watt ceiling and a fresh calibrated forward-power
+> watchdog. See [`docs/automation/TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -2962,6 +2969,11 @@ nothing attached there is nothing to be honest about.
 
 ### `txtest`
 Two-tone TX test signal (for IMD / PA / meter measurements).
+
+On Icom, this path uses **Tune Power**, not RF Power. Stage and verify Tune
+Power before `twotone`; neither its percentage nor
+`AETHER_AUTOMATION_TX_MAX_POWER` is a watt guarantee. Use the measured-watt and
+antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ```json
 → {"cmd":"txtest","action":"twotone"}   # gated

@@ -1641,6 +1641,8 @@ void AppletPanel::setDaxStreamsVisible(bool visible)
     // persists an Applet_* preference and hides a whole tile.
     if (m_aetherClockApplet)
         m_aetherClockApplet->setDaxControlsVisible(visible);
+    if (m_phoneCwApplet)
+        m_phoneCwApplet->setDaxVisible(visible);
 }
 
 void AppletPanel::setHardwareEqVisible(bool visible)

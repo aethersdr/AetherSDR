@@ -2215,7 +2215,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyVolts) {
         m_lastPaTempC = paTemp;
-        m_hasPaTempTelemetry = true;
+        m_hasPaTempTelemetry = m_radioModel.meterModel().hasPaTemp();
         updatePaTempLabel();
         // A bare dash, never a zero, for a rail the radio has not reported —
         // the rule the Radio Health dialog already applies to its registers.
@@ -2234,7 +2234,7 @@ MainWindow::MainWindow(QWidget* parent)
         // number. Same separation as the DAX capability and its crash guard.
         m_supplyVoltLabel->setText(
             m_radioModel.meterModel().hasSupplyVoltage()
-                ? QString("%1 V").arg(supplyVolts, 0, 'f', 2)
+                ? QString("Vd %1 V").arg(supplyVolts, 0, 'f', 2)
                 : QStringLiteral("—"));
 
         // Update station label (nickname arrives via status after connect)
@@ -2243,6 +2243,12 @@ MainWindow::MainWindow(QWidget* parent)
             updateStatusBarMinimumWidth();
         }
     });
+    connect(&m_radioModel.meterModel(), &MeterModel::paCurrentChanged,
+            this, [this](float) { updatePaTempLabel(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::transmittingChanged,
+            this, [this](bool) { updatePaTempLabel(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+            this, [this](bool) { updatePaTempLabel(); });
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -4244,6 +4250,18 @@ void MainWindow::showQuickAddMemoryDialog(const QString& preferredPanId)
 
 void MainWindow::updatePaTempLabel()
 {
+    const auto& meters = m_radioModel.meterModel();
+    if (meters.hasPaCurrentMeter()) {
+        const bool liveTxCurrent =
+            (m_radioModel.transmitModel().isTransmitting()
+             || m_radioModel.transmitModel().isTuning())
+            && meters.hasPaCurrent();
+        m_paTempLabel->setText(liveTxCurrent
+            ? QString("Id %1 A").arg(meters.paCurrent(), 0, 'f', 1)
+            : QStringLiteral("Id —"));
+        m_paTempLabel->setToolTip(QStringLiteral("PA drain current"));
+        return;
+    }
     const QString unit = m_paTempUseFahrenheit ? "F" : "C";
     if (!m_hasPaTempTelemetry) {
         m_paTempLabel->setText(QString("PA --\u00B0%1").arg(unit));
@@ -6828,6 +6846,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (m_appletPanel) {
         m_appletPanel->setDaxStreamsVisible(dax);
     }
+    for (VfoWidget* vfo : findChildren<VfoWidget*>())
+        vfo->setDaxVisible(dax);
     if (m_autoDaxAction) {
         m_autoDaxAction->setVisible(dax);
     }

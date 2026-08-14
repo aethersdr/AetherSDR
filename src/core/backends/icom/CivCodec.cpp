@@ -88,6 +88,7 @@ std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
     // reply parsed with the subcommand sitting in the payload, so the decode
     // could not tell an enable from an offset and dropped all three.
     case cmd::kTuneOffset:
+    case cmd::kRxAntenna:
         f.hasSub = true;
         f.sub    = frame[bodyBegin];
         f.data.assign(frame.begin() + bodyBegin + 1, frame.begin() + bodyEnd);
@@ -251,6 +252,17 @@ std::optional<int> decodeLevel(std::span<const std::uint8_t> bcd)
     if (t > 9 || h > 9 || d > 9 || u > 9)
         return std::nullopt;
     return t * 1000 + h * 100 + d * 10 + u;
+}
+
+int percentToLevelRaw(int percent)
+{
+    const int pct = std::clamp(percent, 0, 100);
+    return (pct * 255 + 99) / 100; // ceil(pct * 255 / 100)
+}
+
+int levelRawToPercent(int raw)
+{
+    return std::clamp(raw, 0, 255) * 100 / 255;
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +494,18 @@ std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db)
 std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to)
 {
     return buildFrame(to, cmd::kAttenuator);
+}
+
+std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
+{
+    const std::array<std::uint8_t, 1> body{
+        static_cast<std::uint8_t>(rxAntenna ? 1 : 0)};
+    return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
+}
+
+std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kRxAntenna, 0x00);
 }
 
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)
