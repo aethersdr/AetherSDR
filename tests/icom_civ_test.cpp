@@ -22,6 +22,12 @@ static void check(bool cond, const char* what)
 }
 
 static constexpr std::uint8_t kIc705 = 0xA4;
+// The IC-9700. The 1A 06 tests below are addressed to this model deliberately:
+// it is the radio the command was read and checked against, and it is the one
+// IcomModels marks as having the command. Building those frames for the IC-705
+// made two halves of this file read as if they disagreed — testDataModeGating
+// asserts, correctly, that an IC-705 must never be sent 1A 06.
+static constexpr std::uint8_t kIc9700 = 0xA2;
 
 static bool bytesAre(const std::vector<std::uint8_t>& got,
                      std::initializer_list<std::uint8_t> want)
@@ -302,42 +308,49 @@ static void testCommands()
     // is the property an operator depends on (asking for a data mode must reach
     // the wire differently), and it stays meaningful if the frame layout later
     // changes.
-    check(cmdSetMode(kIc705, CivMode::Usb, 1) == cmdSetMode(kIc705, CivMode::Usb, 1),
-          "cmdSetMode is deterministic");
-    check(cmdSetDataMode(kIc705, true, 1) != cmdSetDataMode(kIc705, false, 1),
+    //
+    // A `cmdSetMode(...) == cmdSetMode(...)` check stood here and was removed on
+    // review: comparing a pure function's output to itself cannot fail for any
+    // implementation, correct or not, so it pinned nothing. The property it was
+    // reaching for — that 0x06 alone cannot distinguish a data mode from its
+    // plain counterpart — is not assertable until the codec exposes a
+    // mode-plus-data pair, so the honest move is to leave it unasserted rather
+    // than to keep an assertion that only looks like one.
+    check(cmdSetDataMode(kIc9700, true, 1) != cmdSetDataMode(kIc9700, false, 1),
           "a data mode must not be byte-identical to its plain counterpart");
 
-    // 1A 06, per the IC-9700 CI-V Reference Guide p.18.
-    check(bytesAre(cmdSetDataMode(kIc705, true, 1),
-                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0x01, 0x01, 0xFD}),
+    // 1A 06, per the IC-9700 CI-V Reference Guide p.18 — and addressed to the
+    // IC-9700 (0xA2), the model the command was read and checked against.
+    check(bytesAre(cmdSetDataMode(kIc9700, true, 1),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x06, 0x01, 0x01, 0xFD}),
           "data mode ON with FIL1 is 1A 06 01 01");
-    check(bytesAre(cmdSetDataMode(kIc705, true, 2),
-                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0x01, 0x02, 0xFD}),
+    check(bytesAre(cmdSetDataMode(kIc9700, true, 2),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x06, 0x01, 0x02, 0xFD}),
           "data mode ON carries the filter slot");
     // ⚠ The guide's footnote: "When 00 is set, also set 00 to [the filter
     // byte]." So OFF is `00 00` — NOT 00 followed by the current slot. Passing
     // filter 3 here proves the OFF path ignores it rather than echoing it.
-    check(bytesAre(cmdSetDataMode(kIc705, false, 3),
-                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0x00, 0x00, 0xFD}),
+    check(bytesAre(cmdSetDataMode(kIc9700, false, 3),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x06, 0x00, 0x00, 0xFD}),
           "data mode OFF is 00 00, not 00 plus the filter slot");
 
     // ── READING the flag back. Without this the client can only ever know what
     // it last wrote, so a front-panel FM-D is invisible and the next mode write
     // cancels it. See parseDataModeReply().
-    check(bytesAre(cmdReadDataMode(kIc705),
-                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x06, 0xFD}),
+    check(bytesAre(cmdReadDataMode(kIc9700),
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x1A, 0x06, 0xFD}),
           "the data-mode QUERY is a bare 1A 06 with no payload");
 
     {
         auto on = parseFrame(std::vector<std::uint8_t>{
-            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x06, 0x01, 0x02, 0xFD});
+            0xFE, 0xFE, 0xE0, 0xA2, 0x1A, 0x06, 0x01, 0x02, 0xFD});
         check(on.has_value(), "a 1A 06 ON reply parses as a frame");
         auto r = parseDataModeReply(*on);
         check(r.has_value() && r->dataMode && r->filter == 2,
               "1A 06 01 02 decodes as data mode ON, filter 2");
 
         auto off = parseFrame(std::vector<std::uint8_t>{
-            0xFE, 0xFE, 0xE0, 0xA4, 0x1A, 0x06, 0x00, 0x00, 0xFD});
+            0xFE, 0xFE, 0xE0, 0xA2, 0x1A, 0x06, 0x00, 0x00, 0xFD});
         auto ro = parseDataModeReply(*off);
         // Filter 0, NOT an invented FIL1: the guide pairs OFF with a 00 slot,
         // and the real filter travels with 0x06. Fabricating one here would
