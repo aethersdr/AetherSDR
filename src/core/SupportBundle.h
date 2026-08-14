@@ -19,6 +19,8 @@ public:
         QString kernelVersion;
         QString cpuArch;
         QString buildDate;
+        QString cpu;  // model + arch + SIMD features (SystemInventory::cpuSummary)
+        QString ram;  // total physical RAM (SystemInventory::ramSummary)
     };
 
     struct RadioInfo {

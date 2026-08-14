@@ -3838,6 +3838,23 @@ set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
 set(AETHER_TEST_FFTW_TIMELIMIT "0.001" CACHE STRING
     "Seconds FFTW may spend measuring each plan under test (empty = unbounded)")
 
+# Startup hardware inventory (#4986): pins the baseline-comparison contracts
+# that arm the "CPU below the speech-engine baseline" warning, plus host
+# self-consistency of the detection. Compiled with the same baseline define as
+# aethercore so the host check exercises the real compiled value.
+add_executable(system_inventory_test
+    tests/system_inventory_test.cpp
+    src/core/SystemInventory.cpp
+)
+target_include_directories(system_inventory_test PRIVATE src)
+target_link_libraries(system_inventory_test PRIVATE Qt6::Core)
+if (_aether_ggml_baseline)
+    target_compile_definitions(system_inventory_test PRIVATE
+        AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
+endif()
+add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
+
 # The isolation TU, compiled once and linked into every test target below. An
 # OBJECT library rather than STATIC on purpose: its only content is a
 # namespace-scope object whose CONSTRUCTOR is the entire point, and a static

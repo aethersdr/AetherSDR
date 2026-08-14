@@ -3,6 +3,7 @@
 #include "SettingsSanitizer.h"
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
+#include "SystemInventory.h"
 #include "ZipArchive.h"
 #include "models/RadioModel.h"
 
@@ -68,7 +69,9 @@ SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
         QSysInfo::prettyProductName(),
         QSysInfo::kernelVersion(),
         QSysInfo::currentCpuArchitecture(),
-        QString::fromLatin1(__DATE__)
+        QString::fromLatin1(__DATE__),
+        SystemInventory::cpuSummary(),
+        SystemInventory::ramSummary()
     };
 }
 
@@ -247,7 +250,8 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
     body += QString("App: AetherSDR v%1\n").arg(sys.aetherVersion);
     body += QString("Qt: %1\n").arg(sys.qtVersion);
     body += QString("OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
-    body += QString("CPU: %1\n").arg(sys.cpuArch);
+    body += QString("CPU: %1\n").arg(sys.cpu);
+    body += QString("RAM: %1\n").arg(sys.ram);
     body += QString("Build: %1\n").arg(sys.buildDate);
 
     if (radio.connected) {
