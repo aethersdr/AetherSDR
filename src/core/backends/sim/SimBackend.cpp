@@ -263,6 +263,10 @@ RadioCapabilities SimBackend::capabilities() const
     caps.rxFilterWidthsHz = {};
     // Synthetic audio only; nothing to route to a virtual device.
     caps.hasDaxStreams = false;
+    // The demo synthesises a spectrum, not receiver IQ (#4955). The
+    // deterministic IQ fixture for tests is SimulatedIqProvider, which is a
+    // test double rather than a backend capability.
+    caps.hasNativeIqProvider = false;
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
     // No radio-side display engine either — the demo's rows carry no black level.
     caps.hasRadioSideWaterfallAutoBlack = false;

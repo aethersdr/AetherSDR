@@ -335,6 +335,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
                    "without AETHER_AUTOMATION_ALLOW_TX";
     }
 
+    // Canonical IQ for TCI skimmers and other consumers (#4955). Constructed
+    // before the sample-path wiring below, so the tap exists the first time a
+    // block arrives.
+    m_iqProvider = new Hl2IqProvider(this);
+
     m_ioThread = new QThread(this);
     m_ioThread->setObjectName(QStringLiteral("hl2-io"));
     m_metis->moveToThread(m_ioThread);
@@ -355,6 +360,20 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         for (std::size_t i = 0; i < n; ++i) {
             if (m_ioDsps[i])
                 m_ioDsps[i]->processIqBlock(blocks[i]);
+        }
+        // The SAME blocks, in the same fan-out, to the IQ provider (#4955). It
+        // takes the raw wire IQ and conjugates into the canonical analytic
+        // convention itself, rather than reaching into Hl2RxDsp's m_conjugated,
+        // so the two consumers stay independent and the buffer MetisClient
+        // reuses is copied exactly once per subscribed receiver.
+        //
+        // Non-blocking by construction: publishBlock() returns immediately when
+        // nothing is leased, and drops (counted) rather than queueing when a
+        // consumer falls behind. This is the radio's I/O thread — it must never
+        // wait on the GUI.
+        if (m_iqProvider) {
+            for (std::size_t i = 0; i < blocks.size(); ++i)
+                m_iqProvider->feedWireBlock(static_cast<int>(i), blocks[i]);
         }
     }, Qt::DirectConnection);
 
@@ -402,6 +421,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         pushInitialState();
         emitAllSliceState();
         defineMeters();
+        // Only now is there a link to stream IQ over. Routes first, so the
+        // provider has a receiver table before it is told it is live (#4955).
+        publishIqRoutes();
+        if (m_iqProvider)
+            m_iqProvider->setConnected(true);
         // At connect there is one receiver, so this is always "not wide" — but
         // it is published rather than assumed, so the indicator starts from a
         // stated value instead of whatever the widget happened to hold.
@@ -411,6 +435,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         if (m_connected) {
             m_connected = false;
             m_linkStatsTimer->stop();
+            // Every IQ lease dies with the link, and no subscriber is silently
+            // carried over onto whatever receiver set comes back (#4955).
+            if (m_iqProvider)
+                m_iqProvider->setConnected(false);
             emit disconnected();
         }
     });
@@ -618,6 +646,7 @@ void Hl2Backend::buildReceivers(int count)
     // than once per receiver: an intermediate list would describe a set that
     // never actually ran.
     publishIoDsps();
+    publishIqRoutes();
     qCInfo(lcHl2) << "HL2: running" << count << "receiver(s)";
 }
 
@@ -867,6 +896,7 @@ bool Hl2Backend::createPanadapter()
     // configured, tuned and shifted — so the first block it is ever handed lands
     // in a receiver that is fully set up, rather than one still being assembled.
     publishIoDsps();
+    publishIqRoutes();
 
     const auto* ids = m_ids.byDdc(ddc);
     qCInfo(lcHl2) << "HL2: added receiver — DDC" << ddc << "pan" << (ids ? ids->panId : QString())
@@ -1007,6 +1037,7 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // if(m_metis), because a withdrawal that is never undone is permanent
     // silence, and "no wire" must not be the one path that never recovers.
     publishIoDsps();
+    publishIqRoutes();
 
     qCInfo(lcHl2) << "HL2: closed receiver — pan" << removedPanId << "(UI" << removedUi
                   << "); running" << m_rx.size() << "receiver(s)";
@@ -1197,6 +1228,7 @@ void Hl2Backend::releaseReceiverDsps()
         r.dsp = nullptr;
     }
     publishIoDsps();
+    publishIqRoutes();
     for (Hl2RxDsp* d : doomed) {
         // The DSP lives on the I/O thread and owns a WDSP channel plus an FFTW
         // plan. deleteLater() posts the destruction to that thread's event loop,
@@ -1227,6 +1259,7 @@ void Hl2Backend::tearDownReceivers()
     releaseReceiverDsps();   // already withdrew every chain from the sample path
     m_rx.clear();
     publishIoDsps();         // and now the list is empty, not merely all-null
+    publishIqRoutes();
     m_ids.clear();
 }
 
@@ -1242,6 +1275,40 @@ void Hl2Backend::publishIoDsps()
     for (const Receiver& r : m_rx)
         next.push_back(r.dsp);
     publishIoDspList(std::move(next));
+}
+
+// The provider's view of "which receiver is which" (#4955).
+//
+// Kept index-parallel to the wire the same way m_ioDsps is: routes[i] describes
+// DDC i. The pan id is the STABLE identity a consumer holds a lease on; the DDC
+// index is a contiguous wire slot that renumbers on every rebuild. Republishing
+// the mapping on every change is what stops a lease surviving onto a different
+// receiver — publishRoutes() invalidates any lease whose pan is no longer in
+// the table rather than letting it slide onto the DDC that took its slot.
+//
+// The centre reported is the DDC's NCO, NOT the slice's tuned frequency. They
+// are independent on this backend by design, so reporting the slice would
+// mis-map every skimmer spot by the WDSP shift.
+void Hl2Backend::publishIqRoutes()
+{
+    if (!m_iqProvider)
+        return;
+    QVector<Hl2IqProvider::Route> routes;
+    routes.reserve(static_cast<int>(m_rx.size()));
+    for (std::size_t i = 0; i < m_rx.size(); ++i) {
+        const auto* ids = m_ids.byDdc(static_cast<int>(i));
+        if (!ids)
+            continue;
+        Hl2IqProvider::Route r;
+        r.endpointId = ids->panId;
+        r.centerHz = static_cast<long long>(std::llround(m_rx[i].ncoHz));
+        routes.append(r);
+    }
+    MetisClient::Params p;
+    p.numRx = kMaxReceivers;
+    p.boardMaxRx = m_boardMaxRx;
+    m_iqProvider->publishRoutes(routes, m_sampleRateHz,
+                                MetisClient::effectiveNumRx(p));
 }
 
 void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
@@ -1365,6 +1432,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // No per-slice audio or per-pan IQ stream plane: the HL2 sends one raw IQ
     // feed and this host demodulates it.
     c.hasDaxStreams = false;
+    // TRUE while hasDaxStreams is FALSE, and that pairing is the point
+    // (#4955): the Metis receive path already demultiplexes one IQ block per
+    // active DDC, so a TCI skimmer can be fed honestly — but there is no
+    // radio-side DAX stream plane or lifecycle to expose, and claiming one to
+    // buy IQ would light up DAX UI for commands that reach nothing.
+    c.hasNativeIqProvider = true;
     // Every noise module for this radio runs on THIS host — the HL2 sends raw
     // IQ and has no firmware DSP to switch on. Gating the radio-side toggles
     // off is what stops them from looking operable; the client-side modules
@@ -1919,6 +1992,7 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
             }
             m_rx.resize(static_cast<std::size_t>(i));
             publishIoDsps();
+            publishIqRoutes();
             for (Hl2RxDsp* d : doomed) {
                 d->disconnect(this);
                 d->deleteLater();
@@ -2765,6 +2839,9 @@ void Hl2Backend::applyPanBandwidth(double hz)
         if (const Receiver* r = rx(ids.ddcIndex))
             setSliceFrequency(ids.uiNumber, r->sliceFreqHz);
     }
+    // The shared DDC rate — and therefore every IQ subscriber's achieved rate
+    // and the link-budget capacity — just changed radio-wide (#4955).
+    publishIqRoutes();
     notifyOperatingStateChanged();
 }
 
@@ -4421,6 +4498,11 @@ void Hl2Backend::emitPanState(int ddc)
     // the same bandwidth and a different centre.
     emit panCenterBandwidthChanged(ids->panId, r->ncoHz / 1.0e6,
                                    static_cast<double>(m_sampleRateHz) / 1.0e6);
+    // The IQ centre a subscriber decodes against is this same NCO, so the
+    // provider is updated wherever the pan centre is published — one place, so
+    // a new NCO-moving path cannot forget it and leave a skimmer decoding
+    // against a stale centre (#4955, #4172).
+    publishIqRoutes();
 }
 
 void Hl2Backend::emitAllSliceState()

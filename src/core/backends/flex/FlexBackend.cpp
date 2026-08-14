@@ -180,6 +180,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // DAX audio + DAX IQ ride PanadapterStream's VITA-49 plane, which only this
     // backend owns.
     caps.hasDaxStreams = true;
+    // The Flex adapter wraps DaxIqModel behind the backend-neutral seam
+    // (#4955). Separate from hasDaxStreams on purpose: that one stays about
+    // the DAX stream/UI plane, this one is "IQ can be subscribed to".
+    caps.hasNativeIqProvider = true;
     // NR/NB/ANF/NRL/ANFL/ANFT, the APD predistorter and the wideband noise
     // blanker all run in the radio's firmware, driven by command-plane verbs.
     caps.hasRadioSideDsp = true;

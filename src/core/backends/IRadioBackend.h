@@ -23,6 +23,8 @@
 
 namespace AetherSDR {
 
+class IqProvider;
+
 // Neutral, family-agnostic connect descriptor. Core fields cover the common
 // case; vendor-specific parameters (SmartLink token, Kiwi endpoint path, …)
 // ride in `params` so the interface never grows a per-vendor connect signature.
@@ -85,6 +87,17 @@ public:
     // carrying the old shim's synthetic scene, and real demodulated audio over
     // the seam. It answers true because the seam is the one that is real.
     virtual bool ownsRxAudio() const { return false; }
+
+    // The backend-neutral source of canonical receiver IQ, or null when this
+    // radio family has no IQ to give (#4955).
+    //
+    // NULL IS THE LOAD-BEARING DEFAULT and it is what gates TCI's IQ path — a
+    // backend that says nothing gets a structured refusal on iq_start rather
+    // than an acknowledgement followed by silence. Deliberately NOT gated on
+    // RadioCapabilities::hasDaxStreams: that flag is about the DAX stream/UI
+    // plane, and an HL2 has four perfectly good DDCs and no DAX plane at all.
+    // Presence of a provider is the honest question; "is it a Flex" is not.
+    virtual IqProvider* iqProvider() { return nullptr; }
 
     // ---- connection lifecycle ----
     // Typed restore handoff (RFC #4603 proposal B): called by RadioModel

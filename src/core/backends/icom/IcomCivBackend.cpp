@@ -113,6 +113,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;
+    // CI-V exposes no raw receiver IQ, so there is no provider to offer and
+    // an iq_start gets a structured refusal rather than dead traffic (#4955).
+    c.hasNativeIqProvider = false;
 
     // The radio HAS a GPS and the protocol will not carry its data.
     c.hasGpsLocation = false;

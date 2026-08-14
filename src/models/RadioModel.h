@@ -12,6 +12,7 @@
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
+#include "core/FlexIqProvider.h"   // #4955 backend-neutral IQ (Flex adapter)
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
@@ -88,6 +89,17 @@ public:
     // seam-native signals (e.g. a SimBackend's audioFrameReady) that don't flow
     // through PanadapterStream. Null before the first connect.
     IRadioBackend*    backend()     { return m_backend.get(); }
+
+    // The canonical IQ source for this session, or null when the radio has
+    // none (#4955). A backend that owns its own IQ (HL2) answers first; a Flex
+    // session falls back to the DAX-IQ adapter this model owns, because the
+    // DAX-IQ plane lives in DaxIqModel here rather than inside FlexBackend.
+    //
+    // Consumers hold a LEASE on an endpoint, not a channel number, and must
+    // re-check this pointer after backendRebuilt() — the provider belongs to
+    // the backend and a family swap replaces it.
+    IqProvider*       iqProvider();
+    FlexIqProvider&   flexIqProvider() { return m_flexIqProvider; }
 
     // DAX channel holds, null-safe.
     //
@@ -1491,6 +1503,9 @@ private:
     NavtexModel         m_navtexModel;
     UsbCableModel       m_usbCableModel;
     DaxIqModel          m_daxIqModel;
+    // Declared AFTER m_daxIqModel: it holds a pointer to it, and a member
+    // initialised before its dependency is the classic half-built seam.
+    FlexIqProvider      m_flexIqProvider;
     FlexWaveformModel   m_flexWaveformModel;
     DStarModel          m_dstarModel{nullptr, true};
 

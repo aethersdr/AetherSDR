@@ -616,6 +616,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
+    src/core/backends/hl2/Hl2IqProvider.cpp  # #4955 HL2 DDC IQ adapter
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
@@ -717,6 +718,9 @@ set(CORE_SOURCES
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
+    src/core/IqProvider.cpp                  # #4955 backend-neutral receiver IQ
+    src/core/FlexIqProvider.cpp              # #4955 Flex DAX-IQ adapter
+    src/core/SimulatedIqProvider.cpp         # #4955 deterministic IQ fixture
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
