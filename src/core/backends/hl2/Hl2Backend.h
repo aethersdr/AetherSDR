@@ -371,6 +371,10 @@ private:
     // RX1. Empty mode = the operator has not touched it this session.
     QString m_agcMode;
     int     m_agcThresholdDb = 0;
+    // seedReceiverAgc() runs on the FIRST connect only — see the call site.
+    // A reconnect must not flatten live per-receiver AGC that buildReceivers()
+    // deliberately preserved.
+    bool    m_agcSeeded = false;
 
     // The receiver the operator is working on. Separate from m_txDdc: you listen
     // on one slice while transmitting on another all the time, and conflating

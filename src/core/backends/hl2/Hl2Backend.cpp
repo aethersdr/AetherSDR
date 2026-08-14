@@ -1714,9 +1714,21 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // The remembered AGC pair (#4909), onto the receivers that now exist.
     // buildReceivers() built them from Receiver{} on a first connect, so the
     // seeding applyRestoredState() already did could not have reached them.
-    // The WDSP channels are open by now and were configured before this ran, so
-    // this settles the STATE — pushInitialState() gets it into the DSP.
-    seedReceiverAgc();
+    // The channels are OPEN but not yet CONFIGURED — configure() runs in
+    // beginDspSetup()'s lambda below, after this — so this settles the STATE and
+    // beginDspSetup()/pushInitialState() carry it into the DSP.
+    //
+    // FIRST CONNECT ONLY. buildReceivers() deliberately preserves receiver state
+    // across a rebuild and pushInitialState()'s restore block touches only
+    // rx(m_txDdc), so seeding unconditionally meant an auto-reconnect after a
+    // dropped link overwrote RX2's AGC with the remembered pair while its mode
+    // and passband survived — a within-session loss on the very path the
+    // sibling mode/passband restore engineers around. Flat MEMORY across a
+    // restart is the design; flattening live receivers mid-session is not.
+    if (!m_agcSeeded) {
+        m_agcSeeded = true;
+        seedReceiverAgc();
+    }
 
     Hl2RxDsp::Config dc;
     dc.inputSampleRateHz = m_sampleRateHz;
