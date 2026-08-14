@@ -649,7 +649,109 @@ int main(int argc, char** argv)
         check(lastDrive == driveFor(40),
               "#4549: the unkey restores the power set DURING the tune");
 
+        // ---- #4912: health reports the APPLIED drive, not the request ------
+        //
+        // Nothing reported the drive the radio was actually given. `get
+        // transmit` has rfPower and `get radio` has txPower, but both read
+        // TransmitModel — the operator's ask — so a drive that never reached
+        // the radio read back as though it had. That is the exact failure the
+        // HL2 health section exists to catch, in the one area where it is
+        // safety-adjacent.
+        //
+        // Asserted against `lastDrive`, the value taken off the WIRE by the
+        // same reader the checks above use. A readback that agrees only with
+        // the model would prove nothing — agreement with the wire is the claim.
+        lastDrive = -1;
+        tuner.setTxPower(60);
+        spin(200);
+        {
+            const auto h = tuner.healthSnapshot();
+            check(lastDrive == driveFor(60), "#4912: RF power 60 reaches the wire");
+            check(h.values.value(QStringLiteral("rfPowerPercent")).toInt() == 60,
+                  "#4912: health reports the requested drive percent");
+            check(h.values.contains(QStringLiteral("txDriveRegister"))
+                      && h.values.value(QStringLiteral("txDriveRegister")).toInt()
+                             == lastDrive,
+                  "#4912: health reports the raw drive register sent to the radio");
+            check(h.values.contains(QStringLiteral("txDriveGated"))
+                      && !h.values.value(QStringLiteral("txDriveGated")).toBool(),
+                  "#4912: drive is not reported as gated in a TX-capable session");
+        }
+
         tuner.disconnectRadio();
+        spin(50);
+    }
+
+    // ---- #4912: a TX-BLOCKED session says so, instead of looking normal -----
+    //
+    // applyDrive() forces the register to 0 when the transmit gate is closed
+    // while m_rfPowerPercent keeps the operator's value, so the two legitimately
+    // disagree — and until now nothing reported the disagreement. A script
+    // reading only the request would conclude the radio was driven at 100%.
+    //
+    // The gate is decided per connect from AETHER_AUTOMATION + ALLOW_TX, so a
+    // second backend connected with the bridge's variable set (and ALLOW_TX
+    // absent) exercises the blocked path without disturbing anything above.
+    {
+        const bool hadAutomation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
+        const bool hadAllowTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
+        check(!hadAllowTx, "#4912: ALLOW_TX is absent, so the gated case is reachable");
+        qputenv("AETHER_AUTOMATION", "1");
+        const auto restoreEnv = qScopeGuard([hadAutomation] {
+            if (!hadAutomation)
+                qunsetenv("AETHER_AUTOMATION");
+        });
+
+        QUdpSocket gatedRadio;
+        check(gatedRadio.bind(QHostAddress::LocalHost, 0), "#4912: gated fake radio binds");
+        std::uint32_t gatedSeq = 0;
+        int gatedDrive = -1;
+        QObject::connect(&gatedRadio, &QUdpSocket::readyRead, &gatedRadio, [&] {
+            while (gatedRadio.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = gatedRadio.receiveDatagram();
+                const int drive = ep2DriveLevel(dg.data());
+                if (drive >= 0)
+                    gatedDrive = drive;
+                gatedRadio.writeDatagram(fakeEp6(gatedSeq++), dg.senderAddress(),
+                                         dg.senderPort());
+            }
+        });
+
+        Hl2Backend gated;
+        RadioConnectRequest gatedReq;
+        gatedReq.host = QStringLiteral("127.0.0.1");
+        gatedReq.port = gatedRadio.localPort();
+        gated.connectRadio(gatedReq);
+        spin(300);
+        check(gated.isConnected(), "#4912: gated backend connects");
+
+        // BEFORE touching drive at all — the case a latched flag got wrong (#4918
+        // review). finishDspSetup() seeds the register with a direct
+        // setTxDriveLevel(0) that bypasses applyDrive(), so nothing observes the
+        // gate acting; meanwhile m_rfPowerPercent still reads its default 100.
+        // A flag set only inside applyDrive() therefore denied responsibility for
+        // the very divergence the row exists to explain.
+        {
+            const auto h0 = gated.healthSnapshot();
+            check(h0.values.value(QStringLiteral("txDriveGated")).toBool(),
+                  "#4918: the gate is reported before drive is ever commanded");
+            check(h0.values.value(QStringLiteral("rfPowerPercent")).toInt() == 100,
+                  "#4918: and the requested percent is still its default 100");
+        }
+
+        gatedDrive = -1;
+        gated.setTxPower(100);
+        spin(200);
+        const auto h = gated.healthSnapshot();
+        check(gatedDrive == 0, "#4912: the closed gate holds the wire drive at 0");
+        check(h.values.value(QStringLiteral("rfPowerPercent")).toInt() == 100,
+              "#4912: the operator's requested percent is still reported");
+        check(h.values.value(QStringLiteral("txDriveRegister")).toInt() == 0,
+              "#4912: the written register is reported as 0, matching the wire");
+        check(h.values.value(QStringLiteral("txDriveGated")).toBool(),
+              "#4912: the gate is named, so requested-vs-applied is explainable");
+
+        gated.disconnectRadio();
         spin(50);
     }
 

@@ -972,12 +972,13 @@ used by the stacked trace renderer.
   trace floor used by 3D placement from the waterfall color floor.
 
 ### `get rhi`
-Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —
-the widget size, devicePixelRatio, pinned color-buffer extents, full-frame
-overlay/background textures, the waterfall image/texture pair, and (on macOS)
-native-leaf/ancestor isolation — so automation can assert the fractional-scale
-alignment and upload-size invariants exercised by pop-out reparenting (#4091,
-#4319) together with the bounded native-view hierarchy from #4339.
+Per-panadapter `QRhiWidget` **surface geometry, color-buffer sizing mode, and
+native-widget topology** — the widget size, devicePixelRatio, whether Qt owns
+the color-buffer size, full-frame overlay/background textures, the waterfall
+image/texture pair, and (on macOS) native-leaf/ancestor isolation. Automation
+can assert automatic sizing under a fractional `QT_SCALE_FACTOR`, the separate
+full-frame texture upload invariants from #4319, and the bounded native-view
+hierarchy from #4339 in the same snapshot.
 
 ```json
 → {"cmd":"get","model":"rhi"}
@@ -985,30 +986,25 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
    "panIndex":0,"name":"","visible":true,"widthPx":1100,"heightPx":455,"dpr":0.85,
    "gpu":true,"renderer":"GPU QRhi (D3D11; Intel(R) HD Graphics 520)",
    "rendererFailed":false,"rendererFailureReason":"",
-   "colorBufferAutoSized":false,"colorBufferW":936,"colorBufferH":388,
-   "expectedEvenW":936,"expectedEvenH":388,"evenAligned":true,
+   "colorBufferAutoSized":true,"colorBufferW":-1,"colorBufferH":-1,
    "overlayTextureW":936,"overlayTextureH":388,
    "backgroundTextureW":936,"backgroundTextureH":388,
    "waterfallTextureW":936,"waterfallTextureH":194,
    "waterfallImageW":936,"waterfallImageH":194,
    "waterfallTextureMatchesImage":true,
-   "fullFrameTexturesEvenAligned":true,
-   "fullFrameTexturesMatchColorBuffer":true}]}
+   "fullFrameTexturesEvenAligned":true}]}
 ```
 
 | field | meaning |
 |---|---|
 | `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
 | `rendererFailed` / `rendererFailureReason` | whether this panadapter's QRhi renderer failed and its recorded reason; a failed renderer reports `QRhi failed: ...` in `renderer` too. GPU builds only — omitted alongside the buffer fields when `gpu` is `false` |
-| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
-| `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
-| `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
-| `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); this is the expected value |
+| `colorBufferW` / `colorBufferH` | the unset sentinel `-1,-1` when auto-sized; any positive extent means a fixed buffer is active |
 | `overlayTextureW/H` / `backgroundTextureW/H` | full-frame RGBA texture extents, or `-1,-1` before GPU initialization |
 | `waterfallTextureW/H` / `waterfallImageW/H` | live GPU waterfall texture and retained CPU waterfall image extents |
 | `waterfallTextureMatchesImage` | the CPU waterfall image fits within its GPU texture (texture ≥ image in both dimensions), so the upload is safe; holds across pop-out initialization even when the texture is floored larger than a small retained image (#4319) |
-| `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 invariant) |
-| `fullFrameTexturesMatchColorBuffer` | both full-frame textures exactly match the pinned color buffer |
+| `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 upload-safety invariant), independent of the auto-sized QRhi color buffer |
 | `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
 | `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
 | `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
@@ -1982,24 +1978,57 @@ so `connect show` is safe when the dialog is already open. `connect local first`
 captures the first currently discovered local radio's serial before scheduling
 the request, so the response and deferred connect target stay consistent.
 `connect local serial <serial>` selects by discovery serial. `connect ip
-<host-or-ip> [flex|hl2]` uses the manual **Connect by IP** probe path; if the
+<host-or-ip> [flex|hl2|icom]` uses the manual **Connect by IP** probe path; if the
 probe finds a radio, the panel emits its normal `connectRequested` signal and
 `MainWindow` performs the standard Multi-Flex/client-slot checks before
 `RadioModel` connects.
 
 The optional radio type selects which wire protocol to probe, matching the
 dialog's **Radio type** dropdown: `flex` opens the TCP/4992 command plane, `hl2`
-sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024. The two are
-disjoint — a Hermes-Lite 2 never answers the Flex probe and vice versa — so an
-address is only reached with the right type. Omit it and the dialog's current
-selection is used, which keeps every existing `connect ip <addr>` script
-working; the response echoes `"family"` as the requested type or `"dialog"`.
+sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024, and `icom`
+uses the CI-V backend. They are disjoint — a Hermes-Lite 2 never answers the
+Flex probe and vice versa — so an address is only reached with the right type.
 A directed HL2 probe is the only way to reach a Hermes-Lite 2 that discovery
 broadcasts cannot see (VPN, routed subnet), and it is bounded at ~600 ms.
 
-`connect wait <timeout_ms>` holds that request's response until
-`RadioModel::connectionStateChanged(true)` or timeout, which is the preferred
-unattended "request then assert" flow.
+**Omit the type and discovery decides.** If the address appears in `connect
+list`, that entry's `family` is used, so `connect ip <addr>` reaches an HL2
+without the caller having to know it is one. Only an address nothing has
+advertised falls back to the connect dialog's current selection — which is what
+every pre-existing `connect ip <addr>` script relied on, and still does for
+routed/off-subnet radios. The response carries both `"family"` (the type
+actually used, or `"dialog"` when it was left to the selector) and
+`"familySource"`: `"argument"`, `"discovery"` or `"dialog"`. Read
+`familySource`, not `family` — `"family":"flex"` alone cannot tell a resolved
+answer from a default.
+
+**An explicit type always wins, including against discovery** — it is you saying you know
+what is at that address, which is the whole point of being able to pass it. When the two
+disagree the reply carries `"discoveryFamily"` (present whenever discovery had an opinion
+at all), so a caller that wants strictness compares it against `"family"` and decides for
+itself, while a caller working around a wrong discovery entry still gets through. The
+mismatch is also logged.
+
+`connect wait <timeout_ms>` holds that request's response until the radio
+connects, the connect fails, or the timeout expires — the preferred unattended
+"request then assert" flow.
+
+A reply that is not `connected` carries `"phase"`: `"connecting"` means an
+attempt is still in flight and waiting again is the right move, `"idle"` means
+nothing is pending and another wait will time out identically. **This matters on
+the HL2**, which queues a connect behind its DSP open and re-drives it later, so
+a wait can legitimately expire on a connect that then succeeds. A connect that
+fails outright returns immediately with the backend's own message instead of
+running out the clock.
+
+Because every connect verb answers `{"ok":true,"deferred":true}` before its real
+work runs, a failure afterwards used to be visible only in the log. The wait
+reply now also carries `"lastError"` and `"lastErrorAgeMs"` — the last deferred
+connect/disconnect failure and how long ago it happened. It is **scoped to the current
+attempt**: a connect that lands retires it, and so does scheduling a fresh one, so its
+presence means this attempt has a failure behind it rather than "something went wrong at
+some point since the process started". A failed `disconnect` is recorded there too, but
+never completes an in-flight `connect wait` — its message belongs to the disconnect.
 
 ### `streams`
 Radio-side display-stream inventory + leak detector (#3856). `get pans` can never
@@ -2554,9 +2583,29 @@ or a regression test. Read-only: it keys nothing and sets nothing.
       "label":"Mic slider (0-100, 50 = unity)","value":80},
      {"key":"micGainAppliedLinear",
       "label":"Mic gain at the modulator (linear)","value":3.98},
+     {"key":"rfPowerPercent","label":"Drive requested (0-100)","value":60},
+     {"key":"txDriveRegister","label":"Drive written (raw 0-255)","value":153},
+     {"key":"txDriveGated","label":"Drive held at 0 by the TX gate","value":false},
      {"key":"forwardPowerPeakW",
-      "label":"Forward (W, approx — peak estimate)","value":4.56}]}
+      "label":"Forward (W, approx — peak HOLD, display only)","value":4.56}]}
 ```
+
+**Assert on `forwardPowerW`, never on `forwardPowerPeakW`.** The peak row is a
+meter's display hold: a single key-edge ADC sample decays over seconds, so a
+script that asserts on it reads a transient from the start of the over as
+though it were the power now. It is reset at each key edge, which is right for
+a needle and wrong for a test.
+
+On the HL2, `rfPowerPercent` / `txDriveRegister` / `txDriveGated` are the
+requested-versus-applied pair for transmit drive. `txDriveRegister` is the raw
+value last written to the radio and is **absent until the first write** — a `0`
+there means the radio was commanded to zero drive, not that nothing has
+happened yet. `txDriveGated` is true when the transmit gate
+(`AETHER_AUTOMATION_ALLOW_TX` unset, or a TX-blocked session) forced the
+register to 0 while the requested percent stayed where the operator left it;
+without it that divergence is invisible. Note the gateware decodes only the
+drive byte's top nibble, so the raw scale moves in steps of 16 — a percent
+alone does not tell you which of the 16 drives the radio actually got.
 
 **This is deliberately not assembled from the models, and that is the whole
 point.** `get` already reports those, and a model reports what the operator

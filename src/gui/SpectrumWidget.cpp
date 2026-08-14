@@ -974,21 +974,13 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("rendererFailed")] = m_rhiFailure.failed();
     m[QStringLiteral("rendererFailureReason")] = m_rhiFailure.reason();
     const QSize fixed = fixedColorBufferSize();
-    // Unset fixedColorBufferSize() is the null QSize(-1,-1) — isEmpty()
-    // covers it (and any degenerate size) → QRhiWidget auto-sizes.
+    // Qt treats fixedColorBufferSize() as automatic when either dimension is
+    // non-positive; normalize every such representation to the bridge's
+    // -1,-1 sentinel.
     const bool autoSized = fixed.isEmpty();
     m[QStringLiteral("colorBufferAutoSized")] = autoSized;
-    m[QStringLiteral("colorBufferW")] = fixed.width();
-    m[QStringLiteral("colorBufferH")] = fixed.height();
-    // What an even-aligned pin *should* be for the current size — lets a test
-    // assert the #4091 alignment without recomputing the formula itself.
-    const QSize expected = evenAlignedRhiSize(
-        QSize(static_cast<int>(std::ceil(width() * dpr)),
-              static_cast<int>(std::ceil(height() * dpr))));
-    m[QStringLiteral("expectedEvenW")] = expected.width();
-    m[QStringLiteral("expectedEvenH")] = expected.height();
-    m[QStringLiteral("evenAligned")] =
-        !autoSized && (fixed.width() % 2 == 0) && (fixed.height() % 2 == 0);
+    m[QStringLiteral("colorBufferW")] = autoSized ? -1 : fixed.width();
+    m[QStringLiteral("colorBufferH")] = autoSized ? -1 : fixed.height();
     // QSize() is already (-1,-1); keep the JSON sentinel explicit so the
     // automation contract cannot be mistaken for a real zero-sized texture.
     const QSize unsetTextureSize(-1, -1);
@@ -1018,8 +1010,6 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
         !overlaySize.isEmpty() && !backgroundSize.isEmpty()
         && (overlaySize.width() % 2 == 0) && (overlaySize.height() % 2 == 0)
         && (backgroundSize.width() % 2 == 0) && (backgroundSize.height() % 2 == 0);
-    m[QStringLiteral("fullFrameTexturesMatchColorBuffer")] =
-        !autoSized && overlaySize == fixed && backgroundSize == fixed;
 #else
     m[QStringLiteral("gpu")] = false;
 #endif
@@ -1343,8 +1333,12 @@ QVariantMap SpectrumWidget::automationDssSnapshot() const
     m[QStringLiteral("resizeBufferCommitMaxMs")] =
         static_cast<double>(m_resizeBufferCommitMaxNs) / 1000000.0;
 #ifdef AETHER_GPU_SPECTRUM
-    m[QStringLiteral("resizeRenderBufferWidth")] = fixedColorBufferSize().width();
-    m[QStringLiteral("resizeRenderBufferHeight")] = fixedColorBufferSize().height();
+    const QSize resizeRenderTargetSize =
+        renderTarget() ? renderTarget()->pixelSize() : QSize(-1, -1);
+    m[QStringLiteral("resizeRenderBufferWidth")] =
+        resizeRenderTargetSize.width();
+    m[QStringLiteral("resizeRenderBufferHeight")] =
+        resizeRenderTargetSize.height();
 #endif
     m[QStringLiteral("dssVisibleRows")] = m_dss.visibleRowCount();
     double dssFrameMinCenterMhz =
@@ -11324,14 +11318,6 @@ bool SpectrumWidget::event(QEvent* ev)
         setMouseTracking(true);
     }
 
-#ifdef AETHER_GPU_SPECTRUM
-    // Moving between monitors changes the DPR without a resize event; keep
-    // the pinned color-buffer size in device pixels current (#4091).
-    if (ev->type() == QEvent::DevicePixelRatioChange) {
-        updateFixedColorBufferSize();
-    }
-#endif
-
     if (ev->type() == QEvent::NativeGesture) {
         auto* ge = static_cast<QNativeGestureEvent*>(ev);
         if (ge->gestureType() == Qt::ZoomNativeGesture) {
@@ -11577,28 +11563,6 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
 // ─── Resize ───────────────────────────────────────────────────────────────────
 
 #ifdef AETHER_GPU_SPECTRUM
-void SpectrumWidget::updateFixedColorBufferSize()
-{
-    // QRhiWidget's automatic color buffer is widget-size × dpr. A fractional
-    // QT_SCALE_FACTOR (UiScalePercent ≠ 100, e.g. 0.85) turns that into
-    // odd-sized texture extents on most resizes, and the 2016-era Intel HD
-    // Graphics D3D11 UMD (igd10iumd64.dll 21.20.16.x) null-derefs recreating
-    // such textures during the add-pan resize (#4091). Pin the buffer to the
-    // ceil'd, even-aligned device-pixel size instead. The render path derives
-    // its scale from renderTarget()->pixelSize(), not width()×dpr, so the
-    // ≤1 px overshoot is invisible.
-    const qreal dpr = devicePixelRatioF();
-    const QSize devicePx = evenAlignedRhiSize(
-        QSize(static_cast<int>(std::ceil(width() * dpr)),
-              static_cast<int>(std::ceil(height() * dpr))));
-    if (devicePx.isEmpty()) {
-        return;
-    }
-    if (fixedColorBufferSize() != devicePx) {
-        setFixedColorBufferSize(devicePx);
-    }
-}
-
 QSize SpectrumWidget::fullFrameTextureSize() const
 {
     QSize devicePx = renderTarget() ? renderTarget()->pixelSize() : QSize();
@@ -11617,19 +11581,14 @@ void SpectrumWidget::applySettledResizeBuffers()
     commitTimer.start();
     bool buffersChanged = false;
 
-    // This logical size owns the fixed render target, overlay images, FFT
-    // columns, and waterfall until the next settled commit. During a live
-    // window resize, render into this complete old-size frame and let
-    // QRhiWidget scale it to the widget's intermediate geometry.
+    // This logical size owns the overlay images, FFT columns, and waterfall
+    // until the next settled commit. During a live resize, QRhiWidget owns the
+    // automatically sized render target while render() presents the last
+    // complete logical frame at the widget's intermediate geometry.
     if (width() > 0 && height() > 0) {
+        buffersChanged = m_resizePresentationSize != size();
         m_resizePresentationSize = size();
     }
-
-#ifdef AETHER_GPU_SPECTRUM
-    const QSize previousRenderBufferSize = fixedColorBufferSize();
-    updateFixedColorBufferSize();
-    buffersChanged = fixedColorBufferSize() != previousRenderBufferSize;
-#endif
 
     // Match the remainder-based split used by painting and GPU presentation,
     // so the stored row count cannot differ from its destination by one pixel.
@@ -11702,11 +11661,10 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
     }
 
     // Keep every size-dependent buffer at the last completed size while the
-    // window is moving. QRhiWidget scales that fixed color buffer to the
-    // widget's current geometry while render() continues presenting new FFT
-    // and waterfall data into it. The render target, overlays, FFT columns,
-    // waterfall, and its 24,000-row compact history still coalesce to one
-    // commit.
+    // window is moving. QRhiWidget resizes its automatic render target while
+    // render() presents new FFT and waterfall data from the last complete
+    // logical frame. Overlays, FFT columns, waterfall, and its 24,000-row
+    // compact history still coalesce to one commit.
     if (m_waterfall.isNull()) {
         applySettledResizeBuffers();
     } else if (m_resizeBufferSettleTimer) {
@@ -14858,9 +14816,9 @@ void SpectrumWidget::render(QRhiCommandBuffer* cb)
         return;
     }
     if (m_resizeBufferSettleTimer && m_resizeBufferSettleTimer->isActive()) {
-        // Keep presenting fresh FFT/waterfall data into the last settled render
-        // target while QRhiWidget stretches it to the live geometry. This
-        // preserves motion without recreating full-size resources at every
+        // Keep presenting fresh FFT/waterfall data from the last settled
+        // logical frame into QRhiWidget's automatically sized render target.
+        // This preserves motion without recreating full-size resources at every
         // intermediate mouse position (once per visible panadapter).
         static const bool liveResizePreviewEnabled = [] {
             if (!qEnvironmentVariableIsSet("AETHER_RESIZE_LIVE_PREVIEW")) {

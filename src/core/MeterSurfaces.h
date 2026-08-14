@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QLatin1String>
+#include <QString>
+#include <QStringList>
+#include <QStringView>
 
 #include <array>
 
@@ -108,13 +111,44 @@ inline constexpr std::array<MeterSurface, 9> kMeterSurfaces{{
 // Look up a meter's surfaces. Returns nullptr for a key nothing renders, which
 // is the answer the caller wants: a backend publishing "RAD:PACURRENT" and
 // "RAD:OVF" is doing nothing wrong, but no gauge anywhere will move.
-[[nodiscard]] inline const MeterSurface* meterSurfaceFor(QLatin1String key)
+[[nodiscard]] inline const MeterSurface* meterSurfaceFor(QStringView key)
 {
     for (const auto& s : kMeterSurfaces) {
         if (key == QLatin1String(s.key))
             return &s;
     }
     return nullptr;
+}
+
+// Does the consumer understand what the backend declared?
+//
+// THE one implementation of this question, and it is a function rather than
+// three copies of a split-and-compare loop because §1.33 is precisely what
+// happens when two places answer it differently. `acceptedUnits` was widened
+// from a single value to a set here, the automation `meters` join was updated,
+// and `kMeterTable` in RadioCertification.cpp was not — so `radiocert meters`
+// reported UNIT MISMATCH on a healthy TX:ALC on every run, and ranked it above
+// every real finding. There is now nowhere left to hold the old form.
+//
+// An empty declaration is NOT a mismatch: a backend that declares no unit has
+// made no claim to disagree with, and reporting one would invent a defect out
+// of missing metadata. An empty accepted set is not a mismatch either — it
+// means nobody has written down what the consumer handles, which is a gap in
+// this table and not a fault in the radio.
+[[nodiscard]] inline bool meterUnitAccepted(QStringView acceptedUnits,
+                                            QStringView declaredUnit)
+{
+    if (declaredUnit.isEmpty())
+        return true;
+    const QList<QStringView> accepted =
+        acceptedUnits.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    if (accepted.isEmpty())
+        return true;
+    for (QStringView u : accepted) {
+        if (declaredUnit.compare(u.trimmed(), Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
 }
 
 }  // namespace AetherSDR

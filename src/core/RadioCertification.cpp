@@ -6,18 +6,23 @@
 #include "core/ClientQuindarTone.h"
 #include "core/LogManager.h"
 #include "core/ClientTxTestTone.h"
+#include "core/MeterSurfaces.h"
 #include "models/MeterModel.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QEventLoop>
 #include <QScopeGuard>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
+#include <optional>
 #include <vector>
 
 namespace AetherSDR {
@@ -35,24 +40,68 @@ namespace {
 // radio means adding rows, and so the documentation and the tool cannot drift
 // apart — anything here that a backend does not publish shows up as "defined
 // but never fed" or as absent, which are different findings and both useful.
+//
+// THERE IS NO UNIT COLUMN HERE, deliberately. It used to hold one expected unit
+// compared by equality, and MeterSurfaces.h's `acceptedUnits` — a SET — was
+// introduced precisely because that form reports a permanent false positive on
+// a healthy meter. Only one of the two tables was updated, so every HL2 run
+// went on reporting `UNIT MISMATCH … TX:ALC (declared dBFS, expected dB)` on a
+// correct meter, and ranked it above every real concern (CERTIFICATION.md
+// 1.33). The unit expectation now has exactly one home: kMeterSurfaces, joined
+// by key. A row here whose key has no surface entry gets no unit verdict, which
+// is the honest answer rather than a comparison against a value nobody wrote.
 struct MeterSpec {
     const char* source;
     const char* name;
-    const char* unit;
     bool expectedOnHl2;      // physically producible by this radio class
+
+    // Cannot carry a value unless the transmitter was keyed at all.
+    //
+    // TX:MICPEAK, TX:ALC and TX:COMPPEAK are computed host-side from the audio
+    // heading for the modulator, so a key with the drive slider at zero feeds
+    // all three — but a key the radio REFUSED feeds none of them, and the run
+    // that exposed all of this had three refusals and reported the resulting
+    // silence as three meters that are never fed.
+    bool needsKey;
+
+    // Cannot carry a value unless the PA actually produced forward power.
+    //
+    // A strictly stronger condition than needsKey, and the distinction is the
+    // point: TX:SWR, TX:FWDPWR and TX:REFPWR measure RF that did not happen
+    // even when the key went down cleanly. Reporting them as "defined but never
+    // fed" after a silent key is the false finding CERTIFICATION.md 1.32
+    // records — and its own concern text recommends deleting the meter.
+    bool needsForwardPower;
+
     const char* note;
 };
 
+// `note` is factual as of 2026-08-10, checked against Hl2Backend rather than
+// remembered. Four rows previously described meters as unpublished or unwired
+// that are both defined and fed, and were marked expectedOnHl2 = false while
+// being present — which switched off the one check (`expectedButMissing`) that
+// could notice them regressing.
+//                              hl2   key    rf
 constexpr MeterSpec kMeterTable[] = {
-    {"SLC", "LEVEL",    "dBm",  true,  "receive signal level"},
-    {"TX",  "MICPEAK",  "dBFS", true,  "pre-ALC microphone peak"},
-    {"TX",  "SWR",      "SWR",  true,  "ratio — meaningful uncalibrated"},
-    {"TX",  "FWDPWR",   "dBm",  false, "counts available but uncalibrated; not published"},
-    {"TX",  "REFPWR",   "dBm",  false, "counts available but uncalibrated; not published"},
-    {"TX",  "ALC",      "dB",   false, "host ALC computes this and nothing consumes it"},
-    {"TX",  "COMPPEAK", "dB",   false, "host-side compressor; not wired"},
-    {"RAD", "PATEMP",   "degC", true,  "rise under key is the check, not the value"},
-    {"RAD", "+13.8A",   "Volts",false, "no supply telemetry on this radio"},
+    {"SLC", "LEVEL",    true,  false, false, "receive signal level"},
+    {"TX",  "MICPEAK",  true,  true,  false, "pre-ALC microphone peak; host-side, so a "
+                                             "zero-drive key still feeds it"},
+    {"TX",  "SWR",      true,  true,  true,  "ratio - meaningful uncalibrated, but only "
+                                             "published above the forward-power floor"},
+    {"TX",  "FWDPWR",   true,  true,  true,  "published in dBm as wattsToDbm(directional"
+                                             "Watts(raw)) through the peak hold; the "
+                                             "reference curve is uncalibrated, the meter "
+                                             "is not absent"},
+    {"TX",  "REFPWR",   true,  true,  true,  "published in dBm as wattsToDbm(directional"
+                                             "Watts(raw)); same uncalibrated curve as "
+                                             "FWDPWR"},
+    {"TX",  "ALC",      true,  true,  false, "host ALC; MeterModel::swAlc() consumes it "
+                                             "and the Phone/CW ALC gauges render it"},
+    {"TX",  "COMPPEAK", true,  true,  false, "host speech processor, polled onto the "
+                                             "meter at 20 Hz; reads 0 with PROC off, "
+                                             "which is a value and not a silence"},
+    {"RAD", "PATEMP",   true,  false, false, "rise under key is the check, not the value"},
+    {"RAD", "+13.8A",   false, false, false, "no supply telemetry on this radio"},
 };
 
 }  // namespace
@@ -186,6 +235,83 @@ QJsonObject RadioCertification::meterSnapshot() const
     return out;
 }
 
+QJsonObject RadioCertification::renderedSnapshot() const
+{
+    QJsonObject out;
+    if (!m_radio)
+        return out;
+    const auto& meters = m_radio->meterModel();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    auto ageOf = [now](qint64 stamp) { return stamp > 0 ? now - stamp : qint64(-1); };
+
+    // FORWARD POWER, gated the way RigctlProtocol gates RFPOWER_METER_WATTS:
+    // suppress a cached last-transmit value rather than presenting it as
+    // current. The value reported is fwdPowerInstant(), which is what the TX
+    // Controls power gauge binds to, so this is the gauge's number and not the
+    // seam's dBm.
+    const qint64 fwdAge = ageOf(meters.fwdPowerUpdatedAtMs());
+    const bool fwdLive = fwdAge >= 0 && fwdAge <= MeterModel::kTxMeterStaleMs;
+    out[QStringLiteral("fwdPowerWatts")] =
+        fwdLive ? QJsonValue(static_cast<double>(meters.fwdPowerInstant())) : QJsonValue();
+    out[QStringLiteral("fwdPowerAgeMs")] = static_cast<double>(fwdAge);
+    out[QStringLiteral("fwdPowerLive")] = fwdLive;
+
+    // SWR through swrIfLive(), which is THE liveness predicate — the same one
+    // behind the signals' swrValid flag, both snapshot arrays and the bridge
+    // scalar. Reading swr() raw returns m_swr's 1.0f initialiser, so a meter
+    // that has never been fed and a perfect match are indistinguishable, and
+    // this probe reported "1.0" in the same object that reported "never fed".
+    const std::optional<float> liveSwr = meters.swrIfLive();
+    out[QStringLiteral("swr")] =
+        liveSwr ? QJsonValue(static_cast<double>(*liveSwr)) : QJsonValue();
+    out[QStringLiteral("swrAgeMs")] = static_cast<double>(ageOf(meters.swrUpdatedAtMs()));
+    out[QStringLiteral("swrLive")] = liveSwr.has_value();
+
+    // ALC has no liveness predicate on the model — the Phone/CW gauges are
+    // signal-driven and simply keep displaying the last value they were sent.
+    // That is exactly §1.11's stale reading, so age it from the meter's own
+    // timestamp here rather than reporting a bare float. Reported unaged, an
+    // ALC value left over from the previous key reads as a live one.
+    const int alcIdx = meters.findMeter(QStringLiteral("TX"), QStringLiteral("ALC"));
+    const qint64 alcAge = alcIdx >= 0 ? meters.valueAgeMs(alcIdx) : -1;
+    const bool alcLive = alcAge >= 0 && alcAge <= MeterModel::kTxMeterStaleMs;
+    out[QStringLiteral("alcDbfs")] =
+        alcLive ? QJsonValue(static_cast<double>(meters.swAlc())) : QJsonValue();
+    out[QStringLiteral("alcAgeMs")] = static_cast<double>(alcAge);
+    out[QStringLiteral("alcLive")] = alcLive;
+    return out;
+}
+
+void RadioCertification::observeKeyedRf()
+{
+    if (!m_radio)
+        return;
+    const auto& meters = m_radio->meterModel();
+    ++m_keyedWindows;
+
+    // A radio that defines no forward-power meter cannot answer the question,
+    // and that is a different state from one that answered zero. Recorded so
+    // the verdict can say WHICH.
+    if (meters.findMeter(QStringLiteral("TX"), QStringLiteral("FWDPWR")) < 0)
+        return;
+    m_fwdPowerMeterDefined = true;
+
+    const qint64 stamp = meters.fwdPowerUpdatedAtMs();
+    if (stamp <= 0)
+        return;
+    const qint64 age = QDateTime::currentMSecsSinceEpoch() - stamp;
+    if (age > MeterModel::kTxMeterStaleMs)
+        return;   // a reading from a previous key proves nothing about this one
+    ++m_keyedRfSamples;
+    m_keyedFwdWattsMax = std::max(m_keyedFwdWattsMax,
+                                  static_cast<double>(meters.fwdPowerInstant()));
+}
+
+bool RadioCertification::keyedRfConfirmed() const
+{
+    return m_keyedRfSamples > 0 && m_keyedFwdWattsMax > kKeyedRfFloorWatts;
+}
+
 // ---------------------------------------------------------------------------
 // Receive stages. Every one of these is a transcription of HERMES.md 15.
 // ---------------------------------------------------------------------------
@@ -214,6 +340,12 @@ void RadioCertification::stageControlEffect(const Options& o)
         const bool keyed = keyViaOperatorPath(true);
         spin(o.settleMs);
         const QJsonObject s2 = meterSnapshot();
+        // Evidence for the keyed-RF precondition, taken while the key is still
+        // down. Every keyed window in the run contributes, because one silent
+        // key does not prove the PA never enabled and one loud one is enough to
+        // prove it did.
+        if (keyed)
+            observeKeyedRf();
         keyViaOperatorPath(false);
         // A STALE OR REFUSED READING IS NOT A MEASUREMENT. A frozen TX:MICPEAK
         // returns the same number at both gain settings, so the delta is 0 dB
@@ -241,9 +373,26 @@ void RadioCertification::stageControlEffect(const Options& o)
     // to. It previously reported `rfPowerRestoredTo`, which named a restore that
     // never happened — in a report whose entire value is that it does not
     // overstate what it verified. The power row in docs/radio-certification.md
-    // is certified by TX:FWDPWR dropping ~6 dB on a halving, and FWDPWR is
-    // defined-but-never-fed on this backend, so that row is currently unrunnable
-    // rather than unimplemented.
+    // used to be certified by TX:FWDPWR dropping ~6 dB on a halving. FWDPWR IS
+    // published on this backend now (in dBm, through an uncalibrated reference
+    // curve), so that row is no longer blocked on a missing meter — but the
+    // HALVING STIMULUS ITSELF IS NOT USABLE ON THIS RADIO, and the ratio does
+    // not rescue it. Two independent reasons, both measured:
+    //
+    //   * The gateware decodes only the drive register's TOP NIBBLE, so a
+    //     slider halving is not a drive halving. Slider 44 % and 50 % both land
+    //     on nibble 7 (1.984 W vs 2.001 W — six points of travel doing
+    //     nothing), and 51 % jumps +1.25 dB. 100→50→25 % is nibble 15→7→3.
+    //   * HL2FilterE3 is nonlinear as well as uncalibrated, so the scale does
+    //     not cancel out of a ratio taken across a wide span.
+    //
+    // Measured live: −4.44 dB (100→50 %) and −2.33 dB (50→25 %) against the
+    // −6.02 dB a true halving would give. If the scale cancelled, both would
+    // read −6.02. So a failing delta cannot be attributed to the control rather
+    // than to the curve, and radiocert must not report one as a control defect.
+    // What this control CAN certify by effect is monotonicity — one nibble up,
+    // FWDPWR rises — which is the stimulus docs/radio-certification.md now
+    // carries. See HERMES.md 17.5 and 17.7 for both measurements.
     QJsonObject m{
         {QStringLiteral("micGain100Dbfs"), micFull},
         {QStringLiteral("micGain50Dbfs"), micHalf},
@@ -262,24 +411,145 @@ void RadioCertification::stageControlEffect(const Options& o)
             "about what the gain is")
             .arg(micDelta, 0, 'f', 1);
 
-    // RF gain has no runtime path ON THE HERMES-LITE 2: the LNA value is sent
-    // once in the connect parameters. Report it rather than silently skipping,
-    // because it is the control an operator reaches for first when the ADC
-    // overloads, and a UI that offers it is making a promise.
+    // RF GAIN, CERTIFIED BY EFFECT — AND THE FAMILY GATE GOES WITH IT.
     //
-    // GATED ON THE FAMILY, because this is the one radio-specific fact in an
-    // otherwise backend-generic tool. Emitted unconditionally it told a Flex
-    // operator their working preamp was broken — a hardcoded false finding is
-    // worse than a missing one, since nothing distinguishes it from a real
-    // result. Properly this belongs in the capability seam or the per-backend
-    // radio profile (docs/CERTIFICATION.md 2.1); the family gate is the
-    // stopgap that stops it lying in the meantime.
-    if (m_radio->family().compare(QStringLiteral("hl2"), Qt::CaseInsensitive) == 0) {
-        m[QStringLiteral("rfGainRuntimePath")] = false;
-        problems << QStringLiteral(
-            "SliceModel::setRfGain has no runtime path on this backend — LNA gain is "
-            "connect-parameters only, so the preamp/attenuator control does nothing "
-            "after connect");
+    // This used to hardcode, behind `if (family == "hl2")`, the finding
+    // "SliceModel::setRfGain has no runtime path on this backend". The first
+    // clause is still true: SliceModel::setRfGain's whole body is
+    // `slice set N rfgain=X`, Flex wire text no seam backend can receive. The
+    // CONCLUSION was false, and printed on every Hermes-Lite 2 run. The
+    // operator's slider does not call it — SpectrumOverlayMenu emits
+    // rfGainChanged unconditionally and only falls back to the slice setter
+    // when there is no radio model or no pan id — so on the HL2 the slider
+    // routes rfGainChanged → RadioModel::setPanRfGainFor →
+    // Hl2Backend::setPanRfGain → applyLnaGainDb → MetisClient::setLnaGainDb,
+    // which writes AD9866 0x0a[5:0] at runtime and remembers it per band.
+    //
+    // Replacing the assertion with a measurement removes the reason for the
+    // family gate (§1.14). A stage that DRIVES the control and reports what
+    // happened cannot tell a Flex operator their working preamp is broken,
+    // because it is no longer telling anybody anything it did not observe.
+    //
+    // THE EXPECTED DELTA IS ZERO, NOT THE STEP SIZE. Hl2DbReference is moved in
+    // the same call as the gain and both the spectrum and the S-meter render
+    // through it, specifically so a gain change does NOT slide the display
+    // (HERMES.md 17.4; the class header states it as an invariant — "a gain
+    // change provably cannot move a reported dBm value"). On healthy hardware
+    // an 8 dB LNA step moves SLC:LEVEL by 0 dB. Asserting 8 dB would have
+    // replaced one permanent false positive with another.
+    //
+    // AND THE DELTA STILL DOES NOT RENDER A VERDICT, because it cannot. Two
+    // different states produce the identical −step reading:
+    //
+    //   * the reference moved and the LNA register did not — the real defect;
+    //   * the register moved and the RECEIVED NOISE FLOOR did not, because the
+    //     reading is dominated by the converter's own noise rather than by
+    //     anything coming down the feedline. Raising the LNA lifts antenna
+    //     noise and leaves ADC noise where it is, so on a quiet band the raw
+    //     dBFS barely moves and the display subtracts the full step anyway.
+    //
+    // That is not a hypothetical. Measured on the live Hermes-Lite 2 on a quiet
+    // 20 m: an 8 dB step moved SLC:LEVEL by −6.3 dB, which is within 2 dB of
+    // the defect signature — while the raw dBFS behind it ROSE 1.74 dB, proving
+    // the register HAD been written. A threshold tight enough to catch the
+    // defect fires on healthy hardware every time the band is quiet, and this
+    // stage exists to stop printing findings like that.
+    //
+    // So the delta is reported as evidence with its two readings named, and the
+    // VERDICT rests on the echo. applyLnaGainDb echoes the value the hardware
+    // actually took to every pan, so an echo landing on
+    // PanadapterModel::rfGain() is evidence the seam was crossed — and it is
+    // not §1.6's readback of our own setpoint, because an out-of-range request
+    // comes back clamped rather than repeated. What is still missing to close
+    // the effect half is the raw pre-reference dBFS, which the seam does not
+    // expose (docs/CERTIFICATION.md 2.4 — the meters join).
+    auto settledSLevel = [&]() -> double {
+        // LET THE EMA CATCH UP. HERMES.md 17.6: every WDSP sample is smoothed
+        // (decay alpha 0.15 at ~47 samples/s, so ~0.7 s to settle) and one is
+        // published per 100 ms gate. A reading taken straight after the step is
+        // a blend of both gain settings, which halves the delta and lands it
+        // exactly between the two hypotheses this check distinguishes.
+        spin(1200);
+        const QJsonObject s = meterSnapshot();
+        if (s.value(QStringLiteral("sLevelDbmStale")).toBool())
+            return -999.0;
+        return s.value(QStringLiteral("sLevelDbm")).toDouble(-999.0);
+    };
+
+    const QString panId = m_radio->panId();
+    PanadapterModel* pan = panId.isEmpty() ? nullptr : m_radio->panadapter(panId);
+    if (!pan) {
+        m[QStringLiteral("rfGainExercised")] = false;
+        m[QStringLiteral("rfGainNotExercised")] = QStringLiteral(
+            "no active panadapter, so the route the operator's RF Gain slider "
+            "actually uses does not exist to be driven");
+    } else {
+        const int startGain = pan->rfGain();
+        const int low = pan->rfGainLow();
+        const int high = pan->rfGainHigh();
+        // 8 dB: large enough to clear S-meter noise, small enough to leave the
+        // front end somewhere ordinary. Bounded by the range the BACKEND
+        // published rather than a constant pasted from one radio — the HL2
+        // reports -12..+48 in 1 dB steps against the model's Flex-shaped default.
+        constexpr int kProbeStepDb = 8;
+        int target = startGain + kProbeStepDb;
+        if (target > high)
+            target = startGain - kProbeStepDb;
+        target = qBound(low, target, high);
+        const int stepDb = target - startGain;
+
+        const double before = settledSLevel();
+        m_radio->setPanRfGainFor(panId, target);
+        const double after = settledSLevel();
+        const int echoed = pan->rfGain();
+        m_radio->setPanRfGainFor(panId, startGain);   // leave it where we found it
+        spin(400);
+
+        const bool haveLevels = before > -998.0 && after > -998.0;
+        const double delta = after - before;
+        m[QStringLiteral("rfGainExercised")] = stepDb != 0;
+        m[QStringLiteral("rfGainStartDb")] = startGain;
+        m[QStringLiteral("rfGainRequestedDb")] = target;
+        m[QStringLiteral("rfGainEchoedDb")] = echoed;
+        m[QStringLiteral("rfGainReachedBackend")] = echoed == target;
+        m[QStringLiteral("rfGainStepDb")] = stepDb;
+        m[QStringLiteral("sLevelBeforeDbm")] = before > -998.0 ? QJsonValue(before) : QJsonValue();
+        m[QStringLiteral("sLevelAfterDbm")] = after > -998.0 ? QJsonValue(after) : QJsonValue();
+        m[QStringLiteral("sLevelDeltaDb")] = haveLevels ? QJsonValue(delta) : QJsonValue();
+        // Zero, and see above for why it is not the step size — and for why a
+        // reading near sLevelDeltaIfRegisterNotWrittenDb is NOT reported as a
+        // defect. Both numbers are published so a reader can place the measured
+        // delta between them instead of being handed a verdict the measurement
+        // cannot support.
+        m[QStringLiteral("sLevelExpectedDeltaDb")] = 0.0;
+        m[QStringLiteral("sLevelDeltaIfRegisterNotWrittenDb")] = -stepDb;
+        m[QStringLiteral("sLevelDeltaIsConclusive")] = false;
+        m[QStringLiteral("sLevelDeltaCaveat")] = QStringLiteral(
+            "a delta near %1 dB has two causes that this measurement cannot "
+            "separate: the LNA register never took the value, or the reading is "
+            "dominated by converter noise that does not rise with the gain. Only "
+            "the raw pre-reference dBFS distinguishes them and the seam does not "
+            "expose it").arg(-stepDb);
+
+        if (stepDb == 0) {
+            m[QStringLiteral("rfGainNotExercised")] = QStringLiteral(
+                "the published gain range %1..%2 dB leaves no room for a probe "
+                "step from %3 dB").arg(low).arg(high).arg(startGain);
+        } else if (echoed != target) {
+            // THE ONE CONCERN THIS CHECK EARNS. The echo carries the value the
+            // hardware clamped to, so its absence means the command did not
+            // reach the backend at all — which is the claim the deleted
+            // hardcoded assertion used to make without ever testing it.
+            problems << QStringLiteral(
+                "the RF Gain control did not reach the backend: asked for %1 dB "
+                "and the pan reports %2 dB. This route echoes the value the "
+                "hardware took, so a missing echo means the command went nowhere")
+                .arg(target).arg(echoed);
+        } else if (!haveLevels) {
+            problems << QStringLiteral(
+                "no S-meter reading either side of the RF gain step — the gain "
+                "reached the backend but its effect could not be measured");
+        }
     }
 
     record(QStringLiteral("control-effect"),
@@ -288,7 +558,11 @@ void RadioCertification::stageControlEffect(const Options& o)
            QStringLiteral(
                "Halving a linear gain is -6.02 dB. That is arithmetic rather than "
                "a property of this radio, which is what makes it a threshold that "
-               "transfers to hardware nobody has characterised yet."),
+               "transfers to hardware nobody has characterised yet. The RF gain "
+               "check is the same idea against a different invariant: the display "
+               "reference tracks the commanded gain, so the S-meter must not move "
+               "at all, and the amount it moves if the register was never written "
+               "is known exactly."),
            problems.join(QStringLiteral("; ")),
            QStringLiteral("docs/radio-certification.md — Controls"));
 }
@@ -304,11 +578,38 @@ void RadioCertification::stageMeterInventory()
         return;
     const auto& meters = m_radio->meterModel();
     QJsonObject m;
-    QStringList definedNeverFed, expectedButMissing, unitMismatches;
+    QStringList definedNeverFed, expectedButMissing, unitMismatches, inconclusive;
 
     // kMeterTable's `expectedOnHl2` column is a fact about ONE radio class.
     const bool tableAppliesToThisRadio =
         m_radio->family().compare(QStringLiteral("hl2"), Qt::CaseInsensitive) == 0;
+
+    // DID THIS RUN ACTUALLY TRANSMIT? Established from forward power observed
+    // inside a keyed window — a quantity independent of the meters being judged
+    // — because with the operator's drive slider at zero every keyed stage
+    // succeeded, keyRefusals was 0, every precondition passed, and the radio
+    // radiated nothing. The report then blamed TX:SWR and recommended deleting
+    // it (CERTIFICATION.md 1.32).
+    const bool rfConfirmed = keyedRfConfirmed();
+    const bool anyKeyedWindow = m_keyedWindows > 0;
+    // ASK THE MODEL, do not report the observation flag. m_fwdPowerMeterDefined
+    // is only set when a keyed window actually looked, so on a run where every
+    // key was refused it reads false — which states as a fact about the radio
+    // ("it defines no forward-power meter") something that is really a fact
+    // about the run ("nothing ever looked"). The distinction is the whole
+    // subject of this stage.
+    const bool fwdMeterDefined =
+        meters.findMeter(QStringLiteral("TX"), QStringLiteral("FWDPWR")) >= 0;
+    m[QStringLiteral("keyedRf")] = QJsonObject{
+        {QStringLiteral("confirmed"), rfConfirmed},
+        {QStringLiteral("keyedWindows"), m_keyedWindows},
+        {QStringLiteral("freshForwardPowerSamples"), m_keyedRfSamples},
+        {QStringLiteral("maxWattsWhileKeyed"),
+         m_keyedRfSamples > 0 ? QJsonValue(m_keyedFwdWattsMax) : QJsonValue()},
+        {QStringLiteral("floorWatts"), static_cast<double>(kKeyedRfFloorWatts)},
+        {QStringLiteral("forwardPowerMeterDefined"), fwdMeterDefined},
+        {QStringLiteral("keyRefusals"), m_keyRefusals},
+    };
 
     for (const MeterSpec& spec : kMeterTable) {
         const QString key = QString::fromLatin1(spec.source) + QLatin1Char(':')
@@ -316,41 +617,89 @@ void RadioCertification::stageMeterInventory()
         const int idx = meters.findMeter(QString::fromLatin1(spec.source),
                                          QString::fromLatin1(spec.name));
         const qint64 age = idx >= 0 ? meters.valueAgeMs(idx) : -1;
-        // THE UNIT, TWICE. `unit` is what this table EXPECTS; `declaredUnit` is
-        // what the backend actually published. When they disagree the meter is
+        // THE UNIT, TWICE. `acceptedUnits` is every unit the CONSUMER can
+        // correctly handle; `declaredUnit` is what the backend actually
+        // published. When the declaration is outside the set the meter is
         // already being misread and no amount of freshness will show it — an
         // IC-705 declaring FWDPWR in Watts against a consumer assuming dBm
         // rendered 5 W as 0.003 W while this stage reported it fed and healthy.
+        //
+        // The set comes from kMeterSurfaces, the one table that owns it, and
+        // the membership test from the one predicate that answers it. This used
+        // to be a private single-value column compared by equality, which
+        // flagged a correct TX:ALC on every HL2 run (CERTIFICATION.md 1.33).
         const MeterDef* def = idx >= 0 ? meters.meterDef(idx) : nullptr;
         const QString declared = def ? def->unit : QString();
-        const bool unitDisagrees =
-            def && !declared.isEmpty()
-            && declared.compare(QLatin1String(spec.unit), Qt::CaseInsensitive) != 0;
+        const MeterSurface* surface = meterSurfaceFor(key);
+        const QString accepted =
+            surface ? QString::fromLatin1(surface->acceptedUnits) : QString();
+        const bool unitDisagrees = def && surface
+            && !meterUnitAccepted(accepted, declared);
         if (unitDisagrees)
-            unitMismatches << QStringLiteral("%1 (declared %2, expected %3)")
-                                  .arg(key, declared, QString::fromLatin1(spec.unit));
+            unitMismatches << QStringLiteral("%1 (declared %2, consumer handles %3)")
+                                  .arg(key, declared, accepted);
 
-        m[key] = QJsonObject{
-            {QStringLiteral("unit"), QString::fromLatin1(spec.unit)},
+        // INCONCLUSIVE, not "never fed". A meter cannot be judged by a run that
+        // never produced the thing it measures, and NOT-TESTED is already a
+        // first-class outcome in the control scrub (§1.29). Two rungs: a key
+        // that never went down leaves even the host-side transmit meters
+        // unexercised; a key that went down silently additionally leaves the RF
+        // ones unexercised.
+        QString untestedBecause;
+        if (spec.needsKey && !anyKeyedWindow) {
+            untestedBecause = m_keyRefusals > 0
+                ? QStringLiteral("the radio refused every key this run (%1 refusals), "
+                                 "so nothing was ever transmitted for this meter to "
+                                 "measure").arg(m_keyRefusals)
+                : QStringLiteral("no stage in this run keyed the transmitter, so "
+                                 "nothing was ever transmitted for this meter to "
+                                 "measure");
+        } else if (spec.needsForwardPower && !rfConfirmed) {
+            untestedBecause = QStringLiteral(
+                "no keyed stage in this run produced forward power above %1 W, so "
+                "this meter had nothing to report")
+                .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
+        }
+
+        QJsonObject row{
+            {QStringLiteral("acceptedUnits"), accepted},
             {QStringLiteral("declaredUnit"), declared},
             {QStringLiteral("unitDisagrees"), unitDisagrees},
             {QStringLiteral("defined"), idx >= 0},
             {QStringLiteral("everFed"), age >= 0},
             {QStringLiteral("ageMs"), static_cast<double>(age)},
+            {QStringLiteral("needsKey"), spec.needsKey},
+            {QStringLiteral("needsForwardPower"), spec.needsForwardPower},
             // Named for the radio class it describes, not "this radio" — the
             // old key claimed the table had been evaluated against whatever
             // backend happened to be connected.
             {QStringLiteral("expectedOnHl2Class"), spec.expectedOnHl2},
-            {QStringLiteral("note"), QString::fromLatin1(spec.note)},
+            // fromUtf8, not fromLatin1: these notes are UTF-8 source literals
+            // and Latin-1 decoding mangled the one em dash in the table into
+            // three characters in the report.
+            {QStringLiteral("note"), QString::fromUtf8(spec.note)},
         };
+        const bool untested = !untestedBecause.isEmpty();
+        if (untested && idx >= 0 && age < 0) {
+            row[QStringLiteral("verdict")] = QStringLiteral("INCONCLUSIVE");
+            row[QStringLiteral("inconclusiveReason")] = untestedBecause;
+        }
+        m[key] = row;
+
         // Defined but never fed renders as a real instrument reading nothing,
         // which is worse than an absent one: the operator has no way to tell it
         // apart from a quiet band.
         // By the time this runs, the stages above have keyed and injected
         // audio, so a meter with no value has genuinely never been fed rather
-        // than merely not exercised.
-        if (idx >= 0 && age < 0)
-            definedNeverFed << key;
+        // than merely not exercised — PROVIDED those stages transmitted. When
+        // they did not, the silence says nothing about the meter and this is an
+        // inconclusive result, not a negative one.
+        if (idx >= 0 && age < 0) {
+            if (untested)
+                inconclusive << key;
+            else
+                definedNeverFed << key;
+        }
         if (tableAppliesToThisRadio && spec.expectedOnHl2 && idx < 0)
             expectedButMissing << key;
     }
@@ -385,6 +734,50 @@ void RadioCertification::stageMeterInventory()
             + QStringLiteral(". Either publish them with a documented scale or "
                              "stop defining them");
     }
+    // INCONCLUSIVE COMES BEFORE THE NEGATIVE FINDINGS, and is worded as a
+    // statement about the RUN rather than about the meters. A reader who skims
+    // must not come away with "TX:SWR is broken" from a run that never keyed
+    // the PA, because the remedy the negative form recommends is deleting a
+    // working meter.
+    if (!inconclusive.isEmpty()) {
+        QString why;
+        if (m_keyRefusals > 0 && !anyKeyedWindow) {
+            // §1.17: a refused action reads as a broken subject. Name the
+            // refusal, because it is the actionable fact and the meters are
+            // not the subject of it.
+            why = QStringLiteral(
+                "the radio refused every key this run (%1 refusals) — enable TX "
+                "automation, or check band limits and interlocks")
+                .arg(m_keyRefusals);
+        } else if (!anyKeyedWindow) {
+            why = QStringLiteral("no stage in this run keyed the transmitter");
+        } else if (!fwdMeterDefined) {
+            why = QStringLiteral(
+                "this radio defines no TX:FWDPWR meter, so there is no quantity "
+                "independent of the meters below that can confirm a transmission");
+        } else if (m_keyedRfSamples == 0) {
+            why = QStringLiteral(
+                "forward power was never fresh inside a keyed window across %1 "
+                "keyed stage(s)").arg(m_keyedWindows);
+        } else {
+            why = QStringLiteral(
+                "forward power peaked at %1 W across %2 keyed stage(s), below the "
+                "%3 W floor an SWR reading needs behind it — the RF power slider "
+                "at 0 does this, and so do an interlock, a band limit and a PA "
+                "that never enabled")
+                .arg(m_keyedFwdWattsMax, 0, 'g', 3)
+                .arg(m_keyedWindows)
+                .arg(static_cast<double>(kKeyedRfFloorWatts), 0, 'g', 3);
+        }
+        const QString lead = QStringLiteral(
+            "INCONCLUSIVE — this run produced no confirmed RF, so nothing here is "
+            "a verdict on these meters: ")
+            + inconclusive.join(QStringLiteral(", "))
+            + QStringLiteral(". ") + why
+            + QStringLiteral(". Re-run with drive up and into a load before "
+                             "concluding anything about them");
+        concern = concern.isEmpty() ? lead : lead + QStringLiteral(". ") + concern;
+    }
 
     // A UNIT MISMATCH OUTRANKS EVERYTHING ELSE HERE, so it goes first. Every
     // other concern in this stage describes a meter that is not there; this one
@@ -403,11 +796,21 @@ void RadioCertification::stageMeterInventory()
     // these three are read back through the consumer that converts, because
     // "a value arrived" and "the face moved" turned out to be different
     // questions (CERTIFICATION.md 1.27).
-    m[QStringLiteral("asRendered")] = QJsonObject{
-        {QStringLiteral("fwdPowerWatts"), meters.fwdPowerInstant()},
-        {QStringLiteral("swr"), meters.swr()},
-        {QStringLiteral("alcDbfs"), meters.swAlc()},
-    };
+    //
+    // TAKEN WHILE KEYED, by stageMeterScale, and behind each consumer's own
+    // liveness gate. Sampled here instead — after stageControlEffect unkeyed
+    // and settled 700 ms — every transmit quantity is absent by construction,
+    // and read raw the SWR accessor returns its 1.0f initialiser, so the probe
+    // reported a confident perfect match beside its own "never fed" (1.34).
+    // The unkeyed reading is kept alongside because the pair is the evidence
+    // that the gauge falls back correctly when transmission stops.
+    QJsonObject rendered = m_renderedWhileKeyed;
+    const bool haveKeyedSample = !rendered.isEmpty();
+    if (!haveKeyedSample)
+        rendered = renderedSnapshot();
+    rendered[QStringLiteral("sampledWhileKeyed")] = haveKeyedSample;
+    m[QStringLiteral("asRendered")] = rendered;
+    m[QStringLiteral("asRenderedUnkeyed")] = renderedSnapshot();
 
     record(QStringLiteral("meter-inventory"),
            QStringLiteral("Meters exist and actually receive values"),
@@ -415,7 +818,10 @@ void RadioCertification::stageMeterInventory()
            QStringLiteral(
                "Definition and delivery are separate wires and were connected "
                "separately. A defined meter that never updates is indistinguish"
-               "able from a real reading of nothing."),
+               "able from a real reading of nothing — and from a meter that was "
+               "never given anything to measure, which is why the RF-dependent "
+               "rows are only judged once a keyed stage has been confirmed to "
+               "produce forward power."),
            concern,
            QStringLiteral("HERMES.md 14.4 — the orphaned meter seam"));
 }
@@ -438,9 +844,19 @@ void RadioCertification::stageMeterScale(const Options& o)
         tone->setLevelDb(-20.0f);
         tone->setEnabled(true);
     }
-    keyViaOperatorPath(true);
+    const bool keyedOk = keyViaOperatorPath(true);
     spin(o.settleMs);
     const QJsonObject keyed = meterSnapshot();
+    // SAMPLE THE CONSUMER HERE, WHILE THE KEY IS DOWN. This is the only moment
+    // in the meters phase when a transmit-only quantity can exist, and the
+    // inventory stage that reports it runs after stageControlEffect has unkeyed
+    // and settled 700 ms — so it was reading the one instant the value is
+    // guaranteed absent, and reported 0.001 W in a run that measured 2.0 W
+    // (CERTIFICATION.md 1.34).
+    if (keyedOk) {
+        m_renderedWhileKeyed = renderedSnapshot();
+        observeKeyedRf();
+    }
     keyViaOperatorPath(false);
     if (auto* tone = m_audio->clientTxTestTone())
         tone->setEnabled(false);
@@ -454,6 +870,12 @@ void RadioCertification::stageMeterScale(const Options& o)
         {QStringLiteral("micPeakErrorDb"), micPeak + 20.0},
         {QStringLiteral("swr"), swr},
         {QStringLiteral("swrStale"), keyed.contains(QStringLiteral("swrStale"))},
+        // The SWR row above is only a measurement of anything if RF happened.
+        // `swr: -1` at zero drive is the absence of a transmission, not the
+        // absence of a meter, and this is where a reader finds out which.
+        {QStringLiteral("keyedRfConfirmed"), keyedRfConfirmed()},
+        {QStringLiteral("maxFwdWattsWhileKeyed"),
+         m_keyedRfSamples > 0 ? QJsonValue(m_keyedFwdWattsMax) : QJsonValue()},
     };
 
     QStringList problems;
@@ -931,9 +1353,16 @@ void RadioCertification::stageRf(const Options& o)
         tone->setLevelDb(-20.0f);
         tone->setEnabled(true);
     }
-    keyViaOperatorPath(true);
+    const bool keyedOk = keyViaOperatorPath(true);
     spin(o.settleMs);
     const QJsonObject keyed = meterSnapshot();
+    // This stage transmits a tone, so its keyed window is evidence for the
+    // meters phase's keyed-RF precondition in an `all` run. The carrier-
+    // suppression stage deliberately keys into silence and is NOT instrumented
+    // for the same reason: a window that is supposed to produce no RF must not
+    // be counted as one that failed to.
+    if (keyedOk)
+        observeKeyedRf();
     keyViaOperatorPath(false);
     if (auto* tone = m_audio->clientTxTestTone())
         tone->setEnabled(false);
@@ -1375,6 +1804,15 @@ void RadioCertification::stageLifecycle(const Options&)
 QJsonObject RadioCertification::run(const Options& o)
 {
     m_stages = QJsonArray{};
+    // Per-run evidence, cleared with the stages it is reported beside. Carrying
+    // a previous run's keyed-RF confirmation forward would make the second run
+    // of a session inherit the first one's transmission.
+    m_keyedFwdWattsMax = -1.0;
+    m_keyedRfSamples = 0;
+    m_keyedWindows = 0;
+    m_fwdPowerMeterDefined = false;
+    m_renderedWhileKeyed = QJsonObject{};
+    m_keyRefusals = 0;
 
     // LEAVE THE RADIO WHERE WE FOUND IT.
     //
@@ -1622,6 +2060,23 @@ QJsonObject RadioCertification::run(const Options& o)
         // non-zero count here invalidates the transmit stages rather than
         // merely annotating them.
         {QStringLiteral("keyRefusals"), m_keyRefusals},
+        // DID ANY OF IT ACTUALLY RADIATE. Reported at the top level, not only
+        // inside the meters phase, because a run that keyed cleanly and put out
+        // no RF invalidates every transmit measurement in it in exactly the way
+        // keyRefusals above invalidates a run the radio declined to key — and
+        // that case is harder to notice, since nothing refused anything.
+        {QStringLiteral("keyedRf"), QJsonObject{
+            {QStringLiteral("confirmed"), keyedRfConfirmed()},
+            {QStringLiteral("keyedWindows"), m_keyedWindows},
+            {QStringLiteral("maxWattsWhileKeyed"),
+             m_keyedRfSamples > 0 ? QJsonValue(m_keyedFwdWattsMax) : QJsonValue()},
+            {QStringLiteral("floorWatts"), static_cast<double>(kKeyedRfFloorWatts)},
+            // Asked of the model, not of the observation flag — see the same
+            // field in stageMeterInventory for why the two differ on a run
+            // where no keyed window ever looked.
+            {QStringLiteral("forwardPowerMeterDefined"),
+             m_radio && m_radio->meterModel().findMeter(
+                 QStringLiteral("TX"), QStringLiteral("FWDPWR")) >= 0}}},
         {QStringLiteral("stages"), m_stages},
         {QStringLiteral("manualChecks"), manual},
     };

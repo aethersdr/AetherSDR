@@ -4715,6 +4715,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
+    # Argument parsing for the logwatch helper (#4912) — blind rest[0]/rest[1]
+    # indexing turned a typo into an IndexError traceback.
+    add_test(NAME automation_logwatch_arguments
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_logwatch.py)
     # Bridge docs must stay in sync with the verb registry (#4174 Phase 3):
     # fail CI if the generated verb table drifts or a detail heading is dup'd.
     add_test(NAME bridge_docs_check
@@ -4732,6 +4737,28 @@ target_link_libraries(automation_json_id_test PRIVATE
     aethercore Qt6::Core Qt6::Network
 )
 add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
+
+# `connect ip` family resolution + the `family` field on `connect list` (#4912).
+# Pure verb-level test against a fake IConnectionAutomation — no socket, no radio.
+add_executable(automation_connect_family_test
+    tests/automation_connect_family_test.cpp
+)
+target_include_directories(automation_connect_family_test PRIVATE src tests)
+target_link_libraries(automation_connect_family_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_connect_family_test COMMAND automation_connect_family_test)
+
+# `connect wait` phase reporting + deferred connect-failure delivery (#4912).
+add_executable(automation_connect_wait_phase_test
+    tests/automation_connect_wait_phase_test.cpp
+)
+target_include_directories(automation_connect_wait_phase_test PRIVATE src tests)
+target_link_libraries(automation_connect_wait_phase_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_connect_wait_phase_test
+         COMMAND automation_connect_wait_phase_test)
 
 add_executable(gui_client_identity_policy_test
     tests/gui_client_identity_policy_test.cpp

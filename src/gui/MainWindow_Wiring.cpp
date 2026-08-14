@@ -2897,7 +2897,7 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
 
             const int channel = slice->daxChannel();
             m_daxSliceLastCh[slice->sliceId()] = channel;
-            if (channel < 1 || channel > 4) {
+            if (channel < 1 || channel > 8) {
                 continue;
             }
             if (panStream) {

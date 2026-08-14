@@ -2093,7 +2093,7 @@ void section15(RigctlClient& c, Runner& r)
 // Edge cases
 // ═════════════════════════════════════════════════════════════════════════════
 
-void sectionEdge(RigctlClient& c, Runner& r)
+void sectionEdge(RigctlClient& c, Runner& r, bool doCw)
 {
     r.section(QStringLiteral("Edge Cases"));
 
@@ -2125,12 +2125,18 @@ void sectionEdge(RigctlClient& c, Runner& r)
     lines = c.send(QStringLiteral("\\set_trn 1"));
     r.check(QStringLiteral("E5  set_trn 1 accepted silently (RPRT 0)"), c.ok(lines));
 
-    // E6  send_morse smoke test — verify protocol accepts it without --cw flag
-    //     Does not verify radio keying; just that the command parses and queues
-    lines = c.send(QStringLiteral("\\send_morse TEST"));
-    r.check(QStringLiteral("E6  send_morse \"TEST\" accepted (RPRT 0, no --cw required)"),
-            c.ok(lines), lines.join(QStringLiteral(" | ")));
-    c.send(QStringLiteral("\\stop_morse"));
+    // E6  send_morse smoke test — verify the protocol accepts/queues the command.
+    //     GATED behind --cw: send_morse routes through CwxModel → "cwx", which
+    //     KEYS CW on real hardware, so it must not run on a plain (no-TX) pass.
+    if (doCw) {
+        lines = c.send(QStringLiteral("\\send_morse TEST"));
+        r.check(QStringLiteral("E6  send_morse \"TEST\" accepted (RPRT 0)"),
+                c.ok(lines), lines.join(QStringLiteral(" | ")));
+        c.send(QStringLiteral("\\stop_morse"));
+    } else {
+        r.skip(QStringLiteral("E6  send_morse \"TEST\" accepted (RPRT 0)"),
+               QStringLiteral("--cw not set — send_morse keys CW on real hardware"));
+    }
 
     // E7  q (short-form quit) — must return RPRT 0 so Hamlib closes cleanly
     //     without triggering its 20-second command timeout
@@ -2381,7 +2387,7 @@ int main(int argc, char** argv)
     section13(host, port, timeout, r, origFreq, origMode, origPb);
     section14(c, r);
     section15(c, r);
-    sectionEdge(c, r);
+    sectionEdge(c, r, doCw);
     sectionPty(r, ptyPath);
 
     // Best-effort state restore.

@@ -2100,6 +2100,11 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
+            // A retry is an attempt too (#4912). This path does NOT go through
+            // connectToRadio() — it re-drives the connection/backend directly —
+            // so the flag has to be set here as well or an armed reconnect
+            // reads as "nothing is happening".
+            m_connectAttemptActive = true;
             clearAutomationSliceFixtures();
             if (m_connection) {
                 QMetaObject::invokeMethod(m_connection, [this] {
@@ -3061,6 +3066,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         emit backendRebuilt();
     }
 
+    // An attempt is in flight from here until it lands, fails, or is abandoned
+    // (#4912). Set after the family switch above so a backend rebuild — which
+    // tears the old backend down and can emit a disconnect — cannot clear the
+    // flag we are about to set.
+    m_connectAttemptActive = true;
+
     clearAutomationSliceFixtures();
     m_automationGpsNtpServerAddress.clear();
 
@@ -3135,6 +3146,8 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
              << "udpPort=" << udpPort
              << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
+
+    m_connectAttemptActive = true;  // see connectToRadio() (#4912)
 
     clearAutomationSliceFixtures();
     m_automationGpsNtpServerAddress.clear();
@@ -3341,6 +3354,7 @@ void RadioModel::disconnectFromRadio()
 {
     m_intentionalDisconnect = true;
     m_rebootInProgress = false;
+    m_connectAttemptActive = false;  // the operator abandoned it (#4912)
     m_reconnectTimer.stop();
     m_pingTimer.stop();
     if (m_wanConn) {
@@ -3393,6 +3407,7 @@ void RadioModel::forceDisconnect()
 {
     // Close TCP/TLS without setting m_intentionalDisconnect so the UI can
     // start the normal unexpected-disconnect reconnect path.
+    m_connectAttemptActive = false;  // this attempt is over; the retry re-arms it (#4912)
     if (m_wanConn) {
         m_wanConn->disconnectFromRadio();
     } else if (!m_connection) {
@@ -5171,6 +5186,7 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
 void RadioModel::onConnected()
 {
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
+    m_connectAttemptActive = false;  // the attempt landed (#4912)
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
     // Belt-and-braces (#4122 review): the connect entry points clear fixtures,
@@ -6219,7 +6235,11 @@ void RadioModel::onDisconnected()
     // as enabled. Default-true would silently bypass the conflict check if
     // the status burst hadn't been processed yet (#3391 review).
     m_multiFlexEnabled = false;
-    m_maxSlices = 4;
+    // Keep m_maxSlices at the last radio's capacity across disconnect. The DAX
+    // combo and the DAX/TCI applet rows follow maxSlices() on
+    // connectionStateChanged, and resetting to 4 here shrank a 6700's DAX 5-8
+    // to "Off" while disconnected. The next connect re-derives the real value
+    // from maxSlicesForModel() (RadioModel.cpp connect path). (#4854 review)
     m_model.clear();
     m_version.clear();
     m_oscState.clear();
@@ -6360,6 +6380,15 @@ void RadioModel::onDisconnected()
 void RadioModel::onConnectionError(const QString& msg)
 {
     qCWarning(lcProtocol) << "RadioModel: connection error:" << msg;
+    // The attempt ended (#4912). If the reconnect below arms, its own lambda
+    // re-arms the flag when it actually re-drives the connect — so the window
+    // between the failure and the retry reads as idle, which is what it is.
+    //
+    // Deliberately NOT cleared in onDisconnected(): a disconnect emitted while
+    // a connect is in flight is part of that connect (a family switch tears the
+    // old backend down mid-connectToRadio), and clearing there would report
+    // "idle" for a connect that is still very much running.
+    m_connectAttemptActive = false;
     if (!m_rebootInProgress) {
         emit connectionError(msg);
     }
@@ -8399,7 +8428,7 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         return;
     }
     const int ch = kvs.value(QStringLiteral("dax_channel")).toInt();
-    if (ch >= 1 && ch <= 4) {
+    if (ch >= 1 && ch <= 8) {
         m_panStream->registerDaxStream(stream.streamId, ch);
         // #1439 client-registration re-assert — LEGACY FALLBACK ONLY, decided
         // here (not in the create reply) because this status is the moment the

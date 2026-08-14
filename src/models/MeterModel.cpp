@@ -22,15 +22,11 @@ namespace {
 // exactly, while any genuine reading (0 dBm is already 30 dB below a 1 W
 // carrier) stays on the smoothed path.
 constexpr float kNoCarrierWatts = 0.0011f;
-// Minimum instantaneous forward power for an SWR ratio to mean anything.
+// MeterModel::kMinForwardWattsForSwr — the SWR power floor — now lives in the
+// header, because `radiocert`'s keyed-RF precondition has to reason about the
+// same number: the finding it suppresses is "TX:SWR never fed", and SWR is fed
+// exactly when forward power clears this floor.
 //
-// A radio with no carrier reports 0 dBm on FWDPWR, which is 10^(0/10)/1000 =
-// 0.001 W — small but not zero. SWR is computed from forward and reflected
-// power, so below this there is no power behind the ratio and it saturates:
-// an HL2 published 255.99 and held it. The threshold sits a hair above that
-// floor, and 0 dBm is already 30 dB below a 1 W carrier, so nothing real
-// lives underneath it. (#4533)
-constexpr float kMinForwardWattsForSwr = 0.0011f;
 // NOTE: kNoCarrierWatts (#4540) and kMinForwardWattsForSwr (#4533) share the
 // same numeric floor but answer different questions -- "is a carrier present"
 // versus "is there power behind this ratio" -- and are kept separate so a
