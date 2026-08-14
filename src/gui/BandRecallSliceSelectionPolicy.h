@@ -7,8 +7,8 @@ namespace AetherSDR {
 // removed/recreated, and the connect-time bootstrap of the first enumerated
 // slice. Outside a band recall each retains its established behavior. During a
 // FLEX band-stack rebuild, none may reveal the transient slice or send active=1
-// back: either write can race the radio-authoritative pan/slice reconstruction
-// and undo the selected band.
+// back: any of these writes can race the radio-authoritative pan/slice
+// reconstruction and undo the selected band.
 enum class RadioSliceSelectionSource {
     ActiveStatus,
     TopologyFallback,
