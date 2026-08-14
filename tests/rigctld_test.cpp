@@ -6,8 +6,8 @@
 //
 // PTT tests (section 6) and CW/Morse tests (section 11) are disabled by default.
 // Enable only when a dummy load or antenna is connected.
-// --no-split skips the split-VFO tests (section 5) for single-VFO targets that
-// cannot open a VFO B (e.g. the built-in demo/SimBackend, which is single-slice).
+// --no-split skips the split-VFO tests (sections 5 and 5b) for single-VFO targets
+// that cannot open a VFO B (e.g. the built-in demo/SimBackend, which is single-slice).
 // PTY test (section 16) runs automatically; skips if the per-user cat-A symlink cannot be opened.
 
 #include <QCommandLineOption>
@@ -1256,6 +1256,10 @@ void section5Skip(Runner& r)
              "5.10b stashed split freq applied","5.11 targetable VFOB auto-enable",
              "5.12 implicit-enable reclaim",    "5.13 maxSlices guard on demand",
              "5.14 establish split on demand",
+             // Section 5b engages split on a second port, so it is gated with §5.
+             "5b.1 non-split port reports Split: 0 while another slice holds TX",
+             "5b.2 non-split port lists VFOA only (no foreign VFOB)",
+             "5b.3 split-enabled port still reports Split: 1",
          })
         r.skip(QLatin1String(name), QStringLiteral("--no-split set (single-VFO target)"));
 }
@@ -2524,8 +2528,12 @@ int main(int argc, char** argv)
     section2c(c, r, origFreq);
     section3(c, r, origMode, origPb);
     section4(c, r);
-    section5(c, r, origFreq);
-    section5b(c, r, host, port);
+    if (doSplit) {
+        section5(c, r, origFreq);
+        section5b(c, r, host, port);
+    } else {
+        section5Skip(r);
+    }
 
     if (doPtt) section6Ptt(c, r);
     else        section6Skip(r);
