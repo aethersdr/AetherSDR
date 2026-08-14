@@ -3102,12 +3102,19 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         dst->setDssRowSpan(src->dssRowSpan());
 
         // ── Radio-authoritative values ────────────────────────────────────
-        m_radioModel.sendCommand(QString("display pan set %1 average=%2")
-                                     .arg(targetPanId)
-                                     .arg(src->fftAverage()));
-        m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
-                                     .arg(targetPanId)
-                                     .arg(src->fftWeightedAvg() ? 1 : 0));
+        // A pan applet exists before the radio hands back its id (setPanId()
+        // runs after creation), so a clone racing pan creation would put
+        // `display pan set  average=0` — double space, no id — on the wire.
+        // requestPanDisplayRates() already returns early on an empty id; these
+        // two raw sendCommand() calls are the exposed pair.
+        if (!targetPanId.isEmpty()) {
+            m_radioModel.sendCommand(QString("display pan set %1 average=%2")
+                                         .arg(targetPanId)
+                                         .arg(src->fftAverage()));
+            m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
+                                         .arg(targetPanId)
+                                         .arg(src->fftWeightedAvg() ? 1 : 0));
+        }
         dst->setFftAverage(src->fftAverage());
         dst->setFftWeightedAvg(src->fftWeightedAvg());
         // Always update the widget's restore target; only ask the radio when the
@@ -3168,15 +3175,26 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
 
         // Repaint the target's own Display panel so an operator who opens it
         // sees the cloned values rather than the pre-clone slider positions.
-        if (targetIsKiwi) {
-            // syncDisplaySettings() opens with setKiwiWaterfallControlMode(false),
-            // which would drop a Kiwi-displaying pan's panel back to Flex
-            // control mode — relabelling WF Ceiling/Floor and resetting their
-            // ranges from the profile's dBm span to 0..100, clamping the stored
-            // dBm values on the way. This is the canonical restore: it runs the
-            // same Flex sync AND re-enters Kiwi mode.
-            syncKiwiSdrPanadapterUiState(targetPanId);
-        } else if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
+        // BOTH steps run for a Kiwi target, in this order.
+        //
+        // syncKiwiSdrPanadapterUiState() alone is not enough: on a pan that is
+        // actually displaying Kiwi it falls through to the final block and
+        // calls syncKiwiWaterfallSettings() only — its internal
+        // syncFlexDisplaySettings() runs on the two EARLY-RETURN paths (no
+        // profile, or profile present but not displaying Kiwi). So a Kiwi
+        // target would get its WF Ceiling/Floor/Rate refreshed and nothing
+        // else: heat map, grid, line width/colour, fill, FFT floor, colour
+        // scheme, render mode, 3D and average would all still show the
+        // pre-clone positions, and the panel would read as if the clone had
+        // not happened.
+        //
+        // Running the Flex sync first is safe even though it opens with
+        // setKiwiWaterfallControlMode(false): syncDisplaySettings() blocks its
+        // signals, and the dBm span lives in the profile / KiwiSdrManager
+        // rather than in the menu, so syncKiwiWaterfallSettings() re-reads it
+        // (profile.waterfallMinDbm/MaxDbm) and the transient 0..100 clamp
+        // cannot destroy anything.
+        if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
             dstMenu->syncDisplaySettings(
                 dst->fftAverage(), dst->fftFps(),
                 static_cast<int>(dst->fftFillAlpha() * 100.0f),
@@ -3189,8 +3207,13 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
                 dst->spectrumRenderMode(), dst->dssFloorDepth(),
                 dst->dssGain(), dst->fftLineColor(), dst->dssRowSpan());
         }
+        if (targetIsKiwi) {
+            // Re-enter Kiwi control mode over the Flex sync above: restores the
+            // dBm labels and the profile's span on WF Ceiling / WF Floor.
+            syncKiwiSdrPanadapterUiState(targetPanId);
+        }
         // Kiwi-agnostic controls: syncKiwiSdrPanadapterUiState() does not carry
-        // these, so both branches need them.
+        // these, so they run for every target.
         if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
             dstMenu->syncExtraDisplaySettings(
                 dst->wfBlankerEnabled(), dst->wfBlankerThreshold(),
@@ -3201,6 +3224,20 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
     }
 
     if (cloned > 0) {
+        // The two radio-GLOBAL auto-black flags, asserted ONCE after the loop
+        // rather than per target. The per-target block deliberately omits them
+        // because they are not per-pan — but "the source pan's own toggle
+        // already set them" only holds if the operator toggled it THIS session:
+        // on a fresh start the source restores wfAutoBlack /
+        // wfAutoBlackRadioSide from AppSettings without ever passing through
+        // wfAutoBlackChanged / wfAutoBlackSourceChanged, so the radio-side
+        // flags can still be at their defaults. Idempotent, and one write.
+        // Radio-side INTENT, not the capability-masked value, for the same
+        // reason the per-target clone uses wfAutoBlackRadioSide().
+        if (!srcIsKiwi) {
+            m_radioModel.setWaterfallAutoBlack(src->wfAutoBlack());
+            m_radioModel.setWaterfallAutoBlackSource(src->wfAutoBlackRadioSide());
+        }
         settings.save();
     }
     return cloned;
