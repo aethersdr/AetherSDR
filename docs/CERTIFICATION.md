@@ -689,6 +689,21 @@ string. And when a defect is fixed, grep the certification tool for its
 description — the tool is the last place anyone looks for a stale claim about a
 bug they just repaired.
 
+**The rule, stated so it can be enforced at review time.** Everything above is
+the cautionary tale; this is the thing to check against the next `problems <<`
+string:
+
+> A certification finding must either be **produced by a measurement taken
+> during the run**, or **carry the date and the tree it was verified against**.
+
+A finding expressed as a measurement re-derives its own truth on every run and
+cannot go stale. A finding expressed as a literal behind a family gate is only
+ever as current as the day someone typed it — and nothing in the output
+distinguishes the two, which is what makes the second kind so expensive. §1.14
+retired the *spatial* form of this failure (a gate asserting something about the
+wrong radio); this is the *temporal* form, and it is harder to catch precisely
+because the assertion was true when it was written and is about the right radio.
+
 ## 2. Next steps
 
 ### 2.1 The radio profile — highest leverage
@@ -793,6 +808,12 @@ small and all in `RadioCertification.cpp`:
 4. **Refresh `kMeterTable`'s notes and `expectedOnHl2` column.** Four HL2 meters
    are marked not-expected while being defined and fed, so a regression in any
    of them cannot be reported by `expectedButMissing`.
+
+**All four are implemented in #4917**, which lands directly on top of this
+document. Naming it here is not bookkeeping — it is §1.35's rule applied to this
+file: a list of open work is a finding like any other, and one that outlives its
+fix is exactly the failure §1.32–1.35 exist to record. If a fifth item is ever
+added here, it needs the same treatment when it closes.
 
 ### 2.4 What the bridge needs for any of this to be automatable
 
