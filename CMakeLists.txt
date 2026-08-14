@@ -2714,7 +2714,12 @@ target_compile_definitions(aethercore PUBLIC
 # builds (their baseline is the distro's choice and unknowable here) and on
 # non-x86 hosts (all options default OFF there), which the code reports as
 # "unknown"/skips.
-if (DEFINED _aether_prebuilt_ggml_baseline)
+set(_aether_ggml_baseline_str "")
+if (NOT ENABLE_ASR)
+    # No speech engine in this binary — never record a baseline, even if a
+    # stale cache still carries GGML_* entries from an earlier ASR configure
+    # (which would otherwise arm an ASR warning in an ASR-less build).
+elseif (DEFINED _aether_prebuilt_ggml_baseline)
     # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
     # the baseline comes from the pack's recorded build settings above.
     set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")

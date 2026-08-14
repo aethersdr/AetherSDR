@@ -93,18 +93,29 @@ SystemInventory::CpuInfo SystemInventory::detectCpu()
     info.x86 = true;
     info.brand = cpuBrandString();
     quint32 regs[4] = {};
+    // Max basic leaf first: MSVC's __cpuidex — unlike GCC's
+    // __get_cpuid_count, which performs this check itself — does not guard
+    // out-of-range leaves, and Intel CPUs answer them with the highest
+    // supported leaf's registers instead of zeros. Unguarded, a leaf-7 query
+    // could read AVX2/BMI2 as present on exactly the pre-AVX2 parts the
+    // baseline warning exists for.
+    cpuidCount(0, 0, regs);
+    const quint32 maxBasicLeaf = regs[0];
     // Leaf 1 ECX: SSE4.2 bit 20, FMA bit 12, AVX bit 28, F16C bit 29. These
     // are CPU capability bits; OS XSAVE state is assumed (universal on the
-    // OS versions Qt 6 supports).
+    // OS versions Qt 6 supports). Leaf 1 exists on every CPU that can start
+    // this app.
     cpuidCount(1, 0, regs);
     info.sse42 = (regs[2] >> 20) & 1u;
     info.fma   = (regs[2] >> 12) & 1u;
     info.avx   = (regs[2] >> 28) & 1u;
     info.f16c  = (regs[2] >> 29) & 1u;
-    // Leaf 7.0 EBX: AVX2 bit 5, BMI2 bit 8 (leaf 7 absent → zeros).
-    cpuidCount(7, 0, regs);
-    info.avx2 = (regs[1] >> 5) & 1u;
-    info.bmi2 = (regs[1] >> 8) & 1u;
+    // Leaf 7.0 EBX: AVX2 bit 5, BMI2 bit 8 — only when the CPU has leaf 7.
+    if (maxBasicLeaf >= 7) {
+        cpuidCount(7, 0, regs);
+        info.avx2 = (regs[1] >> 5) & 1u;
+        info.bmi2 = (regs[1] >> 8) & 1u;
+    }
 #endif
     return info;
 }

@@ -123,19 +123,13 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
         }
     }
 
-    // 2. System info JSON
+    // 2. System info JSON — field set defined (and regression-pinned) via
+    // systemInfoJson() in the header.
     {
-        auto sys = collectSystemInfo();
-        QJsonObject obj;
-        obj["aetherVersion"] = sys.aetherVersion;
-        obj["qtVersion"]     = sys.qtVersion;
-        obj["os"]            = sys.osName;
-        obj["kernel"]        = sys.kernelVersion;
-        obj["cpu"]           = sys.cpuArch;
-        obj["buildDate"]     = sys.buildDate;
         QFile f(tmp + "/system-info.json");
         if (f.open(QIODevice::WriteOnly))
-            f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+            f.write(QJsonDocument(systemInfoJson(collectSystemInfo()))
+                        .toJson(QJsonDocument::Indented));
     }
 
     // 3. Radio info JSON
