@@ -624,6 +624,7 @@ int main(int argc, char** argv)
         const RestoredRadioState cwSnap = cw.currentOperatingState();
         check(cwSnap.filterLowHz == -150.0 && cwSnap.filterHighHz == 150.0,
               "a new-domain CW passband survives the guard unchanged");
+    }
 
     // ---- the flat AGC model, across more than one receiver -----------------
     //
