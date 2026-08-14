@@ -2598,7 +2598,8 @@ MainWindow::~MainWindow()
         {
             ShutdownTrace trace("audio.thread.join");
             m_audioThread->quit();
-            m_audioThread->wait(3000);
+            if (!m_audioThread->wait(3000))
+                trace.fail("thread_join_timeout");
         }
     } else {
         delete m_audio;
@@ -2606,7 +2607,8 @@ MainWindow::~MainWindow()
     if (m_audioThread && m_audioThread->isRunning()) {
         ShutdownTrace trace("audio.thread.join_retry");
         m_audioThread->quit();
-        m_audioThread->wait(3000);
+        if (!m_audioThread->wait(3000))
+            trace.fail("thread_join_timeout");
     }
     m_audio = nullptr;
 
@@ -2696,7 +2698,8 @@ MainWindow::~MainWindow()
         {
             ShutdownTrace trace("controllers.thread.join");
             m_extCtrlThread->quit();
-            m_extCtrlThread->wait(3000);
+            if (!m_extCtrlThread->wait(3000))
+                trace.fail("thread_join_timeout");
         }
         // Delete ExtControllers objects synchronously after the thread stops.
         // deleteLater() races with quit() and can leave destructors unrun.
@@ -3791,46 +3794,70 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #endif
             {
                 ShutdownTrace trace("spots.dx_cluster.disconnect");
-                QMetaObject::invokeMethod(dxCluster, [dxCluster] { dxCluster->disconnect(); },
+                QMetaObject::invokeMethod(dxCluster, [dxCluster] {
+                    ShutdownTrace workerTrace("spots.dx_cluster.disconnect.worker");
+                    dxCluster->disconnect();
+                },
                                           Qt::BlockingQueuedConnection);
             }
             {
                 ShutdownTrace trace("spots.rbn.disconnect");
-                QMetaObject::invokeMethod(rbnClient, [rbnClient] { rbnClient->disconnect(); },
+                QMetaObject::invokeMethod(rbnClient, [rbnClient] {
+                    ShutdownTrace workerTrace("spots.rbn.disconnect.worker");
+                    rbnClient->disconnect();
+                },
                                           Qt::BlockingQueuedConnection);
             }
             {
                 ShutdownTrace trace("spots.wsjtx.stop");
-                QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] { wsjtxClient->stopListening(); },
+                QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] {
+                    ShutdownTrace workerTrace("spots.wsjtx.stop.worker");
+                    wsjtxClient->stopListening();
+                },
                                           Qt::BlockingQueuedConnection);
             }
             {
                 ShutdownTrace trace("spots.collector.stop");
                 QMetaObject::invokeMethod(spotCollectorClient,
-                                          [spotCollectorClient] { spotCollectorClient->stopListening(); },
+                                          [spotCollectorClient] {
+                    ShutdownTrace workerTrace("spots.collector.stop.worker");
+                    spotCollectorClient->stopListening();
+                },
                                           Qt::BlockingQueuedConnection);
             }
             {
                 ShutdownTrace trace("spots.pota.stop");
-                QMetaObject::invokeMethod(potaClient, [potaClient] { potaClient->stopPolling(); },
+                QMetaObject::invokeMethod(potaClient, [potaClient] {
+                    ShutdownTrace workerTrace("spots.pota.stop.worker");
+                    potaClient->stopPolling();
+                },
                                           Qt::BlockingQueuedConnection);
             }
             {
                 ShutdownTrace trace("spots.eibi.stop");
-                QMetaObject::invokeMethod(eibiClient, [eibiClient] { eibiClient->setEnabled(false); },
+                QMetaObject::invokeMethod(eibiClient, [eibiClient] {
+                    ShutdownTrace workerTrace("spots.eibi.stop.worker");
+                    eibiClient->setEnabled(false);
+                },
                                           Qt::BlockingQueuedConnection);
             }
             {
                 ShutdownTrace trace("spots.n1mm.stop");
                 QMetaObject::invokeMethod(n1mmSpotClient,
-                                          [n1mmSpotClient] { n1mmSpotClient->stopListening(); },
+                                          [n1mmSpotClient] {
+                    ShutdownTrace workerTrace("spots.n1mm.stop.worker");
+                    n1mmSpotClient->stopListening();
+                },
                                           Qt::BlockingQueuedConnection);
             }
 #ifdef HAVE_WEBSOCKETS
             {
                 ShutdownTrace trace("spots.freedv.stop");
                 QMetaObject::invokeMethod(freedvClient,
-                                          [freedvClient] { freedvClient->stopConnection(); },
+                                          [freedvClient] {
+                    ShutdownTrace workerTrace("spots.freedv.stop.worker");
+                    freedvClient->stopConnection();
+                },
                                           Qt::BlockingQueuedConnection);
             }
 #endif
@@ -3847,7 +3874,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
             {
                 ShutdownTrace trace("spots.thread.join");
                 m_spotThread->quit();
-                m_spotThread->wait(3000);
+                if (!m_spotThread->wait(3000))
+                    trace.fail("thread_join_timeout");
             }
         } else {
             delete m_dxCluster;

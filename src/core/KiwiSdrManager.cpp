@@ -385,6 +385,7 @@ KiwiSdrManager::~KiwiSdrManager()
         ShutdownTrace trace("kiwi.thread.join");
         m_clientThread->quit();
         if (!m_clientThread->wait(3000)) {
+            trace.fail("thread_join_timeout");
             qCWarning(lcKiwiSdr)
                 << "KiwiSDR client thread did not stop during manager teardown";
             m_clientThread->setParent(nullptr);
