@@ -11,6 +11,9 @@
 #include "core/backends/icom/IcomCivBackend.h"  // Icom networked radios (family "icom")
 #include "core/backends/icom/IcomCredentials.h"  // password: keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
+#ifdef HAVE_SERIALPORT
+#include "core/backends/ft991/Ft991Backend.h"  // Yaesu FT-991 backend (family "ft991")
+#endif
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/CwTrace.h"
@@ -556,6 +559,13 @@ std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
     // restored state (Constitution II/III).
     if (family.compare(QLatin1String("icom"), Qt::CaseInsensitive) == 0)
         return std::make_unique<icom::IcomCivBackend>();
+#ifdef HAVE_SERIALPORT
+    // Yaesu FT-991: pure-seam, and radio-authoritative like the Icom — it
+    // declares no ClientSettingsDomains. Absent entirely when Qt SerialPort
+    // is not built.
+    if (family.compare(QLatin1String("ft991"), Qt::CaseInsensitive) == 0)
+        return std::make_unique<ft991::Ft991Backend>();
+#endif
     // RFC #4288 demo mode: the synthetic radio is selected here like any other
     // family, which is what completes the "wire it through the real SimBackend
     // factory" ask. Unlike HL2 it is a Route A hybrid — it owns a RadioConnection
