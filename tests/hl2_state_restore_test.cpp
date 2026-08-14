@@ -68,7 +68,7 @@ int main(int argc, char** argv)
         bogus.filterHighHz = 100.0;
         bogus.sampleRateHz = 12'345;                    // snapped, not rejected
         bogus.agcMode = QStringLiteral("medium");       // not the vocabulary
-        bogus.agcThresholdDb = 4'000;                   // outside 0..100
+        bogus.agcThreshold = 4'000;                   // outside 0..100
         bogus.extensionSchemaVersion = 1;
         bogus.extension = QJsonObject{
             {QStringLiteral("rfGain"),
@@ -112,7 +112,7 @@ int main(int argc, char** argv)
         // clamped 4000 would become an AGC-T of 100 nobody chose.
         check(snapshot.agcMode == QStringLiteral("med"),
               "an AGC mode outside the vocabulary is dropped, not aliased");
-        check(snapshot.agcThresholdDb == 65,
+        check(snapshot.agcThreshold == 65,
               "an out-of-range AGC threshold is dropped, not clamped");
     }
 
@@ -123,7 +123,7 @@ int main(int argc, char** argv)
         hl2::Hl2Backend backend;
         RestoredRadioState remembered;
         remembered.agcMode = QStringLiteral("slow");
-        remembered.agcThresholdDb = 40;
+        remembered.agcThreshold = 40;
         backend.applyRestoredState(remembered);
         RadioConnectRequest req;
         req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
@@ -132,7 +132,7 @@ int main(int argc, char** argv)
         backend.connectRadio(req);
 
         const RestoredRadioState snap = backend.currentOperatingState();
-        check(snap.agcMode == QStringLiteral("slow") && snap.agcThresholdDb == 40,
+        check(snap.agcMode == QStringLiteral("slow") && snap.agcThreshold == 40,
               "a remembered AGC pair seeds the session (#4909)");
         backend.disconnectRadio();
     }
@@ -141,7 +141,7 @@ int main(int argc, char** argv)
         // mode, matching the independent validation in applyRestoredState().
         hl2::Hl2Backend backend;
         RestoredRadioState thresholdOnly;
-        thresholdOnly.agcThresholdDb = 0;   // the sentinel's whole point
+        thresholdOnly.agcThreshold = 0;   // the sentinel's whole point
         backend.applyRestoredState(thresholdOnly);
         RadioConnectRequest req;
         req.host = QStringLiteral("192.0.2.1");
@@ -150,7 +150,7 @@ int main(int argc, char** argv)
         backend.connectRadio(req);
 
         const RestoredRadioState snap = backend.currentOperatingState();
-        check(snap.agcThresholdDb == 0,
+        check(snap.agcThreshold == 0,
               "a remembered AGC threshold of 0 is restored, not read as absent");
         check(snap.agcMode == QStringLiteral("med"),
               "the AGC mode keeps its default when the document has none");
@@ -169,7 +169,7 @@ int main(int argc, char** argv)
         backend.setSliceAgc(0, QStringLiteral("fast"), 25);
 
         const RestoredRadioState snap = backend.currentOperatingState();
-        check(snap.agcMode == QStringLiteral("fast") && snap.agcThresholdDb == 25,
+        check(snap.agcMode == QStringLiteral("fast") && snap.agcThreshold == 25,
               "an operator AGC change reaches the capture snapshot");
         backend.disconnectRadio();
     }
@@ -185,7 +185,7 @@ int main(int argc, char** argv)
 
         RestoredRadioState radioA;
         radioA.agcMode = QStringLiteral("fast");
-        radioA.agcThresholdDb = 12;
+        radioA.agcThreshold = 12;
         backend.applyRestoredState(radioA);
         backend.connectRadio(req);
         backend.disconnectRadio();
@@ -193,7 +193,7 @@ int main(int argc, char** argv)
         backend.applyRestoredState(RestoredRadioState{});   // radio B: no memory
         backend.connectRadio(req);
         const RestoredRadioState snap = backend.currentOperatingState();
-        check(snap.agcMode == QStringLiteral("med") && snap.agcThresholdDb == 65,
+        check(snap.agcMode == QStringLiteral("med") && snap.agcThreshold == 65,
               "a memoryless radio comes up on the defaults, never the previous "
               "radio's AGC");
         backend.disconnectRadio();
@@ -580,6 +580,42 @@ int main(int argc, char** argv)
                                     .toObject();
         check(!out.contains(QStringLiteral("filterLowHz")),
               "a memoryless radio does not inherit the previous radio's TX cuts");
+    }
+
+    // ---- the flat AGC model, across more than one receiver -----------------
+    //
+    // Every other case here runs a single DDC, so the two halves of the flat
+    // design were asserted nowhere: seedReceiverAgc() writing EVERY receiver,
+    // and capture following the last receiver the operator touched rather than
+    // the transmit one. A refactor that seeded only rx(m_txDdc), or that read
+    // capture back off the TX receiver, passed the whole suite.
+    {
+        hl2::Hl2Backend backend;
+        RestoredRadioState remembered;
+        remembered.agcMode = QStringLiteral("slow");
+        remembered.agcThreshold = 40;
+        backend.applyRestoredState(remembered);
+
+        // Capture before any operator action reports what was restored, not a
+        // default — seedReceiverAgc() primes the remembered pair.
+        const RestoredRadioState seeded = backend.currentOperatingState();
+        check(seeded.agcMode == QStringLiteral("slow") && seeded.agcThreshold == 40,
+              "a capture before any AGC change reports the restored pair");
+
+        // The operator moves AGC on a NON-transmit slice. Capture must follow
+        // the action; reading rx(m_txDdc) would report the untouched pair and
+        // the change would be silently lost at the next launch.
+        backend.setSliceAgc(/*sliceId=*/1, QStringLiteral("fast"), 30);
+        const RestoredRadioState after = backend.currentOperatingState();
+        check(after.agcMode == QStringLiteral("fast") && after.agcThreshold == 30,
+              "capture follows the last AGC the operator set, not the TX receiver");
+
+        // An unknown mode string is refused on the way in, so the capture side
+        // can never store something the restore side would drop.
+        backend.setSliceAgc(/*sliceId=*/1, QStringLiteral("medium"), 30);
+        const RestoredRadioState bogusMode = backend.currentOperatingState();
+        check(bogusMode.agcMode == QStringLiteral("fast"),
+              "an unknown AGC mode string is refused rather than stored");
     }
 
     return g_failures == 0 ? 0 : 1;

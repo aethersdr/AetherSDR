@@ -1806,6 +1806,15 @@ void Hl2Backend::beginDspSetup()
         dc.mode = modeFromString(r.mode);
         dc.filterLowHz = r.filterLowHz;
         dc.filterHighHz = r.filterHighHz;
+        // The AGC pair, same as the other two Config assembly sites
+        // (createPanadapter and the zoom rebuild). Without it every channel
+        // opened on Config's defaults and stayed there until pushInitialState()
+        // ran at linkUp, so a restored AGC did not reach the DSP for the first
+        // second of audio — found as "the first second has the wrong AGC"
+        // rather than as a restore bug, which is why the three sites should
+        // look identical.
+        dc.agcMode = wdspAgcMode(r.agcMode);
+        dc.maximumAgcGainDb = r.agcThresholdDb * kAgcCeilingDbPerUnit;
         chains.push_back(r.dsp);
         configs.push_back(dc);
     }
@@ -2232,8 +2241,28 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // band. The ceiling is a maximum, not a limiter, so a strong band can still
     // clip at a high setting — that is correct AGC-T behaviour and the reason
     // the control exists. What was wrong was the DEFAULT landing in that region.
-    r->agcMode = m.isEmpty() ? r->agcMode : m;
+    // VALIDATE ON THE WAY IN, so the capture side can only ever store something
+    // the restore side accepts. `m` is just a trimmed lowercase copy of whatever
+    // the caller passed, and a bridge or automation call with "medium" used to
+    // land in r->agcMode, get echoed by emitSliceState(), and get persisted —
+    // while wdspAgcMode() silently ran med and the NEXT launch dropped it via
+    // isKnownAgcModeString(). The applet, the DSP, the document and the restore
+    // all disagreed. An unknown string now leaves the mode where it was.
+    if (!m.isEmpty() && isKnownAgcModeString(m))
+        r->agcMode = m;
+    else if (!m.isEmpty())
+        qCWarning(lcHl2) << "HL2: ignoring unknown AGC mode" << mode
+                         << "- keeping" << r->agcMode;
     r->agcThresholdDb = qBound(0, thresholdDb, 100);
+    // THE REMEMBERED PAIR IS THE LAST ONE THE OPERATOR SET, on whichever
+    // receiver. Capture used to read rx(m_txDdc) instead, which split the model:
+    // a change on RX2 fired the notify, then the debounced capture rewrote the
+    // document with RX1's unchanged pair, so the change that TRIGGERED the
+    // capture was not the change that got captured — and the next launch seeded
+    // every receiver from it. Flat restore is the deliberate design (see
+    // seedReceiverAgc); this makes the capture side agree with it.
+    m_agcMode = r->agcMode;
+    m_agcThresholdDb = r->agcThresholdDb;
     const double ceilingDb = r->agcThresholdDb * kAgcCeilingDbPerUnit;
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
@@ -3699,8 +3728,8 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // setpoint the operator never chose and then persist it back.
     if (isKnownAgcModeString(state.agcMode))
         valid.agcMode = state.agcMode.trimmed().toLower();
-    if (state.agcThresholdDb >= 0 && state.agcThresholdDb <= 100)
-        valid.agcThresholdDb = state.agcThresholdDb;
+    if (state.agcThreshold >= 0 && state.agcThreshold <= 100)
+        valid.agcThreshold = state.agcThreshold;
 
     // Per-band maps ride the typed extension's domain sub-objects
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
@@ -3765,7 +3794,7 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
                   << valid.mode << "filter" << valid.filterLowHz << ".."
                   << valid.filterHighHz << "rate" << valid.sampleRateHz
-                  << "agc" << valid.agcMode << valid.agcThresholdDb
+                  << "agc" << valid.agcMode << valid.agcThreshold
                   << "lna bands" << m_lnaDbByBand.size() << "drive bands"
                   << m_driveByBand.size();
 }
@@ -3794,17 +3823,28 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
 // Each half applies on its own, matching the independent validation in
 // applyRestoredState(): a document carrying only a threshold restores that
 // threshold against the default mode.
+// Seeds the STRUCT only. The channel buildReceivers() opened is still on
+// Config's defaults until beginDspSetup()/pushInitialState() push the pair —
+// the same open-then-configure window the mode and passband restore already
+// lives with, for the same EP2-pacing reason.
 void Hl2Backend::seedReceiverAgc()
 {
     const Receiver defaults;   // the constructed med/65, named once
     const bool haveMode =
         m_haveRestoredState && !m_restoredState.agcMode.isEmpty();
     const bool haveThreshold =
-        m_haveRestoredState && m_restoredState.agcThresholdDb >= 0;
+        m_haveRestoredState && m_restoredState.agcThreshold >= 0;
     for (Receiver& r : m_rx) {
         r.agcMode = haveMode ? m_restoredState.agcMode : defaults.agcMode;
-        r.agcThresholdDb = haveThreshold ? m_restoredState.agcThresholdDb
+        r.agcThresholdDb = haveThreshold ? m_restoredState.agcThreshold
                                          : defaults.agcThresholdDb;
+    }
+    // Prime the remembered pair from what was just seeded, so a capture taken
+    // before the operator touches the control records the restored value rather
+    // than falling back through an empty member.
+    if (!m_rx.empty()) {
+        m_agcMode = m_rx.front().agcMode;
+        m_agcThresholdDb = m_rx.front().agcThresholdDb;
     }
 }
 
@@ -3816,13 +3856,21 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         state.mode = txRx->mode;
         state.filterLowHz = txRx->filterLowHz;
         state.filterHighHz = txRx->filterHighHz;
-        // The AGC pair, from the same receiver as the mode and passband. FLAT,
-        // not per-band: unlike drive and LNA — where the right value is a
-        // property of the band — an operator's AGC is a property of how they
-        // like to listen, and making it jump on a band change would be the
-        // same surprise the TX passband comment above rejects.
+    }
+    // The AGC pair, from the LAST RECEIVER THE OPERATOR TOUCHED rather than
+    // from the transmit one — see setSliceAgc(). FLAT, not per-band: unlike
+    // drive and LNA — where the right value is a property of the band — an
+    // operator's AGC is a property of how they like to listen, and making it
+    // jump on a band change would be the same surprise the TX passband comment
+    // above rejects. Falls back to the transmit receiver before the operator
+    // has set anything this session, so a capture taken on a fresh connect
+    // still records a real value rather than a default.
+    if (!m_agcMode.isEmpty()) {
+        state.agcMode = m_agcMode;
+        state.agcThreshold = m_agcThresholdDb;
+    } else if (const Receiver* txRx = rx(m_txDdc)) {
         state.agcMode = txRx->agcMode;
-        state.agcThresholdDb = txRx->agcThresholdDb;
+        state.agcThreshold = txRx->agcThresholdDb;
     }
     state.sampleRateHz = m_sampleRateHz;
 

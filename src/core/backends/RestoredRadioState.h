@@ -39,7 +39,12 @@ struct RestoredRadioState {
     // control range or a deliberate 0 would be indistinguishable from an
     // absent field and would round-trip into the default.
     QString agcMode;              // Agc — "off" | "slow" | "med" | "fast"
-    int agcThresholdDb = -1;      // Agc — 0..100 operator units; -1 = not restored
+    int agcThreshold = -1;        // Agc — 0..100 OPERATOR UNITS, not dB; -1 = not
+                                  // restored. Deliberately NOT "…Db": the backend
+                                  // multiplies by its own ceiling-per-unit to reach
+                                  // real dB, and KiwiSdrClient has a genuine
+                                  // agcThresholdDb nearby. Matches
+                                  // SliceDelta::agcThreshold, the same 0..100 scale.
 
     // Per-family extension document (per-band gain/drive maps live here —
     // RFC PR 3). Versioned by its owner. GATED PER DOMAIN at the top level:
@@ -55,7 +60,7 @@ struct RestoredRadioState {
     {
         return rfFrequencyHz == 0.0 && mode.isEmpty() && filterLowHz == 0.0
                && filterHighHz == 0.0 && sampleRateHz == 0
-               && agcMode.isEmpty() && agcThresholdDb < 0
+               && agcMode.isEmpty() && agcThreshold < 0
                && extension.isEmpty();
     }
 };

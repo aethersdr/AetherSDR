@@ -55,7 +55,7 @@ RestoredRadioState sampleState()
     state.filterHighHz = 2'900.0;
     state.sampleRateHz = 192'000;
     state.agcMode = QStringLiteral("slow");
-    state.agcThresholdDb = 40;
+    state.agcThreshold = 40;
     state.extensionSchemaVersion = 1;
     // The extension's top level is domain sub-objects (the per-domain gate);
     // each sub-object's contents are backend-owned.
@@ -117,7 +117,7 @@ int main(int argc, char** argv)
               "passband round-trips");
         check(restored.sampleRateHz == 192'000, "span/rate round-trips");
         check(restored.agcMode == QStringLiteral("slow")
-                  && restored.agcThresholdDb == 40,
+                  && restored.agcThreshold == 40,
               "AGC mode and threshold round-trip (#4909)");
         check(restored.extensionSchemaVersion == 1
                   && restored.extension.value(QStringLiteral("rfGain"))
@@ -160,7 +160,7 @@ int main(int argc, char** argv)
         // The AGC threshold's "not restored" is -1, not 0: zero is a value the
         // operator can select, so a gated-out domain must not look like a
         // deliberate AGC-T of 0.
-        check(gated.agcMode.isEmpty() && gated.agcThresholdDb == -1,
+        check(gated.agcMode.isEmpty() && gated.agcThreshold == -1,
               "an undeclared Agc domain is absent, not a threshold of 0");
     }
 
@@ -173,11 +173,11 @@ int main(int argc, char** argv)
                                            QStringLiteral("00:00:00:00:00:0A"));
         RestoredRadioState state = sampleState();
         state.agcMode = QStringLiteral("off");
-        state.agcThresholdDb = 0;
+        state.agcThreshold = 0;
         check(RadioStateMemory::store(zeroRadio, caps, state),
               "a zero AGC threshold stores");
         const RestoredRadioState back = RadioStateMemory::load(zeroRadio, caps);
-        check(back.agcThresholdDb == 0 && back.agcMode == QStringLiteral("off"),
+        check(back.agcThreshold == 0 && back.agcMode == QStringLiteral("off"),
               "a deliberate AGC threshold of 0 is not mistaken for 'absent'");
     }
 

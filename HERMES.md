@@ -207,8 +207,25 @@ the modes.
   this host — so the operator's mode and threshold live in the client's
   operating-state document or nowhere. They ride the RFC #4603 `Agc` domain as
   typed universal fields (`RestoredRadioState::agcMode` /
-  `agcThresholdDb`), captured on every `setSliceAgc` and seeded back onto
-  **every** receiver by `Hl2Backend::seedReceiverAgc()`.
+  `agcThreshold` — 0..100 operator units, NOT dB; the backend multiplies by
+  `kAgcCeilingDbPerUnit` to reach real dB), captured on every `setSliceAgc` and
+  seeded back onto **every** receiver by `Hl2Backend::seedReceiverAgc()`.
+- **"Flat" means ONE remembered pair, not one AGC.** The runtime control is
+  per-receiver — `setSliceAgc(sliceId, …)` resolves `ddcForSlice()` and writes a
+  single `Receiver`, and `emitSliceState()` publishes per-DDC — so an operator
+  running two receivers really can have RX1 on `slow`/40 and RX2 on `fast`/30
+  within a session. What is flat is the *memory*: one pair is captured and it is
+  seeded onto every receiver at the next connect, so that divergence does not
+  survive a restart. This is a deliberate product call (an operator's AGC is a
+  property of how they like to listen, like the TX cut points) rather than an
+  oversight, and it is worth stating plainly because "flat" on its own reads as
+  "there is only one AGC" and sends the next person debugging RX2 looking for a
+  bug. The pair that gets remembered is **the last one the operator set**, on
+  whichever receiver — `setSliceAgc()` records it, and `currentOperatingState()`
+  reads that rather than the transmit receiver. Reading the TX receiver instead
+  meant a change on RX2 fired the capture and then persisted RX1'"'"'s untouched
+  value: the change that triggered the write was not the change that got
+  written.
 - The threshold's "not restored" sentinel is **-1, not 0**: 0 is a threshold the
   operator can select, so a zero-means-absent encoding would quietly reset
   anyone running the AGC-T at the bottom of the slider.

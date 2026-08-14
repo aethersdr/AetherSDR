@@ -363,6 +363,15 @@ private:
     // among the receivers rather than a property each of them has.
     int m_txDdc = 0;
 
+    // The AGC pair the operator last set, on whichever receiver — what
+    // currentOperatingState() persists. The runtime control is per-receiver and
+    // the restore is deliberately flat (seedReceiverAgc writes every receiver),
+    // so the capture side needs one authoritative value; reading the transmit
+    // receiver instead meant a change on RX2 triggered a capture that recorded
+    // RX1. Empty mode = the operator has not touched it this session.
+    QString m_agcMode;
+    int     m_agcThresholdDb = 0;
+
     // The receiver the operator is working on. Separate from m_txDdc: you listen
     // on one slice while transmitting on another all the time, and conflating
     // them would drag transmit around every time the operator clicked a pane.

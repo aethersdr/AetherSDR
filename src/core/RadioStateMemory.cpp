@@ -68,8 +68,8 @@ RestoredRadioState load(const RadioSettingsScope& scope,
         state.agcMode = doc.value(QStringLiteral("agcMode")).toString();
         // -1 (not 0) when the key is absent: 0 is a selectable AGC-T, so the
         // default must sit outside the control's range — see RestoredRadioState.
-        state.agcThresholdDb =
-            doc.value(QStringLiteral("agcThresholdDb")).toInt(-1);
+        state.agcThreshold =
+            doc.value(QStringLiteral("agcThreshold")).toInt(-1);
     }
 
     // The extension is gated per domain too: only a declared domain's
@@ -145,8 +145,8 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
             doc.insert(QStringLiteral("agcMode"), state.agcMode);
         }
         // >= 0, so a threshold of 0 IS written — the sentinel is -1.
-        if (state.agcThresholdDb >= 0) {
-            doc.insert(QStringLiteral("agcThresholdDb"), state.agcThresholdDb);
+        if (state.agcThreshold >= 0) {
+            doc.insert(QStringLiteral("agcThreshold"), state.agcThreshold);
         }
     }
 
