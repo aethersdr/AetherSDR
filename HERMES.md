@@ -249,8 +249,14 @@ to satisfy by accident: a blocker whose corner has crept up into the audio band
 removes the pedestal just as thoroughly while eating the bass out of every mode,
 and every DC measurement stays green through it. So it checks a 60 Hz vs 400 Hz
 modulation ratio through the real chain, the closed-form `|H(f)|` at three audio
-rates, and the unconfigured bypass. It is one of the few HL2 tests in the
-per-PR CI gate; the rest of the suite runs weekly under the sanitizers job.
+rates, and the unconfigured bypass. Six 4 s bursts through the real chain cost
+2.5 s, so it is a cheap test — but only with a warm FFTW wisdom cache. Cold, the
+same binary takes 178 s, because WDSP's first `OpenChannel` measures FFTW
+`PATIENT` plans (see `WdspChannel::open()`, cached at
+`$XDG_CACHE_HOME/aethersdr/wdsp-fftw-wisdom`). A CI container starts cold every
+run, which is why this sat at 188-190 s on the per-PR gate and now runs weekly
+under the sanitizers job instead. Cache that file in CI and it belongs back on
+the gate.
 
 **Why on `Hl2RxDsp` and not on `WdspChannel`.** The root cause is `amd`'s
 envelope detector, which belongs to WDSP, so a blocker on `WdspChannel`'s own RX
@@ -1016,6 +1022,23 @@ inside the loop cannot substitute.
 Related: this is why TUNE always worked and voice never did. A tune carrier sits
 at ZERO offset, where handedness has no effect — the one signal that could not
 have exposed the bug was the one that always looked fine.
+
+**Why the loopback could not have caught it, and what changed.** The second row
+above is worth being precise about. `hl2_tx_loopback_test` measures a loop that
+conjugates twice — `Hl2TxDsp` for the wire on the way out, `Hl2RxDsp` for the
+panadapter on the way back — so a handedness error present at BOTH ends cancels
+exactly. Whichever sign that test asserted, it was blind to a global flip; it
+was another instrument sharing the convention. The test now takes an
+**independent bearing on the receive end first**: hpsdrsim generates its own
+scene tones at 800 Hz and 4 kHz with a fixed handedness, and those reach the
+spectrum without passing through the transmitter. Anchoring on them pins the
+receive end on its own, which is what makes the transmit assertions load-bearing
+instead of self-satisfying. Verified by injecting each fault separately —
+mirroring the display trips the anchor and names the receive end; flipping only
+the modulator leaves the anchor green and trips just the mic-path checks.
+
+It is still inside the machine, and the lesson above still stands: the operator's
+second receiver remains the only check that comes from outside it.
 
 ### 14.7 Process failures worth not repeating
 
@@ -2983,7 +3006,8 @@ and one `active` slice; `slice tx` and `slice select` each clearing the previous
 holder; RF gain on one pan moving all pans; WSJT-X's TCI split creating a second
 DDC and moving transmit to it; and two TCI clients on RX1/RX2 both receiving
 per-slice audio, including with one slice speaker-muted. 196/196 tests green
-(`hl2_tx_loopback_test` excluded — see below).
+(`hl2_tx_loopback_test` was excluded at the time; it has since been fixed and no
+longer needs excluding — see below).
 
 **Proven on real hardware.** The operator has since exercised this end to end on
 a Hermes-Lite 2, transmit included. That closes the gap the simulator
@@ -2999,12 +3023,25 @@ confirming it (§7, and the wrong-sideband account in §14.6).
 
 **Still open:**
 
-- **`hl2_tx_loopback_test` fails against the simulator** on transmit-sideband
-  checks, non-deterministically. Commit `256142a6` — the pre-multi-DDC base —
-  fails identically, so it is pre-existing rather than caused by this work, and
-  it is tracked separately. Note a dev host at `192.168.1.12` is the address that
-  test probes, so a locally-running `hpsdrsim` makes it execute when it was
-  written to skip, and collide with any app already driving that simulator.
+- ~~**`hl2_tx_loopback_test` fails against the simulator** on transmit-sideband
+  checks, non-deterministically.~~ **FIXED.** Correctly diagnosed as pre-existing
+  — commit `256142a6` failed identically — but it was never a transmit fault at
+  all. The test asserted that the fed-back tone appears BELOW centre, which was
+  right against the pre-#4471 panadapter, when the display carried the raw wire.
+  #4471 added the receive-side conjugation that fixed the mirrored panadapter,
+  and from then on the same tone correctly read ABOVE centre while the test went
+  on expecting the old sign. Two supposed symptoms are also explained: the
+  "non-determinism" was the hardcoded `192.168.1.12` reaching a simulator on a
+  *different* machine, so results tracked whatever that machine was doing; and
+  the check that "passed sometimes" did so only when that other simulator was in
+  a different state. The test now defaults to loopback, refuses to key anything
+  whose discovery MAC is not hpsdrsim's synthetic `AA:BB:CC:DD:xx:FF`, asserts
+  the analytic sign, and anchors the receive end on the simulator's own scene
+  tones first (§14.6). It also skips when the simulator reports it is already
+  streaming to somebody else (discovery status `0x03`), which is the collision
+  clause above finally fixed in code rather than in a warning. Its skip paths
+  exit 77 with `SKIP_RETURN_CODE` set, so the ordinary machine — no simulator
+  running — reports `Skipped` rather than a `Passed` that measured nothing.
 - **The link-budget ceiling is derived, not measured.** 70% of 100BASE-T is a
   working figure. Where the drop counter actually starts moving is still a
   number nobody has written down, and it is the one that would justify or move

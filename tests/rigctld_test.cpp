@@ -740,6 +740,57 @@ void section4(RigctlClient& c, Runner& r)
 // Section 5 — Split VFO
 // ═════════════════════════════════════════════════════════════════════════════
 
+// section 5b - Multi-connection split isolation (#4851 / #4853)
+// Reported bug: with one CAT port per slice, a port whose slice is NOT the
+// radio's single TX slice reported Split: 1 purely because the transmitter sat
+// elsewhere, so WSJT-X refused Fake It on every instance but one. Needs a SECOND
+// rigctld port bound to a different slice; skips cleanly if that port (this
+// port + 1) isn't configured. Live-radio, like the rest of section 5.
+void section5b(RigctlClient& c, Runner& r, const QString& host, quint16 port)
+{
+    RigctlClient c2;
+    if (!c2.connectToServer(host, static_cast<quint16>(port + 1))) {
+        r.skip(QStringLiteral("5b   multi-connection split isolation"),
+               QStringLiteral("no 2nd CAT port at %1 (bind a second rigctld port to a "
+                              "different slice to run this)").arg(port + 1));
+        return;
+    }
+    auto splitOf = [](RigctlClient& cl) {
+        return cl.field(cl.send(QStringLiteral("\\get_split_vfo")),
+                        QStringLiteral("Split"));
+    };
+
+    // c2's port engages split -> a TX slice now exists that is NOT c's slice.
+    c2.send(QStringLiteral("\\set_split_vfo 1 VFOB"));
+    QString c2split;
+    QElapsedTimer t; t.start();
+    do {
+        c2split = splitOf(c2);
+        if (c2split == QLatin1String("1") || t.elapsed() >= 5000) break;
+        QThread::msleep(150);
+    } while (true);
+
+    // 5b.1  the port that never engaged split reports simplex even though another
+    //       slice holds TX - the exact #4851 bug (fails on pre-#4853 main).
+    const QString cSplit = splitOf(c);
+    r.check(QStringLiteral("5b.1 non-split port reports Split: 0 while another slice holds TX"),
+            cSplit == QLatin1String("0"), QStringLiteral("Split=%1").arg(cSplit));
+
+    // 5b.2  and it must not advertise that foreign TX slice as its own VFOB.
+    const QString vfoList = c.field(c.send(QStringLiteral("\\get_vfo_list")),
+                                    QStringLiteral("VFO List"));
+    r.check(QStringLiteral("5b.2 non-split port lists VFOA only (no foreign VFOB)"),
+            vfoList.trimmed() == QLatin1String("VFOA"), vfoList);
+
+    // 5b.3  the port that DID engage split still reports Split: 1 (fix isn't "always 0").
+    r.check(QStringLiteral("5b.3 split-enabled port still reports Split: 1"),
+            c2split == QLatin1String("1"), QStringLiteral("Split=%1").arg(c2split));
+
+    // teardown: let the on-demand TX slice settle before removing it (mirrors section 5).
+    QThread::msleep(300);
+    c2.send(QStringLiteral("\\set_split_vfo 0 VFOA"));
+}
+
 void section5(RigctlClient& c, Runner& r, qint64 origFreq)
 {
     r.section(QStringLiteral("Section 5 — Split VFO"));
@@ -2042,7 +2093,7 @@ void section15(RigctlClient& c, Runner& r)
 // Edge cases
 // ═════════════════════════════════════════════════════════════════════════════
 
-void sectionEdge(RigctlClient& c, Runner& r)
+void sectionEdge(RigctlClient& c, Runner& r, bool doCw)
 {
     r.section(QStringLiteral("Edge Cases"));
 
@@ -2074,12 +2125,18 @@ void sectionEdge(RigctlClient& c, Runner& r)
     lines = c.send(QStringLiteral("\\set_trn 1"));
     r.check(QStringLiteral("E5  set_trn 1 accepted silently (RPRT 0)"), c.ok(lines));
 
-    // E6  send_morse smoke test — verify protocol accepts it without --cw flag
-    //     Does not verify radio keying; just that the command parses and queues
-    lines = c.send(QStringLiteral("\\send_morse TEST"));
-    r.check(QStringLiteral("E6  send_morse \"TEST\" accepted (RPRT 0, no --cw required)"),
-            c.ok(lines), lines.join(QStringLiteral(" | ")));
-    c.send(QStringLiteral("\\stop_morse"));
+    // E6  send_morse smoke test — verify the protocol accepts/queues the command.
+    //     GATED behind --cw: send_morse routes through CwxModel → "cwx", which
+    //     KEYS CW on real hardware, so it must not run on a plain (no-TX) pass.
+    if (doCw) {
+        lines = c.send(QStringLiteral("\\send_morse TEST"));
+        r.check(QStringLiteral("E6  send_morse \"TEST\" accepted (RPRT 0)"),
+                c.ok(lines), lines.join(QStringLiteral(" | ")));
+        c.send(QStringLiteral("\\stop_morse"));
+    } else {
+        r.skip(QStringLiteral("E6  send_morse \"TEST\" accepted (RPRT 0)"),
+               QStringLiteral("--cw not set — send_morse keys CW on real hardware"));
+    }
 
     // E7  q (short-form quit) — must return RPRT 0 so Hamlib closes cleanly
     //     without triggering its 20-second command timeout
@@ -2313,6 +2370,7 @@ int main(int argc, char** argv)
     section3(c, r, origMode, origPb);
     section4(c, r);
     section5(c, r, origFreq);
+    section5b(c, r, host, port);
 
     if (doPtt) section6Ptt(c, r);
     else        section6Skip(r);
@@ -2329,7 +2387,7 @@ int main(int argc, char** argv)
     section13(host, port, timeout, r, origFreq, origMode, origPb);
     section14(c, r);
     section15(c, r);
-    sectionEdge(c, r);
+    sectionEdge(c, r, doCw);
     sectionPty(r, ptyPath);
 
     // Best-effort state restore.

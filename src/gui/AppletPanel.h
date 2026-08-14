@@ -40,6 +40,7 @@ class PhoneApplet;
 class EqApplet;
 class WaveApplet;
 class AetherClockApplet;
+class MiniPanApplet;
 class ClientEqApplet;
 class ClientCompApplet;
 class ClientGateApplet;
@@ -106,6 +107,7 @@ public:
     EqApplet*       eqApplet()       { return m_eqApplet; }
     WaveApplet*     waveApplet() const { return m_waveApplet; }
     AetherClockApplet* aetherClockApplet() const { return m_aetherClockApplet; }
+    MiniPanApplet*  miniPanApplet() const { return m_miniPanApplet; }
     // Phase 7.1: each side has its own CEQ applet — clientEqTxApplet()
     // is the original "ceq" tile bound to TX, clientEqRxApplet() is
     // the new "ceq-rx" tile bound to RX.  clientEqApplet() retained as
@@ -176,6 +178,9 @@ public:
 
     // Show/hide the ShackSwitch applet based on device presence.
     void setShackSwitchVisible(bool visible);
+    // DEMO's availability edge — its "hardware" is the connected radio
+    // being the simulator (#4968 red-team B1).
+    void setDemoVisible(bool visible);
 
     // Show/hide the PROF button and applet based on whether the connected radio
     // has an on-radio profile store (RadioCapabilities::hasProfiles).
@@ -242,6 +247,33 @@ public:
     // for all legacy applets — these accessors exist so new features
     // can opt in to the container system early.
     ContainerManager* containerManager() { return m_containerMgr; }
+
+    // Canonical applet entry ids in current column order — the same ids the
+    // Applet_<ID> keys and AppletOrder use.  The workspace controller feeds
+    // these to the legacy-key migration (RFC #4887 phase 3).
+    QStringList appletIds() const;
+
+    // The widget palette (phase 6 field request): every applet with its
+    // display title and functional category, in panel order.  The category
+    // taxonomy lives in ONE table in the .cpp — reshuffling it is a
+    // one-line-per-applet edit.
+    struct AppletCatalogEntry {
+        QString id;
+        QString title;
+        QString category;
+    };
+    QList<AppletCatalogEntry> appletCatalog() const;
+    // Live hardware availability for one applet (the bar's own record).
+    bool appletHardwareAvailable(const QString& id) const;
+
+    // While true, recall-driven visibility changes do NOT write the
+    // operator's Applet_<ID> preferences (red-team B2): a workspace switch
+    // opens and closes applets in bulk, and persisting those as preference
+    // changes rewrote keys the operator never touched — and, because
+    // readLegacyLayoutState() feeds resetToClassic()/create-from-Classic,
+    // one switch to a blank workspace destroyed Classic itself.  The
+    // operator's own clicks (flag false) keep dual-writing as designed.
+    void setRecallInProgress(bool on) { m_recallInProgress = on; }
     ContainerWidget*  rootSidebarContainer() { return m_rootSidebar; }
 
     // Global controls lock — disables wheel/mouse on sidebar sliders (#745)
@@ -260,6 +292,12 @@ public:
     };
 
     friend class AppletDropArea;
+
+signals:
+    // A canvas-mode container was dropped back onto the panel; the workspace
+    // controller owns the transition (RFC #4887 phase 3).
+    void canvasReturnRequested(const QString& appletId);
+
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -352,6 +390,7 @@ private:
     EqApplet*      m_eqApplet{nullptr};
     WaveApplet*    m_waveApplet{nullptr};
     AetherClockApplet* m_aetherClockApplet{nullptr};
+    MiniPanApplet* m_miniPanApplet{nullptr};
     ClientEqApplet* m_clientEqTxApplet{nullptr};
     ClientEqApplet* m_clientEqRxApplet{nullptr};
     ClientCompApplet* m_clientCompApplet{nullptr};
@@ -405,6 +444,7 @@ private:
 
     // Ordered list of applets (drag-reorderable)
     QVector<AppletEntry> m_appletOrder;
+    bool m_recallInProgress{false};
     static const QStringList kDefaultOrder;
 };
 

@@ -634,7 +634,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     }
     if (obj == m_bandStackIndicator && event->type() == QEvent::MouseButtonPress) {
         bool show = !m_panStack->bandStackPanel()->isVisible();
-        m_panStack->setBandStackVisible(show);
+        setBandStackPanelVisible(show);
         updateBandStackIndicator();
         return true;
     }
@@ -1219,8 +1219,7 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("segment_zoom", "Segment Zoom", "Display",
         QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/true); });
     // Keyboard step uses kPanZoomFactor per press; rotary dials use a finer
-    // per-detent factor (kRotaryPanZoomFactor in MainWindow_Controllers.cpp).
-    static constexpr double kPanZoomFactor = 1.5;
+    // per-detent factor (kRotaryPanZoomFactor in MainWindowHelpers.h).
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
         QKeySequence(Qt::Key_Equal), [this]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
     m_shortcutManager.registerAction("pan_zoom_out", "Panadapter Zoom Out", "Display",

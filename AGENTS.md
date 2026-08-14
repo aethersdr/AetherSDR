@@ -12,6 +12,22 @@ If you are an AI assistant: read this file end-to-end before writing
 code or recommending merges. The file is ~830 lines; that is the cost
 of doing the job right on this codebase.
 
+**This file is documentation, not policy.** It describes how to build
+AetherSDR — architecture, conventions, build steps, protocol notes. The
+rules that bind you live in [`CONSTITUTION.md`](CONSTITUTION.md) and
+[`GOVERNANCE.md`](GOVERNANCE.md), and they outrank everything here. Where
+this file appears to contradict either, they win, and the contradiction is
+a defect in this file — fix it or open an issue. That separation is what
+puts this file at CODEOWNERS Tier 2 (infrastructure) while the Constitution
+and GOVERNANCE.md stay Tier 1 (maintainer-only): editing build conventions
+is not a governance act and should not need a maintainer's approval.
+
+One passage restates policy rather than describing practice:
+§"Autonomous Agent Boundaries" below elaborates the autonomy limits that
+[`GOVERNANCE.md`](GOVERNANCE.md) §AI Contributors defines. It may narrow or
+illustrate them, never widen them — relaxing any of those bullets is an
+amendment to GOVERNANCE.md and cannot be made in a Tier-2 PR.
+
 ## Project Goal
 
 Replicate the **Windows-only FlexRadio SmartSDR client** (written in C#) as a
@@ -35,8 +51,11 @@ When helping with AetherSDR:
 - **New engine code goes in `libaethercore`** (`src/core/` or `src/models/`),
   exposed to the UI through models — never via a new gui→core header include.
   See "Build targets" and "In-flight: aetherd" under Architecture Overview.
-- **Read `CONTRIBUTING.md`** for full contributor guidelines, coding conventions,
-  and the AI-to-AI debugging protocol (open a GitHub issue for cross-agent coordination)
+- **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
+  reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
+  coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
+  for cross-agent coordination)
+- **Adding or changing UI? Read [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) first** — every colour resolves through a ThemeManager token (error/warning/success/notification/TX all have one); never hardcode a colour literal. CI's hardcoded-colour ratchet fails a PR that raises the count above its base branch.
 - **Sign every commit you author.** `main` enforces `required_signatures`, so a
   PR with unsigned commits cannot merge without an admin override. If the
   contributor has not set up commit signing yet, walk them through
@@ -132,6 +151,13 @@ operational implementation of Principle X.
 
 ### Autonomous Agent Boundaries
 
+> **Authority: [`GOVERNANCE.md`](GOVERNANCE.md) §AI Contributors.** That
+> section defines these limits and is Tier 1 (maintainer-only). What follows
+> is the worked-example elaboration for agent consumption — it may narrow or
+> illustrate the limits, never widen them. If this list and GOVERNANCE.md
+> differ, GOVERNANCE.md governs and the difference is a defect here. Do not
+> relax any bullet below in a Tier-2 PR; that is an amendment to GOVERNANCE.md.
+
 AI agents (including AetherClaude/pi-claude) may autonomously fix:
 - **Bugs with clear root cause** — persistence missing, guard missing, crash fix
 - **Protocol compliance** — matching SmartSDR behavior confirmed by pcap/FlexLib
@@ -181,7 +207,7 @@ setup.
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
-Current version: **26.8.1**.
+Current version: **26.8.2**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -295,13 +321,14 @@ The accepted RFC at
 clients, with pluggable radio backends (`IRadioBackend`). Implementation
 follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
 step-2 seam have landed** — the engine is a static library, and
-`IRadioBackend` (`src/core/backends/`) now has **three** implementors,
+`IRadioBackend` (`src/core/backends/`) now has **four** implementors,
 selected at connect time by a `family` string through `makeBackend()`:
 
 | Family | Backend | Notes |
 |---|---|---|
 | `flex` | `FlexBackend` (`src/core/backends/flex/`) | SmartSDR wire stack; the Panadapter / Slice / Meter / Transmit / Amp / Tuner status+command paths decode behind it (2.2b–2.4) |
 | `hl2` | `Hl2Backend` (`src/core/backends/hl2/`) | Hermes-Lite 2, shipped v26.7.4 — Metis/HPSDR transport, raw-IQ RX/TX DSP done in-client |
+| `icom` | `IcomCivBackend` (`src/core/backends/icom/`) | Networked Icom, shipped v26.8.2 — CI-V command plane inside the RS-BA1 UDP transport; the radio owns its own state, so `clientSettingsDomains` is empty |
 | `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
 
 The versioned protocol (step 3+) has not landed — UI code still consumes

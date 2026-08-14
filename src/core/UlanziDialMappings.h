@@ -46,6 +46,12 @@ public:
     // Bind rotary action and persist immediately inside the UlanziDialMappings root document.
     static bool setRotaryAction(const QString& actionId);
 
+    // Returns the complete list of wheel action IDs handled by the wheel dispatch chain.
+    static const QStringList& knownWheelActions();
+
+    // True if actionId is a recognized wheel action handled by the wheel dispatch chain.
+    static bool isKnownWheelAction(const QString& actionId);
+
     // Pre-#4611 per-pill key names, retained only as migration sources.
     static QString legacyUnderscoreKey(const QString& pillId);
     static QString legacySlashKey(const QString& pillId);

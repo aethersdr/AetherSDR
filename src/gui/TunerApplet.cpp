@@ -67,6 +67,13 @@ void TunerApplet::setAmplifierMode(bool hasAmp)
 
 void TunerApplet::setPowerScale(int maxWatts, bool hasAmplifier)
 {
+    if (m_havePowerScale && maxWatts == m_lastMaxWatts && hasAmplifier == m_lastHasAmplifier) {
+        return;
+    }
+    m_havePowerScale = true;
+    m_lastMaxWatts = maxWatts;
+    m_lastHasAmplifier = hasAmplifier;
+
     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
     if (hasAmplifier) {
         // PGXL: 0–2000 W, yellow > 1000 W, red > 1500 W

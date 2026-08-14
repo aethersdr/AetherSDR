@@ -174,7 +174,11 @@ private:
 public:
     // Mode conversion (public for TciServer broadcast use)
     static QString smartsdrToTci(const QString& mode);
-    static QString tciToSmartSDR(const QString& mode);
+    // `ok` reports whether `mode` was a recognised TCI modulation name. The
+    // return value falls back to "USB" when it isn't, so a caller that must
+    // reject an unrecognised name rather than silently substitute USB has to
+    // check `ok` — which is why it is not defaulted (#4523).
+    static QString tciToSmartSDR(const QString& mode, bool* ok);
 
     // Slice display letter for `active_slice` (#4160), public for the same
     // reason. `index_letter` is radio-supplied, and a stray ',' or ';' in it

@@ -17,6 +17,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QSignalSpy>
+#include <QSlider>
 
 #include <cstdio>
 
@@ -278,6 +279,33 @@ int main(int argc, char** argv)
         expect(dlg.speakerThreshold() == 65, "setSpeakerThreshold round-trips");
         expect(!thrSpy.isEmpty() && thrSpy.last().at(0).toInt() == 65,
                "speakerThresholdChanged emits percent");
+    }
+
+    // ---- Boundary overlap slider: round-trip, no echo, operator edit ------
+    // Unlike setSpeakerThreshold() above, setBoundaryOverlapMs() must NOT emit:
+    // the controller calls it to seed the widget from the store, and an echo
+    // would round-trip straight back into saveInt("AsrBoundaryOverlapMs") and
+    // re-write what it just read (RFC #4821). The QSignalBlocker in that setter
+    // is the only thing preventing it, so pin both halves — the programmatic
+    // set stays silent, a real operator edit still reaches the controller.
+    {
+        QSignalSpy ovSpy(&dlg, &CopyAssistSettingsDialog::boundaryOverlapChanged);
+        dlg.setBoundaryOverlapMs(750);
+        expect(dlg.boundaryOverlapMs() == 750, "setBoundaryOverlapMs round-trips");
+        expect(ovSpy.isEmpty(),
+               "a programmatic overlap set does not echo back as an operator edit");
+
+        auto* ov = dlg.findChild<QSlider*>(QStringLiteral("CopyAssistOverlapSlider"));
+        expect(ov != nullptr, "boundary overlap slider is findable by object name");
+        if (ov != nullptr) {
+            expect(ov->minimum() == 0 && ov->maximum() == 2000,
+                   "boundary overlap slider spans 0-2000 ms");
+            ov->setValue(1250); // a real operator edit
+            expect(!ovSpy.isEmpty() && ovSpy.last().at(0).toInt() == 1250,
+                   "boundaryOverlapChanged carries the operator's value in ms");
+        }
+
+        dlg.setBoundaryOverlapMs(0); // restore the default (off)
     }
 
     dlg.resize(520, 360);

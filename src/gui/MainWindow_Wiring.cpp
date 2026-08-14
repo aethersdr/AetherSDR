@@ -2064,9 +2064,19 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // restrictive audible slice controls the global client DSP state.
         updateAetherDspModePolicy();
 
-        // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice,
-        // so re-evaluate only when the TX slice changes mode (#4173).
-        if (s->isTxSlice())
+        // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice
+        // (#4173); the ASR (Copy Assist) indicator follows the ACTIVE slice,
+        // because it decodes received audio (#4825). Re-evaluate when either of
+        // those two slices changes mode — narrowing this to the TX slice would
+        // leave the ASR indicator stale after a CW→USB change on a non-TX
+        // active slice, with no other edge to correct it.
+        //
+        // Through activeSlice(), not an m_activeSliceId comparison: the gate
+        // itself calls activeSlice(), which falls back to the first isActive()
+        // slice when the cached id's slice is not active. Asking the same
+        // question the gate asks keeps the trigger and the gate from diverging
+        // inside that fallback window (PR #4932 review).
+        if (s->isTxSlice() || activeSlice() == s)
             updateKeyerAvailability();
 #ifdef HAVE_RADE
         if (mode.startsWith("FDV"))
@@ -2418,6 +2428,20 @@ void MainWindow::onSliceRemoved(int id)
             m_activeSliceId = -1;
             if (m_ax25HfPacketDecodeDialog)
                 m_ax25HfPacketDecodeDialog->setAttachedSlice(nullptr);
+            refreshMiniPanFollow();   // no active slice → blank the mini-pan readout/passband
+            // The last slice is gone, so every indicator's slice is gone with
+            // it. The re-select branch above reaches updateKeyerAvailability()
+            // through setActiveSliceInternal(); this branch has no such call,
+            // and without one the row keeps whatever state the departed slice
+            // left it in.
+            //
+            // Refresh only — deliberately NOT a teardown. The gate leaves an
+            // open Copy Assist panel alone on a null slice, because this branch
+            // is on the band-recall path: with band_persistence the radio drops
+            // and re-creates the slice under the same id (KiwiRebindTracker.h,
+            // #4158), and a single-slice setup passes through here on every band
+            // change (#4932 review).
+            updateKeyerAvailability();
         }
     }
 
@@ -6046,6 +6070,17 @@ void MainWindow::wireMeters()
     // When the PGXL is in STANDBY we fall back to the barefoot scale — only the
     // radio's forward power is reaching the meter, so the 2kW arc would make
     // every reading look tiny and useless.
+    // Redundant-apply skipping (#4845 review) lives in each gauge's own
+    // setPowerScale(), not here. It is worth having because infoChanged is
+    // emitted from ordinary radio status parsing (headphone/lineout gain,
+    // TNF, filter sharpness) and not just the connect-time "info" reply, so
+    // a slider drag on the radio bursts it and every burst would otherwise
+    // re-push an unchanged scale. It has to sit in the widget because a
+    // widget is not always the sole writer of its own scale:
+    // CrossNeedleMeterApplet's "Test 100 W / 4 W reflected" automation
+    // action calls setPowerScale(200, false) straight at the widget, and a
+    // cache out here would then skip the real re-apply that has to
+    // overwrite it.
     auto updatePowerScale = [this]() {
         int maxW = m_radioModel.transmitModel().maxPowerLevel();
         // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
@@ -6064,6 +6099,19 @@ void MainWindow::wireMeters()
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
     connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
+    // Also refresh on infoChanged (#4813): maxPowerLevelChanged only fires when
+    // the numeric value actually changes, which it doesn't on connect if the
+    // radio's exciter limit matches TransmitModel's compiled-in default (100W —
+    // exactly the AU- case above). infoChanged fires once "info" comes back and
+    // model() is populated, so this is what actually catches the initial scale
+    // on connect instead of leaving it wrong until the next real power-level
+    // edge (e.g. a band change that happens to carry a different limit).
+    // infoChanged rather than connectionStateChanged: model() does happen to
+    // be seeded from the discovery packet before that one fires on a LAN
+    // connect (RadioModel.cpp, connectToRadio()), but infoChanged is the
+    // signal actually tied to the info data this branch reads, so it doesn't
+    // depend on that seeding holding for every connect path.
+    connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.
     // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)

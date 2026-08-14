@@ -303,7 +303,7 @@ Pre-built binaries at third_party/fftw3/ (Windows only; Linux uses system pkg)
   Source:  https://www.fftw.org/
 
 
-12. TCI Protocol Specification — Transceiver Control Interface
+13. TCI Protocol Specification — Transceiver Control Interface
 ---------------------------------------------------------------
 The TCI server (src/core/TciProtocol.cpp, TciServer.cpp) implements the
 TCI v2.0 protocol specification published by Expert Electronics. The binary
@@ -316,7 +316,7 @@ protocol.
   Spec:    https://github.com/ExpertSDR3/TCI
 
 
-13. zlib — Compression Library
+14. zlib — Compression Library
 -------------------------------
 Bundled at third_party/zlib/ (v1.3.1) for raw-deflate decompression of
 .ssdr_cfg profile import/export ZIP packages.  Vendored from the upstream
@@ -330,30 +330,6 @@ libraries.  See #2651.
   Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler
   License: zlib license (permissive, similar to MIT)
   Source:  https://github.com/madler/zlib
-
-
-14. liquid-dsp — Comprehensive DSP Toolkit (disabled by default)
-----------------------------------------------------------------
-Bundled at third_party/liquid-dsp/ (commit 4df6fc2ba99b3a584e9f1ad9888094013ae07b2f).
-Comprehensive DSP library covering modems (PSK/QAM/FSK/GMSK/OFDM), forward
-error correction (Hamming/Golay/Reed-Solomon/convolutional), adaptive filters
-(LMS/RLS), AGC, NCO, polyphase resampling, and equalizers.  Vendored
-proactively under #3043 as foundation infrastructure for future digital-mode
-work — no AetherSDR module currently consumes liquid-dsp symbols; standard
-builds therefore leave it disabled on every platform.  Opt-in builds use
-`-DENABLE_LIQUID_DSP=ON`; the static linker extracts only symbols used by a
-future consumer.  Upstream dev infrastructure (autotests, benchmarks, sandbox,
-docs, autotools wiring) was trimmed before vendoring; the upstream
-CMakeLists.txt drives opt-in builds via add_subdirectory.
-
-Linux + macOS only — liquid-dsp upstream targets GCC/Clang/MinGW; its
-include/liquid.h uses C99 `float _Complex` typedefs which MSVC's C compiler
-doesn't accept.  Skipped on MSVC; future consumers needing liquid-dsp on
-Windows will need to land MSVC support first.
-
-  Copyright (c) 2007-2016 Joseph Gaeddert
-  License: MIT
-  Source:  https://github.com/jgaeddert/liquid-dsp
 
 
 15. Dire Wolf — AFSK Demodulator (algorithmic derivation)

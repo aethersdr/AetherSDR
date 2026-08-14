@@ -764,8 +764,15 @@ void TxApplet::confirmAndClearAtuMemories()
 
 void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
 {
-    Q_UNUSED(hasAmplifier);
-    // TX applet always shows exciter (barefoot) power.
+    if (m_havePowerScale && maxWatts == m_lastMaxWatts && hasAmplifier == m_lastHasAmplifier) {
+        return;
+    }
+    m_havePowerScale = true;
+    m_lastMaxWatts = maxWatts;
+    m_lastHasAmplifier = hasAmplifier;
+
+    // TX applet always shows exciter (barefoot) power regardless of
+    // hasAmplifier — cached above only so a redundant call can be detected.
     // Amplified output power is shown in the AMP applet.
     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
     float gaugeFullScaleW = 0.0f;

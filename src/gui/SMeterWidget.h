@@ -172,6 +172,12 @@ private:
     float m_powerScaleMax{120.0f};
     float m_powerRedStart{100.0f};
 
+    // setPowerScale() no-ops when neither input moved (#4845) — it's called
+    // on every RadioModel::infoChanged, most of which carry no scale-relevant
+    // change, and this forces a needle-target recompute plus repaint.
+    int  m_lastMaxWatts{-1};
+    bool m_lastHasAmplifier{false};
+    bool m_havePowerScale{false};
 };
 
 } // namespace AetherSDR

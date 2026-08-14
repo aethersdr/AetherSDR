@@ -1340,7 +1340,7 @@ int MainWindow::injectMidiVfoCcForAutomation(int value)
 
 void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 {
-    if (steps == 0)
+    if (steps == 0 || !UlanziDialMappings::isKnownWheelAction(actionId))
         return;
 
     if (actionId == "WheelFrequency") {
@@ -1477,8 +1477,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         }
     } else if (actionId == "PanadapterZoom") {
         // Rotary dial uses a finer per-detent factor (kRotaryPanZoomFactor vs
-        // keyboard kPanZoomFactor in MainWindow_Shortcuts.cpp) for smooth spins.
-        static constexpr double kRotaryPanZoomFactor = 1.25;
+        // keyboard kPanZoomFactor in MainWindowHelpers.h) for smooth spins.
         const double baseFactor = steps > 0 ? (1.0 / kRotaryPanZoomFactor) : kRotaryPanZoomFactor;
         const double factor = std::pow(baseFactor, std::abs(steps));
         zoomActivePanadapter(factor);

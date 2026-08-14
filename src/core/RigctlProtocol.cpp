@@ -307,8 +307,12 @@ SliceModel* RigctlProtocol::sliceForVfo(const QString& vfo) const
         // promote=false: this is a read-only resolver (get_freq/get_mode VFOB and
         // the set_freq/set_mode VFOB prefix path). It must not drive the deferred
         // split-promotion state machine — that belongs to the split commands.
-        auto* tx = const_cast<RigctlProtocol*>(this)->findTxSlice(/*promote=*/false);
-        // findTxSlice returns currentSlice() when no split exists; distinguish that.
+        // VFOB exists only when THIS client engaged split (same predicate as
+        // get_split_vfo). Otherwise -8, so a port reporting simplex never hands
+        // out another client's TX slice as its VFOB (#4853 review).
+        if (!clientSplitActive())
+            return nullptr;
+        auto* tx = currentTxSlice();
         auto* rx = currentSlice();
         return (tx && tx != rx) ? tx : nullptr;
     }
@@ -540,9 +544,10 @@ QString RigctlProtocol::processCommand(const QString& cmd)
 
         // VFO / mode discovery
         if (name == "get_vfo_list") {
-            // Report VFOB only when a distinct TX slice exists (split active).
-            auto* tx = findTxSlice();
-            const bool hasSplit = (tx && tx != currentSlice());
+            // Report VFOB only when THIS client engaged split (same predicate as
+            // get_split_vfo); a simplex-reporting port must not advertise another
+            // client's slice as VFOB (#4853 review).
+            const bool hasSplit = clientSplitActive();
             const QString vfoList = hasSplit ? QStringLiteral("VFOA VFOB")
                                              : QStringLiteral("VFOA");
             if (m_extended)
@@ -891,6 +896,17 @@ QString RigctlProtocol::cmdGetPtt()
     return QStringLiteral("%1\n").arg(ptt);
 }
 
+bool RigctlProtocol::clientSplitActive(bool includePending) const
+{
+    if (m_lastSplitEnable != 1)
+        return false;
+    if (includePending && m_pendingSplitEnable)
+        return true;  // create-on-demand TX slice not landed yet (keying path only)
+    auto* rx = currentSlice();
+    auto* tx = currentTxSlice();
+    return (rx && tx && rx != tx);
+}
+
 QString RigctlProtocol::cmdSetPtt(const QString& arg)
 {
     if (!m_model) return rprt(-8);
@@ -911,14 +927,11 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
     // Without this gate the seize below moves TX to VFOA on every key, so the radio
     // transmits on the RX VFO — the WSJT-X "Rig" split symptom. Resolve split on
     // the CAT thread (same direct-read pattern as cmdGetSplitVfo).
-    auto* txSlice = findTxSlice(/*promote=*/false);
-    auto* rx      = currentSlice();
-    // Split is "active" if a distinct TX slice exists OR a create-on-demand is
-    // still in flight (m_pendingTxSlice not resolvable yet). Covering the pending
-    // window stops a key that arrives before the slice lands from seizing TX back
-    // to the RX slice (transmitting on VFOA — the very symptom this gate prevents).
-    const bool splitActive = (m_lastSplitEnable == 1)
-                             && (m_pendingSplitEnable || (txSlice && rx && txSlice != rx));
+    // "Active" only when THIS client engaged split (shared predicate so this and
+    // the getters cannot drift): keying must then transmit on the split TX slice
+    // (VFOB), not seize TX back to this port's RX slice. Covers the pending
+    // create-on-demand window too.
+    const bool splitActive = clientSplitActive(/*includePending=*/true);
 
     QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive]() {
         // Non-split: ensure this protocol's bound slice is the TX slice so the
@@ -949,14 +962,9 @@ QString RigctlProtocol::cmdGetInfo()
 }
 
 // Find the TX slice (may differ from the RX slice in split mode)
-SliceModel* RigctlProtocol::findTxSlice(bool promote)
+SliceModel* RigctlProtocol::currentTxSlice() const
 {
     if (!m_model) return nullptr;
-    // Promote the new slice if it has appeared since the last check, and apply
-    // any stashed split freq/mode from the command burst that preceded it.
-    // Skipped on read-only resolution (promote=false) so a query has no side effects.
-    if (promote)
-        tryPromoteTxSlice();
     // Prefer the pending pointer: setTxSlice(true) may have been queued but not
     // yet processed by the event loop, so isTxSlice() on the target slice is
     // still stale-false.  Returning the intended slice here avoids set_split_freq
@@ -965,6 +973,16 @@ SliceModel* RigctlProtocol::findTxSlice(bool promote)
     for (auto* s : m_model->slices())
         if (s->isTxSlice()) return s;
     return nullptr;
+}
+
+SliceModel* RigctlProtocol::findTxSlice(bool promote)
+{
+    // Promote the new slice if it has appeared since the last check, and apply
+    // any stashed split freq/mode from the command burst that preceded it.
+    // Skipped on read-only resolution (promote=false) so a query has no side effects.
+    if (promote)
+        tryPromoteTxSlice();
+    return currentTxSlice();
 }
 
 // If set_split_vfo 1 arrived when only one slice existed, addSlice() was called
@@ -1011,9 +1029,12 @@ void RigctlProtocol::tryPromoteTxSlice()
 QString RigctlProtocol::cmdGetSplitVfo()
 {
     tryPromoteTxSlice();
-    auto* rxSlice = currentSlice();
-    auto* txSlice = findTxSlice();
-    bool split = (rxSlice && txSlice && rxSlice != txSlice);
+    // Report split only when THIS client engaged it, never merely because the
+    // radio's single TX flag sits on another slice — otherwise every per-slice
+    // port except the one owning TX reads as split and WSJT-X refuses emulated
+    // split (Fake It). SmartSDR CAT does not conflate the two; matches the TCI
+    // fix for #4085/#4086.
+    const bool split = clientSplitActive();
     // Report TX VFO as VFOB when split (TX on a different slice), VFOA otherwise.
     // The actual slice is resolved internally — the VFO label is only for the client.
     const QString txVfo = split ? "VFOB" : "VFOA";
@@ -2082,9 +2103,9 @@ QString RigctlProtocol::cmdGetVfoInfo(const QString& arg)
     const QString hamlibMode = smartsdrToHamlib(slice->mode());
     const int passband      = qAbs(slice->filterHigh() - slice->filterLow());
 
-    auto* rxSlice = currentSlice();
-    auto* txSlice = findTxSlice();
-    const bool split = (rxSlice && txSlice && rxSlice != txSlice);
+    // Split only when THIS client engaged it (see clientSplitActive), keeping
+    // independent per-slice ports simplex for multi-instance WSJT-X (#4851).
+    const bool split = clientSplitActive();
 
     if (m_extended) {
         // Echo line must include the VFO argument ("get_vfo_info: VFOA").

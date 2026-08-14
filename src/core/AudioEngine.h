@@ -634,10 +634,15 @@ signals:
     // RX panStream::audioDataReady() path so CwDecoder::feedAudio()
     // accepts it without a separate adapter.
     void txDecodeAudioReady(const QByteArray& pcm24kStereoFloat);
+    // `channels` is carried explicitly (#4489) rather than left for a consumer
+    // to infer from the block's byte count — every current emit site passes 2
+    // (interleaved stereo, see writeAudio()), but a consumer must not assume
+    // that stays true; it must read this argument.
     void receivePresentationPostDspAudioReady(const QString& source,
                                               const QString& sourceId,
-                                              const QByteArray& pcmStereoFloat,
-                                              int sampleRate);
+                                              const QByteArray& pcmFloat,
+                                              int sampleRate,
+                                              int channels);
     void receivePresentationOutputAudioReady(const QString& source,
                                              const QString& sourceId,
                                              const QByteArray& pcmStereoFloat,
@@ -881,7 +886,10 @@ private:
                                 bool markExternalSource,
                                 bool forceRadioDaxRoute);
     void observeTxCaptureState(QAudio::State state);
+    // Overload for callers that must sample the unread depth before draining it.
+    void observeTxCaptureState(QAudio::State state, qint64 bufferedBytes);
     void recordTxCaptureLocalTxAttempt();
+    void noteTxCaptureBacklogDiscard(qint64 discardedBytes);
     void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
     void logTxCaptureHealthSummary(const QString& reason, bool anomaly);
 

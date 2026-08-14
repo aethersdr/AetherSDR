@@ -66,7 +66,11 @@ public slots:
     void setMaxSegmentMs(int ms);
     void setSpeechRms(float rms);
     void setHangoverMs(int ms);
+    void setOverlapMs(int ms);
     void setSpeakerThreshold(float t);
+    // Opt-in (RFC #4818), see IAsrBackend::setContextCarryEnabled.
+    void setContextCarryEnabled(bool on);
+    void clearContext();   // flush carried context (long gap / Clear button)
     void reset();
 
 signals:
@@ -93,6 +97,7 @@ private:
     SpeakerClusterer m_clusterer;       // online A/B/C… labeling
     std::string m_speakerModelPath;     // path m_embedder was built from ("" = none)
     bool m_speakerLabelingEnabled = false; // operator intent; embedder presence gates
+    QString m_prevSegmentText;          // last decode's text — tail source for overlap de-dup (#4821)
     std::unique_ptr<Resampler> m_resampler;
     int m_resamplerSrcRate = 0;
     bool m_warnedNoModel = false;
@@ -147,8 +152,20 @@ public:
     void setDecodeBufferMs(int ms);
     void setSpeechRms(float rms);
     void setSilenceDurationMs(int ms);
+    //  - overlap: boundary-word recovery window (ms) carried across a cap-forced
+    //    segment close so a word split at the cut isn't lost (RFC #4821). 0 = off.
+    void setOverlapMs(int ms);
     //  - speaker threshold: cosine match threshold for A/B/C clustering (0..1)
     void setSpeakerThreshold(float threshold);
+
+    // Opt-in (RFC #4818), applied live, no engine rebuild:
+    //  - context carry: condition each decode on the backend's own previous
+    //    confident output, for continuity across segment boundaries (off =
+    //    independent decodes, the historical default)
+    void setContextCarryEnabled(bool on);
+    // Flush any carried decode context (Copy Assist Clear button); the display
+    // and the context reset together for a clean fresh start.
+    void clearContext();
 
     void reset();
 
@@ -171,7 +188,10 @@ signals:
     void requestSetMaxSegmentMs(int ms);
     void requestSetSpeechRms(float rms);
     void requestSetHangoverMs(int ms);
+    void requestSetOverlapMs(int ms);
     void requestSetSpeakerThreshold(float threshold);
+    void requestSetContextCarryEnabled(bool on);
+    void requestClearContext();
     void requestReset();
 
 private:

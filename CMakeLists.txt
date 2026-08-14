@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.8.1 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.8.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,7 +25,6 @@ option(USE_SYSTEM_ZLIB         "Use system zlib"         OFF)
 option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
-option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
 option(USE_SYSTEM_LIBWHISPER   "Use system libwhisper"   OFF)
 
 # Build features options
@@ -38,7 +37,6 @@ option(REQUIRE_KEYCHAIN "Fail if Qt6Keychain is not found (use for release build
 option(REQUIRE_ASR_ONNX "Fail if ONNX Runtime is not found (Silero VAD + speaker labeling + signal classifier; use for release builds)" OFF)
 option(REQUIRE_ASR_GPU "Fail if no ASR GPU backend (Vulkan/Metal) is enabled (use for release builds)" OFF)
 option(REQUIRE_ASR_SHERPA "Fail if sherpa-onnx is not found (non-whisper ASR backend; use for release builds)" OFF)
-option(ENABLE_LIQUID_DSP "Build with liquid-dsp toolkit support" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(ENABLE_DSTAR "Build the local D-STAR waveform helper (vendored smartsdr-dsp/ThumbDV)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
@@ -607,6 +605,7 @@ set(CORE_SOURCES
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
+    src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
@@ -654,6 +653,7 @@ set(CORE_SOURCES
     src/core/AudioOutputRouter.cpp
     src/core/AetherDspModePolicy.cpp
     src/core/AudioEngine.cpp
+    src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
     src/core/Biquad.cpp
@@ -684,6 +684,7 @@ set(CORE_SOURCES
     src/core/WwvbDecoder.cpp
     src/core/AetherClockEngine.cpp
     src/core/AetherClockSettings.cpp
+    src/core/MiniPanSettings.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
@@ -873,6 +874,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_AetherClock.cpp
     src/gui/MainWindow_Wiring.cpp
+    src/gui/MainWindow_Workspace.cpp
     src/gui/MainWindow_Nets.cpp
     src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
@@ -948,6 +950,8 @@ set(GUI_SOURCES
     src/gui/ProfileImportExportDialog.cpp
     src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
+    src/gui/MiniPanScope.cpp
+    src/gui/MiniPanApplet.cpp
     src/gui/RangeSlider.cpp
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
@@ -1000,6 +1004,17 @@ set(GUI_SOURCES
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
+    src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/CanvasItemFrame.cpp
+    src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/ClassicLayout.cpp
+    src/gui/workspace/WorkspaceCanvas.cpp
+    src/gui/workspace/WorkspaceController.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+    src/gui/workspace/WorkspaceMigration.cpp
+    src/gui/workspace/WorkspaceStore.cpp
+    src/gui/workspace/WorkspaceWindow.cpp
     src/gui/ClientCompApplet.cpp
     src/gui/ClientCompCurveWidget.cpp
     src/gui/ClientCompKnob.cpp
@@ -1194,84 +1209,6 @@ else()
     target_compile_options(aether_sqlite3 PRIVATE -w)
 endif()
 message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
-
-# Bundled liquid-dsp (MIT) — comprehensive DSP toolkit covering modems
-# (PSK/QAM/FSK/GMSK/OFDM), FEC (Hamming/Golay/RS/convolutional), adaptive
-# filters (LMS/RLS), AGC, NCO, polyphase resampling, and equalizers.
-# Vendored proactively under #3043 as foundation infrastructure for future
-# digital-mode work (e.g. native FT8/FT4 — #85 Phase 4 — or PSK31 / RTTY).
-#
-# Linux + macOS only — liquid-dsp upstream targets GCC/Clang/MinGW; its
-# include/liquid.h:473 uses C99 `float _Complex` typedefs which the MSVC C
-# compiler doesn't accept (syntax error: identifier 'liquid_float_complex').
-# Upstream has no first-class MSVC support and patching the header for
-# `_Fcomplex`/`_Dcomplex` would be invasive against future upstream syncs.
-# Tracked as a follow-up; today the Windows build skips this vendor and
-# any future consumer that needs liquid-dsp on Windows needs to land MSVC
-# support first.
-#
-# Built via the upstream CMakeLists.txt with examples / tests / benchmarks /
-# sandbox / docs disabled to keep the build slim. FFTW lookup is disabled
-# (FIND_FFTW=OFF) so liquid-dsp uses its own internal FFT — wiring it to our
-# bundled third_party/fftw3 can be a follow-up if a future consumer wants
-# FFTW-accelerated transforms.
-#
-# Disabled by default on every platform because no AetherSDR module currently
-# consumes liquid-dsp symbols. Opt-in non-MSVC builds link liquid-static; the
-# static linker then extracts only symbols used by a future consumer.
-#
-# USE_SYSTEM_LIQUID_DSP only takes effect once liquid-dsp itself is enabled, so
-# warn if a packager set it without ENABLE_LIQUID_DSP rather than silently
-# ignoring it (#4146 review).
-if(USE_SYSTEM_LIQUID_DSP AND NOT ENABLE_LIQUID_DSP)
-    message(WARNING
-        "USE_SYSTEM_LIQUID_DSP=ON has no effect without ENABLE_LIQUID_DSP=ON — "
-        "liquid-dsp is off by default. Pass -DENABLE_LIQUID_DSP=ON to build "
-        "against it.")
-endif()
-
-if(ENABLE_LIQUID_DSP AND MSVC)
-    message(FATAL_ERROR
-        "ENABLE_LIQUID_DSP is not supported with MSVC because liquid-dsp's "
-        "public headers use C99 _Complex types")
-endif()
-
-if(ENABLE_LIQUID_DSP AND NOT USE_SYSTEM_LIQUID_DSP)
-    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
-    set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
-    set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
-    set(BUILD_DOC OFF CACHE BOOL "" FORCE)
-    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
-    set(FIND_FFTW OFF CACHE BOOL "" FORCE)
-    set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
-# liquid-dsp's cmake_minimum_required(VERSION 3.10) puts its option() calls
-# under CMP0077 OLD behavior — option() with that policy does NOT honor a
-# same-name *normal* variable. We must use CACHE BOOL FORCE so the override
-# takes effect. Without this, BUILD_SHARED_LIBS stays at the option's ON
-# default. Linux silently ships both libliquid.so and libliquid.a (different
-# extensions); the OUTPUT_NAME `liquid` at upstream CMakeLists.txt:444
-# renames the STATIC target's archive to drop the -static suffix.
-#
-# Cache pollution is undone with unset(CACHE) after add_subdirectory so
-# this doesn't leak into the rest of the project's BUILD_SHARED_LIBS
-# semantics.
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/liquid-dsp EXCLUDE_FROM_ALL)
-    unset(BUILD_SHARED_LIBS CACHE)
-# Suppress warnings from vendored code (same pattern as other third_party
-# integrations — we don't want -Werror surfaces on code we don't own).
-    if(TARGET liquid-static)
-        target_compile_options(liquid-static PRIVATE -w)
-    endif()
-endif()
-
-if(ENABLE_LIQUID_DSP AND USE_SYSTEM_LIQUID_DSP)
-    find_package(PkgConfig REQUIRED)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(liquid-dsp REQUIRED IMPORTED_TARGET liquid-dsp)
-    endif()
-endif()
 
 set(DFNR_RESOURCES "")
 if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
@@ -2265,14 +2202,6 @@ target_link_libraries(AetherSDR PRIVATE
     qgeoview           # gui/map only
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
-
-if(ENABLE_LIQUID_DSP)
-    if(USE_SYSTEM_LIQUID_DSP)
-        target_link_libraries(aethercore PRIVATE PkgConfig::liquid-dsp)
-    else()
-        target_link_libraries(aethercore PRIVATE liquid-static)
-    endif()
-endif()
 
 if(Qt6SerialPort_FOUND)
     # PUBLIC: gui (MainWindow.cpp, RadioSetupDialog.cpp) uses QSerialPort and
@@ -3536,6 +3465,183 @@ add_test(NAME window_geometry_restore_test COMMAND window_geometry_restore_test)
 set_tests_properties(window_geometry_restore_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Workspace canvas (RFC #4887) phase 1 — normalized geometry.  Pure logic, no
+# widgets: the edge-rounding rule that keeps tiled items seam-free, and the
+# resolution independence the whole RFC rests on, are pinned on every platform.
+add_executable(workspace_geometry_test
+    tests/workspace_geometry_test.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_geometry_test PRIVATE src)
+target_link_libraries(workspace_geometry_test PRIVATE Qt6::Core)
+add_test(NAME workspace_geometry_test COMMAND workspace_geometry_test)
+
+# Workspace canvas (RFC #4887) phase 1 — the canvas model: membership,
+# placement clamping, hit testing, and the dense-contiguous z invariant that
+# keeps raise/lower working after arbitrarily many operations.
+add_executable(workspace_layout_test
+    tests/workspace_layout_test.cpp
+    src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_layout_test PRIVATE src)
+target_link_libraries(workspace_layout_test PRIVATE Qt6::Core)
+add_test(NAME workspace_layout_test COMMAND workspace_layout_test)
+
+# Workspace canvas (RFC #4887) phase 1 — the widget half, offscreen: model
+# answers applied to real geometry and real Qt stacking, plus the take-vs-remove
+# ownership contract phase 3 depends on.
+add_executable(workspace_canvas_widget_test
+    tests/workspace_canvas_widget_test.cpp
+    src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/CanvasItemFrame.cpp
+    src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/WorkspaceCanvas.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(workspace_canvas_widget_test PRIVATE src)
+target_link_libraries(workspace_canvas_widget_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME workspace_canvas_widget_test COMMAND workspace_canvas_widget_test)
+set_tests_properties(workspace_canvas_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Workspace canvas (RFC #4887) phase 2 — the document schema.  Pure logic: the
+# newer-schema guard that refuses to re-write what a later build wrote, and the
+# boundary validation that repairs what it can and reports every repair.
+add_executable(workspace_document_test
+    tests/workspace_document_test.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_document_test PRIVATE src)
+target_link_libraries(workspace_document_test PRIVATE Qt6::Core)
+add_test(NAME workspace_document_test COMMAND workspace_document_test)
+
+# Workspace canvas (RFC #4887) phase 2 — Classic geometry and the one-way
+# migration off the legacy layout keys, against a real AppSettings in a
+# temporary home.  Pins that every pan layout id tiles the surface exactly, and
+# that migration leaves floating pans and applets alone (RFC decision 1).
+add_executable(workspace_migration_test
+    tests/workspace_migration_test.cpp
+    src/gui/workspace/ClassicLayout.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+    src/gui/workspace/WorkspaceMigration.cpp
+)
+target_include_directories(workspace_migration_test PRIVATE src tests)
+target_link_libraries(workspace_migration_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(workspace_migration_test PROPERTIES AUTOMOC ON)
+add_test(NAME workspace_migration_test COMMAND workspace_migration_test)
+
+# Workspace canvas (RFC #4887) phase 2 — persistence and the auto-commit
+# contract (decision 7): gestures coalesce into one whole-document write, the
+# write is verified against the FILE rather than the settings cache, and a
+# restore replay never writes back what it is reading (#4427).
+add_executable(workspace_store_test
+    tests/workspace_store_test.cpp
+    src/gui/workspace/ClassicLayout.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+    src/gui/workspace/WorkspaceMigration.cpp
+    src/gui/workspace/WorkspaceStore.cpp
+)
+target_include_directories(workspace_store_test PRIVATE src tests)
+target_link_libraries(workspace_store_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(workspace_store_test PROPERTIES AUTOMOC ON)
+add_test(NAME workspace_store_test COMMAND workspace_store_test)
+
+# Workspace canvas (RFC #4887) phase 5 — the pure interaction core: hit
+# zones, anchored resize (the anchored edge must never move), and the snap
+# solver (snaps only the gripped edges, never below the minimum).
+add_executable(workspace_interaction_test
+    tests/workspace_interaction_test.cpp
+    src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+)
+target_include_directories(workspace_interaction_test PRIVATE src)
+target_link_libraries(workspace_interaction_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME workspace_interaction_test COMMAND workspace_interaction_test)
+
+# Workspace canvas (RFC #4887) phase 3 — DockMode::Canvas at the manager
+# level: slot-preserving detach/return, float-docks-first, the evictor
+# routing, width-cap lift (#3451 on canvas), and a stored "canvas" mode
+# restoring panel-docked.
+add_executable(workspace_container_mode_test
+    tests/workspace_container_mode_test.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/containers/ContainerManager.cpp
+    src/gui/containers/ContainerTitleBar.cpp
+    src/gui/containers/ContainerWidget.cpp
+    src/gui/containers/FloatingContainerWindow.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(workspace_container_mode_test PRIVATE src tests)
+target_link_libraries(workspace_container_mode_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(workspace_container_mode_test PROPERTIES AUTOMOC ON)
+add_test(NAME workspace_container_mode_test COMMAND workspace_container_mode_test)
+set_tests_properties(workspace_container_mode_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Workspace canvas (RFC #4887) phase 3 — the controller end to end: first
+# enable migrates and places, explicit returns forget the canvas home while
+# closes keep it, drops move/place through the canvas's real event path, and
+# an unusable store fails the enable without moving a widget.
+add_executable(workspace_controller_test
+    tests/workspace_controller_test.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/containers/ContainerManager.cpp
+    src/gui/containers/ContainerTitleBar.cpp
+    src/gui/containers/ContainerWidget.cpp
+    src/gui/containers/FloatingContainerWindow.cpp
+    src/gui/workspace/CanvasInteraction.cpp
+    src/gui/workspace/CanvasItemFrame.cpp
+    src/gui/workspace/CanvasLayout.cpp
+    src/gui/workspace/ClassicLayout.cpp
+    src/gui/workspace/WorkspaceCanvas.cpp
+    src/gui/workspace/WorkspaceController.cpp
+    src/gui/workspace/WorkspaceDocument.cpp
+    src/gui/workspace/WorkspaceGeometry.cpp
+    src/gui/workspace/WorkspaceMigration.cpp
+    src/gui/workspace/WorkspaceStore.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(workspace_controller_test PRIVATE src tests)
+target_link_libraries(workspace_controller_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(workspace_controller_test PROPERTIES AUTOMOC ON)
+add_test(NAME workspace_controller_test COMMAND workspace_controller_test)
+set_tests_properties(workspace_controller_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Demo RX engine on a worker thread (#4878) — the generator's thread affinity,
+# 24 kHz long-run pacing on a coarse timer, keyed-mute, stallscope, and queued
+# controls. Pure QObject + event loop; no widgets, no radio.
+add_executable(sim_signal_source_test
+    tests/sim_signal_source_test.cpp
+    src/core/backends/sim/SimSignalSource.cpp
+    src/core/backends/sim/NoiseMixer.cpp
+)
+target_include_directories(sim_signal_source_test PRIVATE src)
+target_link_libraries(sim_signal_source_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(sim_signal_source_test PROPERTIES AUTOMOC ON)
+add_test(NAME sim_signal_source_test COMMAND sim_signal_source_test)
+
 # KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
 add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)
 target_include_directories(kiwi_rebind_tracker_test PRIVATE src)
@@ -3642,6 +3748,7 @@ target_link_libraries(client_quindar_test PRIVATE Qt6::Core)
 
 add_executable(tx_mic_channel_normalizer_test
     tests/tx_mic_channel_normalizer_test.cpp
+    src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/Resampler.cpp
 )
@@ -3993,6 +4100,14 @@ add_executable(spectrum_preview_logic_test
 target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
+
+# Floating-panadapter crash-loop guard (#4617) — pins that a session which died
+# inside floatPanadapter() comes up docked instead of replaying the crash.
+add_executable(floating_restore_policy_test
+    tests/floating_restore_policy_test.cpp
+)
+target_include_directories(floating_restore_policy_test PRIVATE src)
+add_test(NAME floating_restore_policy_test COMMAND floating_restore_policy_test)
 
 add_executable(software_opengl_request_test
     tests/software_opengl_request_test.cpp
@@ -4736,6 +4851,7 @@ add_executable(cw_sidetone_test
 )
 target_include_directories(cw_sidetone_test PRIVATE src)
 target_link_libraries(cw_sidetone_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
@@ -5098,6 +5214,12 @@ add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
 target_include_directories(hl2_tx_loopback_test PRIVATE src)
 target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+# This test is a no-op without an hpsdrsim answering discovery, which is the
+# normal state of every machine that has not deliberately started one. Without
+# this property that no-op reports as Passed, which is indistinguishable from a
+# run that actually keyed and measured — the exact silent-green this test was
+# fixed to stop. Same convention as crdv_quarantined_test above.
+set_tests_properties(hl2_tx_loopback_test PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
@@ -5596,6 +5718,34 @@ add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
 set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# FramelessResizer's clampManualResize()/windowOwnsChain() pure-logic
+# helpers (#4827/#4829 review). offscreen never exercises the real manual
+# resize path end-to-end (see FramelessResizer.h), so this is coverage for
+# the arithmetic and parent-chain matching in isolation, not a replacement
+# for the PR's own real-X11-input proof.
+#
+# Compiled and linked by the Linux build job, but not currently in any of
+# ci.yml's named ctest -R filters for the per-PR gate — CI building it
+# without running it (per-PR) is the only thing exercising it today; the
+# weekly sanitizers job is the sole scheduled `ctest` run that includes it
+# by not filtering, and per ci.yml that job has failed every run since
+# 2026-06-08. Pure arithmetic and four bare QWindows, no widgets/sockets/
+# wall clock, milliseconds to run — a reasonable candidate for one of the
+# per-PR filters, but that's a maintainer call on the gate's scope, not
+# this PR's to make unilaterally.
+add_executable(frameless_resizer_test
+    tests/frameless_resizer_test.cpp
+    src/gui/FramelessResizer.cpp
+)
+target_include_directories(frameless_resizer_test PRIVATE src tests)
+target_link_libraries(frameless_resizer_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(frameless_resizer_test PROPERTIES AUTOMOC ON)
+add_test(NAME frameless_resizer_test COMMAND frameless_resizer_test)
+set_tests_properties(frameless_resizer_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # FlexControl port-loss recovery (#4574). Guarded on SERIALPORT for the same
 # reason FlexControlManager itself is: the whole class is inside
 # #ifdef HAVE_SERIALPORT, so without Qt SerialPort there is nothing to test.
@@ -5693,6 +5843,11 @@ add_executable(ulanzi_mapping_migration_test
     ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ulanzi_mapping_migration_test PRIVATE src tests)
+# The drift assertion parses the wheel-action else-if chain out of
+# MainWindow_Controllers.cpp at run time, so it needs to find the source tree
+# from wherever ctest runs it.
+target_compile_definitions(ulanzi_mapping_migration_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(ulanzi_mapping_migration_test PRIVATE Qt6::Core)
 add_test(NAME ulanzi_mapping_migration_test COMMAND ulanzi_mapping_migration_test)
 
@@ -5768,6 +5923,33 @@ target_link_libraries(container_widget_test PRIVATE
 set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 add_test(NAME container_widget_test COMMAND container_widget_test)
 set_tests_properties(container_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Mini-pan applet: scope render API, feed lifecycle driven by show/hide, and
+# the Principle V single-object span persistence.  Offscreen.
+add_executable(mini_pan_widget_test
+    tests/mini_pan_widget_test.cpp
+    src/gui/MiniPanScope.cpp
+    src/gui/MiniPanApplet.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/MiniPanSettings.cpp
+    src/core/ThemeManager.cpp
+    # ThemeManager.cpp calls seedGeneratedDefaults(), which lives ONLY in the
+    # generated seed TU — every other ThemeManager consumer in this file pairs
+    # the two, and omitting it is a link error, not a compile one.
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(mini_pan_widget_test PRIVATE src)
+target_link_libraries(mini_pan_widget_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(mini_pan_widget_test PROPERTIES AUTOMOC ON)
+add_test(NAME mini_pan_widget_test COMMAND mini_pan_widget_test)
+set_tests_properties(mini_pan_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # PC-audio lock contract for host-modulating backends (HL2) — needs
@@ -6048,6 +6230,10 @@ set(AETHER_SETTINGS_CONSUMERS
     amp_applet_test
     container_manager_test
     container_nesting_test
+    workspace_canvas_widget_test
+    workspace_container_mode_test
+    workspace_controller_test
+    mini_pan_widget_test
     log_manager_filter_rules_test
     bandplan_voice_labels_test
 )
