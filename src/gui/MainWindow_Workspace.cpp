@@ -316,6 +316,20 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
         return;
     }
 
+    if (on && m_minimalMode) {
+        // Minimal mode has the splitter hidden and the panel reparented
+        // into the central layout — mounting the canvas into that shell
+        // would wedge both.  The View menu is unreachable in minimal
+        // mode; this guards the bridge and any future caller.
+        statusBar()->showMessage(
+            tr("Workspace canvas unavailable in minimal mode"), 5000);
+        if (m_workspaceCanvasAction) {
+            QSignalBlocker blocker(m_workspaceCanvasAction);
+            m_workspaceCanvasAction->setChecked(false);
+        }
+        return;
+    }
+
     if (on) {
         // Mount first, then enable: the controller places items against the
         // canvas's real size, so the canvas has to be in the splitter (and
@@ -473,7 +487,11 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             QTimer::singleShot(0, this, [this] {
                 if (m_workspaceController
                     && !m_workspaceController->isEnabled()
-                    && !m_appletPanelFloatWindow) {
+                    && !m_appletPanelFloatWindow
+                    // Canvas-exit-into-minimal (one smooth motion): the
+                    // panel now lives in the minimal window — popping it
+                    // out a turn later would empty that window again.
+                    && !m_minimalMode) {
                     toggleAppletPanelFloating(true);
                 }
             });

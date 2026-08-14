@@ -8942,6 +8942,18 @@ void MainWindow::toggleAetherialStrip()
 
 void MainWindow::toggleMinimalMode(bool on)
 {
+    // Canvas mode owns the shell; minimal mode owns the window — they
+    // cannot overlap.  Entering minimal from canvas used to reparent an
+    // EMPTY applet panel (every applet lent to the canvas, every pan on
+    // it, inside the splitter minimal is about to hide): a 260 px window
+    // of nothing (8600 field report).  Exit canvas first — synchronously,
+    // inside the same user action, so the operator sees one motion, not
+    // two — and remember to bring it back on the way out.
+    if (on && m_workspaceController && m_workspaceController->isEnabled()) {
+        m_canvasWasOnBeforeMinimal = true;
+        toggleWorkspaceCanvas(false);
+    }
+
     m_minimalMode = on;
     auto& s = AppSettings::instance();
 
@@ -9064,6 +9076,21 @@ void MainWindow::toggleMinimalMode(bool on)
         // phantom-caption offset.  Re-anchoring first would just be undone.
         if (restored)
             reanchorCustomFrameGeometry(geom);
+
+        // The round trip ends where it started: minimal entered from
+        // canvas mode returns to canvas mode.  Deferred one event-loop
+        // turn — the splitter was just re-shown and geometry restored,
+        // and mounting the canvas inside the same turn is the shell-swap
+        // hazard the boot and disable paths already dodge (wl_subsurface).
+        if (m_canvasWasOnBeforeMinimal) {
+            m_canvasWasOnBeforeMinimal = false;
+            QTimer::singleShot(0, this, [this] {
+                if (!m_minimalMode && m_workspaceController
+                    && !m_workspaceController->isEnabled()) {
+                    toggleWorkspaceCanvas(true);
+                }
+            });
+        }
     }
 
     s.setValue("MinimalModeEnabled", on ? "True" : "False");

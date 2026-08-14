@@ -1655,6 +1655,7 @@ private:
     // that never went near a host-modulating backend.
     bool m_hostVoiceChainOwned{false};
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
+    bool m_canvasWasOnBeforeMinimal{false}; // minimal exit restores canvas mode
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)
     bool m_startupGeometryReapplied{false};
