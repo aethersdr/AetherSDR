@@ -1,5 +1,6 @@
 #include "TitleBar.h"
 #include "FramelessMessageBox.h"
+#include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
 #include "PersistentDialog.h"
 #include "core/AppSettings.h"
@@ -110,7 +111,7 @@ TitleBar::TitleBar(QWidget* parent)
     : QWidget(parent)
 {
     AetherSDR::theme::setContainer(this, QStringLiteral("titlebar"));
-    setFixedHeight(32);
+    setFixedHeight(kHeight);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "TitleBar { background: {{color.background.0}}; border-bottom: 1px solid {{color.background.1}}; }");
 
     m_hbox = new QHBoxLayout(this);
@@ -571,13 +572,21 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
             return true;
         }
 #elif !defined(Q_OS_MAC)
-        if (auto* h = w->windowHandle())
-            if (h->startSystemMove()) {
-                m_windowMoveActive = true;
-                m_windowMoveUsesSystem = true;
-                ev->accept();
-                return true;
-            }
+        // startSystemMove() reports success on xcb but the WM-driven drag it
+        // hands off to is unreliable there (QTBUG-69716) — under Mutter/
+        // XWayland (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland
+        // desktop) the press is swallowed and the window just never follows
+        // the pointer (#4827). Skip straight to the manual-move path below,
+        // same rule Qt's own QSizeGrip::usePlatformSizeGrip() applies.
+        if (!FramelessMoveHelper::systemMoveResizeUnreliable(w)) {
+            if (auto* h = w->windowHandle())
+                if (h->startSystemMove()) {
+                    m_windowMoveActive = true;
+                    m_windowMoveUsesSystem = true;
+                    ev->accept();
+                    return true;
+                }
+        }
 #endif
     }
 
@@ -646,6 +655,17 @@ void TitleBar::handleTitleDoubleClick(QMouseEvent* ev)
         else                  w->showMaximized();
         ev->accept();
     }
+}
+
+void TitleBar::setAppletPanelControlsVisible(bool visible)
+{
+    if (m_dockLeftLbl)  m_dockLeftLbl->setVisible(visible);
+    if (m_dockRightLbl) m_dockRightLbl->setVisible(visible);
+    if (m_popOutLbl)    m_popOutLbl->setVisible(visible);
+    // The trio is BRACKETED by separators; with the icons gone the two
+    // dividers sit adjacent and one dangles (8600 field report).  The
+    // trailing one belongs to the cluster and hides with it.
+    if (m_dockSep)      m_dockSep->setVisible(visible);
 }
 
 bool TitleBar::eventFilter(QObject* obj, QEvent* ev)

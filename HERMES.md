@@ -945,6 +945,14 @@ The pattern: a seam verb with no consumer looks identical to a working one from
 below. Grep for callers of every verb a new backend implements, before trusting
 that implementing it does anything.
 
+**Closed on hardware, 2026-08-10.** `radiocert meters` against the live radio
+reports all eight defined meters `everFed: true` — `SLC:LEVEL`, `TX:MICPEAK`,
+`TX:SWR`, `TX:FWDPWR`, `TX:REFPWR`, `TX:ALC`, `TX:COMPPEAK` and `RAD:PATEMP`.
+The seam this section opened is fed end to end, and four of those meters were
+still described in `docs/radio-certification.md` as computed-and-discarded when
+the run was made. The measurements are in that file under
+*Certified by effect, 2026-08-10 (Hermes-Lite 2)*.
+
 ### 14.5 Testing UX: exercise BOTH RadioModel and TransmitModel
 
 **The automation bridge is not a test of the user interface.** The two drive
@@ -1866,6 +1874,38 @@ smoothing would alias.
 100 ms is the cadence `MetisClient` already paces telemetry at, and the
 attack/decay constants (0.5/0.15) are the ones `MeterModel` uses for Flex
 forward power — reused so meters behave the same across families.
+
+### 17.7 The RF power slider has 101 positions and the radio has 16
+
+`Hl2Backend::applyDrive` maps the operator's 0–100 onto the drive field's
+0–255 (`kTxDriveMax`), and `setTxPower` already says the gateware decodes only
+the **top nibble**. That comment is right, and the consequence is bigger than it
+sounds: the slider offers 101 settings and the radio can hold **16**. Six
+percentage points of travel do nothing at all, and the next single point is a
+step of over a decibel.
+
+Measured on the live radio (14.200 MHz USB, 1 kHz tone at −10 dBFS, dummy load,
+gateware v74), reading `TX:FWDPWR` through the §17.5 reference curve:
+
+| Slider | Drive register | Top nibble | Forward |
+|---|---|---|---|
+| 44 % | 112 | 7 | 1.984 W |
+| 50 % | 127 | 7 | 2.001 W |
+| 51 % | 130 | 8 | 2.312 W |
+| 56 % | 142 | 8 | 2.319 W |
+
+44 % and 50 % differ by 0.04 dB — the same nibble, so the same radio state, and
+the difference is measurement noise. 50 % to 51 % is +1.25 dB. The quantisation
+is a **hardware fact, not a defect**: nothing in `applyDrive` is wrong, and
+rounding differently would only move the step edges. What is worth fixing is the
+UI's implied precision, because an operator nudging 44 → 50 to "come down a
+little" changes nothing and has no way to find that out.
+
+This also bounds what §17.5's uncalibrated curve can be asked to prove. Halving
+the slider is **not** halving the drive code — 100 % → 50 % is nibble 15 → 7,
+and 50 % → 25 % is 7 → 3 — so the "halve the control, expect −6.02 dB"
+certification stimulus does not describe this radio's control at all. See
+`docs/radio-certification.md` for what that does and does not certify here.
 
 ---
 

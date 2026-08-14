@@ -575,6 +575,12 @@ private:
     // TransmitModel defaults rfPower to, so a TUNE before any power change
     // restores something sane rather than 0.
     int m_rfPowerPercent = 100;
+    // The APPLIED side of the pair above, for the health snapshot (#4912).
+    // The raw 0..kTxDriveMax value setTxDriveLevel() last handed to MetisClient —
+    // negative means never written, so the row stays absent rather than claiming a
+    // 0 the radio was never told. (Its companion "gated" row is derived from
+    // m_txAllowed at read time, not latched here — see healthSnapshot().)
+    int m_txDriveRegister = -1;
     // RFC #4603 PR 3 state memory. m_restoredState is the validated snapshot
     // handed over pre-connect; the per-band maps are the working copies the
     // session reads and updates (band key -> value; see Hl2Bands.h). Defaults

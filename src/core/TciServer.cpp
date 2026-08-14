@@ -104,7 +104,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // their current balance when the applets split.
     {
         auto& s = AppSettings::instance();
-        for (int ch = 1; ch <= 4; ++ch) {
+        for (int ch = 1; ch <= 8; ++ch) {
             const QString key = QStringLiteral("TciRxGain%1").arg(ch);
             if (!s.contains(key)) {
                 const QString legacy = s.value(QStringLiteral("DaxRxGain%1").arg(ch), "0.5").toString();
@@ -314,7 +314,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 
             auto* ps = m_model ? m_model->panStream() : nullptr;
             if (!ps) return;
-            for (int ch = 1; ch <= 4; ++ch) {
+            for (int ch = 1; ch <= 8; ++ch) {
                 if (!ps->daxChannelHeldBy(ch, PanadapterStream::DaxConsumer::Tci))
                     continue;
                 bool stillWanted = false;
@@ -660,7 +660,7 @@ void TciServer::setOverflowMode(int mode)
 
 void TciServer::setRxChannelGain(int channel, float gain)
 {
-    if (channel < 1 || channel > 4) return;
+    if (channel < 1 || channel > 8) return;
     const float clamped = std::clamp(gain, 0.0f, 1.0f);
     if (m_rxChannelGain[channel - 1] == clamped) return;
     m_rxChannelGain[channel - 1] = clamped;
@@ -672,7 +672,7 @@ void TciServer::setRxChannelGain(int channel, float gain)
 
 float TciServer::rxChannelGain(int channel) const
 {
-    if (channel < 1 || channel > 4) return 1.0f;
+    if (channel < 1 || channel > 8) return 1.0f;
     return m_rxChannelGain[channel - 1];
 }
 
@@ -2330,12 +2330,12 @@ void TciServer::onDaxAudioReady(int channel, const QByteArray& pcm)
 
     ++m_rxAudioPackets;
 
-    const float channelGain = (channel >= 1 && channel <= 4)
+    const float channelGain = (channel >= 1 && channel <= 8)
         ? m_rxChannelGain[channel - 1] : 1.0f;
 
     // RMS level meter — post-gain, consistent with DAX meter convention.
     // One emission per DAX packet is cheap at ~187 Hz (128-frame packets /24kHz).
-    if (channel >= 1 && channel <= 4) {
+    if (channel >= 1 && channel <= 8) {
         const auto* src = reinterpret_cast<const float*>(pcm.constData());
         const int n = pcm.size() / static_cast<int>(sizeof(float));
         if (n > 0) {
@@ -3448,7 +3448,7 @@ void TciServer::ensureDaxForTci()
                     used.insert(sl->daxChannel());
                 }
             }
-            for (int ch = 1; ch <= 4; ++ch) {
+            for (int ch = 1; ch <= 8; ++ch) {
                 if (!used.contains(ch)) {
                     qCDebug(lcCat) << "TCI: auto-assigning DAX channel" << ch
                                    << "to slice" << s->sliceId();

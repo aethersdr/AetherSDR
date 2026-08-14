@@ -2733,7 +2733,7 @@ void VfoWidget::buildTabContent()
         lbl->setStyleSheet(kLabelStyle);
         row->addWidget(lbl);
         m_daxCmb = new GuardedComboBox;
-        m_daxCmb->addItems({"Off", "1", "2", "3", "4"});
+        populateDaxCombo();  // capacity-gated; rebuilt on connect (setRadioModel)
         AetherSDR::applyComboStyle(m_daxCmb);
         row->addWidget(m_daxCmb, 1);
         vb->addLayout(row);
@@ -2741,7 +2741,7 @@ void VfoWidget::buildTabContent()
         connect(m_daxCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int idx) {
             if (!m_updatingFromModel && m_slice)
-                m_slice->setDaxChannel(idx);  // 0=Off, 1-4=channels
+                m_slice->setDaxChannel(idx);  // 0=Off, 1..N=channels (N=radio capacity)
         });
 
         m_tabStack->addWidget(daxTab);
@@ -6057,16 +6057,52 @@ void VfoWidget::syncSqlVisuals()
     m_sqlSlider->update();
 }
 
+// The DAX RX channel count tracks the radio's slice capacity (FlexLib
+// ModelCapabilities, Principle I): FLEX-6700 -> 8, 6600/6500/8600 -> 4,
+// 6300/6400 -> 2. Offer only what the radio can back, so a smaller model does
+// not present dead entries whose slices produce the same silent no-audio the
+// runtime bump fixes (#4854 review). The 1..8 wire-path guards stay as the
+// upper bound; only this user-facing list follows the radio.
+void VfoWidget::populateDaxCombo()
+{
+    if (!m_daxCmb)
+        return;
+    const int n = qBound(1, m_radioModel ? m_radioModel->maxSlices() : 8, 8);
+    QSignalBlocker block(m_daxCmb);
+    // A slice carrying a DAX channel this radio cannot back (e.g. a profile from a
+    // larger model opened on a smaller one) shows as Off, not a false in-range
+    // channel, so the combo never disagrees with m_slice->daxChannel() (#4854 review).
+    const int dc = m_slice ? m_slice->daxChannel() : 0;
+    const int want = (dc >= 1 && dc <= n) ? dc : 0;
+    m_daxCmb->clear();
+    QStringList items{QStringLiteral("Off")};
+    for (int i = 1; i <= n; ++i)
+        items << QString::number(i);
+    m_daxCmb->addItems(items);
+    m_daxCmb->setCurrentIndex(want);
+}
+
 void VfoWidget::setRadioModel(RadioModel* radioModel)
 {
-    if (m_radioModel)
+    if (m_radioModel) {
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &VfoWidget::updateAntennaButtons);
+        disconnect(m_radioModel, &RadioModel::infoChanged,
+                   this, &VfoWidget::populateDaxCombo);
+        disconnect(m_radioModel, &RadioModel::connectionStateChanged,
+                   this, &VfoWidget::populateDaxCombo);
+    }
     m_radioModel = radioModel;
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &VfoWidget::updateAntennaButtons);
+        // Rebuild the DAX list when the radio (hence its capacity) becomes known.
+        connect(m_radioModel, &RadioModel::infoChanged,
+                this, &VfoWidget::populateDaxCombo);
+        connect(m_radioModel, &RadioModel::connectionStateChanged,
+                this, &VfoWidget::populateDaxCombo);
     }
+    populateDaxCombo();
     updateAntennaButtons();
 }
 

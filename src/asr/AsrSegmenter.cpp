@@ -16,6 +16,7 @@ AsrSegmenter::AsrSegmenter(const Config& config)
     m_minSpeechSamples = framesToSamples(m_config.minSpeechMs);
     m_hangoverSamples = framesToSamples(m_config.hangoverMs);
     m_maxSegmentSamples = framesToSamples(m_config.maxSegmentMs);
+    m_longGapSamples = framesToSamples(m_config.longGapMs);
     m_frame.reserve(m_frameSamples);
 }
 
@@ -33,9 +34,19 @@ void AsrSegmenter::reset()
     m_speechSamples = 0;
     m_pendingContinues = false;
     m_pendingOverlapMs = 0;
+    m_idleSilence = 0;
+    m_longGapFired = false;
+    m_longGapPending = false;
     if (m_vad != nullptr) {
         m_vad->reset();
     }
+}
+
+bool AsrSegmenter::consumeLongGap()
+{
+    const bool r = m_longGapPending;
+    m_longGapPending = false;
+    return r;
 }
 
 void AsrSegmenter::setMaxSegmentMs(int ms)
@@ -165,6 +176,9 @@ std::vector<AsrSegmenter::ClosedSegment> AsrSegmenter::feed(const float* samples
                 m_segment.clear();
             }
             m_trailingSilence = 0;
+            // Speech resumed: the idle gap (if any) is over; re-arm for the next.
+            m_idleSilence = 0;
+            m_longGapFired = false;
             m_segment.insert(m_segment.end(), m_frame.begin(), m_frame.end());
             m_speechSamples += static_cast<int>(m_frame.size());
         } else if (m_inSpeech) {
@@ -175,8 +189,18 @@ std::vector<AsrSegmenter::ClosedSegment> AsrSegmenter::feed(const float* samples
             if (m_trailingSilence >= m_hangoverSamples) {
                 closeSegment(out, /*forceCap=*/false);
             }
+        } else {
+            // Silence outside speech: accumulate the idle gap. When it first
+            // reaches longGapMs, latch a one-shot the worker consumes to flush
+            // carried context (fires once per gap; re-armed when speech resumes).
+            if (m_longGapSamples > 0 && !m_longGapFired) {
+                m_idleSilence += static_cast<int>(m_frame.size());
+                if (m_idleSilence >= m_longGapSamples) {
+                    m_longGapFired = true;
+                    m_longGapPending = true;
+                }
+            }
         }
-        // else: silence outside speech — ignored.
 
         // Hard cap on a single utterance.
         if (m_inSpeech && static_cast<int>(m_segment.size()) >= m_maxSegmentSamples) {

@@ -39,6 +39,29 @@ static void check(bool cond, const char* what)
     }
 }
 
+// A frame that can MOVE the transmitter or the antenna tuner, as opposed to one
+// that merely asks about them.
+//
+// 1C 00 and 1C 01 each have two forms and only one of them does anything. The
+// payload-bearing form is the command — cmdSetPtt writes one byte (00 receive,
+// 01 transmit) and cmdSetTuner writes one byte (00 off, 01 on, 02 start a
+// matching cycle). The empty form is a READ, which the register answers and
+// never acts on. The backend polls exactly that read on a 250 ms cadence from
+// onMeterTick, deliberately: m_keyed was set only by our own setKeying() and by
+// an unsolicited status frame, so a radio keyed from its own front-panel PTT
+// left every transmit meter suppressed and reading "never fed".
+//
+// Matching on cmd+sub alone cannot tell those two forms apart, and a check that
+// cannot tell them apart is not a TX-safety check. It fires on the poll — which
+// keys nothing — and it would go on firing at whoever silenced it, until it got
+// silenced the easy way.
+static bool movesPttOrTuner(const CivFrame& f)
+{
+    return f.cmd == cmd::kControl && f.hasSub
+        && (f.sub == control::kPtt || f.sub == control::kTuner)
+        && !f.data.empty();
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -269,12 +292,25 @@ int main(int argc, char** argv)
               "transmit audio is DROPPED while unkeyed");
 
         // KEYED: the same buffers must arrive.
+        radio.clearCivLog();
         backend.setKeying(true);
         for (int i = 0; i < 20; ++i)
             backend.submitTxAudio(pcm, 24000);
         QTest::qWait(200);
         const int keyed = radio.audioPacketsFromClient();
         check(keyed > before, "and flows once keyed");
+
+        // THE TX-SAFETY PREDICATE HAS TEETH. The scrub check further down is a
+        // negative — "no frame like this was sent" — and a negative passes for
+        // free the moment it stops recognising the thing it forbids. Here a
+        // transmitter really was keyed over the same wire and through the same
+        // capture, so the predicate is proven to catch it before it is trusted
+        // to say the scrub never did.
+        check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                          movesPttOrTuner),
+              "and a real key IS caught by the TX-safety predicate, so the "
+              "scrub's 'never keys' check is not vacuous");
+
         backend.setKeying(false);
 
         // ...and stops again on unkey, rather than draining a backlog into the
@@ -558,10 +594,14 @@ int main(int argc, char** argv)
               "does not claim coverage it does not have");
 
         // 3. PTT, the ATU and power-off are never scrubbed (Principle VI).
-        const bool keyed = std::any_of(sent.begin(), sent.end(), [](const CivFrame& f) {
-            return f.cmd == cmd::kControl && f.hasSub
-                && (f.sub == control::kPtt || f.sub == control::kTuner);
-        });
+        //
+        // Payload-bearing frames only — see movesPttOrTuner. The window this
+        // reads spans the qWait above, so it also catches the backend's own
+        // 250 ms PTT-state READ, which is not a scrub frame and keys nothing.
+        // Matching that read made this assertion fail on roughly half of all
+        // runs purely on timer phase, on a check whose whole job is to be
+        // believed when it fires.
+        const bool keyed = std::any_of(sent.begin(), sent.end(), movesPttOrTuner);
         check(!keyed, "and the scrub never touches PTT or the antenna tuner");
     }
 

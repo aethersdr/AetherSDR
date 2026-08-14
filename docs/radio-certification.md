@@ -44,6 +44,15 @@ Hermes-Lite 2 can physically produce it.
 | `TX:MIC` | dBFS | host-side | pre-gain mic level | — | not yet wired |
 | `TX:HWALC` | dBFS | **no** | — | Flex RCA jack; no HL2 equivalent | — |
 
+Four of those rows read "counts only", "not yet wired" or "gain the ALC applies"
+until 2026-08-10, when a live run showed all four meters defined and fed. The
+stimulus column is the part that stayed wrong longest, and it is the part that
+matters: **`TX:ALC` is the post-ALC transmit PEAK in dBFS, not the gain the ALC
+applied.** That is what `Hl2Backend::defineMeters` publishes and what
+`MeterModel::swAlc()` binds to, so the old "quiet input → gain rises, ±3 dB"
+asked for a quantity this radio never produced — and would have been recorded as
+a failure by anyone who ran it, on a meter that turns out to be exact.
+
 `TX:FWDPWR` and `TX:REFPWR` are published in dBm through the reference curve in
 `Hl2Backend::directionalWatts()`, which is **uncalibrated** — the value is an
 estimate, not a measurement, and the meter descriptions say so. Uncalibrated is
@@ -51,29 +60,11 @@ not the same as absent, and this table said "counts only" long after they were
 being published; a stale not-fed claim is what switches off the check that
 would notice the meter regressing (CERTIFICATION.md 1.32).
 
-**Why `TX:FWDPWR`'s stimulus is a nibble step and not a halving.** The obvious
-check — halve the drive, expect −6.02 dB — cannot be run on this radio, for two
-independent reasons, neither of which is a fault in the control:
-
-1. The gateware decodes only the drive register's **top nibble**, so a slider
-   halving is not a drive halving: 100 → 50 → 25 % is nibble 15 → 7 → 3, and
-   sliders 44 % and 50 % both land on nibble 7 (`HERMES.md` 17.7).
-2. The reference curve is nonlinear as well as uncalibrated, so the scale does
-   not cancel out of a ratio taken across a wide span (`HERMES.md` 17.5).
-
-Measured live: **−4.44 dB** (100→50 %) and **−2.33 dB** (50→25 %) against the
-−6.02 dB a true halving would give — the second is outside even a ±3 dB
-tolerance, on a radio that is working correctly. A failing delta therefore
-cannot be attributed to the control rather than to the curve, so `radiocert`
-must not report one as a control defect. Monotonicity under a one-nibble step is
-what this control can honestly certify by effect.
-
-Likewise `TX:ALC`'s stimulus is a **20 dB input sweep with no movement**, not
-envelope tracking. A post-ALC peak meter has a known answer available with no
-calibration at all: it must stay constant while its input does not. Swept
-−10 → −30 dBFS it read −1.41 dBFS at every level while `TX:MICPEAK` tracked the
-same sweep to within 0.02 dB. A check written to "tracks the envelope" would
-fail a correct meter by roughly 17 dB.
+Both of the changed stimulus cells above are measurements, not preferences —
+`TX:FWDPWR`'s nibble step replaces a halving the hardware refutes, and
+`TX:ALC`'s no-movement sweep replaces envelope tracking that would fail a
+correct meter by ~17 dB. The numbers are under *Certified by effect,
+2026-08-10* below.
 
 ### Radio / hardware
 
@@ -82,6 +73,74 @@ fail a correct meter by roughly 17 dB.
 | `RAD:PATEMP` | degC | yes | 20–60 idle | key 10 s → **rises ≥0.5 °C** | rise is the check, not the value |
 | `RAD:+13.8A` | Volts | **no** | — | HL2 reports no supply voltage | — |
 | `AMP:*`, `TGXL:*` | — | **no** | — | external amp / tuner only | — |
+
+### Certified by effect, 2026-08-10 (Hermes-Lite 2, 14.200 MHz USB, dummy load)
+
+Gateware v74, `radiocert meters 14.200` plus a manual drive sweep, host-side
+1 kHz test tone as the stimulus. Every row below is an **observed effect**, not
+a readback.
+
+| meter | stimulus | observed | verdict |
+|---|---|---|---|
+| `TX:MICPEAK` | −20 dBFS tone | **−19.977 dBFS** (+0.023 dB) | **CERTIFIED** — and again at −10 dBFS: −9.969 |
+| `TX:SWR` | tone into a dummy load | **1.0**, age 43–531 ms | **CERTIFIED** — a flat load reads flat |
+| `TX:SWR` idle | unkeyed | **absent** (null, age −1) | **CERTIFIED** — the `kMinForwardCountsForSwr` gate does its job; no 255.99:1 |
+| `TX:REFPWR` | 5.57 W forward into a dummy load | **0.001 W**, ≈37 dB below forward | **CERTIFIED** — requirement is ≥15 dB |
+| `RAD:PATEMP` | 10 s key | 32.70 → **43.06 °C** (+10.36) | **CERTIFIED** — requirement is a ≥0.5 °C rise |
+| `TX:ALC` | tone swept −10 → −30 dBFS | **−1.41 dBFS at every level** | **CERTIFIED** — see the normalisation check below |
+| `TX:COMPPEAK` | PROC off | **0 dB**, age 0–28 ms | **LIVE** — reads zero with the compressor off, which is correct |
+| `SLC:LEVEL` | receiving | −105.7 dBm, age 15–78 ms | **LIVE** |
+| `RAD:+13.8A` | — | not defined | **correct** — the HL2 reports no supply voltage |
+| mic gain control | 100 → 50 | **6.023 dB** | **CERTIFIED** — arithmetic says 6.02 |
+
+**The ALC normalisation check, and why it certifies the whole host TX chain.**
+A post-ALC peak meter has a known answer available without any calibration: it
+must be **constant** while its input is not. Sweeping the injected tone over
+20 dB, at fixed drive:
+
+| Injected tone | `TX:MICPEAK` | `TX:ALC` | `TX:FWDPWR` |
+|---|---|---|---|
+| −10 dBFS | −9.98 dBFS | **−1.41 dBFS** | 1.988 W |
+| −20 dBFS | −19.98 dBFS | **−1.41 dBFS** | 1.999 W |
+| −30 dBFS | −30.00 dBFS | **−1.41 dBFS** | 2.000 W |
+
+The pre-ALC meter tracks the input to within 0.02 dB and the post-ALC meter does
+not move at all — which is the ALC doing its job, measured rather than assumed.
+Constant forward power across the same sweep says the transmitted level is
+**drive-limited, not audio-limited** on this radio, so an operator's mic gain
+cannot change their output power; only the drive control can.
+
+Because these two meters sit on opposite sides of the ALC, agreeing with each
+other in opposite directions, they certify the host transmit path between them:
+test tone → mic gain → ALC → modulator → IQ on the wire → PA → 2 W into a load.
+This is the HL2 analogue of the IC-705's live-voice run below, with a synthetic
+stimulus instead of speech — weaker as an audio-quality check and stronger as a
+level check, since the tone's amplitude is exactly known.
+
+`TX:FWDPWR` is **live and uncertified**, and the distinction is the point.
+It reads 5.57 W at full drive and 1.17 W at 25 %, so it plainly tracks drive.
+But the certification stimulus in the table above — halve the control, expect
+−6.02 dB — cannot be run on this radio:
+
+| Change | Expected | Measured |
+|---|---|---|
+| 100 % → 50 % | −6.02 dB | **−4.44 dB** |
+| 50 % → 25 % | −6.02 dB | **−2.33 dB** |
+
+Two independent reasons, and neither is a fault in the control:
+
+1. **Halving the slider does not halve the drive.** The gateware decodes only
+   the drive register's top nibble, so the slider's 101 positions are 16 radio
+   states and 100→50→25 % is nibble 15→7→3 (`HERMES.md` 17.7).
+2. **The instrument is uncalibrated by construction.** Forward power comes from
+   Quisk's `HL2FilterE3` *reference* curve, which is a different board's
+   calibration (`HERMES.md` 17.5).
+
+So a failing delta here cannot be attributed to the control rather than to the
+curve, and **`radiocert` must not report one as a control defect.** Certifying
+drive by effect on this radio needs either a per-unit power calibration or an
+external power meter; until then the honest claim is "monotonic in drive",
+which is what the nibble sweep in `HERMES.md` 17.7 shows.
 
 ### Icom (IC-705) — measured with `controls meters`, radio idle on 20 m
 
@@ -260,12 +319,12 @@ this table, which is the same rule the report itself follows.
 
 | Control | Range | HL2 path | Observable effect | Tolerance | Certified |
 |---|---|---|---|---|---|
-| `TransmitModel::setRfPower` | 0–100 | drive register, **top nibble only** | one nibble up → `TX:FWDPWR` rises | monotonic; ≈6 dB not applicable | **partly — monotonic proved by hand** |
+| `TransmitModel::setRfPower` | 0–100 | drive register, **top nibble only** | one nibble up → `TX:FWDPWR` rises | monotonic; see below | **partly — monotonic proved, ≈6 dB not applicable** |
 | `TransmitModel::setRfPower(0)` | — | disables the PA | forward power to the floor | — | **yes — 0 % reads the 0.001 W floor** |
 | `AudioEngine::setPcMicGain` | 0–100 | host-side, pre-modulator | halve → `TX:MICPEAK` drops ≈6 dB | ±1 dB | **yes — 6.023 dB measured** |
 | `SliceModel::setAgcThreshold` | 0–100 | WDSP `SetRXAAGCTop` | raise → audio floor rises | ±3 dB | no |
-| RF Gain slider | dB | AD9866 LNA `0x0a[5:0]` | step the gain → the pan echoes the value the hardware took | echo must equal the request | **yes — `control-effect` phase** |
-| `SliceModel::setRfGain` | dB | **dead end** | Flex wire text; the slider does not call it — see below | — | n/a |
+| `IRadioBackend::setPanRfGain` | −8…+32 dB | AD9866 LNA `0x0a[5:0]`, at runtime | step the gain → the pan echoes the value the hardware took | echo must equal the request | **yes — `control-effect` phase** |
+| `SliceModel::setRfGain` | dB | **dead — Flex wire text** | none; nothing on a non-Flex backend receives it | — | n/a — the operator's slider does not use it |
 | `TransmitModel::setTunePower` | 0–100 | **NOT WIRED** | tune uses full drive | — | n/a |
 | `SliceModel::setSquelch` | on/off | **NOT WIRED** | — | — | n/a |
 | `setFilter(low, high)` | Hz | WDSP passband | tone outside the passband is rejected | ≥30 dB | no |

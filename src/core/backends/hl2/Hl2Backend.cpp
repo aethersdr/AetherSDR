@@ -3324,6 +3324,11 @@ void Hl2Backend::setTxDriveLevel(int level)
 {
     if (!m_metis)
         return;
+    // Retained purely so the health snapshot can report what was ACTUALLY
+    // written (#4912). The value went straight out over a queued invoke and was
+    // kept nowhere, so nothing downstream could report the applied drive — only
+    // TransmitModel's requested percent, which is the operator's ask.
+    m_txDriveRegister = level;
     QMetaObject::invokeMethod(m_metis, "setTxDriveLevel", Qt::QueuedConnection,
         Q_ARG(int, level));
 }
@@ -3422,6 +3427,35 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     put("txFifoOverflow", QStringLiteral("TX FIFO overflow"),
         opt(m_telemetry.txFifoOverflow));
 
+    // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
+    //
+    // Nothing anywhere reported the APPLIED drive. `get transmit` has rfPower
+    // and `get radio` has txPower, but both read TransmitModel — the operator's
+    // request — which is exactly the readback-shares-the-failure problem this
+    // section exists to solve. Worse, applyDrive()'s transmit gate forces the
+    // register to 0 while the requested percent reads back untouched, so
+    // "commanded but never applied" was invisible to automation in the one area
+    // where it is safety-adjacent.
+    //
+    // The raw register is reported alongside the percent rather than instead of
+    // it because the gateware decodes only the drive byte's top nibble: the
+    // 0..255 scale moves in steps of 16, so 100 distinct percents land on 16
+    // distinct drives and a percent alone cannot tell you which one the radio
+    // got.
+    put("rfPowerPercent", QStringLiteral("Drive requested (0-100)"), m_rfPowerPercent);
+    // Absent until first write, per this section's "never told" convention — a
+    // 0 here would read as "the radio was commanded to zero drive".
+    put("txDriveRegister", QStringLiteral("Drive written (raw 0-255)"),
+        m_txDriveRegister >= 0 ? QVariant(m_txDriveRegister) : QVariant());
+    // Reported from the GATE, not from an observation of it acting. Latching this
+    // inside applyDrive() looked equivalent and was not: finishDspSetup() seeds the
+    // register with a direct setTxDriveLevel(0) that never goes through applyDrive(),
+    // so a TX-blocked session where nobody touched the drive slider read
+    // "rfPowerPercent: 100, txDriveRegister: 0, txDriveGated: false" — the row
+    // positively denying responsibility for the exact divergence it exists to
+    // explain. The gate is a session property, so it is always knowable.
+    put("txDriveGated", QStringLiteral("Drive held at 0 by the TX gate"), !m_txAllowed);
+
     // THE VOICE CHAIN, END TO END, AS THE MODULATOR ACTUALLY RAN IT.
     //
     // Every row here is read from this backend rather than from TransmitModel.
@@ -3514,7 +3548,13 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // a hard 0.0 before any telemetry, next to a neighbour saying "not
     // reported" — and "0 W" from a wattmeter reads as a measurement, which is
     // the one thing nothing in this section is allowed to fake.
-    put("forwardPowerPeakW", QStringLiteral("Forward (W, approx — peak estimate)"),
+    // DISPLAY HOLD — NOT AN ASSERTION TARGET (#4912). This is a meter's
+    // peak-hold: one key-edge ADC sample decays over seconds, so a script that
+    // asserts on it reads a transient from the start of the over as though it
+    // were the power now. That is correct for a needle and wrong for a test.
+    // Assert on forwardPowerW, the instantaneous row above.
+    put("forwardPowerPeakW",
+        QStringLiteral("Forward (W, approx — peak HOLD, display only)"),
         m_telemetry.forwardPowerRaw ? QVariant(m_fwdPeakWatts) : QVariant());
     put("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),
         opt(m_telemetry.reversePowerRaw));

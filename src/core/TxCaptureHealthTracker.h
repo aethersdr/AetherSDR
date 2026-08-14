@@ -25,6 +25,7 @@ public:
         None,
         BufferSaturatedDuringTci,
         LocalTxWhileSaturated,
+        CaptureBacklogDiscarded,
     };
 
     struct Snapshot {
@@ -35,6 +36,8 @@ public:
         quint64 fullBufferDuringTciObservations{0};
         quint64 idleDuringTciTransitions{0};
         quint64 postTciLocalTxWhileSaturated{0};
+        quint64 captureBacklogDiscards{0};
+        qint64 captureBacklogDiscardedBytes{0};
         bool sourceWasActive{false};
         bool saturationObserved{false};
     };
@@ -53,6 +56,27 @@ public:
         m_fullBufferDuringTciObservations = 0;
         m_idleDuringTciTransitions = 0;
         m_postTciLocalTxWhileSaturated = 0;
+        m_captureBacklogDiscards = 0;
+        m_captureBacklogDiscardedBytes = 0;
+        m_backlogDiscardReported = false;
+    }
+
+    // The capture path dropped stale audio to catch up to realtime. Counted for
+    // the whole lifecycle, but reported as an event only the first time: a
+    // backend that keeps outrunning the consumer would otherwise warn on every
+    // callback, and the count is what a support dump actually needs.
+    Event recordBacklogDiscard(qint64 discardedBytes)
+    {
+        if (discardedBytes <= 0) {
+            return Event::None;
+        }
+        ++m_captureBacklogDiscards;
+        m_captureBacklogDiscardedBytes += discardedBytes;
+        if (m_backlogDiscardReported) {
+            return Event::None;
+        }
+        m_backlogDiscardReported = true;
+        return Event::CaptureBacklogDiscarded;
     }
 
     Event recordSuppressedCallback(qint64 bufferedBytes, qint64 bufferCapacityBytes)
@@ -156,6 +180,8 @@ public:
         out.fullBufferDuringTciObservations = m_fullBufferDuringTciObservations;
         out.idleDuringTciTransitions = m_idleDuringTciTransitions;
         out.postTciLocalTxWhileSaturated = m_postTciLocalTxWhileSaturated;
+        out.captureBacklogDiscards = m_captureBacklogDiscards;
+        out.captureBacklogDiscardedBytes = m_captureBacklogDiscardedBytes;
         out.sourceWasActive = m_sourceWasActive;
         out.saturationObserved = m_saturationReported;
         return out;
@@ -174,6 +200,9 @@ private:
     bool m_currentlySaturated{false};
     bool m_saturationReported{false};
     bool m_stalledLocalTxReported{false};
+    bool m_backlogDiscardReported{false};
+    quint64 m_captureBacklogDiscards{0};
+    qint64 m_captureBacklogDiscardedBytes{0};
     quint64 m_tciSuppressedCallbacks{0};
     qint64 m_suppressedBufferPeakBytes{0};
     quint64 m_fullBufferDuringTciObservations{0};
