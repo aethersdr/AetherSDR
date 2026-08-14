@@ -81,10 +81,17 @@ public:
     // newer-document case, which must surface rather than silently shrug.
     bool enable(const QStringList& knownAppletIds, QString* whyNot = nullptr);
 
+    enum class DisablePersistence {
+        PersistDisabled,
+        PreserveEnabled,
+    };
+
     // Turn the mode off: every applet returns to its panel slot, the pan
     // stack widget is released (parentless — the caller re-slots it), and
-    // the document keeps all placement for the next enable().
-    void disable();
+    // the document keeps all placement for the next enable().  A temporary
+    // shell handoff may preserve the enabled preference so relaunch still
+    // restores the operator's canvas intent.
+    void disable(DisablePersistence persistence = DisablePersistence::PersistDisabled);
 
     bool isEnabled() const { return m_enabled; }
 

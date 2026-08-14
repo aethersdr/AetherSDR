@@ -1233,14 +1233,7 @@ void MainWindow::registerShortcutActions()
     // verb — until now nothing could drive minimal mode programmatically,
     // which is also why the canvas-vs-minimal handoff went untested.
     m_shortcutManager.registerAction("minimal_mode", "Minimal Mode Toggle", "Display",
-        QKeySequence(), [this]() {
-            const bool next = !m_minimalMode;
-            toggleMinimalMode(next);
-            if (m_minimalModeAction) {
-                QSignalBlocker b(m_minimalModeAction);
-                m_minimalModeAction->setChecked(next);
-            }
-        });
+        QKeySequence(), [this]() { toggleMinimalModeFromAction(); });
 
     // ── RIT/XIT ─────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("rit_toggle", "RIT Toggle", "RIT/XIT",

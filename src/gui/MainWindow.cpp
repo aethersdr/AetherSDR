@@ -1564,17 +1564,10 @@ MainWindow::MainWindow(QWidget* parent)
     auto* minimalShortcut = new QShortcut(QKeySequence("Ctrl+M"), this);
     minimalShortcut->setContext(Qt::ApplicationShortcut);
     minimalShortcut->setAutoRepeat(false);
-    const auto toggleMinimalModeShortcut = [this]() {
-        bool next = !m_minimalMode;
-        // Sync the menu action (with blocker to avoid double-toggle)
-        if (m_minimalModeAction) {
-            QSignalBlocker b(m_minimalModeAction);
-            m_minimalModeAction->setChecked(next);
-        }
-        toggleMinimalMode(next);
-    };
-    connect(minimalShortcut, &QShortcut::activated, this, toggleMinimalModeShortcut);
-    connect(minimalShortcut, &QShortcut::activatedAmbiguously, this, toggleMinimalModeShortcut);
+    connect(minimalShortcut, &QShortcut::activated,
+            this, &MainWindow::toggleMinimalModeFromAction);
+    connect(minimalShortcut, &QShortcut::activatedAmbiguously,
+            this, &MainWindow::toggleMinimalModeFromAction);
 
     // Ctrl+Shift+A — starstruck easter egg: toggles pan-drag sound
     auto* starstruckShortcut = new QShortcut(QKeySequence("Ctrl+Shift+A"), this);
@@ -4530,13 +4523,8 @@ void MainWindow::buildUI()
             this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
     connect(m_titleBar, &TitleBar::multiFlexClicked,
             this, &MainWindow::showMultiFlexDialog);
-    connect(m_titleBar, &TitleBar::minimalModeRequested, this, [this]() {
-        toggleMinimalMode(!m_minimalMode);
-        if (m_minimalModeAction) {
-            QSignalBlocker b(m_minimalModeAction);
-            m_minimalModeAction->setChecked(m_minimalMode);
-        }
-    });
+    connect(m_titleBar, &TitleBar::minimalModeRequested,
+            this, &MainWindow::toggleMinimalModeFromAction);
     connect(m_titleBar, &TitleBar::minimalModeWindowedExitRequested, this, [this]() {
         toggleMinimalMode(false);
     });
@@ -8940,6 +8928,15 @@ void MainWindow::toggleAetherialStrip()
     }
 }
 
+void MainWindow::toggleMinimalModeFromAction()
+{
+    toggleMinimalMode(!m_minimalMode);
+    if (m_minimalModeAction) {
+        QSignalBlocker blocker(m_minimalModeAction);
+        m_minimalModeAction->setChecked(m_minimalMode);
+    }
+}
+
 void MainWindow::toggleMinimalMode(bool on)
 {
     // Canvas mode owns the shell; minimal mode owns the window — they
@@ -8951,7 +8948,7 @@ void MainWindow::toggleMinimalMode(bool on)
     // two — and remember to bring it back on the way out.
     if (on && m_workspaceController && m_workspaceController->isEnabled()) {
         m_canvasWasOnBeforeMinimal = true;
-        toggleWorkspaceCanvas(false);
+        toggleWorkspaceCanvas(false, /*preserveEnabledPreference=*/true);
     }
 
     m_minimalMode = on;
@@ -9083,12 +9080,17 @@ void MainWindow::toggleMinimalMode(bool on)
         // and mounting the canvas inside the same turn is the shell-swap
         // hazard the boot and disable paths already dodge (wl_subsurface).
         if (m_canvasWasOnBeforeMinimal) {
-            m_canvasWasOnBeforeMinimal = false;
             QTimer::singleShot(0, this, [this] {
-                if (!m_minimalMode && m_workspaceController
-                    && !m_workspaceController->isEnabled()) {
-                    toggleWorkspaceCanvas(true);
+                // Keep the intent until the deferred activation actually
+                // succeeds.  A scripted re-entry during this event-loop turn
+                // must not consume it and strand the operator in Classic.
+                if (m_minimalMode || !m_workspaceController)
+                    return;
+                if (m_workspaceController->isEnabled()) {
+                    m_canvasWasOnBeforeMinimal = false;
+                    return;
                 }
+                toggleWorkspaceCanvas(true);
             });
         }
     }

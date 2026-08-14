@@ -724,6 +724,7 @@ private:
     // Windows, without the custom frame, or for a maximized/fullscreen blob.
     // (#4328 — see src/gui/WindowGeometryRestore.h.)
     void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
+    void toggleMinimalModeFromAction();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
@@ -789,7 +790,7 @@ private:
 
     // Workspace canvas (RFC #4887 phase 3) — MainWindow_Workspace.cpp.
     void wireWorkspaceCanvas();
-    void toggleWorkspaceCanvas(bool on);
+    void toggleWorkspaceCanvas(bool on, bool preserveEnabledPreference = false);
     QWidget* centralPanWidget() const;
     // One router for band-stack visibility: canvas mode hosts the panel as
     // a canvas item, classic mode shows it inside the stack (#4887 ph 4).
