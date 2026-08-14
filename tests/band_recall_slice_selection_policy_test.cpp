@@ -116,6 +116,51 @@ int main()
     check(onlyFallbackAsserts,
           "only topology fallback asserts active=1 outside a recall");
 
+    // Wire-level simulation of MainWindow slice adoption sequence on connect.
+    // Slice 0 arrives first (inactive), then Slice 1 arrives (active on radio).
+    {
+        int activeSliceId = -1;
+        bool activeCommandSent = false;
+
+        auto processSliceAdded = [&](int sliceId, bool isRadioActive,
+                                     RadioSliceSelectionSource firstSliceSource) {
+            const bool firstSlice = (activeSliceId < 0);
+            if (firstSlice) {
+                const auto decision =
+                    radioSliceSelectionDecision(false, firstSliceSource);
+                activeSliceId = sliceId;
+                if (!decision.suppressActiveCommand) {
+                    activeCommandSent = true;
+                }
+            }
+            if (isRadioActive && sliceId != activeSliceId) {
+                const auto decision = radioSliceSelectionDecision(
+                    false, RadioSliceSelectionSource::ActiveStatus);
+                activeSliceId = sliceId;
+                if (!decision.suppressActiveCommand) {
+                    activeCommandSent = true;
+                }
+            }
+        };
+
+        // 1. Correct behavior with InitialEnumeration:
+        processSliceAdded(0, false, RadioSliceSelectionSource::InitialEnumeration);
+        processSliceAdded(1, true, RadioSliceSelectionSource::InitialEnumeration);
+
+        check(!activeCommandSent,
+              "connect enumeration sends no active=1 command on wire");
+        check(activeSliceId == 1,
+              "connect enumeration converges onto radio-reported active slice");
+
+        // 2. Regression guard: verify that if call site regressed to TopologyFallback,
+        // an active=1 command WOULD be emitted on slice 0.
+        activeSliceId = -1;
+        activeCommandSent = false;
+        processSliceAdded(0, false, RadioSliceSelectionSource::TopologyFallback);
+        check(activeCommandSent,
+              "regression guard: TopologyFallback on connect would improperly send active=1");
+    }
+
     if (failures == 0) {
         std::printf("\nAll band-recall slice-selection policy tests passed.\n");
         return 0;

@@ -1661,10 +1661,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // order may end with a different slice active (often last-created),
         // and that slice may not exist client-side yet (it arrives in a later
         // status frame). Asserting here would clobber that live status and
-        // make first-enumerated always win.
-        // Note: For mid-session creation when m_activeSliceId < 0, Flex firmware
-        // always emits an active=1 status message for newly created slices,
-        // which activeChanged picks up automatically when it arrives.
+        // make first-enumerated always win. The adoption check later in
+        // onSliceAdded() reads s->isActive() as subsequent slices arrive, so the
+        // client converges on the radio-authoritative active slice.
         selectSliceFromRadioState(
             s, RadioSliceSelectionSource::InitialEnumeration);
 
