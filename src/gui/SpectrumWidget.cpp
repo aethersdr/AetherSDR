@@ -1742,6 +1742,68 @@ QVariantMap SpectrumWidget::automationDssSetScrollback(bool live,
     return snap;
 }
 
+QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
+{
+    // Grouped in the same order as the Display panel's headers so a failing
+    // field points straight at the control that owns it. Colours are hex
+    // strings (`#rrggbb`) — the same spelling AppSettings persists, so a
+    // bridge assertion and a settings dump compare byte-for-byte.
+    QVariantMap snap;
+    snap[QStringLiteral("panIndex")] = m_panIndex;
+    snap[QStringLiteral("objectName")] = objectName();
+
+    // PANADAPTER
+    snap[QStringLiteral("fftAverage")] = m_fftAverage;
+    snap[QStringLiteral("fftFps")] = m_fftFps;
+    snap[QStringLiteral("fftWeightedAvg")] = m_fftWeightedAvg;
+    snap[QStringLiteral("fftHeatMap")] = m_fftHeatMap;
+    snap[QStringLiteral("showGrid")] = m_showGrid;
+    snap[QStringLiteral("fftLineWidth")] = m_fftLineWidth;
+    snap[QStringLiteral("fftLineColor")] = m_fftLineColor.name();
+    snap[QStringLiteral("fftFillAlpha")] = m_fftFillAlpha;
+    snap[QStringLiteral("fftFillColor")] = m_fftFillColor.name();
+    snap[QStringLiteral("noiseFloorEnable")] = m_noiseFloorEnable;
+    snap[QStringLiteral("noiseFloorPosition")] = m_noiseFloorPosition;
+
+    // WATERFALL
+    snap[QStringLiteral("wfBlankerEnabled")] = m_wfBlankerEnabled;
+    snap[QStringLiteral("wfBlankerThreshold")] = m_wfBlankerThreshold;
+    snap[QStringLiteral("wfBlankerMode")] = m_wfBlankerMode;
+    snap[QStringLiteral("wfBlackLevel")] = m_wfBlackLevel;
+    snap[QStringLiteral("wfAutoBlack")] = m_wfAutoBlack;
+    snap[QStringLiteral("wfAutoBlackOffset")] = m_wfAutoBlackOffset;
+    // Intent and effect are separate on purpose (#4606): a clone must copy the
+    // intent, while what renders is the intent masked by this radio.
+    snap[QStringLiteral("wfAutoBlackRadioSide")] = m_wfAutoBlackRadioSide;
+    snap[QStringLiteral("effectiveWfAutoBlackRadioSide")] =
+        effectiveWfAutoBlackRadioSide();
+    snap[QStringLiteral("wfColorGain")] = m_wfColorGain;
+    snap[QStringLiteral("wfLineDuration")] = m_wfLineDuration;
+
+    // BACKGROUND
+    snap[QStringLiteral("backgroundImage")] = m_bgImagePath;
+    snap[QStringLiteral("backgroundOpacity")] = m_bgOpacity;
+    snap[QStringLiteral("backgroundFillColor")] = m_bgFillColor.name();
+
+    // APPEARANCE
+    snap[QStringLiteral("freqGridSpacing")] = m_freqGridSpacingKhz;
+    snap[QStringLiteral("freqScaleFontPt")] = m_freqScaleFontPt;
+    snap[QStringLiteral("wfColorScheme")] = static_cast<int>(m_wfColorScheme);
+
+    // 3D VIEW
+    snap[QStringLiteral("spectrumRenderMode")] =
+        static_cast<int>(m_spectrumRenderMode);
+    snap[QStringLiteral("dssFloorDepth")] = dssFloorDepth();
+    snap[QStringLiteral("dssGain")] = m_dssGain;
+    snap[QStringLiteral("dssRowSpan")] = m_dssRowSpanPct;
+
+    // Which display source the per-source values above resolved from, so a
+    // Flex-vs-Kiwi mismatch reads as a labelled difference rather than a
+    // mysterious floor-depth failure.
+    snap[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
+    return snap;
+}
+
 QVariantMap SpectrumWidget::traceDebugSnapshot()
 {
     const auto vectorStats = [this](const QVector<float>& bins) {

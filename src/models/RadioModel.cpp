@@ -13,6 +13,7 @@
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
+#include "core/ShutdownTrace.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceModeRegistry.h"
 #include "core/DigitalVoiceWaveformProcess.h"
@@ -1703,6 +1704,39 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->setTxPower(percent);
     });
 
+    // The CW pitch to a backend that owns its own demodulator.
+    //
+    // Not a transmit setting for these radios. When we demodulate, the pitch IS
+    // the receiver's BFO — the offset that turns a signal sitting on the marker
+    // into an audible tone — so a backend that never learns it has no way to
+    // put its CW passband where the operator is looking. See
+    // IRadioBackend::setCwPitch().
+    //
+    // cwPitchChanged, not phoneStateChanged: the latter is the bulk-update
+    // signal and fires on every unrelated TX edit, which would re-push the
+    // pitch (and with it a passband and shift rebuild on every CW receiver)
+    // for a mic-gain change.
+    //
+    // Gated off the Flex command plane like every other seam setter here: a
+    // Flex already has `cw pitch` as text from TransmitModel and applies the
+    // BFO on-radio.
+    connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
+            [this](int hz) {
+        if (m_backend && !usesFlexCommandPlane())
+            m_backend->setCwPitch(hz);
+    });
+
+    // And on connect, for the same reason the power push above exists:
+    // cwPitchChanged fires on edges, so a session that never touches the pitch
+    // would leave a host-demodulating backend on its own construction-time
+    // default. Those agree today (both 600 Hz), which is precisely why the
+    // disagreement would be invisible the first time either one moves.
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) {
+        if (connected && m_backend && !usesFlexCommandPlane())
+            m_backend->setCwPitch(m_transmitModel.cwPitch());
+    });
+
     // The speech processor to a backend that owns its own compressor.
     //
     // HERE, not in setupBackend(): m_transmitModel is a RadioModel value member,
@@ -2150,6 +2184,7 @@ RadioModel::~RadioModel()
     // their worker threads: ~FlexBackend runs the exact #502 teardown ordering
     // (BlockingQueued disconnect/stop → deleteLater → thread quit/wait) that
     // used to live here. (aetherd 2.2b)
+    ShutdownTrace trace("radio.backend.destroy");
     teardownBackend();
 }
 

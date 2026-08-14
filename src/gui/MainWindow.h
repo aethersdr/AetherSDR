@@ -684,6 +684,11 @@ private:
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
+    // Display panel → "Clone to all Pans". Copies every Display setting from
+    // `source` onto every other open panadapter (client-side appearance via the
+    // SpectrumWidget setters that persist it, radio-authoritative values via the
+    // same commands the live sliders send). Returns how many pans were written.
+    int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -724,6 +729,7 @@ private:
     // Windows, without the custom frame, or for a maximized/fullscreen blob.
     // (#4328 — see src/gui/WindowGeometryRestore.h.)
     void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
+    void toggleMinimalModeFromAction();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
@@ -789,7 +795,7 @@ private:
 
     // Workspace canvas (RFC #4887 phase 3) — MainWindow_Workspace.cpp.
     void wireWorkspaceCanvas();
-    void toggleWorkspaceCanvas(bool on);
+    void toggleWorkspaceCanvas(bool on, bool preserveEnabledPreference = false);
     QWidget* centralPanWidget() const;
     // One router for band-stack visibility: canvas mode hosts the panel as
     // a canvas item, classic mode shows it inside the stack (#4887 ph 4).
@@ -1655,6 +1661,7 @@ private:
     // that never went near a host-modulating backend.
     bool m_hostVoiceChainOwned{false};
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
+    bool m_canvasWasOnBeforeMinimal{false}; // minimal exit restores canvas mode
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)
     bool m_startupGeometryReapplied{false};

@@ -245,6 +245,34 @@ int main(int argc, char** argv)
     backend.setSliceFilter(0, 300, 2700);
     check(sliceCount >= sliceBefore + 3, "freq/mode/filter each emit sliceChanged");
 
+    // ---- CW reports a passband CENTRED on the marker ----
+    //
+    // The operator-facing half of the CW BFO split (the audio half is
+    // hl2_cw_bfo_test). What the seam reports is what the panadapter draws, so
+    // an asymmetric pair here is a skirt drawn off to one side of the marker —
+    // the shape of the bug this pins. Both CW modes report the SAME cuts:
+    // the sideband lives in the BFO now, not in the sign of the filter.
+    int cwLow = 0, cwHigh = 0;
+    auto captureFilter = QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                                          &backend, [&](int, const SliceDelta& d) {
+        if (d.filterLow)  cwLow  = *d.filterLow;
+        if (d.filterHigh) cwHigh = *d.filterHigh;
+    });
+    backend.setSliceMode(0, QStringLiteral("CW"));
+    check(cwLow == -cwHigh && cwHigh > 0,
+          "CW passband is symmetric about the marker");
+    const int cwuLow = cwLow, cwuHigh = cwHigh;
+    backend.setSliceMode(0, QStringLiteral("CWL"));
+    check(cwLow == cwuLow && cwHigh == cwuHigh,
+          "CWL reports the same carrier-relative cuts as CWU");
+    // Changing the pitch must NOT move the operator's cuts: they are measured
+    // from the marker, so a 500 Hz filter stays a 500 Hz filter on any pitch.
+    backend.setCwPitch(700);
+    check(cwLow == cwuLow && cwHigh == cwuHigh,
+          "a pitch change leaves the operator's CW cuts alone");
+    QObject::disconnect(captureFilter);
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+
     // ---- keying does not disturb the link ----
     // Whether this actually keys depends on the transmit gate above; what
     // matters here is that asking does not upset the connection either way.

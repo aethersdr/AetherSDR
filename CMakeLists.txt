@@ -3132,6 +3132,14 @@ target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
 
+# CW BFO geometry: the marker sits on the signal, the pitch comes from the
+# detector's zero. Companion to hl2_shift_test — same synthetic-tone harness,
+# one more offset in the chain.
+add_executable(hl2_cw_bfo_test tests/hl2_cw_bfo_test.cpp)
+target_include_directories(hl2_cw_bfo_test PRIVATE src)
+target_link_libraries(hl2_cw_bfo_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_cw_bfo_test COMMAND hl2_cw_bfo_test)
+
 add_executable(hl2_notch_seed_test tests/hl2_notch_seed_test.cpp)
 target_include_directories(hl2_notch_seed_test PRIVATE src)
 target_link_libraries(hl2_notch_seed_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4227,6 +4235,16 @@ add_executable(spot_mode_resolver_test
 target_include_directories(spot_mode_resolver_test PRIVATE src)
 target_link_libraries(spot_mode_resolver_test PRIVATE Qt6::Core)
 add_test(NAME spot_mode_resolver_test COMMAND spot_mode_resolver_test)
+
+# SpotHub's newest-spot-follows-the-viewport decision (#4889), header-only
+# and dependency-free by design so it's testable without DxClusterDialog's
+# full client/model dependency graph.
+add_executable(spot_auto_scroll_test
+    tests/spot_auto_scroll_test.cpp
+)
+target_include_directories(spot_auto_scroll_test PRIVATE src)
+target_link_libraries(spot_auto_scroll_test PRIVATE Qt6::Core)
+add_test(NAME spot_auto_scroll_test COMMAND spot_auto_scroll_test)
 
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp

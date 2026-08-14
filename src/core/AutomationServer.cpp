@@ -2618,6 +2618,7 @@ const QStringList& getModelNames()
         QStringLiteral("gps"),        QStringLiteral("clock"),
         QStringLiteral("renderstats"),
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
+        QStringLiteral("display"),
         QStringLiteral("waveforms"),
         QStringLiteral("kiwi"),
     };
@@ -5046,6 +5047,72 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         }
         return out;
     }
+    if (model == QLatin1String("display")) {
+        // Per-panadapter Display-panel settings, so a preference change can be
+        // asserted field-by-field instead of eyeballed. "Clone to all Pans"
+        // proves itself by reading this twice and diffing the pans.
+        // GUI-header-free: snapshotted via meta-call, same as panstats.
+        bool selectorIsIndex = false;
+        const int wantIndex = selector.toInt(&selectorIsIndex);
+        // Collect first, emit second: an unknown property must be rejected
+        // once, up front, rather than after entries for the earlier pans have
+        // already been built — that is how the other models read.
+        QVector<QVariantMap> snaps;
+        // A floated container is reachable from two top-level roots, so the
+        // class walk can yield the same widget twice — dedupe by pointer.
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            if (!selector.isEmpty() && !selectorIsIndex
+                && w->objectName() != selector) {
+                continue;
+            }
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(
+                    w, "automationDisplaySettingsSnapshot", Qt::DirectConnection,
+                    Q_RETURN_ARG(QVariantMap, snap))) {
+                continue;
+            }
+            if (!selector.isEmpty() && selectorIsIndex
+                && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
+                continue;
+            }
+            snaps.append(snap);
+        }
+        // Every pan carries the same field set, so the first is enough to
+        // validate against. With no pan matched there is nothing to check the
+        // name against, so an empty `pans` is the honest answer.
+        if (!property.isEmpty() && !snaps.isEmpty()
+            && !snaps.first().contains(property)) {
+            return err(QStringLiteral("unknown property '") + property
+                       + QStringLiteral("' for display"));
+        }
+        QJsonArray pans;
+        for (const QVariantMap& snap : snaps) {
+            if (property.isEmpty()) {
+                pans.append(QJsonObject::fromVariantMap(snap));
+                continue;
+            }
+            pans.append(QJsonObject{
+                {QStringLiteral("panIndex"),
+                 snap.value(QStringLiteral("panIndex")).toInt()},
+                {QStringLiteral("objectName"),
+                 snap.value(QStringLiteral("objectName")).toString()},
+                {property, QJsonValue::fromVariant(snap.value(property))}});
+        }
+        QJsonObject out{{QStringLiteral("ok"), true},
+                        {QStringLiteral("model"), model},
+                        {QStringLiteral("pans"), pans}};
+        if (!property.isEmpty()) {
+            out[QStringLiteral("property")] = property;
+        }
+        return out;
+    }
     if (model == QLatin1String("tracedebug")) {
         // Per-panadapter trace/floor state from SpectrumWidget. This keeps the
         // bridge GUI-header-free while exposing enough state to compare Flex
@@ -5331,7 +5398,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|clients|kiwi|wavestats|clock)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|display|clients|kiwi|wavestats|clock)"));
     }
 
     if (!property.isEmpty()) {

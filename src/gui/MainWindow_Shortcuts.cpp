@@ -1226,6 +1226,14 @@ void MainWindow::registerShortcutActions()
         QKeySequence(Qt::Key_Minus), [this]() { zoomActivePanadapter(kPanZoomFactor); });
     m_shortcutManager.registerAction("open_memories", "Open Memories Dialog", "Display",
         QKeySequence(Qt::Key_Slash), [this]() { showMemoryDialog(); });
+    // No key sequence: Ctrl+M lives as an application QShortcut in
+    // MainWindow.cpp (it must work with the menu bar hidden, which is
+    // minimal mode's whole situation).  Registering the ACTION makes the
+    // toggle reachable for MIDI bindings and the bridge's `shortcut`
+    // verb — until now nothing could drive minimal mode programmatically,
+    // which is also why the canvas-vs-minimal handoff went untested.
+    m_shortcutManager.registerAction("minimal_mode", "Minimal Mode Toggle", "Display",
+        QKeySequence(), [this]() { toggleMinimalModeFromAction(); });
 
     // ── RIT/XIT ─────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("rit_toggle", "RIT Toggle", "RIT/XIT",

@@ -3,6 +3,7 @@
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
 #include "TxCaptureBuffer.h"
+#include "ShutdownTrace.h"
 #include "ClientEq.h"
 #include "ClientComp.h"
 #include "ClientGate.h"
@@ -2602,7 +2603,9 @@ AudioEngine::AudioEngine(QObject* parent)
 
 AudioEngine::~AudioEngine()
 {
+    ShutdownTrace destructorTrace("audio.destructor");
     {
+        ShutdownTrace trace("audio.dsp_initialization.join");
         std::lock_guard<std::mutex> lock(m_dspInitializationTasksMutex);
         m_dspInitializationStopping = true;
         m_dspInitializationTasks.waitForFinished();

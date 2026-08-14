@@ -267,7 +267,25 @@ int main(int argc, char** argv)
                rx->isPanelDocked() && !rx->isOnCanvas());
     }
 
-    // ── Disable: everything returns, placement is kept ───────────────────
+    // ── Temporary disable: relaunch still restores canvas ────────────────
+    {
+        ctl.disable(WorkspaceController::DisablePersistence::PreserveEnabled);
+        report("temporary disable reports disabled", !ctl.isEnabled());
+        report("...but preserves the enabled preference on disk",
+               storedDocument().contains(QStringLiteral("canvasEnabled")));
+        {
+            QWidget restartPanel;
+            ContainerManager restartManager(&restartPanel);
+            WorkspaceCanvas restartCanvas;
+            WorkspaceController restartProbe(&restartManager, &restartCanvas);
+            report("...so a fresh controller restores canvas on relaunch",
+                   restartProbe.boot());
+        }
+        report("re-enable after a temporary handoff succeeds",
+               ctl.enable({"RX", "TX"}));
+    }
+
+    // ── Explicit disable: everything returns, placement is kept ──────────
     {
         ctl.disable();
         report("disable reports disabled", !ctl.isEnabled());

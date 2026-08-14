@@ -426,7 +426,7 @@ void WorkspaceController::placeActiveWorkspaceItems(WorkspaceDocument& doc,
     }
 }
 
-void WorkspaceController::disable()
+void WorkspaceController::disable(DisablePersistence persistence)
 {
     if (!m_enabled) {
         return;
@@ -478,10 +478,13 @@ void WorkspaceController::disable()
     }
 
     // Placement is kept — switching the mode off is not a statement about
-    // any applet — only the flag changes.
-    WorkspaceDocument doc = m_store.document();
-    doc.canvasEnabled = false;
-    m_store.setDocument(doc);
+    // any applet.  Most callers persist the operator's explicit mode change;
+    // temporary shell handoffs (minimal mode) leave that preference intact.
+    if (persistence == DisablePersistence::PersistDisabled) {
+        WorkspaceDocument doc = m_store.document();
+        doc.canvasEnabled = false;
+        m_store.setDocument(doc);
+    }
     m_store.flush();
 
     m_enabled = false;

@@ -19,6 +19,7 @@
 #include "TitleBar.h"
 #include "containers/ContainerManager.h"
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
 #include "workspace/WorkspaceCanvas.h"
 #include "workspace/WorkspaceController.h"
 #include "workspace/WorkspaceWindow.h"
@@ -307,12 +308,32 @@ void MainWindow::wireWorkspaceCanvas()
     }
 }
 
-void MainWindow::toggleWorkspaceCanvas(bool on)
+void MainWindow::toggleWorkspaceCanvas(bool on, bool preserveEnabledPreference)
 {
     if (!m_workspaceController || !m_splitter || !m_panStack) {
         return;
     }
-    if (on == m_workspaceController->isEnabled()) {
+    if (!on && !m_workspaceController->isEnabled()) {
+        // An explicit off request cancels any deferred resume intent, even
+        // while minimal mode already has the canvas temporarily suspended.
+        m_canvasWasOnBeforeMinimal = false;
+        return;
+    }
+
+    if (on && m_minimalMode) {
+        // Minimal mode has the splitter hidden and the panel reparented
+        // into the central layout — mounting the canvas into that shell
+        // would wedge both.  The View menu is unreachable in minimal
+        // mode; this guards the bridge and any future caller.
+        m_canvasWasOnBeforeMinimal = true;
+        const QString message =
+            tr("Workspace canvas will resume after leaving minimal mode");
+        qCWarning(lcGui).noquote() << message;
+        statusBar()->showMessage(message, 5000);
+        if (m_workspaceCanvasAction) {
+            QSignalBlocker blocker(m_workspaceCanvasAction);
+            m_workspaceCanvasAction->setChecked(false);
+        }
         return;
     }
 
@@ -387,6 +408,7 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
                 tr("Workspace canvas unavailable: %1").arg(whyNot), 8000);
             return;
         }
+        m_canvasWasOnBeforeMinimal = false;
 
         if (bandStackWasVisible) {
             m_workspaceController->setBandStackVisible(true);
@@ -428,7 +450,10 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
     // splitter takes the stack back, and the operator's saved pan layout is
     // re-applied so Classic comes back as the arrangement it was, not as a
     // flat column of whatever order the returns happened in.
-    m_workspaceController->disable();
+    m_workspaceController->disable(
+        preserveEnabledPreference
+            ? WorkspaceController::DisablePersistence::PreserveEnabled
+            : WorkspaceController::DisablePersistence::PersistDisabled);
 
     // The stack is a CHILD of the canvas while the mode is on, so it steps
     // to this window first (one-step, same-top-level — never through
@@ -473,7 +498,11 @@ void MainWindow::toggleWorkspaceCanvas(bool on)
             QTimer::singleShot(0, this, [this] {
                 if (m_workspaceController
                     && !m_workspaceController->isEnabled()
-                    && !m_appletPanelFloatWindow) {
+                    && !m_appletPanelFloatWindow
+                    // Canvas-exit-into-minimal (one smooth motion): the
+                    // panel now lives in the minimal window — popping it
+                    // out a turn later would empty that window again.
+                    && !m_minimalMode) {
                     toggleAppletPanelFloating(true);
                 }
             });

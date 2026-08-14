@@ -23,7 +23,9 @@
 #include <QLoggingCategory>
 #include <QPointer>
 
+#include <algorithm>
 #include <cstdint>
+#include <tuple>
 #include <utility>
 
 // Hl2Backend.h seeds m_alcHoldBelowDbfs with a literal because it can only
@@ -225,12 +227,23 @@ std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept
     if (u == QLatin1String("LSB"))  return {-2900, -100};
     if (u == QLatin1String("DIGU")) return {150, 3000};
     if (u == QLatin1String("DIGL")) return {-3000, -150};
-    // CW: 500 Hz around the conventional 600 Hz pitch. The pitch itself is a
-    // client-side setting the backend is not told about, so this is the
-    // default-pitch case; an operator running another pitch retunes the filter
-    // and that edit survives until the next mode change.
-    if (u == QLatin1String("CWU") || u == QLatin1String("CW")) return {350, 850};
-    if (u == QLatin1String("CWL"))  return {-850, -350};
+    // CW: 500 Hz CENTRED ON THE CARRIER, both sidebands, because in CW the
+    // operator-facing passband is measured from the signal and not from the
+    // audio it becomes. The pitch offset lives in the BFO (cwBfoHz) instead —
+    // see the note there — so CWU and CWL share one table entry and differ only
+    // in which way the BFO leans.
+    //
+    // This is the convention the rest of the app already assumes:
+    // VfoWidget::applyFilterPreset builds every CW preset as {-w/2, +w/2}
+    // ("centred on carrier — radio's BFO handles pitch offset"), and a Flex
+    // reports CW cuts the same way (FlexLib Slice.cs clamps them to
+    // ±12000 - CWPitch, which only makes sense for cuts measured from the
+    // carrier). Returning {350, 850} here put the passband skirt a whole pitch
+    // to the RIGHT of the marker on the panadapter and, worse, meant the
+    // gateware transmitted a CW carrier at the marker while the receiver
+    // listened 600 Hz above it.
+    if (u == QLatin1String("CWU") || u == QLatin1String("CW")
+        || u == QLatin1String("CWL")) return {-250, 250};
     // Carrier-straddling modes: symmetric about the carrier, which the envelope
     // and synchronous detectors both need.
     if (u == QLatin1String("AM") || u == QLatin1String("SAM")) return {-4000, 4000};
@@ -239,6 +252,29 @@ std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept
     if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return {-40000, 40000};
     if (u == QLatin1String("DRM")) return {-5000, 5000};
     return {150, 3000};   // matches modeFromString's USB fallback
+}
+
+// The CW BFO offset for `mode`, in Hz of audio: where a signal sitting exactly
+// on the marker should come out. Positive for upper-sideband CW, negative for
+// lower, zero for every mode that has no BFO.
+//
+// WDSP has no CW mode in the sense a superhet does. SetRXAMode(CWU) does not
+// insert a beat oscillator -- in this chain the NBP edges are what select the
+// sideband (see WdspChannel::setFilter), and the demodulator is a plain
+// direct-conversion detector for every mode. So the pitch has to be produced
+// the same way a real BFO produces it: by offsetting the frequency the detector
+// treats as zero. Everything else follows from that one offset --
+// dspFilterHz() translates the operator's carrier-relative cuts into the audio
+// window, and rxShiftHz() moves the detector's zero so the marker lands on the
+// pitch instead of on DC.
+double cwBfoOffsetHz(const QString& mode, int pitchHz) noexcept
+{
+    const QString u = mode.toUpper();
+    if (u == QLatin1String("CWU") || u == QLatin1String("CW"))
+        return static_cast<double>(pitchHz);
+    if (u == QLatin1String("CWL"))
+        return -static_cast<double>(pitchHz);
+    return 0.0;
 }
 
 // Default TRANSMIT passband per mode, in Hz. POSITIVE for every mode, and that
@@ -814,8 +850,7 @@ bool Hl2Backend::createPanadapter()
     dc.inputSampleRateHz = m_sampleRateHz;
     dc.audioSampleRateHz = 24000;
     dc.mode = modeFromString(r.mode);
-    dc.filterLowHz = r.filterLowHz;
-    dc.filterHighHz = r.filterHighHz;
+    std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
     dc.agcMode = wdspAgcMode(r.agcMode);
     dc.maximumAgcGainDb = r.agcThresholdDb * kAgcCeilingDbPerUnit;
     bool ok = false;
@@ -857,7 +892,7 @@ bool Hl2Backend::createPanadapter()
             Q_ARG(std::uint32_t, ncoCommandHz(r.ncoHz)));
     }
     QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
-        Q_ARG(double, dspShiftHz(r.sliceFreqHz, r.ncoHz)));
+        Q_ARG(double, rxShiftHz(r)));
     // Notches are radio-wide, so a receiver that appears after them has to be
     // brought up to date. Otherwise adding a second panadapter gives you one
     // receiver with the interferer notched out and one without.
@@ -1773,8 +1808,7 @@ void Hl2Backend::beginDspSetup()
         Receiver& r = m_rx[static_cast<std::size_t>(i)];
         Hl2RxDsp::Config dc = m_pendingConnect->dc;
         dc.mode = modeFromString(r.mode);
-        dc.filterLowHz = r.filterLowHz;
-        dc.filterHighHz = r.filterHighHz;
+        std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
         chains.push_back(r.dsp);
         configs.push_back(dc);
     }
@@ -2057,9 +2091,12 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // hl2_shift_test measures exactly that. (This sign is unchanged — it was
     // right all along; what was wrong was the conjugation in Hl2RxDsp, which is
     // why the stage looked correct only in LSB.)
+    //
+    // rxShiftHz(), not dspShiftHz(): in CW the detector's zero is a PITCH away
+    // from the slice, not on it. See the CW BFO note in the header.
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
-            Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
+            Q_ARG(double, rxShiftHz(*r)));
 
     // The TX NCO is a SEPARATE register (addr 0x01) from the RX DDC and does not
     // follow the receiver. Without this the transmit oscillator keeps whatever
@@ -2140,11 +2177,19 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& mode)
     // A sideband bug that reverses itself depending on which mode you came
     // from is exactly what an ordering bug looks like from the operator's seat.
     if (r->dsp) {
+        const auto [dspLo, dspHi] = dspFilterHz(*r);
         QMetaObject::invokeMethod(r->dsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, wdsp));
         QMetaObject::invokeMethod(r->dsp, "setFilter", Qt::QueuedConnection,
-            Q_ARG(double, static_cast<double>(r->filterLowHz)),
-            Q_ARG(double, static_cast<double>(r->filterHighHz)));
+            Q_ARG(double, dspLo), Q_ARG(double, dspHi));
+        // The BFO is part of the mode, so entering or leaving CW moves the
+        // shift as well as the passband. Without this the detector's zero would
+        // still be sitting on the marker from the previous mode: CW would tune
+        // a pitch low, and coming back OUT of CW would leave every other mode
+        // tuned a pitch high, which reads as "the radio is off frequency" long
+        // after the operator has left CW behind.
+        QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
+            Q_ARG(double, rxShiftHz(*r)));
     }
 
     // The transmit sideband follows the slice. Without this, switching to LSB
@@ -2173,9 +2218,15 @@ void Hl2Backend::setSliceFilter(int sliceId, int lowHz, int highHz)
         return;
     r->filterLowHz = lowHz;
     r->filterHighHz = highHz;
-    if (r->dsp)
+    if (r->dsp) {
+        // The operator's cuts are carrier-relative; the demodulator's are not.
+        // Pushing lowHz/highHz straight through would be correct for every mode
+        // except CW and silently wrong there — a dragged filter edge would move
+        // the passband a pitch away from where the operator dropped it.
+        const auto [dspLo, dspHi] = dspFilterHz(*r);
         QMetaObject::invokeMethod(r->dsp, "setFilter", Qt::QueuedConnection,
-            Q_ARG(double, lowHz), Q_ARG(double, highHz));
+            Q_ARG(double, dspLo), Q_ARG(double, dspHi));
+    }
     emitSliceState(ddc);
     notifyOperatingStateChanged();
 }
@@ -2531,7 +2582,7 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
             Q_ARG(std::uint32_t, ncoCommandHz(hz)));
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
-            Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
+            Q_ARG(double, rxShiftHz(*r)));
     // The NCO moved, so the notch axis has to move with it. See the note at the
     // matching site in setSliceFrequency.
     pushNotchTune(*r);
@@ -2688,8 +2739,7 @@ void Hl2Backend::applyPanBandwidth(double hz)
         dc.inputSampleRateHz = m_sampleRateHz;
         dc.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
         dc.mode = modeFromString(r.mode);
-        dc.filterLowHz = r.filterLowHz;
-        dc.filterHighHz = r.filterHighHz;
+        std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
         // Carried through the rebuild rather than reapplied afterwards. A
         // reconfigured channel opens on Config's defaults, so an operator who had
         // moved their AGC would have had it silently snap back to medium/39 dB
@@ -2724,8 +2774,7 @@ void Hl2Backend::applyPanBandwidth(double hz)
                 Hl2RxDsp::Config rc = dc;
                 rc.inputSampleRateHz = previousRate;
                 rc.mode = modeFromString(m_rx[k].mode);
-                rc.filterLowHz = m_rx[k].filterLowHz;
-                rc.filterHighHz = m_rx[k].filterHighHz;
+                std::tie(rc.filterLowHz, rc.filterHighHz) = dspFilterHz(m_rx[k]);
                 rc.agcMode = wdspAgcMode(m_rx[k].agcMode);
                 rc.maximumAgcGainDb = m_rx[k].agcThresholdDb * kAgcCeilingDbPerUnit;
                 std::string backErr;
@@ -2963,6 +3012,63 @@ double Hl2Backend::dspShiftHz(double sliceTrueHz, double ncoTrueHz) const noexce
                                   m_freqCalScale);
 }
 
+double Hl2Backend::cwBfoHz(const QString& mode) const noexcept
+{
+    return cwBfoOffsetHz(mode, m_cwPitchHz);
+}
+
+std::pair<double, double> Hl2Backend::dspFilterHz(const Receiver& r) const noexcept
+{
+    const double bfo = cwBfoHz(r.mode);
+    return {static_cast<double>(r.filterLowHz) + bfo,
+            static_cast<double>(r.filterHighHz) + bfo};
+}
+
+double Hl2Backend::rxShiftHz(const Receiver& r) const noexcept
+{
+    // MINUS the BFO, not plus. The shift names the RF frequency the detector
+    // treats as zero (it is dspShiftHz's whole contract: the value that puts
+    // sliceFreqHz at baseband), so pushing that zero DOWN by a pitch is what
+    // lifts the marker UP onto the pitch. Adding it instead would put the
+    // marker a pitch below zero — audible, on the wrong sideband, and exactly
+    // the sort of sign error that hides behind a filter that was slid the same
+    // wrong way.
+    //
+    // Unscaled by the frequency calibration on purpose: this term is an audio
+    // offset, not an RF frequency. Scaling it would be applying a crystal
+    // correction to the operator's sidetone pitch.
+    return dspShiftHz(r.sliceFreqHz, r.ncoHz) - cwBfoHz(r.mode);
+}
+
+void Hl2Backend::setCwPitch(int hz)
+{
+    // TransmitModel's own range. Clamped again rather than trusted: this is a
+    // seam, and a pitch of 0 would silently turn CW back into the
+    // marker-on-DC geometry this whole path exists to remove.
+    hz = std::clamp(hz, 100, 6000);
+    if (hz == m_cwPitchHz)
+        return;
+    m_cwPitchHz = hz;
+
+    // Re-push every CW receiver. The pitch moves the BFO, and the BFO is baked
+    // into BOTH the shift and the demodulator's passband, so a pitch change
+    // that only re-sent one of them would leave the filter and the detector
+    // disagreeing — the operator would hear the tone move and the signal fade.
+    //
+    // The operator's own cuts are untouched: they are carrier-relative, so a
+    // 500 Hz filter stays a 500 Hz filter centred on the marker whatever the
+    // pitch is. That is the point of keeping the two domains apart.
+    for (Receiver& r : m_rx) {
+        if (!r.dsp || cwBfoHz(r.mode) == 0.0)
+            continue;
+        const auto [lo, hi] = dspFilterHz(r);
+        QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
+            Q_ARG(double, rxShiftHz(r)));
+        QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
+            Q_ARG(double, lo), Q_ARG(double, hi));
+    }
+}
+
 void Hl2Backend::repushAllFrequencies()
 {
     if (!m_metis)
@@ -2976,7 +3082,7 @@ void Hl2Backend::repushAllFrequencies()
             Q_ARG(std::uint32_t, ncoCommandHz(r->ncoHz)));
         if (r->dsp)
             QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
-                Q_ARG(double, dspShiftHz(r->sliceFreqHz, r->ncoHz)));
+                Q_ARG(double, rxShiftHz(*r)));
     }
     // The transmit oscillator does not follow a receiver on its own — it is a
     // separate register that only setTxFrequency() writes. Omitting it here
@@ -3693,6 +3799,43 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         valid.filterLowHz = state.filterLowHz;
         valid.filterHighHz = state.filterHighHz;
     }
+    // PRE-#4914 CW DOCUMENTS, dropped rather than replayed.
+    //
+    // #4914 changed what filterLowHz/HighHz MEAN for CW: they are now measured
+    // from the carrier ({-250, 250}) instead of from the audio the carrier
+    // becomes ({350, 850} at a 600 Hz pitch). Passband is a declared
+    // clientSettingsDomain for this backend, so an operator who last quit in CW
+    // has the old-domain pair on disk right now, and nothing above rejects it —
+    // the pair is ordered and inside ±12 kHz.
+    //
+    // Replayed, dspFilterHz() adds the BFO to a value that already had it:
+    //
+    //     stored {350, 850} + BFO 600  ->  DSP {950, 1450}
+    //     the marker's tone lands at   ->  +600 Hz
+    //     600 is outside {950, 1450}   ->  silence on the marker
+    //
+    // and notifyOperatingStateChanged() then writes the bad pair straight back,
+    // so it never heals. setSliceMode()'s default adoption does not rescue it
+    // either: that fires only when the mode CHANGES, and the restore arrives
+    // already in CW.
+    //
+    // The test is exact rather than heuristic. In the new domain a CW passband
+    // must CONTAIN the carrier, because every producer builds it that way —
+    // defaultPassbandForMode() returns {-250, 250} and
+    // VfoWidget::applyFilterPreset builds {-w/2, +w/2}. So a CW pair sitting
+    // entirely to one side of zero is a pre-#4914 document, with no false
+    // positives. Drop it and let pushInitialState() derive the mode default;
+    // the next capture writes the new-domain value and the document heals.
+    if (cwBfoOffsetHz(valid.mode, m_cwPitchHz) != 0.0
+        && !(valid.filterLowHz < 0.0 && valid.filterHighHz > 0.0))
+    {
+        const auto [lo, hi] = defaultPassbandForMode(valid.mode);
+        qCInfo(lcHl2) << "HL2: dropping pre-#4914 CW passband"
+                      << valid.filterLowHz << ".." << valid.filterHighHz
+                      << "for" << valid.mode << "-> mode default" << lo << ".." << hi;
+        valid.filterLowHz  = static_cast<double>(lo);
+        valid.filterHighHz = static_cast<double>(hi);
+    }
     if (state.sampleRateHz > 0)
         valid.sampleRateHz = nearestIqSampleRateHz(state.sampleRateHz);
 
@@ -4006,11 +4149,16 @@ void Hl2Backend::pushInitialState()
     for (Receiver& r : m_rx) {
         if (!r.dsp)
             continue;
+        const auto [dspLo, dspHi] = dspFilterHz(r);
         QMetaObject::invokeMethod(r.dsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(r.mode)));
         QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
-            Q_ARG(double, static_cast<double>(r.filterLowHz)),
-            Q_ARG(double, static_cast<double>(r.filterHighHz)));
+            Q_ARG(double, dspLo), Q_ARG(double, dspHi));
+        // Restoring straight into CW gets its BFO here. addReceiver() already
+        // set a shift, but from the mode the receiver was CONSTRUCTED with —
+        // and the restored mode arrives after that.
+        QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
+            Q_ARG(double, rxShiftHz(r)));
         QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
             Q_ARG(bool, false));
         // The notch axis, which is measured from the NCO and defaults to ZERO.

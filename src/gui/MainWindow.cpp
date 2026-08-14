@@ -38,6 +38,7 @@
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
+#include "core/ShutdownTrace.h"
 #include "core/PerfTelemetry.h"
 #include "core/PeripheralSettings.h"
 #include "core/VoiceSignalDetector.h"
@@ -1564,17 +1565,10 @@ MainWindow::MainWindow(QWidget* parent)
     auto* minimalShortcut = new QShortcut(QKeySequence("Ctrl+M"), this);
     minimalShortcut->setContext(Qt::ApplicationShortcut);
     minimalShortcut->setAutoRepeat(false);
-    const auto toggleMinimalModeShortcut = [this]() {
-        bool next = !m_minimalMode;
-        // Sync the menu action (with blocker to avoid double-toggle)
-        if (m_minimalModeAction) {
-            QSignalBlocker b(m_minimalModeAction);
-            m_minimalModeAction->setChecked(next);
-        }
-        toggleMinimalMode(next);
-    };
-    connect(minimalShortcut, &QShortcut::activated, this, toggleMinimalModeShortcut);
-    connect(minimalShortcut, &QShortcut::activatedAmbiguously, this, toggleMinimalModeShortcut);
+    connect(minimalShortcut, &QShortcut::activated,
+            this, &MainWindow::toggleMinimalModeFromAction);
+    connect(minimalShortcut, &QShortcut::activatedAmbiguously,
+            this, &MainWindow::toggleMinimalModeFromAction);
 
     // Ctrl+Shift+A — starstruck easter egg: toggles pan-drag sound
     auto* starstruckShortcut = new QShortcut(QKeySequence("Ctrl+Shift+A"), this);
@@ -2538,6 +2532,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
     preparePanadapterUiForShutdown();
 
@@ -2546,6 +2541,7 @@ MainWindow::~MainWindow()
     // them down while MainWindow members are still alive instead of waiting for
     // QWidget child cleanup after member destruction.
     if (m_kiwiSdrManager) {
+        ShutdownTrace trace("kiwi.manager.destroy");
         QObject::disconnect(m_kiwiSdrManager, nullptr, this, nullptr);
         if (m_audio) {
             QObject::disconnect(m_kiwiSdrManager, nullptr, m_audio, nullptr);
@@ -2558,7 +2554,10 @@ MainWindow::~MainWindow()
     // Stop the CWX sidetone keyer (its own worker thread) before AudioEngine is
     // torn down below — its onKeyDownChange callback touches m_audio->cwSidetone()
     // (#3623). reset() joins the worker, so no key edge can fire afterward.
-    m_cwxLocalKeyer.reset();
+    {
+        ShutdownTrace trace("cwx.keyer.destroy");
+        m_cwxLocalKeyer.reset();
+    }
 
 #ifdef HAVE_RADE
     if (m_radeSliceId >= 0)
@@ -2580,6 +2579,7 @@ MainWindow::~MainWindow()
     // UAF pattern as m_networkDiagnosticsDialog above. Tear it down now
     // while AudioEngine is still alive.
     if (m_ax25HfPacketDecodeDialog) {
+        ShutdownTrace trace("ax25.dialog.destroy");
         delete m_ax25HfPacketDecodeDialog.data();
         m_ax25HfPacketDecodeDialog = nullptr;
     }
@@ -2588,22 +2588,32 @@ MainWindow::~MainWindow()
     // Use BlockingQueuedConnection to ensure completion before we proceed.
     if (m_audio && m_audioThread && m_audioThread->isRunning()) {
         AudioEngine* audio = m_audio;
-        QMetaObject::invokeMethod(audio, [audio]() {
-            audio->setNr2Enabled(false);
-            audio->setRn2Enabled(false);
-            audio->setNvAfxEnabled(false);
-            audio->stopRxStream();
-            audio->stopTxStream();
-        }, Qt::BlockingQueuedConnection);
+        {
+            ShutdownTrace trace("audio.stop.invoke");
+            QMetaObject::invokeMethod(audio, [audio]() {
+                ShutdownTrace workerTrace("audio.stop.worker");
+                audio->setNr2Enabled(false);
+                audio->setRn2Enabled(false);
+                audio->setNvAfxEnabled(false);
+                audio->stopRxStream();
+                audio->stopTxStream();
+            }, Qt::BlockingQueuedConnection);
+        }
         audio->deleteLater();
-        m_audioThread->quit();
-        m_audioThread->wait(3000);
+        {
+            ShutdownTrace trace("audio.thread.join");
+            m_audioThread->quit();
+            if (!m_audioThread->wait(3000))
+                trace.fail("thread_join_timeout");
+        }
     } else {
         delete m_audio;
     }
     if (m_audioThread && m_audioThread->isRunning()) {
+        ShutdownTrace trace("audio.thread.join_retry");
         m_audioThread->quit();
-        m_audioThread->wait(3000);
+        if (!m_audioThread->wait(3000))
+            trace.fail("thread_join_timeout");
     }
     m_audio = nullptr;
 
@@ -2618,7 +2628,10 @@ MainWindow::~MainWindow()
     // back-reference first so no dangling pointer remains in the widget tree.
     if (m_appletPanel && m_appletPanel->tciApplet())
         m_appletPanel->tciApplet()->setTciServer(nullptr);
-    m_session->shutdownTciServer();
+    {
+        ShutdownTrace trace("tci.server.destroy");
+        m_session->shutdownTciServer();
+    }
 #endif
 
     // Stop external controller thread (#502)
@@ -2627,8 +2640,14 @@ MainWindow::~MainWindow()
         // the cross-thread QObject access crash (QSerialPort has thread affinity
         // to m_extCtrlThread; calling close() from main thread hits a fatal assert).
 #ifdef HAVE_SERIALPORT
-        QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->close(); },
-                                  Qt::BlockingQueuedConnection);
+        {
+            ShutdownTrace trace("controllers.serial.close");
+            QMetaObject::invokeMethod(m_serialPort, [this] {
+                ShutdownTrace workerTrace("controllers.serial.close.worker");
+                m_serialPort->close();
+            },
+                                      Qt::BlockingQueuedConnection);
+        }
         // FlexControlManager owns its own QSerialPort.  Close it
         // synchronously on the ExtControllers thread before tearing the
         // thread down — otherwise on Windows the OS handle for the
@@ -2640,19 +2659,31 @@ MainWindow::~MainWindow()
         // TaskManager.  Same pattern as the m_midiControl /
         // m_hidEncoder closes below.
         if (m_flexControl) {
-            QMetaObject::invokeMethod(m_flexControl, &FlexControlManager::close,
+            ShutdownTrace trace("controllers.flex_control.close");
+            QMetaObject::invokeMethod(m_flexControl, [this] {
+                ShutdownTrace workerTrace("controllers.flex_control.close.worker");
+                m_flexControl->close();
+            },
                                       Qt::BlockingQueuedConnection);
         }
 #endif
 #ifdef HAVE_MIDI
         if (m_midiControl) {
-            QMetaObject::invokeMethod(m_midiControl, &MidiControlManager::closePort,
+            ShutdownTrace trace("controllers.midi.close");
+            QMetaObject::invokeMethod(m_midiControl, [this] {
+                ShutdownTrace workerTrace("controllers.midi.close.worker");
+                m_midiControl->closePort();
+            },
                                       Qt::BlockingQueuedConnection);
         }
 #endif
 #ifdef HAVE_HIDAPI
         if (m_hidEncoder) {
-            QMetaObject::invokeMethod(m_hidEncoder, &HidEncoderManager::close,
+            ShutdownTrace trace("controllers.hid.close");
+            QMetaObject::invokeMethod(m_hidEncoder, [this] {
+                ShutdownTrace workerTrace("controllers.hid.close.worker");
+                m_hidEncoder->close();
+            },
                                       Qt::BlockingQueuedConnection);
         }
 #endif
@@ -2669,8 +2700,12 @@ MainWindow::~MainWindow()
             m_midiControl->deleteLater();
         }
 #endif
-        m_extCtrlThread->quit();
-        m_extCtrlThread->wait(3000);
+        {
+            ShutdownTrace trace("controllers.thread.join");
+            m_extCtrlThread->quit();
+            if (!m_extCtrlThread->wait(3000))
+                trace.fail("thread_join_timeout");
+        }
         // Delete ExtControllers objects synchronously after the thread stops.
         // deleteLater() races with quit() and can leave destructors unrun.
         // On macOS, UlanziDialMacOSManager::stop() calls
@@ -2679,7 +2714,10 @@ MainWindow::~MainWindow()
         // the main thread is blocked waiting for the cross-thread call to return.
         // Safe to call directly here: the ExtControllers thread has stopped so
         // there is no race on m_dialBackend's state.
-        if (m_dialBackend) m_dialBackend->stop();
+        if (m_dialBackend) {
+            ShutdownTrace trace("controllers.dial.stop");
+            m_dialBackend->stop();
+        }
         delete m_dialBackend;
         m_dialBackend = nullptr;
 #ifdef HAVE_HIDAPI
@@ -3599,6 +3637,7 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    ShutdownTrace closeEventTrace("main_window.close_event");
     // Release the TGXL/PGXL native control sockets explicitly so the radio
     // can resume polling them on behalf of other clients (e.g. Maestro).
     // The radio-disconnect handler does this via a queued connection on
@@ -3762,7 +3801,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
         deactivateRADE();
 #endif
 
-    m_radioModel.disconnectFromRadio();
+    {
+        ShutdownTrace trace("radio.disconnect");
+        m_radioModel.disconnectFromRadio();
+    }
     audioStopRx();
 
     // Stop spot client worker thread
@@ -3778,26 +3820,74 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
             FreeDvClient* freedvClient = m_freedvClient;
 #endif
-            QMetaObject::invokeMethod(dxCluster, [dxCluster] { dxCluster->disconnect(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(rbnClient, [rbnClient] { rbnClient->disconnect(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] { wsjtxClient->stopListening(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(spotCollectorClient,
-                                      [spotCollectorClient] { spotCollectorClient->stopListening(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(potaClient, [potaClient] { potaClient->stopPolling(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(eibiClient, [eibiClient] { eibiClient->setEnabled(false); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(n1mmSpotClient,
-                                      [n1mmSpotClient] { n1mmSpotClient->stopListening(); },
-                                      Qt::BlockingQueuedConnection);
+            {
+                ShutdownTrace trace("spots.dx_cluster.disconnect");
+                QMetaObject::invokeMethod(dxCluster, [dxCluster] {
+                    ShutdownTrace workerTrace("spots.dx_cluster.disconnect.worker");
+                    dxCluster->disconnect();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.rbn.disconnect");
+                QMetaObject::invokeMethod(rbnClient, [rbnClient] {
+                    ShutdownTrace workerTrace("spots.rbn.disconnect.worker");
+                    rbnClient->disconnect();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.wsjtx.stop");
+                QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] {
+                    ShutdownTrace workerTrace("spots.wsjtx.stop.worker");
+                    wsjtxClient->stopListening();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.collector.stop");
+                QMetaObject::invokeMethod(spotCollectorClient,
+                                          [spotCollectorClient] {
+                    ShutdownTrace workerTrace("spots.collector.stop.worker");
+                    spotCollectorClient->stopListening();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.pota.stop");
+                QMetaObject::invokeMethod(potaClient, [potaClient] {
+                    ShutdownTrace workerTrace("spots.pota.stop.worker");
+                    potaClient->stopPolling();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.eibi.stop");
+                QMetaObject::invokeMethod(eibiClient, [eibiClient] {
+                    ShutdownTrace workerTrace("spots.eibi.stop.worker");
+                    eibiClient->setEnabled(false);
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.n1mm.stop");
+                QMetaObject::invokeMethod(n1mmSpotClient,
+                                          [n1mmSpotClient] {
+                    ShutdownTrace workerTrace("spots.n1mm.stop.worker");
+                    n1mmSpotClient->stopListening();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
 #ifdef HAVE_WEBSOCKETS
-            QMetaObject::invokeMethod(freedvClient,
-                                      [freedvClient] { freedvClient->stopConnection(); },
-                                      Qt::BlockingQueuedConnection);
+            {
+                ShutdownTrace trace("spots.freedv.stop");
+                QMetaObject::invokeMethod(freedvClient,
+                                          [freedvClient] {
+                    ShutdownTrace workerTrace("spots.freedv.stop.worker");
+                    freedvClient->stopConnection();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
 #endif
             dxCluster->deleteLater();
             rbnClient->deleteLater();
@@ -3809,8 +3899,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
             freedvClient->deleteLater();
 #endif
-            m_spotThread->quit();
-            m_spotThread->wait(3000);
+            {
+                ShutdownTrace trace("spots.thread.join");
+                m_spotThread->quit();
+                if (!m_spotThread->wait(3000))
+                    trace.fail("thread_join_timeout");
+            }
         } else {
             delete m_dxCluster;
             delete m_rbnClient;
@@ -4552,13 +4646,8 @@ void MainWindow::buildUI()
             this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
     connect(m_titleBar, &TitleBar::multiFlexClicked,
             this, &MainWindow::showMultiFlexDialog);
-    connect(m_titleBar, &TitleBar::minimalModeRequested, this, [this]() {
-        toggleMinimalMode(!m_minimalMode);
-        if (m_minimalModeAction) {
-            QSignalBlocker b(m_minimalModeAction);
-            m_minimalModeAction->setChecked(m_minimalMode);
-        }
-    });
+    connect(m_titleBar, &TitleBar::minimalModeRequested,
+            this, &MainWindow::toggleMinimalModeFromAction);
     connect(m_titleBar, &TitleBar::minimalModeWindowedExitRequested, this, [this]() {
         toggleMinimalMode(false);
     });
@@ -8964,8 +9053,29 @@ void MainWindow::toggleAetherialStrip()
     }
 }
 
+void MainWindow::toggleMinimalModeFromAction()
+{
+    toggleMinimalMode(!m_minimalMode);
+    if (m_minimalModeAction) {
+        QSignalBlocker blocker(m_minimalModeAction);
+        m_minimalModeAction->setChecked(m_minimalMode);
+    }
+}
+
 void MainWindow::toggleMinimalMode(bool on)
 {
+    // Canvas mode owns the shell; minimal mode owns the window — they
+    // cannot overlap.  Entering minimal from canvas used to reparent an
+    // EMPTY applet panel (every applet lent to the canvas, every pan on
+    // it, inside the splitter minimal is about to hide): a 260 px window
+    // of nothing (8600 field report).  Exit canvas first — synchronously,
+    // inside the same user action, so the operator sees one motion, not
+    // two — and remember to bring it back on the way out.
+    if (on && m_workspaceController && m_workspaceController->isEnabled()) {
+        m_canvasWasOnBeforeMinimal = true;
+        toggleWorkspaceCanvas(false, /*preserveEnabledPreference=*/true);
+    }
+
     m_minimalMode = on;
     auto& s = AppSettings::instance();
 
@@ -9088,6 +9198,26 @@ void MainWindow::toggleMinimalMode(bool on)
         // phantom-caption offset.  Re-anchoring first would just be undone.
         if (restored)
             reanchorCustomFrameGeometry(geom);
+
+        // The round trip ends where it started: minimal entered from
+        // canvas mode returns to canvas mode.  Deferred one event-loop
+        // turn — the splitter was just re-shown and geometry restored,
+        // and mounting the canvas inside the same turn is the shell-swap
+        // hazard the boot and disable paths already dodge (wl_subsurface).
+        if (m_canvasWasOnBeforeMinimal) {
+            QTimer::singleShot(0, this, [this] {
+                // Keep the intent until the deferred activation actually
+                // succeeds.  A scripted re-entry during this event-loop turn
+                // must not consume it and strand the operator in Classic.
+                if (m_minimalMode || !m_workspaceController)
+                    return;
+                if (m_workspaceController->isEnabled()) {
+                    m_canvasWasOnBeforeMinimal = false;
+                    return;
+                }
+                toggleWorkspaceCanvas(true);
+            });
+        }
     }
 
     s.setValue("MinimalModeEnabled", on ? "True" : "False");
