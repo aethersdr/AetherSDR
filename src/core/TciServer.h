@@ -348,7 +348,7 @@ private:
     bool              m_txUseRadioRoute{true};
     float             m_txGain{1.0f};
     OverflowMode      m_overflowMode{OverflowMode::Clip};
-    float             m_rxChannelGain[4]{1.0f, 1.0f, 1.0f, 1.0f};
+    float             m_rxChannelGain[8]{1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     qint64            m_txAudioBlocks{0};
     qint64            m_txInputFrames{0};
     qint64            m_txOutputFrames{0};

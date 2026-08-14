@@ -1,11 +1,53 @@
 #pragma once
 
+#include <QGuiApplication>
 #include <QMouseEvent>
 #include <QPoint>
 #include <QWidget>
 #include <QWindow>
 
 namespace AetherSDR::FramelessMoveHelper {
+
+// QWindow::startSystemMove()/startSystemResize() report success on the xcb
+// platform, but the WM-driven interactive move/resize grab they hand off to
+// is unreliable there (upstream QTBUG-69716) — under at least Mutter/XWayland
+// (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland desktop — the
+// workaround for the native-Wayland panadapter stall, #4725) the request is
+// silently dropped: the press is consumed, but the window never
+// actually tracks the pointer (#4827). Qt's own QSizeGrip hits the same wall
+// and works around it in usePlatformSizeGrip() (qsizegrip.cpp) by refusing
+// the platform path on xcb and dragging the geometry manually instead — the
+// Windows clause below matches that precedent clause for clause (Windows +
+// Qt::WA_TranslucentBackground, QTBUG-90628, flicker combining native resize
+// with a translucent top-level there — which AetherSDR's own MainWindow sets
+// whenever frameless mode is on). The xcb clause does not: Qt's own guard is
+// resize-only, with no equivalent for startSystemMove() anywhere in qtbase.
+// This helper applies its xcb refusal to *both*, which is evidence-backed
+// for #4827's own reported Mutter/XWayland environment (`_NET_WM_MOVERESIZE`
+// demonstrably does nothing there) but also takes the WM-driven move path —
+// and with it edge-snap/tiling gestures, and the _NET_WM_SYNC_REQUEST
+// handshake the FramelessResizer header credits for the absence of its
+// resize-shimmer artifact — away from a plain X11 session (KWin/X11, Xfwm,
+// i3, …) where that grab may work fine and was never tested against this
+// change. Narrowing to XWayland specifically
+// (`qEnvironmentVariableIsSet("WAYLAND_DISPLAY")` alongside the xcb check)
+// is possible without a new dependency if this is ever revisited; left as
+// the broader xcb-wide refusal for now rather than changing move behavior
+// for an environment nobody here could test against.
+// `window` may be null for a caller with no widget handy; the Windows
+// clause then simply doesn't apply, same as if the attribute were unset.
+inline bool systemMoveResizeUnreliable(const QWidget* window)
+{
+    const QString platform = QGuiApplication::platformName();
+    if (platform.contains(QLatin1String("xcb"))) {
+        return true;
+    }
+    if (window && window->testAttribute(Qt::WA_TranslucentBackground)
+        && platform == QLatin1String("windows")) {
+        return true;
+    }
+    return false;
+}
 
 namespace Detail {
 
@@ -41,10 +83,12 @@ inline bool start(QWidget* handle, QMouseEvent* ev)
     }
 
 #ifndef Q_OS_MAC
-    if (QWindow* windowHandle = window->windowHandle()) {
-        if (windowHandle->startSystemMove()) {
-            ev->accept();
-            return true;
+    if (!systemMoveResizeUnreliable(window)) {
+        if (QWindow* windowHandle = window->windowHandle()) {
+            if (windowHandle->startSystemMove()) {
+                ev->accept();
+                return true;
+            }
         }
     }
 #endif

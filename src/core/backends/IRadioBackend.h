@@ -392,6 +392,20 @@ public:
     // implements it.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
+    // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000).
+    //
+    // A sidetone setting on a radio that keys itself; a TUNING setting on a
+    // radio whose demodulator we own. The CW convention every client shares is
+    // that the marker sits on the signal and the receiver produces the pitch
+    // from a BFO, so a host-demodulating backend has to know the pitch to place
+    // its passband at all — see Hl2Backend::cwBfoHz(). Get this wrong and the
+    // panadapter's CW passband draws a whole pitch away from the marker while
+    // the transmitter keys on the marker itself.
+    //
+    // Default no-op: a Flex owns its own DSP and takes `cw pitch` as text from
+    // TransmitModel, so this seam would be a second, redundant opinion.
+    virtual void setCwPitch(int hz) { Q_UNUSED(hz); }
+
     // The speech processor, as the operator sees it: an enable plus one of
     // three presets (0 = NOR, 1 = DX, 2 = DX+).
     //

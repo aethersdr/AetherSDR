@@ -2064,9 +2064,19 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // restrictive audible slice controls the global client DSP state.
         updateAetherDspModePolicy();
 
-        // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice,
-        // so re-evaluate only when the TX slice changes mode (#4173).
-        if (s->isTxSlice())
+        // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice
+        // (#4173); the ASR (Copy Assist) indicator follows the ACTIVE slice,
+        // because it decodes received audio (#4825). Re-evaluate when either of
+        // those two slices changes mode — narrowing this to the TX slice would
+        // leave the ASR indicator stale after a CW→USB change on a non-TX
+        // active slice, with no other edge to correct it.
+        //
+        // Through activeSlice(), not an m_activeSliceId comparison: the gate
+        // itself calls activeSlice(), which falls back to the first isActive()
+        // slice when the cached id's slice is not active. Asking the same
+        // question the gate asks keeps the trigger and the gate from diverging
+        // inside that fallback window (PR #4932 review).
+        if (s->isTxSlice() || activeSlice() == s)
             updateKeyerAvailability();
 #ifdef HAVE_RADE
         if (mode.startsWith("FDV"))
@@ -2419,6 +2429,19 @@ void MainWindow::onSliceRemoved(int id)
             if (m_ax25HfPacketDecodeDialog)
                 m_ax25HfPacketDecodeDialog->setAttachedSlice(nullptr);
             refreshMiniPanFollow();   // no active slice → blank the mini-pan readout/passband
+            // The last slice is gone, so every indicator's slice is gone with
+            // it. The re-select branch above reaches updateKeyerAvailability()
+            // through setActiveSliceInternal(); this branch has no such call,
+            // and without one the row keeps whatever state the departed slice
+            // left it in.
+            //
+            // Refresh only — deliberately NOT a teardown. The gate leaves an
+            // open Copy Assist panel alone on a null slice, because this branch
+            // is on the band-recall path: with band_persistence the radio drops
+            // and re-creates the slice under the same id (KiwiRebindTracker.h,
+            // #4158), and a single-slice setup passes through here on every band
+            // change (#4932 review).
+            updateKeyerAvailability();
         }
     }
 
@@ -2864,7 +2887,7 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
 
             const int channel = slice->daxChannel();
             m_daxSliceLastCh[slice->sliceId()] = channel;
-            if (channel < 1 || channel > 4) {
+            if (channel < 1 || channel > 8) {
                 continue;
             }
             if (panStream) {
@@ -3002,6 +3025,246 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     }
 }
 
+// Display panel → "Clone to all Pans" (sits above Reset to Defaults).
+//
+// Every value the Display panel can change is written onto every OTHER open
+// panadapter. Three kinds of setting live in that panel and each has to travel
+// its own way — a single "copy the settings blob" pass would get two of them
+// wrong:
+//
+//   1. Client appearance (trace colours, fill, waterfall palette/blanker,
+//      background, grid, 3D view). The SpectrumWidget setters both apply and
+//      persist under the target's own per-pan settingsKey(), so calling them is
+//      the whole job.
+//   2. Client appearance whose setter does NOT persist (background image path
+//      and opacity — MainWindow has always owned those writes, see the
+//      backgroundImage* handlers). Persisted explicitly here.
+//   3. Radio-authoritative values (FFT average / FPS / weighted average,
+//      waterfall line duration, color gain, black level). Per AGENTS.md these
+//      are never persisted client-side; they are cloned by sending the same
+//      commands the live sliders send, so the radio echoes them back as status.
+//
+// Kiwi-backed pans re-use the waterfall gain/black/rate controls for a different
+// quantity (dBm range), so those three are skipped for such a target exactly as
+// the live per-control handlers skip them.
+int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
+{
+    if (!source || !m_panStack) {
+        return 0;
+    }
+    SpectrumWidget* src = source->spectrumWidget();
+    if (!src) {
+        return 0;
+    }
+
+    auto& settings = AppSettings::instance();
+    // Whether the SOURCE pan is showing Kiwi decides what its waterfall
+    // level/rate accessors actually mean — see the waterfall block below.
+    const bool srcIsKiwi = kiwiSdrPanDisplaysKiwi(source->panId());
+    int cloned = 0;
+
+    for (PanadapterApplet* target : m_panStack->allApplets()) {
+        if (!target || target == source) {
+            continue;
+        }
+        SpectrumWidget* dst = target->spectrumWidget();
+        if (!dst || dst == src) {
+            continue;
+        }
+        const QString targetPanId = target->panId();
+        const bool targetIsKiwi = kiwiSdrPanDisplaysKiwi(targetPanId);
+
+        // ── PANADAPTER ────────────────────────────────────────────────────
+        dst->setFftHeatMap(src->fftHeatMap());
+        dst->setShowGrid(src->showGrid());
+        dst->setFftLineWidth(src->fftLineWidth());
+        dst->setFftLineColor(src->fftLineColor());
+        dst->setFftFillAlpha(src->fftFillAlpha());
+        dst->setFftFillColor(src->fftFillColor());
+        // noiseFloorPosition (and dssFloorDepth below) are stored per display
+        // source, so these setters write the target's CURRENTLY DISPLAYED
+        // source and read the source pan's. That is deliberate: the operator
+        // is cloning the look they can see, not a Flex slot and a Kiwi slot.
+        // The target's other-source value is left alone rather than
+        // overwritten with a position that was never chosen for it.
+        dst->setNoiseFloorPosition(src->noiseFloorPosition());
+        dst->setNoiseFloorEnable(src->noiseFloorEnabled());
+
+        // ── WATERFALL (client-side) ───────────────────────────────────────
+        // The blanker is Flex/Kiwi-agnostic — it filters rows after they land,
+        // whatever produced them — so it clones unconditionally. Everything
+        // else on this group (auto-black trio, gain, black level, rate) is
+        // cloned in the waterfall block further down, which is gated: all five
+        // of those live per-control handlers bail on a Kiwi-displaying pan.
+        dst->setWfBlankerEnabled(src->wfBlankerEnabled());
+        dst->setWfBlankerThreshold(src->wfBlankerThreshold());
+        dst->setWfBlankerMode(src->wfBlankerMode());
+
+        // ── BACKGROUND ────────────────────────────────────────────────────
+        // "none" is the persisted spelling for background-off; an empty path is
+        // its in-memory form. Keep the two in step or a restart resurrects the
+        // default logo on a pan the operator turned off.
+        const QString bgPath = src->backgroundImagePath();
+        dst->setBackgroundImage(bgPath);
+        settings.setValue(dst->settingsKey("BackgroundImage"),
+                          bgPath.isEmpty() ? QStringLiteral("none") : bgPath);
+        dst->setBackgroundOpacity(src->backgroundOpacity());
+        settings.setValue(dst->settingsKey("BackgroundOpacity"),
+                          QString::number(src->backgroundOpacity()));
+        dst->setBackgroundFillColor(src->backgroundFillColor());
+
+        // ── APPEARANCE ────────────────────────────────────────────────────
+        dst->setFreqGridSpacing(src->freqGridSpacing());
+        dst->setFreqScaleFontPt(src->freqScaleFontPt());
+        dst->setWfColorScheme(src->wfColorScheme());
+
+        // ── 3D VIEW ───────────────────────────────────────────────────────
+        dst->setSpectrumRenderMode(src->spectrumRenderMode());
+        dst->setDssFloorDepth(src->dssFloorDepth());
+        dst->setDssGain(src->dssGain());
+        dst->setDssRowSpan(src->dssRowSpan());
+
+        // ── Radio-authoritative values ────────────────────────────────────
+        // A pan applet exists before the radio hands back its id (setPanId()
+        // runs after creation), so a clone racing pan creation would put
+        // `display pan set  average=0` — double space, no id — on the wire.
+        // requestPanDisplayRates() already returns early on an empty id; these
+        // two raw sendCommand() calls are the exposed pair.
+        if (!targetPanId.isEmpty()) {
+            m_radioModel.sendCommand(QString("display pan set %1 average=%2")
+                                         .arg(targetPanId)
+                                         .arg(src->fftAverage()));
+            m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
+                                         .arg(targetPanId)
+                                         .arg(src->fftWeightedAvg() ? 1 : 0));
+        }
+        dst->setFftAverage(src->fftAverage());
+        dst->setFftWeightedAvg(src->fftWeightedAvg());
+        // Always update the widget's restore target; only ask the radio when the
+        // congestion-aware throttle isn't holding the rates down (same rule as
+        // the FPS slider — otherwise the clone fights the cap).
+        dst->setFftFps(src->fftFps());
+        if (!m_adaptiveThrottleActive) {
+            m_radioModel.requestPanDisplayRates(targetPanId, src->fftFps(),
+                                                /*wfMs=*/0);
+        }
+
+        // ── Waterfall level/rate controls ─────────────────────────────────
+        // Skipped whenever EITHER end is displaying Kiwi. Target-side is the
+        // guard the five live handlers use. Source-side matters just as much:
+        // on a Kiwi-displaying pan these sliders drive the profile's dBm
+        // min/max through KiwiSdrManager, so wfColorGain()/wfBlackLevel()/
+        // wfLineDuration() still hold whatever stale Flex values the widget
+        // last had. Cloning those would push a setting the operator never made
+        // anywhere onto every Flex pan — and send `display panafall set` for it.
+        if (!srcIsKiwi && !targetIsKiwi) {
+            dst->setWfAutoBlack(src->wfAutoBlack());
+            dst->setWfAutoBlackOffset(src->wfAutoBlackOffset());
+            // The operator's stored INTENT, not the capability-masked value —
+            // see SpectrumWidget::wfAutoBlackRadioSide(). Cloning the masked
+            // value would quietly downgrade every other pan to SW on a radio
+            // without HW.
+            dst->setWfAutoBlackRadioSide(src->wfAutoBlackRadioSide());
+            // No m_radioModel.setWaterfallAutoBlack()/setWaterfallAutoBlackSource()
+            // here, unlike the live handlers: those two are radio-GLOBAL, and
+            // the source pan's own toggle already set them to these values.
+            // Re-sending them once per target would be the same write N times.
+            dst->setWfColorGain(src->wfColorGain());
+            dst->setWfBlackLevel(src->wfBlackLevel());
+            if (auto* pan = m_radioModel.panadapter(targetPanId);
+                pan && !pan->waterfallId().isEmpty()) {
+                m_radioModel.sendCommand(
+                    QString("display panafall set %1 color_gain=%2")
+                        .arg(pan->waterfallId())
+                        .arg(src->wfColorGain()));
+                m_radioModel.sendCommand(
+                    QString("display panafall set %1 black_level=%2")
+                        .arg(pan->waterfallId())
+                        .arg(src->wfBlackLevel()));
+            }
+            // Clamp like the slider path does (applyWaterfallLineDuration).
+            // The source value came through the same clamp today, so this is
+            // belt-and-braces — but the two paths should not disagree about
+            // what a legal rate is.
+            const int wfRate = std::clamp(src->wfLineDuration(),
+                                          AetherSDR::WaterfallRate::kMin,
+                                          AetherSDR::WaterfallRate::kMax);
+            dst->setWfLineDuration(wfRate);
+            if (!m_adaptiveThrottleActive) {
+                m_radioModel.requestPanDisplayRates(targetPanId, /*fps=*/0,
+                                                    wfRate);
+            }
+        }
+
+        // Repaint the target's own Display panel so an operator who opens it
+        // sees the cloned values rather than the pre-clone slider positions.
+        // BOTH steps run for a Kiwi target, in this order.
+        //
+        // syncKiwiSdrPanadapterUiState() alone is not enough: on a pan that is
+        // actually displaying Kiwi it falls through to the final block and
+        // calls syncKiwiWaterfallSettings() only — its internal
+        // syncFlexDisplaySettings() runs on the two EARLY-RETURN paths (no
+        // profile, or profile present but not displaying Kiwi). So a Kiwi
+        // target would get its WF Ceiling/Floor/Rate refreshed and nothing
+        // else: heat map, grid, line width/colour, fill, FFT floor, colour
+        // scheme, render mode, 3D and average would all still show the
+        // pre-clone positions, and the panel would read as if the clone had
+        // not happened.
+        //
+        // Running the Flex sync first is safe even though it opens with
+        // setKiwiWaterfallControlMode(false): syncDisplaySettings() blocks its
+        // signals, and the dBm span lives in the profile / KiwiSdrManager
+        // rather than in the menu, so syncKiwiWaterfallSettings() re-reads it
+        // (profile.waterfallMinDbm/MaxDbm) and the transient 0..100 clamp
+        // cannot destroy anything.
+        if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
+            dstMenu->syncDisplaySettings(
+                dst->fftAverage(), dst->fftFps(),
+                static_cast<int>(dst->fftFillAlpha() * 100.0f),
+                dst->fftWeightedAvg(), dst->fftFillColor(), dst->wfColorGain(),
+                dst->wfBlackLevel(), dst->wfAutoBlack(),
+                dst->wfAutoBlackOffset(), dst->wfLineDuration(),
+                dst->noiseFloorPosition(), dst->noiseFloorEnabled(),
+                dst->fftHeatMap(), dst->wfColorScheme(), dst->showGrid(),
+                dst->fftLineWidth(), dst->wfAutoBlackRadioSide(),
+                dst->spectrumRenderMode(), dst->dssFloorDepth(),
+                dst->dssGain(), dst->fftLineColor(), dst->dssRowSpan());
+        }
+        if (targetIsKiwi) {
+            // Re-enter Kiwi control mode over the Flex sync above: restores the
+            // dBm labels and the profile's span on WF Ceiling / WF Floor.
+            syncKiwiSdrPanadapterUiState(targetPanId);
+        }
+        // Kiwi-agnostic controls: syncKiwiSdrPanadapterUiState() does not carry
+        // these, so they run for every target.
+        if (SpectrumOverlayMenu* dstMenu = dst->overlayMenu()) {
+            dstMenu->syncExtraDisplaySettings(
+                dst->wfBlankerEnabled(), dst->wfBlankerThreshold(),
+                dst->backgroundOpacity(), dst->freqGridSpacing(),
+                dst->backgroundFillColor(), dst->freqScaleFontPt());
+        }
+        ++cloned;
+    }
+
+    if (cloned > 0) {
+        // The two radio-GLOBAL auto-black flags, asserted ONCE after the loop
+        // rather than per target. The per-target block deliberately omits them
+        // because they are not per-pan — but "the source pan's own toggle
+        // already set them" only holds if the operator toggled it THIS session:
+        // on a fresh start the source restores wfAutoBlack /
+        // wfAutoBlackRadioSide from AppSettings without ever passing through
+        // wfAutoBlackChanged / wfAutoBlackSourceChanged, so the radio-side
+        // flags can still be at their defaults. Idempotent, and one write.
+        // Radio-side INTENT, not the capability-masked value, for the same
+        // reason the per-target clone uses wfAutoBlackRadioSide().
+        if (!srcIsKiwi) {
+            m_radioModel.setWaterfallAutoBlack(src->wfAutoBlack());
+            m_radioModel.setWaterfallAutoBlackSource(src->wfAutoBlackRadioSide());
+        }
+        settings.save();
+    }
+    return cloned;
+}
 
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
@@ -4273,6 +4536,28 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                                   QColor(0x00, 0xe5, 0xff), 100);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
                                        QColor(0x0a, 0x0a, 0x14));
+    });
+    connect(menu, &SpectrumOverlayMenu::displaySettingsCloneRequested,
+            this, [this, applet, sw] {
+        const int cloned = cloneDisplaySettingsToAllPans(applet);
+
+        // Feedback on the source pan: the operator is looking at THIS panel, and
+        // with a single pan open (or every other pan floated off-screen) a silent
+        // button is indistinguishable from a broken one.
+        PanadapterOverlayMessage message;
+        message.id = QStringLiteral("display.clone-to-all-pans");
+        message.timeoutMs = 4000;
+        message.dismissible = true;
+        if (cloned > 0) {
+            message.title = tr("Display settings cloned");
+            message.detail = tr("Applied to %n other panadapter(s).", nullptr, cloned);
+            message.tone = PanadapterOverlayMessageTone::Info;
+        } else {
+            message.title = tr("Nothing to clone");
+            message.detail = tr("This is the only open panadapter.");
+            message.tone = PanadapterOverlayMessageTone::Warning;
+        }
+        sw->upsertOverlayMessage(std::move(message));
     });
 
     auto resolveClickedPanId = [this, sw]() -> QString {

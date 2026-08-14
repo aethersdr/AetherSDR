@@ -172,6 +172,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         " color: {{color.text.primary}}; border: 1px solid {{color.accent.bright}}; }");
     ThemeManager::instance().applyStyleSheet(m_panel->enableButton(), appletToggleStyle);
     ThemeManager::instance().applyStyleSheet(m_panel->newlineButton(), appletToggleStyle);
+    ThemeManager::instance().applyStyleSheet(m_panel->contextCarryButton(), appletToggleStyle);
 
     // ⚙ settings button — modeled on the band-stack gear button but themed and
     // sized (via the shared toggle padding) to sit flush with this row's buttons.
@@ -211,6 +212,10 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // The language selector only affects whisper/remote; sherpa-onnx takes its
     // language from the model, so hide it when sherpa is the active backend.
     m_settings->setLanguageSelectorVisible(m_backend != AsrBackendKind::SherpaOnnx);
+    // Context-carry is implemented only on the whisper backend (sherpa/remote
+    // inherit the IAsrBackend no-ops), so disable the header toggle on those
+    // tiers so it can't promise behavior the active backend won't deliver.
+    m_panel->setContextCarryAvailable(m_backend == AsrBackendKind::Whisper);
 
     // Panel intent. The ⚙ button toggles the modeless settings dialog; model/GPU
     // changes come from the dialog itself.
@@ -222,6 +227,13 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             m_settings->show();
             m_settings->raise();
             m_settings->activateWindow();
+        }
+    });
+    // Clear button: the panel already wiped its own text; also flush the carried
+    // decode context so the fresh display starts from a clean prompt (#4333).
+    connect(m_panel, &CopyAssistPanel::clearRequested, this, [this] {
+        if (m_asr) {
+            m_asr->clearContext();
         }
     });
     connect(m_settings, &CopyAssistSettingsDialog::tierChanged, this, &CopyAssistController::onTierChanged);
@@ -379,6 +391,20 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_settings, &CopyAssistSettingsDialog::browseSpeakerModelRequested, this,
             [this] { promptSpeakerModel(); });
+
+    // Context-carry (RFC #4818), live — no engine rebuild needed. The toggle
+    // lives on the panel header (not the ⚙ dialog) so it can be flipped without
+    // opening settings; reflect the persisted state into it without re-emitting.
+    m_panel->setContextCarryChecked(
+        CopyAssistSettings::value(QStringLiteral("AsrContextCarryEnabled"), QStringLiteral("False"))
+            .toString() == QStringLiteral("True"));
+    connect(m_panel, &CopyAssistPanel::contextCarryToggled, this, [this](bool on) {
+        CopyAssistSettings::setValue(QStringLiteral("AsrContextCarryEnabled"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+        if (m_asr) {
+            m_asr->setContextCarryEnabled(on);
+        }
+    });
 
     // Model download → engine load (the handlers read m_asr at call time, so they
     // survive an engine rebuild on backend switch).
@@ -773,6 +799,14 @@ void CopyAssistController::applyTuning()
         CopyAssistSettings::value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt()));
     m_asr->setSilenceDurationMs(CopyAssistSettings::value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
     m_asr->setOverlapMs(CopyAssistSettings::value(QStringLiteral("AsrBoundaryOverlapMs"), QStringLiteral("0")).toString().toInt());
+
+    // Context-carry (RFC #4818) — a fresh engine (backend switch, model change)
+    // starts with this off by default; re-apply the persisted state so it
+    // survives a rebuild, same as the tuning above.
+    const bool contextCarry =
+        CopyAssistSettings::value(QStringLiteral("AsrContextCarryEnabled"), QStringLiteral("False")).toString()
+        == QStringLiteral("True");
+    m_asr->setContextCarryEnabled(contextCarry);
 }
 
 void CopyAssistController::onEnableToggled(bool on)
@@ -874,6 +908,8 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     // Language applies to whisper/remote only; sherpa-onnx picks it from the
     // model. Keep the selector's visibility in sync with the active backend.
     m_settings->setLanguageSelectorVisible(kind != AsrBackendKind::SherpaOnnx);
+    // Context-carry is whisper-only; keep the header toggle enabled only there.
+    m_panel->setContextCarryAvailable(kind == AsrBackendKind::Whisper);
 
     // Leaving the remote backend clears the persisted auto-connect flag so the
     // next launch starts on the local engine.

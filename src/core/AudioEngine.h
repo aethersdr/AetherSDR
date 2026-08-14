@@ -886,7 +886,10 @@ private:
                                 bool markExternalSource,
                                 bool forceRadioDaxRoute);
     void observeTxCaptureState(QAudio::State state);
+    // Overload for callers that must sample the unread depth before draining it.
+    void observeTxCaptureState(QAudio::State state, qint64 bufferedBytes);
     void recordTxCaptureLocalTxAttempt();
+    void noteTxCaptureBacklogDiscard(qint64 discardedBytes);
     void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
     void logTxCaptureHealthSummary(const QString& reason, bool anomaly);
 

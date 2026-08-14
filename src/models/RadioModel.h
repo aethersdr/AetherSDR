@@ -159,6 +159,15 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // True from the moment a connect is requested until it lands, fails, or is
+    // abandoned. isConnected() alone cannot express "still working": it is
+    // false both before an attempt starts and while one is in flight, which is
+    // why the bridge's `connect wait` could not tell a timeout worth retrying
+    // from one that never had a chance (#4912). The HL2 makes the gap wide —
+    // Hl2Backend::connectRadio() parks the request in m_queuedConnect behind
+    // the DSP open and re-drives it from finishDspSetup(), and nothing about
+    // that queue reaches this model, so no signal fires for seconds.
+    bool isConnectAttemptInFlight() const { return m_connectAttemptActive; }
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
     float paTemp()    const { return m_paTemp; }
@@ -1840,6 +1849,9 @@ private:
     SleepInhibitor m_sleepInhibitor;     // prevents OS idle sleep while connected
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
+    // See isConnectAttemptInFlight(). Set by the connect entry points, cleared
+    // by every way an attempt can end.
+    bool      m_connectAttemptActive{false};
     bool      m_forcedDisconnectInProgress{false};
     GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next

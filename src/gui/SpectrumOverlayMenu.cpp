@@ -205,14 +205,15 @@ static bool isLoopSelectableRxAntenna(const QString& token)
 static constexpr int BAND_BTN_W = 48;
 static constexpr int BAND_BTN_H = 26;
 
-// Scoped to the widget's own objectName rather than a bare "QWidget { … }"
-// selector — an unscoped type selector cascades into Qt's tooltip QLabel for
-// any descendant of the styled widget, stripping the tooltip's frame (#4440,
-// #4444). Takes the widget and sets both the object name and the style in one
-// call so the two can't drift apart (a typo in one used to silently un-style
-// the panel with no compile error). Routed through ThemeManager so the border
-// stays theme-aware, matching the band and display panels rather than the
-// literal #304050 the un-scoped rule inherited.
+// Every overlay panel's frame, scoped to the widget's own objectName rather
+// than a bare "QWidget { … }" selector. A Qt type selector matches subclasses
+// AND descendants, so an unscoped panel sheet paints its own frame onto every
+// bare container inside it, and reaches Qt's tooltip QLabel for the panel's
+// descendants (#4440, #4444). Takes the widget and sets both the object name
+// and the style in one call so the two can't drift apart (a typo in one used
+// to silently un-style the panel with no compile error). Routed through
+// ThemeManager so the border stays theme-aware instead of pinning the dark
+// theme's #304050 literal.
 static void applyPanelStyle(QWidget* panel, const QString& objectName)
 {
     panel->setObjectName(objectName);
@@ -220,6 +221,29 @@ static void applyPanelStyle(QWidget* panel, const QString& objectName)
         panel,
         QStringLiteral("QWidget#%1 { background: rgba(15, 15, 26, 220); "
                        "border: 1px solid {{color.background.2}}; border-radius: 3px; }")
+            .arg(objectName));
+}
+
+// The same object-name scoping for the bare containers INSIDE a panel: rows
+// that group a label with its control so the pair can be shown or hidden as a
+// unit, and the Display panel's scroll area, viewport and content widget. Being
+// real QWidgets rather than layouts, they have to declare that they paint
+// nothing — and they have to declare it scoped, because an unscoped
+// "QWidget { … }" opt-out makes the container a cascade source in its own
+// right, pushing its rule onto its children and onto their tooltip labels,
+// which is exactly what the panel scoping above exists to stop. No ThemeManager
+// here: the rule names no token, so there is nothing to re-resolve on a theme
+// change.
+//
+// The selector is QWidget# even for the QScrollArea: a type selector matches
+// subclasses, and the object name already pins the rule to exactly one widget,
+// so spelling the concrete class would narrow nothing — it would only keep that
+// one site out of this helper and back on a hand-rolled literal.
+static void applyTransparentStyle(QWidget* widget, const QString& objectName)
+{
+    widget->setObjectName(objectName);
+    widget->setStyleSheet(
+        QStringLiteral("QWidget#%1 { background: transparent; border: none; }")
             .arg(objectName));
 }
 
@@ -303,20 +327,36 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     connect(m_toggleBtn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggle);
 
     // Menu buttons — Band, ANT, DSP handled specially (sub-panels)
-    struct BtnDef { QString text; int specialIdx; void (SpectrumOverlayMenu::*sig)(); };
+    // `objName` is the automation bridge's handle on each row. Without it the
+    // sub-panels behind these buttons (Display, Band, ANT, DAX, Memory) are
+    // unreachable from a test: their contents are addressable but nothing can
+    // open them, so every control inside reads as "not visible".
+    struct BtnDef {
+        QString text;
+        const char* objName;
+        const char* a11y;
+        int specialIdx;
+        void (SpectrumOverlayMenu::*sig)();
+    };
+    // QT_TR_NOOP marks each name for lupdate here and tr() translates it at the
+    // use site below — tr() on a non-literal extracts nothing.
     const BtnDef defs[] = {
-        {"+RX",      -1, nullptr},   // 0 — handled separately (signal has panId arg)
-        {"+TNF",     -1, &SpectrumOverlayMenu::addTnfClicked},  // 1
-        {"Band",      0, nullptr},   // 2 — toggleBandPanel
-        {"ANT",       1, nullptr},   // 3 — toggleAntPanel
-        {"Display",   4, nullptr},   // 4 — toggleDisplayPanel
-        {"Memory",    5, nullptr},   // 6 — toggleMemoryPanel
+        // 0 — handled separately (signal has panId arg)
+        {"+RX",     "panMenuAddRxBtn",    QT_TR_NOOP("Add receive slice"),   -1, nullptr},
+        {"+TNF",    "panMenuAddTnfBtn",   QT_TR_NOOP("Add tracking notch filter"), -1,
+         &SpectrumOverlayMenu::addTnfClicked},                       // 1
+        {"Band",    "panMenuBandBtn",     QT_TR_NOOP("Band panel"),           0, nullptr},
+        {"ANT",     "panMenuAntBtn",      QT_TR_NOOP("Antenna panel"),        1, nullptr},
+        {"Display", "panMenuDisplayBtn",  QT_TR_NOOP("Display panel"),        4, nullptr},
+        {"Memory",  "panMenuMemoryBtn",   QT_TR_NOOP("Memory panel"),         5, nullptr},
         // Add Memory lives at the top of MemoryBrowsePanel, outside the scrolling rows.
-        {"DAX",       3, nullptr},   // 6 — toggleDaxPanel
+        {"DAX",     "panMenuDaxBtn",      QT_TR_NOOP("DAX panel"),            3, nullptr},
     };
 
     for (const auto& def : defs) {
         auto* btn = makeMenuBtn(def.text, this);
+        btn->setObjectName(QString::fromLatin1(def.objName));
+        btn->setAccessibleName(tr(def.a11y));
         if (def.specialIdx == 0)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleBandPanel);
         else if (def.specialIdx == 1)
@@ -546,8 +586,7 @@ void SpectrumOverlayMenu::buildAntPanel()
         "border: 1px solid #0090e0; }"
         "QPushButton:hover { border: 1px solid #0090e0; }";
     m_loopRow = new QWidget(m_antPanel);
-    m_loopRow->setObjectName(QStringLiteral("loopRow"));
-    m_loopRow->setStyleSheet("QWidget#loopRow { background: transparent; border: none; }");
+    applyTransparentStyle(m_loopRow, QStringLiteral("loopRow"));
     auto* loopRow = new QHBoxLayout(m_loopRow);
     loopRow->setContentsMargins(0, 0, 0, 0);
     loopRow->setSpacing(4);
@@ -671,15 +710,17 @@ void SpectrumOverlayMenu::buildAntPanel()
                                      const QString& a11yName,
                                      QPushButton** btnOut) -> QWidget* {
         auto* rowWidget = new QWidget;
-        // NO BOX AROUND THE ROW. kPanelStyle sets "QWidget { border: 1px solid
-        // ...; background: ... }" on the ANT panel, and Qt descendant-matches a
-        // bare type selector onto every child QWidget — so a row that is a real
-        // widget draws the panel's own frame around itself. The rows above are
-        // bare QHBoxLayouts added straight to the panel's vbox and have no
-        // container to catch it; these two need containers so each can hide
-        // independently, and therefore have to opt out explicitly.
-        rowWidget->setStyleSheet(
-            QStringLiteral("QWidget { border: none; background: transparent; }"));
+        // NO BOX AROUND THE ROW. The rows above are bare QHBoxLayouts added
+        // straight to the panel's vbox; these two need real containers so each
+        // can hide independently, which is what made them a surface the ANT
+        // panel's frame landed on while that sheet was an unscoped
+        // "QWidget { … }". It is QWidget#antPanel now and reaches nothing below
+        // itself, so this rule no longer cancels a live cascade — it keeps the
+        // row inert if the panel is ever un-scoped again. Scoped to the row's
+        // own name for the reason applyTransparentStyle documents: the opt-out
+        // this replaced was itself unscoped, so it cancelled the panel's box by
+        // broadcasting a rule at every descendant, tooltip labels included.
+        applyTransparentStyle(rowWidget, objectName + QStringLiteral("Row"));
         auto* row = new QHBoxLayout(rowWidget);
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(4);
@@ -1380,39 +1421,30 @@ void SpectrumOverlayMenu::updateLayout()
 void SpectrumOverlayMenu::buildDisplayPanel()
 {
     m_displayPanel = new QWidget(parentWidget());
-    m_displayPanel->setObjectName(QStringLiteral("displayPanel"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(
-        m_displayPanel,
-        "QWidget#displayPanel { background: rgba(15, 15, 26, 220); "
-        "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
+    applyPanelStyle(m_displayPanel, QStringLiteral("displayPanel"));
     m_displayPanel->hide();
 
     // #3969: the panel's ~24 rows exceed a short window's height, so the grid
     // lives on a content widget inside a scroll area (same pattern as
     // RadioSetupDialog::wrapTabInScrollArea) and toggleDisplayPanel() clamps
-    // the shown height. The explicit transparent styles stop the panel-level
-    // QWidget stylesheet above from cascading a second background/border onto
-    // the scroll machinery.
+    // the shown height. The scroll area, its viewport and the content widget
+    // each declare themselves transparent so the panel's own background shows
+    // through the scroll machinery — a QScrollArea viewport otherwise fills
+    // itself with the palette's base colour and hides it.
     auto* panelLayout = new QVBoxLayout(m_displayPanel);
     panelLayout->setContentsMargins(1, 1, 1, 1);  // keep the 1px panel border visible
     m_displayScroll = new QScrollArea;
-    m_displayScroll->setObjectName(QStringLiteral("displayPanelScroll"));
+    applyTransparentStyle(m_displayScroll, QStringLiteral("displayPanelScroll"));
     m_displayScroll->verticalScrollBar()->setObjectName(
         QStringLiteral("displayPanelScrollBar"));
     m_displayScroll->setWidgetResizable(true);
     m_displayScroll->setFrameShape(QFrame::NoFrame);
     m_displayScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_displayScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_displayScroll->setStyleSheet(
-        "QScrollArea#displayPanelScroll { background: transparent; border: none; }");
-    m_displayScroll->viewport()->setObjectName(
-        QStringLiteral("displayPanelViewport"));
-    m_displayScroll->viewport()->setStyleSheet(
-        "QWidget#displayPanelViewport { background: transparent; border: none; }");
+    applyTransparentStyle(m_displayScroll->viewport(),
+                          QStringLiteral("displayPanelViewport"));
     auto* displayContent = new QWidget;
-    displayContent->setObjectName(QStringLiteral("displayPanelContent"));
-    displayContent->setStyleSheet(
-        "QWidget#displayPanelContent { background: transparent; border: none; }");
+    applyTransparentStyle(displayContent, QStringLiteral("displayPanelContent"));
     m_displayScroll->setWidget(displayContent);
     panelLayout->addWidget(m_displayScroll);
 
@@ -1528,19 +1560,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     makeHeader("PANADAPTER");
     {
         auto* toggleRow = new QWidget;
-        toggleRow->setObjectName(QStringLiteral("displayPanelToggleRow"));
-        toggleRow->setStyleSheet(
-            "QWidget#displayPanelToggleRow { border: none; background: transparent; }");
+        applyTransparentStyle(toggleRow, QStringLiteral("displayPanelToggleRow"));
         auto* toggleLayout = new QHBoxLayout(toggleRow);
         toggleLayout->setContentsMargins(0, 2, 0, 2);
         toggleLayout->setSpacing(3);
 
         // Use the shared btnStyle so Heat Map / Grid / Wt Avg get the same
         // 1 px frame (blue unchecked, green checked) as the FFT Floor "Auto"
-        // button and the other row-end action buttons.  The toggleRow
-        // QWidget container itself is borderless (see setStyleSheet above)
-        // so the panel's cascading frame doesn't draw a box around the
-        // whole row.
+        // button and the other row-end action buttons. The toggleRow container
+        // declares itself borderless above for the same reason the Ant panel's
+        // front-end rows do — a real widget inside a panel is a surface a
+        // cascading panel frame can land on. #4440 scoped this panel, so
+        // nothing cascades here today and the rule is defensive.
         auto makeToggle = [&](const QString& text, QPushButton*& btn, bool checked = false) {
             btn = new QPushButton(text);
             btn->setCheckable(true);
@@ -2125,17 +2156,42 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
-    // ── Reset button ──────────────────────────────────────────────────────
+    // ── Whole-panel actions: Clone to all Pans, then Reset to Defaults ────
+    // Clone sits directly above Reset because both act on the panel as a whole,
+    // and Clone is the constructive counterpart — it takes the look the operator
+    // just built here and applies it everywhere, instead of throwing it away.
+    //
+    // Both are styled through ONE setStyleSheet() call over the pair. They are
+    // full-width action buttons sharing btnStyle exactly, so a second call site
+    // would add nothing but a place for the two to drift apart — and the
+    // hardcoded-colour ratchet counts call sites, not colours.
     {
+        m_cloneToAllPansBtn = new QPushButton("Clone to all Pans");
+        m_cloneToAllPansBtn->setObjectName("displayCloneToAllPansBtn");
+        m_cloneToAllPansBtn->setToolTip(
+            "Copy every Display setting on this panadapter — trace, waterfall, "
+            "background, appearance and 3D view — onto all other open "
+            "panadapters.");
+        m_cloneToAllPansBtn->setAccessibleName(tr("Clone display settings to all panadapters"));
+        m_cloneToAllPansBtn->setAccessibleDescription(
+            tr("Applies this panadapter's Display panel settings to every other "
+               "open panadapter."));
+        connect(m_cloneToAllPansBtn, &QPushButton::clicked, this, [this] {
+            emit displaySettingsCloneRequested();
+        });
+
         auto* resetBtn = new QPushButton("Reset to Defaults");
         resetBtn->setObjectName("displayResetBtn");
-        resetBtn->setStyleSheet(btnStyle);
         resetBtn->setToolTip("Reset all display settings to their default values");
         connect(resetBtn, &QPushButton::clicked, this, [this] {
             emit displaySettingsReset();
         });
-        grid->addWidget(resetBtn, row, 0, 1, 4);
-        ++row;
+
+        for (QPushButton* actionBtn : {m_cloneToAllPansBtn, resetBtn}) {
+            actionBtn->setStyleSheet(btnStyle);
+            grid->addWidget(actionBtn, row, 0, 1, 4);
+            ++row;
+        }
     }
 
     // Display panel tooltips

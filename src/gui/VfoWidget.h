@@ -375,6 +375,7 @@ private:
 
     void buildUI();
     void buildTabContent();
+    void populateDaxCombo();  // DAX Ch list, sized to the radio's slice capacity
     // Sweep every interactive flag control and give it Qt::PointingHandCursor so
     // hovering signals clickability.  Re-run after rebuildFilterButtons() so the
     // dynamically recreated filter/autotune/adaptive buttons are covered (#4036).

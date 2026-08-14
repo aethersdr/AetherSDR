@@ -836,11 +836,40 @@ private:
         QPointer<QLocalSocket> socket;
         QTimer* timer{nullptr};
         QMetaObject::Connection connection;
+        // Bound alongside `connection` so a connect that FAILS returns the
+        // backend's message immediately instead of burning the whole timeout
+        // and then reporting the generic "timed out" (#4912).
+        QMetaObject::Connection errorConnection;
         QElapsedTimer elapsed;
         int timeoutMs{0};
         bool complete{false};
+        // Set when finishConnectWait() runs off connectionError rather than
+        // off the timer or a successful connectionStateChanged.
+        QString error;
     };
     std::vector<std::shared_ptr<ConnectWait>> m_connectWaits;
+
+    // The last deferred connect/disconnect failure, and when it happened.
+    //
+    // Every connect verb schedules its real work onto the GUI event loop and
+    // replies {ok:true, deferred:true} before that work runs, so a failure
+    // afterwards existed only as a qCWarning — invisible to the client that
+    // asked (#4912). Keeping the last one here lets `connect wait` hand it
+    // back, which is where a caller is already looking when a connect does not
+    // land. The reply carries the error's AGE, not its timestamp, so a stale
+    // failure from a previous attempt is distinguishable from this one's
+    // without the caller needing a clock of its own.
+    QString m_lastConnectError;
+    qint64 m_lastConnectErrorMs{-1};
+    // answerPendingWaits: whether this failure should complete outstanding
+    // `connect wait` calls. True for the connect verbs; false for disconnect,
+    // whose error would otherwise be handed to an unrelated connect still in
+    // flight.
+    void noteConnectFailure(const QString& what, const QString& error,
+                            bool answerPendingWaits = true);
+    // A connect that lands retires the previous failure, so `lastError` describes
+    // the current state of the world rather than everything that ever went wrong.
+    void clearLastConnectError();
 
     QTimer* m_memoryTimer{nullptr};
     QElapsedTimer m_memoryClock;

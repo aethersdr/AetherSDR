@@ -1,5 +1,7 @@
 #pragma once
 
+#include "models/MeterModel.h"   // kMinForwardWattsForSwr — the keyed-RF floor
+
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPointer>
@@ -195,6 +197,43 @@ private:
     void spin(int ms);
     QJsonObject meterSnapshot() const;
 
+    // WHAT THE OPERATOR'S GAUGE WILL SHOW, read the way the gauge reads it.
+    //
+    // meterSnapshot() above measures the SEAM — the value that crossed from the
+    // backend, by meter index. This measures the CONSUMER: the typed accessors
+    // the applets bind to, each behind the liveness gate its real consumer
+    // applies. The two answer different questions and a probe that mixes them
+    // becomes a third convention that agrees with neither (CERTIFICATION.md
+    // 1.34): reading MeterModel::swr() raw reported a confident 1.0:1 in the
+    // same stage that reported TX:SWR had never been fed, because an unfed SWR
+    // and a perfect match are the same float.
+    QJsonObject renderedSnapshot() const;
+
+    // Record forward power seen INSIDE a keyed window. Called from every stage
+    // that keys, because "did this radio actually radiate" is a precondition of
+    // every transmit-meter verdict and cannot be answered from the meter whose
+    // silence is being judged (CERTIFICATION.md 1.32).
+    void observeKeyedRf();
+
+    // Was a transmission ever CONFIRMED to have produced RF during this run?
+    //
+    // Judged on observed forward power, never on requested drive. A drive floor
+    // would catch the slider-at-zero case that exposed this and nothing else:
+    // an interlock, a band limit or a PA that never enabled are all silent at
+    // any slider setting, and all produce the identical "meter never fed".
+    bool keyedRfConfirmed() const;
+
+    // The floor forward power must clear for a keyed window to count as RF.
+    //
+    // Deliberately MeterModel's own SWR-qualifying floor rather than a number
+    // chosen here. The finding this precondition exists to suppress is "TX:SWR
+    // defined but never fed", and SWR is fed exactly when forward power clears
+    // that floor — so any other constant would make the precondition answer a
+    // slightly different question from the gate it is reasoning about, which is
+    // §1.1 one level up. Zero drive on the HL2 reads 0.001 W; a real key at
+    // 50 % read 2.0 W.
+    static constexpr double kKeyedRfFloorWatts = MeterModel::kMinForwardWattsForSwr;
+
     // QPointer, not raw: run() holds these across nested event loops for minutes
     // at a time. If the session tears down mid-run — a disconnect, an app quit —
     // raw pointers would have the remaining stages resume against freed objects.
@@ -204,6 +243,22 @@ private:
     std::function<void(bool)> m_onKey;
     int m_keyRefusals = 0;   // keys the radio refused; reported, never ignored
     QJsonArray m_stages;
+
+    // ---- keyed-RF evidence, accumulated across every stage that keys ----
+    //
+    // Negative means "never sampled": no keyed window found a fresh forward
+    // power reading, which is a DIFFERENT state from one that read zero and
+    // must not collapse into it.
+    double m_keyedFwdWattsMax = -1.0;
+    int m_keyedRfSamples = 0;        // fresh forward-power reads inside a key
+    int m_keyedWindows = 0;          // keyed windows that reached a measurement
+    bool m_fwdPowerMeterDefined = false;
+
+    // The consumer-side reading taken while the radio was actually keyed.
+    // stageMeterInventory runs after stageControlEffect has unkeyed and settled
+    // 700 ms, so sampling there is sampling the one moment a transmit-only
+    // quantity is guaranteed absent (CERTIFICATION.md 1.34).
+    QJsonObject m_renderedWhileKeyed;
 };
 
 }  // namespace AetherSDR

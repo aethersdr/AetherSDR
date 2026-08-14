@@ -13,6 +13,7 @@
 #include "core/DisplayPresence.h"
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
+#include "core/ShutdownTrace.h"
 #include "core/MacMicPermission.h"
 #include "core/AutomationServer.h"
 
@@ -734,6 +735,8 @@ int main(int argc, char* argv[])
 
         exitCode = app.exec();
     }
+
+    AetherSDR::ShutdownTrace::complete("application");
 
     qInstallMessageHandler(nullptr);
     logManager.shutdownLogging();

@@ -38,6 +38,7 @@
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
+#include "core/ShutdownTrace.h"
 #include "core/PerfTelemetry.h"
 #include "core/PeripheralSettings.h"
 #include "core/VoiceSignalDetector.h"
@@ -112,6 +113,7 @@
 #include "FlexControlDialog.h"
 #include "CwxPanel.h"
 #include "DvkAvailabilityGate.h"
+#include "VoiceModeGate.h"
 #include "DvkPanel.h"
 #include "core/DvkWavTransfer.h"
 #include "AmpApplet.h"
@@ -238,6 +240,8 @@
 #include "core/backends/IRadioBackend.h"   // seam: SimBackend::audioFrameReady wiring
 #include "core/backends/hl2/Hl2Backend.h"  // dynamic_cast for WDSP setup progress
 #include "core/backends/sim/SimBackend.h"  // dynamic_cast for demo noise controls
+#include "workspace/WorkspaceController.h"  // prepareShutdown (phase 7 canvas windows)
+#include "workspace/WorkspaceWindow.h"      // shutdown sweep of hidden windows (M1)
 #if defined(Q_OS_MAC)
 #include "core/VirtualAudioBridge.h"
 #include <QFileInfo>
@@ -1159,12 +1163,22 @@ MainWindow::MainWindow(QWidget* parent)
 
         // 8-axis edge resize for frameless mode — same install pattern
         // as the floating dialogs (SpotHub, RadioSetup, MemoryDialog).
-        // Filter sits on the native QWindow so it doesn't compete with
-        // the TitleBar's drag-to-move handler (the 6 px resize margin
-        // is well clear of the 18+ px title-bar height).  Stays
-        // installed across frameless toggles — when the system frame is
-        // back on, the platform owns resize and our filter no-ops.
-        FramelessResizer::install(this);
+        // The filter is application-wide and matches by window, because
+        // MainWindow's direct children (QStatusBar, the central widget,
+        // QSizeGrip) are all native windows that would otherwise swallow
+        // every edge event before the top level saw it — see the
+        // FramelessResizer header (#4827).  topMoveReserve = TitleBar::kHeight
+        // reserves the whole title bar for its own drag-to-move handler and
+        // the menu bar / min-max-close controls it hosts, rather than the
+        // resizer's 6 px top-edge margin (previously the default 0, which
+        // put that margin *inside* the 32 px title bar and shadowed the
+        // first few px of all of them — #4886).  MainWindow therefore has
+        // no top-edge resize at all in frameless mode, only left/right/
+        // bottom; that trade was already implicit before this PR, since the
+        // filter was dead on every edge here until now.  Stays installed
+        // across frameless toggles — when the system frame is back on, the
+        // platform owns resize and our filter no-ops.
+        FramelessResizer::install(this, 6, TitleBar::kHeight);
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
         // key into the nested AppSettings["CwDecoder"] blob (#2417).  The
@@ -2049,6 +2063,7 @@ MainWindow::MainWindow(QWidget* parent)
     // PUDU monitor, RX chain edit) → wireDspApplets()
     // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
     wireDspApplets();
+    wireWorkspaceCanvas();   // RFC #4887 phase 3 — MainWindow_Workspace.cpp
 
     // PROC / NOR / DX / DX+ -> the client compressor, on a radio that modulates
     // on this host. After wireDspApplets(), which is what gives the applet panel
@@ -2483,8 +2498,8 @@ MainWindow::MainWindow(QWidget* parent)
         QList<int> sizes(m_splitter->count(), 0);
         for (int i = 0; i < m_splitter->count(); ++i) {
             QWidget* w = m_splitter->widget(i);
-            if (w == m_panStack)         sizes[i] = centerW;
-            else if (w == m_appletPanel) sizes[i] = appletW;
+            if (w == centralPanWidget())  sizes[i] = centerW;
+            else if (w == m_appletPanel)  sizes[i] = appletW;
         }
         m_splitter->setSizes(sizes);
     });
@@ -2514,6 +2529,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
     preparePanadapterUiForShutdown();
 
@@ -2522,6 +2538,7 @@ MainWindow::~MainWindow()
     // them down while MainWindow members are still alive instead of waiting for
     // QWidget child cleanup after member destruction.
     if (m_kiwiSdrManager) {
+        ShutdownTrace trace("kiwi.manager.destroy");
         QObject::disconnect(m_kiwiSdrManager, nullptr, this, nullptr);
         if (m_audio) {
             QObject::disconnect(m_kiwiSdrManager, nullptr, m_audio, nullptr);
@@ -2534,7 +2551,10 @@ MainWindow::~MainWindow()
     // Stop the CWX sidetone keyer (its own worker thread) before AudioEngine is
     // torn down below — its onKeyDownChange callback touches m_audio->cwSidetone()
     // (#3623). reset() joins the worker, so no key edge can fire afterward.
-    m_cwxLocalKeyer.reset();
+    {
+        ShutdownTrace trace("cwx.keyer.destroy");
+        m_cwxLocalKeyer.reset();
+    }
 
 #ifdef HAVE_RADE
     if (m_radeSliceId >= 0)
@@ -2556,6 +2576,7 @@ MainWindow::~MainWindow()
     // UAF pattern as m_networkDiagnosticsDialog above. Tear it down now
     // while AudioEngine is still alive.
     if (m_ax25HfPacketDecodeDialog) {
+        ShutdownTrace trace("ax25.dialog.destroy");
         delete m_ax25HfPacketDecodeDialog.data();
         m_ax25HfPacketDecodeDialog = nullptr;
     }
@@ -2564,22 +2585,32 @@ MainWindow::~MainWindow()
     // Use BlockingQueuedConnection to ensure completion before we proceed.
     if (m_audio && m_audioThread && m_audioThread->isRunning()) {
         AudioEngine* audio = m_audio;
-        QMetaObject::invokeMethod(audio, [audio]() {
-            audio->setNr2Enabled(false);
-            audio->setRn2Enabled(false);
-            audio->setNvAfxEnabled(false);
-            audio->stopRxStream();
-            audio->stopTxStream();
-        }, Qt::BlockingQueuedConnection);
+        {
+            ShutdownTrace trace("audio.stop.invoke");
+            QMetaObject::invokeMethod(audio, [audio]() {
+                ShutdownTrace workerTrace("audio.stop.worker");
+                audio->setNr2Enabled(false);
+                audio->setRn2Enabled(false);
+                audio->setNvAfxEnabled(false);
+                audio->stopRxStream();
+                audio->stopTxStream();
+            }, Qt::BlockingQueuedConnection);
+        }
         audio->deleteLater();
-        m_audioThread->quit();
-        m_audioThread->wait(3000);
+        {
+            ShutdownTrace trace("audio.thread.join");
+            m_audioThread->quit();
+            if (!m_audioThread->wait(3000))
+                trace.fail("thread_join_timeout");
+        }
     } else {
         delete m_audio;
     }
     if (m_audioThread && m_audioThread->isRunning()) {
+        ShutdownTrace trace("audio.thread.join_retry");
         m_audioThread->quit();
-        m_audioThread->wait(3000);
+        if (!m_audioThread->wait(3000))
+            trace.fail("thread_join_timeout");
     }
     m_audio = nullptr;
 
@@ -2594,7 +2625,10 @@ MainWindow::~MainWindow()
     // back-reference first so no dangling pointer remains in the widget tree.
     if (m_appletPanel && m_appletPanel->tciApplet())
         m_appletPanel->tciApplet()->setTciServer(nullptr);
-    m_session->shutdownTciServer();
+    {
+        ShutdownTrace trace("tci.server.destroy");
+        m_session->shutdownTciServer();
+    }
 #endif
 
     // Stop external controller thread (#502)
@@ -2603,8 +2637,14 @@ MainWindow::~MainWindow()
         // the cross-thread QObject access crash (QSerialPort has thread affinity
         // to m_extCtrlThread; calling close() from main thread hits a fatal assert).
 #ifdef HAVE_SERIALPORT
-        QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->close(); },
-                                  Qt::BlockingQueuedConnection);
+        {
+            ShutdownTrace trace("controllers.serial.close");
+            QMetaObject::invokeMethod(m_serialPort, [this] {
+                ShutdownTrace workerTrace("controllers.serial.close.worker");
+                m_serialPort->close();
+            },
+                                      Qt::BlockingQueuedConnection);
+        }
         // FlexControlManager owns its own QSerialPort.  Close it
         // synchronously on the ExtControllers thread before tearing the
         // thread down — otherwise on Windows the OS handle for the
@@ -2616,19 +2656,31 @@ MainWindow::~MainWindow()
         // TaskManager.  Same pattern as the m_midiControl /
         // m_hidEncoder closes below.
         if (m_flexControl) {
-            QMetaObject::invokeMethod(m_flexControl, &FlexControlManager::close,
+            ShutdownTrace trace("controllers.flex_control.close");
+            QMetaObject::invokeMethod(m_flexControl, [this] {
+                ShutdownTrace workerTrace("controllers.flex_control.close.worker");
+                m_flexControl->close();
+            },
                                       Qt::BlockingQueuedConnection);
         }
 #endif
 #ifdef HAVE_MIDI
         if (m_midiControl) {
-            QMetaObject::invokeMethod(m_midiControl, &MidiControlManager::closePort,
+            ShutdownTrace trace("controllers.midi.close");
+            QMetaObject::invokeMethod(m_midiControl, [this] {
+                ShutdownTrace workerTrace("controllers.midi.close.worker");
+                m_midiControl->closePort();
+            },
                                       Qt::BlockingQueuedConnection);
         }
 #endif
 #ifdef HAVE_HIDAPI
         if (m_hidEncoder) {
-            QMetaObject::invokeMethod(m_hidEncoder, &HidEncoderManager::close,
+            ShutdownTrace trace("controllers.hid.close");
+            QMetaObject::invokeMethod(m_hidEncoder, [this] {
+                ShutdownTrace workerTrace("controllers.hid.close.worker");
+                m_hidEncoder->close();
+            },
                                       Qt::BlockingQueuedConnection);
         }
 #endif
@@ -2645,8 +2697,12 @@ MainWindow::~MainWindow()
             m_midiControl->deleteLater();
         }
 #endif
-        m_extCtrlThread->quit();
-        m_extCtrlThread->wait(3000);
+        {
+            ShutdownTrace trace("controllers.thread.join");
+            m_extCtrlThread->quit();
+            if (!m_extCtrlThread->wait(3000))
+                trace.fail("thread_join_timeout");
+        }
         // Delete ExtControllers objects synchronously after the thread stops.
         // deleteLater() races with quit() and can leave destructors unrun.
         // On macOS, UlanziDialMacOSManager::stop() calls
@@ -2655,7 +2711,10 @@ MainWindow::~MainWindow()
         // the main thread is blocked waiting for the cross-thread call to return.
         // Safe to call directly here: the ExtControllers thread has stopped so
         // there is no race on m_dialBackend's state.
-        if (m_dialBackend) m_dialBackend->stop();
+        if (m_dialBackend) {
+            ShutdownTrace trace("controllers.dial.stop");
+            m_dialBackend->stop();
+        }
         delete m_dialBackend;
         m_dialBackend = nullptr;
 #ifdef HAVE_HIDAPI
@@ -2715,6 +2774,29 @@ void MainWindow::preparePanadapterUiForShutdown()
     if (auto* stream = m_radioModel.panStream()) {
         QObject::disconnect(stream, nullptr, this, nullptr);
     }
+
+    // Canvas windows first (phase 7): persist their geometry hints, flush
+    // the workspace document, evict their widgets back to the stack/panel
+    // — which still own them — and delete the windows explicitly (the
+    // #2495 lesson: a floating top-level left to ~QWidget cleanup crashed
+    // at exit).  Must precede the stack/container teardown below, which
+    // assumes it can reach every applet.
+    if (m_workspaceController) {
+        m_workspaceController->prepareShutdown();
+    }
+    // The controller only knows OPEN windows; hidden ones (hide-and-keep)
+    // and windows orphaned by disable() live solely in this map — sweep it
+    // whole (red-team #4971 M1: disable-then-quit left every canvas window
+    // to ~QWidget, the #2495 crash shape).  Their widgets were evicted
+    // when they were hidden, so deletion here orphans nothing.
+    for (auto it = m_workspaceWindows.begin(); it != m_workspaceWindows.end();
+         ++it) {
+        if (it.value()) {
+            it.value()->prepareShutdown();
+            delete it.value();
+        }
+    }
+    m_workspaceWindows.clear();
 
     const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
     for (SpectrumWidget* spectrum : spectra) {
@@ -3552,6 +3634,7 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    ShutdownTrace closeEventTrace("main_window.close_event");
     // Release the TGXL/PGXL native control sockets explicitly so the radio
     // can resume polling them on behalf of other clients (e.g. Maestro).
     // The radio-disconnect handler does this via a queued connection on
@@ -3715,7 +3798,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
         deactivateRADE();
 #endif
 
-    m_radioModel.disconnectFromRadio();
+    {
+        ShutdownTrace trace("radio.disconnect");
+        m_radioModel.disconnectFromRadio();
+    }
     audioStopRx();
 
     // Stop spot client worker thread
@@ -3731,26 +3817,74 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
             FreeDvClient* freedvClient = m_freedvClient;
 #endif
-            QMetaObject::invokeMethod(dxCluster, [dxCluster] { dxCluster->disconnect(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(rbnClient, [rbnClient] { rbnClient->disconnect(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] { wsjtxClient->stopListening(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(spotCollectorClient,
-                                      [spotCollectorClient] { spotCollectorClient->stopListening(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(potaClient, [potaClient] { potaClient->stopPolling(); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(eibiClient, [eibiClient] { eibiClient->setEnabled(false); },
-                                      Qt::BlockingQueuedConnection);
-            QMetaObject::invokeMethod(n1mmSpotClient,
-                                      [n1mmSpotClient] { n1mmSpotClient->stopListening(); },
-                                      Qt::BlockingQueuedConnection);
+            {
+                ShutdownTrace trace("spots.dx_cluster.disconnect");
+                QMetaObject::invokeMethod(dxCluster, [dxCluster] {
+                    ShutdownTrace workerTrace("spots.dx_cluster.disconnect.worker");
+                    dxCluster->disconnect();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.rbn.disconnect");
+                QMetaObject::invokeMethod(rbnClient, [rbnClient] {
+                    ShutdownTrace workerTrace("spots.rbn.disconnect.worker");
+                    rbnClient->disconnect();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.wsjtx.stop");
+                QMetaObject::invokeMethod(wsjtxClient, [wsjtxClient] {
+                    ShutdownTrace workerTrace("spots.wsjtx.stop.worker");
+                    wsjtxClient->stopListening();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.collector.stop");
+                QMetaObject::invokeMethod(spotCollectorClient,
+                                          [spotCollectorClient] {
+                    ShutdownTrace workerTrace("spots.collector.stop.worker");
+                    spotCollectorClient->stopListening();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.pota.stop");
+                QMetaObject::invokeMethod(potaClient, [potaClient] {
+                    ShutdownTrace workerTrace("spots.pota.stop.worker");
+                    potaClient->stopPolling();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.eibi.stop");
+                QMetaObject::invokeMethod(eibiClient, [eibiClient] {
+                    ShutdownTrace workerTrace("spots.eibi.stop.worker");
+                    eibiClient->setEnabled(false);
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
+            {
+                ShutdownTrace trace("spots.n1mm.stop");
+                QMetaObject::invokeMethod(n1mmSpotClient,
+                                          [n1mmSpotClient] {
+                    ShutdownTrace workerTrace("spots.n1mm.stop.worker");
+                    n1mmSpotClient->stopListening();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
 #ifdef HAVE_WEBSOCKETS
-            QMetaObject::invokeMethod(freedvClient,
-                                      [freedvClient] { freedvClient->stopConnection(); },
-                                      Qt::BlockingQueuedConnection);
+            {
+                ShutdownTrace trace("spots.freedv.stop");
+                QMetaObject::invokeMethod(freedvClient,
+                                          [freedvClient] {
+                    ShutdownTrace workerTrace("spots.freedv.stop.worker");
+                    freedvClient->stopConnection();
+                },
+                                          Qt::BlockingQueuedConnection);
+            }
 #endif
             dxCluster->deleteLater();
             rbnClient->deleteLater();
@@ -3762,8 +3896,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
 #ifdef HAVE_WEBSOCKETS
             freedvClient->deleteLater();
 #endif
-            m_spotThread->quit();
-            m_spotThread->wait(3000);
+            {
+                ShutdownTrace trace("spots.thread.join");
+                m_spotThread->quit();
+                if (!m_spotThread->wait(3000))
+                    trace.fail("thread_join_timeout");
+            }
         } else {
             delete m_dxCluster;
             delete m_rbnClient;
@@ -5626,7 +5764,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
     if (m_appletPanel) {
         auto* conn = m_radioModel.connection();
         const bool demo = connected && conn && conn->isSyntheticDemo();
-        m_appletPanel->setAppletVisible(QStringLiteral("DEMO"), demo);
+        m_appletPanel->setDemoVisible(demo);
         if (demo) {
             if (auto* applet = m_appletPanel->demoApplet())
                 applet->pushSceneToEngine();
@@ -5981,7 +6119,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsAutoSaveTimer && m_bsAutoSaveTimer->isActive())
             m_bsAutoSaveTimer->stop();
         if (m_panStack) {
-            m_panStack->setBandStackVisible(false);
+            setBandStackPanelVisible(false);
         }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();
@@ -7581,7 +7719,10 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     routeRttyDecoderOutput();
     refreshRttyDecodeState();
 
-    // Update CWX/DVK indicator availability (follows the TX slice, #4173)
+    // Update CWX/DVK indicator availability (follows the TX slice, #4173) and
+    // the ASR indicator's (follows the ACTIVE slice, #4825) — this call is what
+    // covers an active-slice SWITCH for ASR; the mode-change edge on a non-TX
+    // active slice is handled in the modeChanged wiring.
     updateKeyerAvailability();
 
     // Detect band from frequency
@@ -8594,7 +8735,7 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // (right dock).  insertWidget()/addWidget() on an already-attached child
     // reparents it to the new index without destroy/recreate.
     if (left) {
-        const int panIdx = m_splitter->indexOf(m_panStack);
+        const int panIdx = m_splitter->indexOf(centralPanWidget());
         if (panIdx < 0) return;
         m_splitter->insertWidget(panIdx, m_appletPanel);
     } else {
@@ -8604,7 +8745,7 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
     for (int i = 0; i < m_splitter->count(); ++i) {
         QWidget* w = m_splitter->widget(i);
-        m_splitter->setStretchFactor(i, w == m_panStack ? 1 : 0);
+        m_splitter->setStretchFactor(i, w == centralPanWidget() ? 1 : 0);
         m_splitter->setCollapsible(i, false);
     }
 
@@ -8628,8 +8769,8 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
         QList<int> newSizes(m_splitter->count(), 0);
         for (int i = 0; i < m_splitter->count(); ++i) {
             QWidget* w = m_splitter->widget(i);
-            if (w == m_panStack)         newSizes[i] = centerW;
-            else if (w == m_appletPanel) newSizes[i] = appletW;
+            if (w == centralPanWidget())  newSizes[i] = centerW;
+            else if (w == m_appletPanel)  newSizes[i] = appletW;
         }
         m_splitter->setSizes(newSizes);
     }
@@ -9120,10 +9261,10 @@ void MainWindow::updateKeyerAvailability()
 
     const bool txIsCw  = hasCwKeyer
                          && (txMode == "CW" || txMode == "CWL");
-    const bool txIsSsb = (txMode == "USB" || txMode == "LSB"
-                          || txMode == "AM" || txMode == "SAM"
-                          || txMode == "FM" || txMode == "NFM"
-                          || txMode == "DFM");
+    // Voice-mode test through the shared predicate: the ASR block below asks
+    // the same question of a DIFFERENT slice, and one list keeps the two from
+    // drifting on which modes count (VoiceModeGate.h).
+    const bool txIsSsb = isVoiceMode(txMode);
 
     // DVK carries a second, mode-independent gate: the radio's own DVK
     // entitlement. Unlike the mode gate it survives every mode change, so it is
@@ -9134,10 +9275,10 @@ void MainWindow::updateKeyerAvailability()
         txIsSsb,
         m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
         m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature));
-    // hasVoiceKeyer is ANDed in HERE rather than into txIsSsb, because txIsSsb
-    // also drives the ASR indicator further down and Copy Assist is host-side —
-    // folding a voice-keyer capability into the shared mode test would take a
-    // working transcription feature down with the keyer.
+    // hasVoiceKeyer is ANDed in HERE rather than into the mode test, because
+    // isVoiceMode() is shared with the ASR indicator below and Copy Assist is
+    // host-side — folding a radio-side voice-keyer capability into the shared
+    // predicate would take a working transcription feature down with the keyer.
     const bool dvkAvailable = hasVoiceKeyer
                               && (dvkBlocker == DvkIndicatorBlocker::None);
     const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
@@ -9183,22 +9324,114 @@ void MainWindow::updateKeyerAvailability()
     m_dvkIndicator->setToolTip(dvkIndicatorTooltip(dvkBlocker));
 
 #ifdef AETHER_ASR_ENABLED
-    // ASR (Copy Assist): the inverse of CWX — available in voice modes only,
-    // dimmed/disabled in CW and DIGx/RTTY. A receive-side decode, but gated on
-    // the same slice's mode as the other indicators for a consistent row.
+    // ASR (Copy Assist): the inverse of CWX on mode — available in voice modes
+    // only, dimmed in CW and DIGx/RTTY — but NOT on slice. It follows the slice
+    // the operator has SELECTED, which is also the slice the rest of Copy Assist
+    // tracks: setActiveSliceInternal() rebinds m_copyAssistFreqConn to that
+    // slice's frequencyChanged and calls onRetune() on a switch. The CW decoder,
+    // this feature's CW-mode counterpart, gates on the same slice
+    // (refreshCwDecodeState()).
+    //
+    // The selected slice is a PROXY, not the audio source, and the difference
+    // matters to anyone changing this: the tap subscribes to
+    // AudioEngine::receivePresentationPostDspAudioReady and AsrTapPolicy locks
+    // onto a RECEIVER (the Flex, the applet Kiwi, an external Kiwi) on a
+    // first-block-wins rule with a 2 s release window — never onto a slice. On a
+    // Flex that stream is every audible slice already mixed together. So this
+    // gate answers "is the operator listening to something transcribable",
+    // which is a heuristic; it does not and cannot name the audio being decoded.
+    //
+    // It was gated on the TX slice for a visually consistent indicator row, and
+    // that cost the feature entirely with TX off: no slice carries isTxSlice(),
+    // so txMode is empty and a receive-only or antenna-disconnected operator
+    // could not open Copy Assist at all (#4825). Row consistency is the weaker
+    // constraint — CWX and DVK key the TX slice and genuinely belong to it, so
+    // the three indicators may now disagree, which is correct.
+    //
+    // NOTE the auto-hide below now has teeth it did not have on the TX gate:
+    // hiding the panel calls setAsrEnabled(false) (PanadapterApplet), which
+    // disables the tap and drops the receiver lock. Selecting a CW slice
+    // therefore STOPS a running transcription, where before only a TX-slice mode
+    // change could. Deliberate — the indicator must track the selected slice to
+    // be worth anything — but it is the sharp edge of this change.
+    SliceModel* asrSlice = activeSlice();
+    const bool asrIsVoice = asrSlice && isVoiceMode(asrSlice->mode());
     if (m_asrIndicator) {
-        m_asrIndicator->setEnabled(txIsSsb);
+        // The keyers' shape, and for the keyers' reason: only a slice that
+        // EXISTS and is in the wrong mode closes an open panel. A slice that is
+        // momentarily ABSENT is not a mode change, and on this radio it is
+        // routinely not even a removal — with band_persistence a FLEX band
+        // recall DROPS the slice and RE-CREATES it under the same id a moment
+        // later (KiwiRebindTracker.h, #4158). On the ordinary single-slice
+        // setup that empties slices(), so a null-slice auto-hide would stop
+        // transcription on every band change and never restore it: this
+        // function only ever hides, showing is user-driven.
+        //
+        // Disconnect also lands here with a null slice (RadioModel clears
+        // m_slices and capabilitiesChanged drives applyCapabilitiesToUi ->
+        // this function). Leaving the panel up there is the right outcome too —
+        // the last transcript stays readable, and the enabled-while-visible
+        // rule below means it can be closed by hand.
+        //
+        // A non-null slice is NOT enough on its own, because a band recall does
+        // not have to empty slices() to reach here. With a second slice on the
+        // pan, onSliceRemoved() re-selects it (slices.first(), TopologyFallback)
+        // instead of taking the empty branch — so recalling a band on the
+        // transcribed slice hands the gate a surviving CW/DIGx slice, and a
+        // slice-exists guard alone sees a live slice in the wrong mode and
+        // tears the panel down. Same #4158 rebuild, one slice further along.
+        // m_bandRecallSelection is the window that already answers "this pan is
+        // mid-rebuild, treat radio-driven selection as synchronization-only"
+        // (BandRecallSelectionGuard.h, armed on the band write and refreshed by
+        // onSliceRemoved()), which is exactly the question being asked here.
+        //
+        // The decision itself lives in VoiceModeGate.h so a test can pin it —
+        // this function is not reachable from the gating-test target — and the
+        // reason each clause is there is stated with it (#4932 review).
+        const bool bandRecallInFlight =
+            asrSlice
+            && m_bandRecallSelection.isActive(asrSlice->panId(),
+                                              QDateTime::currentMSecsSinceEpoch());
+        if (shouldAutoHideCopyAssist(
+                m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible(),
+                asrSlice != nullptr,
+                asrSlice ? asrSlice->mode() : QString(),
+                bandRecallInFlight)) {
+            m_copyAssistApplet->setCopyAssistVisible(false);
+        }
+
+        // Read visibility AFTER the auto-hide, not before. The enabled state
+        // and the cursor both key off it, and computing them from the pre-hide
+        // value left the indicator enabled with a pointing hand over a panel
+        // that had just been closed: the click passed the isEnabled() guard in
+        // MainWindow_Shortcuts.cpp, showCopyAssist() re-opened the panel, and
+        // this function closed it again in the same handler — an affordance
+        // that promised something and did nothing, until some unrelated
+        // refresh happened along (PR #4932 review).
         const bool asrVisible =
             m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
-        if (txSlice && !txIsSsb && asrVisible) {
-            m_copyAssistApplet->setCopyAssistVisible(false);
-            setIndicatorStyle(m_asrIndicator, kDisabled);
-        } else if (asrVisible) {
-            setIndicatorStyle(m_asrIndicator, kActive);
-        } else {
-            setIndicatorStyle(m_asrIndicator, txIsSsb ? kAvail : kDisabled);
-        }
-        m_asrIndicator->setCursor(txIsSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
+
+        // Enabled when the mode allows OPENING it, or whenever the panel is
+        // already open so it can always be CLOSED. The second half exists
+        // because a disabled QLabel swallows its own clicks
+        // (MainWindow_Shortcuts.cpp) and CopyAssistPanel has no close button of
+        // its own — without it, any state that leaves the panel open while the
+        // gate says no strands a panel the operator cannot dismiss. Fixing that
+        // here, in the panel's own affordance, is what lets the auto-hide above
+        // keep the conservative shape (PR #4932 review).
+        m_asrIndicator->setEnabled(asrIsVoice || asrVisible);
+        // An open panel reads kActive whatever the mode says — including the
+        // band-recall and disconnect cases the auto-hide deliberately skips,
+        // where ASR is genuinely still running.
+        setIndicatorStyle(m_asrIndicator,
+                          asrVisible ? kActive
+                                     : (asrIsVoice ? kAvail : kDisabled));
+        // Cursor tracks the ENABLED state, not the mode, so the hand appears on
+        // exactly the clicks that do something — including the close-an-open-
+        // panel case where the mode gate says no.
+        m_asrIndicator->setCursor((asrIsVoice || asrVisible)
+                                      ? Qt::PointingHandCursor
+                                      : Qt::ArrowCursor);
     }
 #endif
 }
@@ -9584,37 +9817,53 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
     // pan is new is found by DIFFING rather than parsing a create reply: the
     // backend numbers its own pans and skips retired numbers after a close.
     if (!m_radioModel.usesFlexCommandPlane()) {
-        QSet<QString> before;
+        auto before = std::make_shared<QSet<QString>>();
         for (auto* p : m_panStack->allApplets())
-            before.insert(p->panId());
+            before->insert(p->panId());
         for (auto* p : m_radioModel.panadapters())
-            if (p) before.insert(p->panId());
+            if (p) before->insert(p->panId());
 
         m_radioModel.createPanadapter();
 
-        QString createdId;
-        for (auto* p : m_radioModel.panadapters()) {
-            if (p && !before.contains(p->panId())) {
-                createdId = p->panId();
-                break;
+        // The seam create is NOT synchronous for every backend (red-team
+        // M4): HL2's is, but the demo mints its pan over the synthetic wire
+        // — two queued thread hops — so an immediate diff found nothing,
+        // declared "capacity full", and aborted the recursion while the pan
+        // materialised a moment later.  Diff after the create has settled;
+        // 300 ms covers both wire hops with margin and is indistinguishable
+        // from the existing 200 ms inter-create pacing for a synchronous
+        // backend.
+        QTimer::singleShot(300, this,
+                           [this, layoutId, total, panIds, created, before]() {
+            if (m_shuttingDown || !m_panStack) {
+                return;
             }
-        }
-        if (createdId.isEmpty()) {
-            // The backend refused — receiver count, or the link budget at this
-            // span. It has already logged which; surface it and stop rather than
-            // recursing against a limit that will refuse every remaining pan.
-            qWarning() << "applyPanLayout: backend declined pan"
-                       << (created + 1) << "of" << total;
-            showPanadapterSliceCapacityMessage();
-            return;
-        }
-        panIds->append(createdId);
-        qDebug() << "applyPanLayout: created pan" << (created + 1) << "of" << total
-                 << "id:" << createdId;
-        // Same inter-create delay as the Flex path. Adding a receiver restarts
-        // the EP6 stream, so back-to-back creates would stack restarts.
-        QTimer::singleShot(200, this, [this, layoutId, total, panIds, created]() {
-            createPansSequentially(layoutId, total, panIds, created + 1);
+            QString createdId;
+            for (auto* p : m_radioModel.panadapters()) {
+                if (p && !before->contains(p->panId())) {
+                    createdId = p->panId();
+                    break;
+                }
+            }
+            if (createdId.isEmpty()) {
+                // The backend refused — receiver count, or the link budget
+                // at this span. It has already logged which; surface it and
+                // stop rather than recursing against a limit that will
+                // refuse every remaining pan.
+                qWarning() << "applyPanLayout: backend declined pan"
+                           << (created + 1) << "of" << total;
+                showPanadapterSliceCapacityMessage();
+                return;
+            }
+            panIds->append(createdId);
+            qDebug() << "applyPanLayout: created pan" << (created + 1)
+                     << "of" << total << "id:" << createdId;
+            // Same inter-create pacing rationale as the Flex path: adding a
+            // receiver restarts the EP6 stream, so creates stay spaced.
+            QTimer::singleShot(200, this,
+                               [this, layoutId, total, panIds, created]() {
+                createPansSequentially(layoutId, total, panIds, created + 1);
+            });
         });
         return;
     }
