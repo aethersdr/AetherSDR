@@ -219,9 +219,12 @@ VkampApplet::VkampApplet(QWidget* parent)
     m_bypassBtn->setAccessibleDescription(
         tr("Switches the amplifier between bypass and in-line. The label shows the current state, "
            "not the action."));
-    // activeStateStyle("ampOn", ...) has no :disabled rule (unlike
-    // neutralBtnStyle), so the green "AMP ON" state is only reachable
-    // while actually connected -- see setBypass()'s own comment.
+    // Both blocks live in one sheet now, and QPushButton[vkState="ampOn"] and
+    // QPushButton:disabled are equal CSS2 specificity (0,1,1) with the variant
+    // appended last -- so source order hands a disabled button the bright
+    // green if vkState is ever "ampOn". Nothing about the sheet prevents that;
+    // setBypass()'s m_connected ternary is the guard, and setConnected(false)
+    // calls setBypass(false) to clear it.
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_bypassBtn,
         makeStateBtnStyle({
             activeStateStyle("bypass", "{{color.background.1}}", "{{color.background.2}}", "{{color.accent.warning}}"),
@@ -452,13 +455,12 @@ void VkampApplet::setBypass(bool on)
         QAccessibleEvent event(m_bypassBtn, QAccessible::NameChanged);
         QAccessible::updateAccessibility(&event);
     }
-    // "ampOn" has no :disabled rule (unlike neutral), so the green "AMP ON"
-    // state is only reachable while actually connected -- bypass is always
-    // forced false on disconnect (see setConnected()), and without this
-    // guard that would paint a bright, undimmed "AMP ON" button while the
-    // amp is disconnected, which is actively misleading rather than just
-    // visually inconsistent. Green matches the "CONNECTED" status pill's
-    // own palette -- AMP ON is the normal/good operating state.
+    // THIS ternary is the only thing keeping the green off a disconnected
+    // button: the stylesheet cascade would happily paint an undimmed "AMP ON"
+    // on a disabled button (the variant block wins on source order over
+    // :disabled at equal specificity), which reads as a live, in-line
+    // amplifier that isn't even connected. Green matches the "CONNECTED"
+    // status pill's own palette -- AMP ON is the normal/good operating state.
     setBtnState(m_bypassBtn, on ? "bypass" : (m_connected ? "ampOn" : QString()));
     refreshVoltageButtons();
 }
@@ -483,8 +485,14 @@ void VkampApplet::refreshVoltageButtons()
     // that is neither rail target, so "volts below the midpoint" would paint
     // LOW as active when nobody selected it -- and commanding a rail change
     // from that state was observed live pulling the supply toward ~0V.
-    const bool lowActive = m_voltageLow && !m_bypassed;
-    const bool highActive = !m_voltageLow && !m_bypassed;
+    // Gated on m_connected for the same reason the bypass button is: a
+    // disabled button carrying vkState="active" still paints in the full
+    // active colours, so without this a disconnected amp shows a bright,
+    // confident RAIL LOW next to a greyed-out BYPASS and a "—" status pill.
+    // m_voltageLow itself is untouched, so the selection repaints correctly
+    // the moment the amp reconnects and reports a rail.
+    const bool lowActive = m_voltageLow && !m_bypassed && m_connected;
+    const bool highActive = !m_voltageLow && !m_bypassed && m_connected;
     setBtnState(m_voltLowBtn, lowActive ? "active" : QString());
     setBtnState(m_voltHighBtn, highActive ? "active" : QString());
     const bool enabled = m_connected && !m_bypassed && !m_resetting;
