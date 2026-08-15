@@ -2577,6 +2577,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     m_automation->setRadioModel(&radioModel());  // for the get() verb
     m_automation->setAudioEngine(audioEngine());
     m_automation->setQsoRecorder(qsoRecorder());  // for the record() verb
+    m_automation->setTxFinalMonitor(m_finalMonitor);  // for the txmonitor() verb
     m_automation->setClockModel(m_clockModel);  // for the `get clock` verb
     m_automation->setConnectionDialogHost(this);
     m_automation->setConnectionAutomation(
