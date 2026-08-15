@@ -18,13 +18,17 @@
 #include "core/backends/icom/IcomCivBackend.h"
 
 #include <QCoreApplication>
+#include <QLoggingCategory>
 #include <QSignalSpy>
+#include <QStringList>
 #include <QTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <span>
 #include <cstdio>
+#include <cstring>
 
 using namespace AetherSDR;
 using namespace AetherSDR::icom;
@@ -60,6 +64,34 @@ static bool movesPttOrTuner(const CivFrame& f)
     return f.cmd == cmd::kControl && f.hasSub
         && (f.sub == control::kPtt || f.sub == control::kTuner)
         && !f.data.empty();
+}
+
+// ---------------------------------------------------------------------------
+// CI-V trace capture
+//
+// traceCiv writes the decoded `cmd=`/`sub=` tag ONLY to qCDebug — the in-memory
+// ring stores raw hex. So the tag can only be asserted by capturing log output,
+// which is why this needs a message handler rather than a getter.
+// ---------------------------------------------------------------------------
+static QStringList g_civLines;
+static bool g_capturing = false;
+static QtMessageHandler g_prevHandler = nullptr;
+
+static void civCapture(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
+{
+    if (g_capturing && ctx.category && std::strcmp(ctx.category, "aether.icom.civ") == 0)
+        g_civLines << msg;
+    if (g_prevHandler)
+        g_prevHandler(type, ctx, msg);
+}
+
+// The most recent captured line beginning with `prefix`, or a null string.
+static QString lastLineStartingWith(const QString& prefix)
+{
+    for (auto it = g_civLines.crbegin(); it != g_civLines.crend(); ++it)
+        if (it->startsWith(prefix))
+            return *it;
+    return {};
 }
 
 int main(int argc, char** argv)
@@ -853,6 +885,88 @@ int main(int argc, char** argv)
               "and the correction arrives on the next event-loop turn, naming the "
               "mode the radio is really in");
         QObject::disconnect(conn);
+    }
+
+    // ---- the CI-V trace tag decodes the RIGHT byte in BOTH directions -------
+    //
+    // The two call sites hand traceCiv DIFFERENT layouts, and the tag decoder
+    // has to follow:
+    //
+    //   TX (sendUserCommand) — the raw wire frame from buildFrame:
+    //       FE FE <to> <from> <cmd> [<sub>] <data…> FD    -> cmd at index 4
+    //   RX (onCivFrame)      — re-serialised, envelope deliberately dropped:
+    //       <cmd> [<sub>] <data…>                         -> cmd at index 0
+    //
+    // Reading index 4 for both is the defect this guards: on RX it printed a
+    // PAYLOAD byte as the command, and printed nothing at all for frames
+    // shorter than five bytes — which is most of them.
+    //
+    // These assertions are falsifiable by construction: restore the old
+    // `frame[4]` / `size() >= 5` form and the RX cases below fail, because
+    // 1A 06 01 01 is four bytes (no tag at all) and a frequency reply puts a
+    // BCD digit pair where the command was assumed to be.
+    {
+        QLoggingCategory::setFilterRules(QStringLiteral("aether.icom.civ.debug=true"));
+        g_prevHandler = qInstallMessageHandler(civCapture);
+        g_capturing = true;
+
+        // RX, SHORT FRAME — the 1A 06 DATA-flag reply. Four bytes once the
+        // envelope is stripped, so the old `size() >= 5` guard skipped it
+        // silently. This is the exact reply the category was added to make
+        // visible (the radio never volunteers it), so "no tag" is the whole
+        // failure rather than a cosmetic one.
+        g_civLines.clear();
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr,
+                       cmd::kSetting, 0x06, 0x01, 0x01, kCivEom});
+        QTest::qWait(120);
+        {
+            const QString line = lastLineStartingWith(QStringLiteral("RX <- 1a 06"));
+            check(!line.isNull(), "the 1A 06 DATA-flag reply reaches the CI-V trace");
+            check(line.contains(QStringLiteral("cmd=1a")),
+                  "and a four-byte RX frame is TAGGED — the old size()>=5 guard "
+                  "dropped the tag on the very reply this category exists for");
+            check(line.contains(QStringLiteral("sub=06")),
+                  "with the subcommand read from index 1, not index 5");
+        }
+
+        // RX, LONG FRAME — a frequency report. Six bytes, so the old guard
+        // PASSED and produced a confidently wrong label: for 14.074 MHz the
+        // BCD payload puts 0x14 at index 4, which is cmd::kLevel, so a
+        // frequency reply was printed as "cmd=14 sub=00" — a level command.
+        // Plausible, wrong, and aimed at someone who switched this on because
+        // they no longer trust their reading of the code.
+        g_civLines.clear();
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr,
+                       cmd::kReadFreq, 0x00, 0x40, 0x07, 0x14, 0x00, kCivEom});
+        QTest::qWait(120);
+        {
+            const QString line = lastLineStartingWith(QStringLiteral("RX <- 03"));
+            check(!line.isNull(), "the frequency report reaches the CI-V trace");
+            check(line.contains(QStringLiteral("cmd=03")),
+                  "a frequency reply is tagged as READ-FREQUENCY, not as the "
+                  "level command its BCD payload happens to spell at index 4");
+            check(!line.contains(QStringLiteral("sub=")),
+                  "and read-frequency carries no subcommand, so none is invented");
+        }
+
+        // TX — unchanged behaviour, asserted so the RX fix cannot silently
+        // break the direction that was already right. The raw wire frame keeps
+        // its envelope, so the command really is at index 4 here. AF gain is
+        // command 14 SUB 01, which is a subcommand-bearing frame — the case
+        // where a wrong index would show.
+        g_civLines.clear();
+        backend.setSliceAudioGain(0, 42);
+        QTest::qWait(120);
+        {
+            const QString line = lastLineStartingWith(QStringLiteral("TX -> fe fe"));
+            check(!line.isNull(), "the outbound frame reaches the CI-V trace");
+            check(line.contains(QStringLiteral("cmd=14")) && line.contains(QStringLiteral("sub=01")),
+                  "a TX frame still decodes from index 4/5, past the envelope");
+        }
+
+        g_capturing = false;
+        qInstallMessageHandler(g_prevHandler);
+        QLoggingCategory::setFilterRules(QString());
     }
 
     // ---- health -----------------------------------------------------------
