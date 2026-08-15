@@ -1692,6 +1692,33 @@ MainWindow::MainWindow(QWidget* parent)
     // radio side and ignores this.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
             this, [this](const QByteArray& pcm, bool clientLeveled) {
+        // ⛔ NOT WHILE THE MODEM IS TRANSMITTING. This tap is mic-driven — the
+        // comment above says so, and the emit site calls it "phone/SSB" — but
+        // submitTxAudio() is a FUNNEL, shared with AetherModem's AX.25 audio.
+        // Both reach the radio's single modulator input and SUM there.
+        //
+        // Measured 2026-08-15, IC-9700 over LAN. A capture taken at the far end
+        // of this funnel contains two interleaved sources in ~0.9 s blocks:
+        //   - peak ~11476, energy at 1180/1210/1310/1330 Hz  = the modem's AFSK
+        //   - peak ~16000, BROADBAND, dominant frequency wandering 770-1200 Hz
+        //     every 100 ms                                    = this path
+        // Direwolf's atest decodes the modem's audio perfectly on its own (3/3
+        // frames, mark/space 20/20) and decodes NOTHING from the mixture. On the
+        // air that is a transmission which is loud, on frequency, with correct
+        // tones, and undecodable by any TNC — the fault chased since 2026-08-12.
+        //
+        // ⛔ DO NOT GATE THIS ON isDaxTxMode(). Tried 2026-08-15 and it is
+        // WRONG: the modem's own AFSK reaches this same signal. Its chunks go
+        // AudioEngine::sendModemTxAudio() -> feedDaxTxAudioInternal() -> emit
+        // txFinalMonitorPcmReady, so a DAX-TX-mode gate here silences the modem
+        // rather than the microphone — measured on air as "RF power but no
+        // modulation".
+        //
+        // The mixing problem is real (two sources sum into the radio's single
+        // modulator input; a post-funnel capture shows the modem's AFSK at peak
+        // ~11476 interleaved with a broadband ~16000 source), but the separation
+        // has to happen where the two are still distinguishable — upstream of
+        // this shared tap — not here, where they are already one stream.
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
                                    clientLeveled);
     });
