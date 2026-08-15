@@ -2591,7 +2591,8 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
     }
     if (name == QLatin1String("civ")) {
         return normalizedAction == QLatin1String("trace")
-            || normalizedAction == QLatin1String("session");
+            || normalizedAction == QLatin1String("session")
+            || normalizedAction == QLatin1String("scheduler");
     }
     return false;
 }
@@ -3289,7 +3290,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <send <hex>|trace [all]|session> — CI-V inject, frame trace, or RS-BA1 lease health (Icom; send is TX-gated)",
+            "civ <send <hex>|trace [all]|session|scheduler> — CI-V inject, frame "
+            "trace, RS-BA1 lease health, or command-scheduler health (Icom; send "
+            "is TX-gated)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doCiv(a.action, a.value);
@@ -7529,8 +7532,9 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
 
     const QString a = action.trimmed().toLower();
     if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
-                        && a != QLatin1String("session"))) {
-        return err(QStringLiteral("civ requires an action (send|trace|session)"));
+                        && a != QLatin1String("session")
+                        && a != QLatin1String("scheduler"))) {
+        return err(QStringLiteral("civ requires an action (send|trace|session|scheduler)"));
     }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
@@ -7538,7 +7542,7 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
             "radio. Relaunch with AETHER_AUTOMATION_ALLOW_TX=1"));
     }
 
-    // The Icom backend answers all three verbs synchronously inside
+    // The Icom backend answers these diagnostic verbs synchronously inside
     // invokeExtension, so a direct connection lands before the call returns.
     // Anything that does not answer leaves `answered` false and is reported as
     // unsupported rather than as success — a fire-and-forget reply here would
@@ -7564,6 +7568,8 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
 
     const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
                        : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
+                       : a == QLatin1String("scheduler")
+                           ? QStringLiteral("civ.scheduler.status")
                                                      : QStringLiteral("civ.session");
     backend->invokeExtension(QStringLiteral("icom"), verb, rid, arg.trimmed());
     disconnect(okConn);

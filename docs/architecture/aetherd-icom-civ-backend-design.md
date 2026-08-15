@@ -253,19 +253,44 @@ not invent a dB scale from the raw register.
 
 ### Gap B — metering is a scheduler, not a subscription
 
-This is new. Flex streams meters; the HL2 embeds them. Icom needs a **poll
-scheduler** that:
+Flex streams meters; the HL2 embeds them. Icom uses one CI-V command plane for
+meters, startup snapshots, periodic controls and PTT. `IcomCivScheduler` is the
+single writer above `IcomSession::sendCiv()` and:
 
 - polls only meters currently visible in the UI;
-- runs S-meter at ~10 Hz and everything else at ~5 Hz;
+- paces dispatches into 25 ms slots and permits one ordinary command/reply
+  transaction at a time;
 - stops TX meters entirely while receiving, and RX meters while transmitting;
-- yields to user-initiated commands, so tuning never queues behind metering;
+- puts operator writes and their radio-authoritative readbacks ahead of polls;
+- coalesces duplicate reads and rapid writes by semantic register, preserving
+  the newest write generation;
+- expires a lost reply after 350 ms and ages background work so PTT or S-meter
+  traffic cannot starve slower controls;
+- lets fail-safe unkey bypass pacing and the outstanding reply slot; and
 - filters its own request/response traffic out of anything re-exported (CAT
   pass-through, TCI) — kappanhang does exactly this and it matters.
 
-wfview's per-rig `Periodic\N\Command` list with priorities is the proven shape.
-This should be a named component (`IcomMeters`) with its own test, not a timer
-sprinkled through the backend.
+Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
+retired before a later read is sent, or that ACK can be mistaken for the read's
+answer. An unsupported read may itself finish with `FB`/`FA`; that releases the
+slot but is never decoded as state.
+
+PTT additionally carries an intent generation and a one-second confirmation
+window. A delayed pre-key `RX` answer is stale after a newer `TX` intent and
+cannot unkey the model; matching readback confirms the intent, while radio
+truth wins again when the bounded window expires.
+
+| group | interval | condition |
+|---|---:|---|
+| PTT fallback | 250 ms | always connected; Transceive is only a hint |
+| S meter | 100 ms | RX and visible |
+| power, SWR, ALC, compression | 200 ms | TX and visible |
+| PA current | 500 ms | TX and visible |
+| voltage | 1000 ms | visible |
+| overflow | 500 ms | RX and visible |
+| NR, NB, auto/manual notch state | 1000 ms | connected |
+| frequency, mode/DATA, monitor and VOX state | 2000 ms | connected |
+| levels, RF power, preamp, AGC, attenuator, tuner, RIT/XIT | 3000 ms | connected |
 
 #### State convergence is snapshot + transceive + polling
 
@@ -279,11 +304,10 @@ Reliable remote state therefore has three layers:
 3. rotate explicit reads on the link timer for states the model guide permits.
 
 Poll slowly enough to leave command latency and meter traffic headroom. The
-current backend uses six one-second phases, with at most four adjacent control
-reads in a phase, and gives operator writes a 500 ms quiet window. NR/NB
-function and level reads therefore rotate at about six seconds; TX state is
-faster because it gates transmit-only meters. A reply is radio
-authority and updates the model without reflecting a new command back down.
+current intervals are in the table above; priority, coalescing and aging bound
+their interaction instead of relying on independent timers to miss each other.
+A reply is radio authority and updates the model without reflecting a new
+command back down.
 Radio-authoritative Icom state must not be replayed from client persistence on
 reconnect.
 

@@ -9,10 +9,14 @@
 
 #include <deque>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <vector>
 
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/icom/CivCodec.h"
+#include "core/backends/icom/IcomCivScheduler.h"
 #include "core/backends/icom/IcomMeters.h"
 #include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
@@ -112,9 +116,11 @@ public:
     // this session. Cheap, read-only, and safe with no radio attached.
     //
     // controlScrub() is the CHECK. For every settable control it drives the seam
-    // and looks for the frame on the wire, so "we believe this is wired" becomes
-    // "this reached the radio and it answered". `filter` narrows it to one id or
-    // one plane; empty scrubs everything safe.
+    // and verifies that the exact frame reached either the wire or the scheduler.
+    // Because the bridge request is synchronous while CI-V dispatch is not, a
+    // scheduled result is completed by waiting for `civ scheduler` to drain
+    // without a timeout. `filter` narrows it to one id or one plane; empty
+    // scrubs everything safe.
     //
     // NEITHER KEYS THE TRANSMITTER. The scrub deliberately excludes ptt, tuner
     // and power: two of them transmit and the third cannot be undone over WiFi.
@@ -166,6 +172,18 @@ private:
     void publishModeState();
     void publishMeterDefs();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
+    void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
+                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
+    void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
+                    IcomCivScheduler::Priority priority, bool supersedes = true);
+    void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
+                                    const std::string& key);
+    void pumpCiv(qint64 nowMs);
+    [[nodiscard]] std::string semanticKey(std::span<const std::uint8_t> frame) const;
+    [[nodiscard]] std::optional<std::vector<std::uint8_t>>
+        confirmationFor(std::span<const std::uint8_t> frame) const;
+    [[nodiscard]] QVariantMap schedulerDiagnostics() const;
+    void serviceSchedulerWaiters(qint64 nowMs);
     void applyScopeStartup();
     // The connect-edge read burst, lifted out of onSessionConnected UNCHANGED.
     //
@@ -222,6 +240,7 @@ private:
     ScopeDecoder m_scope;
     ScopeCalibration m_scopeCal;
     MeterPoller m_meters;
+    IcomCivScheduler m_civScheduler;
 
     // 48 kHz mono from the radio -> 24 kHz interleaved stereo for the engine.
     //
@@ -261,6 +280,8 @@ private:
     bool m_dataMode = false;
     bool m_connected = false;
     bool m_keyed = false;
+    std::optional<bool> m_pendingPttIntent;
+    qint64 m_pendingPttUntilMs = 0;
     bool m_overflow = false;
     double m_vdVolts = 0.0;
     double m_idAmps = 0.0;
@@ -326,7 +347,6 @@ private:
     bool    m_xitOn = false;
     int     m_ritOffsetHz = 0;
     int     m_controlPollPhase = 0;
-    qint64  m_controlPollQuietUntilMs = 0;
     bool    m_rxAntennaExternal = false;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
@@ -378,9 +398,10 @@ private:
     struct CivTraceEntry {
         std::int64_t atMs = 0;
         bool outbound = false;
+        bool routine = false;
         QString hex;
     };
-    void traceCiv(bool outbound, std::span<const std::uint8_t> frame);
+    void traceCiv(bool outbound, std::span<const std::uint8_t> frame, bool routine = false);
     [[nodiscard]] QVariantList civTrace(bool includeRoutine) const;
     std::deque<CivTraceEntry> m_civTrace;
     static constexpr std::size_t kCivTraceMax = 200;
@@ -390,6 +411,10 @@ private:
     // claims is wired but that has never been seen on the wire is exactly the
     // half-wired state the table exists to expose.
     QSet<QString> m_controlsSent;
+    // Exact set commands admitted by the scheduler. A scrub runs
+    // synchronously while CI-V dispatch/reply is intentionally asynchronous,
+    // so admission and physical dispatch must be reported separately.
+    QSet<QString> m_controlsScheduled;
     QSet<QString> m_controlsSeen;
     // Rows whose scrub mirror holds a REAL value — the radio answered for it,
     // or we commanded it. Deliberately NOT m_controlsSent, which controlScrub()
@@ -402,6 +427,13 @@ private:
     // radio from a registry that matches nothing.
     quint64 m_framesObserved = 0;
 
+    struct SchedulerWaiter {
+        quint64 requestId = 0;
+        qint64 deadlineMs = 0;
+    };
+    std::vector<SchedulerWaiter> m_schedulerWaiters;
+    quint64 m_schedulerTimeoutsReported = 0;
+
     // CI-V stall detection. The transport can be healthy while the command
     // plane is dead — see onLinkTick — so these track the command plane alone.
     qint64  m_lastInboundCivAtMs = 0;
@@ -412,12 +444,9 @@ private:
     // 1 s and a user-command guard can defer it — short enough that an operator
     // has not yet had time to wonder why the S-meter stopped.
     static constexpr qint64 kCivStallMs = 5000;
-    // Reconciliation must yield after an operator write.  This prevents the
-    // next one-second phase from placing stale reads directly behind a set;
-    // RFC #4983 will replace this coarse window with response-aware scheduling.
-    static constexpr qint64 kControlPollQuietMs = 500;
     // Note the id for a frame we are about to send or have just decoded.
     void noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
+    void noteControlScheduled(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     LinkStats m_link;
 };

@@ -2958,6 +2958,27 @@ reconnect grant stopped its media streams around 45 seconds even though the
 ordinary 60-second renewal was later accepted. After that one early renewal,
 the session returns to the wfview/kappanhang 60-second cadence.
 
+**`civ scheduler`** reports the shared command-plane scheduler rather than one
+producer in isolation:
+
+```json
+→ {"cmd":"civ","action":"scheduler"}
+← {"ok":true,"civ":"scheduler","result":{
+   "idle":false,"slotMs":25,"readTimeoutMs":350,
+   "queueDepth":3,"readInFlight":true,"inFlightKey":"meter.s",
+   "queued":812,"dispatched":799,"coalesced":96,
+   "replies":796,"staleReplies":1,"timeouts":2,
+   "pendingPttIntent":false}}
+```
+
+Use it when controls feel delayed or meters stop. A bounded queue with replies
+advancing is healthy. A growing queue plus timeouts identifies CI-V command-
+plane loss even if RS-BA1 link counters and the panadapter still move.
+`staleReplies` is expected to remain near zero; it proves an old poll was
+discarded after a newer operator intent instead of rolling the UI backward.
+Poll this read-only verb until `idle:true` when a test needs deterministic
+write/readback convergence.
+
 **`civ trace [all]`** reads the bounded decoded CI-V frame trace. The default
 omits routine meter traffic; `all` includes it. **`civ send <hex>`** injects
 command bytes through the active Icom session and is reserved for controlled
@@ -3022,15 +3043,20 @@ alone proves nothing. `IDLE` distinguishes a transmit-only meter that is
 correctly quiet while receiving from one that is broken.
 
 **`controls scrub [id|plane]`** — the linkage check. Drives every settable
-control through its seam verb **at its current value**, then looks for the frame
-on the wire. Nothing on the radio moves.
+control through its seam verb **at its current value**, then verifies that the
+exact frame reached either the wire or the CI-V scheduler. Nothing on the radio
+moves. Because dispatch is asynchronous, finish a scrub by polling
+`civ scheduler` until `idle:true`; no increase in `timeouts` proves every
+admitted command completed its dispatch/readback transaction.
 
 ```json
 → {"cmd":"controls","args":"scrub"}
 ← {"ok":true,"result":{"checked":25,"linked":17,"broken":0,"notTested":8,
    "rows":[{"id":"rf.gain","civ":"14 02","seamVerb":"setPanRfGain",
-            "reachedWire":true,"status":"LINKED",
-            "verdict":"the seam verb put this command on the wire"},
+            "reachedWire":false,"reachedScheduler":true,"status":"LINKED",
+            "verdict":"the seam verb admitted this exact command to the CI-V
+                       scheduler; wait for `civ scheduler` idle with no new
+                       timeout to prove dispatch and readback"},
            {"id":"rit.offset","civ":"21 00","status":"NOT-TESTED",
             "verdict":"no safe way to re-assert this without changing the
                        operator's setting — not a fault, not a pass"}]}}
@@ -3039,6 +3065,11 @@ on the wire. Nothing on the radio moves.
 Three outcomes, not two. `NOT-TESTED` is a real state — a control the scrub
 could not drive without changing the operator's setting — and collapsing it into
 either pass or fail would misreport it.
+
+`reachedWire` and `reachedScheduler` are deliberately separate. An idle
+scheduler with unchanged timeout count promotes the latter from accepted work
+to completed wire/readback proof without making the synchronous scrub block the
+application event loop.
 
 The scrub clears the enable-dedupe sentinels first: NR, NB and both notches
 suppress an enable that matches what was last sent, which is correct in normal
@@ -3426,7 +3457,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <send <hex>\|trace [all]\|session> — CI-V inject, frame trace, or RS-BA1 lease health (Icom; send is TX-gated) |
+| `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler> — CI-V inject, frame trace, RS-BA1 lease health, or command-scheduler health (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |

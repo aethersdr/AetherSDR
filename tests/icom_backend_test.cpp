@@ -143,6 +143,29 @@ int main(int argc, char** argv)
     check(waitFor([&] { return backend.isConnected(); }), "the backend connects");
     check(connectedSpy.count() == 1, "and emits connected() exactly once");
 
+    quint64 schedulerRequestId = 9000;
+    const auto waitSchedulerIdle = [&](int timeoutMs = 5000) {
+        QSignalSpy replySpy(&backend, &IRadioBackend::extensionResult);
+        const quint64 requestId = ++schedulerRequestId;
+        QVariantMap arg;
+        arg.insert(QStringLiteral("timeoutMs"), timeoutMs);
+        backend.invokeExtension(QStringLiteral("icom"),
+                                QStringLiteral("civ.scheduler.wait-idle"),
+                                requestId, arg);
+        QVariantMap result;
+        const bool replied = waitFor([&] {
+            for (const QList<QVariant>& reply : replySpy) {
+                if (reply.at(0).toULongLong() == requestId) {
+                    result = reply.at(1).toMap();
+                    return true;
+                }
+            }
+            return false;
+        }, timeoutMs + 500);
+        return replied && result.value(QStringLiteral("idle")).toBool()
+            && !result.value(QStringLiteral("timedOut")).toBool();
+    };
+
     // ---- capability -------------------------------------------------------
     const RadioCapabilities caps = backend.capabilities();
     check(caps.family == QStringLiteral("icom"), "family is icom");
@@ -180,6 +203,10 @@ int main(int argc, char** argv)
           "the backend ASKS the radio what it is (0x19 0x00) rather than assuming");
     check(backend.model().name == "IC-705", "and resolves the IC-705");
     check(backend.model().verified, "whose capability numbers are tier-1 verified");
+    check(waitSchedulerIdle(),
+          "connect-time radio-authoritative state converges through the scheduler");
+    const SliceDelta connectedSliceState = lastSliceState;
+    const TransmitDelta connectedTransmitState = lastTransmitState;
 
     // ---- THE AUDIO CONTRACT (TCI / WSJT-X) --------------------------------
     //
@@ -303,6 +330,11 @@ int main(int argc, char** argv)
         // KEYED: the same buffers must arrive.
         radio.clearCivLog();
         backend.setKeying(true);
+        check(waitFor([&] {
+                  return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                                     movesPttOrTuner);
+              }, 1000),
+              "the keyed intent reaches the radio through the scheduler");
         for (int i = 0; i < 20; ++i)
             backend.submitTxAudio(pcm, 24000);
         QTest::qWait(200);
@@ -321,6 +353,7 @@ int main(int argc, char** argv)
               "scrub's 'never keys' check is not vacuous");
 
         backend.setKeying(false);
+        check(waitSchedulerIdle(), "unkey and its radio confirmation complete");
 
         // ...and stops again on unkey, rather than draining a backlog into the
         // next transmission.
@@ -338,12 +371,12 @@ int main(int argc, char** argv)
     // changes the next voice/data transmission (and the UI follows the poll).
     {
         backend.setTxPower(37);
-        QTest::qWait(80);
+        check(waitSchedulerIdle(), "ordinary RF power converges before TUNE");
         radio.clearCivLog();
         backend.setTune(true, 10);
-        QTest::qWait(80);
+        check(waitSchedulerIdle(), "temporary TUNE drive and tuner state converge");
         backend.setTune(false);
-        QTest::qWait(120);
+        check(waitSchedulerIdle(), "TUNE release and RF-power restore converge");
 
         std::vector<int> powerWrites;
         for (const CivFrame& f : radio.civCommands()) {
@@ -374,8 +407,8 @@ int main(int argc, char** argv)
     // a read that is issued and whose reply is dropped looks exactly like a read
     // that was never issued.
     {
-        const SliceDelta sl = lastSliceState;
-        const TransmitDelta tx = lastTransmitState;
+        const SliceDelta sl = connectedSliceState;
+        const TransmitDelta tx = connectedTransmitState;
 
         check(sl.nr.value_or(false), "NR ON is adopted from the radio");
         check(sl.nb.value_or(false), "NB ON is adopted");
@@ -493,6 +526,7 @@ int main(int argc, char** argv)
         backend.setSliceFilter(0, -1800, 0);   // 1.8 kHz — the SSB ladder's FIL3
         check(waitFor([&] { return radio.m_filter == 3; }),
               "the filter request reaches the radio and selects FIL3");
+        check(waitSchedulerIdle(), "the filter write's compound readback completes");
         check(radio.m_dataOn,
               "and leaves it IN DATA — a filter button must not silently take an "
               "FT8 operator back to microphone audio");
@@ -567,7 +601,7 @@ int main(int argc, char** argv)
         backend.setTxPower(10);
         backend.setMicGain(10);
         backend.setTxMonitor(true, 10);
-        QTest::qWait(150);
+        check(waitSchedulerIdle(), "percentage control writes and confirmations converge");
 
         const auto rawFor = [&](std::uint8_t sub) -> std::optional<int> {
             const auto& frames = radio.civCommands();
@@ -597,17 +631,38 @@ int main(int argc, char** argv)
     // stopped answering after 16 02 02" is a bug report; "the radio stopped
     // answering" is a guess.
     {
+        const auto periodicallyRead = [&](std::uint8_t command, std::uint8_t sub) {
+            return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                               [=](const CivFrame& f) {
+                return f.cmd == command && f.hasSub && f.sub == sub && f.data.empty();
+            });
+        };
+
+        // Prove reconciliation while CI-V is healthy. Once replies stop, each
+        // transaction is deliberately bounded by the timeout; a silence test
+        // should not require the scheduler to spray every register into a
+        // black hole merely to prove those reads exist.
+        radio.clearCivLog();
+        check(waitFor([&] {
+                  return periodicallyRead(cmd::kFunction, func::kNoiseReduce)
+                      && periodicallyRead(cmd::kFunction, func::kNoiseBlanker)
+                      && periodicallyRead(cmd::kLevel, level::kNrLevel)
+                      && periodicallyRead(cmd::kLevel, level::kNbLevel);
+              }, 5000),
+              "NR/NB state and levels are periodically reconciled while CI-V is live");
+
         radio.clearCivLog();
         radio.setCivSilent(true);
 
         // A command the radio receives and does not answer.
         backend.setPanPreamp(QStringLiteral("0"), 1);
-        QTest::qWait(150);
-        check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
-                          [](const CivFrame& f) {
-                              return f.cmd == cmd::kFunction && f.hasSub
-                                  && f.sub == func::kPreamp;
-                          }),
+        check(waitFor([&] {
+                  return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                                     [](const CivFrame& f) {
+                                         return f.cmd == cmd::kFunction && f.hasSub
+                                             && f.sub == func::kPreamp;
+                                     });
+              }, 1000),
               "a deaf radio still RECEIVES — the command reached it");
 
         // The detector needs its own threshold to elapse with no inbound frame.
@@ -626,21 +681,6 @@ int main(int argc, char** argv)
         check(backend.isConnected(),
               "and isConnected() still reports true — the lie the detector exists "
               "to break");
-
-        const auto periodicallyRead = [&](std::uint8_t command, std::uint8_t sub) {
-            return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
-                               [=](const CivFrame& f) {
-                return f.cmd == command && f.hasSub && f.sub == sub && f.data.empty();
-            });
-        };
-        check(periodicallyRead(cmd::kFunction, func::kNoiseReduce),
-              "NR state is periodically read instead of relying on CI-V transceive");
-        check(periodicallyRead(cmd::kFunction, func::kNoiseBlanker),
-              "NB state is periodically read instead of relying on CI-V transceive");
-        check(periodicallyRead(cmd::kLevel, level::kNrLevel),
-              "NR level is periodically reconciled too");
-        check(periodicallyRead(cmd::kLevel, level::kNbLevel),
-              "NB level is periodically reconciled too");
 
         radio.setCivSilent(false);
         QTest::qWait(300);
@@ -756,10 +796,15 @@ int main(int argc, char** argv)
     {
         radio.clearCivLog();
         const QVariantMap res = backend.controlScrub(QString());
-        QTest::qWait(200);
+        check(waitSchedulerIdle(), "the full control scrub drains through the scheduler");
         const auto& sent = radio.civCommands();
 
         check(!res.contains(QStringLiteral("error")), "the scrub runs on a live session");
+        check(res.value(QStringLiteral("broken")).toInt() == 0,
+              "scheduler admission keeps the synchronous scrub from falsely "
+              "reporting queued controls as broken");
+        check(res.value(QStringLiteral("linked")).toInt() > 0,
+              "the scrub reports controls admitted to the scheduler as linked");
 
         // 1. THE MIRROR MUST HOLD THE RADIO'S VALUE, NOT OUR DEFAULT.
         //
@@ -801,7 +846,7 @@ int main(int argc, char** argv)
         // this is the nr/nb/anf/notch sentinel rule, generalised.
         const bool touchedAtten = std::any_of(sent.begin(), sent.end(),
                                               [](const CivFrame& f) {
-            return f.cmd == cmd::kAttenuator;
+            return f.cmd == cmd::kAttenuator && !f.data.empty();
         });
         check(!touchedAtten,
               "a control the radio never reported is NOT driven — re-asserting an "
@@ -904,9 +949,9 @@ int main(int argc, char** argv)
     // An operator disconnect while TUNE is active must unkey and restore the
     // borrowed RF-power register before the serial command path disappears.
     backend.setTxPower(37);
-    QTest::qWait(80);
+    check(waitSchedulerIdle(), "disconnect fixture's ordinary power converges");
     backend.setTune(true, 10);
-    QTest::qWait(80);
+    check(waitSchedulerIdle(), "disconnect fixture reaches active TUNE");
     radio.clearCivLog();
     backend.disconnectRadio();
     QTest::qWait(100);
@@ -1043,8 +1088,7 @@ int main(int argc, char** argv)
         c.backend.connectRadio(r);
         check(waitFor([&] { return c.backend.isConnected(); }),
               "wrong pin: the session still comes up - the RS-BA1 transport is fine");
-        QTest::qWait(300);
-        check(c.sentTo(0xA4) > 1,
+        check(waitFor([&] { return c.sentTo(0xA4) > 1; }, 6000),
               "wrong pin: the reads go where the operator said, not where the "
               "radio is");
         check(c.frequencyMHz == 0.0,
@@ -1093,9 +1137,10 @@ int main(int argc, char** argv)
         check(waitFor([&] { return c.frequencyMHz > 14.0 && c.frequencyMHz < 14.1; }),
               "retarget: the broadcast reply moves the reads to 0x50 and the "
               "radio answers");
-        check(c.sentTo(0xA2) > 1,
-              "retarget: the name seed DID address the wrong device first - "
-              "that is the setup for this case, not the defect");
+        check(c.sentTo(0xA2) == 0,
+              "retarget: the broadcast identity probe leads the scheduler, so "
+              "the queued snapshot for the stale name-derived address is "
+              "discarded before it reaches the wire");
 
         // THE DISCRIMINATING ASSERTION. 0x27 is the scope pair and an IC-9700
         // has a scope, so if "started" is latched per SESSION those two frames

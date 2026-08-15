@@ -348,6 +348,13 @@ add_executable(icom_civ_test
 target_include_directories(icom_civ_test PRIVATE src)
 add_test(NAME icom_civ_test COMMAND icom_civ_test)
 
+add_executable(icom_civ_scheduler_test
+    tests/icom_civ_scheduler_test.cpp
+    src/core/backends/icom/IcomCivScheduler.cpp
+    src/core/backends/icom/CivCodec.cpp)
+target_include_directories(icom_civ_scheduler_test PRIVATE src)
+add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
+
 add_executable(icom_scope_test
     tests/icom_scope_test.cpp
     src/core/backends/icom/IcomScope.cpp
