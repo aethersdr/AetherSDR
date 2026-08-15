@@ -779,6 +779,40 @@ void RadioModel::setupBackend(const QString& family)
     // so this connect is harmless for Flex and load-bearing for HL2.
     connect(m_backend.get(), &IRadioBackend::spectrumFrameReady,
             this, &RadioModel::onBackendSpectrumFrame);
+
+    // POST-RESAMPLE TX TAP (Icom only — it is the one backend that resamples on
+    // the way out). Feeds the SAME sample recorder `txwave` drains, so
+    // `txwave arm` -> transmit -> `txwave save` writes whichever side of the
+    // resampler is armed and the WAV goes straight to Direwolf's atest.
+    //
+    // Why it matters: atest decodes the PRE-resample recording perfectly (3/3
+    // AX.25 frames) while the same transmission off the air decodes nowhere.
+    // This is the other end of that stretch.
+    if (auto* icom = qobject_cast<icom::IcomCivBackend*>(m_backend.get())) {
+        connect(icom, &icom::IcomCivBackend::txPostResampleAudio, this,
+                [this](const std::vector<float>& mono, int rateHz) {
+                    if (!m_txAudioRecordEnabled.load(std::memory_order_relaxed))
+                        return;
+                    // The recorder holds interleaved int16 stereo, matching the
+                    // pre-resample capture, so one WAV writer serves both and
+                    // atest sees the same shape either way.
+                    QMutexLocker lock(&m_txAudioTapMutex);
+                    m_txAudioTapSampleRate = rateHz;
+                    const int room = m_txAudioRecordCapacity - m_txAudioRecordBuffer.size();
+                    if (room <= 0)
+                        return;
+                    const int take = std::min<int>(room, int(mono.size()) * 2);
+                    const int oldSize = m_txAudioRecordBuffer.size();
+                    m_txAudioRecordBuffer.resize(oldSize + take);
+                    qint16* dst = m_txAudioRecordBuffer.data() + oldSize;
+                    for (int i = 0; i < take / 2; ++i) {
+                        const float v = std::clamp(mono[size_t(i)], -1.0f, 1.0f);
+                        const auto s = static_cast<qint16>(std::lround(v * 32767.0f));
+                        dst[i * 2] = s;
+                        dst[i * 2 + 1] = s;
+                    }
+                });
+    }
     // Liveness stamps, on the arrival edge rather than anywhere downstream: a
     // frame that arrives and is then discarded still proves the link is alive,
     // and that is the question these answer.
@@ -8138,6 +8172,16 @@ void RadioModel::setTxAudioRecordEnabled(bool on, int maxSamples)
         m_txAudioRecordCapacity = 0;
     }
     m_txAudioRecordEnabled.store(on, std::memory_order_relaxed);
+}
+
+void RadioModel::setTxPostResampleTapEnabled(bool on)
+{
+    // Icom only: it is the one backend that resamples on the way out, and this
+    // tap exists to bracket that resampler. A no-op elsewhere rather than an
+    // error — asking a Flex for its post-resample audio is a question with no
+    // referent, not a failure.
+    if (auto* backend = qobject_cast<icom::IcomCivBackend*>(m_backend.get()))
+        backend->setTxPostResampleTapEnabled(on);
 }
 
 QVector<qint16> RadioModel::takeTxAudioRecording(int* sampleRateHz)

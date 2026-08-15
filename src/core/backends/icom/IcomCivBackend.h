@@ -158,6 +158,19 @@ public:
     // fallback until the radio answers.
     [[nodiscard]] const IcomModel& model() const noexcept { return *m_model; }
 
+signals:
+    // The post-resample transmit tap (see m_txPostResampleTapEnabled). Mono
+    // float at the session's negotiated rate — the exact samples handed to
+    // IcomSession::sendAudio, which is the last thing AE controls.
+    void txPostResampleAudio(const std::vector<float>& mono, int sampleRateHz);
+
+public:
+    // Arm/disarm the post-resample tap. Diagnostic; keys nothing.
+    void setTxPostResampleTapEnabled(bool on)
+    {
+        m_txPostResampleTapEnabled.store(on, std::memory_order_relaxed);
+    }
+
 private slots:
     void onSessionConnected(const QString& deviceName);
     void onSessionDisconnected(const QString& reason);
@@ -361,6 +374,22 @@ private:
     std::unique_ptr<Resampler> m_txResampler;
     int m_txResamplerFromHz = 0;
     int m_txResamplerToHz = 0;
+
+    // POST-RESAMPLE TRANSMIT TAP — the LAST point AE sees its own audio before
+    // it becomes UDP. `txwave` records what enters RadioModel::submitTxAudio;
+    // Direwolf's atest decodes that recording perfectly (3/3 AX.25 frames,
+    // mark/space 20/20), yet the same transmission off the air decodes nowhere.
+    // The fault therefore lives between that entry point and the antenna, and
+    // this brackets the client half of it: resample 24k->48k, then the codec and
+    // the network.
+    //
+    // Emitted AFTER the resampler and immediately before m_session->sendAudio(),
+    // so a WAV built from it can be fed straight back to atest. Decodable here
+    // clears everything in this file; undecodable here indicts the resampler.
+    //
+    // Off unless armed, and read with a relaxed atomic so an idle transmit path
+    // pays one load. Diagnostic only: it observes, it never keys.
+    std::atomic<bool> m_txPostResampleTapEnabled{false};
     // The DEFAULT audio rate, not the only one. 48 kHz 16-bit mono LPCM is
     // 768 kbps in each direction — about 1.5 Mbps of uncompressed UDP for a
     // duplex session, which saturates a marginal 2.4 GHz link and starves the

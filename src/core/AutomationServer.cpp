@@ -3239,10 +3239,11 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("txwave", {},
-            "txwave <arm|save|off> [samples|path] — record the actual SAMPLES "
-            "handed to the radio backend and write them to a WAV. `txaudio` "
-            "gives levels; only the samples show clipping or a preamble that "
-            "never becomes data",
+            "txwave <arm [post|samples]|save <path>|off> — record the actual "
+            "SAMPLES of a transmission to a WAV (feed it to Direwolf's atest). "
+            "`arm` taps submitTxAudio; `arm post` taps AFTER the Icom's "
+            "24k->48k resampler, the last point AE sees its own audio — the two "
+            "bracket the client half of the transmit path",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doTxWave(a.action, a.value);
@@ -6461,19 +6462,30 @@ QJsonObject AutomationServer::doTxWave(const QString& action, const QString& res
     const QString a = action.trimmed().toLower();
 
     if (a == QLatin1String("arm")) {
+        // `txwave arm post` captures AFTER the Icom's 24k->48k resampler — the
+        // LAST point AE sees its own audio — instead of at submitTxAudio. The
+        // two bracket the client half of the transmit path: atest decodes the
+        // pre-resample capture perfectly while the same transmission off the
+        // air decodes nowhere, so which side stays decodable localises it.
+        const QString arg = rest.trimmed().toLower();
+        const bool post = arg.startsWith(QLatin1String("post"));
         bool ok = false;
-        const int req = rest.trimmed().toInt(&ok);
+        const int req = post ? 0 : arg.toInt(&ok);
+        m_radioModel->setTxPostResampleTapEnabled(post);
         m_radioModel->setTxAudioRecordEnabled(true, ok ? req : 0);
         // Arm the level tap too, so a run reports both without a second verb.
         m_radioModel->setTxAudioTapEnabled(true);
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("txwave"), QStringLiteral("armed")},
+            {QStringLiteral("tap"), post ? QStringLiteral("post-resample")
+                                         : QStringLiteral("submitTxAudio")},
         };
     }
 
     if (a == QLatin1String("off")) {
         m_radioModel->setTxAudioRecordEnabled(false);
+        m_radioModel->setTxPostResampleTapEnabled(false);
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("txwave"), QStringLiteral("off")},

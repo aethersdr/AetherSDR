@@ -1283,6 +1283,10 @@ public:
     // audio path.
     void setTxAudioRecordEnabled(bool on, int maxSamples = 0);
     QVector<qint16> takeTxAudioRecording(int* sampleRateHz = nullptr);
+    // Arm the POST-RESAMPLE tap instead of the pre-resample one (Icom only).
+    // Both feed the same recorder, so `txwave save` writes whichever is armed
+    // and the WAV goes straight to Direwolf's atest either way.
+    void setTxPostResampleTapEnabled(bool on);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);

@@ -2831,6 +2831,17 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
         const auto* f = reinterpret_cast<const float*>(out.constData());
         mono.assign(f, f + out.size() / static_cast<int>(sizeof(float)));
     }
+    // THE LAST POINT AE SEES ITS OWN TRANSMIT AUDIO. Everything after this line
+    // is the codec, UDP and the radio. `txwave` records the other end of this
+    // stretch (what enters RadioModel::submitTxAudio), and Direwolf's atest
+    // decodes that recording perfectly — 3/3 AX.25 frames, mark/space 20/20 —
+    // while the same transmission off the air decodes nowhere. Capturing here
+    // and feeding it back to atest brackets the client half of the gap:
+    // decodable here clears this file; undecodable here indicts the resampler
+    // directly above.
+    if (m_txPostResampleTapEnabled.load(std::memory_order_relaxed))
+        emit txPostResampleAudio(mono, m_audioRateHz);
+
     m_session->sendAudio(mono);
 }
 
