@@ -212,9 +212,10 @@ static void testModes()
     // DFM is FM + DATA, and it was missing entirely. Selecting DFM fell through
     // to the "no equivalent" path, so setSliceMode() re-asserted the radio's
     // current mode and the control appeared to do nothing. The expensive half
-    // was the DATA flag: without it the radio transmits from the MICROPHONE
-    // rather than the WLAN modulator, so a 2 m AX.25 frame keyed the rig and
-    // put room noise on the air. Found on an IC-9700, 2026-08-09.
+    // was the DATA flag: a radio already in FM-D reported back as plain FM, so
+    // the next mode write cleared the flag and the radio transmitted from the
+    // MICROPHONE rather than the WLAN modulator — a 2 m AX.25 frame keyed the
+    // rig and put room noise on the air. Found on an IC-9700, 2026-08-09.
     check(modeFromNeutral("DFM", data) == CivMode::Fm && data, "DFM is FM + data");
     check(modeFromNeutral("FM", data) == CivMode::Fm && !data, "plain FM has no data flag");
     check(modeFromNeutral("CW", data) == CivMode::Cw, "bare CW maps, not just CWU");

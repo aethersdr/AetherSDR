@@ -298,11 +298,13 @@ std::optional<CivMode> modeFromNeutral(const std::string& neutral, bool& dataMod
     //      equivalent" path and re-asserted the radio's current mode. Selecting
     //      DFM in the UI simply reverted — indistinguishable from the control
     //      being ignored.
-    //   2. Worse, on the paths that DID reach the radio as plain FM the DATA
-    //      flag stayed clear, so transmit audio came from the MICROPHONE rather
-    //      than the WLAN modulator — exactly the failure the DIGU/DIGL comment
-    //      above describes, but for packet instead of FT8. A 2 m AX.25 frame
-    //      keyed the radio and put room noise on the air.
+    //   2. Worse, a radio the operator had put into FM-D from the front panel
+    //      reported back as plain FM (modeToNeutral was lossy the same way), so
+    //      the next mode write cleared the DATA flag and transmit audio came
+    //      from the MICROPHONE rather than the WLAN modulator — exactly the
+    //      failure the DIGU/DIGL comment above describes, but for packet
+    //      instead of FT8. A 2 m AX.25 frame keyed the radio and put room noise
+    //      on the air.
     if (u == "DFM")  { dataModeOut = true; return CivMode::Fm; }
     if (u == "RTTY") return CivMode::Rtty;
 
