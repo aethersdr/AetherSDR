@@ -56,6 +56,11 @@ struct RestoredRadioState {
     int extensionSchemaVersion = 0;
     QJsonObject extension;
 
+    // "This radio has no memory." Load returns it for an undeclared or empty
+    // domain set, and radio_state_memory_test pins that — so EVERY field added
+    // above has to be represented here or a document carrying only the new
+    // field would report itself as nothing stored. The AGC threshold is why
+    // that is worth spelling out: its absent value is -1, not 0.
     bool isEmpty() const
     {
         return rfFrequencyHz == 0.0 && mode.isEmpty() && filterLowHz == 0.0

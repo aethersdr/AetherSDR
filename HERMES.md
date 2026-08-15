@@ -271,9 +271,22 @@ reports symmetric cuts, and a pitch change does not move them).
   bug. The pair that gets remembered is **the last one the operator set**, on
   whichever receiver — `setSliceAgc()` records it, and `currentOperatingState()`
   reads that rather than the transmit receiver. Reading the TX receiver instead
-  meant a change on RX2 fired the capture and then persisted RX1'"'"'s untouched
+  meant a change on RX2 fired the capture and then persisted RX1's untouched
   value: the change that triggered the write was not the change that got
   written.
+- **"At the next connect" means a NEW radio, not a returning one.** The seeding
+  runs from `connectRadio()` when the connect request's serial differs from the
+  last one seeded, or when `buildReceivers()` had no previous state to carry —
+  never on a plain auto-reconnect to the same radio. `buildReceivers()`
+  deliberately preserves receiver state across a rebuild and
+  `RadioModel::handRestoredStateToBackend()` re-hands the document before EVERY
+  connect, so seeding from `applyRestoredState()` meant a dropped link flattened
+  RX2's live AGC back onto the remembered pair while its mode and passband
+  survived — the sibling restore engineers around exactly that. Flat memory
+  across a restart is the design; flattening live receivers mid-session is a
+  loss. `applyRestoredState()` still resets the CAPTURE side (the remembered
+  pair belongs to the radio whose document it is), which is what keeps radio A's
+  AGC from being written back under radio B's identity.
 - The threshold's "not restored" sentinel is **-1, not 0**: 0 is a threshold the
   operator can select, so a zero-means-absent encoding would quietly reset
   anyone running the AGC-T at the bottom of the slider.
