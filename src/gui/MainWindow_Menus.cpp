@@ -31,6 +31,7 @@
 #include "RC28MappingDialog.h"
 #include "ShortcutDialog.h"
 #include "RadioHealthDialog.h"
+#include "TxLinearityDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "SpectrumWidget.h"
 #include "SupportDialog.h"
@@ -1276,6 +1277,22 @@ void MainWindow::buildMenuBar()
     // symptoms in that dialog turn out to have a hardware cause.
     helpMenu->addAction("Radio Health...", this, [this]() {
         auto* dlg = new RadioHealthDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        trackPersistentDialog(dlg);
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
+    });
+    // TX Linearity Analyzer. Grouped with the other instruments because it
+    // MEASURES the radio rather than configuring it — and because the Settings
+    // menu's placeholder-connect loop would hijack any action added there.
+    //
+    // Unlike its neighbours here it transmits, so the full §8 interlock set
+    // lives inside the dialog: per-run dummy-load confirmation that is never
+    // remembered, a hard transmit timeout, a duty-cycle cooldown, band-plan
+    // refusal that fails closed, and SWR / PA-temperature / supply aborts.
+    helpMenu->addAction("TX Linearity Analyzer...", this, [this]() {
+        auto* dlg = new TxLinearityDialog(&m_radioModel, m_bandPlanMgr, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         trackPersistentDialog(dlg);
         dlg->show();

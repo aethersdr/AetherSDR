@@ -632,6 +632,17 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/WdspChannel.cpp
+    # TX Linearity Analyzer — backend-agnostic measurement core (no Qt, no
+    # radio-specific types) plus the FlexRadio DAX IQ capture adapter. The core
+    # is the measurement half of a digital-predistortion loop, so it is kept
+    # free of Flex specifics for the HPSDR adapter that follows.
+    src/core/TxLinearitySettings.cpp          # owned config object (Principle V)
+    src/core/txlinearity/SpectrumWindow.cpp
+    src/core/txlinearity/TxSpectrumAnalyzer.cpp
+    src/core/txlinearity/ImdAnalyzer.cpp
+    src/core/txlinearity/TxLinearitySafety.cpp
+    src/core/txlinearity/FlexDaxIqCapture.cpp
+    src/core/txlinearity/TxLinearityController.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/GpuSelector.cpp
@@ -862,6 +873,10 @@ set(MODEL_SOURCES
 add_subdirectory(third_party/QGeoView/lib EXCLUDE_FROM_ALL)
 
 set(GUI_SOURCES
+    # TX Linearity Analyzer — instrument window + marked spectrum plot.
+    # All DSP lives in src/core/txlinearity; these are display and wiring only.
+    src/gui/TxLinearityDialog.cpp
+    src/gui/TxLinearitySpectrumView.cpp
     src/gui/Contribute.cpp
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
@@ -4000,6 +4015,56 @@ add_executable(spectral_nr_test
 target_include_directories(spectral_nr_test PRIVATE src)
 target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
 add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
+
+# ── TX Linearity Analyzer ────────────────────────────────────────────────────
+#
+# Hardware-free by construction: the measurement core takes no Qt and no radio
+# types, so these link FFTW3 directly and nothing else. Every expected value is
+# derived in closed form from the synthetic PA model in
+# tests/TxLinearityTestSignals.h rather than recorded from a previous run, so
+# the suite proves the instrument measures correctly rather than proving it is
+# self-consistent. Do not let these regress into needing a radio.
+add_executable(tx_linearity_spectrum_test
+    tests/tx_linearity_spectrum_test.cpp
+    src/core/txlinearity/SpectrumWindow.cpp
+    src/core/txlinearity/TxSpectrumAnalyzer.cpp
+    src/core/txlinearity/ImdAnalyzer.cpp
+)
+target_include_directories(tx_linearity_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(tx_linearity_spectrum_test PRIVATE ${FFTW3_LIBRARIES})
+add_test(NAME tx_linearity_spectrum_test COMMAND tx_linearity_spectrum_test)
+
+add_executable(tx_linearity_imd_test
+    tests/tx_linearity_imd_test.cpp
+    src/core/txlinearity/SpectrumWindow.cpp
+    src/core/txlinearity/TxSpectrumAnalyzer.cpp
+    src/core/txlinearity/ImdAnalyzer.cpp
+)
+target_include_directories(tx_linearity_imd_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(tx_linearity_imd_test PRIVATE ${FFTW3_LIBRARIES})
+add_test(NAME tx_linearity_imd_test COMMAND tx_linearity_imd_test)
+
+# The owned config object (Principle V): defaults as a unit, round-trips as a
+# unit, and a drifted document degrades field by field. The range clamp is
+# load-bearing — timeoutSec feeds a transmit interlock.
+add_executable(tx_linearity_settings_test
+    tests/tx_linearity_settings_test.cpp
+    src/core/TxLinearitySettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(tx_linearity_settings_test PRIVATE src)
+target_link_libraries(tx_linearity_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_linearity_settings_test COMMAND tx_linearity_settings_test)
+
+# The safety interlocks are clock-injected and Qt-free specifically so they can
+# be tested without transmitting. An interlock that can only be exercised by
+# keying a radio is an interlock that never gets exercised.
+add_executable(tx_linearity_safety_test
+    tests/tx_linearity_safety_test.cpp
+    src/core/txlinearity/TxLinearitySafety.cpp
+)
+target_include_directories(tx_linearity_safety_test PRIVATE src)
+add_test(NAME tx_linearity_safety_test COMMAND tx_linearity_safety_test)
 
 add_executable(mono_dsp_stereo_adapter_test
     tests/mono_dsp_stereo_adapter_test.cpp
