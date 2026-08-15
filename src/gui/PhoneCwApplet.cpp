@@ -132,6 +132,7 @@ PhoneCwApplet::PhoneCwApplet(QWidget* parent)
 
 void PhoneCwApplet::setSelectableMicInputs(bool selectable)
 {
+    m_selectableMicInputs = selectable;
     if (!m_micSourceCombo)
         return;
     // Rebuild rather than disable: a greyed-out MIC entry still reads as "this
@@ -183,6 +184,17 @@ void PhoneCwApplet::setMicLevelMeterAvailable(bool available)
     m_micLevelMeterAvailable = available;
     if (m_levelGauge)
         m_levelGauge->setVisible(available);
+}
+
+void PhoneCwApplet::setDaxVisible(bool visible)
+{
+    if (!m_daxBtn)
+        return;
+    m_daxBtn->setVisible(visible);
+    if (!visible) {
+        const QSignalBlocker blocker(m_daxBtn);
+        m_daxBtn->setChecked(false);
+    }
 }
 
 void PhoneCwApplet::buildPhonePanel()
@@ -299,12 +311,18 @@ void PhoneCwApplet::buildPhonePanel()
             // Don't push to the radio in RADE mode: the slider is acting
             // as client-side RADE gain (PcMicGain), and sending
             // mic_level=N would silently overwrite the user's hardware-mic
-            // setting.  PC mode is already client-authoritative on the
-            // radio side (mic_level is ignored for PC), so the gate only
-            // matters for RADE-with-hardware-mic.
-            if (!m_updatingFromModel && m_model && !m_radeActive)
-                m_model->setMicLevel(v);
-            emit micLevelChanged(v);
+            // setting. Ordinary PC mode is resolved by the capability-aware
+            // model sync below; only RADE unconditionally owns client gain.
+            if (!m_updatingFromModel) {
+                if (m_model && !m_radeActive)
+                    m_model->setMicLevel(v);
+                const bool clientOwnsGain =
+                    m_radeActive
+                    || (m_selectableMicInputs && m_model
+                        && m_model->micSelection() == QLatin1String("PC"));
+                if (clientOwnsGain)
+                    emit micLevelChanged(v);
+            }
         });
 
         connect(m_accBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -815,9 +833,15 @@ void PhoneCwApplet::syncPhoneFromModel()
         if (idx >= 0) m_micSourceCombo->setCurrentIndex(idx);
     }
 
-    // PC mic gain and RADE mic gain are both client-authoritative (radio returns 0 for PC,
-    // and is unused for RADE TX). Both share the PcMicGain setting.
-    if (m_model->micSelection() == "PC" || m_radeActive) {
+    // A genuine selectable PC input is Flex client audio and therefore owns
+    // PcMicGain.  On Icom/HL2 the single "PC" label is synthetic: the backend
+    // still owns and reports its modulation level, so adopt that radio value.
+    const bool clientOwnsGain =
+        m_radeActive
+        || (m_selectableMicInputs
+            && m_model->micSelection() == QLatin1String("PC"));
+    const QSignalBlocker micLevelBlocker(m_micLevelSlider);
+    if (clientOwnsGain) {
         int pcGain = AppSettings::instance().value("PcMicGain", 100).toInt();
         m_micLevelSlider->setValue(pcGain);
         m_micLevelLabel->setText(QString::number(pcGain));

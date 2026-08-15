@@ -1413,6 +1413,7 @@ void VfoWidget::buildUI()
     tabLayout->setSpacing(0);
 
     const QStringList tabLabels = {"\xF0\x9F\x94\x8A", "DSP", "USB", "X/RIT", "DAX"};
+    m_daxTabIndex = tabLabels.indexOf(QLatin1String("DAX"));
     for (int i = 0; i < tabLabels.size(); ++i) {
         if (i > 0) {
             auto* sep = new QLabel("|");
@@ -1421,6 +1422,7 @@ void VfoWidget::buildUI()
             sep->setFixedWidth(6);
             sep->setAlignment(Qt::AlignCenter);
             tabLayout->addWidget(sep);
+            m_tabSeparators.append(sep);
         }
         auto* btn = new QPushButton(tabLabels[i]);
         btn->setFlat(true);
@@ -2733,7 +2735,7 @@ void VfoWidget::buildTabContent()
         lbl->setStyleSheet(kLabelStyle);
         row->addWidget(lbl);
         m_daxCmb = new GuardedComboBox;
-        m_daxCmb->addItems({"Off", "1", "2", "3", "4"});
+        populateDaxCombo();  // capacity-gated; rebuilt on connect (setRadioModel)
         AetherSDR::applyComboStyle(m_daxCmb);
         row->addWidget(m_daxCmb, 1);
         vb->addLayout(row);
@@ -2741,7 +2743,7 @@ void VfoWidget::buildTabContent()
         connect(m_daxCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int idx) {
             if (!m_updatingFromModel && m_slice)
-                m_slice->setDaxChannel(idx);  // 0=Off, 1-4=channels
+                m_slice->setDaxChannel(idx);  // 0=Off, 1..N=channels (N=radio capacity)
         });
 
         m_tabStack->addWidget(daxTab);
@@ -2823,6 +2825,19 @@ void VfoWidget::showTab(int index)
         }
     }
     relayoutToCurrentContent();
+}
+
+void VfoWidget::setDaxVisible(bool visible)
+{
+    if (m_daxTabIndex < 0 || m_tabBtns.size() <= m_daxTabIndex)
+        return;
+    if (!visible && m_activeTab == m_daxTabIndex)
+        closeActiveTab();
+    m_tabBtns[m_daxTabIndex]->setVisible(visible);
+    // Separator i sits immediately before tab i+1; hide the DAX separator too
+    // so an Icom VFO does not retain an orphan trailing bar.
+    if (m_daxTabIndex > 0 && m_tabSeparators.size() >= m_daxTabIndex)
+        m_tabSeparators[m_daxTabIndex - 1]->setVisible(visible);
 }
 
 void VfoWidget::updateDspTabAccent()
@@ -5733,8 +5748,13 @@ void VfoWidget::applyFilterPreset(int widthHz)
         int mid = -shift / 2;
         lo = mid - widthHz / 2;
         hi = mid + widthHz / 2;
-    } else if (mode == "CW" || mode == "CWL") {
-        // Centered on carrier — radio's BFO handles pitch offset
+    } else if (mode == "CW" || mode == "CWL" || mode == "CWU") {
+        // Centered on carrier — radio's BFO handles pitch offset.
+        // CWU belongs with the other two spellings: it was falling through to
+        // the final else and getting a USB-shaped {95, width} with no carrier
+        // in it. It is reachable — NetSchedulerDialog lists it as a schedulable
+        // mode and RadioSetupDialog has it as the CWU/CWL sideband toggle — and
+        // it was wrong under the old passband convention too, just less visibly.
         lo = -widthHz / 2;
         hi =  widthHz / 2;
     } else if (mode == "AM" || mode == "SAM" || mode == "DSB"
@@ -6074,16 +6094,52 @@ void VfoWidget::syncSqlVisuals()
     m_sqlSlider->update();
 }
 
+// The DAX RX channel count tracks the radio's slice capacity (FlexLib
+// ModelCapabilities, Principle I): FLEX-6700 -> 8, 6600/6500/8600 -> 4,
+// 6300/6400 -> 2. Offer only what the radio can back, so a smaller model does
+// not present dead entries whose slices produce the same silent no-audio the
+// runtime bump fixes (#4854 review). The 1..8 wire-path guards stay as the
+// upper bound; only this user-facing list follows the radio.
+void VfoWidget::populateDaxCombo()
+{
+    if (!m_daxCmb)
+        return;
+    const int n = qBound(1, m_radioModel ? m_radioModel->maxSlices() : 8, 8);
+    QSignalBlocker block(m_daxCmb);
+    // A slice carrying a DAX channel this radio cannot back (e.g. a profile from a
+    // larger model opened on a smaller one) shows as Off, not a false in-range
+    // channel, so the combo never disagrees with m_slice->daxChannel() (#4854 review).
+    const int dc = m_slice ? m_slice->daxChannel() : 0;
+    const int want = (dc >= 1 && dc <= n) ? dc : 0;
+    m_daxCmb->clear();
+    QStringList items{QStringLiteral("Off")};
+    for (int i = 1; i <= n; ++i)
+        items << QString::number(i);
+    m_daxCmb->addItems(items);
+    m_daxCmb->setCurrentIndex(want);
+}
+
 void VfoWidget::setRadioModel(RadioModel* radioModel)
 {
-    if (m_radioModel)
+    if (m_radioModel) {
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &VfoWidget::updateAntennaButtons);
+        disconnect(m_radioModel, &RadioModel::infoChanged,
+                   this, &VfoWidget::populateDaxCombo);
+        disconnect(m_radioModel, &RadioModel::connectionStateChanged,
+                   this, &VfoWidget::populateDaxCombo);
+    }
     m_radioModel = radioModel;
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &VfoWidget::updateAntennaButtons);
+        // Rebuild the DAX list when the radio (hence its capacity) becomes known.
+        connect(m_radioModel, &RadioModel::infoChanged,
+                this, &VfoWidget::populateDaxCombo);
+        connect(m_radioModel, &RadioModel::connectionStateChanged,
+                this, &VfoWidget::populateDaxCombo);
     }
+    populateDaxCombo();
     updateAntennaButtons();
 }
 

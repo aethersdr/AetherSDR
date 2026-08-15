@@ -76,6 +76,7 @@ public:
     void setTxPower(float fwdPowerW);
     void setTxCompression(float compPeakDb);
     void setTransmitting(bool tx);
+    void setDaxVisible(bool visible);
 
     // Split mode: call whenever TX assignment or active slice changes.
     //   isTxSlice  — this VFO's slice has tx=1
@@ -375,6 +376,7 @@ private:
 
     void buildUI();
     void buildTabContent();
+    void populateDaxCombo();  // DAX Ch list, sized to the radio's slice capacity
     // Sweep every interactive flag control and give it Qt::PointingHandCursor so
     // hovering signals clickability.  Re-run after rebuildFilterButtons() so the
     // dynamically recreated filter/autotune/adaptive buttons are covered (#4036).
@@ -522,9 +524,11 @@ private:
 
     // Sub-menu tabs
     QVector<QPushButton*> m_tabBtns;
+    QVector<QLabel*> m_tabSeparators;
     QStackedWidget* m_tabStack{nullptr};
     QWidget*        m_tabBar{nullptr};
     int m_activeTab{-1};
+    int m_daxTabIndex{-1};
     QPointer<QWidget> m_shadowWidget;
 
     // Tab content widgets

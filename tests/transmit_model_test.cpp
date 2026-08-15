@@ -45,6 +45,23 @@ int main(int argc, char** argv)
 
     bool ok = true;
 
+    // A backend's MOX delta is the radio's live PTT answer, not this client's
+    // transmit intent. RadioModel publishes it on radioTransmittingChanged;
+    // TransmitModel must retain the observation without opening local mic,
+    // DAX, recorder or serial-PTT consumers through moxChanged.
+    QList<bool> radioTxEdges;
+    QList<bool> localMoxEdges;
+    QObject::connect(&tx, &TransmitModel::transmittingChanged,
+                     [&radioTxEdges](bool on) { radioTxEdges.append(on); });
+    QObject::connect(&tx, &TransmitModel::moxChanged,
+                     [&localMoxEdges](bool on) { localMoxEdges.append(on); });
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(tx.isMox() && !tx.isTransmitting(),
+                 "radio-reported MOX is retained without claiming local TX intent");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
+    ok &= expect(radioTxEdges.isEmpty() && localMoxEdges.isEmpty(),
+                 "radio-reported MOX emits no local transmit-ownership edges");
+
     // ---- forced mic selection is ADOPTED, never commanded --------------------
     //
     // On a radio whose input a client cannot choose (an Icom picks its own from

@@ -105,7 +105,11 @@ void TciApplet::buildUI()
         });
         row->addWidget(m_rxMeter[i], 1);
 
-        outer->addLayout(row);
+        // Wrap each row in a container widget so setMaxDaxChannels() can hide
+        // whole rows on radios with fewer than kChannels slices (#4854 review).
+        m_rxRow[i] = new QWidget;
+        m_rxRow[i]->setLayout(row);
+        outer->addWidget(m_rxRow[i]);
     }
 
     // TX meter/slider
@@ -316,9 +320,13 @@ void TciApplet::setRadioModel(RadioModel* model)
     }
 
     // Slice → DAX channel mapping drives both DAX and TCI RX indicators.
-    // TCI RX1-4 carry the same DAX channels (PanadapterStream::daxAudioReady
+    // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxAudioReady
     // fans out to both DaxBridge and TciServer), so reuse the DAX channel
-    // assignments for the slice letters here.
+    // assignments for the slice letters here. The TCI receiver (trx) index is
+    // NOT capped at 4: trx is a positional slice index bounded by
+    // slices.size() (up to 8 on a 6700), and TciServer::onDaxAudioReady /
+    // setRxChannelGain already span channels 1-8 — so DAX 5-8 do have TCI
+    // representation. (The old "RX1-4" was stale from the 4-DAX era.)
     auto updateRxLabels = [this]() {
         for (int i = 0; i < kChannels; ++i) {
             m_rxStatus[i]->setText(QStringLiteral("\u2014"));
@@ -383,6 +391,25 @@ void TciApplet::setTciServer(TciServer* tci)
     updateTciStatus();
 #else
     (void)tci;
+#endif
+}
+
+// Hide RX rows above the radio's slice capacity (mirrors DaxApplet). kChannels
+// stays the allocation; we only toggle visibility. Compiles to a no-op when
+// WebSocket support is absent (the applet is an empty widget then). (#4854)
+void TciApplet::setMaxDaxChannels(int n)
+{
+#ifdef HAVE_WEBSOCKETS
+    n = qBound(1, n, kChannels);
+    if (n == m_maxDaxChannels)
+        return;
+    m_maxDaxChannels = n;
+    for (int i = 0; i < kChannels; ++i) {
+        if (m_rxRow[i])
+            m_rxRow[i]->setVisible(i < n);
+    }
+#else
+    (void)n;
 #endif
 }
 

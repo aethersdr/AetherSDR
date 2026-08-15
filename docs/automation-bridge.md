@@ -663,6 +663,13 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 > load), set `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
 > `src/core/TxKeyingMarker.h`.
+>
+> `AETHER_AUTOMATION_TX_MAX_POWER=N` is a **0–100 control-percentage ceiling**
+> for RF Power and Tune Power. It is not a physical-watt limit: radios map the
+> setpoint differently, two-tone can use Tune Power rather than RF Power, and an
+> ATU cycle can have its own drive policy. Hardware-in-the-loop tests need a
+> separate authorized watt ceiling and a fresh calibrated forward-power
+> watchdog. See [`docs/automation/TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -698,6 +705,7 @@ connects).
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `eqstats` | Client EQ canvas objectName (default: all) | analyzer paint/cache counters — see [`get eqstats`](#get-eqstats) |
 | `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
+| `display` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter **Display panel** settings — see [`get display`](#get-display) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
@@ -722,7 +730,14 @@ The TX input endpoint also exposes in-memory capture-health evidence for TCI
 handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 `source_was_active`, `saturation_observed`, `tci_suppressed_callbacks`,
 `full_buffer_during_tci_observations`, `idle_during_tci_transitions`,
-`post_tci_local_tx_while_saturated`, and `last_mic_read_age_ms`.
+`post_tci_local_tx_while_saturated`, `capture_backlog_discards`,
+`capture_backlog_discarded_bytes`, and `last_mic_read_age_ms`.
+Capture is drained during TCI suppression on every platform — bounded blocks on
+Linux/Windows pull mode, a push-buffer clear on macOS — so a growing
+`buffer_bytes_available` value or a new saturation event now indicates that the
+backend has stopped making forward progress. A non-zero
+`capture_backlog_discards` means pull-mode capture had to skip stale audio to
+return to realtime; during a healthy soak it stays at zero.
 `saturation_observed` is set when the capture buffer reaches its reported
 capacity during TCI suppression. An Active-to-Idle transition with suppressed
 callbacks and unread bytes remains a fallback for backends that do not expose a
@@ -959,13 +974,77 @@ used by the stacked trace renderer.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
 
+### `get display`
+Per-panadapter **Display panel** settings — every value the panel's PANADAPTER
+/ WATERFALL / BACKGROUND / APPEARANCE / 3D VIEW groups own, as one flat object
+per pan. Where `get tracedebug` is diagnostic internals, this is the operator's
+own preferences, so a display change is assertable field-by-field instead of by
+comparing screenshots.
+
+```json
+→ {"cmd":"get","model":"display","selector":"1"}
+← {"ok":true,"model":"display","pans":[{
+   "panIndex":1,"objectName":"",
+   "fftAverage":0,"fftFps":25,"fftWeightedAvg":false,
+   "fftHeatMap":true,"showGrid":true,
+   "fftLineWidth":2.0,"fftLineColor":"#00e5ff",
+   "fftFillAlpha":0.7,"fftFillColor":"#00e5ff",
+   "noiseFloorEnable":false,"noiseFloorPosition":75,
+   "wfBlankerEnabled":false,"wfBlankerThreshold":1.15,"wfBlankerMode":0,
+   "wfBlackLevel":15,"wfAutoBlack":true,"wfAutoBlackOffset":50,
+   "wfAutoBlackRadioSide":false,"effectiveWfAutoBlackRadioSide":false,
+   "wfColorGain":50,"wfLineDuration":100,
+   "backgroundImage":":/bg-default.jpg","backgroundOpacity":80,
+   "backgroundFillColor":"#0a0a14",
+   "freqGridSpacing":0,"freqScaleFontPt":8,"wfColorScheme":0,
+   "spectrumRenderMode":0,"dssFloorDepth":6,"dssGain":70,"dssRowSpan":100,
+   "kiwiWaterfallActive":false}]}
+```
+
+`selector` filters by pan index (`get display 0`) or objectName; omit it for
+every pan. A trailing **property** narrows each entry to `panIndex`,
+`objectName`, and that one field — `get display "" wfColorScheme` is the
+one-line way to diff a palette across pans.
+
+Field notes:
+
+- `wfAutoBlackRadioSide` is the operator's stored **intent**;
+  `effectiveWfAutoBlackRadioSide` is that intent masked by whether this radio
+  computes a black level at all (#4606). They differ legitimately — assert the
+  intent when checking what a preference action copied, the effective value when
+  checking what renders.
+- `backgroundImage` is `""` when the background is off entirely (the "Off"
+  button), `:/bg-default.jpg` for the bundled logo, otherwise a file path.
+- `dssFloorDepth` and `noiseFloorPosition` are stored per display source;
+  `kiwiWaterfallActive` says which one these resolved from, so a Flex-vs-Kiwi
+  mismatch reads as a labelled difference rather than a mystery failure.
+- `fftAverage`, `fftFps`, `fftWeightedAvg` and `wfLineDuration` are
+  radio-authoritative: the values here are what the widget last saw from radio
+  status, and they settle a turn or two after a command.
+
+**Proving "Clone to all Pans"** (Display panel → SYSTEM, above Reset to
+Defaults) — change something on pan 0, clone, and diff:
+
+```json
+→ {"cmd":"invoke","target":"pan 0/displayColorSchemeCombo","action":"select","value":"2"}
+→ {"cmd":"invoke","target":"pan 0/displayCloneToAllPansBtn","action":"click"}
+→ {"cmd":"get","model":"display"}
+← {"ok":true,"model":"display","pans":[
+   {"panIndex":0,"wfColorScheme":2, …},
+   {"panIndex":1,"wfColorScheme":2, …}]}
+```
+
+The radio-authoritative fields settle asynchronously, so re-poll rather than
+asserting them in the same write as the click.
+
 ### `get rhi`
-Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —
-the widget size, devicePixelRatio, pinned color-buffer extents, full-frame
-overlay/background textures, the waterfall image/texture pair, and (on macOS)
-native-leaf/ancestor isolation — so automation can assert the fractional-scale
-alignment and upload-size invariants exercised by pop-out reparenting (#4091,
-#4319) together with the bounded native-view hierarchy from #4339.
+Per-panadapter `QRhiWidget` **surface geometry, color-buffer sizing mode, and
+native-widget topology** — the widget size, devicePixelRatio, whether Qt owns
+the color-buffer size, full-frame overlay/background textures, the waterfall
+image/texture pair, and (on macOS) native-leaf/ancestor isolation. Automation
+can assert automatic sizing under a fractional `QT_SCALE_FACTOR`, the separate
+full-frame texture upload invariants from #4319, and the bounded native-view
+hierarchy from #4339 in the same snapshot.
 
 ```json
 → {"cmd":"get","model":"rhi"}
@@ -973,30 +1052,25 @@ alignment and upload-size invariants exercised by pop-out reparenting (#4091,
    "panIndex":0,"name":"","visible":true,"widthPx":1100,"heightPx":455,"dpr":0.85,
    "gpu":true,"renderer":"GPU QRhi (D3D11; Intel(R) HD Graphics 520)",
    "rendererFailed":false,"rendererFailureReason":"",
-   "colorBufferAutoSized":false,"colorBufferW":936,"colorBufferH":388,
-   "expectedEvenW":936,"expectedEvenH":388,"evenAligned":true,
+   "colorBufferAutoSized":true,"colorBufferW":-1,"colorBufferH":-1,
    "overlayTextureW":936,"overlayTextureH":388,
    "backgroundTextureW":936,"backgroundTextureH":388,
    "waterfallTextureW":936,"waterfallTextureH":194,
    "waterfallImageW":936,"waterfallImageH":194,
    "waterfallTextureMatchesImage":true,
-   "fullFrameTexturesEvenAligned":true,
-   "fullFrameTexturesMatchColorBuffer":true}]}
+   "fullFrameTexturesEvenAligned":true}]}
 ```
 
 | field | meaning |
 |---|---|
 | `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
 | `rendererFailed` / `rendererFailureReason` | whether this panadapter's QRhi renderer failed and its recorded reason; a failed renderer reports `QRhi failed: ...` in `renderer` too. GPU builds only — omitted alongside the buffer fields when `gpu` is `false` |
-| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
-| `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
-| `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
-| `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); this is the expected value |
+| `colorBufferW` / `colorBufferH` | the unset sentinel `-1,-1` when auto-sized; any positive extent means a fixed buffer is active |
 | `overlayTextureW/H` / `backgroundTextureW/H` | full-frame RGBA texture extents, or `-1,-1` before GPU initialization |
 | `waterfallTextureW/H` / `waterfallImageW/H` | live GPU waterfall texture and retained CPU waterfall image extents |
 | `waterfallTextureMatchesImage` | the CPU waterfall image fits within its GPU texture (texture ≥ image in both dimensions), so the upload is safe; holds across pop-out initialization even when the texture is floored larger than a small retained image (#4319) |
-| `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 invariant) |
-| `fullFrameTexturesMatchColorBuffer` | both full-frame textures exactly match the pinned color buffer |
+| `fullFrameTexturesEvenAligned` | both full-frame textures have even width and height (the #4319 upload-safety invariant), independent of the auto-sized QRhi color buffer |
 | `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
 | `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
 | `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
@@ -2008,24 +2082,57 @@ so `connect show` is safe when the dialog is already open. `connect local first`
 captures the first currently discovered local radio's serial before scheduling
 the request, so the response and deferred connect target stay consistent.
 `connect local serial <serial>` selects by discovery serial. `connect ip
-<host-or-ip> [flex|hl2]` uses the manual **Connect by IP** probe path; if the
+<host-or-ip> [flex|hl2|icom]` uses the manual **Connect by IP** probe path; if the
 probe finds a radio, the panel emits its normal `connectRequested` signal and
 `MainWindow` performs the standard Multi-Flex/client-slot checks before
 `RadioModel` connects.
 
 The optional radio type selects which wire protocol to probe, matching the
 dialog's **Radio type** dropdown: `flex` opens the TCP/4992 command plane, `hl2`
-sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024. The two are
-disjoint — a Hermes-Lite 2 never answers the Flex probe and vice versa — so an
-address is only reached with the right type. Omit it and the dialog's current
-selection is used, which keeps every existing `connect ip <addr>` script
-working; the response echoes `"family"` as the requested type or `"dialog"`.
+sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024, and `icom`
+uses the CI-V backend. They are disjoint — a Hermes-Lite 2 never answers the
+Flex probe and vice versa — so an address is only reached with the right type.
 A directed HL2 probe is the only way to reach a Hermes-Lite 2 that discovery
 broadcasts cannot see (VPN, routed subnet), and it is bounded at ~600 ms.
 
-`connect wait <timeout_ms>` holds that request's response until
-`RadioModel::connectionStateChanged(true)` or timeout, which is the preferred
-unattended "request then assert" flow.
+**Omit the type and discovery decides.** If the address appears in `connect
+list`, that entry's `family` is used, so `connect ip <addr>` reaches an HL2
+without the caller having to know it is one. Only an address nothing has
+advertised falls back to the connect dialog's current selection — which is what
+every pre-existing `connect ip <addr>` script relied on, and still does for
+routed/off-subnet radios. The response carries both `"family"` (the type
+actually used, or `"dialog"` when it was left to the selector) and
+`"familySource"`: `"argument"`, `"discovery"` or `"dialog"`. Read
+`familySource`, not `family` — `"family":"flex"` alone cannot tell a resolved
+answer from a default.
+
+**An explicit type always wins, including against discovery** — it is you saying you know
+what is at that address, which is the whole point of being able to pass it. When the two
+disagree the reply carries `"discoveryFamily"` (present whenever discovery had an opinion
+at all), so a caller that wants strictness compares it against `"family"` and decides for
+itself, while a caller working around a wrong discovery entry still gets through. The
+mismatch is also logged.
+
+`connect wait <timeout_ms>` holds that request's response until the radio
+connects, the connect fails, or the timeout expires — the preferred unattended
+"request then assert" flow.
+
+A reply that is not `connected` carries `"phase"`: `"connecting"` means an
+attempt is still in flight and waiting again is the right move, `"idle"` means
+nothing is pending and another wait will time out identically. **This matters on
+the HL2**, which queues a connect behind its DSP open and re-drives it later, so
+a wait can legitimately expire on a connect that then succeeds. A connect that
+fails outright returns immediately with the backend's own message instead of
+running out the clock.
+
+Because every connect verb answers `{"ok":true,"deferred":true}` before its real
+work runs, a failure afterwards used to be visible only in the log. The wait
+reply now also carries `"lastError"` and `"lastErrorAgeMs"` — the last deferred
+connect/disconnect failure and how long ago it happened. It is **scoped to the current
+attempt**: a connect that lands retires it, and so does scheduling a fresh one, so its
+presence means this attempt has a failure behind it rather than "something went wrong at
+some point since the process started". A failed `disconnect` is recorded there too, but
+never completes an in-flight `connect wait` — its message belongs to the disconnect.
 
 ### `streams`
 Radio-side display-stream inventory + leak detector (#3856). `get pans` can never
@@ -2580,9 +2687,29 @@ or a regression test. Read-only: it keys nothing and sets nothing.
       "label":"Mic slider (0-100, 50 = unity)","value":80},
      {"key":"micGainAppliedLinear",
       "label":"Mic gain at the modulator (linear)","value":3.98},
+     {"key":"rfPowerPercent","label":"Drive requested (0-100)","value":60},
+     {"key":"txDriveRegister","label":"Drive written (raw 0-255)","value":153},
+     {"key":"txDriveGated","label":"Drive held at 0 by the TX gate","value":false},
      {"key":"forwardPowerPeakW",
-      "label":"Forward (W, approx — peak estimate)","value":4.56}]}
+      "label":"Forward (W, approx — peak HOLD, display only)","value":4.56}]}
 ```
+
+**Assert on `forwardPowerW`, never on `forwardPowerPeakW`.** The peak row is a
+meter's display hold: a single key-edge ADC sample decays over seconds, so a
+script that asserts on it reads a transient from the start of the over as
+though it were the power now. It is reset at each key edge, which is right for
+a needle and wrong for a test.
+
+On the HL2, `rfPowerPercent` / `txDriveRegister` / `txDriveGated` are the
+requested-versus-applied pair for transmit drive. `txDriveRegister` is the raw
+value last written to the radio and is **absent until the first write** — a `0`
+there means the radio was commanded to zero drive, not that nothing has
+happened yet. `txDriveGated` is true when the transmit gate
+(`AETHER_AUTOMATION_ALLOW_TX` unset, or a TX-blocked session) forced the
+register to 0 while the requested percent stayed where the operator left it;
+without it that divergence is invisible. Note the gateware decodes only the
+drive byte's top nibble, so the raw scale moves in steps of 16 — a percent
+alone does not tell you which of the 16 drives the radio actually got.
 
 **This is deliberately not assembled from the models, and that is the whole
 point.** `get` already reports those, and a model reports what the operator
@@ -2778,6 +2905,51 @@ The `demod` block is what separates "no frames because the band is dead" from
 non-`-120` `rmsDbfs` means audio is arriving, and `rejectBadFcs` climbing while
 `framesAccepted` does not means the decoder is finding structure and losing it
 to bit errors.
+
+### `civ`
+
+Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
+observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
+key or retune the radio.
+
+**`civ session`** reports the media lease independently of UDP link liveness:
+
+```json
+→ {"cmd":"civ","action":"session"}
+← {"ok":true,"civ":"session","result":{
+   "authenticated":true,"connected":true,"streamGranted":true,
+   "lastRenewalResult":"accepted","lastRenewalResponse":"0x00000000",
+   "lastRenewalSequence":42,"nextInnerSequence":43,
+   "tokenRequestId":"0x8f31",
+   "lastAcceptedAgeMs":8123,"pendingRenewals":0,
+   "acceptedRenewals":14,"reissuedTokens":1,"rejectedRenewals":0,
+   "ignoredAuthReplies":0,"ignoredControlPackets":1,
+   "initialMaintenanceMs":30000,"initialMaintenancePending":false,
+   "renewalCadenceMs":60000,"ackGraceMs":3000,"deadSessionMs":80000}}
+```
+
+Use this first when the panadapter, CI-V controls, and audio stop together while
+the outer UDP packet counters still move. A healthy result has a recent accepted
+token, response `0x00000000`, and no growing pending/rejected count. The health
+verb shows the same essentials under **RS-BA1 session**.
+
+The token-request ID is freshly randomized for each login. On an immediate
+reconnect the radio can answer the initial token request with `0xffffffff` and
+a token that must be used to request the streams; wfview follows the same path.
+`lastRenewalResult:"reissued"` distinguishes that valid reconnect exchange
+from the same nonzero response rejecting an established lease renewal.
+
+The first maintenance renewal is sent at 30 seconds because a live immediate
+reconnect grant stopped its media streams around 45 seconds even though the
+ordinary 60-second renewal was later accepted. After that one early renewal,
+the session returns to the wfview/kappanhang 60-second cadence.
+
+**`civ trace [all]`** reads the bounded decoded CI-V frame trace. The default
+omits routine meter traffic; `all` includes it. **`civ send <hex>`** injects
+command bytes through the active Icom session and is reserved for controlled
+hardware tests. Raw RS-BA1 datagram logging is intentionally off by default and
+should only be enabled briefly when these structured diagnostics are
+insufficient.
 
 ### `controls`
 
@@ -2996,6 +3168,11 @@ nothing attached there is nothing to be honest about.
 ### `txtest`
 Two-tone TX test signal (for IMD / PA / meter measurements).
 
+On Icom, this path uses **Tune Power**, not RF Power. Stage and verify Tune
+Power before `twotone`; neither its percentage nor
+`AETHER_AUTOMATION_TX_MAX_POWER` is a watt guarantee. Use the measured-watt and
+antenna gates in [`TX_TEST_PROMPT.md`](automation/TX_TEST_PROMPT.md).
+
 ```json
 → {"cmd":"txtest","action":"twotone"}   # gated
 ← {"ok":true,"txtest":"twotone"}
@@ -3181,7 +3358,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 64 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 65 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3195,7 +3372,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
-| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event |
+| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event (positive steps = scroll up); drives wheel VFO tuning |
 | `dragAt` | — | dragAt <target> <x> <y> <dx> <dy> [control\|meta\|shift\|alt,...] |
 | `gesture` | — | gesture <begin\|move\|end\|cancel\|status> — phaseful pointer gesture |
 | `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
@@ -3210,7 +3387,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
-| `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters |
+| `notch` | — | notch <list\|add\|set\|remove\|enable> [args] — manual notch filters (add <freqMhz> [widthHz]; set <id> [freq=<mhz>] [width=<hz>]; remove <id>; enable <0\|1>) |
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
@@ -3218,10 +3395,11 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
-| `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — |
+| `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain> [value] |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864) |
+| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
@@ -3234,8 +3412,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <send <hex>\|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated) |
-| `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter |
+| `civ` | — | civ <send <hex>\|trace [all]\|session> — CI-V inject, frame trace, or RS-BA1 lease health (Icom; send is TX-gated) |
+| `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
 | `station` | — | station <name> — set the GUI-client station name |

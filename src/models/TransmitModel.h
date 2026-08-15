@@ -347,6 +347,8 @@ signals:
     // the set* / atu* methods only, never from applyStatus() — echoing a status
     // back at the radio as a command is how a control starts fighting itself.
     void voxCommandIssued(bool on, int level, int delayMs);
+    void monitorCommandIssued(bool on, int level);
+    void rfPowerCommandIssued(int percent);
     void atuCommandIssued(bool start);
     // Fires only when cwPitch actually changes. Use this instead of
     // phoneStateChanged for slot work that should NOT run on every

@@ -51,6 +51,7 @@
 #include "DaxIqApplet.h"
 #include "TciApplet.h"
 #include "PanadapterStack.h"
+#include "workspace/WorkspaceController.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
 #include "models/PanadapterModel.h"
@@ -61,6 +62,8 @@
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
+
+#include <QStatusBar>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -561,6 +564,17 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
         dissolveAllSliceLinks(connected ? "radio connected" : "radio disconnected");
+    });
+    // A momentary-keying release that arrives while disconnected is discarded
+    // by the per-path isConnected() gates before their flag bookkeeping runs,
+    // so a key held across a disconnect strands its flag and eats the first
+    // press after reconnect (#4638). Release the whole family here instead of
+    // weakening those gates: the fail-safe no-ops when nothing is keyed, and
+    // its un-key requests are harmless on a radio that is already gone.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (!connected)
+            failSafeMomentaryKeyingToRx("radio-disconnect");
     });
     // Local microphone capture for a backend that MODULATES ON THE HOST.
     //
@@ -1477,13 +1491,21 @@ void MainWindow::wirePanLifecycle()
             // profile. The only correct rule is not to write at all.
             const QString rfGainKey = rfGainSettingsKey(sw);
             const bool haveSavedRfGain = s.contains(rfGainKey);
+            const bool clientOwnsRfGain =
+                m_radioModel.backendCapabilities().clientSettingsDomains.testFlag(
+                    RadioCapabilities::ClientSettingsDomain::RfGain);
+            // Flex deliberately declares no client-owned RF-gain domain: the
+            // radio persists and reports its pan gain. Sim likewise regenerates
+            // its scene. Only a backend that explicitly delegates this domain
+            // (currently HL2) may receive a saved client replay.
+            const bool restoreSavedRfGain = clientOwnsRfGain && haveSavedRfGain;
             PanadapterModel* activePan = m_radioModel.activePanadapter();
-            const int rfGain = haveSavedRfGain
+            const int rfGain = restoreSavedRfGain
                 ? s.value(rfGainKey).toInt()
                 : (activePan ? activePan->rfGain() : 0);
             m_radioModel.setPanWnb(wnbOn);
             m_radioModel.setPanWnbLevel(wnbLevel);
-            if (haveSavedRfGain)
+            if (restoreSavedRfGain)
                 m_radioModel.setPanRfGain(rfGain);
             sw->setWnbActive(wnbOn);
             sw->setRfGain(rfGain);
@@ -1719,7 +1741,20 @@ void MainWindow::wirePanLifecycle()
 
                 // Restore floating-pan state saved from the previous session.
                 // Runs for any pan count so a single floated pan is also restored.
-                m_panStack->restoreFloatingState();
+                //
+                // NOT while the workspace canvas is on (RFC #4887, maintainer
+                // ruling 2026-08-12): canvas mode owns placement, and replaying
+                // window-persistence floats under it hands the operator an
+                // uncontrollable always-above window that looks exactly like a
+                // broken canvas pan — stale FloatingPanIds from the pre-canvas
+                // era cost a full day of field debugging to identify. The
+                // restored pans have already arrived as canvas items at their
+                // slots by this point; popping out MANUALLY is untouched
+                // (decision 1 — pop-out stays), and the saved key is left
+                // alone so a canvas-off session still restores it.
+                if (!(m_workspaceController && m_workspaceController->isEnabled())) {
+                    m_panStack->restoreFloatingState();
+                }
             });
         }
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -1896,12 +1931,29 @@ void MainWindow::wireCatPorts()
     applyCatPortCount();
     m_appletPanel->daxApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->daxIqApplet()->setRadioModel(&m_radioModel);
+    // DAX RX row count follows the radio's slice capacity (#4854 review),
+    // mirroring the AetherClock DAX-chooser wiring in setupAetherClock().
+    if (auto* daxApplet = m_appletPanel->daxApplet()) {
+        daxApplet->setMaxDaxChannels(m_radioModel.maxSlices());
+        connect(&m_radioModel, &RadioModel::infoChanged, daxApplet,
+                [this, daxApplet] { daxApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+        connect(&m_radioModel, &RadioModel::connectionStateChanged, daxApplet,
+                [this, daxApplet](bool) { daxApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+    }
 #ifdef HAVE_WEBSOCKETS
     // Owned by the session — no QObject parent (see RadioSession docs, #2385).
     m_session->setTciServer(new TciServer(&m_radioModel, nullptr));
     tciServer()->setAudioEngine(m_audio);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->tciApplet()->setTciServer(tciServer());
+    // TCI RX row count follows the radio's slice capacity too (#4854 review).
+    if (auto* tciApplet = m_appletPanel->tciApplet()) {
+        tciApplet->setMaxDaxChannels(m_radioModel.maxSlices());
+        connect(&m_radioModel, &RadioModel::infoChanged, tciApplet,
+                [this, tciApplet] { tciApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+        connect(&m_radioModel, &RadioModel::connectionStateChanged, tciApplet,
+                [this, tciApplet](bool) { tciApplet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+    }
 
     // TCI applet sliders → TciServer gain setters
     connect(m_appletPanel->tciApplet(), &TciApplet::tciRxGainChanged,
@@ -1983,8 +2035,11 @@ void MainWindow::wireCatPorts()
 
     // TCI client count changes no longer auto-create/remove the audio stream.
     // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
-    // the stream overrode the user's explicit PC Audio toggle. Users who need
-    // TCI audio (WSJT-X) should enable PC Audio manually. (#1071)
+    // the stream overrode the user's explicit PC Audio toggle. TCI audio does
+    // not need PC Audio either: on Flex it uses DAX channels acquired by
+    // TciServer::ensureDaxForTci(), and on a host-modulating backend it arrives
+    // over the seam via backendSliceAudioFrameReady — neither path consults
+    // PcAudioEnabled, which gates only remote_audio_rx. (#1071, #1331)
 #endif
 
 }
@@ -2301,6 +2356,23 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
 
     if (!m_automation)
         m_automation = std::make_unique<AutomationServer>();
+
+    // dumpTree reports the status-bar message (#4864) by reading a generic
+    // dynamic property — core/ must not know the QStatusBar type
+    // (engine-boundary EB2).  The gui side owns the widget, and the mirror
+    // lives HERE, with the rest of the bridge wiring it serves (review m13:
+    // it was previously wired inside the workspace-canvas mount, which has
+    // no structural link to it).  Idempotent across re-wires: the property
+    // write is safe to connect once per server start.
+    if (!m_statusMessageMirrorWired) {
+        m_statusMessageMirrorWired = true;
+        connect(statusBar(), &QStatusBar::messageChanged, this,
+                [this](const QString& m) {
+                    statusBar()->setProperty("currentMessage", m);
+                });
+        statusBar()->setProperty("currentMessage",
+                                 statusBar()->currentMessage());
+    }
 
     m_automation->setRadioModel(&radioModel());  // for the get() verb
     m_automation->setAudioEngine(audioEngine());

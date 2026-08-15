@@ -48,7 +48,7 @@ public:
 
 public slots:
     // Feed DAX RX audio (24kHz stereo int16) for decoding.
-    // channel is the DAX channel number (1-4), only processes channel 1.
+    // channel is the DAX channel number (1-8), only processes channel 1.
     void feedRxAudio(int channel, const QByteArray& pcm);
 
     // Feed mic audio (24kHz stereo int16) for encoding.

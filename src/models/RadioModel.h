@@ -159,6 +159,15 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // True from the moment a connect is requested until it lands, fails, or is
+    // abandoned. isConnected() alone cannot express "still working": it is
+    // false both before an attempt starts and while one is in flight, which is
+    // why the bridge's `connect wait` could not tell a timeout worth retrying
+    // from one that never had a chance (#4912). The HL2 makes the gap wide —
+    // Hl2Backend::connectRadio() parks the request in m_queuedConnect behind
+    // the DSP open and re-drives it from finishDspSetup(), and nothing about
+    // that queue reaches this model, so no signal fires for seconds.
+    bool isConnectAttemptInFlight() const { return m_connectAttemptActive; }
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
     float paTemp()    const { return m_paTemp; }
@@ -824,6 +833,41 @@ public:
     // See core/WaterfallRate.h. (#4606)
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
+
+    // Retune a slice on behalf of the CAT servers (rigctld / SmartCAT) so a band
+    // change made over CAT (WSJT-X/FLDigi "change band") is recentered instead of
+    // leaving the panadapter behind. Applies the recenter policy: in-span keeps
+    // autopan=0 (no yank — external Doppler software like SatPC32 steps every few
+    // seconds); an out-of-span or cross-band target uses tuneAndRecenter. Both go
+    // through SliceModel, which updates the model and emits frequencyChanged —
+    // required to drive the client-side follow (Center Lock / Pan-Follows-VFO)
+    // that lets the radio actually move a centered slice. We issue no pan command
+    // directly; the client lock logic does, exactly as the GUI path does. Call on
+    // the GUI thread (owns SliceModel).
+    // Returns false (and issues no tune) when the target is rejected — a null
+    // slice, an implausible frequency (see isPlausibleCatTuneMhz), or a locked
+    // slice, which SliceModel refuses — so the CAT protocol layer can report the
+    // failure instead of acknowledging a tune that never happened. A retune to
+    // the frequency the slice already holds is a no-op, not a rejection, and
+    // still returns true — unless the slice is locked, since the lock is tested
+    // ahead of the no-op case and a locked slice always reports failure.
+    bool tuneSliceForCat(SliceModel* slice, double mhz);
+
+    // Is this a physically plausible CAT-tune target (MHz)? The single policy for
+    // the boundary check tuneSliceForCat applies. rigctld pre-validates with it
+    // too: its handlers answer the client synchronously and then marshal the tune
+    // through a queued call, so tuneSliceForCat's bool is unobservable to them —
+    // without this they would answer success and silently drop an out-of-range
+    // tune. Rejects non-positive, non-finite, and absurdly-high targets (an
+    // FA-5000;, a DN whose multi-step product underflows past 0, a parse that
+    // yielded NaN, a fat-fingered absurd set); the radio still enforces its real
+    // band limits — this only stops the physically impossible from being
+    // broadcast via frequencyChanged before the radio rejects it.
+    // NOT a bound on step arithmetic in the UP direction: the ceiling has to sit
+    // above the top amateur allocation, and a multi-step UP cannot reach it
+    // (2^31 steps at the usual 100 Hz is ~215 GHz), so a runaway UP is caught by
+    // the radio refusing the tune, not here.
+    static bool isPlausibleCatTuneMhz(double mhz);
 
     // Effective pan geometry: the deferred pending value if one is queued,
     // else the live model value, else NaN when the pan is unknown. Caller-side
@@ -1844,6 +1888,9 @@ private:
     SleepInhibitor m_sleepInhibitor;     // prevents OS idle sleep while connected
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
+    // See isConnectAttemptInFlight(). Set by the connect entry points, cleared
+    // by every way an attempt can end.
+    bool      m_connectAttemptActive{false};
     bool      m_forcedDisconnectInProgress{false};
     GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next

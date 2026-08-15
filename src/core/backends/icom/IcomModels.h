@@ -64,6 +64,15 @@ struct IcomModel {
     // should decline to advertise capabilities it cannot stand behind.
     bool verified = false;
 
+    // Speaks the selected-VFO form of command 0x26 — mode, DATA state and IF
+    // filter in one 26 00 frame. The IC-705 and IC-7300MK2 guides in
+    // sources/icom-official/ document this exact form.
+    //
+    // FALSE UNTIL VERIFIED FOR EACH MODEL. Some Icoms expose a different 0x26
+    // shape, and a mode change sent in the wrong form is silently unapplied.
+    // The conservative fallback is plain 0x06 with no DATA control or claim.
+    bool hasVfoModeCommand = false;
+
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 

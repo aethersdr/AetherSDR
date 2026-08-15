@@ -82,4 +82,4 @@ gpg --verify AetherSDR-Setup-vX.Y.Z.exe.asc AetherSDR-Setup-vX.Y.Z.exe
 All commits on `main` must be GPG-signed by their author. GitHub displays
 a green "Verified" badge on signed commits. Contributors should set up
 commit signing with their personal GPG key — see
-[CONTRIBUTING.md](../CONTRIBUTING.md#commit-signing) for setup instructions.
+[DEVELOPER-GUIDE.md](DEVELOPER-GUIDE.md#commit-signing) for setup instructions.

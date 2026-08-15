@@ -2,7 +2,9 @@
 
 #include <QHostAddress>
 #include <QObject>
+#include <QSet>
 #include <QString>
+#include <QVariantMap>
 
 #include <cstdint>
 #include <span>
@@ -46,6 +48,19 @@ public:
         // not sending audio — a receive-only session cannot key by accident.
         bool enableTx = true;
         quint16 txBufferMs = 200;
+        // Production lease timing. Tests override these values to exercise the
+        // renewal watchdog without waiting more than a minute.
+        int tokenRenewalMs = 60000;
+        int tokenAckGraceMs = 3000;
+        int tokenDeadMs = 80000;
+        // The one-time early renewal that covers a reconnect grant's shorter
+        // first window. Overridable so a test can prove the early renewal
+        // actually fires ahead of the steady cadence, rather than only that
+        // the flag was set.
+        int initialMaintenanceMs = 30000;
+        // Zero selects a fresh random nonzero ID. Tests may override it to
+        // prove reconnect correlation deterministically.
+        quint16 tokenRequestId = 0;
         // The radio's CI-V address. Seeded from settings and CORRECTED from the
         // 0x19 0x00 reply once the session is up — never assumed, because the
         // address is user-changeable and other Icoms speak this same transport.
@@ -77,6 +92,8 @@ public:
         IcomStream::Counters audio;
     };
     [[nodiscard]] Stats stats() const;
+    // Credential-free RS-BA1 lease state for health and automation diagnostics.
+    [[nodiscard]] QVariantMap leaseDiagnostics() const;
 
 signals:
     void connected(const QString& deviceName);
@@ -100,6 +117,8 @@ private slots:
 
 private:
     void fail(const QString& reason);
+    void sendRenewal(const QString& reason);
+    [[nodiscard]] bool isCurrentControlPacket(std::span<const std::uint8_t> packet) const;
     void requestStreamsIfReady();
     void openMediaStreams();
 
@@ -118,23 +137,35 @@ private:
     bool    m_civDataSeen = false;
     int     m_civOpenAttempts = 0;
 
-    // Auth state. The auth id and session ids are re-read from the stream grant
-    // rather than cached from the login — see parseStreamGrant's comment; the
-    // failure of not doing so is "audio stops after exactly one minute".
+    // Auth state. A grant may replace the auth ID, but only after its header
+    // IDs prove it belongs to this control session.
     AuthId m_authId{};
     RadioId m_radioId{};
     QString m_radioName;
     QString m_deviceName;
     std::uint16_t m_innerSeq = 0;
+    std::uint16_t m_tokenRequestId = 0;
     bool m_authOk = false;
-    // Token-renewal watchdog. The radio's session lasts 60 s and expires in
-    // silence, so a renewal has to be verified rather than assumed.
+    // Token-renewal watchdog. References renew at 60 s; a live IC-7300MK2
+    // expired a reconnect grant around 45 s and an established lease about
+    // 90 s after its last accepted token, both in silence.
     qint64 m_lastAuthOkMs = 0;   // when the radio last acknowledged an auth
     bool   m_renewUnacked = false;
+    bool   m_initialMaintenancePending = false;
     int    m_renewRetries = 0;
     static constexpr int kTokenRenewMaxRetries = 4;
+    QSet<quint16> m_pendingRenewals;
+    quint16 m_lastRenewalSeq = 0;
+    QString m_lastRenewalResult = QStringLiteral("not sent");
+    quint32 m_lastRenewalResponse = 0;
+    quint64 m_renewAcceptedCount = 0;
+    quint64 m_tokenReissuedCount = 0;
+    quint64 m_renewRejectedCount = 0;
+    quint64 m_ignoredAuthReplies = 0;
+    quint64 m_ignoredControlPackets = 0;
     bool m_haveRadioId = false;
     bool m_streamsRequested = false;
+    bool m_streamGranted = false;
     bool m_connected = false;
     // Re-entrancy guard: a teardown makes several streams fail at once, and
     // each one calling stop() again would delete objects mid-signal.

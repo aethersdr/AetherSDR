@@ -374,6 +374,7 @@ signals:
     void audioMuteCommandIssued(bool mute);
     void audioGainCommandIssued(int gainPercent);
     void audioPanCommandIssued(int panPercent);      // 0=left, 50=centre, 100=right
+    void rxAntennaCommandIssued(const QString& antenna);
     // Operator asked for THIS slice to own transmit. A radio with one
     // transmitter and several receivers has to move it rather than set a flag.
     void txSliceCommandIssued();

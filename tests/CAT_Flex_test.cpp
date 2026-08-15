@@ -204,6 +204,21 @@ static QString hz11(qint64 hz)
     return QStringLiteral("%1").arg(hz, 11, 10, QChar('0'));
 }
 
+// Poll a frequency readback until it matches (or a generous cap elapses). A tune
+// updates the model optimistically, so the readback is normally immediate; polling
+// is belt-and-suspenders so the check never depends on exact settle timing (fast
+// simulator or a slower real radio). `got` receives the last response (for detail).
+static bool pollFreqEquals(CatClient& c, const QString& query, const QString& expect,
+                           QString& got, int capMs = 1000)
+{
+    for (int elapsed = 0; elapsed < capMs; elapsed += 50) {
+        QThread::msleep(50);
+        got = c.query(query);
+        if (got == expect) return true;
+    }
+    return false;
+}
+
 // Does this port have a usable VFO B? ZZFB returns its frequency when present, or
 // "?" (NOT_ENABLED) on a single-VFO port / when the VFO B slice isn't open. Single
 // definition so the split-section gates can't drift apart.
@@ -342,11 +357,12 @@ void section2(CatClient& c, Runner& r, qint64 origHz)
             resp.mid(4) == faResp.mid(2),
             QStringLiteral("ZZFA=%1 FA=%2").arg(repr(resp.mid(4)), repr(faResp.mid(2))));
 
+    // Poll rather than assume a fixed wait (see pollFreqEquals) so the check stays
+    // timing-independent regardless of where the radio started.
     const qint64 testHz = 14'074'000;
     c.send(QStringLiteral("ZZFA") + hz11(testHz));
-    QThread::msleep(150);
-
-    QString respZz = c.query(QStringLiteral("ZZFA"));
+    QString respZz;
+    pollFreqEquals(c, QStringLiteral("ZZFA"), QStringLiteral("ZZFA") + hz11(testHz), respZz);
     QString respFa = c.query(QStringLiteral("FA"));
     r.check(QStringLiteral("2.3  set ZZFA 14.074 MHz → ZZFA; confirms"),
             respZz == QStringLiteral("ZZFA") + hz11(testHz),
@@ -355,16 +371,56 @@ void section2(CatClient& c, Runner& r, qint64 origHz)
             respFa == QStringLiteral("FA") + hz11(testHz),
             QStringLiteral("got %1").arg(repr(respFa)));
 
-    const qint64 test2Hz = 21'074'000;
+    const qint64 test2Hz = 21'074'000;   // cross-band (20 m → 15 m)
     c.send(QStringLiteral("FA") + hz11(test2Hz));
-    QThread::msleep(150);
-    respZz = c.query(QStringLiteral("ZZFA"));
+    pollFreqEquals(c, QStringLiteral("ZZFA"), QStringLiteral("ZZFA") + hz11(test2Hz), respZz);
     r.check(QStringLiteral("2.5  set via base FA; ZZFA; reflects the change"),
             respZz == QStringLiteral("ZZFA") + hz11(test2Hz),
             QStringLiteral("got %1").arg(repr(respZz)));
 
     c.send(QStringLiteral("FA") + hz11(origHz));
     QThread::msleep(100);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)
+// ═════════════════════════════════════════════════════════════════════════════
+
+void section2c(CatClient& c, Runner& r, qint64 origHz)
+{
+    r.section(QStringLiteral("Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)"));
+
+    // A band change over CAT (WSJT-X/FLDigi "change band") must move VFO A to the
+    // new band and have the radio recenter the panadapter so the pan follows —
+    // RadioModel::tuneSliceForCat(), the fix for the reported band-switch bug. The
+    // FlexCAT dialect exposes VFO-A frequency (ZZFA;/FA;) but NOT the panadapter
+    // center, so this guards the CAT round-trip across a real band boundary: the
+    // cross-band ZZFA set is accepted and VFO A lands on the requested frequency
+    // without error, clamp, or revert. The pan-follow itself is confirmed visually.
+
+    // Read the current frequency, then target a different HF band: flip between
+    // 40 m (7.100 MHz) and 20 m (14.100 MHz) across the 10 MHz divide so this is
+    // always a genuine band change regardless of where the radio started.
+    QString resp = c.query(QStringLiteral("ZZFA"));
+    const qint64 startHz = (resp.startsWith(QLatin1String("ZZFA")) && isDigits(resp.mid(4), 11))
+                           ? resp.mid(4).toLongLong()
+                           : origHz;
+    const qint64 target = (startHz < 10'150'000) ? 14'100'000 : 7'100'000;
+
+    c.send(QStringLiteral("ZZFA") + hz11(target));
+    pollFreqEquals(c, QStringLiteral("ZZFA"), QStringLiteral("ZZFA") + hz11(target), resp);
+    r.check(QStringLiteral("2c.1  cross-band set ZZFA (%1 → %2 Hz) — VFO A followed to the new band")
+                .arg(startHz).arg(target),
+            resp == QStringLiteral("ZZFA") + hz11(target),
+            QStringLiteral("got %1").arg(repr(resp)));
+
+    // Tune back across the boundary — verifies the reverse direction and restores
+    // the original band.
+    c.send(QStringLiteral("ZZFA") + hz11(origHz));
+    pollFreqEquals(c, QStringLiteral("ZZFA"), QStringLiteral("ZZFA") + hz11(origHz), resp);
+    r.check(QStringLiteral("2c.2  cross-band set ZZFA back to the original band (%1 Hz) confirms").arg(origHz),
+            resp == QStringLiteral("ZZFA") + hz11(origHz),
+            QStringLiteral("got %1").arg(repr(resp)));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -545,6 +601,23 @@ void section7(CatClient& c, Runner& r)
 {
     r.section(QStringLiteral("Section 7 — ZZAI — AI Mode (async unsolicited updates)"));
 
+    // Setup (AI still off, so these push nothing): capture the current frequency
+    // and pin a known mode. 7.5/7.6 then exercise a genuine, IN-BAND change.
+    // A cross-band ZZFA would not do: the RADIO recalls its band stack when the
+    // slice crosses into a new band and reports the recalled mode back, so one
+    // set yields TWO unsolicited pushes (FA then MD) and the extra MD desyncs the
+    // ordered request/response reads for the rest of the section. That recall is
+    // radio-side — tuneSliceForCat only tunes, it never sets a mode — and it is
+    // not introduced here: rigctld's cross-band path already used tuneAndRecenter
+    // before this change. Measured on a FLEX-6500, 20 m USB → 7.100 MHz: FA at
+    // +0.00 s, MD1 at +0.17 s, slice left on LSB.
+    const QString faStart = c.query(QStringLiteral("ZZFA"));
+    const qint64 startHz = (faStart.startsWith(QLatin1String("ZZFA")) && isDigits(faStart.mid(4), 11))
+                           ? faStart.mid(4).toLongLong()
+                           : 14'100'000;
+    c.send(QStringLiteral("ZZMD01"));   // USB, so 7.6's ZZMD05 (FM) is a real change (send() adds ';')
+    QThread::msleep(150);
+
     QString resp = c.query(QStringLiteral("ZZAI"));
     r.check(QStringLiteral("7.1  ZZAI; → ZZAI00 (disabled by default)"),
             resp == QLatin1String("ZZAI00"), repr(resp));
@@ -561,7 +634,7 @@ void section7(CatClient& c, Runner& r)
     r.check(QStringLiteral("7.4  AI; reflects ZZAI enable (shared state)"),
             aiResp == QLatin1String("AI1"), repr(aiResp));
 
-    const qint64 newHz = 14'100'000;
+    const qint64 newHz = startHz + 2000;   // +2 kHz, in-band (no band/mode recall)
     c.send(QStringLiteral("ZZFA") + hz11(newHz));
     QString push = c.tryRead(2000);
     r.check(QStringLiteral("7.5  AI push after ZZFA set → push is \"FA<freq>\" (NOT ZZFA prefix)"),
@@ -831,18 +904,19 @@ void section12(CatClient& c, Runner& r)
 {
     r.section(QStringLiteral("Section 12 — Cross-Dialect Consistency (base ↔ ZZ commands)"));
 
+    // Poll rather than assume a fixed wait (see pollFreqEquals) so the check stays
+    // timing-independent regardless of where the radio started.
     const qint64 testHz = 14'074'000;
     c.send(QStringLiteral("FA") + hz11(testHz));
-    QThread::msleep(150);
-    QString resp = c.query(QStringLiteral("ZZFA"));
+    QString resp;
+    pollFreqEquals(c, QStringLiteral("ZZFA"), QStringLiteral("ZZFA") + hz11(testHz), resp);
     r.check(QStringLiteral("12.1 set freq via FA; → ZZFA; reflects it"),
             resp == QStringLiteral("ZZFA") + hz11(testHz),
             QStringLiteral("got %1").arg(repr(resp)));
 
-    const qint64 test2Hz = 7'074'000;
+    const qint64 test2Hz = 7'074'000;   // cross-band (20 m → 40 m)
     c.send(QStringLiteral("ZZFA") + hz11(test2Hz));
-    QThread::msleep(150);
-    resp = c.query(QStringLiteral("FA"));
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(test2Hz), resp);
     r.check(QStringLiteral("12.2 set freq via ZZFA; → FA; reflects it"),
             resp == QStringLiteral("FA") + hz11(test2Hz),
             QStringLiteral("got %1").arg(repr(resp)));
@@ -1549,6 +1623,7 @@ int main(int argc, char* argv[])
 
     section1(c, r);
     section2(c, r, origHz);
+    section2c(c, r, origHz);
     section3(c, r);
     section4(c, r, origMode);
     section5(c, r);

@@ -75,6 +75,11 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
+    // Backend MOX is observed radio state, not this client's transmit intent.
+    // RadioModel publishes it on radioTransmittingChanged for presentation
+    // consumers.  Routing it through setTransmitting() would emit moxChanged
+    // and could open this client's mic/DAX/serial-PTT paths when hardware PTT
+    // or another network client keys the radio.
     changed |= assign(d.mox, m_mox);
     changed |= assign(d.transmitFreq, m_transmitFreq);
 
@@ -274,6 +279,7 @@ void TransmitModel::setRfPower(int power)
         emit stateChanged();
     }
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
+    emit rfPowerCommandIssued(power);
 }
 
 void TransmitModel::setTunePower(int power)
@@ -542,6 +548,7 @@ void TransmitModel::setSbMonitor(bool on)
         emit micStateChanged();
     }
     emit commandReady(QString("transmit set mon=%1").arg(on ? 1 : 0));
+    emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
 }
 
 void TransmitModel::setMonGainSb(int gain)
@@ -550,6 +557,7 @@ void TransmitModel::setMonGainSb(int gain)
     m_monGainSb = gain;
     emit micStateChanged();
     emit commandReady(QString("transmit set mon_gain_sb=%1").arg(gain));
+    emit monitorCommandIssued(m_sbMonitor, m_monGainSb);
 }
 
 void TransmitModel::loadMicProfile(const QString& name)

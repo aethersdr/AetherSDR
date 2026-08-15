@@ -216,6 +216,11 @@ public:
         Q_UNUSED(panId);
         Q_UNUSED(step);
     }
+    virtual void setSliceRxAntenna(int sliceId, const QString& antenna)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(antenna);
+    }
 
     // How often the operator wants panadapter frames, in frames per second.
     //
@@ -368,6 +373,14 @@ public:
     // Default OFF. Turning it on outside a measurement will be unpleasant.
     virtual void setTxAudioMonitor(bool on) { Q_UNUSED(on); }
 
+    // The operator-facing radio MON switch and level. This is deliberately
+    // separate from the diagnostic receive-during-TX gate above.
+    virtual void setTxMonitor(bool on, int level)
+    {
+        Q_UNUSED(on);
+        Q_UNUSED(level);
+    }
+
     // Tune carrier on/off, at the operator's TUNE power (percent, 0..100).
     //
     // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
@@ -391,6 +404,20 @@ public:
     // nothing to do here. A backend that owns its own drive register (HL2)
     // implements it.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000).
+    //
+    // A sidetone setting on a radio that keys itself; a TUNING setting on a
+    // radio whose demodulator we own. The CW convention every client shares is
+    // that the marker sits on the signal and the receiver produces the pitch
+    // from a BFO, so a host-demodulating backend has to know the pitch to place
+    // its passband at all — see Hl2Backend::cwBfoHz(). Get this wrong and the
+    // panadapter's CW passband draws a whole pitch away from the marker while
+    // the transmitter keys on the marker itself.
+    //
+    // Default no-op: a Flex owns its own DSP and takes `cw pitch` as text from
+    // TransmitModel, so this seam would be a second, redundant opinion.
+    virtual void setCwPitch(int hz) { Q_UNUSED(hz); }
 
     // The speech processor, as the operator sees it: an enable plus one of
     // three presets (0 = NOR, 1 = DX, 2 = DX+).

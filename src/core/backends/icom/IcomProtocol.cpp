@@ -82,13 +82,12 @@ std::vector<std::uint8_t> framed(std::size_t len, PacketType type, std::uint16_t
 // The "inner" header shared by every control-stream request larger than 16
 // bytes (login, auth, stream request). Offsets are relative to the packet.
 //
-// INNER SEQUENCE: kappanhang writes a little-endian u16 at 0x17; wfview writes
-// a big-endian u16 at 0x16. For every value below 256 the two are byte-for-byte
-// identical, which is why both implementations work — and neither reference
-// exercises the divergence, because the counter is small in every capture
-// either project published. We follow kappanhang (our portable reference) and
-// flag the ambiguity here rather than silently picking a side: if a long-lived
-// session ever misbehaves after ~3 hours of 45 s renewals, this is the byte.
+// INNER SEQUENCE: a big-endian u16 at 0x16, matching wfview's packet struct and
+// a live IC-7300MK2. kappanhang writes a little-endian u16 at 0x17; both shapes
+// are byte-identical below 256, which hid the disagreement until a long-lived
+// session crossed the 8-bit boundary. At 256 the shifted kappanhang shape was
+// rejected with response 0xffffffff, and serial + audio expired 90 s after the
+// last valid renewal while the outer control stream remained alive.
 void writeInner(std::span<std::uint8_t> p, std::size_t payloadSize,
                 std::uint8_t requestReply, std::uint8_t requestType,
                 std::uint16_t innerSeq)
@@ -96,8 +95,7 @@ void writeInner(std::span<std::uint8_t> p, std::size_t payloadSize,
     putBe32(p, 0x10, static_cast<std::uint32_t>(payloadSize));
     p[0x14] = requestReply;
     p[0x15] = requestType;
-    p[0x16] = 0x00;
-    putLe16(p, 0x17, innerSeq);
+    putBe16(p, 0x16, innerSeq);
 }
 
 // The 95-entry substitution table Icom uses to obfuscate credentials, indexed
@@ -365,7 +363,7 @@ std::array<std::uint8_t, 16> encodePasscode(std::string_view s)
 // ---------------------------------------------------------------------------
 
 std::vector<std::uint8_t> buildLogin(std::uint32_t localSid, std::uint32_t remoteSid,
-                                     std::uint16_t innerSeq, std::uint16_t authStartId,
+                                     std::uint16_t innerSeq, std::uint16_t tokenRequestId,
                                      std::string_view username, std::string_view password)
 {
     auto p = framed(kLenLogin, PacketType::Idle, 0, localSid, remoteSid);
@@ -373,8 +371,10 @@ std::vector<std::uint8_t> buildLogin(std::uint32_t localSid, std::uint32_t remot
 
     // Two bytes of our choosing. The auth ID the radio hands back echoes them
     // in its first two bytes, which is how a reply is matched to a login when
-    // several are in flight.
-    putLe16(p, 0x1a, authStartId);
+    // several are in flight. This must be fresh per login: both wfview and
+    // kappanhang randomize it, and a live IC-7300MK2 rejected an immediate
+    // reconnect when AetherSDR reused 0x0000 from the previous session.
+    putLe16(p, 0x1a, tokenRequestId);
 
     const auto user = encodePasscode(username);
     const auto pass = encodePasscode(password);
@@ -411,13 +411,24 @@ std::vector<std::uint8_t> buildAuth(std::uint32_t localSid, std::uint32_t remote
     return p;
 }
 
-bool isAuthAccepted(std::span<const std::uint8_t> pkt)
+AuthReply parseAuthReply(std::span<const std::uint8_t> pkt)
 {
-    if (!startsWith(pkt, kLenToken, 0x40))
-        return false;
+    AuthReply out;
+    if (!startsWith(pkt, kLenToken, 0x40)) {
+        return out;
+    }
     // 0x14 == 0x02 marks a REPLY (we send 0x01); 0x15 == 0x05 marks it as the
     // answer to a Renew, which is the one that actually gates the streams.
-    return pkt[0x14] == 0x02 && pkt[0x15] == static_cast<std::uint8_t>(AuthKind::Renew);
+    if (pkt[0x14] != 0x02
+        || pkt[0x15] != static_cast<std::uint8_t>(AuthKind::Renew)) {
+        return out;
+    }
+    out.innerSeq = getBe16(pkt, 0x16);
+    out.response = getLe32(pkt, 0x30);
+    std::copy_n(pkt.begin() + 0x1a, out.authId.size(), out.authId.begin());
+    out.result = out.response == 0 ? AuthReplyResult::Accepted
+                                   : AuthReplyResult::Nonzero;
+    return out;
 }
 
 bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId)
@@ -494,11 +505,9 @@ StreamGrant parseStreamGrant(std::span<const std::uint8_t> pkt)
 
     g.granted    = true;
     g.deviceName = fixedString(pkt, 0x40, 32);
-    // THE TRAP: the radio may hand back DIFFERENT session IDs and a different
-    // auth ID than the ones the login established — a previous session on the
-    // same socket can shift them. Caching the login's values and never
-    // re-reading them here authenticates correctly exactly once and then fails
-    // every 60 s renewal, which presents as "audio stops after a minute".
+    // The header IDs are correlation data, not replacements for the current
+    // control stream's IDs. A delayed grant from a previous session can arrive
+    // on the new socket, so IcomSession validates both before adopting authId.
     g.remoteSid = getBe32(pkt, 0x08);
     g.localSid  = getBe32(pkt, 0x0c);
     std::copy_n(pkt.begin() + 0x1a, g.authId.size(), g.authId.begin());

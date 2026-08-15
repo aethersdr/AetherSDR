@@ -99,6 +99,22 @@ private:
     // serving get_freq/get_mode VFOB) pass promote=false so a query never
     // mutates radio state as a side effect.
     SliceModel* findTxSlice(bool promote = true);
+    // Read-only lookup of the current TX slice (pending pointer, else the
+    // isTxSlice() slice); no promotion side effect, so it is callable from const.
+    SliceModel* currentTxSlice() const;
+
+    // True only when THIS connection engaged split (set_split_vfo 1 or an
+    // implicit VFOB set), regardless of where the radio's single transmitter
+    // sits. Split reporting over rigctld is therefore per-CONNECTION state, not
+    // rig state: split engaged in the AetherSDR GUI, or by another CAT client, is
+    // intentionally NOT surfaced here — matching SmartSDR CAT and the TCI fix
+    // (#4085/#4086), which is what lets N per-slice ports each behave as an
+    // independent single-VFO rig (#4851/#4853). includePending covers the
+    // create-on-demand window and is for the keying path (cmdSetPtt) only; the
+    // getters and the VFOB resolver pass false so they never advertise split
+    // before the TX slice exists. One source of truth for cmdGetSplitVfo,
+    // cmdGetVfoInfo, sliceForVfo, get_vfo_list and cmdSetPtt so it cannot drift.
+    bool clientSplitActive(bool includePending = false) const;
     // If a split-enable arrived when only one slice existed, this promotes the
     // newly-created second slice to TX as soon as it appears in the model,
     // then applies any stashed split freq/mode from the burst that preceded it.

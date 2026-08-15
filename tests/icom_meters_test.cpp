@@ -87,6 +87,12 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Power, 255, kS9DbmHf), 12.0), "raw 255 is 12 W, above rated");
     check(meterValue(MeterId::Power, 240, kS9DbmHf) > 10.0, "and the region between is reachable");
 
+    // Same CI-V addresses, different radio-specific faces.
+    check(near(meterValue(MeterId::Power, 143, kS9DbmHf, 0xB6), 50.0),
+          "IC-7300MK2 raw 143 is 50 W");
+    check(near(meterValue(MeterId::Power, 213, kS9DbmHf, 0xB6), 100.0),
+          "IC-7300MK2 raw 213 is its rated 100 W");
+
     check(near(meterValue(MeterId::Swr, 0, 0), 1.0), "SWR 1.0 at zero");
     check(near(meterValue(MeterId::Swr, 48, 0), 1.5), "SWR 1.5");
     check(near(meterValue(MeterId::Swr, 120, 0), 3.0), "SWR 3.0");
@@ -98,6 +104,10 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Comp, 130, 0), 15.0), "COMP 15 dB");
     check(near(meterValue(MeterId::Vd, 75, 0), 5.0), "Vd 5 V");
     check(near(meterValue(MeterId::Id, 121, 0), 2.0), "Id 2 A");
+    check(near(meterValue(MeterId::Vd, 13, 0, 0xB6), 10.0),
+          "IC-7300MK2 Vd uses its desktop calibration");
+    check(near(meterValue(MeterId::Id, 97, 0, 0xB6), 10.0),
+          "IC-7300MK2 Id uses its 25 A face");
 
     // ALC full scale is 120, NOT 255 — the guide says so. Scaling by 255 makes
     // a fully-driven ALC read 47%.
@@ -219,6 +229,8 @@ static void testModelTable()
     check(ic705 && ic705->scopePoints == 475 && ic705->scopeMaxAmplitude == 160,
           "475 points, 0..160 — straight from Icom's CI-V guide");
     check(ic705 && ic705->receivers == 1 && ic705->hasWifi, "one receiver, WiFi");
+    check(ic705 && ic705->hasVfoModeCommand,
+          "and its official guide verifies selected-VFO 26 00 mode/DATA/filter");
 
     // Geometry genuinely varies, which is why it cannot be a compile-time
     // constant shared across models.
@@ -226,6 +238,8 @@ static void testModelTable()
     check(ic7610 && ic7610->scopePoints == 689 && ic7610->scopeMaxAmplitude == 200,
           "the IC-7610 has a DIFFERENT scope geometry");
     check(ic7610 && !ic7610->verified, "and is honestly marked unverified");
+    check(ic7610 && !ic7610->hasVfoModeCommand,
+          "so it does not inherit the IC-705's selected-VFO 26 00 shape");
 
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
     // bytes and decodes a plausible-looking wrong frequency.
@@ -246,6 +260,8 @@ static void testModelTable()
     check(mk2 && mk2->hasNetwork, "and unlike the original IC-7300 it HAS a network transport");
     check(mk2 && !mk2->hasWifi, "Ethernet, not WiFi — the IC-705 is the WiFi one");
     check(mk2 && mk2->verified, "its numbers came from its own Icom CI-V guide");
+    check(mk2 && mk2->hasVfoModeCommand,
+          "including its selected-VFO 26 00 mode/DATA/filter command");
     check(mk2 && mk2->scopePoints == 475 && mk2->scopeMaxAmplitude == 160,
           "475 points, 0..160");
     check(mk2 && mk2->tuningMaxHz == 74'800'000ULL, "0.03 to 74.8 MHz");
@@ -262,6 +278,10 @@ static void testModelTable()
     check(modelForCivAddress(0x01) == nullptr,
           "an unrecognised address resolves to nothing — a normal outcome, not an error");
     check(!knownModels().empty(), "the table is populated");
+    check(std::all_of(knownModels().begin(), knownModels().end(), [](const IcomModel& m) {
+              return m.verified || !m.hasVfoModeCommand;
+          }),
+          "no unverified model silently inherits a DATA command shape");
 }
 
 static void testUnknownModelIsConservative()

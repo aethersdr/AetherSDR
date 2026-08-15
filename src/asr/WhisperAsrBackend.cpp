@@ -247,7 +247,12 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     wparams.n_threads = m_threads;
     wparams.translate = false;
-    wparams.no_context = true;    // each over is independent
+    // Never reuse whisper's INTERNAL cross-call prompt (prompt_past): it is
+    // rebuilt from every decode's output unconditionally, so the confidence gate
+    // can't reach it — that was the "kept re-seeding and couldn't recover" bug.
+    // Instead we condition explicitly via initial_prompt below, which the gate
+    // and resetContext() fully control.
+    wparams.no_context = true;
     wparams.single_segment = true; // one utterance -> one segment
     wparams.no_timestamps = true;
     wparams.print_progress = false;
@@ -255,6 +260,16 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     wparams.print_timestamps = false;
     wparams.print_special = false;
     wparams.suppress_blank = true;
+
+    // Context carry (opt-in): condition this decode on the last confident
+    // segment's text by passing it as an explicit prompt. promptUtf8 must outlive
+    // whisper_full() (it holds the buffer initial_prompt points at); whisper
+    // tokenizes it synchronously during the call.
+    QByteArray promptUtf8;
+    if (m_contextCarryEnabled && !m_carriedPrompt.isEmpty()) {
+        promptUtf8 = m_carriedPrompt.toUtf8();
+        wparams.initial_prompt = promptUtf8.constData();
+    }
 
     // "auto" (or empty) → let whisper detect the language from the audio and
     // then transcribe it; any other value pins decoding to that language.
@@ -302,9 +317,9 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
         return {};
     }
 
-    // Confidence = mean probability over the real (non-special) tokens. Special
-    // tokens (timestamps, <eot>, etc.) have ids >= the end-of-text token and are
-    // excluded so punctuation/formatting doesn't skew the score.
+    // Special tokens (timestamps, <eot>, etc.) have ids >= the end-of-text token;
+    // they're excluded from the confidence mean below so punctuation/formatting
+    // doesn't skew the score.
     const whisper_token specialFloor = whisper_token_eot(m_ctx);
 
     QString text;
@@ -312,10 +327,15 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     int probCount = 0;
     const int segments = whisper_full_n_segments(m_ctx);
     for (int i = 0; i < segments; ++i) {
+        // Text via whisper's own byte-safe assembly — NOT rebuilt token-by-token:
+        // whisper can split one multi-byte UTF-8 character across token
+        // boundaries (BPE / byte-fallback), and QString::fromUtf8 on each partial
+        // fragment would yield U+FFFD, corrupting non-ASCII text (#4399 languages).
         const char* seg = whisper_full_get_segment_text(m_ctx, i);
         if (seg != nullptr) {
             text += QString::fromUtf8(seg);
         }
+        // Confidence = mean probability over the real (non-special) tokens.
         const int nTokens = whisper_full_n_tokens(m_ctx, i);
         for (int t = 0; t < nTokens; ++t) {
             if (whisper_full_get_token_id(m_ctx, i, t) >= specialFloor) {
@@ -329,7 +349,35 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     AsrTranscript result;
     result.text = text.trimmed();
     result.confidence = probCount > 0 ? static_cast<float>(probSum / probCount) : 0.0f;
+
+    // Only a confident segment becomes the next decode's prompt; a marginal one
+    // leaves the last good prompt in place rather than replacing it with garbage.
+    // (A real pause or Clear drops it entirely via resetContext().)
+    if (m_contextCarryEnabled && asrShouldCarryContext(result.text, result.confidence)) {
+        // whisper consumes at most the LAST min(n_max_text_ctx, n_text_ctx/2)-1
+        // ≈ 223 prompt tokens (whisper.cpp max_prompt_ctx), and a decode can echo
+        // initial_prompt back into its own text — so keep only the tail, or an
+        // echo would compound the carried string run over run.
+        constexpr int kMaxCarriedChars = 1000;
+        m_carriedPrompt = result.text.right(kMaxCarriedChars);
+    }
+
     return result;
+}
+
+void WhisperAsrBackend::setContextCarryEnabled(bool on)
+{
+    m_contextCarryEnabled = on;
+    if (!on) {
+        m_carriedPrompt.clear(); // start clean when re-enabled
+    }
+}
+
+void WhisperAsrBackend::resetContext()
+{
+    // Drop the carried prompt so the next decode starts clean. Lets the engine
+    // recover after a long silence or an explicit Clear.
+    m_carriedPrompt.clear();
 }
 
 void WhisperAsrBackend::unload()
@@ -339,6 +387,9 @@ void WhisperAsrBackend::unload()
         m_ctx = nullptr;
     }
     m_ctxOnGpu = false;
+    // A new/different model has no relationship to whatever text the old one
+    // produced — don't carry a stale prompt into its first decode.
+    m_carriedPrompt.clear();
 }
 
 std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QString& language,

@@ -140,10 +140,30 @@ jobs:
       # already required — so sharing the runner costs one step and saves a
       # whole checkout. A worktree rather than a second actions/checkout: the
       # base tree is only ever read by a text scanner.
+      #
+      # The base is the MERGE BASE of what was actually checked out, not live
+      # origin/<base_ref> (#4956). For a pull_request event github.sha is frozen
+      # when the run is CREATED, so the PR side is main-as-of-then while
+      # origin/<base_ref> resolves when the job RUNS. When main LOSES colours in
+      # between, the drop is billed to whichever PR happens to be running: #4895
+      # — a five-line C++ comment edit, which strip_comments() makes invisible to
+      # the scanner by construction — failed +5 setstylesheet off a 22h-old
+      # pinned tree, reporting #4866's cleanup sign-flipped. Re-resolving
+      # refs/pull/N/merge is not the fix: it races the ref and would scan a
+      # different tree than the SHA this run reports. The merge base asks the
+      # delta question against the tree the PR was actually written on, and is
+      # insensitive to how long the run sat queued — which is why fork PRs, held
+      # for workflow approval, were the most exposed. The a11y step below is
+      # already merge-base correct via its three-dot diff.
+      #
+      # Captured into a variable, not inlined: `bash -e` does not abort on a
+      # failed command substitution used as an argument, so an inline form would
+      # silently pass an empty base to `git worktree add`.
       - name: Hardcoded-colour ratchet
         if: ${{ !cancelled() }}
         run: |
-          git worktree add /tmp/colour-base "origin/${{ github.base_ref }}"
+          BASE=$(git merge-base HEAD "origin/${{ github.base_ref }}")
+          git worktree add /tmp/colour-base "$BASE"
           python tools/audit_colours.py \
             --src src \
             --compare-src /tmp/colour-base/src \

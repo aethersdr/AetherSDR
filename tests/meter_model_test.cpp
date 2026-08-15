@@ -874,6 +874,29 @@ void testRemovingATxFilterTapInvalidatesThePair()
            hadLevels && !model.hasTxFilterLevels());
 }
 
+void testPaCurrentIsDistinctFromTemperature()
+{
+    MeterModel model;
+    MeterDef current;
+    current.index = 90;
+    current.source = "RAD";
+    current.name = "PACURRENT";
+    current.unit = "Amps";
+    current.low = 0.0;
+    current.high = 25.0;
+    model.defineMeter(current);
+
+    float published = -1.0f;
+    QObject::connect(&model, &MeterModel::paCurrentChanged,
+                     [&published](float amps) { published = amps; });
+    model.updateValueByName("RAD", "PACURRENT", 7.5f);
+
+    report("PA current is exposed without fabricating PA temperature",
+           model.hasPaCurrentMeter() && model.hasPaCurrent()
+               && nearlyEqual(model.paCurrent(), 7.5f)
+               && nearlyEqual(published, 7.5f) && !model.hasPaTemp());
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -913,6 +936,7 @@ int main(int argc, char** argv)
     testActiveTxSliceSelectsTxFilterTaps();
     testChangingActiveTxSliceDropsStaleFilterLevels();
     testRemovingATxFilterTapInvalidatesThePair();
+    testPaCurrentIsDistinctFromTemperature();
 
     return g_failed == 0 ? 0 : 1;
 }

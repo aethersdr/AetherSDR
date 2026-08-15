@@ -629,6 +629,12 @@ void TxApplet::syncAtuIndicators()
 
 void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
 {
+    if (!m_transmitting) {
+        m_smoothedPower = 0.0f;
+        static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
+        static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
+        return;
+    }
     m_smoothedPower = fwdPower;
     static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
     // Absent SWR parks the gauge at its 1.0 rest position; a raw 0.0 would
@@ -639,6 +645,8 @@ void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
 
 void TxApplet::updatePeakPower(float fwdPowerInstant)
 {
+    if (!m_transmitting)
+        return;
     if (fwdPowerInstant > m_peakPower) {
         m_peakPower = fwdPowerInstant;
         m_peakDecayStart = fwdPowerInstant;
@@ -652,14 +660,19 @@ void TxApplet::updatePeakPower(float fwdPowerInstant)
 
 void TxApplet::setTransmitting(bool tx)
 {
+    m_transmitting = tx;
     if (!tx) {
-        // Drop the peak-hold tick to zero immediately on un-key so a held
-        // PEP reading does not linger across overs. (#2561)
+        // Clear BOTH the live readings and peak-hold immediately. Merely
+        // stopping meter polling leaves the last power sample painted forever,
+        // and an already-in-flight reply may still arrive after this edge.
+        m_smoothedPower = 0.0f;
         m_peakPower = 0.0f;
         m_peakDecayStart = 0.0f;
         m_peakHoldRunning = false;
         m_peakTick.stop();
+        static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
         static_cast<HGauge*>(m_fwdGauge)->setPeakValue(0.0f);
+        static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
     }
 }
 

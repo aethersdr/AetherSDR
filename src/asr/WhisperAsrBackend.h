@@ -12,6 +12,24 @@ struct whisper_context;
 
 namespace AetherSDR {
 
+// Below this confidence, don't let a segment's text seed the next decode's
+// prompt — a garbled/low-confidence result is more likely to compound into a
+// worse one downstream (a known whisper hallucination-propagation failure mode)
+// than to help continuity. 0.65 aligns with CopyAssistPanel's "yellow" band
+// (colorForConfidence): text the UI paints sub-yellow is exactly what we don't
+// want to carry. Not exposed in the UI — kept deliberately simple.
+inline constexpr float kContextCarryMinConfidence = 0.65f;
+
+// Whether a decoded segment should become the next decode's carried context
+// prompt (RFC #4818). Free + inline so it is unit-testable without a loaded
+// whisper_context: carry only confident, non-empty text — a marginal or empty
+// decode returns false, which the caller honours by leaving the previous prompt
+// in place rather than replacing it with garbage.
+inline bool asrShouldCarryContext(const QString& text, float confidence)
+{
+    return !text.isEmpty() && confidence >= kContextCarryMinConfidence;
+}
+
 // whisper.cpp implementation of IAsrBackend. CPU inference (the vendored ggml
 // is CPU-only for now); language defaults to English but is configurable.
 // Lives entirely on AsrEngine's worker thread.
@@ -27,6 +45,15 @@ public:
     bool isLoaded() const override { return m_ctx != nullptr; }
     AsrTranscript transcribe(const std::vector<float>& pcm16k, QString* error) override;
     void unload() override;
+    // Opt-in (RFC #4818): see IAsrBackend::setContextCarryEnabled. The
+    // carried text is passed as an explicit decode prompt (whisper's
+    // initial_prompt), and only a segment whose confidence clears the gate (see
+    // .cpp) is stored as the next call's prompt, so a garbled decode can't poison
+    // it.
+    void setContextCarryEnabled(bool on) override;
+    // Drop the carried prompt so the next decode starts clean (long silence gap
+    // or explicit Clear). See IAsrBackend::resetContext.
+    void resetContext() override;
 
 private:
     whisper_context* m_ctx = nullptr;
@@ -37,6 +64,11 @@ private:
     // load(), so a decode-time throw never latches a device that was not
     // involved.
     bool m_ctxOnGpu = false;
+    bool m_contextCarryEnabled = false;
+    // The last confident segment's text, carried forward as the next decode's
+    // explicit prompt when context-carry is on. Empty = start clean (right after
+    // load(), a reset, or while no segment has cleared the confidence gate).
+    QString m_carriedPrompt;
 };
 
 // A selectable GPU: `index` is the value to pass as gpuDevice (its position among

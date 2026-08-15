@@ -1553,7 +1553,7 @@ static inline quint8 daxHolderBit(PanadapterStream::DaxConsumer who)
 
 quint32 PanadapterStream::acquireDaxChannel(int channel, DaxConsumer who)
 {
-    if (channel < 1 || channel > 4) return 0;
+    if (channel < 1 || channel > 8) return 0;
     bool needCreate = false;
     quint32 streamId = 0;
     {
@@ -1583,7 +1583,7 @@ quint32 PanadapterStream::acquireDaxChannel(int channel, DaxConsumer who)
 
 void PanadapterStream::releaseDaxChannel(int channel, DaxConsumer who)
 {
-    if (channel < 1 || channel > 4) return;
+    if (channel < 1 || channel > 8) return;
     QMutexLocker lock(&m_streamMutex);
     auto it = m_daxChannelStates.find(channel);
     if (it == m_daxChannelStates.end()) return;
@@ -1610,7 +1610,7 @@ void PanadapterStream::releaseDaxChannel(int channel, DaxConsumer who)
 
 void PanadapterStream::notifyDaxCreateFailed(int channel)
 {
-    if (channel < 1 || channel > 4) return;
+    if (channel < 1 || channel > 8) return;
     bool retryArmed = false;
     {
         QMutexLocker lock(&m_streamMutex);

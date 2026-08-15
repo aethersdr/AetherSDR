@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 #include "LogManager.h"
+#include "ShutdownTrace.h"
 
 #include <QDir>
 #include <QFile>
@@ -372,14 +373,19 @@ KiwiSdrManager::KiwiSdrManager(
 
 KiwiSdrManager::~KiwiSdrManager()
 {
-    disconnectAll();
-    const QStringList ids = m_clients.keys();
-    for (const QString& id : ids) {
-        destroyClient(id, true);
+    {
+        ShutdownTrace trace("kiwi.clients.destroy");
+        disconnectAll();
+        const QStringList ids = m_clients.keys();
+        for (const QString& id : ids) {
+            destroyClient(id, true);
+        }
     }
     if (m_clientThread) {
+        ShutdownTrace trace("kiwi.thread.join");
         m_clientThread->quit();
         if (!m_clientThread->wait(3000)) {
+            trace.fail("thread_join_timeout");
             qCWarning(lcKiwiSdr)
                 << "KiwiSDR client thread did not stop during manager teardown";
             m_clientThread->setParent(nullptr);
