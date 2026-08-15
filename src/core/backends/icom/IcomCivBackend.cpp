@@ -2446,19 +2446,16 @@ void IcomCivBackend::traceCiv(bool outbound, std::span<const std::uint8_t> frame
         if (frame.size() > static_cast<std::size_t>(cmdIdx)) {
             const std::uint8_t c = frame[cmdIdx];
             tag = QStringLiteral(" cmd=%1").arg(c, 2, 16, QLatin1Char('0'));
-            // Which commands carry a subcommand is a per-command fact — the
-            // same enumeration parseFrame() uses. Getting it wrong here would
-            // label command 0x05's first frequency digit as a subcommand.
-            if (frame.size() > static_cast<std::size_t>(cmdIdx) + 1) {
-                switch (c) {
-                case cmd::kLevel: case cmd::kMeter: case cmd::kFunction:
-                case cmd::kPower: case cmd::kReadId: case cmd::kSetting:
-                case cmd::kControl: case cmd::kScope: case cmd::kTuneOffset:
-                    tag += QStringLiteral(" sub=%1")
-                               .arg(frame[cmdIdx + 1], 2, 16, QLatin1Char('0'));
-                    break;
-                default: break;
-                }
+            // Which commands carry a subcommand is a per-command fact, and
+            // commandHasSubcommand() is the single list parseFrame() decodes
+            // by. Keeping a second copy here would let the two drift, and a
+            // drift would label command 0x05's first frequency digit as a
+            // subcommand — the wrong-but-plausible output this tag exists to
+            // avoid.
+            if (frame.size() > static_cast<std::size_t>(cmdIdx) + 1
+                && commandHasSubcommand(c)) {
+                tag += QStringLiteral(" sub=%1")
+                           .arg(frame[cmdIdx + 1], 2, 16, QLatin1Char('0'));
             }
         }
         qCDebug(lcIcomCiv).noquote().nospace()

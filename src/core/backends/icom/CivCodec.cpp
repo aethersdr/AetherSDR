@@ -47,6 +47,40 @@ std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd, std::
     return buildFrame(to, cmd, body);
 }
 
+// Which commands carry a subcommand is a per-command fact, not a positional
+// one. Treating every second byte as a subcommand would turn command 0x05's
+// first frequency digit into a "subcommand"; treating none of them as one
+// would collapse every 0x27 scope reply into a single undifferentiated blob.
+// So the set is enumerated — ONCE, here, because a second copy of it can drift
+// silently and a drift produces exactly the wrong-but-plausible decode this
+// enumeration exists to prevent. parseFrame() and the CI-V trace both read it.
+bool commandHasSubcommand(std::uint8_t command)
+{
+    switch (command) {
+    case cmd::kLevel:
+    case cmd::kMeter:
+    case cmd::kFunction:
+    case cmd::kPower:
+    case cmd::kReadId:
+    case cmd::kSetting:
+    case cmd::kControl:
+    case cmd::kScope:
+    // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
+    // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
+    // reply parsed with the subcommand sitting in the payload, so the decode
+    // could not tell an enable from an offset and dropped all three.
+    case cmd::kTuneOffset:
+    case cmd::kRxAntenna:
+    // 0x26 is sub-addressed by VFO: 26 00 is the selected VFO, 26 01 the
+    // unselected one. Without this the selector stays in the payload and every
+    // mode/DATA/filter field is decoded one byte off.
+    case cmd::kVfoMode:
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
 {
     // FE FE <to> <from> <cmd> ... <FD>  — the shortest legal frame is 6 bytes
@@ -69,37 +103,14 @@ std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
     if (bodyEnd <= bodyBegin)
         return f;   // bare command or FB/FA with no data
 
-    // Which commands carry a subcommand is a per-command fact, not a positional
-    // one. Treating every second byte as a subcommand would turn command 0x05's
-    // first frequency digit into a "subcommand"; treating none of them as one
-    // would collapse every 0x27 scope reply into a single undifferentiated
-    // blob. So the set is enumerated.
-    switch (f.cmd) {
-    case cmd::kLevel:
-    case cmd::kMeter:
-    case cmd::kFunction:
-    case cmd::kPower:
-    case cmd::kReadId:
-    case cmd::kSetting:
-    case cmd::kControl:
-    case cmd::kScope:
-    // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
-    // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
-    // reply parsed with the subcommand sitting in the payload, so the decode
-    // could not tell an enable from an offset and dropped all three.
-    case cmd::kTuneOffset:
-    case cmd::kRxAntenna:
-    // 0x26 is sub-addressed by VFO: 26 00 is the selected VFO, 26 01 the
-    // unselected one. Without this the selector stays in the payload and every
-    // mode/DATA/filter field is decoded one byte off.
-    case cmd::kVfoMode:
+    // See commandHasSubcommand() above for why this is an enumeration and not a
+    // positional rule.
+    if (commandHasSubcommand(f.cmd)) {
         f.hasSub = true;
         f.sub    = frame[bodyBegin];
         f.data.assign(frame.begin() + bodyBegin + 1, frame.begin() + bodyEnd);
-        break;
-    default:
+    } else {
         f.data.assign(frame.begin() + bodyBegin, frame.begin() + bodyEnd);
-        break;
     }
     return f;
 }

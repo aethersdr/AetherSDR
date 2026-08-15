@@ -83,6 +83,13 @@ struct CivFrame {
                                                       std::uint8_t sub,
                                                       std::span<const std::uint8_t> payload = {});
 
+// Whether a command is sub-addressed — i.e. whether the byte after it is a
+// subcommand or the first byte of the payload. This is a per-command fact and
+// there is exactly ONE list of it: parseFrame() decodes by it, and the CI-V
+// trace labels by it. A second copy can drift, and a drift here produces the
+// wrong-but-plausible decode the enumeration exists to prevent.
+[[nodiscard]] bool commandHasSubcommand(std::uint8_t command);
+
 // Decode one complete frame (FE FE … FD). Returns nullopt if it is malformed.
 [[nodiscard]] std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame);
 
