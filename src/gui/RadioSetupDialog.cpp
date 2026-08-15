@@ -7783,11 +7783,17 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         ipEdit->setPlaceholderText("e.g. 192.168.1.50");
         AetherSDR::ThemeManager::instance().applyStyleSheet(ipEdit, kEditStyle);
         ipEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
+        // Name answers "what is this?", description answers "what do I type?"
+        // -- docs/a11y.md Section 2's rule for input widgets.
+        ipEdit->setAccessibleName(tr("VK3AMP address"));
+        ipEdit->setAccessibleDescription(tr("IP address or host name of the VK3AMP amplifier"));
         grid->addWidget(ipEdit, row, 1);
 
         auto* portSpin = new QSpinBox;
         portSpin->setRange(1, 65535);
         portSpin->setValue(PeripheralSettings::deviceInt("Vkamp", "ManualPort", 5005));
+        portSpin->setAccessibleName(tr("VK3AMP control port"));
+        portSpin->setAccessibleDescription(tr("TCP control port, 1 to 65535, default 5005"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin,
             "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
@@ -7801,10 +7807,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         auto* statusLbl = new QLabel(m_vkamp->isConnected() ? "Connected" : "Not connected");
         AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
             m_vkamp->isConnected() ? kVkampConnectedStyle : kVkampDisconnectedStyle);
+        statusLbl->setAccessibleName(tr("VK3AMP connection status"));
         grid->addWidget(statusLbl, row, 4);
 
         auto* vkampBtn = new QPushButton(m_vkamp->isConnected() ? "Disconnect" : "Connect");
         AetherSDR::ThemeManager::instance().applyStyleSheet(vkampBtn, kBtnStyle);
+        vkampBtn->setAccessibleName(tr("Connect or disconnect the VK3AMP amplifier"));
         grid->addWidget(vkampBtn, row, 3);
 
         auto updateVkampState = [this, vkampBtn, statusLbl]() {
@@ -7862,7 +7870,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         });
 
-        // Row 7: VK3AMP hardware variant -- 600W/1000W/2000W ship as
+        // Row 8: VK3AMP hardware variant -- 600W/1000W/2000W ship as
         // distinct rated-power classes, and the wire protocol has no
         // model/wattage field to auto-detect which one this is (design
         // doc's variant table). Picking the wrong one only misscales the
@@ -7879,6 +7887,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
             "QComboBox::drop-down { border: none; }";
         AetherSDR::ThemeManager::instance().applyStyleSheet(variantCombo, kVariantComboStyle);
+        variantCombo->setAccessibleName(tr("VK3AMP amplifier model"));
+        variantCombo->setAccessibleDescription(
+            tr("Rated output of your unit. Sets the power meter's full scale; it does not change "
+               "anything on the amplifier."));
         for (auto v : {Vkamp::Variant::W600, Vkamp::Variant::W1000, Vkamp::Variant::W2000}) {
             variantCombo->addItem(Vkamp::variantLabel(v), static_cast<int>(v));
         }

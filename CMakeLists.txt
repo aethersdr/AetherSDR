@@ -4252,6 +4252,25 @@ target_include_directories(vkamp_protocol_test PRIVATE src)
 target_link_libraries(vkamp_protocol_test PRIVATE Qt6::Core)
 add_test(NAME vkamp_protocol_test COMMAND vkamp_protocol_test)
 
+# VkampConnection against a stub amp on loopback -- the transport behaviour
+# the pure-codec test above can't reach: the bypass/voltage safety interlock,
+# the reset hold's exclusive claim on the wire, the command rate limiter,
+# hostname resolution for the UDP telemetry port, and TX-gated telemetry
+# expiry. Isolated settings dir per the CMake contract: LogManager pulls in
+# AppSettings.
+add_executable(vkamp_connection_test
+    tests/vkamp_connection_test.cpp
+    src/core/VkampConnection.cpp
+    src/core/VkampProtocol.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(vkamp_connection_test PRIVATE src tests)
+target_link_libraries(vkamp_connection_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME vkamp_connection_test COMMAND vkamp_connection_test)
+set_tests_properties(vkamp_connection_test PROPERTIES TIMEOUT 120)
+
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
@@ -6114,6 +6133,7 @@ set(AETHER_SETTINGS_CONSUMERS
     mini_pan_widget_test
     log_manager_filter_rules_test
     bandplan_voice_labels_test
+    vkamp_connection_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

@@ -118,13 +118,24 @@ struct Telemetry {
     // Calibrated values -- quadratic (output/reflected/input) or linear
     // (current) fits against external reference measurements, ported from
     // the companion project's own calibration (design doc Section 3.2).
+    //
+    // The three quadratics share one out-of-range rule: the fit is followed
+    // only where it is monotonically increasing, and below its own vertex it
+    // tapers linearly to 0W at 0 raw counts. calibratedPower() in the .cpp
+    // carries the reasoning -- in short, a decreasing power curve is the fit
+    // telling you it has left the data it was built from, and scaling a real
+    // reading by a fraction of itself never made that reading truer. The
+    // consequence that matters at call sites: 0 raw counts really does mean
+    // 0W on every curve, so "no carrier" needs no special case anywhere.
     float outputWatts() const;
     float reflectedWatts() const;
     float currentAmps() const;
     float inputWatts() const;
     // Computed client-side, not a wire field -- rho = sqrt(reflected/output),
-    // SWR = (1+rho)/(1-rho). Defaults to 1.0 (no carrier) when either
-    // calibrated watt value is <= 0, matching the amp's own idle display.
+    // SWR = (1+rho)/(1-rho). Returns 1.0 when there is no calibrated forward
+    // power to divide by, matching the amp's own idle display. A genuinely
+    // matched load reaches 1.0 through the arithmetic rather than through a
+    // guard, since reflectedWatts() reads a true 0 at 0 raw counts.
     float swr() const;
 };
 

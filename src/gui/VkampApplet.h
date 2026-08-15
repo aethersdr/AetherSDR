@@ -26,10 +26,11 @@ class VkampApplet : public QWidget {
 public:
     explicit VkampApplet(QWidget* parent = nullptr);
 
-    // Rescales the forward-power gauge to the selected hardware variant's
-    // rated output + headroom (Vkamp::meterFullScaleWatts/ratedWatts) --
-    // driven by the Peripherals settings row, see design doc's variant
-    // table. Safe to call before or after connect; defaults to W2000.
+    // Rescales the forward- and reflected-power gauges to the selected
+    // hardware variant's rated output + headroom
+    // (Vkamp::meterFullScaleWatts/ratedWatts) -- driven by the Peripherals
+    // settings row, see design doc's variant table. Safe to call before or
+    // after connect; defaults to W2000.
     void setVariant(Vkamp::Variant variant);
 
     // Telemetry (UDP)
@@ -37,6 +38,12 @@ public:
     void setReflectedPower(float watts);
     void setSwr(float swr);
     void setCurrent(float amps);
+    // Telemetry has expired -- the amp stopped transmitting and is now silent
+    // (VkampConnection::telemetryStalled). Zeroes the four TX-only readouts
+    // rather than leaving the last transmit frame on the gauges for the whole
+    // idle period. Status fields (temp/volts/band/antenna) are NOT touched:
+    // those keep flowing on the TCP link and stay valid.
+    void clearTelemetry();
 
     // Status (TCP)
     void setTemp(float degC);
@@ -110,6 +117,9 @@ private:
     bool m_bypassed{false};
     bool m_voltageLow{false};
     bool m_connected{false};
+    // A reset hold is running: VkampConnection drops every other command for
+    // its duration, so the controls are disabled to match (setResetProgress).
+    bool m_resetting{false};
 
     Vkamp::Variant m_variant{Vkamp::Variant::W2000};
 

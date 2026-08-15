@@ -6105,6 +6105,14 @@ void MainWindow::wireMeters()
         vkamp->setSwr(t.swr());
         vkamp->setCurrent(t.currentAmps());
     });
+    // Telemetry is TX-gated (design doc Section 3.2) -- the amp goes silent
+    // the moment a transmission ends, so without this the last transmit
+    // frame stays on the power/SWR/current readouts for the whole idle
+    // period, showing a keyed amplifier that isn't transmitting. Status
+    // fields keep flowing on TCP and are deliberately left alone.
+    connect(&m_vkampConn, &VkampConnection::telemetryStalled, this, [this]() {
+        m_appletPanel->vkampApplet()->clearTelemetry();
+    });
 
     // Startup auto-connect from saved Peripherals settings — same reasoning
     // as ACOM above: no radio-side presence signal exists for this

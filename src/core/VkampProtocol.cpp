@@ -1,5 +1,6 @@
 #include "VkampProtocol.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QRegularExpression>
@@ -45,34 +46,14 @@ constexpr float kVoltageRailMidpoint = 49.7f;
 constexpr float kOutputCalA = 0.004512816228704022f;
 constexpr float kOutputCalB = -0.1747779854596575f;
 constexpr float kOutputCalC = 25.69141235049288f;
-// Floor extended down from the companion project's original 175.6 (their
-// lowest confirmed point, raw~175.6 -> true 133W) after a live capture on
-// this codebase's own hardware: 121 telemetry frames during a steady 1W-
-// drive transmission clustered at raw 157-166 (mode 165, 58/121 frames),
-// user-confirmed true output ~111W. NOT extended further than this
-// steady-state cluster: the same capture's tail-off through 134 and 102 as
-// the transmission ended is transient, not a new steady point, and is
-// deliberately excluded.
-//
-// Anchored at 157 -- the LOW edge of that cluster -- not 165, its mode. An
-// earlier version of this fix anchored at the mode instead, which put most
-// of the real observed jitter (157-164) inside the ramp below it: a linear
-// taper multiplies against the full ~120W target, so even a 1-raw-count
-// blip swung the ramp's own fraction by 1/rampWidth =33%, i.e. ~40W --
-// looking exactly like the value "flickering" even though it was a stable
-// transmission the whole time. The quadratic above is actually well-
-// resolved through this whole range (~1.3W of true slope per raw count at
-// raw~160, confirmed by evaluating it directly) -- the flicker was 100% an
-// artifact of running real, already-noisy data through the taper meant for
-// smoothing a RARE undershoot blip below the confirmed cluster, not for
-// interpolating across the bulk of it. Anchoring at the cluster's own low
-// edge instead means raw 157-166 all resolve through the smooth quadratic
-// directly, and the (unchanged, still 3-count-wide) ramp only ever
-// activates for the rare sub-157 dip actually observed in this same
-// capture's tail-off -- exactly the boundary-smoothing role it was
-// originally designed for (see kOutputCalRampWidth's own doc comment).
-constexpr float kOutputCalMinRaw = 157.0f;
-constexpr float kOutputCalRampWidth = 3.0f;
+// Documentation only -- no code branches on this. It records the lowest raw
+// count the output fit has ever been confirmed against on real hardware: the
+// companion project's own lowest confirmed point was raw~175.6 -> true 133W,
+// and a later live capture on this codebase's own hardware added 121 frames
+// of a steady 1W-drive transmission clustered at raw 157-166 (mode 165),
+// user-confirmed ~111W true. The same capture's tail-off through 134 and 102
+// as the transmission ended is transient, not a steady point.
+constexpr float kOutputLowestConfirmedRaw = 157.0f;
 
 constexpr float kCurrentCalA = 0.4052965787643523f;
 constexpr float kCurrentCalB = 0.3049154652689805f;
@@ -84,6 +65,55 @@ constexpr float kReflectedCalC = 2.4337837601262087f;
 constexpr float kInputCalA = 0.0008018661524991072f;
 constexpr float kInputCalB = 0.1595133745143524f;
 constexpr float kInputCalC = 1.004316538777762f;
+
+// One rule for every quadratic power curve above, replacing the per-curve
+// floors this shipped with (PR #4919 review).
+//
+// A least-squares quadratic is only meaningful where it is monotonically
+// INCREASING. Below its own vertex it turns decreasing -- more raw counts
+// reporting less power -- which is unphysical for any of these sensors and
+// is the fit telling you it has run out of the data it was built from. So:
+//
+//   raw >= vertex : evaluate the quadratic directly.
+//   raw <  vertex : linear taper from 0W at 0 counts up to the curve's own
+//                   value at the vertex. Continuous, monotonic, and -- the
+//                   part that matters -- exactly 0 at 0 raw counts.
+//
+// Why this replaces what was here before, on both curves:
+//
+//  - Output shipped a hard floor at kOutputLowestConfirmedRaw with a
+//    3-count linear ramp beneath it. Sitting one count under the confirmed
+//    157-166 steady-state cluster, that ramp turned an ordinary 1-count ADC
+//    dip to raw 156 into a 109W -> 72W jump: the same "flicker on a steady
+//    carrier" the anchor had already been moved once to cure, relocated 8
+//    counts down rather than removed. The quadratic is well-conditioned
+//    that far down (~1.3W of true slope per raw count at raw~160), so
+//    following it is both smoother and closer to the truth. Multiplying a
+//    real reading by a fraction never made it more trustworthy -- it only
+//    made it wrong in a new direction.
+//
+//  - Reflected shipped no floor at all, so its intercept never let it read
+//    zero: the curve bottoms out at ~2.0W (vertex raw~9.2) and returns
+//    ~2.43W at raw 0. A perfectly matched load therefore reported ~2W
+//    reflected and an inflated SWR -- 1.35:1 at 109W forward -- and made
+//    swr()'s own "reflected <= 0" guard unreachable. The taper fixes that
+//    at the source, which is why swr() below needs no special case.
+//
+// Input keeps its existing behaviour: kInputCalB is positive, so that
+// curve's vertex is at a negative raw count and it is already increasing
+// across the whole domain -- the taper branch never runs for it.
+float calibratedPower(float raw, float a, float b, float c)
+{
+    const auto curve = [&](float r) { return std::max(0.0f, a * r * r + b * r + c); };
+    if (raw <= 0.0f) {
+        return 0.0f;
+    }
+    const float vertexRaw = -b / (2.0f * a);
+    if (vertexRaw <= 0.0f || raw >= vertexRaw) {
+        return curve(raw);
+    }
+    return curve(vertexRaw) * (raw / vertexRaw);
+}
 
 }  // namespace
 
@@ -169,25 +199,13 @@ void StatusStreamParser::feed(const QByteArray& bytes)
 
 float Telemetry::outputWatts() const
 {
-    const float raw = static_cast<float>(output);
-    const float rampStart = kOutputCalMinRaw - kOutputCalRampWidth;
-    if (raw < rampStart) {
-        return 0.0f;
-    }
-    const float value = std::max(0.0f, kOutputCalA * raw * raw + kOutputCalB * raw + kOutputCalC);
-    if (raw < kOutputCalMinRaw) {
-        // Linear taper from 0 (at rampStart) up to the curve's own value at
-        // kOutputCalMinRaw -- continuous, not a step (design doc Section 3.2
-        // via the companion project's own _OUTPUT_CAL_RAMP_WIDTH comment).
-        return value * (raw - rampStart) / kOutputCalRampWidth;
-    }
-    return value;
+    return calibratedPower(static_cast<float>(output), kOutputCalA, kOutputCalB, kOutputCalC);
 }
 
 float Telemetry::reflectedWatts() const
 {
-    const float raw = static_cast<float>(reflected);
-    return std::max(0.0f, kReflectedCalA * raw * raw + kReflectedCalB * raw + kReflectedCalC);
+    return calibratedPower(static_cast<float>(reflected),
+                           kReflectedCalA, kReflectedCalB, kReflectedCalC);
 }
 
 float Telemetry::currentAmps() const
@@ -197,8 +215,7 @@ float Telemetry::currentAmps() const
 
 float Telemetry::inputWatts() const
 {
-    const float raw = static_cast<float>(input_raw);
-    return std::max(0.0f, kInputCalA * raw * raw + kInputCalB * raw + kInputCalC);
+    return calibratedPower(static_cast<float>(input_raw), kInputCalA, kInputCalB, kInputCalC);
 }
 
 float Telemetry::swr() const

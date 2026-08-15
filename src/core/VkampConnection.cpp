@@ -34,6 +34,7 @@ VkampConnection::VkampConnection(QObject* parent)
     // Section 6). This ping is the only thing that produces one.
     m_keepaliveTimer.setInterval(kKeepaliveIntervalMs);
     connect(&m_keepaliveTimer, &QTimer::timeout, this, [this]() {
+        // Held back during a reset hold by sendCommand()'s own gate.
         sendCommand(Vkamp::buildPoll());
     });
 
@@ -55,8 +56,34 @@ VkampConnection::VkampConnection(QObject* parent)
     // churning sockets/ports risks losing telemetry right as a TX starts.
     m_telemetryTriggerTimer.setInterval(kTelemetryRetriggerMs);
     connect(&m_telemetryTriggerTimer, &QTimer::timeout, this, [this]() {
-        m_udpSocket.writeDatagram(Vkamp::buildPoll(), QHostAddress(m_lastHost), m_lastUdpPort);
+        sendTelemetryTrigger();
     });
+
+    // Telemetry is TX-gated (design doc Section 3.2): the amp streams while
+    // transmitting and is silent otherwise, so "frames stopped" is the normal
+    // end of a transmission, not a fault. Without this the last frame of the
+    // last transmission stays on the gauges for the whole idle period --
+    // forward power, SWR and current all reading as though the amp were still
+    // keyed. Every other amplifier applet is spared this only because its amp
+    // keeps streaming zeros at idle; this one never will.
+    m_telemetryStallTimer.setSingleShot(true);
+    m_telemetryStallTimer.setInterval(kTelemetryStallMs);
+    connect(&m_telemetryStallTimer, &QTimer::timeout, this, [this]() {
+        if (!m_connected) { return; }
+        qCDebug(lcTuner) << "VkampConnection: telemetry idle -- expiring the last frame";
+        emit telemetryStalled();
+    });
+}
+
+void VkampConnection::sendTelemetryTrigger()
+{
+    if (m_resolvedHost.isNull()) {
+        return;
+    }
+    if (m_udpSocket.writeDatagram(Vkamp::buildPoll(), m_resolvedHost, m_lastUdpPort) < 0) {
+        qCWarning(lcTuner) << "VkampConnection: telemetry trigger to" << m_resolvedHost
+                           << "failed --" << m_udpSocket.errorString();
+    }
 }
 
 QString VkampConnection::description() const
@@ -117,6 +144,11 @@ void VkampConnection::disconnect()
     m_keepaliveTimer.stop();
     m_staleStatusTimer.stop();
     m_telemetryTriggerTimer.stop();
+    m_telemetryStallTimer.stop();
+    m_resolvedHost.clear();
+    // The next connection starts with a clean rate-limit budget -- otherwise
+    // a command sent just before the drop can hold back the reconnect poll.
+    m_lastCommandTimer.invalidate();
     if (m_resetTimer) { m_resetTimer->stop(); }
     m_resetting = false;
     m_connected = false;
@@ -145,8 +177,17 @@ void VkampConnection::onTransportUp()
     // reason on every connection, not just a slow/remote one.
     m_socket.setSocketOption(QAbstractSocket::LowDelayOption, 1);
 
+    // Reuse whatever the TCP connect already resolved rather than re-parsing
+    // the user's string -- see m_resolvedHost's own doc comment for why
+    // QHostAddress(m_lastHost) is not equivalent.
+    m_resolvedHost = m_socket.peerAddress();
+    if (m_resolvedHost.isNull()) {
+        qCWarning(lcTuner) << "VkampConnection: connected but peer address is null --"
+                              "UDP telemetry will not flow";
+    }
+
     sendCommand(Vkamp::buildPoll());
-    m_udpSocket.writeDatagram(Vkamp::buildPoll(), QHostAddress(m_lastHost), m_lastUdpPort);
+    sendTelemetryTrigger();
 
     m_keepaliveTimer.start();
     m_staleStatusTimer.start();
@@ -162,6 +203,11 @@ void VkampConnection::onTransportDown()
     m_keepaliveTimer.stop();
     m_staleStatusTimer.stop();
     m_telemetryTriggerTimer.stop();
+    m_telemetryStallTimer.stop();
+    m_resolvedHost.clear();
+    // The next connection starts with a clean rate-limit budget -- otherwise
+    // a command sent just before the drop can hold back the reconnect poll.
+    m_lastCommandTimer.invalidate();
     if (m_resetTimer) { m_resetTimer->stop(); }
     m_resetting = false;
     m_parser.reset();
@@ -220,6 +266,7 @@ void VkampConnection::onUdpReadyRead()
                                      "external reference reading at this drive level "
                                      "to extend the curve";
             }
+            m_telemetryStallTimer.start();  // see this timer's own setup comment
             emit telemetryUpdated(*telemetry);
         }
     }
@@ -232,10 +279,17 @@ void VkampConnection::onStatusReceived(const Vkamp::Status& status)
     emit statusUpdated(status);
 }
 
-bool VkampConnection::sendCommand(const QByteArray& code)
+bool VkampConnection::sendCommand(const QByteArray& code, bool isResetHold)
 {
     if (!m_connected) {
         qCWarning(lcTuner) << "VkampConnection: command" << code << "dropped -- not connected";
+        return false;
+    }
+    if (m_resetting && !isResetHold) {
+        // See sendCommand()'s own doc comment in the header: the reset hold
+        // owns the wire until it finishes.
+        qCWarning(lcTuner) << "VkampConnection: command" << code
+                           << "dropped -- a reset hold is in progress";
         return false;
     }
     if (m_lastCommandTimer.isValid() && m_lastCommandTimer.elapsed() < kMinCommandIntervalMs) {
@@ -296,7 +350,7 @@ void VkampConnection::startReset()
         m_resetTimer = new QTimer(this);
         m_resetTimer->setInterval(static_cast<int>(kResetIntervalSeconds * 1000));
         connect(m_resetTimer, &QTimer::timeout, this, [this]() {
-            sendCommand(Vkamp::buildResetHold());
+            sendCommand(Vkamp::buildResetHold(), /*isResetHold=*/true);
             m_resetRemaining -= kResetIntervalSeconds;
             if (m_resetRemaining <= 0.0) {
                 m_resetTimer->stop();
@@ -312,7 +366,7 @@ void VkampConnection::startReset()
     // Send the first hold immediately -- matches the companion project's own
     // reset() loop, which sends on every interval including the first,
     // rather than waiting one full interval before the amp sees anything.
-    sendCommand(Vkamp::buildResetHold());
+    sendCommand(Vkamp::buildResetHold(), /*isResetHold=*/true);
     emit resetProgress(m_resetRemaining);
     m_resetTimer->start();
 }

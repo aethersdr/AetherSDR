@@ -97,6 +97,16 @@ QPushButton* makeSmallButton(const QString& text, QWidget* parent)
     return btn;
 }
 
+// Reflected-power axis as a fraction of the variant's rated output. 15% puts
+// the W2000 unit at the 300W axis this shipped with, and scales the smaller
+// units down instead of leaving them with an axis they can never reach.
+constexpr float kReflectedScaleFraction = 0.15f;
+
+float reflectedFullScale(Vkamp::Variant v)
+{
+    return Vkamp::ratedWatts(v) * kReflectedScaleFraction;
+}
+
 }  // namespace
 
 VkampApplet::VkampApplet(QWidget* parent)
@@ -109,6 +119,9 @@ VkampApplet::VkampApplet(QWidget* parent)
 
     // ── Header: status pill ─────────────────────────────────────────────────
     m_statusPill = new QLabel("—", this);
+    // A status badge, per docs/a11y.md Section 1 -- without a name an AT
+    // announces the bare em-dash placeholder and nothing else.
+    m_statusPill->setAccessibleName(tr("Amplifier connection status"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusPill,
         "QLabel { background: {{color.background.1}}; color: {{color.text.label}}; "
         "border: 1px solid {{color.border.strong}}; border-radius: 3px; font-size: 9px; "
@@ -135,7 +148,12 @@ VkampApplet::VkampApplet(QWidget* parent)
     // ── REF row ───────────────────────────────────────────────────────────
     m_refLabel = makeValueLabel(this);
     m_refLabel->setText("REF");
-    m_refGauge = new HGauge(0.0f, 300.0f, 150.0f, "", "", evenTicks(300.0f), this);
+    // Scaled off the variant like the forward gauge, not a fixed 300W: on a
+    // 600W unit a 300W full-scale reflected axis is most of the rated output
+    // and never leaves the first sixth of the bar. kReflectedScaleFraction
+    // keeps the W2000 axis at exactly the 300W this shipped with.
+    m_refGauge = new HGauge(0.0f, reflectedFullScale(m_variant), reflectedFullScale(m_variant) / 2.0f,
+        "", "", evenTicks(reflectedFullScale(m_variant)), this);
     m_refGauge->setAccessibleName(tr("Reflected power"));
     auto* refRow = new QHBoxLayout;
     refRow->setSpacing(4);
@@ -198,6 +216,9 @@ VkampApplet::VkampApplet(QWidget* parent)
 
     // ── Bypass / Cooling row ─────────────────────────────────────────────────
     m_bypassBtn = makeSmallButton("BYPASS", this);
+    m_bypassBtn->setAccessibleDescription(
+        tr("Switches the amplifier between bypass and in-line. The label shows the current state, "
+           "not the action."));
     // activeStateStyle("ampOn", ...) has no :disabled rule (unlike
     // neutralBtnStyle), so the green "AMP ON" state is only reachable
     // while actually connected -- see setBypass()'s own comment.
@@ -209,6 +230,7 @@ VkampApplet::VkampApplet(QWidget* parent)
     connect(m_bypassBtn, &QPushButton::clicked, this, [this]() { emit bypassToggled(!m_bypassed); });
 
     m_coolingBtn = makeSmallButton("COOLING", this);
+    m_coolingBtn->setAccessibleName(tr("Cooling override"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_coolingBtn,
         makeStateBtnStyle({activeStateStyle("active", "{{color.background.1}}", "{{color.background.2}}", "{{color.text.primary}}")}));
     connect(m_coolingBtn, &QPushButton::clicked, this, [this]() {
@@ -227,6 +249,11 @@ VkampApplet::VkampApplet(QWidget* parent)
     m_ant1Btn = makeSmallButton("1", this);
     m_ant2Btn = makeSmallButton("2", this);
     m_ant3Btn = makeSmallButton("3", this);
+    // "1"/"2"/"3" carry no meaning on their own to an AT reading the button
+    // out of its row context -- docs/a11y.md Section 1.
+    m_ant1Btn->setAccessibleName(tr("Antenna port 1"));
+    m_ant2Btn->setAccessibleName(tr("Antenna port 2"));
+    m_ant3Btn->setAccessibleName(tr("Antenna port 3"));
     const QString antBtnStyle = makeStateBtnStyle(
         {activeStateStyle("active", "{{color.background.1}}", "{{color.accent}}", "{{color.text.primary}}")});
     for (auto* btn : {m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
@@ -256,6 +283,12 @@ VkampApplet::VkampApplet(QWidget* parent)
     theme.applyStyleSheet(railLabel, kTelStyle);
     m_voltLowBtn = makeSmallButton("LOW", this);
     m_voltHighBtn = makeSmallButton("HIGH", this);
+    m_voltLowBtn->setAccessibleName(tr("Low voltage rail"));
+    m_voltHighBtn->setAccessibleName(tr("High voltage rail"));
+    m_voltLowBtn->setAccessibleDescription(
+        tr("Selects the amplifier's low supply rail. Unavailable while the amplifier is bypassed."));
+    m_voltHighBtn->setAccessibleDescription(
+        tr("Selects the amplifier's high supply rail. Unavailable while the amplifier is bypassed."));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltLowBtn,
         makeStateBtnStyle({activeStateStyle("active", "{{color.background.0}}", "{{color.accent.danger}}", "{{color.text.primary}}")}));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_voltHighBtn,
@@ -279,6 +312,9 @@ VkampApplet::VkampApplet(QWidget* parent)
     // (see e.g. ProfileManagerDialog's delete-profile confirm).
     m_resetBtn = new QPushButton("RESET", this);
     m_resetBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    m_resetBtn->setAccessibleName(tr("Reset amplifier"));
+    m_resetBtn->setAccessibleDescription(
+        tr("Asks the amplifier to reset. Confirms first, then holds the command for about ten seconds."));
     theme.applyStyleSheet(m_resetBtn,
         "QPushButton { background: {{color.background.tx}}; border: 1px solid {{color.border.tx}}; "
         "border-radius: 3px; color: {{color.accent.warning}}; font-size: 10px; font-weight: bold; padding: 2px 8px; }"
@@ -319,6 +355,25 @@ void VkampApplet::setVariant(Vkamp::Variant variant)
     m_variant = variant;
     const float maxW = Vkamp::meterFullScaleWatts(variant);
     m_pwrGauge->setRange(0.0f, maxW, Vkamp::ratedWatts(variant), evenTicks(maxW));
+    const float refMax = reflectedFullScale(variant);
+    m_refGauge->setRange(0.0f, refMax, refMax / 2.0f, evenTicks(refMax));
+}
+
+void VkampApplet::clearTelemetry()
+{
+    // Only the TX-gated UDP fields -- see this method's own doc comment.
+    m_fwdWatts = 0.0f;
+    m_reflectedWatts = 0.0f;
+    m_swrVal = 1.0f;
+    m_currentAmps = 0.0f;
+    m_peakFwd = 0.0f;
+    if (m_peakTimer) { m_peakTimer->stop(); }
+    m_pwrGauge->setValue(0.0f);
+    m_pwrGauge->clearPeak();
+    m_refGauge->setValue(0.0f);
+    m_swrGauge->setValue(1.0f);
+    m_valuesDirty = true;
+    updateValueLabels();
 }
 
 void VkampApplet::setForwardPower(float watts)
@@ -387,6 +442,10 @@ void VkampApplet::setBypass(bool on)
 {
     m_bypassed = on;
     m_bypassBtn->setText(on ? "BYPASS" : "AMP ON");
+    // The label is a STATE, not an action ("BYPASS" means it is bypassed), so
+    // spell that out for an AT rather than leaving it to infer a verb --
+    // docs/a11y.md Section 1's dynamic-name case.
+    m_bypassBtn->setAccessibleName(on ? tr("Amplifier bypassed") : tr("Amplifier in line"));
     // Text-only value change -- see docs/a11y.md; same pattern as
     // AcomApplet::updateTempLabel()'s own dynamic-text button.
     if (QAccessible::isActive()) {
@@ -417,15 +476,18 @@ void VkampApplet::setVoltageLow(bool low)
 
 void VkampApplet::refreshVoltageButtons()
 {
-    // Mirrors the sibling VK-AMPS-Control web app's own renderVoltage() /
-    // updateVoltageButtonsEnabled() logic exactly -- neither button shows
-    // active while bypassed, and both are disabled (not just visually
-    // muted) for the entire time bypass is on. See design doc Section 5.
+    // Neither button shows active while bypassed, and both are disabled (not
+    // just visually muted) for the entire time bypass is on. This is design
+    // doc Section 5's real-hardware finding, and that finding is the whole
+    // authority for it: bypass parks the supply at a standby reading (~6.3V)
+    // that is neither rail target, so "volts below the midpoint" would paint
+    // LOW as active when nobody selected it -- and commanding a rail change
+    // from that state was observed live pulling the supply toward ~0V.
     const bool lowActive = m_voltageLow && !m_bypassed;
     const bool highActive = !m_voltageLow && !m_bypassed;
     setBtnState(m_voltLowBtn, lowActive ? "active" : QString());
     setBtnState(m_voltHighBtn, highActive ? "active" : QString());
-    const bool enabled = m_connected && !m_bypassed;
+    const bool enabled = m_connected && !m_bypassed && !m_resetting;
     m_voltLowBtn->setEnabled(enabled);
     m_voltHighBtn->setEnabled(enabled);
 }
@@ -444,6 +506,7 @@ void VkampApplet::setFaultCode(int code)
 
 void VkampApplet::setResetProgress(double remainingSeconds, bool active)
 {
+    m_resetting = active;
     if (active) {
         m_resetBtn->setEnabled(false);
         m_resetBtn->setText(QStringLiteral("RESETTING… %1s").arg(static_cast<int>(remainingSeconds + 0.5)));
@@ -451,6 +514,16 @@ void VkampApplet::setResetProgress(double remainingSeconds, bool active)
         m_resetBtn->setEnabled(m_connected);
         m_resetBtn->setText("RESET");
     }
+    // The hold owns the wire for its whole duration -- VkampConnection drops
+    // any other command while it runs, so these have to look unavailable
+    // rather than accept a click that will be thrown away.
+    const bool controlsLive = m_connected && !active;
+    m_bypassBtn->setEnabled(controlsLive);
+    m_coolingBtn->setEnabled(controlsLive);
+    m_ant1Btn->setEnabled(controlsLive);
+    m_ant2Btn->setEnabled(controlsLive);
+    m_ant3Btn->setEnabled(controlsLive);
+    refreshVoltageButtons();
     // Text-only value change -- see docs/a11y.md. Fires at most once per
     // second (VkampConnection's own kResetIntervalSeconds), not high-rate.
     if (QAccessible::isActive()) {
@@ -462,6 +535,7 @@ void VkampApplet::setResetProgress(double remainingSeconds, bool active)
 void VkampApplet::setConnected(bool connected)
 {
     m_connected = connected;
+    if (!connected) { m_resetting = false; }
     m_bypassBtn->setEnabled(connected);
     m_coolingBtn->setEnabled(connected);
     m_ant1Btn->setEnabled(connected);

@@ -190,31 +190,33 @@ int main()
     //    read back from this port's own output. ─────────────────────────────
     {
         Telemetry t;
-        t.output = 100;
-        report("outputWatts() is 0 below the ramp start (raw 100 < 154.0)",
+        t.output = 0;
+        report("outputWatts() is exactly 0 at 0 raw counts -- no intercept pedestal",
                nearlyEqual(t.outputWatts(), 0.0f));
 
-        // Floor lowered from the companion project's original 175.6 to 157.0
-        // (kOutputCalMinRaw's own doc comment) after a live capture on real
-        // hardware: raw~157-166, steady, paired with a confirmed ~111W true
-        // reading. Anchored at the LOW edge of that cluster (157), not its
-        // mode (165) -- an earlier version of this fix anchored at the mode
-        // and put most of the real jitter inside the ramp, where a 1-count
-        // ADC blip swung the reading by ~40W (looked like flicker on a
-        // perfectly steady transmission). raw 156 below exercises the ramp
-        // zone, which now only covers the rare sub-157 case.
-        t.output = 156;
-        report("outputWatts() tapers continuously inside the (lowered) ramp zone (raw 156)",
-               nearlyEqual(t.outputWatts(), 72.1666f, 0.05f));
+        // Below the curve's own vertex (raw ~19.4) the quadratic turns
+        // decreasing, which is unphysical -- calibratedPower() tapers
+        // linearly to zero there instead of trusting it. The vertex value is
+        // ~24.0 W, so the halfway point of the taper is ~12.0 W.
+        t.output = 10;
+        report("outputWatts() tapers linearly below the curve's vertex",
+               nearlyEqual(t.outputWatts(), 12.399f, 0.05f));
 
-        // Regression guard for the mode-vs-low-edge bug above: the real
-        // observed cluster (157-166) must resolve through the smooth
-        // quadratic, not the steep ramp -- so a 1-count ADC blip anywhere
-        // in that range should swing the reading by low single-digit watts
-        // (matching the curve's own ~1.3W/count local slope here), not the
-        // ~40W/count the ramp produces.
+        // Regression guard for the ramp cliff (PR #4919 review): the fix that
+        // moved the floor from the cluster's mode (165) to its low edge (157)
+        // relocated a ~37 W/count discontinuity rather than removing it -- a
+        // 1-count ADC dip out of the confirmed 157-166 cluster read 109 W ->
+        // 72 W. Following the quadratic through means neighbouring counts now
+        // differ by the curve's own local slope, ~1.3 W.
+        t.output = 156;
+        const float belowCluster = t.outputWatts();
         t.output = 157;
         const float lowEdge = t.outputWatts();
+        report("outputWatts() has no cliff one count below the confirmed cluster",
+               nearlyEqual(belowCluster, 108.25f, 0.05f)
+                   && (lowEdge - belowCluster) < 2.0f);
+
+        // Same guard across the whole cluster, from the original fix.
         t.output = 166;
         const float highEdge = t.outputWatts();
         report("outputWatts() swings by only a few W/count across the confirmed "
@@ -235,11 +237,42 @@ int main()
         // in the right ballpark of the real calibration data.
         report("outputWatts() at raw 669 lands near the confirmed ~1920W reading",
                nearlyEqual(t.outputWatts(), 1928.5255f, 0.05f));
+
+        // Monotonic across the whole domain -- the property the taper exists
+        // to preserve. A power meter that reads lower as the ADC reads higher
+        // is what put the ramp cliff and the reflected pedestal here in the
+        // first place.
+        bool monotonic = true;
+        float prev = -1.0f;
+        for (int raw = 0; raw <= 800; ++raw) {
+            Telemetry probe;
+            probe.output = raw;
+            const float w = probe.outputWatts();
+            if (w < prev - 0.0005f) { monotonic = false; break; }
+            prev = w;
+        }
+        report("outputWatts() is monotonically non-decreasing over raw 0-800", monotonic);
     }
     {
         Telemetry t;
+        // The reflected fit's intercept is ~2.43 W and its minimum ~2.005 W,
+        // so before the shared taper this curve could never read zero: a
+        // perfectly matched load showed ~2 W reflected and an inflated SWR.
+        t.reflected = 0;
+        report("reflectedWatts() is exactly 0 at 0 raw counts -- the intercept "
+               "pedestal never reaches the gauge",
+               nearlyEqual(t.reflectedWatts(), 0.0f));
+
+        // Vertex is at raw ~9.23 with value ~2.005 W; raw 8 sits just inside
+        // the taper.
         t.reflected = 8;
-        report("reflectedWatts() at raw 8", nearlyEqual(t.reflectedWatts(), 2.0125f, 0.01f));
+        report("reflectedWatts() tapers below its vertex (raw 8)",
+               nearlyEqual(t.reflectedWatts(), 1.7376f, 0.01f));
+
+        // Above the vertex the fitted quadratic is used unchanged.
+        t.reflected = 30;
+        report("reflectedWatts() follows the quadratic above its vertex (raw 30)",
+               nearlyEqual(t.reflectedWatts(), 4.1765f, 0.01f));
     }
     {
         Telemetry t;
@@ -250,6 +283,15 @@ int main()
         Telemetry t;
         t.input_raw = 50;
         report("inputWatts() at raw 50", nearlyEqual(t.inputWatts(), 10.9847f, 0.01f));
+
+        // The input fit's B term is positive, so its vertex sits at a negative
+        // raw count and the taper branch never runs for it -- but its ~1.0W
+        // intercept still must not become a reading. Zero counts is zero watts
+        // on every curve; that invariant is what lets swr() drop its old
+        // "reflected <= 0" special case.
+        t.input_raw = 0;
+        report("inputWatts() is exactly 0 at 0 raw counts despite a positive intercept",
+               nearlyEqual(t.inputWatts(), 0.0f));
     }
     {
         Telemetry t;
@@ -261,6 +303,28 @@ int main()
         Telemetry idle;
         report("swr() defaults to 1.0 with no carrier (matches the amp's own idle display)",
                nearlyEqual(idle.swr(), 1.0f));
+
+        // A genuinely matched load: real forward drive, zero reflected on the
+        // wire. This read 1.35:1 before reflectedWatts() could return zero.
+        Telemetry matched;
+        matched.output = 157;
+        matched.reflected = 0;
+        report("swr() is 1.0 on a perfect match at the low end of the confirmed range",
+               nearlyEqual(matched.swr(), 1.0f));
+        matched.output = 669;
+        report("swr() is 1.0 on a perfect match at full power",
+               nearlyEqual(matched.swr(), 1.0f));
+
+        // Reflected >= forward is physically impossible but reachable through
+        // noise or calibration error at low drive; rho is clamped so swr()
+        // stays finite and positive instead of dividing by ~0 or going
+        // negative.
+        Telemetry pathological;
+        pathological.output = 157;
+        pathological.reflected = 4000;
+        const float clamped = pathological.swr();
+        report("swr() stays finite and >1 when reflected exceeds forward",
+               std::isfinite(clamped) && clamped > 1.0f && clamped <= 200.0f);
     }
 
     // ── Command builders -- bare 2-digit ASCII, no terminator ───────────────

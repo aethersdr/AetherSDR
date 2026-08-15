@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QHostAddress>
 #include <QObject>
 #include <QString>
 #include <QTcpSocket>
@@ -56,6 +57,12 @@ signals:
     void connectionFailed(const QString& errorString);
     void statusUpdated(const AetherSDR::Vkamp::Status& status);
     void telemetryUpdated(const AetherSDR::Vkamp::Telemetry& telemetry);
+    // UDP telemetry has gone quiet while the TCP link is still healthy --
+    // i.e. the amp stopped transmitting (design doc Section 3.2: telemetry
+    // is TX-gated and the amp is silent at all other times). Consumers must
+    // treat the last frame as expired rather than keep displaying it; see
+    // m_telemetryStallTimer.
+    void telemetryStalled();
     void resetProgress(double remainingSeconds);
     void resetFinished();
 
@@ -68,16 +75,38 @@ private:
     void onTransportDown();
     void onTransportError(const QString& errorString);
     void onStatusReceived(const Vkamp::Status& status);
-    // Fire-and-forget over TCP, gated on connection state and
-    // kMinCommandIntervalMs. Returns false (and logs) if the command was
-    // dropped rather than sent -- callers don't currently act on this, but
-    // it mirrors the companion project's own "never silently swallow a
-    // dropped command" stance.
-    bool sendCommand(const QByteArray& code);
+    // Fire-and-forget over TCP, gated on connection state,
+    // kMinCommandIntervalMs, and an in-progress reset hold. Returns false
+    // (and logs) if the command was dropped rather than sent -- callers don't
+    // currently act on this, but it mirrors the companion project's own
+    // "never silently swallow a dropped command" stance.
+    //
+    // `isResetHold` is the one exemption from the reset gate, for the hold
+    // stream itself. Everything else -- keepalive polls and user-driven
+    // commands alike -- is held back for the duration: this protocol has no
+    // correlation ID at all (design doc Section 6), so at most one command
+    // may be unconfirmed at a time, and a foreign byte pair landing inside
+    // the "23" stream also risks restarting the amp's own ~9-12s hold
+    // counter, which would make a reset appear to run to completion without
+    // ever taking effect.
+    bool sendCommand(const QByteArray& code, bool isResetHold = false);
+    // Pokes the telemetry port so the amp keeps streaming to this (ip, port)
+    // for the life of the connection (design doc Section 3.2). No-op until
+    // m_resolvedHost is known; logs rather than swallowing a failed write.
+    void sendTelemetryTrigger();
     void armReconnect();
 
     QTcpSocket m_socket;
     QUdpSocket m_udpSocket;
+
+    // The address the TCP socket actually resolved to, captured on connect
+    // and used for every datagram. NOT QHostAddress(m_lastHost): that ctor
+    // parses only a literal address, so a hostname (or an mDNS name) yields
+    // a null QHostAddress and writeDatagram() silently fails -- while
+    // connectToHost() resolves the same string fine, leaving the UI
+    // reporting a healthy connection with telemetry that never arrives.
+    // Nothing in the Peripherals row restricts the field to a dotted quad.
+    QHostAddress m_resolvedHost;
 
     Vkamp::StatusStreamParser m_parser;
     Vkamp::Status m_lastStatus;
@@ -131,6 +160,13 @@ private:
     // telemetry right as a TX starts.
     QTimer m_telemetryTriggerTimer;
     static constexpr int kTelemetryRetriggerMs = 3000;
+    // Fires when telemetry stops arriving on an otherwise healthy link,
+    // which for this amp is the normal end of a transmission rather than a
+    // fault -- so it drives telemetryStalled(), not a disconnect. Comfortably
+    // above kTelemetryRetriggerMs so a frame arriving only in reply to a
+    // retrigger never trips it.
+    QTimer m_telemetryStallTimer;
+    static constexpr int kTelemetryStallMs = 5000;
 
     // Protects the amp's relay/PSU from a rapid-fire command burst -- a real
     // live finding from the companion project: 5 commands landing within
