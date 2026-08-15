@@ -209,6 +209,14 @@ static void testModes()
     // what routes audio to the WLAN modulator instead of the microphone.
     check(modeFromNeutral("DIGU", data) == CivMode::Usb && data, "DIGU is USB + data");
     check(modeFromNeutral("DIGL", data) == CivMode::Lsb && data, "DIGL is LSB + data");
+    // DFM is FM + DATA, and it was missing entirely. Selecting DFM fell through
+    // to the "no equivalent" path, so setSliceMode() re-asserted the radio's
+    // current mode and the control appeared to do nothing. The expensive half
+    // was the DATA flag: without it the radio transmits from the MICROPHONE
+    // rather than the WLAN modulator, so a 2 m AX.25 frame keyed the rig and
+    // put room noise on the air. Found on an IC-9700, 2026-08-09.
+    check(modeFromNeutral("DFM", data) == CivMode::Fm && data, "DFM is FM + data");
+    check(modeFromNeutral("FM", data) == CivMode::Fm && !data, "plain FM has no data flag");
     check(modeFromNeutral("CW", data) == CivMode::Cw, "bare CW maps, not just CWU");
     check(modeFromNeutral("CWL", data) == CivMode::CwR, "CWL is CW-reverse");
     // No IC-705 equivalent: refuse rather than silently substituting USB.
@@ -217,6 +225,12 @@ static void testModes()
 
     check(modeToNeutral(CivMode::Usb, false) == "USB", "reverse USB");
     check(modeToNeutral(CivMode::Usb, true) == "DIGU", "reverse DIGU");
+    // The round trip has to survive too. Returning plain "FM" for a radio in
+    // FM-D made the UI show FM, and the next mode write then sent FM with the
+    // flag CLEAR — silently taking the radio out of data mode and back onto the
+    // microphone without the operator touching anything.
+    check(modeToNeutral(CivMode::Fm, false) == "FM", "reverse FM");
+    check(modeToNeutral(CivMode::Fm, true) == "DFM", "reverse DFM keeps the data flag");
     check(modeToNeutral(CivMode::Dv, false).empty(), "D-STAR has no neutral mode");
 
     // THE LADDER IS PER MODE. FIL1 is 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in
