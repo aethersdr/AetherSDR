@@ -220,6 +220,14 @@ public:
     void setRejectRenewalsAfter(int accepted) { m_acceptRenewals = accepted; }
     void setReissueInitialTokenOnNextLogin(bool on) { m_reissueNextInitialToken = on; }
     void setAuthFailureOnLogin(bool on) { m_authFailureOnLogin = on; }
+    // The PREVIOUS session's teardown status, delivered on the new control
+    // association before this session has a stream grant to protect it. At
+    // that point the lifecycle exception does not apply yet, so the header
+    // IDs are the only thing separating it from a real login failure.
+    void setStaleAuthFailureBeforeLoginReply(bool on) { m_staleAuthFailureOnLogin = on; }
+    // Answer the next renewal with an inner sequence the client never sent.
+    // A client that acknowledges on packet shape alone accepts it anyway.
+    void setCorruptNextRenewalSequence(bool on) { m_corruptNextRenewalSeq = on; }
 
     // Every CI-V command the client sent, in order. Counting them says the link
     // is alive; keeping them is what lets a test assert that a particular
@@ -297,6 +305,10 @@ private:
                 s.send(status);
                 return;
             }
+            if (m_staleAuthFailureOnLogin) {
+                m_staleAuthFailureOnLogin = false;
+                pushAuthFailure(true);
+            }
             m_sentCaps = false;
             m_reissueThisInitialToken = m_reissueNextInitialToken;
             m_reissueNextInitialToken = false;
@@ -335,6 +347,15 @@ private:
             // client test pass while ignoring the fields the live radio uses.
             for (int i = 0x16; i < 0x20; ++i)
                 reply[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(b[i]);
+            if (m_corruptNextRenewalSeq) {
+                m_corruptNextRenewalSeq = false;
+                // Well-formed in every other respect — right shape, right auth
+                // ID, zero response — so the outstanding-request set is the
+                // only thing that can reject it.
+                const auto bogus = static_cast<std::uint16_t>(innerSeq + 0x4000);
+                reply[0x16] = static_cast<std::uint8_t>((bogus >> 8) & 0xff);
+                reply[0x17] = static_cast<std::uint8_t>(bogus & 0xff);
+            }
             const bool accepted = m_acceptedRenewals < m_acceptRenewals;
             if (m_reissueThisInitialToken) {
                 m_reissueThisInitialToken = false;
@@ -659,6 +680,8 @@ private:
     bool m_reissueNextInitialToken = false;
     bool m_reissueThisInitialToken = false;
     bool m_authFailureOnLogin = false;
+    bool m_staleAuthFailureOnLogin = false;
+    bool m_corruptNextRenewalSeq = false;
     int m_acceptRenewals = std::numeric_limits<int>::max();
     int m_acceptedRenewals = 0;
     std::vector<std::uint16_t> m_renewalSequences;

@@ -53,6 +53,11 @@ public:
         int tokenRenewalMs = 60000;
         int tokenAckGraceMs = 3000;
         int tokenDeadMs = 80000;
+        // The one-time early renewal that covers a reconnect grant's shorter
+        // first window. Overridable so a test can prove the early renewal
+        // actually fires ahead of the steady cadence, rather than only that
+        // the flag was set.
+        int initialMaintenanceMs = 30000;
         // Zero selects a fresh random nonzero ID. Tests may override it to
         // prove reconnect correlation deterministically.
         quint16 tokenRequestId = 0;
@@ -149,7 +154,6 @@ private:
     bool   m_initialMaintenancePending = false;
     int    m_renewRetries = 0;
     static constexpr int kTokenRenewMaxRetries = 4;
-    static constexpr int kInitialMaintenanceRenewalMs = 30000;
     QSet<quint16> m_pendingRenewals;
     quint16 m_lastRenewalSeq = 0;
     QString m_lastRenewalResult = QStringLiteral("not sent");

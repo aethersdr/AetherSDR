@@ -75,6 +75,7 @@ bool IcomSession::start(const Params& params)
         return false;
     }
     if (params.tokenRenewalMs <= 0 || params.tokenAckGraceMs <= 0
+        || params.initialMaintenanceMs <= 0
         || params.tokenDeadMs <= params.tokenRenewalMs) {
         fail(QStringLiteral("invalid RS-BA1 lease timing configuration"));
         return false;
@@ -575,7 +576,7 @@ void IcomSession::onTokenRenew()
     // A reconnect grant can have a shorter first window than an established
     // lease. Cover it once, then return to the wfview/kappanhang 60 s cadence.
     const int cadenceMs = m_initialMaintenancePending
-        ? std::min(m_params.tokenRenewalMs, kInitialMaintenanceRenewalMs)
+        ? std::min(m_params.tokenRenewalMs, m_params.initialMaintenanceMs)
         : m_params.tokenRenewalMs;
     if (sinceAck < cadenceMs)
         return;
@@ -774,7 +775,7 @@ QVariantMap IcomSession::leaseDiagnostics() const
     out.insert(QStringLiteral("ignoredControlPackets"),
                QVariant::fromValue<qulonglong>(m_ignoredControlPackets));
     out.insert(QStringLiteral("renewalCadenceMs"), m_params.tokenRenewalMs);
-    out.insert(QStringLiteral("initialMaintenanceMs"), kInitialMaintenanceRenewalMs);
+    out.insert(QStringLiteral("initialMaintenanceMs"), m_params.initialMaintenanceMs);
     out.insert(QStringLiteral("initialMaintenancePending"), m_initialMaintenancePending);
     out.insert(QStringLiteral("ackGraceMs"), m_params.tokenAckGraceMs);
     out.insert(QStringLiteral("deadSessionMs"), m_params.tokenDeadMs);
