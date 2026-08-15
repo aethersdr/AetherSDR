@@ -41,6 +41,7 @@
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -8051,8 +8052,138 @@ void RadioModel::setTxAudioMonitor(bool on)
 void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                                bool clientLeveled)
 {
+    // Observation tap on the ONE funnel every backend's transmit audio passes
+    // through — host-modulating (HL2) and seam (Icom) alike. Deliberately here
+    // rather than in a backend: instrumenting Hl2Backend would have measured
+    // one path and left the other invisible, which is the mistake that cost
+    // 2026-08-13.
+    //
+    // Placed BEFORE the backend call so it records what the backend was GIVEN.
+    // A backend that drops the audio (Hl2Backend returns early when unkeyed, or
+    // when the rate is not 24 kHz) then shows as "offered N bytes, transmitted
+    // nothing" rather than as silence with no explanation.
+    //
+    // Why not ClientPuduMonitor: that tap sits on the VOICE channel strip.
+    // Proven 2026-08-13 — an AX.25 transmission that decoded correctly produced
+    // an entirely silent Pudu capture, because modem audio never traverses it.
+    if (m_txAudioTapEnabled.load(std::memory_order_relaxed))
+        noteTxAudioSubmission(int16Stereo, sampleRateHz);
+
     if (m_backend)
         m_backend->submitTxAudio(int16Stereo, sampleRateHz, clientLeveled);
+}
+
+void RadioModel::noteTxAudioSubmission(const QByteArray& int16Stereo, int sampleRateHz)
+{
+    // Cheap running summary, not a buffer: this runs on the audio path, so it
+    // must not allocate or block. Peak/RMS answer the question that matters —
+    // "did real audio reach the backend, and at what level" — without keeping
+    // the samples.
+    const int samples = static_cast<int>(int16Stereo.size() / sizeof(qint16));
+    if (samples <= 0)
+        return;
+    const auto* pcm = reinterpret_cast<const qint16*>(int16Stereo.constData());
+
+    int peak = 0;
+    double sumSquares = 0.0;
+    for (int i = 0; i < samples; ++i) {
+        const int v = std::abs(static_cast<int>(pcm[i]));
+        if (v > peak)
+            peak = v;
+        sumSquares += static_cast<double>(v) * static_cast<double>(v);
+    }
+
+    QMutexLocker lock(&m_txAudioTapMutex);
+    ++m_txAudioTapBlocks;
+    m_txAudioTapSamples += samples;
+    m_txAudioTapSampleRate = sampleRateHz;
+    if (peak > m_txAudioTapPeak)
+        m_txAudioTapPeak = peak;
+    m_txAudioTapSumSquares += sumSquares;
+
+    if (m_txAudioRecordEnabled.load(std::memory_order_relaxed))
+        recordTxAudioSamples(pcm, samples);
+}
+
+// Called with m_txAudioTapMutex already held, on the audio path. Appends into
+// already-reserved capacity and stops at the cap — never grows the buffer here.
+void RadioModel::recordTxAudioSamples(const qint16* pcm, int samples)
+{
+    const int room = m_txAudioRecordCapacity - m_txAudioRecordBuffer.size();
+    if (room <= 0)
+        return;
+    const int take = std::min(room, samples);
+    // resize() within the reserved capacity does not reallocate; memcpy into
+    // the tail avoids a per-sample push_back on the audio path.
+    const int oldSize = m_txAudioRecordBuffer.size();
+    m_txAudioRecordBuffer.resize(oldSize + take);
+    std::memcpy(m_txAudioRecordBuffer.data() + oldSize, pcm, size_t(take) * sizeof(qint16));
+}
+
+void RadioModel::setTxAudioRecordEnabled(bool on, int maxSamples)
+{
+    // Reserve up front so the audio path never allocates. 48000*2*8 = ~13 s of
+    // stereo at 48 kHz; ample for a burst, and 1.5 MB is cheap for a
+    // diagnostic that only exists while armed.
+    constexpr int kDefaultSamples = 48000 * 2 * 8;
+    constexpr int kMaxSamples = 48000 * 2 * 30;
+    const int cap = std::clamp(maxSamples > 0 ? maxSamples : kDefaultSamples, 1, kMaxSamples);
+
+    QMutexLocker lock(&m_txAudioTapMutex);
+    if (on) {
+        m_txAudioRecordBuffer.clear();
+        m_txAudioRecordBuffer.reserve(cap);
+        m_txAudioRecordCapacity = cap;
+    } else {
+        m_txAudioRecordCapacity = 0;
+    }
+    m_txAudioRecordEnabled.store(on, std::memory_order_relaxed);
+}
+
+QVector<qint16> RadioModel::takeTxAudioRecording(int* sampleRateHz)
+{
+    QMutexLocker lock(&m_txAudioTapMutex);
+    if (sampleRateHz)
+        *sampleRateHz = m_txAudioTapSampleRate;
+    QVector<qint16> out;
+    out.swap(m_txAudioRecordBuffer);
+    return out;
+}
+
+QJsonObject RadioModel::txAudioTapSnapshot() const
+{
+    QMutexLocker lock(&m_txAudioTapMutex);
+    const auto dbfs = [](double lin) {
+        return lin > 1e-12 ? 20.0 * std::log10(lin) : -140.0;
+    };
+    const double peakLin = m_txAudioTapPeak / 32768.0;
+    const double rmsLin = m_txAudioTapSamples > 0
+        ? std::sqrt(m_txAudioTapSumSquares / double(m_txAudioTapSamples)) / 32768.0
+        : 0.0;
+    return QJsonObject{
+        {QStringLiteral("enabled"), m_txAudioTapEnabled.load(std::memory_order_relaxed)},
+        {QStringLiteral("blocks"), qint64(m_txAudioTapBlocks)},
+        {QStringLiteral("samples"), qint64(m_txAudioTapSamples)},
+        {QStringLiteral("sampleRate"), m_txAudioTapSampleRate},
+        {QStringLiteral("peakDbfs"), std::round(dbfs(peakLin) * 10.0) / 10.0},
+        {QStringLiteral("rmsDbfs"), std::round(dbfs(rmsLin) * 10.0) / 10.0},
+        // Digital silence is the finding this exists to name, so say it rather
+        // than leaving a reader to infer it from a -140 reading.
+        {QStringLiteral("silent"), m_txAudioTapPeak == 0},
+    };
+}
+
+void RadioModel::setTxAudioTapEnabled(bool on)
+{
+    if (on) {
+        QMutexLocker lock(&m_txAudioTapMutex);
+        m_txAudioTapBlocks = 0;
+        m_txAudioTapSamples = 0;
+        m_txAudioTapPeak = 0;
+        m_txAudioTapSumSquares = 0.0;
+        m_txAudioTapSampleRate = 0;
+    }
+    m_txAudioTapEnabled.store(on, std::memory_order_relaxed);
 }
 
 bool RadioModel::sendCommand(const QString& cmd)

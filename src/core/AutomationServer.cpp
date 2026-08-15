@@ -10,6 +10,7 @@
 #include "NvidiaBnrSettings.h"   // BNR intensity (in-process AFX, #3902)
 #include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
+#include "ClientPuduMonitor.h"    // txmonitor() verb — post-final-limiter TX tap
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
 #include "CallsignUtils.h"
 #include "models/Nr2SettingsModel.h"
@@ -3228,6 +3229,34 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doRecord(a.action, a.value);
             });
 
+        add("txaudio", {},
+            "txaudio <on|off|status> — summarise the audio handed to the RADIO "
+            "BACKEND (peak/RMS/blocks), on every backend. Unlike txmonitor this "
+            "sits on the path modem TX audio actually takes",
+            parseActionOnly,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTxAudioTap(a.action);
+            });
+
+        add("txwave", {},
+            "txwave <arm|save|off> [samples|path] — record the actual SAMPLES "
+            "handed to the radio backend and write them to a WAV. `txaudio` "
+            "gives levels; only the samples show clipping or a preamble that "
+            "never becomes data",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTxWave(a.action, a.value);
+            });
+
+        add("txmonitor", {},
+            "txmonitor <start|stop|status> — capture the post-final-limiter TX "
+            "stream (what the radio is TOLD to transmit) to a WAV; pairs with "
+            "`modem txprobe` (what the modulator BUILT) to bracket the seam",
+            parseActionOnly,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTxMonitor(a.action);
+            });
+
         add("testtone", {}, "testtone <on|off> [freqHz levelDb]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
@@ -4522,6 +4551,11 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 void AutomationServer::setClockModel(AetherClockModel* model)
 {
     m_clockModel = model;
+}
+
+void AutomationServer::setTxFinalMonitor(ClientPuduMonitor* mon)
+{
+    m_txFinalMonitor = mon;
 }
 
 namespace {
@@ -6365,6 +6399,243 @@ QJsonObject AutomationServer::doRecord(const QString& action, const QString& val
         };
     }
     return err(QStringLiteral("record: unknown action '%1' (start|stop|status|path|dir)")
+                   .arg(action));
+}
+
+QJsonObject AutomationServer::doTxAudioTap(const QString& action)
+{
+    // txaudio on|off|status — summarise what the BACKEND WAS GIVEN.
+    //
+    // This is the probe `txmonitor` should have been for modem transmit audio.
+    // ClientPuduMonitor taps the VOICE channel strip: on 2026-08-13 an AX.25
+    // transmission that decoded correctly at the far end produced an entirely
+    // silent Pudu capture, because modem audio never traverses that strip. This
+    // tap sits on RadioModel::submitTxAudio(), the single funnel every backend
+    // shares, so it sees the audio on both the host-modulating (HL2) and seam
+    // (Icom) paths.
+    //
+    // `on` resets the accumulator, so a run is: txaudio on -> transmit ->
+    // txaudio status. Not TX-gated: it observes, it never keys.
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("on") || a == QLatin1String("off")) {
+        m_radioModel->setTxAudioTapEnabled(a == QLatin1String("on"));
+        QJsonObject reply = m_radioModel->txAudioTapSnapshot();
+        reply.insert(QStringLiteral("ok"), true);
+        reply.insert(QStringLiteral("txaudio"), a);
+        return reply;
+    }
+
+    if (a.isEmpty() || a == QLatin1String("status")) {
+        QJsonObject reply = m_radioModel->txAudioTapSnapshot();
+        reply.insert(QStringLiteral("ok"), true);
+        reply.insert(QStringLiteral("txaudio"), QStringLiteral("status"));
+        return reply;
+    }
+
+    return err(QStringLiteral("txaudio: unknown action '%1' (on|off|status)").arg(action));
+}
+
+QJsonObject AutomationServer::doTxWave(const QString& action, const QString& rest)
+{
+    // txwave arm|save|off — record the actual SAMPLES handed to the backend.
+    //
+    // `txaudio` reports peak/RMS, and that is precisely why it could not answer
+    // the question that mattered on 2026-08-14: it read a healthy −9.1 dBFS for
+    // a transmission whose waterfall was a harmonic comb with no decodable frame
+    // in it. A level is an average; clipping and a preamble that never becomes
+    // data are both shapes. Only the samples show a shape.
+    //
+    // Usage: txwave arm -> transmit -> txwave save <path>. Recording the FIRST
+    // samples of the burst is deliberate — the preamble-to-data transition is at
+    // the start, and that transition is what is under test.
+    //
+    // Not TX-gated: it observes a transmission the operator has already caused
+    // and keys nothing itself.
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("arm")) {
+        bool ok = false;
+        const int req = rest.trimmed().toInt(&ok);
+        m_radioModel->setTxAudioRecordEnabled(true, ok ? req : 0);
+        // Arm the level tap too, so a run reports both without a second verb.
+        m_radioModel->setTxAudioTapEnabled(true);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("txwave"), QStringLiteral("armed")},
+        };
+    }
+
+    if (a == QLatin1String("off")) {
+        m_radioModel->setTxAudioRecordEnabled(false);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("txwave"), QStringLiteral("off")},
+        };
+    }
+
+    if (a == QLatin1String("save")) {
+        const QString path = rest.trimmed();
+        if (path.isEmpty())
+            return err(QStringLiteral("txwave save: a file path is required"));
+
+        int rate = 0;
+        const QVector<qint16> pcm = m_radioModel->takeTxAudioRecording(&rate);
+        if (pcm.isEmpty())
+            return err(QStringLiteral("txwave save: nothing recorded (arm before transmitting?)"));
+        if (rate <= 0)
+            rate = 48000;
+
+        // Stereo int16 WAV. The tap carries interleaved stereo, so write it as
+        // such rather than guessing which channel to keep — if the two channels
+        // ever differ, that is itself a finding.
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly))
+            return err(QStringLiteral("txwave save: cannot open '%1'").arg(path));
+
+        const quint32 dataBytes = quint32(pcm.size()) * 2u;
+        const quint16 channels = 2;
+        const quint32 byteRate = quint32(rate) * channels * 2u;
+
+        QByteArray hdr;
+        const auto u32 = [&hdr](quint32 v) {
+            hdr.append(char(v & 0xff));
+            hdr.append(char((v >> 8) & 0xff));
+            hdr.append(char((v >> 16) & 0xff));
+            hdr.append(char((v >> 24) & 0xff));
+        };
+        const auto u16 = [&hdr](quint16 v) {
+            hdr.append(char(v & 0xff));
+            hdr.append(char((v >> 8) & 0xff));
+        };
+        hdr.append("RIFF", 4);
+        u32(36u + dataBytes);
+        hdr.append("WAVE", 4);
+        hdr.append("fmt ", 4);
+        u32(16);            // PCM chunk size
+        u16(1);             // format = PCM
+        u16(channels);
+        u32(quint32(rate));
+        u32(byteRate);
+        u16(quint16(channels * 2));  // block align
+        u16(16);                     // bits per sample
+        hdr.append("data", 4);
+        u32(dataBytes);
+        f.write(hdr);
+        f.write(reinterpret_cast<const char*>(pcm.constData()), qint64(dataBytes));
+        f.close();
+
+        m_radioModel->setTxAudioRecordEnabled(false);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("txwave"), QStringLiteral("saved")},
+            {QStringLiteral("path"), path},
+            {QStringLiteral("samples"), pcm.size()},
+            {QStringLiteral("frames"), pcm.size() / 2},
+            {QStringLiteral("sampleRate"), rate},
+            {QStringLiteral("seconds"),
+             std::round(double(pcm.size() / 2) / double(rate) * 1000.0) / 1000.0},
+        };
+    }
+
+    return err(QStringLiteral("txwave: unknown action '%1' (arm|save|off)").arg(action));
+}
+
+QJsonObject AutomationServer::doTxMonitor(const QString& action)
+{
+    // txmonitor start|stop|status — capture the POST-FINAL-LIMITER transmit
+    // stream: the exact int16 bytes that get packetised into VITA-49, i.e. what
+    // the radio is TOLD to transmit.
+    //
+    // Why this is not the `record` verb: that one drives the QSO recorder, which
+    // captures RECEIVE audio. Between them they bracket the seam — `txprobe`
+    // reports what the modulator BUILT, this reports what was SENT, and `record`
+    // reports what came back. A fault that lives between "built" and "sent" is
+    // invisible to the other two, and that is exactly the gap this closes:
+    // 2026-08-13, an AX.25 transmit whose modulator output measured clean at
+    // −9.1 dBFS was audibly wrong on the air, with no instrument able to see
+    // which side of the seam corrupted it.
+    //
+    // Not TX-gated: it only observes a transmission the operator has already
+    // caused, and keys nothing itself. Gating an observer behind the permission
+    // whose effects it observes would make the failure it exists for unreachable.
+    if (!m_txFinalMonitor)
+        return err(QStringLiteral("TX monitor unavailable (no main window registered it)"));
+
+    const QString a = action.trimmed().toLower();
+
+    if (a.isEmpty() || a == QLatin1String("status")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("txmonitor"), QStringLiteral("status")},
+            {QStringLiteral("recording"), m_txFinalMonitor->isRecording()},
+            {QStringLiteral("hasRecording"), m_txFinalMonitor->hasRecording()},
+            {QStringLiteral("recordedMs"), m_txFinalMonitor->recordedMs()},
+            {QStringLiteral("sampleRate"), ClientPuduMonitor::kSampleRate},
+            {QStringLiteral("channels"), ClientPuduMonitor::kChannels},
+            {QStringLiteral("maxSeconds"), ClientPuduMonitor::kMaxSeconds},
+        };
+    }
+
+    if (a == QLatin1String("start")) {
+        // Report the pre-existing state rather than stamping "started" onto a
+        // capture already in flight — startRecording() is a no-op then, and a
+        // reply that claimed otherwise would describe a recording that never began.
+        const bool was = m_txFinalMonitor->isRecording();
+        // Lambda form, not invokeMethod-by-name: startRecording() is a plain
+        // public method, not a slot, so a string lookup would fail at RUNTIME
+        // with only a warning — the verb would report ok while recording nothing.
+        //
+        // QUEUED, NOT BLOCKING. BlockingQueuedConnection waits forever if the GUI
+        // thread is stuck, and a bridge verb that can hang the whole app is worse
+        // than one that is slightly racy: observed 2026-08-13, an IC-9700 locked
+        // up mid-transmit, the GUI thread stopped servicing its event loop, and
+        // this call took the bridge — and every other verb, including the unkey
+        // path — down with it while the radio was KEYED. An observer must never
+        // be able to do that.
+        if (!was) {
+            QMetaObject::invokeMethod(m_txFinalMonitor,
+                                      [m = m_txFinalMonitor] { if (m) m->startRecording(); },
+                                      Qt::QueuedConnection);
+        }
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("txmonitor"), QStringLiteral("start")},
+            {QStringLiteral("alreadyRecording"), was},
+            {QStringLiteral("recording"), m_txFinalMonitor->isRecording()},
+        };
+    }
+
+    if (a == QLatin1String("stop")) {
+        const bool was = m_txFinalMonitor->isRecording();
+        // Queued for the same reason as start — see the note there. The reply's
+        // recordedMs/hasRecording are therefore read BEFORE the stop lands, so
+        // they describe the capture in flight; the WAV is written by the queued
+        // call moments later. Poll `txmonitor status` if you need the final size.
+        if (was) {
+            QMetaObject::invokeMethod(m_txFinalMonitor,
+                                      [m = m_txFinalMonitor] { if (m) m->stopRecording(); },
+                                      Qt::QueuedConnection);
+        }
+        // stopRecording() writes the WAV; name it so a caller can go and measure
+        // the samples instead of trusting a level readout.
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("txmonitor"), QStringLiteral("stop")},
+            {QStringLiteral("wasRecording"), was},
+            {QStringLiteral("recordedMs"), m_txFinalMonitor->recordedMs()},
+            {QStringLiteral("hasRecording"), m_txFinalMonitor->hasRecording()},
+            {QStringLiteral("path"), QDir::temp().filePath(QStringLiteral("pudu_monitor.wav"))},
+        };
+    }
+
+    return err(QStringLiteral("txmonitor: unknown action '%1' (start|stop|status)")
                    .arg(action));
 }
 

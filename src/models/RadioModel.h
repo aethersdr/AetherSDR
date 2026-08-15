@@ -45,6 +45,8 @@
 #include <QString>
 #include <QList>
 #include <QJsonObject>
+#include <QMutex>
+#include <atomic>
 #include <QHash>
 #include <QMap>
 #include <QSet>
@@ -1268,6 +1270,19 @@ public:
     // audio, whose level the sender owns (#4796).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled);
+    // TX-audio observation tap. Summarises what the BACKEND WAS GIVEN — every
+    // backend, host-modulating and seam alike, since they share this funnel.
+    // Answers "did real audio reach the backend, and at what level", which no
+    // other instrument does: ClientPuduMonitor sits on the voice channel strip
+    // and sees nothing of modem transmit audio (proven 2026-08-13).
+    void setTxAudioTapEnabled(bool on);
+    QJsonObject txAudioTapSnapshot() const;
+    // Arm/disarm the bounded SAMPLE recorder and drain it. Levels cannot see
+    // clipping or a preamble that never becomes data; the samples can.
+    // maxSamples is clamped, and the buffer is reserved here rather than on the
+    // audio path.
+    void setTxAudioRecordEnabled(bool on, int maxSamples = 0);
+    QVector<qint16> takeTxAudioRecording(int* sampleRateHz = nullptr);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1859,6 +1874,34 @@ private:
     }
 
 private:
+    // TX-audio tap (see setTxAudioTapEnabled). Off by default and read with a
+    // relaxed atomic so the audio path pays a single load when idle. The
+    // accumulator is mutex-guarded because a snapshot must be self-consistent.
+    void noteTxAudioSubmission(const QByteArray& int16Stereo, int sampleRateHz);
+    std::atomic<bool> m_txAudioTapEnabled{false};
+    mutable QMutex m_txAudioTapMutex;
+    quint64 m_txAudioTapBlocks{0};
+    quint64 m_txAudioTapSamples{0};
+    int m_txAudioTapPeak{0};
+    double m_txAudioTapSumSquares{0.0};
+    int m_txAudioTapSampleRate{0};
+
+    // Optional SAMPLE recorder, distinct from the peak/RMS accumulator above.
+    // Levels answer "did audio arrive"; they cannot answer "is it clipped" or
+    // "does the pattern ever change from flags to data" — both of which are
+    // questions about the WAVEFORM. Answering those from a dBFS figure is the
+    // mistake that cost 2026-08-14: the tap read a healthy -9.1 dBFS while the
+    // waterfall showed a harmonic comb with no frame in it.
+    //
+    // Capacity is reserved once when recording is armed, never on the audio
+    // path, and capture stops silently at the cap. Recording the FIRST samples
+    // rather than the last is deliberate: the preamble-to-data transition is at
+    // the START of a burst, and that transition is the thing under test.
+    void recordTxAudioSamples(const qint16* pcm, int samples);
+    std::atomic<bool> m_txAudioRecordEnabled{false};
+    QVector<qint16> m_txAudioRecordBuffer;   // guarded by m_txAudioTapMutex
+    int m_txAudioRecordCapacity{0};
+
     QList<SliceModel*> m_slices;
     QMap<int, QString> m_rawSliceModeLists;
     QMap<int, SliceModel*> m_staleSlices;  // previous session, kept alive for UI reuse

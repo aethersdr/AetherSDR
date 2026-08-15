@@ -33,6 +33,7 @@ class RadioModel;
 class SliceModel;
 class AudioEngine;
 class QsoRecorder;
+class ClientPuduMonitor;
 class AetherClockModel;
 
 // In-app, agent-first automation bridge (issue #3646, Phases 0-1).
@@ -255,6 +256,14 @@ public:
     void setClockModel(AetherClockModel* model);  // out-of-line: QPointer needs the complete type
     // QSO recorder handle for the record() verb (start/stop/status/path).
     void setQsoRecorder(QsoRecorder* rec) { m_qsoRecorder = rec; }
+    // Post-final-limiter TX monitor for the txmonitor() verb. This taps the
+    // exact int16 stream that gets packetised into VITA-49 — what the radio is
+    // TOLD to transmit — so a test can capture the modulator's real output
+    // rather than inferring it. Distinct from the QSO recorder, which records
+    // RECEIVE audio. May be null in an engine-only build.
+    // Out-of-line for the same reason as setClockModel(): assigning a
+    // QPointer needs the complete type, and this header only forward-declares it.
+    void setTxFinalMonitor(ClientPuduMonitor* mon);
     // Real connection hook for the connect/disconnect/dialog verbs. The bridge
     // asks the implementor (the GUI's ConnectionPanel) to drive the same path
     // the visible buttons do, so automation exercises the normal
@@ -603,6 +612,12 @@ private:
     // recorder, read the WAV path, or point recordings at a path (for live
     // capture-file verification on TCC-restricted boxes).
     QJsonObject doRecord(const QString& action, const QString& value);
+    QJsonObject doTxMonitor(const QString& action);
+    QJsonObject doTxAudioTap(const QString& action);
+    // txwave arm|save|off — record the SAMPLES the backend was handed, not just
+    // their level, and write a WAV. Clipping and a flags-only burst are shapes;
+    // a dBFS figure cannot show either.
+    QJsonObject doTxWave(const QString& action, const QString& rest);
     // testtone on [freqHz] [levelDb] | off — drive the client-side TX test tone
     // through onTxAudioReady so a recording gets a deterministic "phone" segment
     // (verifies SSB<->CW switching while recording). The actual transmit still
@@ -751,6 +766,7 @@ private:
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
     QPointer<AudioEngine> m_audioEngine;          // for get audio; may be null
     QPointer<QsoRecorder> m_qsoRecorder;          // for record(); may be null
+    QPointer<ClientPuduMonitor> m_txFinalMonitor;  // for txmonitor(); may be null
     QPointer<AetherClockModel> m_clockModel;      // for get clock; may be null
     IConnectionAutomation* m_connection = nullptr;  // connect/disconnect verbs
     QPointer<QObject> m_connectionGuard;            // auto-nulls when the impl is destroyed
