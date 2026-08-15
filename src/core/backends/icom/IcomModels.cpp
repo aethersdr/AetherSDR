@@ -58,6 +58,19 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, 100.0,
         144'000'000ULL, 1'300'000'000ULL,
         /*verified*/ false,
+        // 0x26 MEASURED on the live radio at 10.0.0.7, 2026-08-14 (G0JKN), the
+        // same standard of evidence as the scope geometry above:
+        //
+        //   tx: fe fe a2 e0 26 00 fd
+        //   rx: 26 00 05 00 01          (vfo 00, mode 05=FM, DATA 00, FIL1)
+        //
+        // A structured reply, not FA. Without this the 9700 fell to the legacy
+        // 06 branch in setSliceMode(), which forces m_dataMode = false and
+        // sends a body of {mode, filter} with NO DATA byte — so selecting FM-D
+        // wrote plain FM and the mode reverted in the UI. On air that left
+        // transmit audio on the MICROPHONE, so a 2 m AX.25 frame keyed the
+        // radio and put room noise out instead of the modem's AFSK.
+        /*hasVfoModeCommand*/ true,
     },
     {
         0x98, "IC-7610", 2, 1,
