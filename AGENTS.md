@@ -207,6 +207,30 @@ setup.
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
+### Adding a test — declare it in `tests/tests.cmake`, not `CMakeLists.txt`
+
+Drop `<feature>_test.cpp` into `tests/`, then declare its `add_executable` +
+`add_test` in **`tests/tests.cmake`**. There is no glob; every test is declared
+explicitly, so copy a neighbouring target's block.
+
+The root `CMakeLists.txt` held all 300+ of these until the split — over half its
+6,357 lines — so a stale doc, an old PR, or pattern-matching on the surrounding
+code will all point you at the wrong file. Two guards catch that: `tests.cmake`
+aborts the CMake configure step, and `tools/check_test_registration.py --strict`
+fails the PR in CI.
+
+Paths in `tests.cmake` are relative to the **repository root**
+(`tests/foo_test.cpp`, `src/gui/Bar.cpp`) because it is pulled in with
+`include()`, not `add_subdirectory()`. Do not convert it to a subdirectory to
+"tidy it up": `include()` keeps the root's directory scope, which is what keeps
+those paths — and nine `${CMAKE_CURRENT_SOURCE_DIR}` references pointing at
+`tools/` and `docs/` — resolving correctly. Under `add_subdirectory` the source
+paths fail loudly and those nine fail *silently*. The file's header says all of
+this at the point of use.
+
+A test that touches `AppSettings` also needs its target name in the
+`AETHER_SETTINGS_CONSUMERS` list at the bottom of `tests.cmake`.
+
 Current version: **26.8.2**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).

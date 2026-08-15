@@ -84,6 +84,17 @@ jobs:
       - name: Engine/UI dependency direction
         run: python tools/check_engine_boundary.py --strict
 
+      # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
+      # was 6,357 lines, over half of it 300+ test-target declarations; the split
+      # cut it to ~2,780. tests/tests.cmake fails the CONFIGURE step if a test
+      # target reappears in the root file, which is the fast feedback path — this
+      # is the second line, for what a configure-time check cannot see: a reviewer
+      # reading the diff on GitHub, and a stale build tree that never re-runs
+      # cmake. Cheap and stdlib-only, so it costs nothing to keep both.
+      - name: Test registration location
+        if: ${{ !cancelled() }}
+        run: python tools/check_test_registration.py --strict
+
       # ── Network transfer-timeout ratchet (#4688 §6). A QNetworkAccessManager
       # with no transfer timeout turns a half-open connection into a reply that
       # never finishes and never errors — the surface that issued it just stops,

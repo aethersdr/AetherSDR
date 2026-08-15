@@ -175,12 +175,12 @@ tests/                       @aethersdr/reviewers
 # Build configuration.
 # NOTE the same at-any-depth behaviour as *.md: `CMakeLists.txt` has no slash,
 # so it matches a CMakeLists.txt in ANY directory, and it sits below the Tier 3
-# block above. There is no CMakeLists.txt under tests/ today — every test is
-# registered in this root file — but if test registration is ever split out
-# into tests/CMakeLists.txt, this line silently claims it for Tier 2 and undoes
-# half the point of putting tests/ at Tier 3. Add an explicit
-# `tests/CMakeLists.txt @aethersdr/reviewers` line below this one if that split
-# happens.
+# block above. Test registration lives in tests/tests.cmake, which does NOT
+# match this pattern and so stays Tier 3 with the tests it declares — that is
+# one reason it is named tests.cmake rather than tests/CMakeLists.txt. If a
+# real tests/CMakeLists.txt is ever added, this line silently claims it for
+# Tier 2 and undoes half the point of putting tests/ at Tier 3; add an explicit
+# `tests/CMakeLists.txt @aethersdr/reviewers` line below this one if so.
 CMakeLists.txt               @aethersdr/infrastructure
 THIRD_PARTY_LICENSES         @aethersdr/infrastructure
 
