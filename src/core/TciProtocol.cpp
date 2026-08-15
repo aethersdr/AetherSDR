@@ -130,6 +130,12 @@ QString TciProtocol::tciToSmartSDR(const QString& mode, bool* ok)
 // and the deliberately lenient forms (cmdVolume's non-spec percent branch,
 // which three bundled plugins depend on) are the caller's business and are
 // unchanged.
+//
+// Base 10 only, and it must stay that way. QString::toInt()'s base argument
+// defaults to 10, which is the only reason "0x1" is rejected rather than
+// resolving to slice 1 — pass 0 here for "helpful" auto-base detection and
+// `mute:0x1,false` silently starts landing on a slice the client never named.
+// The test asserts the hex case; this sentence is why the assertion holds.
 static bool argToInt(const QStringList& args, int idx, int& out)
 {
     if (idx < 0 || idx >= args.size()) return false;
@@ -138,6 +144,32 @@ static bool argToInt(const QStringList& args, int idx, int& out)
     if (!ok) return false;
     out = parsed;
     return true;
+}
+
+// Booleans are the same defect with a different literal, and there are 20 of
+// them: `args[1].toLower() == "true"` turns *everything that is not the word
+// "true"* into false, so `mute:0,yes` UNMUTED slice 0 and broadcast a
+// well-formed "mute:0,false;" — #4867's signature exactly, with no number
+// involved. TCI spells booleans "true"/"false"; this accepts those two
+// (case-insensitively, as the old expression did) and reports failure for
+// anything else so the caller can drop the command. Every bundled plugin
+// sends Python's `str(bool).lower()` or JS's `${bool}`, i.e. exactly these
+// two spellings, so nothing shipped is affected.
+//
+// DELIBERATELY NOT used by the two verbs that key the transmitter. `cmdTune`
+// and `cmdKeyer` must fail CLOSED rather than fail silent: dropping an
+// unparseable `tune:0,<junk>` would leave a tuning carrier up, and dropping
+// `keyer:0,<junk>` would leave the key down. For those two, "not the word
+// true" continuing to mean *stop* is the safe reading, and Constitution VI
+// makes it the required one. They keep the bare comparison, with a comment
+// at each site saying so.
+static bool argToBool(const QStringList& args, int idx, bool& out)
+{
+    if (idx < 0 || idx >= args.size()) return false;
+    const QString v = args[idx].trimmed().toLower();
+    if (v == QLatin1String("true"))  { out = true;  return true; }
+    if (v == QLatin1String("false")) { out = false; return true; }
+    return false;
 }
 
 static bool argToLongLong(const QStringList& args, int idx, long long& out)
@@ -756,7 +788,12 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool tune = (args[1].toLower() == "true");
+    // Deliberately NOT argToBool, and deliberately not the drop posture the
+    // rest of this file uses: this verb keys the transmitter. Dropping an
+    // unparseable `tune:0,<junk>` would leave a tuning carrier on the air,
+    // so "anything that is not the word true" has to keep meaning STOP.
+    // Fail closed, not silent — Constitution VI. (#4867 review)
+    const bool tune = (args[1].trimmed().toLower() == QLatin1String("true"));
     QMetaObject::invokeMethod(m_model, [model = m_model, tune]() {
         if (tune)
             model->transmitModel().startTune(TransmitModel::PttSource::Dax);
@@ -845,6 +882,7 @@ QString TciProtocol::cmdMicLevel(const QStringList& args, bool /*isSet*/)
         int lvl = m_model ? m_model->transmitModel().micLevel() : 0;
         return QStringLiteral("mic_level:%1;").arg(lvl);
     }
+    if (!m_model) return {};
     int lvl = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, lvl)) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
@@ -906,7 +944,8 @@ QString TciProtocol::cmdRitEnable(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     int hz = s->ritFreq();
     QMetaObject::invokeMethod(s, [s, on, hz]() { s->setRit(on, hz); },
                               Qt::QueuedConnection);
@@ -958,7 +997,8 @@ QString TciProtocol::cmdXitEnable(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     int hz = s->xitFreq();
     QMetaObject::invokeMethod(s, [s, on, hz]() { s->setXit(on, hz); },
                               Qt::QueuedConnection);
@@ -1074,6 +1114,7 @@ QString TciProtocol::cmdCwMacrosSpeed(const QStringList& args, bool /*isSet*/)
         return QStringLiteral("cw_macros_speed:%1;").arg(wpm);
     }
 
+    if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
     if (wpm < 5 || wpm > 100) return {};
@@ -1123,7 +1164,8 @@ QString TciProtocol::cmdLock(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     QMetaObject::invokeMethod(s, [s, on]() { s->setLocked(on); },
                               Qt::QueuedConnection);
 
@@ -1149,7 +1191,8 @@ QString TciProtocol::cmdSqlEnable(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     int level = s->receiveSquelchLevel();
     QMetaObject::invokeMethod(s, [s, on, level]() { s->setSquelch(on, level); },
                               Qt::QueuedConnection);
@@ -1293,7 +1336,8 @@ QString TciProtocol::cmdMute(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
-    bool mute = (args[1].toLower() == "true");
+    bool mute = false;
+    if (!argToBool(args, 1, mute)) return {};
     auto* s = sliceForTrx(trx);
     if (s) {
         QMetaObject::invokeMethod(s, [s, mute]() { s->setAudioMute(mute); },
@@ -1371,7 +1415,8 @@ QString TciProtocol::cmdRxNbEnable(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     QMetaObject::invokeMethod(s, [s, on]() { s->setNb(on); },
                               Qt::QueuedConnection);
 
@@ -1394,7 +1439,8 @@ QString TciProtocol::cmdRxNrEnable(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     QMetaObject::invokeMethod(s, [s, on]() { s->setNr(on); },
                               Qt::QueuedConnection);
 
@@ -1417,7 +1463,8 @@ QString TciProtocol::cmdRxAnfEnable(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     QMetaObject::invokeMethod(s, [s, on]() { s->setAnf(on); },
                               Qt::QueuedConnection);
 
@@ -1440,7 +1487,8 @@ QString TciProtocol::cmdRxApfEnable(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     QMetaObject::invokeMethod(s, [s, on]() { s->setApf(on); },
                               Qt::QueuedConnection);
 
@@ -1465,7 +1513,8 @@ QString TciProtocol::cmdRxRecord(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     QMetaObject::invokeMethod(s, [s, on]() { s->setRecordOn(on); },
                               Qt::QueuedConnection);
 
@@ -1488,7 +1537,8 @@ QString TciProtocol::cmdRxPlay(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool on = (args[1].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, 1, on)) return {};
     QMetaObject::invokeMethod(s, [s, on]() { s->setPlayOn(on); },
                               Qt::QueuedConnection);
 
@@ -1594,10 +1644,21 @@ QString TciProtocol::cmdCwMacrosStop()
 QString TciProtocol::cmdIqStart(const QStringList& args)
 {
     if (!m_model || args.isEmpty()) return {};
+    // Bound the index BEFORE the arithmetic: argToInt accepts INT_MAX (it
+    // parses cleanly — it is "99999999999" that clears ok), and `trx + 1`
+    // would then be signed overflow, i.e. UB reachable from any TCI client on
+    // the one PR whose whole subject is boundary validation. Checking the
+    // index rather than the result also subsumes the old channel range test.
+    //
+    // No observable behaviour changes: DaxIqModel::createStream() already
+    // rejects an out-of-range channel, so this is strictly about keeping the
+    // arithmetic defined for the weekly UBSan job. There is deliberately no
+    // test asserting the rejection — there would be nothing to observe — only
+    // a positive control that an in-range index still creates its stream.
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
+    if (trx < 0 || trx > 3) return {};       // DAX IQ channels are 1-4
     const int channel = trx + 1;  // TRX 0 → DAX IQ channel 1
-    if (channel < 1 || channel > 4) return {};
     // Creating the dax_iq stream is not enough to make IQ flow: on FlexRadio
     // `daxiq_channel` is a Panadapter property, so the radio streams nothing
     // (or a stale pan's IQ) until a panadapter is routed to this channel with
@@ -1620,10 +1681,11 @@ QString TciProtocol::cmdIqStart(const QStringList& args)
 QString TciProtocol::cmdIqStop(const QStringList& args)
 {
     if (!m_model || args.isEmpty()) return {};
+    // Bounded before the addition, same as cmdIqStart above.
     int trx = 0;
     if (!argToInt(args, 0, trx)) return {};
+    if (trx < 0 || trx > 3) return {};       // DAX IQ channels are 1-4
     const int channel = trx + 1;
-    if (channel < 1 || channel > 4) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model, channel]() {
         model->daxIqModel().removeStream(channel);
     }, Qt::QueuedConnection);
@@ -1681,7 +1743,9 @@ QString TciProtocol::cmdKeyer(const QStringList& args)
     // keyer:trx,state[,duration_ms]
     // state: true=key down, false=key up
     if (!m_model || args.size() < 2) return {};
-    bool down = (args[1].toLower() == "true");
+    // Same fail-closed exemption as cmdTune: an unparseable state must mean
+    // KEY UP, never "ignore and leave the key down" (Constitution VI).
+    const bool down = (args[1].trimmed().toLower() == QLatin1String("true"));
     QMetaObject::invokeMethod(m_model, [model = m_model, down]() {
         model->sendCwKey(down);
     }, Qt::QueuedConnection);
@@ -1695,6 +1759,7 @@ QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool /*isSet*/)
         int wpm = m_model ? m_model->transmitModel().cwSpeed() : 20;
         return QStringLiteral("cw_keyer_speed:%1;").arg(wpm);
     }
+    if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
     if (wpm < 5 || wpm > 100) return {};
@@ -1724,13 +1789,15 @@ QString TciProtocol::cmdCwMacrosDelay(const QStringList& args, bool /*isSet*/)
     return {};
 }
 
-QString TciProtocol::cmdCwTerminal(const QStringList& args, bool isSet)
+// Global command — see the note above cmdMonEnable. Same boolean shape.
+QString TciProtocol::cmdCwTerminal(const QStringList& args, bool /*isSet*/)
 {
     static bool terminal = false;
-    if (!isSet)
+    if (args.isEmpty())
         return QStringLiteral("cw_terminal:%1;").arg(terminal ? "true" : "false");
-    if (!args.isEmpty())
-        terminal = (args[0].toLower() == "true");
+    // argToBool leaves `terminal` untouched when the argument is unparseable,
+    // so a dropped SET keeps the last good value rather than resetting it.
+    if (!argToBool(args, args.size() == 1 ? 0 : 1, terminal)) return {};
     return {};
 }
 
@@ -1829,7 +1896,8 @@ QString TciProtocol::cmdRxMute(const QStringList& args, bool isSet)
     }
 
     if (args.size() < 2) return {};
-    bool mute = (args[1].toLower() == "true");
+    bool mute = false;
+    if (!argToBool(args, 1, mute)) return {};
     QMetaObject::invokeMethod(s, [s, mute]() { s->setAudioMute(mute); },
                               Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("rx_mute:%1,%2;")
@@ -1866,15 +1934,20 @@ QString TciProtocol::cmdRxBalance(const QStringList& args, bool isSet)
 
 // ── Monitor ────────────────────────────────────────────────────────────────
 
-QString TciProtocol::cmdMonEnable(const QStringList& args, bool isSet)
+// Global command — see the note above cmdCwMacrosSpeed. This is the boolean
+// half of the same defect: `mon_enable:true;` is one argument, so the
+// trx-shaped `isSet` read it as a GET and the enable was silently discarded,
+// while `mon_enable:0,true;` took the SET branch and read args[0] — the trx
+// slot, "0" — as the state, so it DISABLED the monitor.
+QString TciProtocol::cmdMonEnable(const QStringList& args, bool /*isSet*/)
 {
     if (!m_model) return {};
-    if (!isSet) {
+    if (args.isEmpty()) {
         return QStringLiteral("mon_enable:%1;")
                    .arg(m_model->transmitModel().sbMonitor() ? "true" : "false");
     }
-    if (args.isEmpty()) return {};
-    bool on = (args[0].toLower() == "true");
+    bool on = false;
+    if (!argToBool(args, args.size() == 1 ? 0 : 1, on)) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
         model->transmitModel().setSbMonitor(on);
     }, Qt::QueuedConnection);
@@ -1937,7 +2010,7 @@ QString TciProtocol::cmdRxBinEnable(const QStringList& args, bool isSet)
         return QStringLiteral("rx_bin_enable:%1,%2;")
                    .arg(trx).arg(binEnabled ? "true" : "false");
     if (args.size() < 2) return {};
-    binEnabled = (args[1].toLower() == "true");
+    if (!argToBool(args, 1, binEnabled)) return {};
     return {};
 }
 
@@ -1952,7 +2025,7 @@ QString TciProtocol::cmdRxAncEnable(const QStringList& args, bool isSet)
         return QStringLiteral("rx_anc_enable:%1,%2;")
                    .arg(trx).arg(ancEnabled ? "true" : "false");
     if (args.size() < 2) return {};
-    ancEnabled = (args[1].toLower() == "true");
+    if (!argToBool(args, 1, ancEnabled)) return {};
     return {};
 }
 
@@ -1967,7 +2040,7 @@ QString TciProtocol::cmdRxDseEnable(const QStringList& args, bool isSet)
         return QStringLiteral("rx_dse_enable:%1,%2;")
                    .arg(trx).arg(dseEnabled ? "true" : "false");
     if (args.size() < 2) return {};
-    dseEnabled = (args[1].toLower() == "true");
+    if (!argToBool(args, 1, dseEnabled)) return {};
     return {};
 }
 
@@ -1984,42 +2057,47 @@ QString TciProtocol::cmdRxNfEnable(const QStringList& args, bool isSet)
         return QStringLiteral("rx_nf_enable:%1,%2;")
                    .arg(trx).arg(nfEnabled ? "true" : "false");
     if (args.size() < 2) return {};
-    nfEnabled = (args[1].toLower() == "true");
+    if (!argToBool(args, 1, nfEnabled)) return {};
     return {};
 }
 
 // ── Digital mode offsets ───────────────────────────────────────────────────
 
-QString TciProtocol::cmdDiglOffset(const QStringList& args, bool isSet)
+// Global command — see the note above cmdCwMacrosSpeed. digl_offset takes no
+// trx (it hardcodes sliceForTrx(0)), so the dispatcher's trx-shaped `isSet`
+// was wrong in both directions here too: `digl_offset:500;` read as a GET and
+// discarded the 500, and `digl_offset:0,500;` set the offset to the trx slot
+// and broadcast "digl_offset:0;". Fifth and sixth instances of the same
+// defect, found in the #4867 review.
+QString TciProtocol::cmdDiglOffset(const QStringList& args, bool /*isSet*/)
 {
     if (!m_model) return {};
     auto* s = sliceForTrx(0);
     if (!s) return {};
 
-    if (!isSet)
+    if (args.isEmpty())
         return QStringLiteral("digl_offset:%1;").arg(s->diglOffset());
 
-    if (args.isEmpty()) return {};
     int hz = 0;
-    if (!argToInt(args, 0, hz)) return {};
+    if (!argToInt(args, args.size() == 1 ? 0 : 1, hz)) return {};
     QMetaObject::invokeMethod(s, [s, hz]() { s->setDiglOffset(hz); },
                               Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("digl_offset:%1;").arg(hz);
     return {};
 }
 
-QString TciProtocol::cmdDiguOffset(const QStringList& args, bool isSet)
+// Global command — see the note above cmdDiglOffset.
+QString TciProtocol::cmdDiguOffset(const QStringList& args, bool /*isSet*/)
 {
     if (!m_model) return {};
     auto* s = sliceForTrx(0);
     if (!s) return {};
 
-    if (!isSet)
+    if (args.isEmpty())
         return QStringLiteral("digu_offset:%1;").arg(s->diguOffset());
 
-    if (args.isEmpty()) return {};
     int hz = 0;
-    if (!argToInt(args, 0, hz)) return {};
+    if (!argToInt(args, args.size() == 1 ? 0 : 1, hz)) return {};
     QMetaObject::invokeMethod(s, [s, hz]() { s->setDiguOffset(hz); },
                               Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("digu_offset:%1;").arg(hz);
