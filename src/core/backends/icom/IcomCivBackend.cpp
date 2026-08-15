@@ -2521,6 +2521,18 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, civTrace(mode == QLatin1String("all")));
         return;
     }
+    if (verb == QLatin1String("civ.session")) {
+        QVariantMap result;
+        if (m_session) {
+            result = m_session->leaseDiagnostics();
+        } else {
+            result.insert(QStringLiteral("connected"), false);
+            result.insert(QStringLiteral("lastRenewalResult"),
+                          QStringLiteral("no session"));
+        }
+        emit extensionResult(requestId, result);
+        return;
+    }
     if (verb == QLatin1String("civ.send")) {
         // RAW INJECTION. The caller supplies the command bytes ONLY — the
         // preamble, addresses and terminator are ours. That is not politeness:
@@ -2791,6 +2803,47 @@ IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const
                         .arg(m_audioRateHz * 16 / 1000));
     h.labels.insert(QStringLiteral("audiorate"), QStringLiteral("Audio rate"));
     h.order << QStringLiteral("audiorate");
+
+    // RS-BA1 lease state is separate from UDP transport liveness. A rejected
+    // or expired token leaves the outer socket answering while CI-V and audio
+    // stop, so packet counters alone cannot diagnose this class of freeze.
+    if (m_session) {
+        const QVariantMap lease = m_session->leaseDiagnostics();
+        h.sections.insert(QStringLiteral("lease"), QStringLiteral("RS-BA1 session"));
+        h.values.insert(QStringLiteral("lease"),
+                        QStringLiteral("%1, %2")
+                            .arg(lease.value(QStringLiteral("authenticated")).toBool()
+                                     ? QStringLiteral("authenticated")
+                                     : QStringLiteral("not authenticated"),
+                                 lease.value(QStringLiteral("lastRenewalResult")).toString()));
+        h.labels.insert(QStringLiteral("lease"), QStringLiteral("Lease"));
+        h.order << QStringLiteral("lease");
+
+        const qint64 ageMs = lease.value(QStringLiteral("lastAcceptedAgeMs")).toLongLong();
+        h.values.insert(QStringLiteral("leaseage"),
+                        ageMs >= 0 ? QStringLiteral("%1 ms").arg(ageMs)
+                                   : QStringLiteral("no accepted token"));
+        h.labels.insert(QStringLiteral("leaseage"), QStringLiteral("Last token ACK"));
+        h.order << QStringLiteral("leaseage");
+
+        h.values.insert(QStringLiteral("leaseseq"),
+                        QStringLiteral("last %1 / next %2 / pending %3")
+                            .arg(lease.value(QStringLiteral("lastRenewalSequence")).toUInt())
+                            .arg(lease.value(QStringLiteral("nextInnerSequence")).toUInt())
+                            .arg(lease.value(QStringLiteral("pendingRenewals")).toInt()));
+        h.labels.insert(QStringLiteral("leaseseq"), QStringLiteral("Token sequence"));
+        h.order << QStringLiteral("leaseseq");
+
+        h.values.insert(QStringLiteral("leasecounts"),
+                        QStringLiteral("%1 accepted / %2 reissued / %3 rejected / %4 stale")
+                            .arg(lease.value(QStringLiteral("acceptedRenewals")).toULongLong())
+                            .arg(lease.value(QStringLiteral("reissuedTokens")).toULongLong())
+                            .arg(lease.value(QStringLiteral("rejectedRenewals")).toULongLong())
+                            .arg(lease.value(QStringLiteral("ignoredAuthReplies")).toULongLong()
+                                 + lease.value(QStringLiteral("ignoredControlPackets")).toULongLong()));
+        h.labels.insert(QStringLiteral("leasecounts"), QStringLiteral("Token replies"));
+        h.order << QStringLiteral("leasecounts");
+    }
 
     if (!m_model->verified) {
         // Say so rather than presenting cross-referenced numbers as measured.

@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -58,6 +59,11 @@ std::uint16_t getLe16(const QByteArray& b, int at)
 {
     return static_cast<std::uint16_t>(static_cast<std::uint8_t>(b[at])
                                       | (static_cast<std::uint8_t>(b[at + 1]) << 8));
+}
+std::uint16_t getBe16(const QByteArray& b, int at)
+{
+    return static_cast<std::uint16_t>((static_cast<std::uint8_t>(b[at]) << 8)
+                                      | static_cast<std::uint8_t>(b[at + 1]));
 }
 
 // One UDP endpoint of the fake radio. Handles the handshake and pings that are
@@ -188,6 +194,32 @@ public:
     [[nodiscard]] bool serialOpened() const { return m_serialOpened; }
     [[nodiscard]] bool sawUsernameObfuscated() const { return m_usernameObfuscated; }
     [[nodiscard]] int civCommandsSeen() const { return m_civCommands; }
+    [[nodiscard]] const std::vector<std::uint16_t>& renewalSequences() const
+    {
+        return m_renewalSequences;
+    }
+    [[nodiscard]] const std::vector<std::uint16_t>& deauthOuterSequences() const
+    {
+        return m_deauthOuterSequences;
+    }
+    [[nodiscard]] const std::vector<std::uint16_t>& loginTokenRequestIds() const
+    {
+        return m_loginTokenRequestIds;
+    }
+    [[nodiscard]] const std::vector<AuthId>& renewalAuthIds() const
+    {
+        return m_renewalAuthIds;
+    }
+    [[nodiscard]] const std::vector<AuthId>& streamRequestAuthIds() const
+    {
+        return m_streamRequestAuthIds;
+    }
+
+    // Lease fault injection used by IcomSession integration tests.
+    void setInjectStaleGrant(bool on) { m_injectStaleGrant = on; }
+    void setRejectRenewalsAfter(int accepted) { m_acceptRenewals = accepted; }
+    void setReissueInitialTokenOnNextLogin(bool on) { m_reissueNextInitialToken = on; }
+    void setAuthFailureOnLogin(bool on) { m_authFailureOnLogin = on; }
 
     // Every CI-V command the client sent, in order. Counting them says the link
     // is alive; keeping them is what lets a test assert that a particular
@@ -230,6 +262,21 @@ public:
         m_audio->send(p);
     }
 
+    // Push the auth-failure status seen when an old session tears down during
+    // a reconnect. With stale=false it belongs to the current session and must
+    // be fatal; with stale=true it must not kill the new media lease.
+    void pushAuthFailure(bool stale)
+    {
+        auto status = m_control->frame(kLenStatus, 0x00, m_seq++);
+        status[0x30] = status[0x31] = status[0x32] = 0xff;
+        status[0x40] = 0x01;
+        if (stale) {
+            putBe32(status, 0x08, 0xCCCC0001);
+            putBe32(status, 0x0c, 0xCCCC0002);
+        }
+        m_control->send(status);
+    }
+
 private:
     void control(FakeStream& s, const QByteArray& b)
     {
@@ -242,24 +289,71 @@ private:
             m_usernameObfuscated = std::equal(expect.begin(), expect.end(),
                                               reinterpret_cast<const std::uint8_t*>(b.constData())
                                                   + 0x40);
+            const std::uint16_t tokenRequestId = getLe16(b, 0x1a);
+            m_loginTokenRequestIds.push_back(tokenRequestId);
+            if (m_authFailureOnLogin) {
+                auto status = s.frame(kLenStatus, 0x00, m_seq++);
+                status[0x30] = status[0x31] = status[0x32] = status[0x33] = 0xff;
+                s.send(status);
+                return;
+            }
+            m_sentCaps = false;
+            m_reissueThisInitialToken = m_reissueNextInitialToken;
+            m_reissueNextInitialToken = false;
             auto reply = s.frame(0x60, 0x00, m_seq++);
             reply[0x14] = 0x02;
-            for (std::size_t i = 0; i < 6; ++i)
+            reply[0x1a] = static_cast<std::uint8_t>(tokenRequestId & 0xff);
+            reply[0x1b] = static_cast<std::uint8_t>((tokenRequestId >> 8) & 0xff);
+            for (std::size_t i = 2; i < 6; ++i) {
                 reply[0x1a + i] = static_cast<std::uint8_t>(0xC0 + i);
+            }
             s.send(reply);
             return;
         }
         case 0x40: {   // auth
             const auto kind = static_cast<std::uint8_t>(b[0x15]);
             ++m_authCount;
-            if (kind != 0x05)
+            if (kind == static_cast<std::uint8_t>(AuthKind::Deauth)) {
+                m_deauthOuterSequences.push_back(getLe16(b, 0x06));
+                return;
+            }
+            if (kind != 0x05) {
                 return;   // the FIRST auth gets no reply; only the token request does
+            }
+            const std::uint16_t innerSeq = getBe16(b, 0x16);
+            m_renewalSequences.push_back(innerSeq);
+            AuthId requestAuthId{};
+            for (std::size_t i = 0; i < requestAuthId.size(); ++i) {
+                requestAuthId[i] = static_cast<std::uint8_t>(b[0x1a + i]);
+            }
+            m_renewalAuthIds.push_back(requestAuthId);
             auto reply = s.frame(0x40, 0x00, m_seq++);
             reply[0x14] = 0x02;
             reply[0x15] = 0x05;
-            s.send(reply);
+            // A renewal reply correlates through both the 16-bit inner
+            // sequence and the current auth ID. Echoing neither used to let a
+            // client test pass while ignoring the fields the live radio uses.
+            for (int i = 0x16; i < 0x20; ++i)
+                reply[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(b[i]);
+            const bool accepted = m_acceptedRenewals < m_acceptRenewals;
+            if (m_reissueThisInitialToken) {
+                m_reissueThisInitialToken = false;
+                // Rotate the six-byte material so adopting the reissued token
+                // is load-bearing in the session test rather than a no-op.
+                for (std::size_t i = 0; i < requestAuthId.size(); ++i) {
+                    reply[0x1a + i] = static_cast<std::uint8_t>(0xF0 + i);
+                }
+                reply[0x30] = reply[0x31] = reply[0x32] = reply[0x33] = 0xff;
+            } else if (accepted) {
+                ++m_acceptedRenewals;
+            } else {
+                reply[0x30] = reply[0x31] = reply[0x32] = reply[0x33] = 0xff;
+            }
 
-            if (!m_sentCaps) {
+            auto sendCapabilities = [&] {
+                if (m_sentCaps) {
+                    return;
+                }
                 m_sentCaps = true;
                 auto caps = s.frame(0xA8, 0x00, m_seq++);
                 for (std::size_t i = 0; i < 16; ++i)
@@ -267,10 +361,30 @@ private:
                 const char* name = "IC-705";
                 std::copy(name, name + 6, caps.begin() + 0x52);
                 s.send(caps);
+            };
+            if (m_injectStaleGrant) {
+                // Reproduce the live reconnect race: capabilities, then an old
+                // grant, then this request's token reply. Normal fake-radio
+                // behavior below keeps its historical token-before-caps order.
+                sendCapabilities();
+                if (!m_sentPrematureGrant) {
+                    m_sentPrematureGrant = true;
+                    sendGrant(s, true);
+                }
+                s.send(reply);
+            } else {
+                s.send(reply);
+                sendCapabilities();
             }
             return;
         }
         case 0x90: {   // stream request
+            AuthId requestAuthId{};
+            for (std::size_t i = 0; i < requestAuthId.size(); ++i) {
+                requestAuthId[i] = static_cast<std::uint8_t>(b[0x1a + i]);
+            }
+            m_streamRequestAuthIds.push_back(requestAuthId);
+
             // Refuse unless the client echoed back the identity we published in
             // the capabilities packet. A real radio has to know WHICH radio the
             // client wants when a server fronts several.
@@ -286,13 +400,9 @@ private:
             m_announcedCiv   = getBe32(b, 0x7c);
             m_announcedAudio = getBe32(b, 0x80);
 
-            auto grant = s.frame(0x90, 0x00, m_seq++);
-            const char* name = "IC-705";
-            std::copy(name, name + 6, grant.begin() + 0x40);
-            for (std::size_t i = 0; i < 6; ++i)
-                grant[0x1a + i] = static_cast<std::uint8_t>(0xD0 + i);
-            grant[0x60] = 0x01;
-            s.send(grant);
+            if (m_injectStaleGrant)
+                sendGrant(s, true);
+            sendGrant(s, false);
             return;
         }
         default:
@@ -508,6 +618,21 @@ public:
 
 private:
 
+    void sendGrant(FakeStream& stream, bool stale)
+    {
+        auto grant = stream.frame(0x90, 0x00, m_seq++);
+        const char* name = "IC-705";
+        std::copy(name, name + 6, grant.begin() + 0x40);
+        for (std::size_t i = 0; i < 6; ++i)
+            grant[0x1a + i] = static_cast<std::uint8_t>((stale ? 0xE0 : 0xD0) + i);
+        grant[0x60] = 0x01;
+        if (stale) {
+            putBe32(grant, 0x08, 0xBBBB0001);
+            putBe32(grant, 0x0c, 0xBBBB0002);
+        }
+        stream.send(grant);
+    }
+
     void audio(FakeStream&, const QByteArray& b)
     {
         if (b.size() > 24 && static_cast<std::uint8_t>(b[0x10]) == 0x80)
@@ -529,6 +654,18 @@ private:
     int m_authCount = 0;
     int m_civCommands = 0;
     bool m_civSilent = false;
+    bool m_injectStaleGrant = false;
+    bool m_sentPrematureGrant = false;
+    bool m_reissueNextInitialToken = false;
+    bool m_reissueThisInitialToken = false;
+    bool m_authFailureOnLogin = false;
+    int m_acceptRenewals = std::numeric_limits<int>::max();
+    int m_acceptedRenewals = 0;
+    std::vector<std::uint16_t> m_renewalSequences;
+    std::vector<AuthId> m_renewalAuthIds;
+    std::vector<AuthId> m_streamRequestAuthIds;
+    std::vector<std::uint16_t> m_deauthOuterSequences;
+    std::vector<std::uint16_t> m_loginTokenRequestIds;
     int m_audioFromClient = 0;
     quint32 m_announcedCiv = 0;
     quint32 m_announcedAudio = 0;

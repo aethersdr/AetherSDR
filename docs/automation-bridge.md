@@ -2866,6 +2866,51 @@ non-`-120` `rmsDbfs` means audio is arriving, and `rejectBadFcs` climbing while
 `framesAccepted` does not means the decoder is finding structure and losing it
 to bit errors.
 
+### `civ`
+
+Icom CI-V and RS-BA1 session diagnostics. The read-only actions work in an
+observe-only bridge; raw injection remains TX-gated because arbitrary CI-V can
+key or retune the radio.
+
+**`civ session`** reports the media lease independently of UDP link liveness:
+
+```json
+→ {"cmd":"civ","action":"session"}
+← {"ok":true,"civ":"session","result":{
+   "authenticated":true,"connected":true,"streamGranted":true,
+   "lastRenewalResult":"accepted","lastRenewalResponse":"0x00000000",
+   "lastRenewalSequence":42,"nextInnerSequence":43,
+   "tokenRequestId":"0x8f31",
+   "lastAcceptedAgeMs":8123,"pendingRenewals":0,
+   "acceptedRenewals":14,"reissuedTokens":1,"rejectedRenewals":0,
+   "ignoredAuthReplies":0,"ignoredControlPackets":1,
+   "initialMaintenanceMs":30000,"initialMaintenancePending":false,
+   "renewalCadenceMs":60000,"ackGraceMs":3000,"deadSessionMs":80000}}
+```
+
+Use this first when the panadapter, CI-V controls, and audio stop together while
+the outer UDP packet counters still move. A healthy result has a recent accepted
+token, response `0x00000000`, and no growing pending/rejected count. The health
+verb shows the same essentials under **RS-BA1 session**.
+
+The token-request ID is freshly randomized for each login. On an immediate
+reconnect the radio can answer the initial token request with `0xffffffff` and
+a token that must be used to request the streams; wfview follows the same path.
+`lastRenewalResult:"reissued"` distinguishes that valid reconnect exchange
+from the same nonzero response rejecting an established lease renewal.
+
+The first maintenance renewal is sent at 30 seconds because a live immediate
+reconnect grant stopped its media streams around 45 seconds even though the
+ordinary 60-second renewal was later accepted. After that one early renewal,
+the session returns to the wfview/kappanhang 60-second cadence.
+
+**`civ trace [all]`** reads the bounded decoded CI-V frame trace. The default
+omits routine meter traffic; `all` includes it. **`civ send <hex>`** injects
+command bytes through the active Icom session and is reserved for controlled
+hardware tests. Raw RS-BA1 datagram logging is intentionally off by default and
+should only be enabled briefly when these structured diagnostics are
+insufficient.
+
 ### `controls`
 
 The CI-V control and meter registry, joined against what is actually wired.
@@ -3327,7 +3372,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
-| `civ` | — | civ <send <hex>\|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated) |
+| `civ` | — | civ <send <hex>\|trace [all]\|session> — CI-V inject, frame trace, or RS-BA1 lease health (Icom; send is TX-gated) |
 | `controls` | — | controls <map\|meters\|scrub [id\|plane]> — the CI-V control and meter registry joined against what is actually wired, and a linkage check that drives every settable control without moving any of them (Icom) |
 | `radiocert` | — | radiocert <tune\|rx\|tx\|meters\|all> [freqMhz] — radio bring-up diagnostic, in dependency order (tx/meters key) |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |

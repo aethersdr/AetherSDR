@@ -865,6 +865,40 @@ int main(int argc, char** argv)
         check(!h.values.contains(QStringLiteral("patemp")),
               "no PA temperature key, because the radio does not report one");
         check(h.values.contains(QStringLiteral("model")), "the resolved model is reported");
+        check(h.values.contains(QStringLiteral("lease"))
+                  && h.values.value(QStringLiteral("lease")).toString().contains(
+                      QStringLiteral("authenticated")),
+              "health separates the authenticated RS-BA1 lease from UDP link liveness");
+        check(h.values.contains(QStringLiteral("leaseseq"))
+                  && h.values.contains(QStringLiteral("leasecounts")),
+              "health exposes renewal sequence and reply counters");
+
+        QVariant leaseResult;
+        bool leaseAnswered = false;
+        auto leaseConn = QObject::connect(
+            &backend, &IRadioBackend::extensionResult, &app,
+            [&](quint64 id, const QVariant& result) {
+                if (id == 7300) {
+                    leaseAnswered = true;
+                    leaseResult = result;
+                }
+            });
+        backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("civ.session"),
+                                7300, {});
+        QObject::disconnect(leaseConn);
+        const QVariantMap lease = leaseResult.toMap();
+        check(leaseAnswered && lease.value(QStringLiteral("authenticated")).toBool(),
+              "civ.session synchronously returns the live authenticated lease");
+        check(lease.value(QStringLiteral("lastRenewalResponse")).toString()
+                  == QStringLiteral("0x00000000"),
+              "civ.session preserves the protocol response word for troubleshooting");
+        check(lease.value(QStringLiteral("tokenRequestId")).toString().startsWith(
+                  QStringLiteral("0x")),
+              "civ.session exposes the per-login token-request correlation ID");
+        check(lease.contains(QStringLiteral("reissuedTokens")),
+              "civ.session distinguishes reconnect token reissue from renewal rejection");
+        check(lease.value(QStringLiteral("initialMaintenanceMs")).toInt() == 30000,
+              "civ.session exposes the one-time early maintenance window");
     }
 
     // An operator disconnect while TUNE is active must unkey and restore the
