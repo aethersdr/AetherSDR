@@ -2461,9 +2461,26 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         txModel.setDax(true);
     }
 
-    const QString route = bypassesDax
-        ? QStringLiteral("host-modulated (no DAX stream)")
-        : QStringLiteral("DAX TX stream 0x%1").arg(m_audio->txStreamId(), 0, 16);
+    // NAME THE ROUTE THAT ACTUALLY FIRED. txAudioBypassesDax() is an OR of two
+    // different reasons — the host runs the modulator (HL2), or the audio
+    // crosses the seam to a radio that modulates it (Icom) — and reporting both
+    // as "host-modulated" describes the HL2's case on a radio where
+    // hostModulates is FALSE.
+    //
+    // Not cosmetic in practice: chasing an AX.25 transmit fault on an IC-9700,
+    // this line said "host-modulated (no DAX stream)" while `modem txprobe`
+    // reported hostModulates:false for the same transmission. The two read as a
+    // contradiction and cost a diversion looking for a missing DAX stream on a
+    // radio that has never had one. The internal qCInfo below was already
+    // correct ("seam/host"); only the operator-facing line was wrong.
+    const RadioCapabilities routeCaps =
+        m_radio ? m_radio->backendCapabilities() : RadioCapabilities{};
+    const QString route =
+        !bypassesDax
+            ? QStringLiteral("DAX TX stream 0x%1").arg(m_audio->txStreamId(), 0, 16)
+        : routeCaps.hostModulates
+            ? QStringLiteral("host-modulated (no DAX stream)")
+            : QStringLiteral("over the radio seam (no DAX stream)");
     appendSystemLine(QStringLiteral("Keying transmitter for AX.25 TX on %1; %2.")
         .arg(transmitSliceSummary(), route));
     qCInfo(lcAx25).noquote()
