@@ -291,8 +291,15 @@ jobs:
       #
       # These are table assertions — no radio, no sockets, no event loop, ~0.1 s
       # against a target the Build step already linked.
-      - name: Test Icom CI-V codec (mode map, filters, frame building)
-        run: ctest --test-dir build -R "^icom_civ_test$" --output-on-failure
+      #
+      # icom_meters_test rides along because it owns the model table's
+      # invariants, and this PR proved they were unguarded: setting the
+      # IC-9700's hasVfoModeCommand tripped "no model silently inherits a DATA
+      # command shape" and all four checks stayed green, because nothing in this
+      # file ran that target either. A capability flag that gates which frame
+      # reaches the radio is exactly the kind of claim worth failing a merge on.
+      - name: Test Icom CI-V codec and model table
+        run: ctest --test-dir build -R "^icom_(civ|meters)_test$" --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months

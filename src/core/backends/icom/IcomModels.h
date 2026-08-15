@@ -68,9 +68,19 @@ struct IcomModel {
     // filter in one 26 00 frame. The IC-705 and IC-7300MK2 guides in
     // sources/icom-official/ document this exact form.
     //
-    // FALSE UNTIL VERIFIED FOR EACH MODEL. Some Icoms expose a different 0x26
+    // FALSE UNTIL ATTESTED FOR EACH MODEL. Some Icoms expose a different 0x26
     // shape, and a mode change sent in the wrong form is silently unapplied.
     // The conservative fallback is plain 0x06 with no DATA control or claim.
+    //
+    // ATTESTED IS NOT `verified` ABOVE, deliberately. `verified` is a claim
+    // about this whole row — geometry, amplitude range, tuning limits, all
+    // confirmed against the model's own guide. The 0x26 shape is one narrow
+    // question that a measured round trip answers on its own, and the IC-9700
+    // is exactly that case: geometry still assumed, 26 00 read off the radio.
+    // Coupling the two would force either an overclaimed row or a discarded
+    // trace. So record the evidence in a comment beside the flag AND add the
+    // address to kAttestedVfoMode in icom_meters_test.cpp — that list is what
+    // stops a new row copied from the IC-705 inheriting a shape nobody checked.
     bool hasVfoModeCommand = false;
 
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
