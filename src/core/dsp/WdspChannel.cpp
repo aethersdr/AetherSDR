@@ -288,11 +288,26 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
     if (m_nbActive.load(std::memory_order_relaxed)) {
         if (m_nbHold.load(std::memory_order_relaxed)) {
             // Transmitting. Skip the stage entirely — see setNoiseBlankerHold.
-            m_nbFlushPending.store(true, std::memory_order_relaxed);
         } else {
-            if (m_nbFlushPending.exchange(false, std::memory_order_relaxed)) {
-                flush_anbEXT(m_channelId);
-            }
+            // DELIBERATELY NOT FLUSHED on the way out of a hold, and this is
+            // the whole point of holding rather than muting. The stage was
+            // SKIPPED while held, not fed, so its running average still holds
+            // the pre-transmit signal level and it is already armed for the
+            // first receive sample.
+            //
+            // Flushing here would reset that average to full scale, and at
+            // backtau = 0.05 s nothing could exceed threshold * average for
+            // ~200 ms — an unarmed blanker at the start of every receive
+            // period, which is exactly the failure aether_wdsp.h's ARMING
+            // DELAY note warns about and exactly the window this hold exists
+            // to protect. Measured: with a flush here the blanked/unblanked
+            // impulse peak ratio was 1.000 for the first 200 ms after each
+            // transmit — bit-identical to the blanker being switched off —
+            // against 0.43 once settled. Without it, 0.52 immediately.
+            //
+            // What the delay line carries across the hold is trans_count +
+            // adv_count samples: 8 at tau/advtime = 0.0001 s, or 0.17 ms of
+            // pre-transmit audio. That is not worth de-arming the stage for.
             const std::size_t n = inputI.size();
             for (std::size_t k = 0; k < n; ++k) {
                 m_nbInterleaved[2 * k] = static_cast<double>(inputI[k]);
@@ -679,9 +694,6 @@ void WdspChannel::openNoiseBlanker() noexcept
                   noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel));
     m_nbOpen = true;
     m_nbActive.store(m_config.noiseBlankerEnabled, std::memory_order_relaxed);
-    // A freshly created stage is already flushed; do not schedule another one,
-    // or the first block after every reconfigure re-arms from full scale.
-    m_nbFlushPending.store(false, std::memory_order_relaxed);
 }
 
 void WdspChannel::closeNoiseBlanker() noexcept
@@ -713,7 +725,6 @@ bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
             // transmit-era gap; playing it out is an audible tick at the exact
             // moment the operator asked for less noise.
             flush_anbEXT(m_channelId);
-            m_nbFlushPending.store(false, std::memory_order_relaxed);
         }
         SetEXTANBRun(m_channelId, on ? 1 : 0);
     }

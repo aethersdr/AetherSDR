@@ -157,8 +157,11 @@ public:
     // real receive sample afterwards is thousands of times the average and the
     // blanker gates the audio off — a hole at the start of every receive
     // period, in the same family as the NR filter-state gap. Held, the stage is
-    // skipped entirely and its average is frozen; releasing the hold flushes it
-    // on the next block.
+    // skipped entirely and its average is FROZEN at the pre-transmit signal
+    // level — so releasing the hold does NOT flush it, and must not: flushing
+    // re-arms the average from full scale and buys ~200 ms of blind blanker at
+    // the head of every receive period, which is the very hole this exists to
+    // close. See the note in processIq().
     //
     // Safe from the processIq() thread, unlike every other control call here:
     // it stores an atomic and the flush it schedules writes only into buffers
@@ -315,8 +318,11 @@ private:
     // not consult m_config across a control-thread write.
     bool m_nbOpen = false;
     std::atomic<bool> m_nbActive {false};
+    // Set on a transmit edge; processIq() skips the stage while it is true so
+    // the running average is FROZEN rather than dragged into the mute path's
+    // silence. No companion "flush on release" flag: re-arming the stage on
+    // every T->R edge is the defect this hold exists to avoid, not part of it.
     std::atomic<bool> m_nbHold {false};
-    std::atomic<bool> m_nbFlushPending {false};
     // ANB works on WDSP's interleaved-double buffer, in place; processIq()
     // takes separate float planes. These three are the staging buffers for
     // that conversion, sized once in open() so the real-time path never

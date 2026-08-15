@@ -109,6 +109,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // see the capability's own note.
     c.hasManualNotch = true;
 
+    // The radio's own blanker, reached over CI-V and already covered by
+    // hasRadioSideDsp. A networked Icom ships finished audio, not IQ (see
+    // hasDaxStreams below), so there is nothing here for a host stage to blank
+    // even if we wanted one.
+    c.hasHostNoiseBlanker = false;
+
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;
 

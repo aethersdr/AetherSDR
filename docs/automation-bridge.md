@@ -697,7 +697,7 @@ connects).
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. |
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), **linkedTo** (Slice Link peer id, `-1` when unlinked), txSlice, …) |
-| `hostnb` | — (optional property) | HOST-SIDE noise blanker, read from the BACKEND: `{receivers:[{ddc,panId,on,level,threshold}]}`. **Distinct from `get slice nb`** — that reports the slice model, which is set the instant the button is clicked and stays true even if the intent never reached the DSP. This answers from the backend's own per-receiver state and also reports the WDSP `threshold` the 0..100 level became, so the inversion (higher level → lower threshold) can be asserted rather than assumed. Errors on a radio that does not declare `hasHostNoiseBlanker` rather than returning an empty success. |
+| `hostnb` | — (optional property) | HOST-SIDE noise blanker, read from the DSP: `{receivers:[{ddc,panId,on,level,threshold,requestedOn,requestedLevel,hasChain}]}`. **Distinct from `get slice nb`** — that reports the slice model, which is set the instant the button is clicked and stays true even if the intent never reached the DSP. `on`/`level` here are what the WDSP stage actually has; `requestedOn`/`requestedLevel` are what the backend was asked for, reported alongside so the two can be COMPARED. Errors on a radio that does not declare `hasHostNoiseBlanker` rather than returning an empty success. |
 | `clock` | — | AetherClock snapshot: `state`/`stateName` (NoSignal/Acquiring/Locked), `station`/`stationName` (WWV/WWVH/WWVB), `decodedUtc` (ISO-8601, empty until a decode), `offsetMs` (decoded − host at the second edge; positive = host behind broadcast), `lockQuality` (0–100), `sliceId` (bound slice, −1 when stopped), `gpsTimeAvailable`. Validate applet Start/Tune/station-switch actions and lock progress without pixels. |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
@@ -1210,19 +1210,32 @@ firmware DSP to switch on.
 ```json
 → {"cmd":"get","model":"hostnb"}
 ← {"ok":true,"model":"hostnb","hostnb":{"receivers":[
-   {"ddc":0,"panId":"0x40000000","on":true,"level":80,"threshold":7.579}]}}
+   {"ddc":0,"panId":"0x40000000","on":true,"level":80,"threshold":7.579,
+    "requestedOn":true,"requestedLevel":80,"hasChain":true}]}}
 ```
 
 - **Why it is not `get slice nb`.** That field comes from `SliceModel`, which
   is set the moment the operator clicks NB — it is true whether or not the
   intent survived the seam. A backend that ignored `setSliceNoiseBlanker`
-  entirely would still report `nb: true` there and look correct. This model
-  reads the backend's own per-receiver state, so the two disagreeing is exactly
-  the "the control moves and nothing happens" failure being caught.
-- `threshold` is what WDSP actually got: the 0..100 `level` runs the opposite
-  way from WDSP's trigger (a multiple of the running average magnitude, so
-  **smaller is more aggressive**), and reporting both lets a driver assert the
-  inversion rather than trust it. Level 0 → 100, level 50 → 20, level 100 → 4.
+  entirely would still report `nb: true` there and look correct.
+- **`on`/`level` are read from the DSP, not from the request.** They are the
+  state the WDSP stage actually holds, read across the thread boundary from
+  `Hl2RxDsp`. `requestedOn`/`requestedLevel` are what the backend was asked
+  for. Reporting both is the point: the request is stored synchronously while
+  the stage is configured through a queued call, so **a mismatch between the
+  pairs is exactly the "the control moves and nothing happens" failure this
+  verb exists to catch.** A readback that echoed the request would certify its
+  own input.
+- Because the seam is asynchronous, the pairs can differ for a few
+  milliseconds right after a toggle. A driver asserts on them settling, not on
+  the first read — `wait_for` rather than a bare `get`.
+- `hasChain` is false for a receiver between rebuilds (a sample-rate change,
+  a reconnect). There is nothing applied then, so `on` reads false rather than
+  flattering the request.
+- `threshold` is what WDSP got, computed from the **applied** level: the 0..100
+  level runs the opposite way from WDSP's trigger (a multiple of the running
+  average magnitude, so **smaller is more aggressive**). Level 0 → 100,
+  level 50 → 20, level 100 → 4.
 - `on`/`level` are **per receiver**, not radio-wide — unlike the notches. Two
   panadapters on different bands can legitimately want different settings.
 - Errors on a radio that does not declare the capability, rather than returning
@@ -1232,7 +1245,8 @@ firmware DSP to switch on.
 
 ```
 slice dsp nb on 80          # drive the control the operator drives
-get hostnb                  # backend agrees: on=true, level=80, threshold≈7.6
+get hostnb                  # DSP agrees: on=true, level=80, threshold≈7.6,
+                            #   and requestedOn/requestedLevel match it
 get slice active nb         # model agrees too
 slice dsp nb off
 get hostnb                  # on=false everywhere

@@ -8,7 +8,7 @@
 // with the blanker off and once on — so it measures the stage rather than the
 // absolute levels of a chain that may be retuned later.
 //
-// Three things are pinned:
+// Four things are pinned:
 //   1. The blanker removes impulses and leaves the wanted signal alone.
 //   2. The seam's 0..100 level maps onto WDSP's INVERTED threshold, with the
 //      slice model's default of 50 landing on pihpsdr's fixed value of 20.
@@ -16,6 +16,11 @@
 //      silence, and the blanker triggers on a RATIO against a running average
 //      magnitude, so an unheld blanker would gate the start of every receive
 //      period — the same failure family as the NR filter-state gap.
+//   4. ...and it is still BLANKING there. (3) alone is satisfied by a stage
+//      that does nothing at all, which is what flushing on the T->R edge
+//      produces: flush sets the running average to full scale and the blanker
+//      cannot trigger for ~200 ms. Both directions have to be pinned or the
+//      hold can be "fixed" into uselessness without a test noticing.
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples
@@ -27,6 +32,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <utility>
 #include <vector>
 
 using namespace AetherSDR::hl2;
@@ -362,6 +368,91 @@ int main(int argc, char** argv)
               "the blanker adds NO delay to the return of audio after transmit");
         std::fprintf(stdout, "  post-TX recovery block off=%d on=%d (%d samples each)\n",
                      recoveryBlockOff, recoveryBlockOn, kEdgeBlock);
+    }
+
+    // ── 6. ...and it must still BLANK once transmit ends ───────────────────
+    //
+    // Section 5 on its own is satisfied by a blanker that does nothing at all:
+    // a permanently deaf stage adds no delay either. That is not hypothetical —
+    // it is precisely what an implementation that FLUSHES the stage on the
+    // transmit-to-receive edge produces. flush_anb() sets the running average
+    // to 1.0 (full scale), and at backtau = 0.05 s nothing can exceed
+    // threshold * average for ~200 ms, so the blanker is inert for the first
+    // fifth of a second of every receive period while section 5 stays green.
+    //
+    // So this measures the thing section 5 cannot see: with impulses arriving
+    // IMMEDIATELY after the edge, does the peak actually come down? Verified to
+    // fail on the flushing implementation (ratio 1.000, bit-identical to the
+    // blanker being off) and pass on this one (~0.52, matching the settled
+    // ratio in section 3).
+    {
+        // Peak of the demodulated audio in an early window after the TX edge,
+        // and in a late one, for a chain with the blanker on or off. The first
+        // 40 ms are skipped: the WDSP mute ramp and the pipeline's own settling
+        // are paid by BOTH arms and are not what is being measured.
+        const auto postTxPeaks = [&](bool blankerOn) {
+            Hl2RxDsp dsp;
+            std::string err;
+            check(dsp.configure(baseConfig(), &err),
+                  err.empty() ? "Hl2RxDsp configures for the post-TX blanking case"
+                              : err.c_str());
+            if (blankerOn)
+                dsp.setNoiseBlanker(true, kNbLevel);
+
+            std::vector<float> audio;
+            bool collecting = false;
+            QObject::connect(&dsp, &Hl2RxDsp::audioReady, &dsp,
+                             [&](const std::vector<float>& pcm) {
+                if (collecting)
+                    audio.insert(audio.end(), pcm.begin(), pcm.end());
+            });
+
+            feed(dsp, makeStream(oneSecond, 0));      // arm on real signal
+            dsp.setAudioMuted(true);
+            feed(dsp, std::vector<std::complex<float>>(
+                          static_cast<std::size_t>(kFs / 2),
+                          std::complex<float>(0.0f, 0.0f)));   // "transmit"
+            dsp.setAudioMuted(false);
+            collecting = true;
+            // Receive returns WITH impulses, from the very first sample.
+            feed(dsp, makeStream(oneSecond, 2000, oneSecond));
+
+            // audioReady carries INTERLEAVED stereo at kFs.
+            const std::size_t skip = static_cast<std::size_t>(0.040 * kFs) * 2;
+            const std::size_t earlyEnd = static_cast<std::size_t>(0.200 * kFs) * 2;
+            const std::size_t lateStart = static_cast<std::size_t>(0.600 * kFs) * 2;
+            std::pair<double, double> peaks{0.0, 0.0};
+            for (std::size_t k = skip; k < std::min(earlyEnd, audio.size()); ++k)
+                peaks.first = std::max(peaks.first,
+                                       static_cast<double>(std::abs(audio[k])));
+            for (std::size_t k = lateStart; k < audio.size(); ++k)
+                peaks.second = std::max(peaks.second,
+                                        static_cast<double>(std::abs(audio[k])));
+            return peaks;
+        };
+
+        const auto offPeaks = postTxPeaks(false);
+        const auto onPeaks = postTxPeaks(true);
+        check(offPeaks.first > 0.0 && onPeaks.first > 0.0,
+              "both post-TX arms produced audio in the early window");
+        const double earlyRatio =
+            offPeaks.first > 0.0 ? onPeaks.first / offPeaks.first : 1.0;
+        const double lateRatio =
+            offPeaks.second > 0.0 ? onPeaks.second / offPeaks.second : 1.0;
+        // THE assertion. 0.75 rather than the 0.5 of section 3 because the
+        // stage is still converging its average over part of this window; the
+        // defect it catches sits at 1.000, so the margin is not tight.
+        check(earlyRatio < 0.75,
+              "the blanker is ARMED immediately after transmit (it still blanks "
+              "impulses in the first 200 ms of the receive period)");
+        // And it is not merely gating the whole early window: whatever it does
+        // there is in line with what it does once fully settled.
+        check(earlyRatio < lateRatio * 2.0,
+              "early-window blanking is comparable to the settled steady state");
+        std::fprintf(stdout,
+                     "  post-TX impulse peak: off=%.4f on=%.4f (40-200ms, ratio %.3f)"
+                     "  settled ratio %.3f\n",
+                     offPeaks.first, onPeaks.first, earlyRatio, lateRatio);
     }
 
     if (g_failures == 0)

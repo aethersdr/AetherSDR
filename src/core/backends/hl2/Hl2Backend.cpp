@@ -3529,16 +3529,38 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                 for (std::size_t i = 0; i < m_rx.size(); ++i) {
                     const Receiver& r = m_rx[i];
                     const auto* ids = m_ids.byDdc(static_cast<int>(i));
+                    // `on`/`level` are what the DSP ACTUALLY HAS, read across
+                    // the thread boundary through Hl2RxDsp's atomics — not what
+                    // this backend was asked for. Reporting the request would
+                    // make this verb certify its own input: the request is
+                    // stored in r.nbOn synchronously, before the queued call to
+                    // the chain has run, so it stays true even if the chain
+                    // never got it or refused it. requestedOn/requestedLevel
+                    // are reported alongside precisely so the two can be
+                    // COMPARED — a mismatch is the "the control moves and
+                    // nothing happens" failure this verb exists to catch.
+                    //
+                    // With no chain (a receiver between rebuilds) there is
+                    // nothing applied yet, so `on` is false rather than a
+                    // flattering echo of the request.
+                    const bool appliedOn = r.dsp && r.dsp->appliedNoiseBlankerEnabled();
+                    const int appliedLevel =
+                        r.dsp ? r.dsp->appliedNoiseBlankerLevel() : 0;
                     rxList.append(QVariantMap{
                         {QStringLiteral("ddc"), static_cast<int>(i)},
                         {QStringLiteral("panId"), ids ? ids->panId : QString()},
-                        {QStringLiteral("on"), r.nbOn},
-                        {QStringLiteral("level"), r.nbLevel},
-                        // The value the level actually became inside WDSP, so a
-                        // driver can prove the 0..100 -> threshold inversion
-                        // rather than take it on trust.
+                        {QStringLiteral("on"), appliedOn},
+                        {QStringLiteral("level"), appliedLevel},
+                        {QStringLiteral("requestedOn"), r.nbOn},
+                        {QStringLiteral("requestedLevel"), r.nbLevel},
+                        {QStringLiteral("hasChain"), r.dsp != nullptr},
+                        // The value the APPLIED level became inside WDSP. Now a
+                        // real assertion rather than f(x) == f(x): it is
+                        // computed from the level the DSP took, so a request
+                        // that never crossed the seam shows a threshold that
+                        // does not match the requested level.
                         {QStringLiteral("threshold"),
-                         WdspChannel::noiseBlankerThresholdForLevel(r.nbLevel)},
+                         WdspChannel::noiseBlankerThresholdForLevel(appliedLevel)},
                     });
                 }
                 emit extensionResult(requestId, QVariantMap{

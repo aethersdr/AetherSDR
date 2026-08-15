@@ -94,9 +94,18 @@ void SetRXAShiftRun(int channel, int run);
 // transmit-to-receive edge gets an unarmed blanker for the first moment of
 // every receive period.
 //
-// Every Set* below is control-path work: they take the stage's lock, and
-// Buffsize/Samplerate REALLOCATE the delay line. xanbEXT and flushEXT allocate
-// nothing and are safe on the real-time path.
+// Every Set* below is control-path work: they take the stage's lock. NONE of
+// them allocate — create_anb sizes the delay line once at
+// (MAX_TAU + MAX_ADVTIME) * MAX_SAMPLERATE, independent of both buffsize and
+// samplerate, so SetEXTANBBuffsize only stores the count and
+// SetEXTANBSamplerate only re-derives the sample counts through initBlanker().
+//
+// xanbEXT allocates nothing and is safe on the real-time path. flush_anbEXT
+// allocates nothing either, but it is CHEAP rather than FREE: it takes the same
+// lock as the setters and initBlanker() memsets the whole delay line (~98 KB)
+// and rebuilds the transition table. Calling it from the audio callback is
+// permissible; calling it on every block, or on every transmit-to-receive edge,
+// is not what it is for — see the ARMING DELAY note above.
 void create_anbEXT(int id, int run, int buffsize, double samplerate, double tau,
                    double hangtime, double advtime, double backtau,
                    double threshold);

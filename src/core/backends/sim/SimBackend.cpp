@@ -250,6 +250,9 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
     caps.hasManualNotch = false;
+    // The synthesised stream has no impulse noise in it, and the demo has no IQ
+    // path this host demodulates — there is nothing to blank.
+    caps.hasHostNoiseBlanker = false;
     // Synthesised signals come out exactly where the demo says they are; there
     // is no oscillator to be wrong about.
     caps.hostFrequencyCalibration = false;

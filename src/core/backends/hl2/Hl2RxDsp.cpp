@@ -1,9 +1,12 @@
 #include "core/backends/hl2/Hl2RxDsp.h"
 
+#include <QLoggingCategory>
 #include <QMetaType>
 
 #include <algorithm>
 #include <cmath>
+
+Q_LOGGING_CATEGORY(lcHl2RxDsp, "aether.hl2.rxdsp")
 
 namespace AetherSDR::hl2 {
 
@@ -129,6 +132,11 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     // Re-assert it, or a rate change made while transmitting comes back with
     // the blanker running on the mute path's silence.
     m_channel->setNoiseBlankerHold(m_audioMuted);
+    // The channel was OPENED with the blanker (wc.noiseBlankerEnabled above),
+    // so a successful configure() is also the point at which the request has
+    // definitively landed.
+    m_nbAppliedOn.store(m_nbOn, std::memory_order_relaxed);
+    m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
     return true;
 }
 
@@ -136,8 +144,21 @@ void Hl2RxDsp::setNoiseBlanker(bool on, int level)
 {
     m_nbOn = on;
     m_nbLevel = std::clamp(level, 0, 100);
-    if (m_channel)
-        m_channel->setNoiseBlanker(m_nbOn, m_nbLevel);
+    if (!m_channel)
+        return;   // no chain yet; configure() opens with the request
+    // CHECKED, unlike a fire-and-forget setter, because WdspChannel refuses a
+    // control operation that races another one and returns false rather than
+    // blocking. Swallowing that would leave this object — and therefore the NB
+    // button and the bridge readback — claiming a blanker the channel is not
+    // running, which is the one failure this whole feature is built to avoid.
+    if (!m_channel->setNoiseBlanker(m_nbOn, m_nbLevel)) {
+        qCWarning(lcHl2RxDsp) << "noise blanker" << (m_nbOn ? "on" : "off") << "level"
+                         << m_nbLevel << "refused by the channel; the request is "
+                            "held and re-applied on the next configure()";
+        return;
+    }
+    m_nbAppliedOn.store(m_nbOn, std::memory_order_relaxed);
+    m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
 }
 
 void Hl2RxDsp::setMode(WdspChannel::Mode mode)

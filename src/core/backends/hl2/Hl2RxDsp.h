@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <memory>
@@ -114,10 +115,19 @@ public:
     // this host or it does not happen at all. That is why the NB button is
     // visible on a radio that reports hasRadioSideDsp = false.
     //
-    // Runs BEFORE the panadapter's own conjugation and before WdspChannel, on
-    // the wire samples. Placement is not a style choice: an impulse is narrow
-    // in time and wide in frequency, and once the bandpass has spread it over
-    // milliseconds there is no spike left to remove.
+    // Runs inside WdspChannel::processIq(), on the wire samples, immediately
+    // ahead of fexchange2. Placement is not a style choice: an impulse is
+    // narrow in time and wide in frequency, and once the bandpass has spread it
+    // over milliseconds there is no spike left to remove.
+    //
+    // ON THE AUDIO PATH ONLY. processIqBlock() feeds the panadapter from its
+    // own conjugated copy BEFORE it reaches the channel, so the spectrum and
+    // waterfall show UNBLANKED IQ. That is deliberate — the display is a
+    // measurement of what is on the air and blanking it would hide the very
+    // impulses the operator is deciding whether to blank — but it is a visible
+    // difference from a Flex, which blanks in its own DDC upstream of both.
+    // If that ever needs to change, the stage moves up here rather than gaining
+    // a second copy inside the channel.
     //
     // `level` is 0..100, larger being more aggressive; WdspChannel owns the map
     // onto WDSP's inverted threshold.
@@ -128,8 +138,27 @@ public:
     // button stayed lit. Anything that must outlive a rebuild lives in its own
     // member and is re-applied at the end of configure().
     Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    // What the operator ASKED for. Survives configure() and is what a rebuild
+    // re-applies.
     [[nodiscard]] bool noiseBlankerEnabled() const { return m_nbOn; }
     [[nodiscard]] int noiseBlankerLevel() const { return m_nbLevel; }
+    // What the WDSP stage ACTUALLY has, which is not the same question. The
+    // request crosses a queued connection to get here and WdspChannel can
+    // refuse it outright (a control operation already in flight), so a readback
+    // that reported the request back would be certifying its own input.
+    //
+    // ATOMIC because these two are the only members of this class read from
+    // OUTSIDE its thread: Hl2Backend answers the bridge's `hl2 nb.get` from the
+    // GUI thread while this object lives on the I/O thread. Relaxed is enough —
+    // they are independent scalars and nothing is ordered against them.
+    [[nodiscard]] bool appliedNoiseBlankerEnabled() const
+    {
+        return m_nbAppliedOn.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] int appliedNoiseBlankerLevel() const
+    {
+        return m_nbAppliedLevel.load(std::memory_order_relaxed);
+    }
 
     // ── Manual notch filters ──────────────────────────────────────────────
     //
@@ -289,8 +318,13 @@ private:
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
     // Noise-blanker state, kept out of m_config so configure() cannot clear it.
+    // m_nbOn/m_nbLevel are the REQUEST; m_nbApplied* are what the WDSP stage
+    // took. They diverge exactly when something went wrong, which is the whole
+    // reason the bridge readback reports the applied pair.
     bool m_nbOn = false;
     int  m_nbLevel = 50;      // 0..100, the slice model's units
+    std::atomic<bool> m_nbAppliedOn {false};
+    std::atomic<int>  m_nbAppliedLevel {50};
     Config m_config;
 
     // Notch set, mirrored so reconfigure() can replay it — see the note on
