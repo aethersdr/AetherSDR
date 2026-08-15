@@ -87,6 +87,19 @@ public:
 
     [[nodiscard]] std::size_t pendingBytes() const noexcept { return m_pending.size(); }
 
+    // Overflow accounting. submit() drops the OLDEST bytes past
+    // kMaxPendingBytes, which is right for voice and destructive for a digital
+    // burst — the oldest bytes of an AX.25 transmission are its preamble and
+    // opening flag, so what survives syncs on nothing while still sounding like
+    // packet. These make that visible instead of silent.
+    //
+    // droppedBytes() is cumulative for the session; dropEvents() counts the
+    // submits that overflowed, so one huge write and a thousand small ones are
+    // distinguishable.
+    [[nodiscard]] std::size_t droppedBytes() const noexcept { return m_droppedBytes; }
+    [[nodiscard]] std::size_t dropEvents() const noexcept { return m_dropEvents; }
+    void resetDropCounters() noexcept { m_droppedBytes = 0; m_dropEvents = 0; }
+
     // Roughly 250 ms at 48 kHz mono s16. Past that the operator is hearing
     // their own latency, so dropping beats growing the backlog.
     static constexpr std::size_t kMaxPendingBytes = 24000;
@@ -94,6 +107,8 @@ public:
 private:
     AudioCodec m_codec;
     std::deque<std::uint8_t> m_pending;
+    std::size_t m_droppedBytes = 0;
+    std::size_t m_dropEvents = 0;
 };
 
 // ---------------------------------------------------------------------------

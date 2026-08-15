@@ -5542,6 +5542,31 @@ void IcomCivBackend::onLinkTick()
         }
         m_schedulerTimeoutsReported = schedulerStats.timeouts;
     }
+    // ---- TX PACKETISER OVERFLOW ----------------------------------------
+    //
+    // submit() drops the OLDEST bytes past its 250 ms cap, which is right for
+    // voice — latency must not grow — and destructive for a digital burst,
+    // where the oldest bytes are the preamble and the opening flag. What
+    // survives keys the radio and sounds exactly like packet while syncing on
+    // nothing, so this failure is otherwise completely silent: no error, no
+    // gap in the audio, and a transmission the operator can hear on a second
+    // receiver.
+    //
+    // Reported on the EDGE and with a running total, once per tick rather than
+    // once per drop: an oversized submit sheds thousands of bytes in one loop
+    // and a per-drop message would be unreadable. WARNING level because audio
+    // the client generated and then discarded is not a debug detail.
+    if (s.txDroppedBytes > m_lastTxDroppedBytes) {
+        qCWarning(lcIcomLink).nospace()
+            << "Icom TX packetiser DROPPED audio: +"
+            << (s.txDroppedBytes - m_lastTxDroppedBytes) << " bytes this tick, "
+            << s.txDroppedBytes << " total over " << s.txDropEvents
+            << " overflow(s); pending=" << s.txPendingBytes
+            << "/" << AetherSDR::icom::TxPacketizer::kMaxPendingBytes
+            << ". On an AX.25 burst the dropped bytes are the PREAMBLE — the "
+               "transmission will be audible and undecodable.";
+    }
+    m_lastTxDroppedBytes = s.txDroppedBytes;
 
     // ---- CI-V STALL DETECTION ------------------------------------------
     //

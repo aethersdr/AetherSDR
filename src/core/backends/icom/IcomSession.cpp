@@ -776,6 +776,9 @@ IcomSession::Stats IcomSession::stats() const
     if (m_control) s.control = m_control->counters();
     if (m_serial)  s.serial  = m_serial->counters();
     if (m_audio)   s.audio   = m_audio->counters();
+    s.txDroppedBytes = m_tx.droppedBytes();
+    s.txDropEvents   = m_tx.dropEvents();
+    s.txPendingBytes = m_tx.pendingBytes();
     return s;
 }
 

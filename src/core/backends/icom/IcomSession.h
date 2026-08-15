@@ -107,6 +107,13 @@ public:
         IcomStream::Counters control;
         IcomStream::Counters serial;
         IcomStream::Counters audio;
+        // TX packetiser overflow. Non-zero means submit() discarded audio the
+        // client had already generated, from the FRONT of the queue — which on
+        // an AX.25 burst is the preamble and opening flag. Silent otherwise:
+        // the transmission still keys and still sounds like packet.
+        std::size_t txDroppedBytes = 0;
+        std::size_t txDropEvents = 0;
+        std::size_t txPendingBytes = 0;
     };
     [[nodiscard]] Stats stats() const;
     // Credential-free RS-BA1 lease state for health and automation diagnostics.
