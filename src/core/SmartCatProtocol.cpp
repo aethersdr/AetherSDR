@@ -1428,6 +1428,11 @@ QString SmartCatProtocol::cmdUP(const QString& arg)
     // Cross-band-aware (see cmdFA): a multi-step move can leave the pan span, so
     // route through the recenter policy rather than a bare autopan=0 setFrequency.
     // Answer "?;" if the target is rejected rather than acknowledge a dropped tune.
+    // No upper bound applies here, unlike the DN underflow below: TS-2000 spells
+    // P1 as a 2-digit step count, but this parses any int, and even INT_MAX steps
+    // at the usual 100 Hz lands ~215 GHz — under isPlausibleCatTuneMhz's ceiling,
+    // which has to clear the 250 GHz top allocation. A runaway UP is refused by
+    // the radio, not here. See kMaxCatTuneMhz in RadioModel.cpp.
     if (!m_model || !m_model->tuneSliceForCat(a, a->frequency() + stepMhz * steps))
         return "?;";
     return {};

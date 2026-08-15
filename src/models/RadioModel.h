@@ -836,7 +836,8 @@ public:
     // slice, which SliceModel refuses — so the CAT protocol layer can report the
     // failure instead of acknowledging a tune that never happened. A retune to
     // the frequency the slice already holds is a no-op, not a rejection, and
-    // still returns true.
+    // still returns true — unless the slice is locked, since the lock is tested
+    // ahead of the no-op case and a locked slice always reports failure.
     bool tuneSliceForCat(SliceModel* slice, double mhz);
 
     // Is this a physically plausible CAT-tune target (MHz)? The single policy for
@@ -844,10 +845,15 @@ public:
     // too: its handlers answer the client synchronously and then marshal the tune
     // through a queued call, so tuneSliceForCat's bool is unobservable to them —
     // without this they would answer success and silently drop an out-of-range
-    // tune. Rejects non-positive, non-finite, and absurdly-high targets (a
-    // multi-step UP whose product runs away, a fat-fingered set); the radio still
-    // enforces its real band limits — this only stops the physically impossible
-    // from being broadcast via frequencyChanged before the radio rejects it.
+    // tune. Rejects non-positive, non-finite, and absurdly-high targets (an
+    // FA-5000;, a DN whose multi-step product underflows past 0, a parse that
+    // yielded NaN, a fat-fingered absurd set); the radio still enforces its real
+    // band limits — this only stops the physically impossible from being
+    // broadcast via frequencyChanged before the radio rejects it.
+    // NOT a bound on step arithmetic in the UP direction: the ceiling has to sit
+    // above the top amateur allocation, and a multi-step UP cannot reach it
+    // (2^31 steps at the usual 100 Hz is ~215 GHz), so a runaway UP is caught by
+    // the radio refusing the tune, not here.
     static bool isPlausibleCatTuneMhz(double mhz);
 
     // Effective pan geometry: the deferred pending value if one is queued,

@@ -5250,6 +5250,16 @@ target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
 target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
 
+# CAT/rigctld retune policy (#4497). The pan recenter is radio-side and the only
+# lever is the autopan=0 flag on "slice tune", which the CAT integration suites
+# cannot observe — reverting the recenter arm leaves all three of them green. So
+# the in-span predicate, the seam's rejections, and the fact that an out-of-span
+# target really reaches tuneAndRecenter are pinned here instead.
+add_executable(cat_tune_policy_test tests/cat_tune_policy_test.cpp)
+target_include_directories(cat_tune_policy_test PRIVATE src)
+target_link_libraries(cat_tune_policy_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME cat_tune_policy_test COMMAND cat_tune_policy_test)
+
 # RadioModel audio-mute model-state contract (#4771).
 add_executable(radiomodel_audio_mute_test tests/radiomodel_audio_mute_test.cpp)
 target_include_directories(radiomodel_audio_mute_test PRIVATE src)

@@ -4600,10 +4600,17 @@ bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
 
 // Sanity ceiling for a CAT-commanded tune (MHz). Well above the highest amateur
 // allocation (~250 GHz, incl. microwave/transverter), so a real tune is never
-// rejected, while a gross overflow — a multi-step UP/DN whose product runs away,
-// or a fat-fingered absurd set — is caught before it broadcasts a bogus
-// frequencyChanged. The radio enforces its actual band limits; this only rejects
-// the physically impossible.
+// rejected, while an absurd literal — a fat-fingered set, a parse that ran away
+// — is caught before it broadcasts a bogus frequencyChanged. The radio enforces
+// its actual band limits; this only rejects the physically impossible.
+//
+// Because it must clear 250 GHz, it does NOT bound step arithmetic in the UP
+// direction: the step count parses as an int, so the largest reachable UP target
+// is ~215 GHz at the usual 100 Hz step and no step count can trip this. The DN
+// direction is bounded, but by the mhz > 0 term below rather than by this
+// ceiling. Don't lower it to catch runaway steps — that would reject legitimate
+// microwave work; a step count worth bounding should be bounded where it is
+// parsed.
 static constexpr double kMaxCatTuneMhz = 1.0e6; // 1 THz
 
 bool RadioModel::isPlausibleCatTuneMhz(double mhz)

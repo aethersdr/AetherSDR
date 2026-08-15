@@ -1286,10 +1286,18 @@ void TciServer::tuneSliceAndConfirm(
     }
 
     const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
+    // The in-span test is shared with the CAT/rigctld planes (#4497):
+    // PanadapterModel::spanContainsMhz is the single definition, so the three
+    // command planes cannot drift apart on what "in span" means. This used to be
+    // open-coded here and in RigctlProtocol; the copies were identical until the
+    // predicate grew a centerKnown term, which is exactly the drift the shared
+    // definition prevents. Behaviour change from the dedupe: before the radio has
+    // reported a real centre, PanadapterModel::centerMhz is a placeholder, so a
+    // TCI retune in that window now recenters instead of trusting it — the safe
+    // direction, and it establishes the centre.
     bool inSpan = false;
-    if (PanadapterModel* pan = m_model->panadapter(slice->panId())) {
-        const double halfBandwidth = pan->bandwidthMhz() / 2.0;
-        inSpan = halfBandwidth > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBandwidth;
+    if (const PanadapterModel* pan = m_model->panadapter(slice->panId())) {
+        inSpan = pan->spanContainsMhz(mhz);
     }
 
     // TUNE THROUGH THE MODEL, ON EVERY COMMAND PLANE (#4500, #4493).
