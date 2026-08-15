@@ -801,7 +801,19 @@ void RadioModel::setupBackend(const QString& family)
                     const int room = m_txAudioRecordCapacity - m_txAudioRecordBuffer.size();
                     if (room <= 0)
                         return;
-                    const int take = std::min<int>(room, int(mono.size()) * 2);
+                    // ROUND DOWN TO A WHOLE STEREO PAIR. `room` is a raw
+                    // capacity difference and can be odd; an odd `take` writes
+                    // take/2 pairs into take slots, leaving one sample
+                    // uninitialised AND starting the next block at an odd
+                    // offset — which swaps left and right for the rest of the
+                    // capture and makes the WAV undecodable no matter how good
+                    // the audio is. Not observed in practice (the capacity and
+                    // the block sizes are both even, so `room` stayed even),
+                    // but this is a diagnostic whose whole value is that its
+                    // output can be trusted.
+                    const int take = std::min<int>(room, int(mono.size()) * 2) & ~1;
+                    if (take <= 0)
+                        return;
                     const int oldSize = m_txAudioRecordBuffer.size();
                     m_txAudioRecordBuffer.resize(oldSize + take);
                     qint16* dst = m_txAudioRecordBuffer.data() + oldSize;
