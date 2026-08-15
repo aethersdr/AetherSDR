@@ -18,7 +18,6 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QStringList>
-#include <QTest>
 #include <cstdio>
 
 using namespace AetherSDR;
