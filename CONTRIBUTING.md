@@ -96,9 +96,9 @@ GitHub on every tier — your own PR always needs review from someone else.
 
 | Tier | Paths | Who can approve |
 |---|---|---|
-| **Source, tests & documentation (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** — plus `tests/`, `docs/`, and `resources/` **in full, markdown included** (so `docs/DEVELOPER-GUIDE.md` and the in-app help text under `resources/help/` are both here) | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking) |
-| **Infrastructure (Tier 2)** | `*.md` *outside* `docs/`, `resources/`, and `tests/` (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, `scripts/*.md`, and the AI-instruction files `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `.github/copilot-instructions.md`), `.claude/commands/`, `CMakeLists.txt`, `THIRD_PARTY_LICENSES`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat, @rfoust) |
-| **Maintainer-only (Tier 1)** | Governance docs (`CONSTITUTION.md` **and its canonical copy `.specify/memory/constitution.md`**, `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`), security/compliance (`SECURITY*`, `.github/CODEOWNERS`, `.github/codeql/`, `docs/RELEASE-SIGNING-KEY.pub.asc`), and the workflows that hold release secrets, feed bytes into a signed artifact, or form part of the CodeQL scanner's trust chain (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`) | `@aethersdr/maintainers` (@ten9876) |
+| **Source, tests & documentation (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** — plus `tests/`, `docs/`, and `resources/`, **markdown included** (so `docs/DEVELOPER-GUIDE.md` and the in-app help text under `resources/help/` are both here). Two files under `docs/` are carved back to Tier 1 below | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking) |
+| **Infrastructure (Tier 2)** | `*.md` *outside* `docs/`, `resources/`, and `tests/` (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, `plugins/*/README.md`, and the AI-instruction files `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `.github/copilot-instructions.md`), `.claude/commands/`, `CMakeLists.txt`, `THIRD_PARTY_LICENSES`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat, @rfoust) |
+| **Maintainer-only (Tier 1)** | Governance docs (`CONSTITUTION.md` **and its canonical copy `.specify/memory/constitution.md`**, `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`), security/compliance (`SECURITY*`, `.github/CODEOWNERS`, `.github/codeql/`, `docs/RELEASE-SIGNING-KEY.pub.asc` and the `docs/VERIFYING-RELEASES.md` that publishes its fingerprint), and the workflows that hold release secrets, feed bytes into a signed artifact, or form part of the CodeQL scanner's trust chain (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`) | `@aethersdr/maintainers` (@ten9876) |
 
 The maintainer-only tier is deliberately narrow: it covers the rules of the
 project and the paths that can compromise a signed release. Everything that
@@ -119,6 +119,12 @@ resolves by *last match*, not by specificity. The `docs/`, `resources/`, and
 above it and every `.md` under those directories quietly falls back to Tier 2.
 `CMakeLists.txt` has the same no-slash behaviour, which is why build config
 still reaches Tier 2 wherever it lives.
+
+A trailing slash does not anchor a pattern either: only a *leading* slash
+(`/docs/`) pins one to the repository root. So `docs/` and `tests/` also claim
+`third_party/crdv/docs/` and `third_party/crdv/tests/` — intended, since a
+vendored tree's own docs and tests belong with its code, which is already
+Tier 3.
 
 `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` are Tier 2 because their content is
 operational: architecture, build steps, style guide, protocol notes. The policy

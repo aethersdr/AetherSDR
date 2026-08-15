@@ -53,7 +53,7 @@ Current domain areas:
 
 | Area | Path(s) | Notes |
 |------|---------|-------|
-| Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides |
+| Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides. Spans two CODEOWNERS tiers: `docs/` and `resources/help/` are Tier 3, bare `*.md` is Tier 2 |
 | Build / CI | `CMakeLists.txt`, `.github/` | Build system, CI pipelines |
 | Plugins | `plugins/` | Stream Deck, TCI plugins |
 | Platform: macOS | `src/platform/macos/` | macOS-specific code only |
@@ -141,14 +141,16 @@ three tiers, broadest → most restrictive:
 
 - **Tier 3 — source code, tests, and documentation** (`@aethersdr/reviewers`):
   all of `src/` — including the whole of `MainWindow` — plus `tests/`,
-  `docs/`, and `resources/` in full (markdown included, so `resources/help/`
-  is here too), plus anything not enumerated below. The broad reviewer roster;
+  `docs/`, and `resources/`, markdown included (so `resources/help/` is here
+  too), plus anything not enumerated below. The broad reviewer roster;
   routine review of source, its tests, and its documentation all benefit from
   more eyes. `tests/` is here because it *is* source — ~90k lines of C++ —
-  and because most code changes touch `src/` and `tests/` together.
+  and because most code changes touch `src/` and `tests/` together. Two files
+  under `docs/` are carved back to Tier 1 below, so "all of `docs/`" is the
+  rule and not quite the whole story.
 - **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `*.md` outside
   those directories (`README.md`, `CHANGELOG.md`, `ROADMAP.md`,
-  `scripts/*.md`, …), `CMakeLists.txt`, the routine CI
+  `plugins/*/README.md`, …), `CMakeLists.txt`, the routine CI
   workflows under `.github/workflows/`, and the AI-instruction files
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
   `.github/copilot-instructions.md`, `.claude/commands/`).
@@ -157,7 +159,8 @@ three tiers, broadest → most restrictive:
   `.specify/memory/constitution.md` and the root `CONSTITUTION.md` mirror —
   plus `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`),
   the security/compliance paths (`SECURITY*`, `.github/CODEOWNERS` itself, the
-  CodeQL config, the release signing key), and the workflows that hold release
+  CodeQL config, the release signing key and the `docs/VERIFYING-RELEASES.md`
+  that publishes its fingerprint), and the workflows that hold release
   secrets or feed bytes into a signed artifact — which includes the CI-image
   build, since the CodeQL scan runs inside that image.
 
@@ -168,11 +171,17 @@ not restated here: the exact workflow filenames, which change as workflows are
 added and renamed.
 
 One subtlety worth knowing before editing `.github/CODEOWNERS`: a pattern with
-no slash matches at **any depth**, so the `*.md` glob reaches markdown inside
-every directory. The `docs/`, `resources/`, and `tests/` lines therefore have
-to come *after* it in the file for those directories' markdown to stay at
-Tier 3 — CODEOWNERS resolves by last match, not by specificity. `CMakeLists.txt`
-behaves the same way, which is noted inline where it appears.
+no slash (`*.md`, `CMakeLists.txt`) — **or with only a trailing one**
+(`docs/`, `tests/`) — matches at **any depth**. Only a *leading* slash
+(`/docs/`) anchors a pattern to the repository root.
+
+Two consequences. The `*.md` glob reaches markdown inside every directory, so
+the `docs/`, `resources/`, and `tests/` lines have to come *after* it in the
+file for those directories' markdown to stay at Tier 3 — CODEOWNERS resolves by
+last match, not by specificity. And those three lines are themselves
+unanchored, so they also claim `third_party/crdv/docs/` and
+`third_party/crdv/tests/`. That is intended: a vendored tree's own docs and
+tests belong with its code, which is already Tier 3.
 
 Tier 1 is deliberately narrow: a path belongs there only if a wrong change to
 it would alter **who decides things** or **what gets signed**. Documentation
