@@ -1854,6 +1854,9 @@ AudioEngine::AudioEngine(QObject* parent)
     m_opusTxPaceTimer->setInterval(10);
     m_opusTxPaceClock.start();
     connect(m_opusTxPaceTimer, &QTimer::timeout, this, [this]() {
+        // The pacer queue is audio-thread-owned like the TX accumulators; an
+        // unkey requests its flush and this is where it lands (#5004).
+        applyPendingAudioBufferFlush();
         OpusTxPacer::DrainResult drain =
             m_opusTxPacer.takeDue(m_opusTxPaceClock.elapsed(),
                                   m_txPacketCount);
@@ -1872,6 +1875,9 @@ AudioEngine::AudioEngine(QObject* parent)
     m_rxTimer->setTimerType(Qt::PreciseTimer);
     m_rxTimer->setInterval(10);
     connect(m_rxTimer, &QTimer::timeout, this, [this]() {
+        // Before the early return: a RADE-exit flush must land even while the
+        // sink is stopped, or m_radeRxBuffer keeps stale speech (#5004).
+        applyPendingAudioBufferFlush();
         if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen() || m_audioSink->state() == QAudio::StoppedState) return;
 
         // Cap buffer to bound latency. Default 100ms, user-adjustable for
@@ -8051,6 +8057,8 @@ void AudioEngine::onCwRecordPump()
 
 void AudioEngine::onTxAudioReady()
 {
+    applyPendingAudioBufferFlush();  // #5004 — drop unkey/route residue first
+
     // If a TCI client is actively feeding TX audio (binary frames via
     // TciServer → feedDaxTxAudio), step the local mic capture aside.
     // Both producers emit txPacketReady; the higher-rate mic stream would
@@ -8570,8 +8578,7 @@ void AudioEngine::setAllowBluetoothTelephonyOutput(bool on)
 
 void AudioEngine::setRadeMode(bool on)
 {
-    if (m_radeMode == on) return;
-    m_radeMode = on;
+    if (m_radeMode.exchange(on) == on) return;
     // RADE TX: onTxAudioReady() emits txRawPcmReady (float32) then returns
     // early — the Opus voice TX path never runs. RADEEngine receives the
     // raw PCM, encodes it to a modem waveform, and emits it via
@@ -8583,9 +8590,11 @@ void AudioEngine::setRadeMode(bool on)
     // use the physical mic and discard every dax_tx packet, producing no
     // TX waveform. feedDaxTxAudio/m_daxTxUseRadioRoute are irrelevant:
     // RADE bypasses feedDaxTxAudio entirely.
-    if (!on)
-        m_radeRxBuffer.clear();
-    clearTxAccumulators();
+    // MainWindow drives this from the GUI thread while the audio thread is
+    // packetizing TX and draining m_radeRxBuffer into QAudioSink, so both drops
+    // go through the deferred flush rather than freeing under the reader (#5004).
+    requestAudioBufferFlush(FlushTxAccumulators
+                            | (on ? FlushNone : FlushRadeRxBuffer));
 }
 
 void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
@@ -8605,6 +8614,8 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     // the gate lives with the consumer. m_transmitting is decoded from Flex
     // interlock status a host-modulating radio never sends, so testing it would
     // discard everything.
+    applyPendingAudioBufferFlush();  // #5004 — drop unkey/route residue first
+
     if (m_hostModulation) {
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
                                /*forceRadioDaxRoute=*/true);
@@ -8647,17 +8658,64 @@ void AudioEngine::setDaxTxMode(bool on)
     }
 }
 
-void AudioEngine::setTransmitting(bool tx)
+void AudioEngine::flushAudioBuffersNow(int what)
 {
-    if (m_transmitting == tx) return;
-    m_transmitting = tx;
-
-    if (!tx) {
-        // On unkey: drop any partial packet residue so next burst starts cleanly.
+    if (what & FlushTxAccumulators) {
         m_txAccumulator.clear();
         m_txFloatAccumulator.clear();
         m_daxPreTxBuffer.clear();
+    }
+    if (what & FlushOpusPacer)
         m_opusTxPacer.clear();
+    if (what & FlushDaxRouteState) {
+        m_daxRadioTxChannelState.reset();
+        m_lastDaxRadioChannelLog.invalidate();
+    }
+    if (what & FlushRadeRxBuffer)
+        m_radeRxBuffer.clear();
+}
+
+void AudioEngine::requestAudioBufferFlush(int what)
+{
+    if (what == FlushNone) return;
+
+    // Same shape as setRadioTransmitting(): do it inline when we already own the
+    // thread, defer otherwise. Deferring rather than posting a lambda keeps the
+    // flush ordered ahead of the audio the engine is about to packetize, and
+    // costs one atomic instead of an event-loop round trip on every unkey.
+    if (thread() == QThread::currentThread()) {
+        flushAudioBuffersNow(what);
+        return;
+    }
+    m_pendingBufferFlush.fetch_or(what, std::memory_order_acq_rel);
+}
+
+void AudioEngine::applyPendingAudioBufferFlush()
+{
+    const int what = m_pendingBufferFlush.exchange(FlushNone, std::memory_order_acq_rel);
+    if (what != FlushNone)
+        flushAudioBuffersNow(what);
+}
+
+void AudioEngine::clearTxAccumulators()
+{
+    requestAudioBufferFlush(FlushTxAccumulators);
+}
+
+void AudioEngine::setTransmitting(bool tx)
+{
+    // The TX gate flips inline and immediately — MainWindow drives this straight
+    // off the local MOX edge to avoid audible keying lag, and m_transmitting is
+    // atomic precisely so that stays safe from the GUI thread.
+    if (m_transmitting.exchange(tx) == tx) return;
+
+    if (!tx) {
+        // On unkey: drop any partial packet residue so next burst starts cleanly.
+        // Deferred, not inline: the buffers below belong to the audio thread,
+        // which is very likely mid-packetize on exactly this edge (JTDX "Halt Tx"
+        // aborts with a queued backlog still draining). Freeing them from here
+        // was the access violation reported inside VCRUNTIME140's memcpy (#5004).
+        requestAudioBufferFlush(FlushTxAccumulators | FlushOpusPacer);
     }
 }
 
@@ -8709,13 +8767,14 @@ void AudioEngine::setRadioTransmitting(bool tx)
 
 void AudioEngine::setDaxTxUseRadioRoute(bool on)
 {
-    if (m_daxTxUseRadioRoute == on) return;
-    m_daxTxUseRadioRoute = on;
+    if (m_daxTxUseRadioRoute.exchange(on) == on) return;
     // Switching route changes payload format; drop partial buffered samples.
-    m_txFloatAccumulator.clear();
-    m_daxPreTxBuffer.clear();
-    m_daxRadioTxChannelState.reset();
-    m_lastDaxRadioChannelLog.invalidate();
+    // Deferred for the same reason as the unkey flush — TciServer::prepareTxAudio()
+    // calls this from the GUI thread while the audio thread packetizes (#5004).
+    // FlushTxAccumulators additionally drops m_txAccumulator, which the old
+    // inline clear left alone; that buffer only feeds the uncompressed mic TX
+    // path the radio never selects (it forces Opus), so the widening is inert.
+    requestAudioBufferFlush(FlushTxAccumulators | FlushDaxRouteState);
     qCDebug(lcDax) << "AudioEngine: DAX TX route"
                    << (on ? "radio-dax pcc=0x0123" : "float32 pcc=0x03e3")
                    << "stream=0x" + QString::number(m_txStreamId, 16);
@@ -8736,6 +8795,8 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
                                          bool forceRadioDaxRoute)
 {
+    applyPendingAudioBufferFlush();  // #5004 — drop unkey/route residue first
+
     if (inPcm.isEmpty()) return;
     // A host-modulating backend (HL2) has no Flex TX stream id and never will —
     // its modulator runs here, fed from the final-monitor tap below. Gating this
@@ -9014,6 +9075,8 @@ void AudioEngine::pumpWsprBeacon()
 
 void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
 {
+    applyPendingAudioBufferFlush();  // #5004 — drop RADE-exit residue first
+
     if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen()) return;
 
     // Decoded RADE speech goes into its own output-rate buffer. The drain

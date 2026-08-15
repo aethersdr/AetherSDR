@@ -211,7 +211,10 @@ public:
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
     void setRadioTransmitting(bool tx);  // raw interlock state (regardless of TX ownership)
-    void clearTxAccumulators() { m_txAccumulator.clear(); m_txFloatAccumulator.clear(); m_daxPreTxBuffer.clear(); }
+    // Safe to call from any thread (#5004): off the audio thread this only
+    // records a flush request; the audio thread performs the actual clear
+    // before it next appends to the buffers.
+    void clearTxAccumulators();
     Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
@@ -696,6 +699,26 @@ private slots:
     void onCwRecordPump();
 
 private:
+    // What a deferred audio-buffer flush should drop (#5004). Values are OR-ed
+    // into m_pendingBufferFlush by requestAudioBufferFlush() and consumed by
+    // applyPendingAudioBufferFlush() on the audio thread.
+    enum AudioFlushRequest : int {
+        FlushNone           = 0,
+        FlushTxAccumulators = 1 << 0,  // m_txAccumulator/m_txFloatAccumulator/m_daxPreTxBuffer
+        FlushOpusPacer      = 1 << 1,  // m_opusTxPacer queue
+        FlushDaxRouteState  = 1 << 2,  // DAX radio-route channel/log state
+        FlushRadeRxBuffer   = 1 << 3,  // m_radeRxBuffer (decoded RADE speech)
+    };
+
+    // Clear the buffers now. Precondition: running on the AudioEngine thread.
+    void flushAudioBuffersNow(int what);
+    // Clear now if we are on the audio thread, otherwise defer to it (#5004).
+    void requestAudioBufferFlush(int what);
+    // Consume any deferred flush. Called at the top of every audio-thread entry
+    // point that touches these buffers, so the drop happens before new samples
+    // are appended — same observable ordering as the old inline clear().
+    void applyPendingAudioBufferFlush();
+
     enum class RxAudioBuffer {
         Main,
         KiwiSdr,
@@ -928,6 +951,16 @@ private:
     // write path.
     bool          m_hostModulation{false};
     quint8        m_txPacketCount{0};    // 4-bit, mod 16
+    // Audio-buffer ownership (#5004): these buffers, m_opusTxPacer below, and
+    // m_radeRxBuffer are touched ONLY on the AudioEngine thread — mic readyRead,
+    // the queued feedDaxTxAudio/sendModemTxAudio/feedDecodedSpeech slots, the
+    // Opus and RX pace timers, and start/stopTxStream, which callers always
+    // invoke on this thread. They are plain containers with no mutex, so a
+    // clear() from another thread frees the block while the audio thread is
+    // mid-append/memcpy/remove — the access violation inside VCRUNTIME140's
+    // memcpy that JTDX "Halt Tx" reproduced. Other threads must never clear
+    // them directly; they call requestAudioBufferFlush(), and the audio thread
+    // applies it at applyPendingAudioBufferFlush().
     QByteArray    m_txAccumulator;       // accumulate PCM until 128 stereo pairs
     QByteArray    m_voxAccumulator;     // accumulate PCM for VOX/met_in_rx stream
     QByteArray    m_txFloatAccumulator;  // accumulate float32 PCM for RADE modem TX
@@ -954,7 +987,11 @@ private:
     std::atomic<bool>  m_opusTxEnabled{false}; // Opus TX encoding for SmartLink
     std::unique_ptr<class OpusCodec> m_opusTxCodec; // lazy-init on first TX with Opus
     QByteArray    m_opusTxAccumulator;  // accumulate stereo samples for Opus frame
-    OpusTxPacer   m_opusTxPacer;
+    OpusTxPacer   m_opusTxPacer;      // audio thread only — see #5004 note above
+    // Deferred buffer flush requested from a non-audio thread (#5004).
+    // Bitmask of Flush* so a route change and an unkey landing in the same
+    // window both survive; the audio thread consumes it with a single exchange.
+    std::atomic<int> m_pendingBufferFlush{FlushNone};
     QTimer*       m_opusTxPaceTimer{nullptr};
     QElapsedTimer m_opusTxPaceClock;
     QElapsedTimer m_opusTxDropLogTimer;
@@ -1236,6 +1273,7 @@ private:
     QByteArray    m_rxOutputBuffer;  // post-DSP speaker audio at output device rate
     QByteArray    m_kiwiSdrOutputBuffer;  // post-DSP Kiwi speaker audio at output device rate
     QByteArray    m_radeRxBuffer;  // decoded RADE speech at output device rate
+                                   // audio thread only — see #5004 note above
     std::atomic<bool> m_kiwiSdrAudioEnabled{false};
     bool m_legacyKiwiDspInitializationPending{false};
     QFutureSynchronizer<void> m_dspInitializationTasks;
