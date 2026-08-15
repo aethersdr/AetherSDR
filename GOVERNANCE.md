@@ -139,11 +139,16 @@ PR review is gated by [`.github/CODEOWNERS`](.github/CODEOWNERS), which is the
 authoritative source of who must approve what (last-match-wins). It defines
 three tiers, broadest → most restrictive:
 
-- **Tier 3 — source code** (`@aethersdr/reviewers`): all of `src/` — including
-  the whole of `MainWindow` — plus anything not enumerated below. The broad
-  reviewer roster; routine source review benefits from more eyes.
-- **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `docs/`, `*.md`
-  (including `ROADMAP.md`), `tests/`, `CMakeLists.txt`, the routine CI
+- **Tier 3 — source code, tests, and documentation** (`@aethersdr/reviewers`):
+  all of `src/` — including the whole of `MainWindow` — plus `tests/`,
+  `docs/`, and `resources/` in full (markdown included, so `resources/help/`
+  is here too), plus anything not enumerated below. The broad reviewer roster;
+  routine review of source, its tests, and its documentation all benefit from
+  more eyes. `tests/` is here because it *is* source — ~90k lines of C++ —
+  and because most code changes touch `src/` and `tests/` together.
+- **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `*.md` outside
+  those directories (`README.md`, `CHANGELOG.md`, `ROADMAP.md`,
+  `scripts/*.md`, …), `CMakeLists.txt`, the routine CI
   workflows under `.github/workflows/`, and the AI-instruction files
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
   `.github/copilot-instructions.md`, `.claude/commands/`).
@@ -161,6 +166,13 @@ and wins on any disagreement; the path-level breakdown for contributors is the
 table in [`CONTRIBUTING.md`](CONTRIBUTING.md#reviews-and-merging). Deliberately
 not restated here: the exact workflow filenames, which change as workflows are
 added and renamed.
+
+One subtlety worth knowing before editing `.github/CODEOWNERS`: a pattern with
+no slash matches at **any depth**, so the `*.md` glob reaches markdown inside
+every directory. The `docs/`, `resources/`, and `tests/` lines therefore have
+to come *after* it in the file for those directories' markdown to stay at
+Tier 3 — CODEOWNERS resolves by last match, not by specificity. `CMakeLists.txt`
+behaves the same way, which is noted inline where it appears.
 
 Tier 1 is deliberately narrow: a path belongs there only if a wrong change to
 it would alter **who decides things** or **what gets signed**. Documentation

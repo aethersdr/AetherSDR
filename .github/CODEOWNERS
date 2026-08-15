@@ -8,7 +8,13 @@
 #
 #   Tier 3 (source code, broad default)   — top of file (the `*` line)
 #   Tier 2 (project infrastructure)       — middle (specific paths)
+#   Tier 3 (documentation directories)    — just below the *.md glob
 #   Tier 1 (governance, security)         — bottom (most specific paths)
+#
+# The one place that layout is not strictly broad → specific is the
+# documentation-directory block: docs/ and resources/ are Tier 3, but their
+# lines have to sit BELOW Tier 2's `*.md` glob rather than up with the `*`
+# default. See the Tier 3 note below for why.
 #
 # Tier 1 — @aethersdr/maintainers (currently: @ten9876).
 #         The RULES OF THE PROJECT and the paths that can compromise a
@@ -26,10 +32,12 @@
 #         Project infrastructure: CI/CD configuration — the ROUTINE
 #         workflow definitions (.github/workflows/ except the sensitive
 #         ones carved to Tier 1), dependabot, docker, issue templates —
-#         plus documentation (docs/, *.md catchall, including
-#         README/CHANGELOG/SUPPORT/ROADMAP which fall through here from
-#         the *.md glob), tests, build configuration (CMakeLists.txt),
-#         and legal/compliance tracking (THIRD_PARTY_LICENSES).
+#         plus the *.md catchall for markdown that is NOT in one of the
+#         directories reclaimed to Tier 3 below (README/CHANGELOG/
+#         SUPPORT/ROADMAP and the AI-instruction files fall through
+#         here), build configuration (CMakeLists.txt), and
+#         legal/compliance tracking (THIRD_PARTY_LICENSES).
+#         NOT tests/ — that is source code and sits at Tier 3.
 #         ALSO the AI-instruction files (AGENTS.md, CLAUDE.md,
 #         GEMINI.md, .github/copilot-instructions.md, .claude/commands/).
 #         Those are operational documentation — architecture, build
@@ -45,14 +53,20 @@
 #         AetherSDR source code and anything else not enumerated
 #         above (src/ — including the whole of MainWindow —
 #         third_party/, plugins/, hal-plugin/, resources/, packaging/,
-#         scripts/). Broadest collaborator roster because routine
-#         source review benefits from more eyes.
-#         CAUTION: *.md has no slash, so it matches at ANY depth — a
-#         markdown file inside a Tier 3 directory (resources/help/*.md,
-#         scripts/*.md, …) is Tier 2, not Tier 3. That is intended
-#         (documentation is documentation wherever it lives) but it does
-#         mean "everything under resources/" above is shorthand, not
-#         literal.
+#         scripts/), PLUS three directories claimed in full, markdown
+#         included: docs/, resources/, and tests/. Broadest collaborator
+#         roster because routine source review benefits from more eyes —
+#         and so does routine review of the tests and documentation that
+#         travel with that source.
+#         CAUTION: *.md has no slash, so it matches at ANY depth. That
+#         is why the docs/ and resources/ lines are placed BELOW Tier 2's
+#         *.md glob instead of up here with the `*` default: put them
+#         above it and last-match-wins pulls every markdown file under
+#         them (resources/help/*.md, docs/PR-WORKFLOW.md, …) straight
+#         back to Tier 2, silently, while the directory around them
+#         stays Tier 3. Markdown OUTSIDE those two directories still
+#         matches *.md and is still Tier 2 — README.md, CHANGELOG.md,
+#         ROADMAP.md, AGENTS.md, scripts/*.md.
 #
 # Team rosters are managed in the GitHub org settings:
 #   https://github.com/orgs/aethersdr/teams
@@ -77,13 +91,45 @@
 *                            @aethersdr/reviewers
 
 # ── Tier 2: project infrastructure — narrower owner set than Tier 3 ────────
-# CI/CD configuration (workflows + tooling), documentation, tests, build config.
+# CI/CD configuration (workflows + tooling), stray markdown, tests, build config.
 # (The CodeQL config stays Tier 1 under Security below — a security control.)
 
-# Documentation & tests
-tests/                       @aethersdr/infrastructure
-docs/                        @aethersdr/infrastructure
+# Markdown that is not in one of the directories reclaimed to Tier 3 below.
 *.md                         @aethersdr/infrastructure
+
+# ── Tier 3: whole directories — reclaimed from the *.md glob ──────────────
+# Each of these directories goes to the broad reviewer roster in full,
+# markdown included. ORDER IS LOAD-BEARING: they must stay BELOW the *.md
+# line above. *.md has no slash, so it matches at any depth; move these up
+# and every .md under them silently reverts to Tier 2 while the directory
+# around it stays Tier 3.
+#
+# docs/ and resources/ — documentation. A guide under docs/ or a help topic
+# under resources/help/ is best reviewed by the people who review the code
+# it describes, and that is the broader roster. resources/ already landed on
+# @aethersdr/reviewers via the `*` default for everything that is not
+# markdown, so its line changes exactly one thing: resources/help/*.md, the
+# in-app help text.
+#
+# tests/ — source code, not infrastructure: ~90k lines of C++ across 305
+# test TUs, against 3 files of actual harness glue. It sat at Tier 2 from
+# the original CODEOWNERS (#2029), where Tier 2 meant "mechanical/safe
+# paths, the bot may also approve" — a LOW-RISK, widen-approval framing.
+# #3053 rebuilt the tiers and Tier 2 came to mean "narrower roster, because
+# infrastructure needs deeper repo context than routine source review",
+# which is close to the opposite; tests/ was carried along rather than
+# re-argued. A unit test for the HL2 decoder does not need deeper context
+# than the decoder — it needs context on that subsystem, which is what the
+# Tier 3 roster has. 182 of the last 300 commits touched src/ and tests/
+# together, so the old split cut through the middle of most code PRs.
+# Nobody loses authority: @aethersdr/infrastructure is a strict subset of
+# @aethersdr/reviewers, so this only ADDS eligible approvers.
+#
+# docs/RELEASE-SIGNING-KEY.pub.asc is carved back to Tier 1 further below —
+# it lives under docs/ but it is a signing key, not documentation.
+docs/                        @aethersdr/reviewers
+resources/                   @aethersdr/reviewers
+tests/                       @aethersdr/reviewers
 
 # AI-instruction files. AGENTS.md / CLAUDE.md / GEMINI.md /
 # .github/copilot-instructions.md all land here via the *.md glob above —
@@ -111,7 +157,15 @@ docs/                        @aethersdr/infrastructure
 .github/docker/              @aethersdr/infrastructure
 .github/ISSUE_TEMPLATE/      @aethersdr/infrastructure
 
-# Build configuration
+# Build configuration.
+# NOTE the same at-any-depth behaviour as *.md: `CMakeLists.txt` has no slash,
+# so it matches a CMakeLists.txt in ANY directory, and it sits below the Tier 3
+# block above. There is no CMakeLists.txt under tests/ today — every test is
+# registered in this root file — but if test registration is ever split out
+# into tests/CMakeLists.txt, this line silently claims it for Tier 2 and undoes
+# half the point of putting tests/ at Tier 3. Add an explicit
+# `tests/CMakeLists.txt @aethersdr/reviewers` line below this one if that split
+# happens.
 CMakeLists.txt               @aethersdr/infrastructure
 THIRD_PARTY_LICENSES         @aethersdr/infrastructure
 
