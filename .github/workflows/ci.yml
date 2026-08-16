@@ -64,14 +64,22 @@ jobs:
       # This is the reversible first step; read the `cleanups` counter and the
       # hit rate in the "ccache stats" step before going further.
       #
-      # Budget check at 2000M, against the repo's 10 GB cache allowance:
-      #   Linux    ~1.1 GB entry x 2 retained  = 2.2 GB
-      #   Windows  ~0.32 GB x 2                = 0.6 GB
-      #   macOS    ~0.14 GB x 2                = 0.3 GB
-      #   deps (Qt 1.3 GB, DeepFilterNet, FFTW, qtkeychain)
-      #                                        ~ 2.0 GB
-      #                                        -------
-      #                                        ~ 5.1 GB
+      # Budget check at 2000M, against the repo's 10 GB cache allowance. Entry
+      # sizes are MEASURED on refs/heads/main, not projected, except Linux which
+      # is extrapolated from the 55% compression ratio at the new cap:
+      #   Linux    ~1.1 GiB entry x 2 retained  = 2.2 GiB
+      #   Windows  ~0.38 GiB x 2                = 0.8 GiB
+      #   macOS    ~0.18 GiB x 2                = 0.4 GiB
+      #   canary   ~0.57 GiB x 2                = 1.1 GiB
+      #   deps (Qt, DeepFilterNet, FFTW, qtkeychain; 9 entries)
+      #                                         ~ 1.8 GiB
+      #                                         --------
+      #                                         ~ 6.3 GiB
+      # The canary line is system-libs-canary.yml's cache, which an earlier
+      # revision of this table omitted — the same omission that left it out of
+      # cache-cleanup.yml's PREFIXES. Counting it moves the projection from
+      # ~5.1 to ~6.3 GiB: still comfortably inside the allowance, with less
+      # headroom than the earlier figure implied.
       # See "Compiler-cache strategy" at the bottom of this file for why only
       # main writes an entry, and cache-cleanup.yml for what prunes the rest.
       CCACHE_MAXSIZE: 2000M
@@ -973,12 +981,13 @@ jobs:
 # - Do not add an exact-match key to the RESTORE steps. The prefix fallback is
 #   the mechanism; an exact key that never matches just adds a lookup.
 # - SUPERSEDED main entries are swept by .github/workflows/cache-cleanup.yml.
-#   This matters because the 7-day retention is NOT configurable: restores
+#   This matters because we are on the default seven-day retention: restores
 #   resolve to the most recent match, so run N's cache is unreachable the moment
 #   run N+1 saves, and an unreachable entry is never accessed again — so nothing
 #   refreshes its LRU position and nothing deletes it. Left alone, main writes
-#   ~1.0 GiB x ~9.2 runs/day and would pin the repo at its allowance on its own.
-#   That job prunes each prefix to the newest 2.
+#   ~1.66 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
+#   own. That job prunes each prefix to the newest 2. (Retention is itself a
+#   configurable policy as of 2025-11; see cache-cleanup.yml's header.)
 # - IF YOU ADD A run_id-KEYED COMPILER CACHE IN ANY WORKFLOW, add its key prefix
 #   to that job's PREFIXES list. Note "any workflow", not "this file": the first
 #   version of that list was written as "one prefix per compiler cache in

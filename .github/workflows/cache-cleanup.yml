@@ -3,10 +3,18 @@ name: Cache cleanup
 # Deletes Actions cache entries that nothing can read any more, keeping the
 # repository inside its 10 GB allowance.
 #
-# Background: caches are scoped by ref and evicted by LAST ACCESS date, and
-# GitHub removes anything not accessed in over 7 days. That 7-day retention is
-# NOT configurable, so an entry that stops being read still occupies budget for
-# up to a week unless something deletes it.
+# Background: caches are scoped by ref and evicted by LAST ACCESS date, and this
+# repository is on the default seven-day retention — anything not accessed for
+# seven days is removed. So an entry that stops being read still occupies budget
+# for up to a week unless something deletes it.
+#
+# Retention IS a policy, not a platform constant: the same 2025-11-20 changelog
+# that made the size limit configurable introduced a retention limit (days)
+# alongside it, manageable by enterprise/org/repo admins in Actions settings.
+# Whether it can be lowered on this org's Free plan is undocumented and the API
+# does not expose it, so this workflow assumes the default and does the job in
+# code. If retention is ever lowered, revisit whether prune-main is still
+# earning its keep — a short retention does much of the same work for free.
 #
 # One cause is handled here — SUPERSEDED main entries. ci.yml saves a compiler
 # cache on every green main build, keyed on run_id because actions/cache entries
@@ -15,10 +23,16 @@ name: Cache cleanup
 # unreachable it is never accessed again, so nothing refreshes its LRU position
 # and nothing deletes it.
 #
-# That adds up faster than it looks: main runs ~9.2x/day and each writes ~1.0 GiB
-# across the three platforms, so unmanaged this alone accumulates ~9 GiB/day and
-# would pin the repo at its allowance holding roughly a day of caches nothing
-# will ever read.
+# That adds up faster than it looks. Measured entry sizes on refs/heads/main,
+# with the Linux cap raised to 2000M:
+#
+#   ccache-linux-build-   ~1.1 GiB      sccache-windows-   ~0.38 GiB
+#   ccache-ccache-macos-  ~0.18 GiB     ccache-sid-canary- ~0.57 GiB
+#
+# so a main CI run writes ~1.66 GiB across its three platforms, ~9.2x/day —
+# ~15 GiB/day of entries that are unreachable within the hour. Unmanaged, that
+# pins the repo at its allowance on its own, holding well under a day of caches
+# nothing will ever read.
 #
 # NOT handled here: caches on refs/pull/N/merge, which become unreadable when
 # the PR closes. A job for those was written and pulled back out before merge —
@@ -98,6 +112,11 @@ jobs:
             # an empty array and this job reports "nothing to prune" and exits
             # green — the exact silent-success mode this workflow exists to stop.
             # Assigning from a command substitution keeps `set -e` in play.
+            # --limit 100 is per prefix and only ever sees the newest 100. A
+            # sustained outage of this job could therefore strand entries older
+            # than that — the seven-day retention reaps them anyway, so this is a
+            # slower cleanup rather than a leak, but it is why the limit is
+            # generous relative to the ~2 entries a healthy run finds.
             listing=$(
               gh cache list --ref refs/heads/main --key "$prefix" \
                 --limit 100 --sort created_at --order desc \
