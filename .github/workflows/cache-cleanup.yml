@@ -179,8 +179,15 @@ jobs:
   # The obvious trigger cannot work. For a `pull_request` event whose head is a
   # fork, GitHub issues a read-only GITHUB_TOKEN and a `permissions:` block can
   # only lower that ceiling, never raise it — so actions:write is not granted,
-  # `gh cache delete` returns 403, and the job fails. 22 of 25 open PRs here are
-  # from forks, so that is the common case, not an edge.
+  # `gh cache delete` returns 403, and the job fails.
+  #
+  # The population that matters is CLOSED PRs, since that is what a
+  # `types: [closed]` trigger fires on: ~70% of recently closed PRs here came
+  # from forks (42 of 60 over a wide window, 8 of the last 20). The 22-of-25
+  # figure quoted during review counts OPEN PRs — a different and less
+  # applicable measure, noted because it is the one in #5008's history. Either
+  # way this is the common case, and the job would have gone red on every one of
+  # them while deleting nothing.
   #
   # `pull_request_target` would get a writable token and is the documented-safe
   # shape for a job that checks nothing out. It is deliberately not used: a
