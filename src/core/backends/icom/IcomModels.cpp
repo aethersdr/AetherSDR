@@ -156,6 +156,22 @@ constexpr IcomModel kUnknown{
     /*hasVfoModeCommand*/ false,
 };
 
+constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
+    {0x00, "MIC",     ModSourceMic},
+    {0x01, "USB",     ModSourceUsb},
+    {0x02, "MIC+USB", ModSourceMic | ModSourceUsb},
+    {0x03, "WLAN",    ModSourceNetwork},
+}};
+
+constexpr std::array<ModulationInputChoice, 6> kIc7300Mk2ModInputs{{
+    {0x00, "MIC",     ModSourceMic},
+    {0x01, "USB",     ModSourceUsb},
+    {0x02, "ACC",     ModSourceAccessory},
+    {0x03, "MIC+USB", ModSourceMic | ModSourceUsb},
+    {0x04, "MIC+ACC", ModSourceMic | ModSourceAccessory},
+    {0x05, "LAN",     ModSourceNetwork},
+}};
+
 }  // namespace
 
 const IcomModel* modelForCivAddress(std::uint8_t addr)
@@ -193,6 +209,23 @@ const IcomModel* modelForName(std::string_view name)
 std::span<const IcomModel> knownModels() { return kModels; }
 
 const IcomModel& unknownModel() { return kUnknown; }
+
+std::optional<ModulationProfile> modulationProfileFor(const IcomModel& model)
+{
+    // IC-705 CI-V guide: USB/WLAN levels 0116/0117, DATA OFF/DATA MOD
+    // selections 0118/0119.
+    if (model.civAddress == 0xA4) {
+        return ModulationProfile{116, -1, 117, 118, 119, 0x03,
+                                 kIc705ModInputs};
+    }
+    // IC-7300MK2 CI-V guide: USB/ACC/LAN levels 0081/0082/0083, DATA OFF/DATA
+    // MOD selections 0084/0085. LAN is value 05, not the IC-705's WLAN 03.
+    if (model.civAddress == 0xB6) {
+        return ModulationProfile{81, 82, 83, 84, 85, 0x05,
+                                 kIc7300Mk2ModInputs};
+    }
+    return std::nullopt;
+}
 
 std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 {

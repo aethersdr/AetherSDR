@@ -204,6 +204,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // II/III says the client must not re-assert them. This backend READS state
     // at connect; it never pushes a restored one.
     c.clientSettingsDomains = {};
+    c.extensionNamespaces << QStringLiteral("icom");
 
     return c;
 }
@@ -478,15 +479,18 @@ void IcomCivBackend::sendConnectReadBurst()
     if (m_model->hasVfoModeCommand)
         queueStartupRead(cmdReadVfoMode(m_session->civAddress()));
 
-    // ASK WHERE THE RADIO TAKES ITS MODULATION FROM. Not cosmetic: if this is
-    // not WLAN, everything else about transmit can be perfect and the operator
-    // still gets zero output. Diagnosing it from the outside means noticing
-    // that a keyed radio with healthy audio counters makes no power, which is
-    // exactly the dead end this avoids.
-    queueStartupRead(cmdReadSetting(m_session->civAddress(),
-                                    setting::kDataOffModInput));
-    queueStartupRead(cmdReadSetting(m_session->civAddress(),
-                                    setting::kDataModInput));
+    // ASK WHERE THE RADIO TAKES ITS MODULATION FROM, using this model's own
+    // guide. The SET-menu numbers and enum values differ even between the
+    // IC-705 and IC-7300MK2, so an unknown model is deliberately left unread.
+    if (const auto mod = modulationProfileFor(*m_model)) {
+        for (int item : {mod->dataOffInputItem, mod->dataInputItem,
+                         mod->usbLevelItem, mod->accessoryLevelItem,
+                         mod->networkLevelItem}) {
+            if (item >= 0) {
+                queueStartupRead(cmdReadSetting(m_session->civAddress(), item));
+            }
+        }
+    }
 
     // ADOPT THE RADIO'S OWN LEVELS. Constitution II/III says an Icom is
     // authoritative over its operating state and the client must never push a
@@ -994,80 +998,46 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
 
 void IcomCivBackend::checkModInput()
 {
-    // Report ONCE both answers are in, and only when something is actually
-    // wrong. A warning that fires on a correctly configured radio is one the
-    // operator learns to scroll past (CERTIFICATION.md 1.28).
-    if (m_dataOffModInput < 0 || m_dataModInput < 0)
+    const auto mod = modulationProfileFor(*m_model);
+    if (!mod)
         return;
-
-    // ONLY a radio with Wi-Fi has a WLAN modulation source to select.
-    //
-    // The 1A 05 item numbers (118/119) and the value table below are read from
-    // ONE model's CI-V Reference Guide and sent to every Icom, but each model
-    // numbers its own SET menu and its own enum. On an IC-9700 — LAN only, no
-    // Wi-Fi — both items were set correctly on the front panel and the radio
-    // answered 0x01, which this table calls "USB". So either 118/119 are not
-    // MOD Input on that model, or 0x01 IS its network source; either way
-    // demanding 0x03 asks for a setting the radio cannot offer, and the warning
-    // could never be satisfied by any front-panel action.
-    //
-    // Reported by an operator with the radio in front of them (2026-08-05): set
-    // to LAN on both, warned anyway, every session. A check that fires on a
-    // correctly configured radio is worse than no check — it is the one the
-    // operator learns to scroll past, and it trains them past the real ones.
-    //
-    // Staying silent here loses nothing that was working: the warning was
-    // WRONG on this radio, not merely noisy. Re-enable per model once the
-    // mapping is confirmed against that model's own guide (the same bar
-    // IcomModel::verified sets for the rest of the table).
-    // Note this also silences the check on an UNIDENTIFIED radio, since
-    // kUnknown carries hasWifi=false. That is the right outcome, though for a
-    // second reason: kUnknown is also hasTransmit=false, and a radio this
-    // client will not let key has no modulation path to warn about. Warning
-    // there would be advice about a transmission that cannot happen, decoded
-    // through a value table not known to apply to that model.
-    if (!m_model->hasWifi)
-        return;
-
-    const bool voiceOk = m_dataOffModInput == setting::kModWlan;
-    const bool dataOk  = m_dataModInput == setting::kModWlan;
-    if (voiceOk && dataOk)
-        return;
-
-    auto name = [](int v) -> QString {
-        switch (v) {
-        case setting::kModMic:    return QStringLiteral("MIC");
-        case setting::kModUsb:    return QStringLiteral("USB");
-        case setting::kModMicUsb: return QStringLiteral("MIC+USB");
-        case setting::kModWlan:   return QStringLiteral("WLAN");
-        default:                  return QStringLiteral("unknown(%1)").arg(v);
+    const auto name = [&mod](int value) {
+        for (const ModulationInputChoice& choice : mod->choices) {
+            if (choice.value == value) {
+                return QString::fromUtf8(choice.label.data(),
+                                         static_cast<int>(choice.label.size()));
+            }
         }
+        return QStringLiteral("unknown(%1)").arg(value);
     };
 
     QStringList wrong;
-    if (!voiceOk)
-        wrong << QStringLiteral("voice modes take modulation from %1")
-                     .arg(name(m_dataOffModInput));
-    if (!dataOk)
-        wrong << QStringLiteral("data modes take modulation from %1")
+    if (m_pcAudioEnabled && m_dataOffModInput >= 0) {
+        const int expected = *m_pcAudioEnabled ? mod->networkOnlyValue : 0x00;
+        if (m_dataOffModInput != expected) {
+            wrong << QStringLiteral("PC Audio is %1 but DATA OFF MOD is %2")
+                         .arg(*m_pcAudioEnabled ? QStringLiteral("on")
+                                                : QStringLiteral("off"),
+                              name(m_dataOffModInput));
+        }
+    }
+    if (m_dataMode && m_dataModInput >= 0
+        && m_dataModInput != mod->networkOnlyValue) {
+        wrong << QStringLiteral("DATA MOD is %1, so generated digital audio is ignored")
                      .arg(name(m_dataModInput));
+    }
+    if (wrong.isEmpty()) {
+        m_lastModInputWarning.clear();
+        return;
+    }
 
-    // A configurationWarning, NOT a connectionError: this is advice about a
-    // radio that is otherwise working perfectly. connectionError is fatal to
-    // every consumer — RadioModel starts its reconnect timer on it — so raising
-    // it here dropped the session ~4 ms after the CI-V stream came live and
-    // reconnected into the same check forever. The operator saw a radio that
-    // would not stay connected and a message about a menu setting, with no way
-    // to tell that the message WAS the disconnect.
-    //
-    // It still reaches the operator; it just no longer costs them the session.
-    emit configurationWarning(
-        QStringLiteral("The radio is not listening to network audio — %1. "
-                       "AetherSDR's transmit audio will be ignored and the radio "
-                       "will key at zero output. On the radio: MENU > SET > "
-                       "Connectors > MOD Input > set DATA OFF MOD and DATA MOD "
-                       "to WLAN.")
-            .arg(wrong.join(QStringLiteral(", "))));
+    const QString warning = QStringLiteral("Icom modulation input: %1. Check Radio Health "
+                                           "for the reported source and level.")
+                                .arg(wrong.join(QStringLiteral(", ")));
+    if (warning != m_lastModInputWarning) {
+        m_lastModInputWarning = warning;
+        emit configurationWarning(warning);
+    }
 }
 
 void IcomCivBackend::applyScopeStartup()
@@ -1330,6 +1300,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         }
         case level::kMicGain: {
             m_micGainPercent = pct;
+            m_micGainReported = true;
             TransmitDelta t; t.micLevel = pct;
             emit transmitChanged(t);
             return;
@@ -1529,12 +1500,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         if (st->filter != 0)
             m_filter = st->filter;
         publishModeState();
-        // NOT a modulation-source re-check. checkModInput() reads DATA OFF MOD
-        // and DATA MOD together and warns if either is wrong, so its answer
-        // does not depend on which of the two the radio is currently in — but
-        // its usefulness did: until this decoded, "DATA MOD is set to WLAN"
-        // could be true while the radio sat in DATA OFF and modulated from the
-        // microphone anyway. That gap closes here, by the mode being right.
+        checkModInput();
         return;
     }
 
@@ -1543,13 +1509,28 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         if (!frame.hasSub || frame.sub != 0x05 || frame.data.size() < 3)
             return;
         const int item = decodeBcdByte(frame.data[0]) * 100 + decodeBcdByte(frame.data[1]);
-        const int value = frame.data[2];
-        if (item == setting::kDataOffModInput)
-            m_dataOffModInput = value;
-        else if (item == setting::kDataModInput)
-            m_dataModInput = value;
-        else
+        const auto mod = modulationProfileFor(*m_model);
+        if (!mod)
             return;
+        if (item == mod->dataOffInputItem) {
+            m_dataOffModInput = frame.data[2];
+        } else if (item == mod->dataInputItem) {
+            m_dataModInput = frame.data[2];
+        } else {
+            const auto raw = decodeLevel(std::span(frame.data).subspan(2));
+            if (!raw)
+                return;
+            const int pct = levelRawToPercent(*raw);
+            if (item == mod->usbLevelItem) {
+                m_usbModLevelPercent = pct;
+            } else if (item == mod->accessoryLevelItem) {
+                m_accessoryModLevelPercent = pct;
+            } else if (item == mod->networkLevelItem) {
+                m_networkModLevelPercent = pct;
+            } else {
+                return;
+            }
+        }
         checkModInput();
         return;
     }
@@ -1924,6 +1905,13 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
     case cmd::kTuneOffset:
         if (parsed->hasSub) {
             return buildFrameSub(addr, parsed->cmd, parsed->sub);
+        }
+        break;
+    case cmd::kSetting:
+        if (parsed->hasSub && parsed->sub == 0x05 && parsed->data.size() >= 3) {
+            const int item = decodeBcdByte(parsed->data[0]) * 100
+                + decodeBcdByte(parsed->data[1]);
+            return cmdReadSetting(addr, item);
         }
         break;
     case cmd::kAttenuator:
@@ -2463,6 +2451,7 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
 void IcomCivBackend::setMicGain(int gainPercent)
 {
     m_micGainPercent = gainPercent;
+    m_micGainReported = true;
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kMicGain, percentToLevelRaw(gainPercent)));
 }
@@ -3260,6 +3249,28 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, true);
         return;
     }
+    if (verb == QLatin1String("audio.pc")) {
+        const auto mod = modulationProfileFor(*m_model);
+        if (!mod) {
+            const QString reason = QStringLiteral(
+                "PC Audio cannot select DATA OFF MOD for this Icom model: "
+                "its model-specific SET-menu map is not verified.");
+            emit configurationWarning(reason);
+            if (requestId != 0) {
+                emit extensionError(requestId, reason);
+            }
+            return;
+        }
+        const bool on = arg.toBool();
+        m_pcAudioEnabled = on;
+        sendUserCommand(cmdWriteSetting(
+            m_session ? m_session->civAddress() : m_model->civAddress,
+            mod->dataOffInputItem, on ? mod->networkOnlyValue : 0x00));
+        if (requestId != 0) {
+            emit extensionResult(requestId, true);
+        }
+        return;
+    }
     if (verb == QLatin1String("controls.map")) {
         emit extensionResult(requestId, controlMap());
         return;
@@ -3516,6 +3527,20 @@ void IcomCivBackend::onLinkTick()
             queueControl(cmdReadTuneOffset(addr, sub));
         }
     }
+    // SET-menu changes can originate on the front panel. Refresh slowly: they
+    // are troubleshooting state, not interactive controls, and share this CI-V
+    // stream with tuning and meters.
+    if (phase % 12 == 0) {
+        if (const auto mod = modulationProfileFor(*m_model)) {
+            for (int item : {mod->dataOffInputItem, mod->dataInputItem,
+                             mod->usbLevelItem, mod->accessoryLevelItem,
+                             mod->networkLevelItem}) {
+                if (item >= 0) {
+                    queueControl(cmdReadSetting(addr, item));
+                }
+            }
+        }
+    }
     pumpCiv(now);
     if (m_lastInboundCivAtMs <= 0) {
         m_lastInboundCivAtMs = now;   // start the clock at the first tick
@@ -3555,33 +3580,59 @@ IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const
                     QStringLiteral("0x%1").arg(m_model->civAddress, 2, 16, QLatin1Char('0')));
     h.labels.insert(QStringLiteral("civ"), QStringLiteral("CI-V address"));
 
-    // WHERE THE RADIO TAKES ITS MODULATION FROM. On a health readout because
-    // "keys but makes no power" has no other visible cause: the audio counters
-    // climb, the meters are fresh, and the modulator is listening elsewhere.
-    if (m_dataOffModInput >= 0 || m_dataModInput >= 0) {
-        auto name = [](int v) -> QString {
-            switch (v) {
-            case setting::kModMic:    return QStringLiteral("MIC");
-            case setting::kModUsb:    return QStringLiteral("USB");
-            case setting::kModMicUsb: return QStringLiteral("MIC+USB");
-            case setting::kModWlan:   return QStringLiteral("WLAN");
-            default:                  return QStringLiteral("?");
+    // WHERE THE RADIO TAKES ITS MODULATION FROM, plus the level of every source
+    // named by that selection. These are separate rows because DATA OFF and
+    // DATA are independent radio-owned settings; folding them together hid the
+    // exact half responsible for a keyed-but-silent transmission.
+    if (const auto mod = modulationProfileFor(*m_model)) {
+        const auto describe = [this, &mod](int value) {
+            const ModulationInputChoice* selected = nullptr;
+            for (const ModulationInputChoice& choice : mod->choices) {
+                if (choice.value == value) {
+                    selected = &choice;
+                    break;
+                }
             }
+            if (!selected) {
+                return QStringLiteral("unknown (%1)").arg(value);
+            }
+            QString result = QString::fromUtf8(selected->label.data(),
+                                               static_cast<int>(selected->label.size()));
+            QStringList levels;
+            const auto addLevel = [&levels](const QString& name, int percent) {
+                levels << (percent >= 0 ? QStringLiteral("%1 %2%").arg(name).arg(percent)
+                                        : QStringLiteral("%1 not reported").arg(name));
+            };
+            if ((selected->sources & ModSourceMic) != 0U) {
+                addLevel(QStringLiteral("MIC Gain"),
+                         m_micGainReported ? m_micGainPercent : -1);
+            }
+            if ((selected->sources & ModSourceUsb) != 0U) {
+                addLevel(QStringLiteral("USB MOD Level"), m_usbModLevelPercent);
+            }
+            if ((selected->sources & ModSourceAccessory) != 0U) {
+                addLevel(QStringLiteral("ACC MOD Level"), m_accessoryModLevelPercent);
+            }
+            if ((selected->sources & ModSourceNetwork) != 0U) {
+                const QString name = m_model->hasWifi ? QStringLiteral("WLAN MOD Level")
+                                                       : QStringLiteral("LAN MOD Level");
+                addLevel(name, m_networkModLevelPercent);
+            }
+            if (!levels.isEmpty()) {
+                result += QStringLiteral(" — ") + levels.join(QStringLiteral(", "));
+            }
+            return result;
         };
-        // The verdict, like the warning in checkModInput(), is only meaningful
-        // on a radio that HAS a WLAN source. Elsewhere show the raw values and
-        // pass no judgement: an IC-9700 set correctly to LAN reads back 0x01
-        // here, and appending "NOT WLAN" to that is telling the operator their
-        // working radio is misconfigured.
-        const bool ok = !m_model->hasWifi
-                        || (m_dataOffModInput == setting::kModWlan
-                            && m_dataModInput == setting::kModWlan);
-        h.values.insert(QStringLiteral("modinput"),
-                        QStringLiteral("%1 voice / %2 data%3")
-                            .arg(name(m_dataOffModInput), name(m_dataModInput),
-                                 ok ? QString() : QStringLiteral("  — NOT WLAN")));
-        h.labels.insert(QStringLiteral("modinput"), QStringLiteral("MOD Input"));
-        h.order << QStringLiteral("modinput");
+        if (m_dataOffModInput >= 0) {
+            h.values.insert(QStringLiteral("dataoffmod"), describe(m_dataOffModInput));
+            h.labels.insert(QStringLiteral("dataoffmod"), QStringLiteral("DATA OFF MOD"));
+            h.order << QStringLiteral("dataoffmod");
+        }
+        if (m_dataModInput >= 0) {
+            h.values.insert(QStringLiteral("datamod"), describe(m_dataModInput));
+            h.labels.insert(QStringLiteral("datamod"), QStringLiteral("DATA MOD"));
+            h.order << QStringLiteral("datamod");
+        }
     }
     h.order << QStringLiteral("civ");
 

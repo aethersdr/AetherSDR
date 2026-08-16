@@ -301,6 +301,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     // PC Audio toggle
     m_pcBtn = new QPushButton("PC Audio");
+    m_pcBtn->setObjectName(QStringLiteral("pcAudioBtn"));
     m_pcBtn->setCheckable(true);
     m_pcBtn->setFixedHeight(22);
     m_pcBtn->setFixedWidth(70);
@@ -308,7 +309,8 @@ TitleBar::TitleBar(QWidget* parent)
     bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
     m_pcBtn->setChecked(pcOn);
     m_pcBtn->setAccessibleName("PC Audio");
-    m_pcBtn->setAccessibleDescription("Toggle PC audio receive playback");
+    m_pcBtn->setAccessibleDescription(
+        "Toggle PC receive playback and PC microphone voice transmit");
     updatePcAudioToolTip();
 
     auto updatePcStyle = [this]() {
@@ -848,10 +850,13 @@ void TitleBar::setPcAudioLocked(bool locked)
     if (locked)
         setPcAudioEnabled(true);      // locked ON, never locked off
     m_pcBtn->setEnabled(!locked);
-    m_pcBtn->setToolTip(
-        locked ? tr("PC audio is required: this radio's audio is produced and "
-                    "captured on this computer, so it cannot be turned off.")
-               : QString());
+    if (locked) {
+        m_pcBtn->setToolTip(
+            tr("PC audio is required: this radio's audio is produced and "
+               "captured on this computer, so it cannot be turned off."));
+    } else {
+        updatePcAudioToolTip();
+    }
 }
 
 void TitleBar::setPcAudioEnabled(bool on)

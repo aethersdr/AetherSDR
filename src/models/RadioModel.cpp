@@ -470,6 +470,15 @@ void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
     m_backend->invokeExtension(ns, verb, requestId, arg);
 }
 
+void RadioModel::setPcAudioEnabled(bool on)
+{
+    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+        return;
+    }
+    m_backend->invokeExtension(QStringLiteral("icom"),
+                               QStringLiteral("audio.pc"), 0, on);
+}
+
 void RadioModel::handRestoredStateToBackend(const QString& serial)
 {
     if (!m_backend) {
@@ -1438,7 +1447,7 @@ void RadioModel::teardownBackend()
     // Any backend replacement invalidates a WSPR transmit-route claim. Cleared
     // here rather than only in onDisconnected(), because a family switch never
     // reaches that path — see hasWsprTxStream().
-    m_wsprTxHostModulated = false;
+    m_wsprTxSeamAudioArmed = false;
     m_backend.reset();
     m_connection = nullptr;
     m_panStream = nullptr;
@@ -6379,7 +6388,7 @@ void RadioModel::onDisconnected()
     // and the next connect re-reads it from status.
     m_wsprTxRestoreDax = false;
     m_wsprTxPreviousDax = false;
-    m_wsprTxHostModulated = false;
+    m_wsprTxSeamAudioArmed = false;
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -10543,12 +10552,10 @@ bool RadioModel::prepareWsprTransmit()
     if (!backendCapabilities().canTransmit) {
         return false;
     }
-    // A host-modulating backend (HL2) runs the modulator on THIS host, so the
-    // beacon needs no transport at all: AudioEngine's WSPR pump already reaches
-    // it through feedDaxTxAudioInternal()'s m_hostModulation branch →
-    // txFinalMonitorPcmReady → submitTxAudio, the same tap the microphone and
-    // TCI use. There is nothing to create and nothing to borrow, so this arm
-    // takes none of the station state the Flex arm below does.
+    // A seam-audio backend needs no Flex DAX stream. HL2 modulates locally and
+    // Icom ships the PCM to the radio's own modulator; both paths converge at
+    // txFinalMonitorPcmReady → submitTxAudio. There is nothing to create and
+    // nothing to borrow, so this arm takes none of the Flex station state below.
     //
     // Nor does it need `transmit dax`: that setting exists to tell a FLEX to
     // take its modulator input from the DAX stream instead of the mic jacks,
@@ -10560,7 +10567,7 @@ bool RadioModel::prepareWsprTransmit()
     // Any backend whose transmit audio leaves through the seam, not only one
     // that modulates locally — the beacon reaches submitTxAudio either way.
     if (backendCapabilities().takesTxAudioOverSeam) {
-        m_wsprTxHostModulated = true;
+        m_wsprTxSeamAudioArmed = true;
         return true;
     }
     // Every other non-Flex family: the beacon rides a Flex `dax_tx` stream and
@@ -10600,13 +10607,13 @@ bool RadioModel::prepareWsprTransmit()
 
 void RadioModel::releaseWsprTransmit()
 {
-    // Host-modulated: nothing was borrowed, so nothing is handed back. Dropping
+    // Seam audio: nothing was borrowed, so nothing is handed back. Dropping
     // the latch is the whole release — and it must happen before the DAX arm so
     // a stale m_daxTxStreamId from an earlier Flex session in the same process
     // cannot make this path issue `stream set … tx=0` at a radio that has no
     // such stream.
-    if (m_wsprTxHostModulated) {
-        m_wsprTxHostModulated = false;
+    if (m_wsprTxSeamAudioArmed) {
+        m_wsprTxSeamAudioArmed = false;
         return;
     }
     if (m_wsprTxOwnershipRequested && m_wsprTxYieldAfterUse) {

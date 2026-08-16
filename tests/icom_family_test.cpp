@@ -80,13 +80,30 @@ int main(int argc, char** argv)
           "no IQ on any networked Icom — a true here offers a DAX-IQ path that cannot exist");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "an Icom remembers its own state, so the client restores NOTHING");
-    // The MOD Input warning demands a WLAN modulation source. Only a radio with
-    // Wi-Fi has one -- and in kModels exactly ONE model does (the IC-705, whose
-    // 0xA4 is also the default CI-V address, which is almost certainly the radio
-    // the check was written against). On every other networked Icom the warning
-    // asked for a setting the radio cannot offer: an IC-9700 set correctly to
-    // LAN on the front panel reports 0x01 and was warned at it on every single
-    // session. Pin the discriminator so the gate cannot quietly come back.
+    RadioCapabilities transmittingIcom = caps;
+    transmittingIcom.canTransmit = true;
+    check(wsprSeamAudioRouteReady(true, transmittingIcom),
+          "an armed Icom seam-audio route is ready without host modulation");
+    transmittingIcom.takesTxAudioOverSeam = false;
+    check(!wsprSeamAudioRouteReady(true, transmittingIcom),
+          "the WSPR route fails closed if the current backend cannot take seam audio");
+
+    const auto ic705Mod = icom::modulationProfileFor(
+        *icom::modelForCivAddress(0xA4));
+    const auto mk2Mod = icom::modulationProfileFor(
+        *icom::modelForCivAddress(0xB6));
+    check(ic705Mod && ic705Mod->dataOffInputItem == 118
+              && ic705Mod->dataInputItem == 119
+              && ic705Mod->networkOnlyValue == 0x03,
+          "IC-705 uses SET 0118/0119 and WLAN value 03");
+    check(mk2Mod && mk2Mod->dataOffInputItem == 84
+              && mk2Mod->dataInputItem == 85
+              && mk2Mod->networkOnlyValue == 0x05,
+          "IC-7300MK2 uses SET 0084/0085 and LAN value 05");
+    // An IC-9700 has no Wi-Fi and, unlike the two profiles above, no verified
+    // model-specific modulation map. It must therefore remain outside this
+    // read/write path instead of borrowing the IC-705's WLAN table. Pin that
+    // distinction so the old false warning cannot quietly come back.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
     check(AetherSDR::icom::modelForCivAddress(0xA4)->hasWifi,

@@ -259,17 +259,18 @@ constexpr std::array kSpecs = {
 
     // ---- SET menu (0x1A 05) ----------------------------------------------
     ControlSpec{"mod.input.dataoff", 0x1A, 0x05, true, "DATA OFF MOD input",
-                Plane::Radio, Encoding::Bcd4, Wiring::DecodeOnly,
-                0, 3, "enum", 0, 3,
-                "", "", true,
-                "MENU ITEM 118. THE SINGLE MOST IMPORTANT SETTING FOR TRANSMIT: if "
-                "it is not WLAN the radio discards every byte of our audio, keys, "
-                "and reports zero forward power with no error. Read and warned "
-                "about, deliberately never written."},
+                Plane::Radio, Encoding::Bcd4, Wiring::Both,
+                0, 5, "enum", 0, 5,
+                "invokeExtension icom/audio.pc", "pcAudioBtn", true,
+                "MODEL-SPECIFIC: item 0118 and WLAN=03 on IC-705; item 0084 "
+                "and LAN=05 on IC-7300MK2. PC Audio writes only this voice-mode "
+                "selection and confirms it by readback."},
     ControlSpec{"mod.input.data", 0x1A, 0x05, true, "DATA MOD input",
                 Plane::Radio, Encoding::Bcd4, Wiring::DecodeOnly,
-                0, 3, "enum", 0, 3,
-                "", "", true, "MENU ITEM 119 — the data-mode half of the above."},
+                0, 5, "enum", 0, 5,
+                "", "", true,
+                "MODEL-SPECIFIC: item 0119 on IC-705 and 0085 on IC-7300MK2. "
+                "Radio-authoritative and deliberately never written by PC Audio."},
 
     // ---- Scope (0x27) ----------------------------------------------------
     ControlSpec{"scope.onoff", 0x27, 0x10, true, "Scope on/off",

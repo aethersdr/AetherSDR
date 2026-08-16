@@ -1983,6 +1983,20 @@ MainWindow::MainWindow(QWidget* parent)
             });
             m_radioModel.removeRxAudioStream();
         }
+
+        // On Icom this toggle owns only DATA OFF MOD: network audio while on,
+        // the radio's hand microphone while off. DATA MOD is deliberately left
+        // to the radio, since digital-mode routing is independent operator state.
+        m_radioModel.setPcAudioEnabled(on);
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        if (m_radioModel.isConnected() && caps.takesTxAudioOverSeam
+            && !caps.hostModulates) {
+            if (on && !m_audio->isTxStreaming()) {
+                audioStartTx(m_radioModel.radioAddress(), 4991);
+            } else if (!on && m_audio->isTxStreaming()) {
+                audioStopTx();
+            }
+        }
     });
     // Master volume — title bar slider routes through applyMasterVolume()
     // so the TCI `volume:N;` command (#1764) can hit the same code path
@@ -8333,7 +8347,7 @@ void MainWindow::refreshCwDecodeState()
     const bool anyOn = rxOn || txOn;
 
     auto* s = activeSlice();
-    const bool isCw = s && (s->mode() == "CW" || s->mode() == "CWL");
+    const bool isCw = s && isCwMode(s->mode());
 
     // Panel is visible only in CW receive mode — the operator's CW
     // text view is anchored to a CW slice's panadapter.  TX-side

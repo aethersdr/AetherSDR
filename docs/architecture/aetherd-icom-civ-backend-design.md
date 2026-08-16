@@ -97,7 +97,7 @@ and it is the cleanest part of that codebase.
 | `setMicGain` | CI-V `14 0B`, 0000–0255 BCD |
 | `setTxMonitor` | CI-V `16 45` enable plus `14 15` level |
 | `setTxFilter` | CI-V `1A 05 0020/0021/0022` — **discrete WIDE/MID/NAR**, not Hz |
-| `submitTxAudio` | audio stream, codec 4 — **requires DATA MOD = WLAN** |
+| `submitTxAudio` | audio stream, codec 4 — **requires DATA MOD = WLAN (IC-705) or LAN (IC-7300MK2)** |
 | `setSliceAudioGain` | CI-V `14 01` (AF level) |
 | `createPanadapter` | `false` — one receiver, one scope |
 
@@ -520,7 +520,8 @@ single-packet WLAN waveform, emit spectrum and waterfall. Proof: a screenshot
 with a real signal at a known frequency landing in the right bin.
 
 **Phase 3 — audio.** `IcomAudio`: codec 4 LPCM 48 k mono, RX first. Then TX,
-which needs DATA MOD = WLAN on the radio and **verification outside the system** —
+which needs the model's network source in DATA MOD (WLAN on IC-705, LAN on
+IC-7300MK2) and **verification outside the system** —
 a second receiver or a WebSDR, per `feedback-verify-outside-the-system`. A TX
 path that looks perfect from inside AetherSDR and is silent on the air is the
 exact failure mode this project has already been bitten by.

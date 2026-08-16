@@ -104,9 +104,10 @@ TX AUDIO ROUTING SUMMARY:                  ◄── AUDIO THREAD
 
 The PSK Reporter WSPR beacon is a one-shot, operator-armed digital source. A
 precise timer on the AudioEngine worker thread generates sample-accurate 4-FSK
-independently of microphone callbacks and sends it through a client-owned
-`dax_tx` stream in DIGU. Its dedicated non-voice PTT source suppresses Quindar,
-and the generator holds silence through the unkey edge.
+independently of microphone callbacks. It uses a client-owned `dax_tx` stream
+on Flex and the normalized transmit-audio seam on Icom/HL2, in DIGU. Its
+dedicated non-voice PTT source suppresses Quindar, and the generator holds
+silence through the unkey edge.
 
 Four conventions in that generator are taken from WSJT-X's `Modulator.cpp`
 rather than invented, because a WSPR frame is judged by decoders we do not own:

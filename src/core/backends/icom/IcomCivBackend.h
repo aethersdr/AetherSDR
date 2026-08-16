@@ -385,6 +385,12 @@ private:
 
     int m_dataOffModInput = -1;   // SSB / CW / AM / FM
     int m_dataModInput    = -1;   // data modes (FT8 and friends)
+    int m_usbModLevelPercent = -1;
+    int m_accessoryModLevelPercent = -1;
+    int m_networkModLevelPercent = -1;
+    bool m_micGainReported = false;
+    std::optional<bool> m_pcAudioEnabled;
+    QString m_lastModInputWarning;
     void checkModInput();
 
     std::int64_t m_scopeCentreHz = 0;

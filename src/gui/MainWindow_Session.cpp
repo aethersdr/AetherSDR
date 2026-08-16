@@ -720,9 +720,13 @@ void MainWindow::wireRadioModel()
         // PC audio is not optional on a host-modulating backend: all audio, both
         // directions, lives on this computer. Turning it off would leave the
         // operator deaf and mute with nothing to explain it.
-        if (m_titleBar)
-            m_titleBar->setPcAudioLocked(connected && seamTxAudio);
-        if (connected && seamTxAudio) {
+        const bool pcAudioRequired = seamTxAudio && caps.hostModulates;
+        const bool pcAudioEnabled = pcAudioRequired
+            || AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+        if (m_titleBar) {
+            m_titleBar->setPcAudioLocked(connected && pcAudioRequired);
+        }
+        if (connected && seamTxAudio && pcAudioEnabled) {
             if (!m_audio->isTxStreaming())
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             // RX must be started imperatively, exactly like TX. Locking the
@@ -733,11 +737,16 @@ void MainWindow::wireRadioModel()
             // persisted, and the locked button can no longer be clicked to
             // recover -- leaving the sink Stopped with the button showing ON.
             // Persist the setting too, so those paths agree on the next launch.
-            AppSettings::instance().setValue("PcAudioEnabled", "True");
-            AppSettings::instance().save();
-            audioStartRx();
-        } else if (!connected && seamTxAudio) {
+            if (pcAudioRequired) {
+                AppSettings::instance().setValue("PcAudioEnabled", "True");
+                AppSettings::instance().save();
+                audioStartRx();
+            }
+        } else if (seamTxAudio && m_audio->isTxStreaming()) {
             audioStopTx();
+        }
+        if (connected) {
+            m_radioModel.setPcAudioEnabled(pcAudioEnabled);
         }
     });
 

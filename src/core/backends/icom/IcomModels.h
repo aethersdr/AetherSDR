@@ -86,6 +86,38 @@ struct IcomModel {
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 
+enum ModulationSource : unsigned {
+    ModSourceNone      = 0,
+    ModSourceMic       = 1U << 0,
+    ModSourceUsb       = 1U << 1,
+    ModSourceAccessory = 1U << 2,
+    ModSourceNetwork   = 1U << 3,
+};
+
+struct ModulationInputChoice {
+    std::uint8_t value = 0;
+    std::string_view label;
+    unsigned sources = ModSourceNone;
+};
+
+// Model-specific 1A 05 SET-menu map. Icom does not keep these item numbers or
+// enum values stable between radios: the IC-705 calls its network source WLAN
+// at value 03, while the IC-7300MK2 calls it LAN at value 05.
+struct ModulationProfile {
+    int usbLevelItem = -1;
+    int accessoryLevelItem = -1;
+    int networkLevelItem = -1;
+    int dataOffInputItem = -1;
+    int dataInputItem = -1;
+    std::uint8_t networkOnlyValue = 0;
+    std::span<const ModulationInputChoice> choices;
+};
+
+// Empty when this model's own official CI-V guide has not been checked. A
+// caller must not borrow another model's SET-menu map as a fallback.
+[[nodiscard]] std::optional<ModulationProfile>
+modulationProfileFor(const IcomModel& model);
+
 // Look up by the address the radio reported. Returns nullptr for an address we
 // do not recognise — which is a real and expected outcome, not an error: Icom
 // has ~130 CI-V addresses and this table has a handful.

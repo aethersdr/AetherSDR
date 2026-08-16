@@ -359,6 +359,16 @@ static void testCommands()
     // Indices shifted by one when the leading fixed 0x00 was added.
     check(refClamped[9] == 0x00 && refClamped[7] == 0x20,
           "out-of-range reference clamps to +20.0 rather than wrapping");
+
+    check(bytesAre(cmdWriteSetting(0xA4, 118, 0x03),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x05, 0x01, 0x18, 0x03, 0xFD}),
+          "IC-705 PC Audio selects WLAN with SET 0118 value 03");
+    check(bytesAre(cmdWriteSetting(0xB6, 84, 0x05),
+                   {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x05, 0xFD}),
+          "IC-7300MK2 PC Audio selects LAN with SET 0084 value 05");
+    check(bytesAre(cmdWriteSetting(0xB6, 84, 0x00),
+                   {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x00, 0xFD}),
+          "IC-7300MK2 PC Audio off restores MIC without touching DATA MOD 0085");
 }
 
 // DATA mode — command 26.

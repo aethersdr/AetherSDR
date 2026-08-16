@@ -286,16 +286,7 @@ inline constexpr std::uint8_t kDialLock      = 0x50;
 // is no error anywhere: the transmit path is working perfectly into a modulator
 // that is listening somewhere else.
 namespace setting {
-inline constexpr int kDataOffModInput = 118;   // SSB/CW/AM/FM — "DATA OFF MOD"
-inline constexpr int kDataModInput    = 119;   // data modes    — "DATA MOD"
-inline constexpr int kWlanModLevel    = 117;
 inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
-
-// 1A 05 values for the two above.
-inline constexpr std::uint8_t kModMic     = 0x00;
-inline constexpr std::uint8_t kModUsb     = 0x01;
-inline constexpr std::uint8_t kModMicUsb  = 0x02;
-inline constexpr std::uint8_t kModWlan    = 0x03;
 }  // namespace setting
 
 // Read or write a 1A 05 SET-menu item. `item` is the DECIMAL menu number as
