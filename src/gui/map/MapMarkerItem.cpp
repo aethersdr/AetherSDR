@@ -24,8 +24,10 @@ QFont markerFont()
 }
 } // namespace
 
-MapMarkerItem::MapMarkerItem(const MapView::Marker& marker)
+MapMarkerItem::MapMarkerItem(const MapView::Marker& marker,
+                             int relativeWorldOffset)
     : m_marker(marker)
+    , m_relativeWorldOffset(relativeWorldOffset)
 {
     setFlags(QGV::ItemFlag::IgnoreScale | QGV::ItemFlag::IgnoreAzimuth
              | QGV::ItemFlag::Clickable);
@@ -54,8 +56,32 @@ void MapMarkerItem::setPulsePhase(double phase)
 void MapMarkerItem::onProjection(QGVMap* geoMap)
 {
     QGVDrawItem::onProjection(geoMap);
-    m_projPos = geoMap->getProjection()->geoToProj(
+    m_baseProjPos = geoMap->getProjection()->geoToProj(
         QGV::GeoPos(m_marker.lat, m_marker.lon));
+    moveToNearestWorld(geoMap->getCamera());
+}
+
+void MapMarkerItem::onCamera(const QGVCameraState& oldState,
+                             const QGVCameraState& newState)
+{
+    const QPointF oldPosition = m_projPos;
+    moveToNearestWorld(newState);
+    if (oldPosition != m_projPos) {
+        resetBoundary();
+    }
+    QGVDrawItem::onCamera(oldState, newState);
+    if (oldPosition != m_projPos) {
+        refresh();
+    }
+}
+
+void MapMarkerItem::moveToNearestWorld(const QGVCameraState& camera)
+{
+    const double worldWidth = camera.getProjection()->boundaryProjRect().width();
+    const double worldOffset = m_relativeWorldOffset + qRound(
+        (camera.projCenter().x() - m_baseProjPos.x()) / worldWidth);
+    m_projPos = QPointF(m_baseProjPos.x() + worldOffset * worldWidth,
+                        m_baseProjPos.y());
 }
 
 QPointF MapMarkerItem::projAnchor() const

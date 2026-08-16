@@ -13,10 +13,15 @@
 #include "core/RadioDiscovery.h"
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomModels.h"
+#include "core/backends/icom/CivCodec.h"
+#include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
 
+#include <cstdint>
 #include <cstdio>
+#include <utility>
+#include <vector>
 
 using namespace AetherSDR;
 
@@ -44,6 +49,19 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     RadioModel model;
 
+    const auto icomNotice = experimentalRadioDescriptor(QStringLiteral("icom"));
+    const auto hl2Notice = experimentalRadioDescriptor(QStringLiteral("hl2"));
+    check(icomNotice && icomNotice->displayName == QStringLiteral("Icom"),
+          "Icom is identified as an experimental radio family");
+    check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
+          "Hermes-Lite 2 is identified as an experimental radio family");
+    check(!experimentalRadioDescriptor(QStringLiteral("flex")),
+          "Flex is not marked as an experimental radio family");
+    check(icomNotice
+              && experimentalRadioNoticeText(icomNotice->displayName)
+                     .contains(QStringLiteral("Help \u2192 File an Issue")),
+          "the experimental notice points operators to the issue-reporting workflow");
+
     // ---- the factory selects it ------------------------------------------
     model.connectToRadio(infoFor(QStringLiteral("icom")));
     check(model.family() == QStringLiteral("icom"), "the model adopts the icom family");
@@ -62,13 +80,37 @@ int main(int argc, char** argv)
           "no IQ on any networked Icom — a true here offers a DAX-IQ path that cannot exist");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "an Icom remembers its own state, so the client restores NOTHING");
-    // The MOD Input warning demands a WLAN modulation source. Only a radio with
-    // Wi-Fi has one -- and in kModels exactly ONE model does (the IC-705, whose
-    // 0xA4 is also the default CI-V address, which is almost certainly the radio
-    // the check was written against). On every other networked Icom the warning
-    // asked for a setting the radio cannot offer: an IC-9700 set correctly to
-    // LAN on the front panel reports 0x01 and was warned at it on every single
-    // session. Pin the discriminator so the gate cannot quietly come back.
+    RadioCapabilities transmittingIcom = caps;
+    transmittingIcom.canTransmit = true;
+    check(wsprSeamAudioRouteReady(true, transmittingIcom),
+          "an armed Icom seam-audio route is ready without host modulation");
+    transmittingIcom.takesTxAudioOverSeam = false;
+    check(!wsprSeamAudioRouteReady(true, transmittingIcom),
+          "the WSPR route fails closed if the current backend cannot take seam audio");
+
+    const auto ic705Mod = icom::modulationProfileFor(
+        *icom::modelForCivAddress(0xA4));
+    const auto mk2Mod = icom::modulationProfileFor(
+        *icom::modelForCivAddress(0xB6));
+    check(ic705Mod && ic705Mod->dataOffInputItem == 118
+              && ic705Mod->dataInputItem == 119
+              && ic705Mod->networkOnlyValue == 0x03,
+          "IC-705 uses SET 0118/0119 and WLAN value 03");
+    check(mk2Mod && mk2Mod->dataOffInputItem == 84
+              && mk2Mod->dataInputItem == 85
+              && mk2Mod->networkOnlyValue == 0x05,
+          "IC-7300MK2 uses SET 0084/0085 and LAN value 05");
+    // The fallback PC Audio "off" writes when there is nothing captured to put
+    // back. It belongs to the model, not to the call site: these two agree at
+    // 0x00 today, and a third model whose MIC is elsewhere must not inherit it.
+    check(ic705Mod && ic705Mod->micValue == 0x00
+              && mk2Mod && mk2Mod->micValue == 0x00,
+          "both verified models name MIC in their own profile rather than "
+          "leaving the caller to hardcode it");
+    // An IC-9700 has no Wi-Fi and, unlike the two profiles above, no verified
+    // model-specific modulation map. It must therefore remain outside this
+    // read/write path instead of borrowing the IC-705's WLAN table. Pin that
+    // distinction so the old false warning cannot quietly come back.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
     check(AetherSDR::icom::modelForCivAddress(0xA4)->hasWifi,
@@ -146,6 +188,102 @@ int main(int argc, char** argv)
     check(dynamic_cast<icom::IcomCivBackend*>(model.backend()) == nullptr,
           "and icom -> flex swaps back out");
     check(model.family() == QStringLiteral("flex"), "leaving the model Flex-capable");
+
+    // ---- the model table, which the CI-V chooser is populated from ---------
+    //
+    // The connect panel builds its list from knownModels() rather than a
+    // hand-typed one precisely so the two cannot drift, which makes these table
+    // invariants load-bearing for the UI as well as the decoder.
+    {
+        const auto models = icom::knownModels();
+        check(!models.empty(), "the model table is not empty");
+        for (const auto& m : models) {
+            check(m.isKnown(),
+                  "every table row has a real CI-V address - a 0 would render as "
+                  "a chooser entry that addresses nobody");
+            check(!m.name.empty(), "and a name to put in front of the operator");
+            // The address is the key modelForCivAddress() looks up, so a
+            // duplicate would make one of the two models unreachable by the
+            // 0x19 0x00 reply - silently, and in favour of whichever came first.
+            check(icom::modelForCivAddress(m.civAddress) != nullptr,
+                  "and is reachable by its own address");
+            // ROUND TRIP through the name, which is the ONLY identity available
+            // during the RS-BA1 handshake - before any CI-V stream exists, and
+            // therefore the only thing that can seed the address in time for the
+            // connect-edge read burst.
+            const icom::IcomModel* byName = icom::modelForName(m.name);
+            check(byName != nullptr && byName->civAddress == m.civAddress,
+                  "and its own name resolves back to it");
+        }
+    }
+
+    // ---- hasNetwork is what the Connect-by-IP chooser filters on ----------
+    //
+    // The connect page lists only radios it can actually dial, so this flag is
+    // now load-bearing for the UI as well as the backend. Pin both sides of the
+    // discriminator: flipping either one silently changes what the operator is
+    // offered, and the IC-7300 / IC-7300MK2 pair is exactly where it is easy to
+    // get wrong — same family name, one USB-only, one with an Ethernet port.
+    check(!icom::modelForCivAddress(0x94)->hasNetwork,
+          "the IC-7300 is CI-V only - it cannot answer a Connect-by-IP session "
+          "directly, so the chooser must not offer it");
+    check(icom::modelForCivAddress(0xB6)->hasNetwork,
+          "the IC-7300MK2 CAN - it has an Ethernet port, and dropping it from "
+          "the chooser would hide the model this backend was validated on");
+
+    // The name is FREE TEXT set on the radio, so the match has to survive the
+    // ways it is really written.
+    check(icom::modelForName("IC-705") != nullptr, "IC-705 resolves");
+    check(icom::modelForName("ic-705") != nullptr, "lower case resolves");
+    check(icom::modelForName("IC705") != nullptr, "no hyphen resolves");
+    check(icom::modelForName("ic705") != nullptr, "neither resolves");
+    check(icom::modelForName("IC-705") == icom::modelForName("ic705"),
+          "and all of them are the same model");
+    check(icom::modelForName("") == nullptr, "an empty name resolves nothing");
+    check(icom::modelForName("IC-7760") == nullptr,
+          "a model absent from the table resolves nothing - which is the case "
+          "only the broadcast address query can rescue");
+
+    // ---- the 0x19 0x00 reply, including our own echo of it ----------------
+    {
+        auto idFrame = [](std::uint8_t from, std::vector<std::uint8_t> data) {
+            icom::CivFrame f;
+            f.to = icom::kControllerAddress;
+            f.from = from;
+            f.cmd = icom::cmd::kReadId;
+            f.hasSub = true;
+            f.sub = 0x00;
+            f.data = std::move(data);
+            return f;
+        };
+        check(icom::parseModelIdReply(idFrame(0xA2, {0xA2})) == 0xA2,
+              "a real reply yields the reported address");
+
+        // THE ECHO. A broadcast send comes back as to=0x00, from=0xE0 and
+        // reaches the parser on the real radios - measured 2026-08-14, echo
+        // first on every run. It carries NO data byte, because the query form
+        // has none, so it must not be mistaken for an answer. Getting this
+        // wrong would read the address as whatever happened to be in an empty
+        // payload, once per connect, on every Icom.
+        icom::CivFrame echo;
+        echo.to = icom::kBroadcastAddress;
+        echo.from = icom::kControllerAddress;
+        echo.cmd = icom::cmd::kReadId;
+        echo.hasSub = true;
+        echo.sub = 0x00;
+        check(!icom::parseModelIdReply(echo).has_value(),
+              "our own broadcast echo is not an address report");
+
+        // Neighbouring commands must not be read as one either.
+        icom::CivFrame other = idFrame(0xA2, {0xA2});
+        other.cmd = icom::cmd::kReadFreq;
+        check(!icom::parseModelIdReply(other).has_value(),
+              "a different command is not an address report");
+        other = idFrame(0xA2, {0xA2});
+        other.sub = 0x01;
+        check(!icom::parseModelIdReply(other).has_value(),
+              "and neither is a different sub-command");
+    }
 
     if (g_failures == 0)
         std::printf("icom_family_test: all checks passed\n");

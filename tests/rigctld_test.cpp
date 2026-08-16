@@ -2,10 +2,12 @@
 // Requires a running AetherSDR instance with rigctld enabled (default: localhost:4532).
 //
 // Build:  cmake --build build --target rigctld_test
-// Run:    ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+// Run:    ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw] [--no-split] [--pty PATH]
 //
 // PTT tests (section 6) and CW/Morse tests (section 11) are disabled by default.
 // Enable only when a dummy load or antenna is connected.
+// --no-split skips the split-VFO tests (sections 5 and 5b) for single-VFO targets
+// that cannot open a VFO B (e.g. the built-in demo/SimBackend, which is single-slice).
 // PTY test (section 16) runs automatically; skips if the per-user cat-A symlink cannot be opened.
 
 #include <QCommandLineOption>
@@ -275,6 +277,23 @@ static const QSet<QString> kKnownModes = {
     QStringLiteral("RTTYR"),  QStringLiteral("None"),
 };
 
+// Poll a get_freq-style query until it reads the wanted Hz (within tolerance) or a
+// generous cap elapses; returns the last value seen. A tune updates the model
+// optimistically, so the readback is normally immediate; polling is belt-and-
+// suspenders so confirmations never depend on exact settle timing (fast simulator
+// or a slower real radio).
+static qint64 pollFreqField(RigctlClient& c, const QString& query, qint64 wantHz,
+                            int capMs = 1000, qint64 tolHz = 100)
+{
+    qint64 got = 0;
+    for (int elapsed = 0; elapsed < capMs; elapsed += 50) {
+        QThread::msleep(50);
+        got = c.field(c.send(query), QStringLiteral("Frequency")).toLongLong();
+        if (qAbs(got - wantHz) < tolHz) break;
+    }
+    return got;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Section 1 — Connection & Initialization
 // ═════════════════════════════════════════════════════════════════════════════
@@ -397,16 +416,17 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
     const qint64 testFreq = origFreq + 1000;
     lines = c.send(QStringLiteral("\\set_freq %1").arg(testFreq));
     r.check(QStringLiteral("2.2  set_freq returns RPRT 0"), c.ok(lines));
-    QThread::msleep(150);
 
-    lines = c.send(QStringLiteral("\\get_freq"));
-    const qint64 confirmed = c.field(lines, QStringLiteral("Frequency")).toLongLong();
+    // Poll to the same 10 Hz tolerance the assert uses — the default 100 Hz
+    // would let the loop break while still 10–100 Hz off, then fail the assert
+    // with a misleading "matched but failed" result.
+    const qint64 confirmed = pollFreqField(c, QStringLiteral("\\get_freq"), testFreq, 1000, 10);
     r.check(QStringLiteral("2.3  get_freq confirms new frequency (%1 Hz)").arg(testFreq),
             qAbs(confirmed - testFreq) < 10,
             QStringLiteral("got %1").arg(confirmed));
 
     c.send(QStringLiteral("\\set_freq %1").arg(origFreq));
-    QThread::msleep(100);
+    pollFreqField(c, QStringLiteral("\\get_freq"), origFreq); // let the restore settle
 
     // 2.4  short form get
     lines = c.send(QStringLiteral("f"));
@@ -417,24 +437,30 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
     lines = c.send(QStringLiteral("F %1").arg(testFreq));
     r.check(QStringLiteral("2.5  short form \"F\" (set_freq) returns RPRT 0"), c.ok(lines));
     c.send(QStringLiteral("F %1").arg(origFreq));
-    QThread::msleep(100);
 
-    // 2.6  VFO-prefixed get_freq VFOA — same result as bare get_freq
+    // 2.6  VFO-prefixed get_freq VFOA — same result as bare get_freq (poll the
+    //      restore above to settle, then confirm VFOA reads the original freq)
+    // Poll to exact equality — the assert below is ==, so a default 100 Hz poll
+    // tolerance could break while still a few Hz off and then fail (the same trap
+    // fixed at 2.3).
+    pollFreqField(c, QStringLiteral("\\get_freq VFOA"), gotFreq, 1000, 1);
+    // Then one authoritative read, so the RPRT assertion is explicit again rather
+    // than implied by the value comparison — pollFreqField only compares the field.
     lines = c.send(QStringLiteral("\\get_freq VFOA"));
-    r.check(QStringLiteral("2.6  get_freq VFOA returns same Hz as get_freq"),
-            c.ok(lines) && c.field(lines, QStringLiteral("Frequency")).toLongLong() == gotFreq,
-            c.field(lines, QStringLiteral("Frequency")));
+    const qint64 vfoaFreq = c.field(lines, QStringLiteral("Frequency")).toLongLong();
+    r.check(QStringLiteral("2.6  get_freq VFOA returns RPRT 0 and the same Hz as get_freq"),
+            c.ok(lines) && vfoaFreq == gotFreq,
+            QStringLiteral("%1 | %2").arg(vfoaFreq).arg(lines.join(QStringLiteral(" "))));
 
     // 2.7  VFO-prefixed set_freq VFOA <hz>
     lines = c.send(QStringLiteral("\\set_freq VFOA %1").arg(testFreq));
     r.check(QStringLiteral("2.7  set_freq VFOA returns RPRT 0"), c.ok(lines));
-    QThread::msleep(50);
-    lines = c.send(QStringLiteral("\\get_freq VFOA"));
+    const qint64 vfoaSet = pollFreqField(c, QStringLiteral("\\get_freq VFOA"), testFreq);
     r.check(QStringLiteral("2.8  get_freq VFOA confirms VFO-prefixed set_freq"),
-            c.ok(lines) && std::abs(c.field(lines, QStringLiteral("Frequency")).toLongLong() - testFreq) < 100,
-            c.field(lines, QStringLiteral("Frequency")));
+            std::abs(vfoaSet - testFreq) < 100,
+            QStringLiteral("%1").arg(vfoaSet));
     c.send(QStringLiteral("\\set_freq %1").arg(origFreq));
-    QThread::msleep(50);
+    pollFreqField(c, QStringLiteral("\\get_freq"), origFreq); // restore before section 3
 
     // 2.8b  get_freq VFOB with no split — must return RIG_ENAVAIL (-8)
     lines = c.send(QStringLiteral("\\get_freq VFOB"));
@@ -464,6 +490,102 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
                                 [](const QString& l){ return l.startsWith(QLatin1String("RPRT")); });
     r.check(QStringLiteral("2.6  extended-mode response has echo, \"Frequency:\" label, and RPRT"),
             hasEcho && hasLabel && hasRprt, raw.join(QStringLiteral(" | ")));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)
+// ═════════════════════════════════════════════════════════════════════════════
+
+void section2c(RigctlClient& c, Runner& r, qint64 origFreq)
+{
+    r.section(QStringLiteral("Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)"));
+
+    // A band change over CAT (WSJT-X/FLDigi "change band") must move the slice to
+    // the new band and have the radio recenter the panadapter so the pan follows —
+    // RadioModel::tuneSliceForCat(), the fix for the reported band-switch bug.
+    // rigctld exposes the slice frequency (get_freq) but NOT the panadapter center,
+    // so this guards the CAT round-trip across a real band boundary: the cross-band
+    // set_freq is accepted and the slice lands on the requested frequency without
+    // error, clamp, or revert. The pan-follow itself is confirmed visually.
+
+    // Target a different HF band than the current frequency: flip between 40 m
+    // (7.100 MHz) and 20 m (14.100 MHz) across the 10 MHz divide so this is always
+    // a genuine band change regardless of where the radio started.
+    const qint64 target = (origFreq < 10150000) ? 14100000 : 7100000;
+
+    QStringList lines = c.send(QStringLiteral("\\set_freq %1").arg(target));
+    r.check(QStringLiteral("2c.1  cross-band set_freq (%1 → %2 Hz) returns RPRT 0")
+                .arg(origFreq).arg(target),
+            c.ok(lines));
+    const qint64 confirmed = pollFreqField(c, QStringLiteral("\\get_freq"), target);
+    r.check(QStringLiteral("2c.2  get_freq confirms the slice followed to the new band (%1 Hz)").arg(target),
+            qAbs(confirmed - target) < 100,
+            QStringLiteral("got %1").arg(confirmed));
+
+    // Tune back across the boundary — verifies the reverse direction and restores
+    // the original band.
+    lines = c.send(QStringLiteral("\\set_freq %1").arg(origFreq));
+    r.check(QStringLiteral("2c.3  cross-band set_freq back to the original band returns RPRT 0"),
+            c.ok(lines));
+    const qint64 restored = pollFreqField(c, QStringLiteral("\\get_freq"), origFreq);
+    r.check(QStringLiteral("2c.4  get_freq confirms return to the original frequency (%1 Hz)").arg(origFreq),
+            qAbs(restored - origFreq) < 100,
+            QStringLiteral("got %1").arg(restored));
+
+    // 2c.5/2c.6  Upper-bound guard: an absurdly high target (10 THz, far above any
+    // amateur allocation) must be rejected at the boundary — RIG_EINVAL, no tune —
+    // rather than optimistically broadcast. Symmetric with the <=0/NaN rejection;
+    // the guard lives in RadioModel::isPlausibleCatTuneMhz, applied synchronously
+    // by cmdSetFreq (its queued tune can't observe the seam's bool). A finite step
+    // math (set_freq / a multi-step UP) can overflow to a value like this.
+    lines = c.send(QStringLiteral("\\set_freq 10000000000000"));
+    r.check(QStringLiteral("2c.5  absurd set_freq (10 THz) rejected with RPRT -1"),
+            c.rprt(lines) == -1, lines.join(QStringLiteral(" | ")));
+    const qint64 unchanged = pollFreqField(c, QStringLiteral("\\get_freq"), origFreq);
+    r.check(QStringLiteral("2c.6  VFO unchanged after the rejected absurd set_freq (%1 Hz)").arg(origFreq),
+            qAbs(unchanged - origFreq) < 100,
+            QStringLiteral("got %1").arg(unchanged));
+
+    // 2c.7–2c.10  Locked-slice guard: SliceModel refuses a tune on a locked slice,
+    // so acknowledging one would report success for a tune the radio never makes
+    // — the same false success the bound checks above close. cmdSetFreq tests the
+    // lock synchronously for the same reason it tests plausibility: the seam's
+    // bool is unobservable across its queued call.
+    const QString origLock =
+        c.field(c.send(QStringLiteral("\\get_func LOCK")), QStringLiteral("LOCK"));
+    lines = c.send(QStringLiteral("\\set_func LOCK 1"));
+    r.check(QStringLiteral("2c.7  set_func LOCK 1 returns RPRT 0"),
+            c.ok(lines), lines.join(QStringLiteral(" | ")));
+
+    // The lock write is queued — wait until the model reports it before tuning,
+    // or the tune would race ahead of the lock and legitimately succeed.
+    QString lockVal;
+    for (int elapsed = 0; elapsed < 1000; elapsed += 50) {
+        QThread::msleep(50);
+        lockVal = c.field(c.send(QStringLiteral("\\get_func LOCK")), QStringLiteral("LOCK"));
+        if (lockVal == QLatin1String("1")) break;
+    }
+    r.check(QStringLiteral("2c.8  get_func LOCK confirms the slice is locked"),
+            lockVal == QLatin1String("1"), lockVal);
+
+    const qint64 lockedTarget = (origFreq < 10'150'000) ? 14'150'000 : 7'150'000;
+    lines = c.send(QStringLiteral("\\set_freq %1").arg(lockedTarget));
+    r.check(QStringLiteral("2c.9  set_freq on a locked slice rejected with RPRT -1"),
+            c.rprt(lines) == -1, lines.join(QStringLiteral(" | ")));
+    const qint64 held = pollFreqField(c, QStringLiteral("\\get_freq"), origFreq);
+    r.check(QStringLiteral("2c.10 VFO unchanged after the rejected locked set_freq (%1 Hz)").arg(origFreq),
+            qAbs(held - origFreq) < 100,
+            QStringLiteral("got %1").arg(held));
+
+    // Restore the lock to whatever the radio had — every later section tunes, and
+    // a slice left locked would fail all of them.
+    c.send(QStringLiteral("\\set_func LOCK %1")
+               .arg(origLock == QLatin1String("1") ? 1 : 0));
+    for (int elapsed = 0; elapsed < 1000; elapsed += 50) {
+        QThread::msleep(50);
+        if (c.field(c.send(QStringLiteral("\\get_func LOCK")), QStringLiteral("LOCK")) == origLock)
+            break;
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1116,6 +1238,30 @@ void section5(RigctlClient& c, Runner& r, qint64 origFreq)
 
         disableSplitSettled();  // cleanup
     }
+}
+
+void section5Skip(Runner& r)
+{
+    r.section(QStringLiteral("Section 5 — Split VFO  (skipped — --no-split; single-VFO target)"));
+    for (const auto* name : {
+             "5.1  get_split_vfo baseline",     "5.2  set_split_vfo 1 VFOB",
+             "5.3  split active",               "5.4  set_split_freq",
+             "5.5  get_split_freq",             "5.5b VFOA/VFOB independent",
+             "5.6  set_split_mode",             "5.7  get_split_mode",
+             "5.7b get_split_freq_mode",        "5.7c set_split_freq_mode",
+             "5.7d get_split_freq_mode confirm","5.7e set_split_mode round-trip",
+             "5.7f VFOB level independent",     "5.7g VFO-prefixed split setters",
+             "5.8  get_vfo_info VFOB split",    "5.9  disable split",
+             "5.9b split confirmed off",        "5.10 deferred stash path",
+             "5.10b stashed split freq applied","5.11 targetable VFOB auto-enable",
+             "5.12 implicit-enable reclaim",    "5.13 maxSlices guard on demand",
+             "5.14 establish split on demand",
+             // Section 5b engages split on a second port, so it is gated with §5.
+             "5b.1 non-split port reports Split: 0 while another slice holds TX",
+             "5b.2 non-split port lists VFOA only (no foreign VFOB)",
+             "5b.3 split-enabled port still reports Split: 1",
+         })
+        r.skip(QLatin1String(name), QStringLiteral("--no-split set (single-VFO target)"));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1937,7 +2083,7 @@ void section13(const QString& host, quint16 port, int timeout,
 // Section 14 — Short-Form Character Mapping  (Hamlib source audit regression)
 // ═════════════════════════════════════════════════════════════════════════════
 
-void section14(RigctlClient& c, Runner& r)
+void section14(RigctlClient& c, Runner& r, bool doSplit)
 {
     r.section(QStringLiteral("Section 14 — Short-Form Character Mapping (Hamlib audit regression)"));
 
@@ -1991,10 +2137,17 @@ void section14(RigctlClient& c, Runner& r)
     r.check(QStringLiteral("14.6 'z' → get_xit returns XIT field"),
             c.ok(lines) && isInt(xitVal), xitVal);
 
-    // 14.7  'k' → get_split_freq_mode  (was missing before audit)
-    lines = c.send(QStringLiteral("k"));
-    r.check(QStringLiteral("14.7 'k' → get_split_freq_mode returns RPRT 0"),
-            c.ok(lines), lines.join(QStringLiteral(" | ")));
+    // 14.7  'k' → get_split_freq_mode  (was missing before audit). Returns RPRT 0
+    //       only when split is active; on a single-VFO target with no TX slice it
+    //       correctly returns RPRT -1, so skip it there (mirrors --no-split for §5).
+    if (doSplit) {
+        lines = c.send(QStringLiteral("k"));
+        r.check(QStringLiteral("14.7 'k' → get_split_freq_mode returns RPRT 0"),
+                c.ok(lines), lines.join(QStringLiteral(" | ")));
+    } else {
+        r.skip(QStringLiteral("14.7 'k' → get_split_freq_mode returns RPRT 0"),
+               QStringLiteral("--no-split set (single-VFO target — no split active)"));
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2309,6 +2462,9 @@ int main(int argc, char** argv)
         QStringLiteral("enable PTT tests (section 6) — requires dummy load or antenna"));
     QCommandLineOption cwOpt({QStringLiteral("cw")},
         QStringLiteral("enable CW/Morse tests (section 11) — requires --ptt and CW mode"));
+    QCommandLineOption noSplitOpt({QStringLiteral("no-split")},
+        QStringLiteral("skip split-VFO tests (section 5) — for single-VFO targets that "
+                       "cannot open a VFO B (e.g. the built-in demo/SimBackend)"));
     const QString defaultPty0 = defaultPtyPath(0);
     QCommandLineOption ptyOpt({QStringLiteral("pty")},
         QStringLiteral("PTY device path for section 16 (default: %1)").arg(defaultPty0),
@@ -2319,6 +2475,7 @@ int main(int argc, char** argv)
     parser.addOption(timeoutOpt);
     parser.addOption(pttOpt);
     parser.addOption(cwOpt);
+    parser.addOption(noSplitOpt);
     parser.addOption(ptyOpt);
     parser.process(app);
 
@@ -2327,6 +2484,7 @@ int main(int argc, char** argv)
     const int      timeout = parser.value(timeoutOpt).toInt();
     const bool     doPtt   = parser.isSet(pttOpt);
     const bool     doCw    = parser.isSet(cwOpt);
+    const bool     doSplit = !parser.isSet(noSplitOpt);
     const QString  ptyPath = parser.value(ptyOpt);
 
     std::cout << '\n' << bold(QStringLiteral("AetherSDR rigctld Test Suite")).toStdString() << '\n'
@@ -2367,10 +2525,15 @@ int main(int argc, char** argv)
     section1(c, r);
     section1b(c, r);
     section2(c, r, origFreq);
+    section2c(c, r, origFreq);
     section3(c, r, origMode, origPb);
     section4(c, r);
-    section5(c, r, origFreq);
-    section5b(c, r, host, port);
+    if (doSplit) {
+        section5(c, r, origFreq);
+        section5b(c, r, host, port);
+    } else {
+        section5Skip(r);
+    }
 
     if (doPtt) section6Ptt(c, r);
     else        section6Skip(r);
@@ -2385,7 +2548,7 @@ int main(int argc, char** argv)
 
     section12(c, r);
     section13(host, port, timeout, r, origFreq, origMode, origPb);
-    section14(c, r);
+    section14(c, r, doSplit);
     section15(c, r);
     sectionEdge(c, r, doCw);
     sectionPty(r, ptyPath);

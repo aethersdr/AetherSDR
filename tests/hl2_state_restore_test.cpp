@@ -10,10 +10,17 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Bands.h"
 
+#include "core/backends/SliceDelta.h"
+
 #include <QCoreApplication>
 #include <QJsonObject>
+#include <QEventLoop>
+#include <QObject>
+#include <QTimer>
+#include <QVariantMap>
 
 #include <iostream>
+#include <map>
 
 using namespace AetherSDR;
 
@@ -28,6 +35,82 @@ void check(bool condition, const char* label)
         ++g_failures;
     }
 }
+
+// A connect request for a given radio, optionally running more than one
+// receiver. The SERIAL matters to more than the settings scope now: connectRadio
+// seeds the AGC when it changes, so tests that mean "a different radio" have to
+// say so, and tests that mean "the same radio again" have to reuse it.
+//
+// numRx rides in params because that is how RadioModel passes it
+// (populateFamilyParams -> m_requestedNumRx -> buildReceivers). Anything above 1
+// is what makes the per-receiver cases reachable at all: the constructor builds
+// ONE receiver with uiNumber 0, so setSliceAgc(1, ...) on an unconnected backend
+// resolves ddcForSlice(1) to -1 and returns without doing anything.
+RadioConnectRequest hl2Request(const QString& serial, int numRx = 1)
+{
+    RadioConnectRequest req;
+    req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
+    req.port = 1024;
+    req.serial = serial;
+    if (numRx > 1)
+        req.params.insert(QStringLiteral("numRx"), numRx);
+    return req;
+}
+
+// Let a connect finish before issuing the next one.
+//
+// connectRadio() DEFERS while m_pendingConnect is set — a second connect is
+// queued behind the still-opening DSP and re-driven from finishDspSetup(). The
+// build spans event-loop turns and runs on the I/O thread, so a test that just
+// calls connectRadio() twice in a row never executes the second one at all:
+// every assertion about the second connect would pass or fail for reasons that
+// have nothing to do with it. Pump until dspSetupFinished, with a bound so a
+// wedged build fails the test rather than hanging the suite.
+void settleConnect(hl2::Hl2Backend& backend)
+{
+    QEventLoop loop;
+    QObject::connect(&backend, &hl2::Hl2Backend::dspSetupFinished, &loop,
+                     &QEventLoop::quit);
+    QTimer::singleShot(120'000, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+// Per-receiver AGC, read the way the applet reads it.
+//
+// currentOperatingState() is FLAT by design, so it cannot see the difference
+// between "every receiver was seeded" and "only the transmit one was" — the two
+// halves of the flat model that most want pinning. sliceChanged carries the pair
+// per DDC, which is exactly the surface #4909's third gap was about.
+class AgcWatcher : public QObject {
+public:
+    explicit AgcWatcher(hl2::Hl2Backend& backend)
+    {
+        QObject::connect(&backend, &IRadioBackend::sliceChanged, this,
+                         [this](int id, const SliceDelta& d) {
+                             if (d.agcMode.has_value())
+                                 m_mode[id] = *d.agcMode;
+                             if (d.agcThreshold.has_value())
+                                 m_threshold[id] = *d.agcThreshold;
+                         });
+    }
+
+    // Force a fresh publish for one slice without touching its AGC. A tune is
+    // the cheapest such event and it is one of the ~11 sites that now carry the
+    // pair. setSliceAudioMute would NOT do — it returns early when the value is
+    // unchanged, so it publishes nothing and the reader silently sees stale
+    // values.
+    void reemit(hl2::Hl2Backend& backend, int sliceId)
+    {
+        backend.setSliceFrequency(sliceId, 14'074'000.0 + 1'000.0 * sliceId);
+    }
+
+    QString mode(int sliceId) const { return m_mode.count(sliceId) ? m_mode.at(sliceId) : QString(); }
+    int threshold(int sliceId) const { return m_threshold.count(sliceId) ? m_threshold.at(sliceId) : -1; }
+
+private:
+    std::map<int, QString> m_mode;
+    std::map<int, int> m_threshold;
+};
 
 } // namespace
 
@@ -67,6 +150,8 @@ int main(int argc, char** argv)
         bogus.filterLowHz = 5'000.0;                    // low >= high
         bogus.filterHighHz = 100.0;
         bogus.sampleRateHz = 12'345;                    // snapped, not rejected
+        bogus.agcMode = QStringLiteral("medium");       // not the vocabulary
+        bogus.agcThreshold = 4'000;                   // outside 0..100
         bogus.extensionSchemaVersion = 1;
         bogus.extension = QJsonObject{
             {QStringLiteral("rfGain"),
@@ -104,6 +189,104 @@ int main(int argc, char** argv)
                       .toInt()
                   >= 0,
               "a restored per-band drive clamps to 0..100");
+        // AGC: DROPPED, not clamped or aliased. "medium" is close enough to
+        // the real "med" that wdspAgcMode() would silently accept it as its
+        // fallback — the whole reason isKnownAgcModeString() exists — and a
+        // clamped 4000 would become an AGC-T of 100 nobody chose.
+        check(snapshot.agcMode == QStringLiteral("med"),
+              "an AGC mode outside the vocabulary is dropped, not aliased");
+        check(snapshot.agcThreshold == 65,
+              "an out-of-range AGC threshold is dropped, not clamped");
+    }
+
+    // ---- the AGC pair restores, independently ------------------------------
+    // #4909: the operator's AGC lived only in the WDSP channel, so every
+    // launch reopened it on med/65 and the setting was gone.
+    {
+        hl2::Hl2Backend backend;
+        RestoredRadioState remembered;
+        remembered.agcMode = QStringLiteral("slow");
+        remembered.agcThreshold = 40;
+        backend.applyRestoredState(remembered);
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcMode == QStringLiteral("slow") && snap.agcThreshold == 40,
+              "a remembered AGC pair seeds the session (#4909)");
+        backend.disconnectRadio();
+    }
+    {
+        // Half a document: the threshold alone applies against the default
+        // mode, matching the independent validation in applyRestoredState().
+        hl2::Hl2Backend backend;
+        RestoredRadioState thresholdOnly;
+        thresholdOnly.agcThreshold = 0;   // the sentinel's whole point
+        backend.applyRestoredState(thresholdOnly);
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcThreshold == 0,
+              "a remembered AGC threshold of 0 is restored, not read as absent");
+        check(snap.agcMode == QStringLiteral("med"),
+              "the AGC mode keeps its default when the document has none");
+        backend.disconnectRadio();
+    }
+    {
+        // The operator's own change is CAPTURED — the half of the bug that
+        // made the document empty in the first place.
+        hl2::Hl2Backend backend;
+        backend.applyRestoredState(RestoredRadioState{});
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+        backend.setSliceAgc(0, QStringLiteral("fast"), 25);
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcMode == QStringLiteral("fast") && snap.agcThreshold == 25,
+              "an operator AGC change reaches the capture snapshot");
+        backend.disconnectRadio();
+    }
+    {
+        // A radio swap must not carry the previous radio's AGC: an empty
+        // restore is a full reset, and buildReceivers() deliberately keeps
+        // receiver state across the rebuild. A swap is a DIFFERENT SERIAL —
+        // which is also the identity connectRadio() seeds on, so reusing one
+        // serial here would have tested the reconnect path instead.
+        hl2::Hl2Backend backend;
+        AgcWatcher watch(backend);
+
+        RestoredRadioState radioA;
+        radioA.agcMode = QStringLiteral("fast");
+        radioA.agcThreshold = 12;
+        backend.applyRestoredState(radioA);
+        backend.connectRadio(hl2Request(QStringLiteral("AA:BB:CC:DD:EE:FF")));
+        settleConnect(backend);
+        backend.disconnectRadio();
+
+        backend.applyRestoredState(RestoredRadioState{});   // radio B: no memory
+        backend.connectRadio(hl2Request(QStringLiteral("11:22:33:44:55:66")));
+        settleConnect(backend);
+        const RestoredRadioState snap = backend.currentOperatingState();
+        check(snap.agcMode == QStringLiteral("med") && snap.agcThreshold == 65,
+              "a memoryless radio comes up on the defaults, never the previous "
+              "radio's AGC");
+        // And on the RECEIVERS, not only in the capture snapshot: the snapshot
+        // reads a member, so it would report the reset even if the receivers
+        // still ran radio A's pair and the applet still showed it.
+        watch.reemit(backend, 0);
+        check(watch.mode(0) == QStringLiteral("med") && watch.threshold(0) == 65,
+              "the swap resets the RECEIVER too, not just the capture member");
+        backend.disconnectRadio();
     }
 
     // ---- restored state seeds the session at connect ----------------------
@@ -531,6 +714,118 @@ int main(int argc, char** argv)
         const RestoredRadioState cwSnap = cw.currentOperatingState();
         check(cwSnap.filterLowHz == -150.0 && cwSnap.filterHighHz == 150.0,
               "a new-domain CW passband survives the guard unchanged");
+    }
+
+    // ---- the flat AGC model, across more than one receiver -----------------
+    //
+    // Every other case here runs a single DDC, so the two halves of the flat
+    // design were asserted nowhere: seedReceiverAgc() writing EVERY receiver,
+    // and capture following the last receiver the operator touched rather than
+    // the transmit one. A refactor that seeded only rx(m_txDdc), or that read
+    // capture back off the TX receiver, passed the whole suite.
+    //
+    // THIS BLOCK MUST CONNECT, and with numRx > 1. The constructor builds one
+    // receiver at uiNumber 0, so on an unconnected backend setSliceAgc(1, ...)
+    // resolves to no receiver and returns silently — which is exactly how an
+    // earlier version of this block asserted nothing at all while reading like
+    // coverage.
+    {
+        hl2::Hl2Backend backend;
+        AgcWatcher watch(backend);
+        RestoredRadioState remembered;
+        remembered.agcMode = QStringLiteral("slow");
+        remembered.agcThreshold = 40;
+        backend.applyRestoredState(remembered);
+        backend.connectRadio(hl2Request(QStringLiteral("AA:BB:CC:DD:EE:F1"), 2));
+        settleConnect(backend);
+
+        // Capture before any operator action reports what was restored, not a
+        // default.
+        const RestoredRadioState seeded = backend.currentOperatingState();
+        check(seeded.agcMode == QStringLiteral("slow") && seeded.agcThreshold == 40,
+              "a capture before any AGC change reports the restored pair");
+
+        // EVERY receiver, not just the transmit one. This is the half that
+        // capture cannot see, because capture is flat.
+        watch.reemit(backend, 0);
+        watch.reemit(backend, 1);
+        check(watch.mode(0) == QStringLiteral("slow") && watch.threshold(0) == 40
+                  && watch.mode(1) == QStringLiteral("slow")
+                  && watch.threshold(1) == 40,
+              "the remembered pair seeds EVERY receiver, not only the TX one");
+
+        // The operator moves AGC on a NON-transmit slice. Capture must follow
+        // the action; reading rx(m_txDdc) would report the untouched pair and
+        // the change would be silently lost at the next launch.
+        backend.setSliceAgc(/*sliceId=*/1, QStringLiteral("fast"), 30);
+        const RestoredRadioState after = backend.currentOperatingState();
+        check(after.agcMode == QStringLiteral("fast") && after.agcThreshold == 30,
+              "capture follows the last AGC the operator set, not the TX receiver");
+        // ...and it is genuinely per-receiver at runtime: RX1 keeps slow/40.
+        watch.reemit(backend, 0);
+        check(watch.mode(0) == QStringLiteral("slow") && watch.threshold(0) == 40,
+              "an AGC change on RX2 leaves RX1 alone (the control is per-receiver)");
+
+        // An unknown mode string is refused on the way in, so the capture side
+        // can never store something the restore side would drop — and the
+        // ECHO keeps the old value too, which is what the DSP is now told to
+        // run (setSliceAgc derives the WDSP mode from r->agcMode, not from the
+        // caller's string; deriving it from the string left the channel on
+        // WDSP's medium fallback while every visible surface said "fast").
+        backend.setSliceAgc(/*sliceId=*/1, QStringLiteral("medium"), 30);
+        const RestoredRadioState bogusMode = backend.currentOperatingState();
+        check(bogusMode.agcMode == QStringLiteral("fast"),
+              "an unknown AGC mode string is refused rather than stored");
+        watch.reemit(backend, 1);
+        check(watch.mode(1) == QStringLiteral("fast"),
+              "a refused AGC mode leaves the published pair on the old value");
+        backend.disconnectRadio();
+    }
+
+    // ---- an auto-reconnect does not flatten live per-receiver AGC ----------
+    //
+    // RadioModel::handRestoredStateToBackend() re-hands the stored document
+    // before EVERY connect, the reconnect timer's included, and buildReceivers()
+    // deliberately carries receiver state across the rebuild. Seeding from
+    // applyRestoredState() therefore overwrote RX2's live AGC with the flat
+    // remembered pair on every dropped link, while its mode and passband
+    // survived — a within-session loss on the very path the sibling
+    // mode/passband restore engineers around. Seeding now lives at connectRadio()
+    // and is keyed on the serial, so the same radio returning is left alone.
+    {
+        hl2::Hl2Backend backend;
+        AgcWatcher watch(backend);
+        const QString serial = QStringLiteral("AA:BB:CC:DD:EE:F2");
+
+        RestoredRadioState remembered;
+        remembered.agcMode = QStringLiteral("slow");
+        remembered.agcThreshold = 40;
+        backend.applyRestoredState(remembered);
+        backend.connectRadio(hl2Request(serial, 2));
+        settleConnect(backend);
+
+        // The operator diverges the two receivers within the session.
+        backend.setSliceAgc(0, QStringLiteral("slow"), 40);
+        backend.setSliceAgc(1, QStringLiteral("fast"), 30);
+
+        // Exactly what the reconnect timer does: re-hand the (flat) document,
+        // then re-drive the connect with the SAME serial. The document holds
+        // the last pair the operator set, so an unconditional seed would pull
+        // RX1 onto fast/30.
+        RestoredRadioState stored;
+        stored.agcMode = QStringLiteral("fast");
+        stored.agcThreshold = 30;
+        backend.applyRestoredState(stored);
+        backend.connectRadio(hl2Request(serial, 2));
+        settleConnect(backend);
+
+        watch.reemit(backend, 0);
+        watch.reemit(backend, 1);
+        check(watch.mode(0) == QStringLiteral("slow") && watch.threshold(0) == 40,
+              "an auto-reconnect leaves RX1's live AGC alone (#4909 follow-up)");
+        check(watch.mode(1) == QStringLiteral("fast") && watch.threshold(1) == 30,
+              "an auto-reconnect leaves RX2's live AGC alone");
+        backend.disconnectRadio();
     }
 
     return g_failures == 0 ? 0 : 1;

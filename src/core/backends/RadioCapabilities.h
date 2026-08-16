@@ -168,6 +168,7 @@ struct RadioCapabilities {
         RfGain      = 1u << 3,  // LNA/preamp gain (per band — see RFC PR 3)
         TxSetpoints = 1u << 4,  // TX drive setpoints (per band); never keying
         Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
+        Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
@@ -207,6 +208,25 @@ struct RadioCapabilities {
     // Flex only, today. The name is the CONCEPT, not the vendor — a future
     // radio with LMS filters says true and gets the same three buttons.
     bool hasLmsNoiseFilters = false;
+
+    // THIS HOST runs an impulse noise blanker on the radio's IQ, so the NB
+    // control is real even on a radio whose own firmware has no DSP.
+    //
+    // The exact shape of the manual-notch exception, one field over: on a
+    // direct-sampling backend the blanker either happens in WDSP on this host
+    // or it does not happen at all, so gating NB on hasRadioSideDsp removed a
+    // WORKING control rather than an empty one — the mirror image of the
+    // HERMES §17 failure that flag exists to prevent.
+    //
+    // NARROWER THAN "the radio has a noise blanker", deliberately. It says
+    // where the blanker runs, because that is what varies and what decides
+    // whether this application has anything to do. A Flex leaves it false and
+    // gets its NB from hasRadioSideDsp; the two are OR'd at the button.
+    //
+    // Requires an IQ path this host actually demodulates. A backend that
+    // receives finished audio has nothing to blank however much it would like
+    // to, and must leave this false.
+    bool hasHostNoiseBlanker = false;
 
     // The radio has ONE operator-placed notch in its own DSP: an enable and a
     // position within the passband. The IC-705 spends 16 48 on the enable and

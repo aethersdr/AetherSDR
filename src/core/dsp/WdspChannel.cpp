@@ -3,6 +3,7 @@
 #include <aether_wdsp.h>
 #include <fftw3.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -275,9 +276,57 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
 
     const uint64_t allocationsBefore = wdspPortAllocationSequence();
     int wdspError = 0;
+
+    // ── Noise blanker, ahead of the channel ───────────────────────────────
+    //
+    // Inside the allocation-guarded window deliberately: xanb() allocates
+    // nothing today, and if a future WDSP snapshot changes that, this reports
+    // AllocationViolation rather than letting a malloc land on the real-time
+    // path unnoticed.
+    const float* channelI = inputI.data();
+    const float* channelQ = inputQ.data();
+    if (m_nbActive.load(std::memory_order_relaxed)) {
+        if (m_nbHold.load(std::memory_order_relaxed)) {
+            // Transmitting. Skip the stage entirely — see setNoiseBlankerHold.
+        } else {
+            // DELIBERATELY NOT FLUSHED on the way out of a hold, and this is
+            // the whole point of holding rather than muting. The stage was
+            // SKIPPED while held, not fed, so its running average still holds
+            // the pre-transmit signal level and it is already armed for the
+            // first receive sample.
+            //
+            // Flushing here would reset that average to full scale, and at
+            // backtau = 0.05 s nothing could exceed threshold * average for
+            // ~200 ms — an unarmed blanker at the start of every receive
+            // period, which is exactly the failure aether_wdsp.h's ARMING
+            // DELAY note warns about and exactly the window this hold exists
+            // to protect. Measured: with a flush here the blanked/unblanked
+            // impulse peak ratio was 1.000 for the first 200 ms after each
+            // transmit — bit-identical to the blanker being switched off —
+            // against 0.43 once settled. Without it, 0.52 immediately.
+            //
+            // What the delay line carries across the hold is trans_count +
+            // adv_count samples: 8 at tau/advtime = 0.0001 s, or 0.17 ms of
+            // pre-transmit audio. That is not worth de-arming the stage for.
+            const std::size_t n = inputI.size();
+            for (std::size_t k = 0; k < n; ++k) {
+                m_nbInterleaved[2 * k] = static_cast<double>(inputI[k]);
+                m_nbInterleaved[2 * k + 1] = static_cast<double>(inputQ[k]);
+            }
+            // In place: ANB reads and writes the same buffer.
+            xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            for (std::size_t k = 0; k < n; ++k) {
+                m_nbI[k] = static_cast<float>(m_nbInterleaved[2 * k]);
+                m_nbQ[k] = static_cast<float>(m_nbInterleaved[2 * k + 1]);
+            }
+            channelI = m_nbI.data();
+            channelQ = m_nbQ.data();
+        }
+    }
+
     fexchange2(m_channelId,
-               const_cast<float*>(inputI.data()),
-               const_cast<float*>(inputQ.data()),
+               const_cast<float*>(channelI),
+               const_cast<float*>(channelQ),
                outputLeft.data(), outputRight.data(), &wdspError);
     const uint64_t allocationsAfter = wdspPortAllocationSequence();
     m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
@@ -610,6 +659,89 @@ int WdspChannel::wdspMode(Mode mode) noexcept
     return static_cast<int>(mode);
 }
 
+double WdspChannel::noiseBlankerThresholdForLevel(int level) noexcept
+{
+    const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
+    // Geometric from 100 down to 4 — see the header. 0.04 is 4/100, so the
+    // exponent form makes the endpoints readable: 100 * 0.04^0 = 100 and
+    // 100 * 0.04^1 = 4, with the midpoint at 100 * 0.2 = 20.
+    return 100.0 * std::pow(0.04, clamped / 100.0);
+}
+
+void WdspChannel::openNoiseBlanker() noexcept
+{
+    if (m_nbOpen || m_config.direction != Direction::Receive) {
+        return;
+    }
+    // Staging buffers first: processIq() may run the moment the channel starts,
+    // and it must never be the thing that sizes them.
+    m_nbInterleaved.assign(2 * m_config.inputBlockSize, 0.0);
+    m_nbI.assign(m_config.inputBlockSize, 0.0f);
+    m_nbQ.assign(m_config.inputBlockSize, 0.0f);
+
+    // Created whether or not the operator has it switched on, so that enabling
+    // it later is a run-flag store rather than an allocation on a live channel.
+    // Times are pihpsdr's (receiver.c create_anbEXT); only the threshold is
+    // ours to move, because only the threshold has a control above the seam.
+    create_anbEXT(m_channelId,
+                  m_config.noiseBlankerEnabled ? 1 : 0,
+                  static_cast<int>(m_config.inputBlockSize),
+                  static_cast<double>(m_config.inputSampleRate),
+                  0.0001,   // tau       — signal<->zero transition time
+                  0.0001,   // hangtime  — hold at zero after the impulse
+                  0.0001,   // advtime   — blank this far ahead of it
+                  0.05,     // backtau   — averaging time for the trigger level
+                  noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel));
+    m_nbOpen = true;
+    m_nbActive.store(m_config.noiseBlankerEnabled, std::memory_order_relaxed);
+}
+
+void WdspChannel::closeNoiseBlanker() noexcept
+{
+    if (!m_nbOpen) {
+        return;
+    }
+    m_nbActive.store(false, std::memory_order_relaxed);
+    destroy_anbEXT(m_channelId);
+    m_nbOpen = false;
+}
+
+bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive) {
+        return false;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    m_config.noiseBlankerEnabled = on;
+    m_config.noiseBlankerLevel = std::clamp(level, 0, 100);
+    if (m_nbOpen) {
+        SetEXTANBThreshold(m_channelId,
+                           noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel));
+        if (on) {
+            // Flush BEFORE running. Whatever the delay line holds is a fragment
+            // of the last enabled period, and on the HL2 that can be a
+            // transmit-era gap; playing it out is an audible tick at the exact
+            // moment the operator asked for less noise.
+            flush_anbEXT(m_channelId);
+        }
+        SetEXTANBRun(m_channelId, on ? 1 : 0);
+    }
+    m_nbActive.store(on && m_nbOpen, std::memory_order_relaxed);
+    endControlOperation();
+    return true;
+}
+
+void WdspChannel::setNoiseBlankerHold(bool hold) noexcept
+{
+    // No beginControlOperation(): this is called from the same thread that
+    // drives processIq() on a transmit edge, and taking the control handshake
+    // there would deadlock against a callback in flight. Both stores are
+    // atomic and the flush they schedule happens inside processIq() itself.
+    m_nbHold.store(hold, std::memory_order_relaxed);
+}
+
 void WdspChannel::open() noexcept
 {
     const std::scoped_lock setupLock(g_setupMutex);
@@ -649,6 +781,9 @@ void WdspChannel::open() noexcept
     // lock -- a kill or a crash before exit must not throw the measurement away.
     exportWisdomNow();
     armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
+    // Before the channel starts, so the first block through processIq() finds
+    // its staging buffers sized and the stage already created.
+    openNoiseBlanker();
     // Fully configured -- now run. dmode 0: nothing to flush on the way up.
     SetChannelState(m_channelId, 1, 0);
     m_open = true;
@@ -666,6 +801,10 @@ void WdspChannel::close() noexcept
     // entirely, which is both a click on the way out and a race.
     SetChannelState(m_channelId, 0, 1);
     CloseChannel(m_channelId);
+    // After the channel has stopped and drained: while it is still running a
+    // callback can be inside processIq(), and destroying the stage under one
+    // frees the delay line out from under xanb().
+    closeNoiseBlanker();
     m_open = false;
 }
 

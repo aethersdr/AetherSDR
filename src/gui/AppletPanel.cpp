@@ -14,6 +14,7 @@
 #include "DemoApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
+#include "VkampApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -788,6 +789,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_speBtn = entry.btn;
         markHardwareConditional("SPE");
+        m_appletOrder.append(entry);
+    }
+
+    // VK3AMP amplifier — independent of both AMP (PGXL) and ACOM: a station
+    // can have a radio-relayed PGXL, a direct ACOM, and a direct VK3AMP all
+    // present at once, each fully independent hardware. See
+    // docs/architecture/vkamp-amplifier-design.md.
+    m_vkampApplet = new VkampApplet;
+    {
+        auto entry = makeEntry("VKAMP", "VK3AMP Amplifier", m_vkampApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_vkampBtn = entry.btn;
+        markHardwareConditional("VKAMP");
         m_appletOrder.append(entry);
     }
 
@@ -1677,6 +1691,12 @@ void AppletPanel::setAcomVisible(bool visible)
 void AppletPanel::setSpeVisible(bool visible)
 {
     updateHardwareAvailability("SPE", "Applet_SPE", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setVkampVisible(bool visible)
+{
+    updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
     applyBarLayout();
 }
 

@@ -291,6 +291,21 @@ std::optional<CivMode> modeFromNeutral(const std::string& neutral, bool& dataMod
     // microphone while the operator is running FT8.
     if (u == "DIGU") { dataModeOut = true; return CivMode::Usb; }
     if (u == "DIGL") { dataModeOut = true; return CivMode::Lsb; }
+    // DFM is FM with the same DATA flag, and it was missing here. Two costs,
+    // and the second is the expensive one:
+    //
+    //   1. DFM fell through to nullopt, so setSliceMode() took the "no
+    //      equivalent" path and re-asserted the radio's current mode. Selecting
+    //      DFM in the UI simply reverted — indistinguishable from the control
+    //      being ignored.
+    //   2. Worse, a radio the operator had put into FM-D from the front panel
+    //      reported back as plain FM (modeToNeutral was lossy the same way), so
+    //      the next mode write cleared the DATA flag and transmit audio came
+    //      from the MICROPHONE rather than the WLAN modulator — exactly the
+    //      failure the DIGU/DIGL comment above describes, but for packet
+    //      instead of FT8. A 2 m AX.25 frame keyed the radio and put room noise
+    //      on the air.
+    if (u == "DFM")  { dataModeOut = true; return CivMode::Fm; }
     if (u == "RTTY") return CivMode::Rtty;
 
     // DSB, SAM and DRM have no IC-705 equivalent. Returning nullopt rather than
@@ -307,7 +322,12 @@ std::string modeToNeutral(CivMode mode, bool dataMode)
     case CivMode::Am:   return "AM";
     case CivMode::Cw:   return "CWU";
     case CivMode::CwR:  return "CWL";
-    case CivMode::Fm:   return "FM";
+    // Symmetric with Lsb/Usb above: the DATA flag is what distinguishes FM-D
+    // from FM, and returning plain "FM" for both made the round trip lossy. A
+    // radio sitting in FM-D reported as FM, so the UI showed FM, and the next
+    // mode write sent FM with the flag clear — silently taking the radio OUT of
+    // data mode and back onto the microphone.
+    case CivMode::Fm:   return dataMode ? "DFM" : "FM";
     case CivMode::Wfm:  return "WFM";
     // AetherSDR has no RTTY neutral mode. Mapping to the data mode on the
     // matching sideband is LOSSY IN NAME but correct in the two things that

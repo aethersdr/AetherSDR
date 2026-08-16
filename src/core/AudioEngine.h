@@ -44,6 +44,7 @@ class RNNoiseFilter;
 class DeepFilterFilter;
 class NvidiaAfxFilter;
 class Resampler;
+class TxVoiceProcessor;
 class ClientEq;
 class ClientComp;
 class ClientGate;
@@ -178,7 +179,8 @@ public:
     bool hasKiwiSdrAudioSource(const QString& sourceId) const;
     int  txInputSampleRate() const { return m_txInputRate; }
     int  txInputChannelCount() const { return m_txInputChannels; }
-    bool txInputResamplingTo24k() const { return m_txNeedsResample; }
+    bool txInputNormalizationTo48k() const;
+    bool txRadeResamplingTo24k() const { return m_radeTxNeedsResample; }
     bool rxOutputResamplingActive() const { return m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE; }
     QJsonArray audioEndpointDiagnostics() const;
     QJsonObject startAutomationAudioCapture(int durationMs,
@@ -363,11 +365,9 @@ public:
     // registration — clear to nullptr before destroying the monitor.
     void setTxPostDspMonitor(ClientPuduMonitor* m) noexcept;
 
-    // Generalised TX DSP chain — each stage is a separate processing
-    // block run in order on the TX audio path.  Only Eq and Comp are
-    // implemented today; the remaining stages are placeholders for
-    // Phase 2+ work (Gate, DeEss, Tube, Enh from #1661) and are no-ops
-    // until their DSP classes ship.
+    // Generalised TX DSP chain — each stage is a separate float processing
+    // block run in order by TxVoiceProcessor at 48 kHz. Numeric values are
+    // persisted in the packed atomic and therefore form a stable contract.
     enum class TxChainStage : uint8_t {
         None   = 0,   // sentinel / end-of-list marker
         Gate   = 1,
@@ -616,7 +616,15 @@ signals:
     // which is RADE-only), so it is the source for Client-Side TX recording:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
-    void txFinalMonitorPcmReady(const QByteArray& int16Stereo);
+    //
+    // `clientLeveled` is true when the frames came from an external TCI/DAX
+    // client (feedDaxTxAudio's markExternalSource) rather than the mic chain or
+    // the engine's own tone generators. Such a client owns its level — WSJT-X's
+    // Pwr slider attenuates the audio it streams — and a host-modulating
+    // backend must not run makeup gain over it (#4796). Slots that only record
+    // or meter the stream can ignore the flag (Qt permits connecting to a slot
+    // with fewer arguments).
+    void txFinalMonitorPcmReady(const QByteArray& int16Stereo, bool clientLeveled);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio
     // thread while the radio is keyed for CW (no mic-driven onTxAudioReady in
@@ -836,42 +844,16 @@ private:
         RxDspSource source,
         ExternalRxAudioSourceState* externalSource) const;
 #endif
-    // Apply client-side TX EQ in-place. No-op if disabled. Caller owns data.
-    void applyClientEqTxInt16(QByteArray& int16stereo);
-    void applyClientEqTxFloat32(QByteArray& float32);
-    // Apply client-side TX compressor in-place.  No-op if disabled.
-    void applyClientCompTxInt16(QByteArray& int16stereo);
-    void applyClientCompTxFloat32(QByteArray& float32);
     // RX comp operates on the post-Gate float32 stereo buffer.
     void applyClientCompRxFloat32(QByteArray& float32);
-    // Apply client-side TX gate in-place.  No-op if disabled.
-    void applyClientGateTxInt16(QByteArray& int16stereo);
-    void applyClientGateTxFloat32(QByteArray& float32);
     // RX gate operates on the post-EQ float32 stereo buffer.
     void applyClientGateRxFloat32(QByteArray& float32);
-    // Apply client-side TX de-esser in-place.  No-op if disabled.
-    void applyClientDeEssTxInt16(QByteArray& int16stereo);
-    void applyClientDeEssTxFloat32(QByteArray& float32);
     // RX de-esser operates on the post-Comp float32 stereo buffer (#2425).
     void applyClientDeEssRxFloat32(QByteArray& float32);
-    // Apply client-side TX tube saturator in-place.  No-op if disabled.
-    void applyClientTubeTxInt16(QByteArray& int16stereo);
-    void applyClientTubeTxFloat32(QByteArray& float32);
     // RX tube operates on the post-Comp float32 stereo buffer.
     void applyClientTubeRxFloat32(QByteArray& float32);
-    // Apply client-side TX PUDU exciter in-place.  No-op if disabled.
-    void applyClientPuduTxInt16(QByteArray& int16stereo);
-    void applyClientPuduTxFloat32(QByteArray& float32);
     // RX pudu operates on the post-Tube float32 stereo buffer.
     void applyClientPuduRxFloat32(QByteArray& float32);
-    // Apply client-side TX reverb in-place.  No-op if disabled.
-    void applyClientReverbTxInt16(QByteArray& int16stereo);
-    void applyClientReverbTxFloat32(QByteArray& float32);
-    void applyClientFinalLimiterTxInt16(QByteArray& int16stereo);
-    void applyClientFinalLimiterTxFloat32(QByteArray& float32);
-    // Apply the whole TX DSP chain (CMP + EQ) in the configured order.
-    void applyClientTxDspInt16(QByteArray& int16stereo);
-    void applyClientTxDspFloat32(QByteArray& float32);
 
     void accumulatePcMicMeterInt16Stereo(const QByteArray& int16stereo);
     void logTxInputChannelDiagnostics(const TxMicChannelNormalizer::Diagnostics& diagnostics,
@@ -1017,10 +999,15 @@ private:
     // when TX-decode is off.
     std::atomic<bool> m_cwDecodeTxTapEnabled{false};
     std::atomic<bool> m_tncRxTapEnabled{false};
-    bool  m_txNeedsResample{false};      // TX: input rate != 24kHz, needs resampling
+    bool  m_radeTxNeedsResample{false};  // RADE: input rate != 24 kHz
     bool  m_txInputMono{false};          // TX: legacy convenience mirror of m_txInputChannels == 1
     int   m_txInputChannels{2};          // TX: actual negotiated input channel count
     int   m_txInputRate{24000};          // TX: actual input sample rate
+    // TX: actual negotiated input sample format. Int16 is the first ladder rung
+    // for mic capture, but a Float32-only virtual driver legitimately lands on
+    // the Float fallback (#1090), so the support snapshot must report what was
+    // negotiated rather than assume the common case.
+    QAudioFormat::SampleFormat m_txInputFormat{QAudioFormat::Int16};
     TxMicChannelNormalizer::ChannelMode m_txMicChannelMode{
         TxMicChannelNormalizer::ChannelMode::Auto};
     TxMicChannelNormalizer::AutoState m_txMicChannelState;
@@ -1029,7 +1016,7 @@ private:
     TxMicChannelNormalizer::AutoState m_daxRadioTxChannelState;
     QElapsedTimer m_lastTxMicChannelLog;
     QElapsedTimer m_lastDaxRadioChannelLog;
-    std::unique_ptr<Resampler> m_txResampler;  // e.g. 48k→24k (lazy init)
+    std::unique_ptr<Resampler> m_txResampler;  // RADE e.g. 48k -> 24k (lazy init)
 
     // DSP lifecycle mutex: held during feedAudioData() DSP section AND
     // during enable/disable to prevent use-after-free (#502)
@@ -1071,9 +1058,6 @@ private:
     // RN2 ownership pattern above.  (#2813)
     std::unique_ptr<RNNoiseFilter> m_rn2Tx;
     std::atomic<bool> m_rn2TxEnabled{false};
-    // Scratch buffer for int16 ↔ float32 conversion around RN2 TX.
-    // Audio-thread only — grows once to steady state, then alloc-free.
-    QByteArray m_rn2TxF32In;
 
     // Client-side DFNR (DeepFilterNet3)
 #ifdef HAVE_DFNR
@@ -1114,6 +1098,10 @@ private:
     std::unique_ptr<ClientTxTestTone>   m_clientTxTestTone;
     std::unique_ptr<WsprBeacon>         m_wsprBeacon;
     std::unique_ptr<ClientQuindarTone>  m_clientQuindarTone;
+    std::unique_ptr<TxVoiceProcessor>   m_txVoiceProcessor;
+    // Audio-thread only: prevents duplicate queued recovery work after the
+    // impossible matched-egress frame-count mismatch.
+    bool m_txVoiceEgressRecoveryQueued{false};
     // Audio-thread-loaded pointer for the post-final-limiter monitor
     // (final-output recording).  Same lock-free atomic pointer pattern
     // as m_txPostDspMonitor.
@@ -1125,8 +1113,7 @@ private:
     // a uint64_t so the audio thread can load the full order in a
     // single atomic read per block.  TxChainStage::None terminates the
     // list; unused slots are zero.  Default canonical order:
-    // [Gate, Eq, DeEss, Comp, Tube, Enh] — but only Eq and Comp have
-    // implementations today, so the others are no-op pass-throughs.
+    // [Gate, Eq, DeEss, Comp, Tube, Enh, Reverb].
     std::atomic<uint64_t> m_txChainPacked{0};
     // Master-bypass snapshot — the stages that were enabled at the
     // moment setTxBypassed(true) was called.  Used solely to restore
@@ -1157,22 +1144,14 @@ private:
     bool m_rxBypassActive{false};
     // Scratch buffer for in-place EQ on the RX path (avoids per-call alloc).
     QByteArray m_clientEqRxScratch;
-    QByteArray m_clientEqTxScratch;
-    QByteArray m_clientCompTxScratch;
     QByteArray m_clientCompRxScratch;
-    QByteArray m_clientGateTxScratch;
     QByteArray m_clientGateRxScratch;
-    QByteArray m_clientDeEssTxScratch;
     QByteArray m_clientDeEssRxScratch;
-    QByteArray m_clientTubeTxScratch;
     QByteArray m_clientTubeRxScratch;
-    QByteArray m_clientPuduTxScratch;
     QByteArray m_clientPuduRxScratch;
-    QByteArray m_clientReverbTxScratch;
-    QByteArray m_clientFinalLimiterTxScratch;
     // Post-EQ analyzer tap. One ring per path, mono (L+R averaged).
-    // Audio thread writes via tapClientEqRxStereo() / tapClientEqTxInt16()
-    // / tapClientEqTxFloat32(); UI thread snapshots via the public
+    // Audio thread writes via tapClientEqRxStereo() / tapClientEqTxFloat32();
+    // UI thread snapshots via the public
     // copyRecent*() accessors. Mutex is held for microseconds only.
     mutable std::mutex m_clientEqTapMutex;
     float              m_clientEqTapRx[kClientEqTapSize]{};
@@ -1180,7 +1159,6 @@ private:
     int                m_clientEqTapRxWrite{0};
     int                m_clientEqTapTxWrite{0};
     void tapClientEqRxStereo(const float* stereoInterleaved, int frames);
-    void tapClientEqTxInt16(const int16_t* int16stereo, int frames);
     void tapClientEqTxFloat32(const float* f32, int samples, int channels);
 
     // Pre-allocated NR2 output buffers (avoid per-call heap allocation)

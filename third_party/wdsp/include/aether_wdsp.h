@@ -52,6 +52,77 @@ void SetRXASNBAOutputBandwidth(int channel, double lowHz, double highHz);
 void SetRXAShiftFreq(int channel, double shiftHz);
 void SetRXAShiftRun(int channel, int run);
 
+// ── Impulse noise blanker (ANB, nob.c) ────────────────────────────────────
+//
+// NOT part of the RXA chain, and that is a property of WDSP rather than a
+// choice made here: RXA.c never instantiates an ANB, so unlike the AGC or the
+// notches there is no SetRXAANB* to call. The blanker is a stage the HOST runs
+// on raw IQ before handing it to the channel — which is also the only place it
+// CAN run, because blanking an impulse has to happen before any filter smears
+// it across time. Both reference clients do exactly this (pihpsdr
+// receiver.c full_rx_buffer, Thetis cmaster.c).
+//
+// IDENTIFIED BY AN `id`, from a table of 32 in nob.c that is INDEPENDENT of
+// WDSP's channel table. This host deliberately passes the WdspChannel's own
+// channel id as the blanker id: both tables are 32 entries, WdspChannel already
+// owns the allocation and release of that number, and reusing it means one
+// lifetime instead of two that can drift apart. Anything else linking against
+// this facade must do the same, or claim ids from a separate allocator.
+//
+// BUFFER FORMAT is INTERLEAVED DOUBLE — I,Q,I,Q — `buffsize` complex samples
+// long, and the same pointer may be passed as both in and out for in-place
+// operation. This is fexchange0's format, not fexchange2's separate float
+// planes, so a host on fexchange2 has to interleave into a staging buffer.
+//
+// HANDEDNESS DOES NOT MATTER. xanb() looks only at sqrt(I*I + Q*Q), so a
+// conjugated wire (the HPSDR convention — see Hl2RxDsp::processIqBlock) blanks
+// identically to an unconjugated one. This is the one IQ stage on this path
+// with no sign trap in it.
+//
+// PARAMETERS. `threshold` is the trigger: a sample blanks when its magnitude
+// exceeds threshold times the running average magnitude, so SMALLER is MORE
+// aggressive. tau/hangtime/advtime are the transition, hold-off and look-ahead
+// times in seconds; backtau is the time constant of that running average.
+// pihpsdr's fixed set is (0.0001, 0.0001, 0.0001, 0.05, 20).
+//
+// ARMING DELAY, which is not obvious and is worth designing around: flush
+// (and creation) sets the running average to 1.0 — full scale — so immediately
+// afterwards nothing exceeds threshold * avg and the blanker does nothing until
+// the average has decayed to the real signal level. At backtau = 0.05 s that is
+// a few hundred milliseconds. The failure direction is the safe one (no
+// blanking rather than blanking everything), but a host that flushes on every
+// transmit-to-receive edge gets an unarmed blanker for the first moment of
+// every receive period.
+//
+// Every Set* below is control-path work: they take the stage's lock. NONE of
+// them allocate — create_anb sizes the delay line once at
+// (MAX_TAU + MAX_ADVTIME) * MAX_SAMPLERATE, independent of both buffsize and
+// samplerate, so SetEXTANBBuffsize only stores the count and
+// SetEXTANBSamplerate only re-derives the sample counts through initBlanker().
+//
+// xanbEXT allocates nothing and is safe on the real-time path. flush_anbEXT
+// allocates nothing either, but it is CHEAP rather than FREE: it takes the same
+// lock as the setters and initBlanker() memsets the whole delay line (~98 KB)
+// and rebuilds the transition table. Calling it from the audio callback is
+// permissible; calling it on every block, or on every transmit-to-receive edge,
+// is not what it is for — see the ARMING DELAY note above.
+void create_anbEXT(int id, int run, int buffsize, double samplerate, double tau,
+                   double hangtime, double advtime, double backtau,
+                   double threshold);
+void destroy_anbEXT(int id);
+// Resets the state machine and the delay line, and re-arms as described above.
+void flush_anbEXT(int id);
+// In-place safe: pass the same pointer for both.
+void xanbEXT(int id, double* in, double* out);
+void SetEXTANBRun(int id, int run);
+void SetEXTANBBuffsize(int id, int size);
+void SetEXTANBSamplerate(int id, int rate);
+void SetEXTANBTau(int id, double tau);
+void SetEXTANBHangtime(int id, double time);
+void SetEXTANBAdvtime(int id, double time);
+void SetEXTANBBacktau(int id, double tau);
+void SetEXTANBThreshold(int id, double thresh);
+
 // ── Manual notch filters (the notched-bandpass stage, nbp0) ────────────────
 //
 // This is the host-side equivalent of a Flex TNF, and on a direct-sampling

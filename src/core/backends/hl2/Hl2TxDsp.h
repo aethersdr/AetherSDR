@@ -95,7 +95,37 @@ public:
 
 public slots:
     // Mono TX audio at inputSampleRateHz.
-    void processAudioBlock(const std::vector<float>& mono);
+    //
+    // `clientLeveled` marks audio whose level is owned by an external client —
+    // TCI or DAX TX audio (WSJT-X, fldigi, the PipeWire bridge), where the
+    // sender has already applied its own power/attenuation control.
+    //
+    // THE CONTRACT IS ONE-SIDED, and its two halves are different claims:
+    //
+    //   * The CLIENT owns its level upward. Nothing here adds gain it did not
+    //     ask for — the ALC's makeup half is ceilinged at unity for such
+    //     blocks. That half is #4796: an ALC exists to close the 20-30 dB gap
+    //     between a microphone and full modulation, and applied to a client
+    //     that sets its own level it does the opposite of what either party
+    //     wants — it normalizes the client's level control away above the hold
+    //     threshold, and freezes into a path-dependent gain below it.
+    //   * The MODULATOR owns its own ceiling. Reduction still applies, because
+    //     that half was never the bug. m_micGain reaches 10x (+20 dB), so a
+    //     full-scale client with the TX gain slider up arrives well inside the
+    //     hard clamp in processAudioBlock, and flat-topping an SSB modulator
+    //     input splatters across the band. That clamp is a backstop, not a
+    //     level control, and must not become the only thing standing between a
+    //     hot client and the air.
+    //
+    // The hold (alcHoldBelowDbfs) belongs to the makeup half and so applies to
+    // the mic path only. Leaving it on this path would strand a client-leveled
+    // over at whatever reduction its loudest block called for — #4796
+    // mirrored. hl2_txdsp_test pins all three of these claims.
+    //
+    // The engine's own generated audio (WSPR beacon, AX.25 modem tones, the
+    // RADE modem waveform) arrives with this false and keeps the whole ALC,
+    // matching its on-air level to date.
+    void processAudioBlock(const std::vector<float>& mono, bool clientLeveled);
     // Drop anything buffered — on unkey, so the next transmission does not
     // start with the tail of the previous one.
     void reset();

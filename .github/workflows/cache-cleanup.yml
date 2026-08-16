@@ -1,0 +1,165 @@
+name: Cache cleanup
+
+# Deletes Actions cache entries that nothing can read any more, keeping the
+# repository inside its 10 GB allowance.
+#
+# Background: caches are scoped by ref and evicted by LAST ACCESS date, and this
+# repository is on the default seven-day retention — anything not accessed for
+# seven days is removed. So an entry that stops being read still occupies budget
+# for up to a week unless something deletes it.
+#
+# Retention IS a policy, not a platform constant: the same 2025-11-20 changelog
+# that made the size limit configurable introduced a retention limit (days)
+# alongside it, manageable by enterprise/org/repo admins in Actions settings.
+# Whether it can be lowered on this org's Free plan is undocumented and the API
+# does not expose it, so this workflow assumes the default and does the job in
+# code. If retention is ever lowered, revisit whether prune-main is still
+# earning its keep — a short retention does much of the same work for free.
+#
+# One cause is handled here — SUPERSEDED main entries. ci.yml saves a compiler
+# cache on every green main build, keyed on run_id because actions/cache entries
+# are immutable. Restores resolve through restore-keys to the MOST RECENT match,
+# so the moment run N+1 saves, run N's entry is unreachable — and being
+# unreachable it is never accessed again, so nothing refreshes its LRU position
+# and nothing deletes it.
+#
+# That adds up faster than it looks. Measured entry sizes on refs/heads/main,
+# with the Linux cap raised to 2000M:
+#
+#   ccache-linux-build-   ~1.1 GiB      sccache-windows-   ~0.38 GiB
+#   ccache-ccache-macos-  ~0.18 GiB     ccache-sid-canary- ~0.57 GiB
+#
+# so a main CI run writes ~1.66 GiB across its three platforms, ~9.2x/day —
+# ~15 GiB/day of entries that are unreachable within the hour. Unmanaged, that
+# pins the repo at its allowance on its own, holding well under a day of caches
+# nothing will ever read.
+#
+# NOT handled here: caches on refs/pull/N/merge, which become unreadable when
+# the PR closes. A job for those was written and pulled back out before merge —
+# `pull_request` grants a read-only GITHUB_TOKEN for fork PRs and `permissions:`
+# cannot elevate it, so `gh cache delete` 403s; 22 of 25 open PRs are from
+# forks, so it would have failed on nearly every close. It also may not be
+# needed: PRs only WRITE a dependency cache (Qt, FFTW, DeepFilterNet) when the
+# key is not already readable, and the reason they were doing so is that main's
+# copy kept being evicted by the churn ci.yml's save-on-main split removes. Left
+# for a follow-up that can measure whether anything is still accumulating there,
+# and settle the trigger (a scheduled sweep avoids the privileged-trigger
+# question entirely).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+# actions:write is the only elevated scope and it cannot reach anything outside
+# the cache API. It lives in this workflow rather than as a step in ci.yml
+# specifically so ci.yml keeps `contents: read` — nothing that compiles
+# PR-authored code ever holds a write scope.
+#
+# workflow_run runs in the BASE repository context with a full token even when
+# the run that triggered it came from a fork, which is why this job works where
+# a `pull_request`-triggered one would not.
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  prune-main:
+    # workflow_run.event == 'push', NOT head_branch == 'main'. A fork's default
+    # branch is usually also called main, so a head_branch test fires on fork PR
+    # runs too — harmless in effect (the prune is idempotent and no fork run
+    # writes to refs/heads/main) but it would run this job on all ~35 CI runs a
+    # day instead of the ~9 that actually saved something.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune superseded main compiler caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # Keep 2, not 1. Only the newest is ever restored, so the second is
+          # insurance: if a save lands a sparse or corrupt entry, deleting it by
+          # hand falls back to a known-good one instead of a cold build for
+          # everybody until the next green main run.
+          KEEP: "2"
+        run: |
+          set -euo pipefail
+
+          # EVERY run_id-keyed compiler cache in the repo, not just ci.yml's.
+          # The macOS key is doubled ("ccache-ccache-...") because
+          # hendrikmuhs/ccache-action prepends its own "ccache-" to the key
+          # input, which is already "ccache-macos-ci".
+          #
+          # ccache-sid-canary- belongs to system-libs-canary.yml, which is a
+          # separate workflow on the same push:main trigger. It was missed on
+          # the first pass precisely because the rule was written as "caches in
+          # ci.yml" — the scope that matters is the repository's 10 GB, so if
+          # you add a run_id-keyed compiler cache in ANY workflow, add it here.
+          PREFIXES="
+            ccache-linux-build-
+            sccache-windows-
+            ccache-ccache-macos-ci-
+            ccache-sid-canary-
+          "
+
+          total=0
+          for prefix in $PREFIXES; do
+            # Capture to a variable rather than `mapfile < <(...)`: pipefail does
+            # NOT cover process substitution, so a failed API call there yields
+            # an empty array and this job reports "nothing to prune" and exits
+            # green — the exact silent-success mode this workflow exists to stop.
+            # Assigning from a command substitution keeps `set -e` in play.
+            # --limit 100 is per prefix and only ever sees the newest 100. A
+            # sustained outage of this job could therefore strand entries older
+            # than that — the seven-day retention reaps them anyway, so this is a
+            # slower cleanup rather than a leak, but it is why the limit is
+            # generous relative to the ~2 entries a healthy run finds.
+            listing=$(
+              gh cache list --ref refs/heads/main --key "$prefix" \
+                --limit 100 --sort created_at --order desc \
+                --json id --jq ".[${KEEP}:] | .[].id"
+            )
+
+            if [ -z "$listing" ]; then
+              echo "$prefix: nothing to prune (<= $KEEP entries)"
+              continue
+            fi
+
+            # created_at, not last_accessed_at: "newest" here must mean most
+            # recently WRITTEN. Sorting by access would rank a stale entry that
+            # a straggler run happened to read above the current one, and the
+            # prune would then delete the wrong thing.
+            count=$(printf '%s\n' "$listing" | wc -l)
+            echo "$prefix: pruning $count superseded entr(ies)"
+            while IFS= read -r id; do
+              # Delete by id, which is unambiguous; deleting by key would need
+              # --ref and could match another ref's identically-keyed entry.
+              # Tolerate individual failures: LRU can take an entry between the
+              # list and the delete, and one 404 must not strand the rest.
+              if gh cache delete "$id"; then
+                total=$((total + 1))
+              else
+                echo "  already gone: $id"
+              fi
+            done <<< "$listing"
+          done
+          echo "Pruned $total superseded cache(s)."
+
+      - name: Report repo cache usage
+        # Visibility, not a gate — the failure this workflow addresses was
+        # silent, so the usage number belongs somewhere a person will read it.
+        # A step of this job rather than a job of its own: as a separate job it
+        # needed `if: always()` + `needs:`, which fired on every CI completion —
+        # ~35 runners a day to print one line, nearly all of them after a prune
+        # that had been skipped.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/actions/cache/usage" \
+            --jq '"Repo Actions cache: \(.active_caches_count) entries, \((.active_caches_size_in_bytes/1073741824)*100|floor/100) GiB of 10 GiB allowance"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"

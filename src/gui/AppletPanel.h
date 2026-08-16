@@ -34,6 +34,7 @@ class AmpApplet;
 class DemoApplet;
 class AcomApplet;
 class SpeApplet;
+class VkampApplet;
 class TxApplet;
 class PhoneCwApplet;
 class PhoneApplet;
@@ -101,6 +102,7 @@ public:
     DemoApplet*   demoApplet()    { return m_demoApplet; }
     AcomApplet*   acomApplet()    { return m_acomApplet; }
     SpeApplet*    speApplet()     { return m_speApplet; }
+    VkampApplet*  vkampApplet()   { return m_vkampApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -172,6 +174,12 @@ public:
     // amplifier connection. Independent of setAmpVisible/setAcomVisible for
     // the same multi-amplifier-station reason.
     void setSpeVisible(bool visible);
+
+    // Show/hide the VKAMP button and applet based on a direct VK3AMP
+    // amplifier connection. Independent of setAmpVisible/setAcomVisible — a
+    // station can have a radio-relayed PGXL, a direct ACOM, and a direct
+    // VK3AMP all present at once, each fully independent hardware.
+    void setVkampVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
@@ -384,6 +392,8 @@ private:
     QPushButton* m_acomBtn{nullptr};
     SpeApplet*   m_speApplet{nullptr};
     QPushButton* m_speBtn{nullptr};
+    VkampApplet* m_vkampApplet{nullptr};
+    QPushButton* m_vkampBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
     PhoneApplet*   m_phoneApplet{nullptr};

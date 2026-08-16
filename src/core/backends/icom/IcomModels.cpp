@@ -58,6 +58,19 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, 100.0,
         144'000'000ULL, 1'300'000'000ULL,
         /*verified*/ false,
+        // 0x26 MEASURED on the live radio at 10.0.0.7, 2026-08-14 (G0JKN), the
+        // same standard of evidence as the scope geometry above:
+        //
+        //   tx: fe fe a2 e0 26 00 fd
+        //   rx: 26 00 05 00 01          (vfo 00, mode 05=FM, DATA 00, FIL1)
+        //
+        // A structured reply, not FA. Without this the 9700 fell to the legacy
+        // 06 branch in setSliceMode(), which forces m_dataMode = false and
+        // sends a body of {mode, filter} with NO DATA byte — so selecting FM-D
+        // wrote plain FM and the mode reverted in the UI. On air that left
+        // transmit audio on the MICROPHONE, so a 2 m AX.25 frame keyed the
+        // radio and put room noise out instead of the modem's AFSK.
+        /*hasVfoModeCommand*/ true,
     },
     {
         0x98, "IC-7610", 2, 1,
@@ -143,6 +156,22 @@ constexpr IcomModel kUnknown{
     /*hasVfoModeCommand*/ false,
 };
 
+constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
+    {0x00, "MIC",     ModSourceMic},
+    {0x01, "USB",     ModSourceUsb},
+    {0x02, "MIC+USB", ModSourceMic | ModSourceUsb},
+    {0x03, "WLAN",    ModSourceNetwork},
+}};
+
+constexpr std::array<ModulationInputChoice, 6> kIc7300Mk2ModInputs{{
+    {0x00, "MIC",     ModSourceMic},
+    {0x01, "USB",     ModSourceUsb},
+    {0x02, "ACC",     ModSourceAccessory},
+    {0x03, "MIC+USB", ModSourceMic | ModSourceUsb},
+    {0x04, "MIC+ACC", ModSourceMic | ModSourceAccessory},
+    {0x05, "LAN",     ModSourceNetwork},
+}};
+
 }  // namespace
 
 const IcomModel* modelForCivAddress(std::uint8_t addr)
@@ -180,6 +209,23 @@ const IcomModel* modelForName(std::string_view name)
 std::span<const IcomModel> knownModels() { return kModels; }
 
 const IcomModel& unknownModel() { return kUnknown; }
+
+std::optional<ModulationProfile> modulationProfileFor(const IcomModel& model)
+{
+    // IC-705 CI-V guide: USB/WLAN levels 0116/0117, DATA OFF/DATA MOD
+    // selections 0118/0119.
+    if (model.civAddress == 0xA4) {
+        return ModulationProfile{116, -1, 117, 118, 119, 0x03, 0x00,
+                                 kIc705ModInputs};
+    }
+    // IC-7300MK2 CI-V guide: USB/ACC/LAN levels 0081/0082/0083, DATA OFF/DATA
+    // MOD selections 0084/0085. LAN is value 05, not the IC-705's WLAN 03.
+    if (model.civAddress == 0xB6) {
+        return ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,
+                                 kIc7300Mk2ModInputs};
+    }
+    return std::nullopt;
+}
 
 std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 {

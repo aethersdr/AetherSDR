@@ -37,6 +37,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QSysInfo>
+#include <QThread>
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
@@ -469,6 +470,24 @@ void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
     m_backend->invokeExtension(ns, verb, requestId, arg);
 }
 
+void RadioModel::setPcAudioEnabled(bool on)
+{
+    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+        return;
+    }
+    m_backend->invokeExtension(QStringLiteral("icom"),
+                               QStringLiteral("audio.pc"), 0, on);
+}
+
+void RadioModel::notePcAudioEnabled(bool on)
+{
+    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+        return;
+    }
+    m_backend->invokeExtension(QStringLiteral("icom"),
+                               QStringLiteral("audio.pc.state"), 0, on);
+}
+
 void RadioModel::handRestoredStateToBackend(const QString& serial)
 {
     if (!m_backend) {
@@ -513,7 +532,28 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
     req.params.insert(QStringLiteral("icom.password"), IcomCredentials::sessionPassword());
     req.params.insert(QStringLiteral("icom.serialPort"), IcomSettings::serialPort());
     req.params.insert(QStringLiteral("icom.audioPort"), IcomSettings::audioPort());
-    req.params.insert(QStringLiteral("icom.civAddress"), IcomSettings::civAddress());
+    // THE CI-V ADDRESS IS OMITTED WHEN NOBODY CHOSE ONE, and the omission is the
+    // signal. Before this, a blank field was written back as kDefaultCivAddress
+    // and arrived here indistinguishable from a deliberate IC-705 pick, so the
+    // backend had nothing to branch on and every unconfigured radio was
+    // addressed at 0xA4 — correct for one model in the table and silently
+    // ignored by all the others. IcomSettings::kDefaultCivAddress exists to make
+    // exactly this distinction; it had no way to reach the backend.
+    //
+    // Pinned says whether the wire may correct it: a picked MODEL is a shortcut
+    // for an address and may be corrected, a typed CUSTOM address is a device
+    // selection on a possibly-shared bus and may not. See IcomSettings.h.
+    switch (IcomSettings::civSelection()) {
+    case IcomSettings::CivSelection::Auto:
+        break;
+    case IcomSettings::CivSelection::Model:
+        req.params.insert(QStringLiteral("icom.civAddress"), IcomSettings::civAddress());
+        break;
+    case IcomSettings::CivSelection::Custom:
+        req.params.insert(QStringLiteral("icom.civAddress"), IcomSettings::civAddress());
+        req.params.insert(QStringLiteral("icom.civAddressPinned"), true);
+        break;
+    }
 
     // LOW BANDWIDTH MODE REACHES THIS FAMILY NOW.
     //
@@ -1416,7 +1456,7 @@ void RadioModel::teardownBackend()
     // Any backend replacement invalidates a WSPR transmit-route claim. Cleared
     // here rather than only in onDisconnected(), because a family switch never
     // reaches that path — see hasWsprTxStream().
-    m_wsprTxHostModulated = false;
+    m_wsprTxSeamAudioArmed = false;
     m_backend.reset();
     m_connection = nullptr;
     m_panStream = nullptr;
@@ -3543,6 +3583,17 @@ bool RadioModel::hasManualNotch() const
     return backendCapabilities().hasManualNotch;
 }
 
+bool RadioModel::hasHostNoiseBlanker() const
+{
+    // NOT permissive, for the same reason hasManualNotch() is not: this flag
+    // can only ADD the NB button, so answering true with no backend attached
+    // would show it on a family that never claims it.
+    if (!m_backend || !isConnected()) {
+        return false;
+    }
+    return backendCapabilities().hasHostNoiseBlanker;
+}
+
 QList<int> RadioModel::radioFilterWidthsHz() const
 {
     if (!m_backend || !isConnected()) {
@@ -4656,6 +4707,101 @@ bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
 
     m_pendingProfileLoadPanWrites.supersedeBand(panId);
     return dispatchPanBand(panId, bandKey);
+}
+
+// Sanity ceiling for a CAT-commanded tune (MHz). Well above the highest amateur
+// allocation (~250 GHz, incl. microwave/transverter), so a real tune is never
+// rejected, while an absurd literal — a fat-fingered set, a parse that ran away
+// — is caught before it broadcasts a bogus frequencyChanged. The radio enforces
+// its actual band limits; this only rejects the physically impossible.
+//
+// Because it must clear 250 GHz, it does NOT bound step arithmetic in the UP
+// direction: the step count parses as an int, so the largest reachable UP target
+// is ~215 GHz at the usual 100 Hz step and no step count can trip this. The DN
+// direction is bounded, but by the mhz > 0 term below rather than by this
+// ceiling. Don't lower it to catch runaway steps — that would reject legitimate
+// microwave work; a step count worth bounding should be bounded where it is
+// parsed.
+static constexpr double kMaxCatTuneMhz = 1.0e6; // 1 THz
+
+bool RadioModel::isPlausibleCatTuneMhz(double mhz)
+{
+    return std::isfinite(mhz) && mhz > 0.0 && mhz < kMaxCatTuneMhz;
+}
+
+bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
+{
+    // This mutates SliceModel, which lives on this model's (GUI) thread. The
+    // GUI-thread invariant is upheld by construction at both call sites — not by
+    // the assert below (which is a no-op in release): SmartCAT/CatPort calls this
+    // directly and already runs on the GUI thread, while rigctld only ever reaches
+    // here inside a QueuedConnection invocation delivered on the GUI thread. The
+    // assert is a debug-only backstop that catches a future off-thread caller
+    // before it can silently race SliceModel, rather than the guarantee itself.
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!slice) {
+        return false;
+    }
+    // Boundary validation (Principle VII): this is the single seam every CAT /
+    // rigctld retune funnels through, so reject an implausible frequency here
+    // once rather than in each caller. A non-positive, non-finite, or absurdly
+    // high target (a client sending FA-5000;, a multi-step DN/UP that under- or
+    // overflows, a parse that yielded NaN/inf) would otherwise be pushed
+    // optimistically into the model and broadcast via frequencyChanged before the
+    // radio rejects it. Return false so the caller answers the client with an
+    // error rather than acknowledging a tune that was thrown away. (rigctld also
+    // pre-validates with this same predicate — its queued tune can't observe this
+    // bool; see isPlausibleCatTuneMhz.)
+    if (!isPlausibleCatTuneMhz(mhz)) {
+        return false;
+    }
+    // A locked slice refuses the tune outright — SliceModel::setFrequency and
+    // tuneAndRecenter both bail on m_locked (and raise the lock feedback), so
+    // returning true here would be the same Principle VII lie the check above
+    // closes: the client reads success for a tune the radio never made. Test the
+    // lock rather than comparing the frequency before and after, because a
+    // retune to the frequency the slice already holds is a legitimate no-op that
+    // SliceModel also skips — and that case must still report success. (rigctld
+    // pre-checks the lock too; its queued tune can't observe this bool.)
+    if (slice->isLocked()) {
+        // Tell the OPERATOR, not just the CAT client. SliceModel::setFrequency and
+        // tuneAndRecenter raise this before bailing on m_locked, so returning here
+        // without it would swallow the on-screen lock flash — leaving someone whose
+        // WSJT-X has stopped retuning with no indication that the lock is why.
+        slice->notifyTuneBlockedByLock();
+        return false;
+    }
+    // Recenter policy: an in-span retune keeps autopan=0 (no yank — external
+    // Doppler software like SatPC32 steps every few seconds); an out-of-span or
+    // cross-band target uses tuneAndRecenter so the radio recenters/re-bands the
+    // panadapter. Both go through SliceModel, which updates the model frequency
+    // and emits frequencyChanged — that drives the client-side follow (Center
+    // Lock / Pan-Follows-VFO) the radio needs to actually move a centered slice.
+    // (A bare command via sendCmdPublic does NOT emit frequencyChanged, so the
+    // follow never runs and the tune doesn't stick on real hardware.) SliceModel
+    // still guards the no-op case (freq unchanged) itself, so no extra check here.
+    // We issue no pan command directly — the client lock logic does, exactly as
+    // the GUI tune path does.
+    //
+    // Deliberately NOT a band-stack preselect: the GUI's own cross-band tune
+    // calls preselectBandStackForTune()/requestPanBand() first, which also
+    // restores that band's antenna, filters and zoom. CAT does not, by design —
+    // the CAT/DAX/TCI planes express intent and let the radio recenter rather
+    // than issuing pan/band commands directly, and confirm off the radio's reply
+    // instead of a fixed timer. TciServer::tuneSliceAndConfirm behaves the same
+    // way, and TCI is the reference we match. Consequence, called out in the PR:
+    // a CAT band change follows the pan but does not restore per-band stack
+    // state the way clicking the band button does.
+    bool inSpan = false;
+    if (const PanadapterModel* pan = panadapter(slice->panId())) {
+        inSpan = pan->spanContainsMhz(mhz);
+    }
+    if (inSpan) {
+        slice->setFrequency(mhz);
+    } else {
+        slice->tuneAndRecenter(mhz);
+    }
+    return true;
 }
 
 double RadioModel::effectivePanCenterMhz(const QString& panId) const
@@ -6251,7 +6397,7 @@ void RadioModel::onDisconnected()
     // and the next connect re-reads it from status.
     m_wsprTxRestoreDax = false;
     m_wsprTxPreviousDax = false;
-    m_wsprTxHostModulated = false;
+    m_wsprTxSeamAudioArmed = false;
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -7384,10 +7530,11 @@ void RadioModel::setTxAudioMonitor(bool on)
         m_backend->setTxAudioMonitor(on);
 }
 
-void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
+void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
+                               bool clientLeveled)
 {
     if (m_backend)
-        m_backend->submitTxAudio(int16Stereo, sampleRateHz);
+        m_backend->submitTxAudio(int16Stereo, sampleRateHz, clientLeveled);
 }
 
 bool RadioModel::sendCommand(const QString& cmd)
@@ -10414,12 +10561,10 @@ bool RadioModel::prepareWsprTransmit()
     if (!backendCapabilities().canTransmit) {
         return false;
     }
-    // A host-modulating backend (HL2) runs the modulator on THIS host, so the
-    // beacon needs no transport at all: AudioEngine's WSPR pump already reaches
-    // it through feedDaxTxAudioInternal()'s m_hostModulation branch →
-    // txFinalMonitorPcmReady → submitTxAudio, the same tap the microphone and
-    // TCI use. There is nothing to create and nothing to borrow, so this arm
-    // takes none of the station state the Flex arm below does.
+    // A seam-audio backend needs no Flex DAX stream. HL2 modulates locally and
+    // Icom ships the PCM to the radio's own modulator; both paths converge at
+    // txFinalMonitorPcmReady → submitTxAudio. There is nothing to create and
+    // nothing to borrow, so this arm takes none of the Flex station state below.
     //
     // Nor does it need `transmit dax`: that setting exists to tell a FLEX to
     // take its modulator input from the DAX stream instead of the mic jacks,
@@ -10431,7 +10576,7 @@ bool RadioModel::prepareWsprTransmit()
     // Any backend whose transmit audio leaves through the seam, not only one
     // that modulates locally — the beacon reaches submitTxAudio either way.
     if (backendCapabilities().takesTxAudioOverSeam) {
-        m_wsprTxHostModulated = true;
+        m_wsprTxSeamAudioArmed = true;
         return true;
     }
     // Every other non-Flex family: the beacon rides a Flex `dax_tx` stream and
@@ -10471,13 +10616,13 @@ bool RadioModel::prepareWsprTransmit()
 
 void RadioModel::releaseWsprTransmit()
 {
-    // Host-modulated: nothing was borrowed, so nothing is handed back. Dropping
+    // Seam audio: nothing was borrowed, so nothing is handed back. Dropping
     // the latch is the whole release — and it must happen before the DAX arm so
     // a stale m_daxTxStreamId from an earlier Flex session in the same process
     // cannot make this path issue `stream set … tx=0` at a radio that has no
     // such stream.
-    if (m_wsprTxHostModulated) {
-        m_wsprTxHostModulated = false;
+    if (m_wsprTxSeamAudioArmed) {
+        m_wsprTxSeamAudioArmed = false;
         return;
     }
     if (m_wsprTxOwnershipRequested && m_wsprTxYieldAfterUse) {

@@ -31,6 +31,14 @@ inline bool isVoiceMode(const QString& mode)
         || mode == QLatin1String("DFM");
 }
 
+// AetherSDR's older neutral vocabulary used CW for upper-side CW. Icom and
+// HL2 report that same mode explicitly as CWU; CWL is the reverse-side mode.
+inline bool isCwMode(const QString& mode)
+{
+    return mode == QLatin1String("CW") || mode == QLatin1String("CWU")
+        || mode == QLatin1String("CWL");
+}
+
 // Whether an ALREADY-OPEN Copy Assist panel should be torn down, as
 // MainWindow::updateKeyerAvailability() decides it. Pure, so the decision can
 // be pinned by a test — updateKeyerAvailability() itself cannot be, since

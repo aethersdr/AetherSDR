@@ -42,7 +42,7 @@ RadioCapabilities hl2Caps()
     caps.family = QStringLiteral("hl2");
     caps.clientSettingsDomains = Domain::Tuning | Domain::Passband
                                  | Domain::SpanRate | Domain::RfGain
-                                 | Domain::TxSetpoints;
+                                 | Domain::TxSetpoints | Domain::Agc;
     return caps;
 }
 
@@ -54,6 +54,8 @@ RestoredRadioState sampleState()
     state.filterLowHz = 100.0;
     state.filterHighHz = 2'900.0;
     state.sampleRateHz = 192'000;
+    state.agcMode = QStringLiteral("slow");
+    state.agcThreshold = 40;
     state.extensionSchemaVersion = 1;
     // The extension's top level is domain sub-objects (the per-domain gate);
     // each sub-object's contents are backend-owned.
@@ -114,6 +116,9 @@ int main(int argc, char** argv)
         check(restored.filterLowHz == 100.0 && restored.filterHighHz == 2'900.0,
               "passband round-trips");
         check(restored.sampleRateHz == 192'000, "span/rate round-trips");
+        check(restored.agcMode == QStringLiteral("slow")
+                  && restored.agcThreshold == 40,
+              "AGC mode and threshold round-trip (#4909)");
         check(restored.extensionSchemaVersion == 1
                   && restored.extension.value(QStringLiteral("rfGain"))
                              .toObject()
@@ -152,6 +157,28 @@ int main(int argc, char** argv)
                   && gated.sampleRateHz == 0 && gated.extension.isEmpty(),
               "undeclared domains stay 'not restored' even though the stored "
               "document carries them");
+        // The AGC threshold's "not restored" is -1, not 0: zero is a value the
+        // operator can select, so a gated-out domain must not look like a
+        // deliberate AGC-T of 0.
+        check(gated.agcMode.isEmpty() && gated.agcThreshold == -1,
+              "an undeclared Agc domain is absent, not a threshold of 0");
+    }
+
+    // ---- a threshold of ZERO survives the round-trip -----------------------
+    // The sentinel is -1 precisely so this case works: with 0 as "absent" an
+    // operator who ran the AGC-T at the bottom of the slider would get 65 back.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope zeroRadio(QStringLiteral("hl2"),
+                                           QStringLiteral("00:00:00:00:00:0A"));
+        RestoredRadioState state = sampleState();
+        state.agcMode = QStringLiteral("off");
+        state.agcThreshold = 0;
+        check(RadioStateMemory::store(zeroRadio, caps, state),
+              "a zero AGC threshold stores");
+        const RestoredRadioState back = RadioStateMemory::load(zeroRadio, caps);
+        check(back.agcThreshold == 0 && back.agcMode == QStringLiteral("off"),
+              "a deliberate AGC threshold of 0 is not mistaken for 'absent'");
     }
 
     // ---- per-domain gating on store ---------------------------------------

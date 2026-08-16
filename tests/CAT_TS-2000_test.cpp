@@ -204,6 +204,21 @@ static QString hz11(qint64 hz)
     return QStringLiteral("%1").arg(hz, 11, 10, QChar('0'));
 }
 
+// Poll a frequency readback until it matches (or a generous cap elapses). A tune
+// updates the model optimistically, so the readback is normally immediate; polling
+// is belt-and-suspenders so the check never depends on exact settle timing (fast
+// simulator or a slower real radio). `got` receives the last response (for detail).
+static bool pollFreqEquals(CatClient& c, const QString& query, const QString& expect,
+                           QString& got, int capMs = 1000)
+{
+    for (int elapsed = 0; elapsed < capMs; elapsed += 50) {
+        QThread::msleep(50);
+        got = c.query(query);
+        if (got == expect) return true;
+    }
+    return false;
+}
+
 // Does this port have a usable VFO B? FB returns its frequency when present, or "?"
 // (NOT_ENABLED) on a single-VFO port / when the VFO B slice isn't open.
 static bool hasVfoB(CatClient& c)
@@ -317,18 +332,18 @@ qint64 section2(CatClient& c, Runner& r, qint64 origHz)
                        ? resp.mid(2).toLongLong()
                        : origHz;
 
+    // Poll rather than assume a fixed wait (see pollFreqEquals) so the check stays
+    // timing-independent regardless of where the radio started.
     const qint64 testHz = 14'074'000;
     c.send(QStringLiteral("FA") + hz11(testHz));
-    QThread::msleep(150);
-    resp = c.query(QStringLiteral("FA"));
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(testHz), resp);
     r.check(QStringLiteral("2.2  set FA 14.074 MHz → FA; confirms new frequency"),
             resp == QStringLiteral("FA") + hz11(testHz),
             QStringLiteral("got %1").arg(repr(resp)));
 
-    const qint64 test2Hz = 7'074'000;
+    const qint64 test2Hz = 7'074'000;   // cross-band (20 m → 40 m)
     c.send(QStringLiteral("FA") + hz11(test2Hz));
-    QThread::msleep(150);
-    resp = c.query(QStringLiteral("FA"));
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(test2Hz), resp);
     r.check(QStringLiteral("2.3  second set FA (different band) confirms correctly"),
             resp == QStringLiteral("FA") + hz11(test2Hz),
             QStringLiteral("got %1").arg(repr(resp)));
@@ -336,6 +351,47 @@ qint64 section2(CatClient& c, Runner& r, qint64 origHz)
     c.send(QStringLiteral("FA") + hz11(origHz));
     QThread::msleep(100);
     return currentHz;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)
+// ═════════════════════════════════════════════════════════════════════════════
+
+void section2c(CatClient& c, Runner& r, qint64 origHz)
+{
+    r.section(QStringLiteral("Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)"));
+
+    // A band change over CAT (WSJT-X/FLDigi "change band") must move VFO A to the
+    // new band and have the radio recenter the panadapter so the pan follows —
+    // RadioModel::tuneSliceForCat(), the fix for the reported band-switch bug. The
+    // TS-2000 protocol exposes VFO-A frequency (FA;) but NOT the panadapter center,
+    // so this guards the CAT round-trip across a real band boundary: the cross-band
+    // FA set is accepted and VFO A lands on the requested frequency without error,
+    // clamp, or revert. The pan-follow itself is confirmed visually on the panadapter.
+
+    // Read the current frequency, then target a different HF band: flip between
+    // 40 m (7.100 MHz) and 20 m (14.100 MHz) across the 10 MHz divide so this is
+    // always a genuine band change regardless of where the radio started.
+    QString resp = c.query(QStringLiteral("FA"));
+    const qint64 startHz = (resp.startsWith(QLatin1String("FA")) && isDigits(resp.mid(2), 11))
+                           ? resp.mid(2).toLongLong()
+                           : origHz;
+    const qint64 target = (startHz < 10'150'000) ? 14'100'000 : 7'100'000;
+
+    c.send(QStringLiteral("FA") + hz11(target));
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(target), resp);
+    r.check(QStringLiteral("2c.1  cross-band set FA (%1 → %2 Hz) — VFO A followed to the new band")
+                .arg(startHz).arg(target),
+            resp == QStringLiteral("FA") + hz11(target),
+            QStringLiteral("got %1").arg(repr(resp)));
+
+    // Tune back across the boundary — verifies the reverse direction and restores
+    // the original band.
+    c.send(QStringLiteral("FA") + hz11(origHz));
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(origHz), resp);
+    r.check(QStringLiteral("2c.2  cross-band set FA back to the original band (%1 Hz) confirms").arg(origHz),
+            resp == QStringLiteral("FA") + hz11(origHz),
+            QStringLiteral("got %1").arg(repr(resp)));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1244,6 +1300,40 @@ void section15(CatClient& c, Runner& r)
         dnHz = faDn.mid(2).toLongLong();
     r.check(QStringLiteral("15.24 DN; → FA returns to base frequency"),
             dnHz == baseHz, repr(faDn));
+
+    // 15.25  DN with a step count large enough to underflow past 0 at any tuning
+    // step. tuneSliceForCat rejects the resulting non-positive target at the
+    // boundary, so cmdDN answers "?;" and the tune is dropped — VFO A must NOT
+    // move, clamp to a band edge, or emit a negative "slice tune". (Regression
+    // guard for the cmdDN underflow; the guard lives in RadioModel::tuneSliceForCat.)
+    //
+    // Use query() not send(): the "?;" rejection is a real response now, so it
+    // must be consumed here or it desyncs the FA poll (and every later read).
+    const QString dnUnder = c.query(QStringLiteral("DN99999999"));
+    r.check(QStringLiteral("15.25 DN99999999 (underflow) rejected with \"?;\""),
+            dnUnder == QLatin1String("?"), repr(dnUnder));
+    QString faUnder;
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(baseHz), faUnder);
+    qint64 underHz = (faUnder.startsWith(QLatin1String("FA")) && isDigits(faUnder.mid(2), 11))
+                     ? faUnder.mid(2).toLongLong() : -1;
+    r.check(QStringLiteral("15.26 DN99999999 (underflow) → VFO A unchanged, no negative freq"),
+            underHz == baseHz, repr(faUnder));
+
+    // 15.27  Upper-bound guard (symmetric with the 15.25 underflow): an absurdly
+    // high FA target (10 THz, far above any amateur allocation) must be rejected
+    // at the boundary — "?;" and no tune — rather than optimistically broadcast.
+    // The guard lives in RadioModel::isPlausibleCatTuneMhz, applied by the seam
+    // tuneSliceForCat. A finite UP/DN step math (or a fat-fingered set) can overflow
+    // to a value like this. query() consumes the "?;" so it can't desync the FA poll.
+    const QString faOver = c.query(QStringLiteral("FA10000000000000"));
+    r.check(QStringLiteral("15.27 FA 10 THz (overflow) rejected with \"?;\""),
+            faOver == QLatin1String("?"), repr(faOver));
+    QString faAfter;
+    pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(baseHz), faAfter);
+    qint64 overHz = (faAfter.startsWith(QLatin1String("FA")) && isDigits(faAfter.mid(2), 11))
+                    ? faAfter.mid(2).toLongLong() : -1;
+    r.check(QStringLiteral("15.28 FA 10 THz (overflow) → VFO A unchanged"),
+            overHz == baseHz, repr(faAfter));
 }
 
 } // namespace
@@ -1312,6 +1402,7 @@ int main(int argc, char* argv[])
 
     section1(c, r);
     section2(c, r, origHz);
+    section2c(c, r, origHz);
     section3(c, r);
     section4(c, r, origMode);
     section5(c, r);

@@ -246,13 +246,19 @@ QString formatAudioEndpointBullet(const QJsonObject& endpoint)
     const QString backend = orPlaceholder(endpoint["backend"].toString());
     const QString state = orPlaceholder(endpoint["state"].toString(), "n/a");
     const QString error = orPlaceholder(endpoint["error"].toString(), "n/a");
-    const QString details = QString("rate `%1`, channels `%2`, format `%3`, resampling `%4`")
+    QString details = QString("rate `%1`, channels `%2`, format `%3`, resampling `%4`")
         .arg(formatHzValue(endpoint["sample_rate_hz"]))
         .arg(endpoint["channel_count"].isDouble()
                  ? QString::number(endpoint["channel_count"].toInt())
                  : QStringLiteral("n/a"))
         .arg(orPlaceholder(endpoint["sample_format"].toString()))
         .arg(formatBoolValue(endpoint["resampling_active"]));
+    if (endpoint.contains("voice_input_normalizing_to_48k")) {
+        details += QString(", voice input normalization to 48 kHz `%1`, voice egress resampling to 24 kHz `%2`, RADE resampling to 24 kHz `%3`")
+            .arg(formatBoolValue(endpoint["voice_input_normalizing_to_48k"]))
+            .arg(formatBoolValue(endpoint["voice_egress_resampling_to_24k"]))
+            .arg(formatBoolValue(endpoint["rade_resampling_to_24k"]));
+    }
 
     QString line = QString("- `%1` [%2 %3]: operational `%4`, running `%5`, state `%6`, error `%7`, backend `%8`, device `%9`, %10")
         .arg(orPlaceholder(endpoint["name"].toString()))

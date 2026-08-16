@@ -55,6 +55,12 @@
 
 namespace AetherSDR {
 
+inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabilities)
+{
+    return armed && capabilities.canTransmit
+        && capabilities.takesTxAudioOverSeam;
+}
+
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -353,6 +359,10 @@ public:
     // notch with TNFs instead and will never claim it.
     bool hasLmsNoiseFilters() const;
     bool hasManualNotch() const;
+    // Whether THIS HOST blanks impulse noise in the radio's IQ
+    // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
+    // reasoning as hasManualNotch(): it can only add the NB button.
+    bool hasHostNoiseBlanker() const;
     // The filter widths the radio declares, widest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a
@@ -551,13 +561,22 @@ public:
     // operator-issue setters so the change routes through the backend seam.
     void recallLocalMemory(int index);
     void createAudioStream();
+    // An operator CLICK on the PC Audio button. On an Icom this asks the radio
+    // to switch its voice-mode modulation input, which Principle II permits
+    // because a user action is a request. Nothing else may call it — see
+    // notePcAudioEnabled() for the connect edge.
+    void setPcAudioEnabled(bool on);
+    // The client's PC Audio state, published so the backend can ADVISE on a
+    // mismatch. Writes nothing: Principle III owns DATA OFF MOD to the radio,
+    // so a connect must never replay this client-persisted flag onto it.
+    void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
     bool prepareWsprTransmit();
     void releaseWsprTransmit();
     void restoreWsprTransmitDax();
     // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
-    // literally a `dax_tx` stream; on a host-modulating backend (HL2) there is
-    // no stream to own — the modulator is ours and the pump feeds it through
+    // literally a `dax_tx` stream; on a seam-audio backend (HL2 or Icom) there
+    // is no stream to own — the pump feeds the backend through
     // txFinalMonitorPcmReady → submitTxAudio, which needs nothing created.
     //
     // The dialog polls this every 50 ms while transmitting and aborts the frame
@@ -578,7 +597,8 @@ public:
         // teardownBackend() now clears the latch as well; this is the backstop
         // that makes a missed clear harmless rather than dangerous, which is the
         // right split for anything guarding a transmitter.
-        if (m_wsprTxHostModulated && backendCapabilities().hostModulates)
+        if (wsprSeamAudioRouteReady(m_wsprTxSeamAudioArmed,
+                                    backendCapabilities()))
             return true;
         return m_daxTxStreamId != 0 && m_daxTxActive;
     }
@@ -829,6 +849,41 @@ public:
     // See core/WaterfallRate.h. (#4606)
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
+
+    // Retune a slice on behalf of the CAT servers (rigctld / SmartCAT) so a band
+    // change made over CAT (WSJT-X/FLDigi "change band") is recentered instead of
+    // leaving the panadapter behind. Applies the recenter policy: in-span keeps
+    // autopan=0 (no yank — external Doppler software like SatPC32 steps every few
+    // seconds); an out-of-span or cross-band target uses tuneAndRecenter. Both go
+    // through SliceModel, which updates the model and emits frequencyChanged —
+    // required to drive the client-side follow (Center Lock / Pan-Follows-VFO)
+    // that lets the radio actually move a centered slice. We issue no pan command
+    // directly; the client lock logic does, exactly as the GUI path does. Call on
+    // the GUI thread (owns SliceModel).
+    // Returns false (and issues no tune) when the target is rejected — a null
+    // slice, an implausible frequency (see isPlausibleCatTuneMhz), or a locked
+    // slice, which SliceModel refuses — so the CAT protocol layer can report the
+    // failure instead of acknowledging a tune that never happened. A retune to
+    // the frequency the slice already holds is a no-op, not a rejection, and
+    // still returns true — unless the slice is locked, since the lock is tested
+    // ahead of the no-op case and a locked slice always reports failure.
+    bool tuneSliceForCat(SliceModel* slice, double mhz);
+
+    // Is this a physically plausible CAT-tune target (MHz)? The single policy for
+    // the boundary check tuneSliceForCat applies. rigctld pre-validates with it
+    // too: its handlers answer the client synchronously and then marshal the tune
+    // through a queued call, so tuneSliceForCat's bool is unobservable to them —
+    // without this they would answer success and silently drop an out-of-range
+    // tune. Rejects non-positive, non-finite, and absurdly-high targets (an
+    // FA-5000;, a DN whose multi-step product underflows past 0, a parse that
+    // yielded NaN, a fat-fingered absurd set); the radio still enforces its real
+    // band limits — this only stops the physically impossible from being
+    // broadcast via frequencyChanged before the radio rejects it.
+    // NOT a bound on step arithmetic in the UP direction: the ceiling has to sit
+    // above the top amateur allocation, and a multi-step UP cannot reach it
+    // (2^31 steps at the usual 100 Hz is ~215 GHz), so a runaway UP is caught by
+    // the radio refusing the tune, not here.
+    static bool isPlausibleCatTuneMhz(double mhz);
 
     // Effective pan geometry: the deferred pending value if one is queued,
     // else the live model value, else NaN when the pan is unknown. Caller-side
@@ -1173,8 +1228,11 @@ public:
         return m_backend != nullptr && m_flexBackend == nullptr;
     }
     // Forward processed transmit audio to a host-modulating backend. No-op when
-    // the backend modulates on the radio side.
-    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz);
+    // the backend modulates on the radio side. `clientLeveled` carries
+    // AudioEngine's source decision through: true for external TCI/DAX client
+    // audio, whose level the sender owns (#4796).
+    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
+                       bool clientLeveled);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1797,10 +1855,10 @@ private:
     bool        m_wsprTxReleaseWhenReady{false};
     bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed
     bool        m_wsprTxRestoreDax{false};    // beacon changed it and owes a restore
-    // The beacon armed against a host-modulating backend, so it borrowed no DAX
+    // The beacon armed against a seam-audio backend, so it borrowed no Flex DAX
     // stream and no `transmit dax`. Latched by prepareWsprTransmit() and the
     // only thing releaseWsprTransmit() has to undo on that path.
-    bool        m_wsprTxHostModulated{false};
+    bool        m_wsprTxSeamAudioArmed{false};
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
     QSet<quint32> m_deadDaxRxSeen;

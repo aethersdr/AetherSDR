@@ -20,9 +20,14 @@ all run through the same DSP chain:
   monitor tones use local output sinks that are independent of the RX speaker
   buffer. They are logically tone generators, represented as stereo output
   frames.
-- **PC mic voice TX path**: `QAudioSource` captures Int16 mic audio, converts it
-  to the internal 24 kHz stereo frame shape, then runs the voice TX strip before
-  Opus remote audio TX or an uncompressed VITA fallback.
+- **PC mic voice TX path**: `QAudioSource` captures Int16 mic audio at the
+  negotiated device rate. After channel canonicalization, `TxVoiceProcessor`
+  converts to float once, normalizes to a fixed 48 kHz DSP domain, runs optional
+  TX RN2 and the complete voice strip, then performs one 48-to-24 kHz conversion
+  and one TPDF-dithered Int16 quantization at the existing 24 kHz voice-output
+  boundary. That boundary is final for Flex `remote_audio_tx`; HL2 and Icom
+  currently consume the same 24 kHz Int16 seam and convert onward inside their
+  backends.
 - **Opus `remote_audio_tx` path**: the normal PC mic voice path sends 24 kHz
   stereo Int16 frames as 10 ms Opus packets over VITA-49 PCC `0x8005`.
 - **RADE TX/RX path**: RADE branches early from PC mic capture and bypasses the
@@ -38,11 +43,13 @@ The internal voice and modem paths are mostly **logically mono** but are often
 represented as **stereo frames** because the radio/audio interfaces expect
 interleaved L/R samples. Important cases:
 
-- PC mic voice TX is carried as stereo Int16 frames after capture normalization.
-  Stereo capture is first collapsed to a canonical mono voice signal using Auto
-  Left/Right/Average selection, then duplicated to L/R. If resampling is needed,
-  that canonical mono signal is sent through `Resampler::processMonoToStereo()`.
-- Opus `remote_audio_tx` packets are always 24 kHz stereo Int16 frames.
+- PC mic voice TX is canonicalized as duplicated-stereo Int16 at the negotiated
+  device rate. Stereo capture is first collapsed to a canonical mono voice
+  signal using Auto Left/Right/Average selection. `TxVoiceProcessor` converts
+  that signal to float, resamples mono to 48 kHz when needed, and duplicates it
+  to L/R for continuous float32 processing.
+- Opus `remote_audio_tx` encoder input is always 24 kHz stereo Int16 in 10 ms
+  frames.
 - RADE modem/speech processing is logically mono, but AudioEngine handoff and
   VITA packetization use 24 kHz stereo float32 frames.
 - DAX radio-native TX packets are mono Int16, but the DAX bridge and TCI hand
@@ -218,6 +225,23 @@ The same setting is exposed in Radio Setup > Audio > PC Audio Devices as
 "Prompt on Audio Device Changes"; that checkbox is checked when notifications
 are enabled and unchecked when the suppression setting is active.
 
+On networked Icom radios an operator **click** on the title-bar PC Audio toggle
+also requests the voice-mode input selection. On selects the model's network
+source in `DATA OFF MOD` (WLAN on IC-705, LAN on IC-7300MK2) and opens PC
+microphone capture; off puts back whatever the radio held before the first
+request of the session — `MIC` only when nothing was captured — and closes
+capture. `DATA MOD` is separate radio-owned state and is never changed by this
+toggle.
+
+Only a click writes. `DATA OFF MOD` is a SET-menu register the radio persists,
+so Constitution III forbids replaying the client-persisted `PcAudioEnabled` key
+onto it: a connect *publishes* the client's PC Audio state
+(`RadioModel::notePcAudioEnabled`) so the backend can warn about a mismatch, and
+never commands. Without that split an operator who set `DATA OFF MOD` to USB for
+a rig interface would find it silently rewritten on every connect. On a model
+with no verified SET-menu map the click is refused and says so, rather than
+guessing another radio's item numbers.
+
 Accepting the dialog queues `AudioEngine::setInputDevice()` and
 `AudioEngine::setOutputDevice()` onto the audio worker thread. Those setters are
 the only place that persists the chosen device IDs and restarts the affected
@@ -287,28 +311,27 @@ radio audio streams.
 ```mermaid
 flowchart TD
     A["QAudioSource mic capture<br/>Int16, preferred stereo"] --> B["AudioEngine::onTxAudioReady()"]
-    B --> C["Canonicalize mic channels<br/>Auto Left/Right/Average/Mono<br/>duplicate mono to L/R"]
-    C --> D{"Needs resample?"}
-    D -->|yes| E["Use canonical mono<br/>processMonoToStereo()<br/>24 kHz stereo Int16"]
-    D -->|no| H{"RADE mode?"}
-    E --> H
-    H -->|yes| I["PC mic gain -> canonical meter<br/>Int16 stereo -> float32 stereo<br/>txRawPcmReady()"]
-    I --> J["RADEEngine"]
-    H -->|no| K{"DAX TX mode?"}
-    K -->|yes| L["return<br/>DAX/TCI feed feedDaxTxAudio()"]
-    K -->|no| M["ClientTxTestTone<br/>optional replacement tone"]
-    M --> N["applyClientTxDspInt16()<br/>Gate -> EQ -> DeEss -> Comp -> Tube -> PUDU -> Reverb"]
-    N --> O["Post-DSP monitor tap"]
-    O --> P["PC mic gain<br/>0..100 -> 0.0..1.0 attenuation"]
-    P --> Q["Quindar tone insertion"]
-    Q --> R["ClientFinalLimiter"]
-    R --> S["Final monitor tap"]
-    S --> T["txPostChainScopeReady<br/>average L/R<br/>voice post-limiter"]
-    T --> U["PC mic meter<br/>canonical stereo frame level"]
-    U --> V["scopeSamplesReady<br/>average L/R"]
-    V --> W{"Opus enabled?"}
-    W -->|yes| X["10 ms Opus remote_audio_tx<br/>PCC 0x8005"]
-    W -->|no| Y["Uncompressed VITA fallback<br/>PCC 0x03E3"]
+    B --> C["Canonicalize mic channels at device rate<br/>Auto Left/Right/Average/Mono<br/>duplicate mono to L/R Int16"]
+    C --> D{"RADE mode?"}
+    D -->|yes| E["Legacy RADE device-rate -> 24 kHz SRC if needed<br/>PC mic gain, meter, Int16 -> float32"]
+    E --> F["RADEEngine<br/>separate fixed-rate modem path"]
+    D -->|no| G{"DAX TX mode?"}
+    G -->|yes| H["return<br/>DAX/TCI feed feedDaxTxAudio()"]
+    G -->|no| I["TxVoiceProcessor<br/>Int16 -> mono float32 once"]
+    I --> J["Input SRC when needed<br/>device rate -> fixed 48 kHz DSP rate<br/>duplicate mono to L/R"]
+    J --> K["Optional TX RN2 at native 48 kHz"]
+    K --> L["Optional 48 kHz test tone"]
+    L --> M["User-ordered 48 kHz float strip<br/>Gate / EQ / DeEss / Comp / Tube / PUDU / Reverb"]
+    M --> N["PC mic gain -> Quindar -> final limiter<br/>48 kHz float32 stereo"]
+    N --> O["Independent L/R egress SRC<br/>48 kHz -> 24 kHz float32"]
+    O --> P["Linked TPDF dither + round-to-nearest<br/>quantize once to 24 kHz stereo Int16"]
+    P --> Q["Final monitor, scopes, PC mic meter"]
+    Q --> R{"Backend consumes TX audio seam?"}
+    R -->|yes| U["IRadioBackend::submitTxAudio()<br/>24 kHz stereo Int16"]
+    U --> V["HL2 / Icom backend<br/>convert for backend-native processing"]
+    R -->|no| S{"Opus enabled?"}
+    S -->|yes| T["10 ms Opus remote_audio_tx<br/>PCC 0x8005"]
+    S -->|no| W["Uncompressed VITA fallback<br/>PCC 0x03E3"]
 ```
 
 ### QAudioSource format negotiation
@@ -319,7 +342,9 @@ flowchart TD
 - macOS prefers sample rates in this order for general devices: 48 kHz,
   44.1 kHz, then 24 kHz. For Bluetooth headset inputs that CoreAudio reports
   as native 8, 16, or 24 kHz-only, AetherSDR opens the mic at that native rate
-  first and then uses its normal radio-native conversion when needed.
+  first. Normal voice then normalizes the captured signal to its fixed 48 kHz
+  DSP domain; the separate RADE route instead converts it to RADE's 24 kHz
+  handoff rate. DAX/TCI TX does not consume the PC-mic capture buffer.
 - Linux and other non-Windows platforms prefer 24 kHz, then 48 kHz, then
   44.1 kHz.
 - Stereo is tried before mono for each sample rate.
@@ -347,13 +372,15 @@ flowchart TD
   than a backlog replayed 1.36 s per callback. Discards are counted for the
   lifecycle and reported once as a capture-health event.
 
-When the capture sample rate is not 24 kHz, `m_txResampler` converts to the
-internal 24 kHz voice rate.
+The negotiated rate is not the voice DSP rate. For the normal voice path,
+`TxVoiceProcessor` normalizes it to a fixed 48 kHz float domain. The older
+`m_txResampler` remains only for the separate RADE branch, which still expects
+24 kHz stereo at its `RADEEngine` handoff.
 
 ### Capture normalization and resampling behavior
 
-`onTxAudioReady()` normalizes the mic data to interleaved 24 kHz stereo Int16
-before the voice TX chain or early RADE/DAX branches:
+`onTxAudioReady()` first canonicalizes mic channels as interleaved stereo Int16
+at the negotiated device rate. Rate conversion then depends on the route:
 
 - The actual negotiated channel count is stored as `m_txInputChannels`.
 - Oversized realtime blocks are rejected before sample access or allocation on
@@ -372,15 +399,62 @@ before the voice TX chain or early RADE/DAX branches:
   channel when the weaker side is at least 12 dB down above a -65 dBFS floor,
   otherwise averages balanced L/R. A short hold keeps the previous one-sided
   selection through quiet pauses.
-- The canonical mono sample is duplicated back to L/R for the rest of the voice
-  path.
-- Input that needs resampling is converted from the canonical duplicated stereo
-  to float32 mono and resampled with `Resampler::processMonoToStereo()`.
-  `processStereoToStereo()` is not used on raw mic stereo.
+- The canonical mono sample is duplicated back to L/R without changing the
+  capture rate.
+- The normal voice route passes that canonical Int16 frame to
+  `TxVoiceProcessor::processCapturedInt16()`. It converts the duplicated signal
+  to mono float32 once, uses the stateful r8brain `Resampler::process()` path to
+  reach 48 kHz when needed, and then duplicates the 48 kHz mono result to L/R.
+  After consuming the capture samples, it replaces that caller-owned block
+  in-place with the final 24 kHz stereo Int16 transport output. Queued monitor
+  consumers therefore retain an immutable completed block rather than sharing
+  a reusable processor-owned output buffer.
+- `prepare(..., maxInputFrames)` sizes the normal realtime working set; it is
+  not an input ceiling. A capture callback larger than that reservation is
+  still processed, with scratch buffers allowed to grow for the exceptional
+  block, rather than dropping the delayed microphone audio.
+- Native 48 kHz input skips the ingress SRC but still enters the same float32
+  processing domain.
+- The voice SRCs use a 12% transition-band profile selected to retain the
+  supported modulation bandwidth through 10 kHz while avoiding the much larger
+  group delay of the general-purpose 2% profile. Their deterministic serial SRC
+  delay, expressed in the 48 kHz DSP domain, is 394 frames (about 8.2 ms) for
+  48 kHz capture, 615 frames (about 12.8 ms) for 44.1 kHz capture, and 788
+  frames (about 16.4 ms) for 24 kHz capture. Supported low-rate capture has a
+  longer interpolation filter: 1,240 frames (about 25.8 ms) at 16 kHz and
+  2,104 frames (about 43.8 ms) at 8 kHz. These figures include the serial
+  ingress and egress SRCs but not optional DSP latency. Enabled gate lookahead
+  and the nominal 480-frame RNNoise contribution are added by
+  `TxVoiceProcessor::latencyFrames()`, which reports the configured-path delay
+  in 48 kHz frames. The SRC and gate terms are deterministic. RNNoise's current
+  callback-sized streaming adapter can emit additional startup silence for
+  irregular callback partitions while waiting for complete 480-frame output,
+  so the RNNoise term is nominal rather than a universal wall-clock guarantee.
+- RADE retains its separate conversion to 24 kHz before its early branch. DAX
+  TX does not consume this mic buffer; DAX/TCI audio arrives separately through
+  `feedDaxTxAudio()`.
+
+### TX rate diagnostics
+
+Support snapshots retain `resampling_active` as the route-level statement that
+the selected TX path currently performs any SRC. The explicit fields identify
+which conversion is responsible:
+
+- `voice_input_normalizing_to_48k`: the normal voice path converts the
+  negotiated capture rate to the fixed 48 kHz DSP rate.
+- `voice_egress_resampling_to_24k`: the normal voice path performs its required
+  48-to-24 kHz output conversion. This is true even for native 48 kHz capture.
+- `rade_resampling_to_24k`: the separate RADE path converts the capture rate to
+  its fixed 24 kHz input rate.
+
+Route priority mirrors `onTxAudioReady()`: RADE reports only its own SRC, DAX
+mic bypass reports no PC-mic SRC, and normal voice reports its unconditional
+egress SRC plus ingress normalization when needed. This prevents the historical
+generic field from changing meaning when the capture rate changes.
 
 ### Voice TX ordering after capture/resampling
 
-After capture normalization, `onTxAudioReady()` uses this ordering:
+After capture channel canonicalization, `onTxAudioReady()` uses this ordering:
 
 1. **RADE early path**: if RADE mode is active, PC mic gain is applied, the
    client mic meter is computed from the canonical stereo frame level, Int16
@@ -389,32 +463,67 @@ After capture normalization, `onTxAudioReady()` uses this ordering:
 2. **DAX TX bypass**: if DAX TX mode is active, the PC mic voice handler returns.
    DAX/TCI audio enters through `feedDaxTxAudio()` and intentionally bypasses the
    voice DSP chain.
-3. **Test tone**: `ClientTxTestTone` can replace the mic data with a generated
-   24 kHz stereo Int16 tone before user voice DSP.
-4. **Voice DSP strip**: `applyClientTxDspInt16()` runs the ordered chain. The
-   default order is Gate, EQ, DeEss, Comp, Tube, PUDU, Reverb, though the order
-   is user-configurable.
-5. **Post-DSP monitor tap**: `m_txPostDspMonitor->feedTxPostDsp()` receives the
-   post-strip Int16 stereo signal before PC mic gain.
-6. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates all
-   samples. It is not a boost stage.
-7. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones after
-   PC mic gain and before the final limiter.
-8. **Final limiter**: `ClientFinalLimiter` runs after all voice-strip work and
-   Quindar insertion.
-9. **Final monitor tap**: `m_txFinalMonitor->feedTxFinal()` receives the
-   post-limiter signal.
-10. **TX post-chain scope**: `txPostChainScopeReady` receives a mono scope signal
-    made by averaging L/R from the post-limiter Int16 stereo signal.
-11. **PC mic meter**: `pcMicLevelChanged` uses the post-limiter canonical stereo
-    frame level, so right-only input devices meter correctly.
-12. **Main scope**: `scopeSamplesReady(..., true)` receives a mono scope signal
+3. **Float conversion and ingress SRC**: `TxVoiceProcessor` converts canonical
+   Int16 to mono float32 once. If the device is not already at 48 kHz, a
+   stateful r8brain SRC converts it to the fixed DSP rate; the result is then
+   duplicated to float32 stereo.
+4. **Optional TX RN2**: the mic-preamp RNNoise instance runs directly in the
+   native 48 kHz domain. `TxVoiceProcessor` supplies a reusable caller-owned
+   output buffer to `RNNoiseFilter::process48kStereo(input, output)`; RX RN2
+   retains its existing legacy rate wrapper.
+5. **Test tone**: `ClientTxTestTone` can replace the mic signal with a generated
+   48 kHz float32 stereo tone before the user voice strip.
+6. **Voice DSP strip**: `TxVoiceProcessor::processChannelStrip()` runs float32
+   processors directly in the user-selected order. The default order is Gate,
+   EQ, DeEss, Comp, Tube, PUDU, Reverb.
+7. **PC mic gain**: `setPcMicGain(0..100)` maps to `0.0..1.0` and attenuates the
+   48 kHz float samples. It is not a boost stage.
+8. **Quindar tone**: `ClientQuindarTone::process()` inserts Quindar tones at
+   48 kHz after PC mic gain and before the final limiter.
+9. **Final limiter**: `ClientFinalLimiter::process()` runs at 48 kHz after all
+   voice-strip work and Quindar insertion. Non-finite samples are replaced with
+   silence before they can enter the stateful egress SRC.
+10. **Egress SRC**: independent left and right `Resampler` instances convert
+    48 kHz float32 to 24 kHz float32, preserving the stereo representation. The
+    matched instances must return equal frame counts. If they ever diverge, the
+    common aligned prefix is retained, the mismatch is logged, and both
+    resamplers reset before the next block so the channels cannot remain offset.
+11. **Transport quantization**: one unshaped TPDF value with a 2-LSB
+    peak-to-peak range is added per frame, identically to L/R so the duplicated
+    mono voice representation remains exact. Samples are then rounded to the
+    nearest Int16 code and saturated at the Int16 rails. The allocation-free
+    deterministic PRNG has persistent streaming state and is returned to its
+    fixed seed by `TxVoiceProcessor::reset()` for reproducible offline tests.
+    When both float samples in a frame are exactly zero, the PRNG still advances
+    but the frame remains the exact Int16 digital-silence code. Nonzero samples,
+    including sub-LSB values, retain normal TPDF treatment.
+12. **Measurement seams**: capture is disabled by default and production
+    `AudioEngine` does not toggle it per block. Offline/tests enable it
+    explicitly when they need the named intermediate buffers.
+    `normalizedFloat48Stereo()` exposes the normalized 48 kHz input and
+    `postChannelStripFloat48Stereo()` exposes the 48 kHz post-strip/pre-gain
+    signal. `transportFloat32Stereo()` exposes the final 24 kHz float
+    representation; the caller-owned in/out block carries the corresponding
+    dithered Int16 transport representation.
+13. **Monitor taps**: both legacy monitor pointers currently receive the stable
+    post-limiter, post-SRC 24 kHz Int16 representation. The named 48 kHz
+    measurement seam above is the accurate post-strip tap.
+14. **TX post-chain scope**: `txPostChainScopeReady` receives a mono scope signal
+    made by averaging L/R from the final 24 kHz Int16 stereo signal.
+15. **PC mic meter**: `pcMicLevelChanged` uses the final transport-rate canonical
+    stereo frame level, so right-only input devices meter correctly.
+16. **Main scope**: `scopeSamplesReady(..., true)` receives a mono scope signal
     made by averaging L/R.
-13. **Packetization**:
-    - If Opus TX is enabled, the path encodes 10 ms Opus packets for
+17. **Packetization**:
+    - Backends with `takesTxAudioOverSeam` receive the completed 24 kHz stereo
+      Int16 block through `IRadioBackend::submitTxAudio()`. HL2 converts it to
+      its 48 kHz host-modulator domain, while Icom converts to its configured
+      48 kHz radio-audio stream. These conversions mean the voice processor's
+      quantization is final only for the Flex path today.
+    - For Flex, if Opus TX is enabled, the path encodes 10 ms Opus packets for
       `remote_audio_tx`.
-    - Otherwise, the fallback path packetizes 128 stereo frames as float32 VITA
-      PCC `0x03E3`.
+    - Otherwise, the Flex fallback path packetizes 128 stereo frames as
+      float32 VITA PCC `0x03E3`.
 
 ### PC mic gain and final limiter
 
@@ -429,9 +538,44 @@ The final limiter defaults are:
 - output trim: `0.0 dB`
 - DC block: true
 
-The limiter is channel-linked. It optionally DC-blocks each channel, applies
-output trim as a pre-limiter drive stage, and then limits peaks against the
-ceiling with attack/release smoothing.
+The limiter is channel-linked and prepared at 48 kHz. It optionally DC-blocks
+each channel, applies output trim as a pre-limiter drive stage, and then limits
+peaks against the ceiling with attack/release smoothing.
+
+The limiter precedes the 48-to-24 kHz egress SRC. Although it bounds samples in
+the 48 kHz domain, the SRC's band-limited reconstruction can overshoot that
+sample ceiling. The final Int16 conversion saturates any resulting over-range
+samples, so the limiter ceiling is not currently a guaranteed post-SRC or true-
+peak ceiling.
+
+This ordering is deliberate rather than an oversight, so do not "fix" it
+without revisiting the trade. The measured worst case is about +1.5 dBFS, and
+only for a pathological input — a ceiling-limited full-scale square wave, the
+hardest signal a linear-phase decimator can be handed. Real limited speech
+overshoots far less. The obvious alternative, lowering the limiter ceiling by a
+matching true-peak margin, is rejected on purpose: absent radio-side
+compensation, even 1 dB of headroom costs roughly 21% of PEP. Occasional speech
+overshoots, clipped once at the Int16 rail, are preferable to a permanently
+reduced transmitter output — particularly for the tightly integrated Aurora.
+The pre-refactor chain made no stronger guarantee in practice either:
+`ClientFinalLimiter` is a smoothed peak limiter, not a brickwall.
+
+Changing that policy requires measured headroom or a separately
+specified post-SRC safeguard; it must not silently add lookahead latency.
+
+### Passband authority, SRC filtering, and oversampling
+
+The client does not add a selectable TX passband filter in this path. The radio
+remains authoritative for the configured transmit mode and passband. The
+low-pass filtering inherent in the 48-to-24 kHz r8brain conversion is the SRC's
+anti-alias filter; it must not be treated as the artistic or operator-selected
+TX passband filter.
+
+All voice stages currently run at the fixed 48 kHz DSP rate. This refactor does
+not add local oversampling around tube saturation, PUDU excitation, compressor
+drive/limiting, or the final limiter. Any future oversampling belongs around the
+specific harmonic-generating stage and must return to the 48 kHz domain before
+the single egress SRC.
 
 ## Opus TX/RX
 
@@ -442,6 +586,9 @@ The normal remote voice path uses `OpusCodec`:
 - PCM format: interleaved Int16
 - Frame duration: 10 ms
 - Frame size: 240 sample frames, or 480 Int16 samples
+- Encoder bitrate: 70 kbps by default
+- Encoder complexity: 10
+- Encoder signal hint: `OPUS_SIGNAL_VOICE`
 - Encoded packet cadence: one Opus frame per VITA packet
 
 For TX, `AudioEngine::onTxAudioReady()` accumulates exactly 10 ms of 24 kHz
@@ -449,10 +596,10 @@ stereo Int16 audio before calling `OpusCodec::encode()`. The encoded Opus frame
 is wrapped in a VITA-49 packet using PCC `0x8005` for `remote_audio_tx` and the
 current remote TX stream id.
 
-Encoded packets are not written immediately. They are appended to
-`m_opusTxQueue`, capped to roughly 20 packets, and a 10 ms pacing timer drains
-one packet per tick. If the queue grows beyond the cap, the oldest packet is
-dropped.
+Encoded packets are not written immediately. `OpusTxPacer` holds at most 20
+packets and follows 10 ms elapsed-time deadlines. A late timer event can drain a
+bounded catch-up batch; an empty queue re-anchors the schedule, and an overflow
+drops the oldest queued packet.
 
 For RX Opus audio, `PanadapterStream::decodeOpusAudio()` decodes PCC `0x8005`
 payloads to 24 kHz stereo Int16 and converts them to float32 stereo before
@@ -506,6 +653,13 @@ the life of the session.
 When `m_radeMode` is active, `AudioEngine::onTxAudioReady()` branches before the
 normal Opus voice TX path. RADE receives float32 PCM and bypasses the Opus
 `remote_audio_tx` encoder entirely.
+
+On the transition into RADE, `AudioEngine::setRadeMode(true)` resets the
+RADE-only device-to-24 kHz resampler on the audio thread before publishing the
+new mode. The reset therefore discards history from a previous RADE session
+without running resampler reset/prewarm work inside the realtime capture
+callback. This changes neither RADE's rate domain nor its steady-state signal
+latency.
 
 `RADEEngine::feedTxAudio()` expects 24 kHz stereo float32 PCM. It averages L/R
 and downsamples to 16 kHz mono for LPCNet feature extraction, encodes the RADE
@@ -666,8 +820,8 @@ equivalent taps.
 
 Local/client taps:
 
-- `pcMicLevelChanged` on the PC mic voice path is a post-final-limiter Int16
-  meter over the canonical stereo frame level.
+- `pcMicLevelChanged` on the PC mic voice path is measured from the final
+  post-limiter, post-egress-SRC, quantized 24 kHz Int16 representation.
 - `pcMicLevelChanged` on the RADE early branch is after PC mic gain but before
   Int16-to-float conversion and uses the canonical stereo frame level.
 - `pcMicLevelChanged` on the DAX/TCI path is computed in `feedDaxTxAudio()` from
@@ -678,10 +832,11 @@ Local/client taps:
   output trim or optional 48 kHz resampling.
 - `scopeSamplesReady` is a shared local scope signal. Stereo sources are
   converted to mono by averaging L/R.
-- `txPostChainScopeReady` is taken after the PC mic voice final limiter and
-  converts stereo to mono by averaging L/R. DAX/TCI and RADE also emit this
-  high-rate TX scope from their pre-packetization bypass audio so the WAVE
-  display continues to show digital-mode transmit waveforms.
+- `txPostChainScopeReady` on the PC mic voice path is taken from the final
+  post-limiter, post-egress-SRC 24 kHz Int16 representation and converts stereo
+  to mono by averaging L/R. DAX/TCI and RADE also emit this high-rate TX scope
+  from their pre-packetization bypass audio so the WAVE display continues to
+  show digital-mode transmit waveforms.
 - `rxPostChainScopeReady` is taken after the RX client strip, optional RX
   upsampling, RX boost, and RX output trim on the non-BNR path. For BNR it is
   taken after BNR output resampling and trim. In both cases it is before speaker
@@ -712,12 +867,17 @@ Radio-provided taps:
 | Speaker write | RX drain timer in `AudioEngine::startRxStream()` | float32 stereo buffers | `QAudioSink` writes | 24 or 48 kHz | 2 | Caps buffers and mixes RADE decoded speech |
 | CW sidetone | `CwSidetoneGenerator` | key state | float32 stereo | normally 48 kHz | 2 | Local-only sidetone sink |
 | Quindar local monitor | `QuindarLocalSink` | tone state | float32 stereo | 48 kHz | 2 | Local-only Quindar monitor sink |
-| PC mic capture | `AudioEngine::startTxStream()` | device Int16 | Int16 from `QAudioSource` | 24, 44.1, or 48 kHz | 1 or 2 | macOS push-buffer polling; Linux/Windows pull mode |
-| PC mic normalization | `AudioEngine::onTxAudioReady()` | Int16 mono/stereo | Int16 stereo | 24 kHz | 1 or 2 -> 1 -> 2 | Auto selects stronger one-sided stereo channel or averages balanced stereo before resampling/duplication |
-| PC mic voice strip | `AudioEngine::applyClientTxDspInt16()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | Ordered Gate/EQ/DeEss/Comp/Tube/PUDU/Reverb |
-| PC mic gain | `AudioEngine::onTxAudioReady()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | 0..100 maps to 0.0..1.0 attenuation |
-| Quindar TX insertion | `ClientQuindarTone::process()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | Inserts tones before final limiter |
-| Final voice limiter | `ClientFinalLimiter::processInt16Stereo()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | DC block, output trim, linked peak limiting |
+| PC mic capture | `AudioEngine::startTxStream()` | device Int16 | Int16 from `QAudioSource` | negotiated device rate | 1 or 2 | macOS push-buffer polling; Linux/Windows pull mode |
+| PC mic channel canonicalization | `TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo()` | Int16 mono/stereo | duplicated-stereo Int16 | negotiated device rate | 1 or 2 -> 1 -> 2 | Auto selects stronger one-sided stereo channel or averages balanced stereo; no SRC here |
+| Voice float conversion / ingress SRC | `TxVoiceProcessor::processCapturedInt16()` | duplicated-stereo Int16 | float32 stereo | device rate -> 48 kHz when needed | 2 -> 1 -> 2 | Converts to float once; stateful mono r8brain SRC; native 48 kHz skips SRC |
+| TX RN2 | `RNNoiseFilter::process48kStereo(input, output)` | float32 stereo | float32 stereo | 48 kHz | 2 -> 1 -> 2 | Optional mic denoiser in `Native48k` rate domain; reuses caller-owned output storage |
+| PC mic voice strip | `TxVoiceProcessor::processChannelStrip()` | float32 stereo | float32 stereo | 48 kHz | 2 | Ordered Gate/EQ/DeEss/Comp/Tube/PUDU/Reverb |
+| PC mic gain | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | float32 stereo | 48 kHz | 2 | 0..100 maps to 0.0..1.0 attenuation |
+| Quindar TX insertion | `ClientQuindarTone::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | Inserts tones before final limiter |
+| Final voice limiter | `ClientFinalLimiter::process()` | float32 stereo | float32 stereo | 48 kHz | 2 | DC block, output trim, linked peak limiting |
+| Voice egress SRC | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | float32 stereo | 48 kHz -> 24 kHz | 2 | Independent matched L/R r8brain instances preserve stereo; 12% transition profile; state persists across blocks; group delay is included by `latencyFrames()`. An impossible frame-count mismatch preserves the aligned common prefix and queues both SRC histories for reset on the audio event loop between callbacks. |
+| Voice transport quantization | `TxVoiceProcessor::processWorkBuffer()` | float32 stereo | Int16 stereo | 24 kHz | 2 | Linked unshaped TPDF (2 LSB peak-to-peak), round-to-nearest, and Int16 saturation; exact-zero frames remain digital zero while the PRNG advances |
+| Backend TX audio seam | `RadioModel::submitTxAudio()` / `IRadioBackend::submitTxAudio()` | Int16 stereo | backend-dependent | 24 kHz at seam | 2 | Used by host-modulating backends; HL2 and Icom currently convert the 24 kHz seam output to 48 kHz backend processing |
 | Opus TX packetization | `AudioEngine::onTxAudioReady()` | Int16 stereo | VITA PCC `0x8005` Opus | 24 kHz | 2 | 10 ms packets, paced queue |
 | Uncompressed voice fallback | `AudioEngine::onTxAudioReady()` | Int16 stereo | VITA PCC `0x03E3` float32 stereo | 24 kHz | 2 | 128 stereo frames per packet |
 | RADE TX branch | `AudioEngine::onTxAudioReady()` | Int16 stereo | float32 stereo | 24 kHz | 2 | Applies PC mic gain, canonical meter, emits `txRawPcmReady()` |
@@ -750,9 +910,12 @@ warning before it is discarded and regenerated.
 | `AudioEngine::resampleStereo()` | Resample without downmix | float32 stereo | float32 stereo | Uses independent L/R resamplers; preserves pan |
 | `AudioEngine::processNr2()` | Downmix and duplicate | float32 stereo | float32 stereo | Averages L/R, NR2 mono processing, duplicates, reapplies pan |
 | `AudioEngine::processBnr()` | Downmix, 24->48, 48->24, duplicate | float32 stereo | float32 stereo | BNR path is mono internally |
-| `AudioEngine::onTxAudioReady()`, mono input | Duplicate canonical mono | Int16 mono | Int16 stereo | Direct Int16 mono duplication before optional resample |
-| `AudioEngine::onTxAudioReady()`, stereo input | Canonicalize and duplicate | Int16 stereo | Int16 stereo | Auto Left/Right/Average avoids one-sided stereo 6.02 dB loss |
-| `AudioEngine::onTxAudioReady()`, resample | Resample canonical mono and duplicate | Int16 stereo | Int16 stereo | Canonical duplicated stereo -> float32 mono -> `processMonoToStereo()` -> Int16 |
+| `TxMicChannelNormalizer`, mono input | Duplicate canonical mono | Int16 mono | Int16 stereo | Direct Int16 mono duplication at the negotiated device rate |
+| `TxMicChannelNormalizer`, stereo input | Canonicalize and duplicate | Int16 stereo | Int16 stereo | Auto Left/Right/Average avoids one-sided stereo 6.02 dB loss; retains device rate |
+| `TxVoiceProcessor`, ingress | Format conversion, resample, duplicate | canonical Int16 stereo at device rate | float32 stereo 48 kHz | Takes one canonical channel, converts to float once, uses mono `Resampler::process()` when needed, then duplicates |
+| `TxVoiceProcessor`, egress | Preserve stereo and downsample | float32 stereo 48 kHz | float32 stereo 24 kHz | Separate L/R `Resampler` instances; no downmix |
+| `TxVoiceProcessor`, transport boundary | Dither and quantize | float32 stereo 24 kHz | Int16 stereo 24 kHz | Single linked-channel TPDF-dithered conversion using round-to-nearest and Int16 saturation; exact-zero frames preserve digital silence |
+| `IRadioBackend::submitTxAudio()` | Backend TX handoff | Int16 stereo 24 kHz | backend-dependent | Flex does not use this seam for normal voice; HL2 and Icom currently convert the shared 24 kHz output for 48 kHz backend processing |
 | `AudioEngine::onTxAudioReady()`, RADE branch | Format conversion | Int16 stereo | float32 stereo | After PC mic gain and canonical meter |
 | `AudioEngine::onTxAudioReady()`, Opus TX | Encoding | Int16 stereo | Opus payload | 10 ms / 240 frame packets |
 | `AudioEngine::onTxAudioReady()`, VITA fallback | Format conversion | Int16 stereo | float32 stereo VITA | 128 stereo frames per packet |
@@ -774,18 +937,18 @@ warning before it is discarded and regenerated.
 
 | Signal/name | File/function | Pre/post stage | Channel policy | Units |
 | --- | --- | --- | --- | --- |
-| `AudioEngine::pcMicLevelChanged`, PC voice | `AudioEngine::onTxAudioReady()` | Post final limiter, before Opus/fallback packetization | Canonical stereo frame level | dBFS peak and RMS |
+| `AudioEngine::pcMicLevelChanged`, PC voice | `AudioEngine::onTxAudioReady()` | Post final limiter, 48-to-24 kHz SRC, and Int16 quantization; before Opus/fallback packetization | Canonical stereo frame level | dBFS peak and RMS |
 | `AudioEngine::pcMicLevelChanged`, RADE | `AudioEngine::onTxAudioReady()` RADE branch | After PC mic gain, before Int16->float32 and RADE engine | Canonical stereo frame level | dBFS peak and RMS |
 | `AudioEngine::pcMicLevelChanged`, DAX/TCI | `AudioEngine::feedDaxTxAudio()` | Before DAX route packetization | All float samples | dBFS peak and RMS |
 | `AudioEngine::levelChanged` | `AudioEngine::feedAudioData()` | After selected RX NR, before RX client strip/boost/trim/resample | RMS over all float samples in the buffer | Linear RMS |
 | `AudioEngine::scopeSamplesReady`, TX voice | `AudioEngine::emitScopeFromInt16Stereo()` | Post PC mic meter, before packetization | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::scopeSamplesReady`, TX DAX | `AudioEngine::emitScopeFromFloat32Stereo()` | In `feedDaxTxAudio()` before route packetization | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::scopeSamplesReady`, RX | `AudioEngine::emitScopeFromFloat32Stereo()` | In `writeAudio()` or BNR output path near RX buffering | Average L/R | float PCM scope samples, sample rate |
-| `AudioEngine::txPostChainScopeReady`, TX voice | `AudioEngine::emitTxPostChainScopeFromInt16Stereo()` | Post final limiter and final monitor tap | Average L/R | float PCM scope samples, sample rate |
+| `AudioEngine::txPostChainScopeReady`, TX voice | `AudioEngine::emitTxPostChainScopeFromInt16Stereo()` | Final 24 kHz Int16 representation, post limiter/SRC/quantization and final monitor tap | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::txPostChainScopeReady`, TX DAX/TCI/RADE | `AudioEngine::emitTxPostChainScopeFromFloat32Stereo()` | Pre-packetization digital bypass audio | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::rxPostChainScopeReady` | `AudioEngine::emitRxPostChainScopeFromFloat32Stereo()` | Non-BNR: after RX strip, upsample, boost, and trim; BNR: after BNR resample/trim; before buffer append | Average L/R | float PCM scope samples, sample rate |
 | RX EQ analyzer | `AudioEngine::tapClientEqRxStereo()` | After RX EQ, before RX Gate/Comp/DeEss/Tube/PUDU | Average L/R | float mono analyzer samples |
-| TX EQ analyzer | `AudioEngine::tapClientEqTxInt16()` / `tapClientEqTxFloat32()` | After TX EQ or EQ bypass inside TX strip | Average L/R for stereo | float mono analyzer samples |
+| TX EQ analyzer | `AudioEngine::tapClientEqTxFloat32()` | After TX EQ or EQ bypass inside the 48 kHz TX strip | Average L/R for stereo | float mono analyzer samples |
 | macOS DAX RX level | `VirtualAudioBridge::feedDaxAudio()` | After DAX RX gain, before shared-memory write | Left channel only | Linear RMS |
 | macOS DAX TX level | `VirtualAudioBridge::readTxAudio()` | After DAX TX gain, before `txAudioReady()` | Left channel only | Linear RMS |
 | PipeWire DAX RX level | `PipeWireAudioBridge::feedDaxAudio()` | After downmix/upconvert for PipeWire source | All output mono samples | Linear RMS |
@@ -802,6 +965,13 @@ warning before it is discarded and regenerated.
   preserving stereo image or radio pan matters.
 - PC mic capture is canonicalized before resampling and metering, so one-sided
   stereo microphones keep full level and right-only microphones meter correctly.
+- Keep the normal voice strip in the fixed 48 kHz float domain. The 24 kHz rate
+  is the existing voice-output boundary, not the voice DSP engine rate. For
+  Flex `remote_audio_tx`, apply dither and quantize only once after the final
+  48-to-24 kHz SRC. The shared HL2/Icom seam currently consumes that same
+  Int16 block and performs additional backend-specific conversion; removing
+  that legacy round trip requires a separately reviewed backend-capability and
+  transport-contract change.
 - DAX/TCI and RADE intentionally bypass the client voice strip. Do not move them
   through voice EQ/compression/limiting unless the digital-mode behavior is
   deliberately being redesigned.

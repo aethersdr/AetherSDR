@@ -38,15 +38,51 @@ jobs:
     # the cache and the compiler side.
     env:
       CCACHE_DIR: /ccache
-      # Sized from measurement, not guesswork: a full cold build of this
-      # configuration settles at ~0.5 GB. 1000M leaves headroom without wasting
-      # budget — and budget pressure here is about entry COUNT, not entry size,
-      # because the cache key carries github.run_id so every run writes a fresh
-      # entry. An oversized cap multiplies what each of those costs against the
-      # repo's 10 GB ceiling and risks LRU-evicting the Qt / FFTW / DeepFilterNet
-      # entries the other jobs depend on. (check-macos runs at 500M, but on a
-      # lighter configuration — no ENABLE_NVIDIA_AFX.)
-      CCACHE_MAXSIZE: 1000M
+      # Raised 1000M -> 2000M. This cache was FULL and evicting internally: the
+      # last green main run before this change reported
+      #
+      #   Cache size (GB):  1.0 /  1.0 (95.41%)   Hits 2082/2210 (94.21%)
+      #
+      # A cold build settles at ~0.5 GB, so 1000M looked like 2x headroom — but
+      # this entry does not hold one build, it accumulates objects across ~9.2
+      # main merges a day. At 1.0 GB it was continuously discarding its own
+      # oldest objects, so it only ever represented a narrow window of recent
+      # main, and a PR branched from a day-old main took misses on objects that
+      # had fallen out of ccache rather than out of the GitHub cache.
+      #
+      # Raised for THIS job only. The other two are not constrained and would
+      # pay transfer time for nothing — do not raise them on symmetry grounds:
+      #   check-macos     0.3 / 0.5 GB (57.63%)
+      #   check-windows   628 MiB / 1 GiB (61%)
+      #
+      # 2000M, not the 5000M the headroom would allow, because the binding
+      # constraint is TRANSFER TIME, not storage. Entries compress to ~55% of
+      # the ccache directory (1.0 GB of ccache -> a 556 MiB entry), and restore
+      # cost scales with it: 12 s at 556 MiB today, ~24 s at 2000M, ~60 s at
+      # 5000M — paid on EVERY run, against a benefit that only materialises
+      # for misses that were eviction-caused rather than genuinely new source.
+      # This is the reversible first step; read the `cleanups` counter and the
+      # hit rate in the "ccache stats" step before going further.
+      #
+      # Budget check at 2000M, against the repo's 10 GB cache allowance. Entry
+      # sizes are MEASURED on refs/heads/main, not projected, except Linux which
+      # is extrapolated from the 55% compression ratio at the new cap:
+      #   Linux    ~1.1 GiB entry x 2 retained  = 2.2 GiB
+      #   Windows  ~0.38 GiB x 2                = 0.8 GiB
+      #   macOS    ~0.18 GiB x 2                = 0.4 GiB
+      #   canary   ~0.57 GiB x 2                = 1.1 GiB
+      #   deps (Qt, DeepFilterNet, FFTW, qtkeychain; 9 entries)
+      #                                         ~ 1.8 GiB
+      #                                         --------
+      #                                         ~ 6.3 GiB
+      # The canary line is system-libs-canary.yml's cache, which an earlier
+      # revision of this table omitted — the same omission that left it out of
+      # cache-cleanup.yml's PREFIXES. Counting it moves the projection from
+      # ~5.1 to ~6.3 GiB: still comfortably inside the allowance, with less
+      # headroom than the earlier figure implied.
+      # See "Compiler-cache strategy" at the bottom of this file for why only
+      # main writes an entry, and cache-cleanup.yml for what prunes the rest.
+      CCACHE_MAXSIZE: 2000M
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -58,16 +94,16 @@ jobs:
       - name: Ensure ccache is present
         run: command -v ccache || (apt-get update && apt-get install -y ccache)
 
-      - name: Cache ccache objects
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # RESTORE on every run, SAVE only on main — see "Compiler-cache strategy"
+      # at the bottom of this file for the measurements behind the split.
+      - name: Restore ccache objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: /ccache
-          # Exact key never hits (run_id is unique) so every run writes a fresh
-          # entry; restore-keys pulls the most recent prior one. Standard ccache
-          # pattern — GitHub evicts by LRU within the repo's 10 GB budget, which
-          # is why CCACHE_MAXSIZE is capped well under it: this cache must not
-          # evict the Qt/FFTW/DeepFilter entries the other jobs depend on.
-          key: ccache-linux-build-${{ github.run_id }}
+          # There is deliberately no exact-match key here: the prefix fallback
+          # IS the mechanism, and restore-keys picks the most recently created
+          # matching entry, which under save-on-main is the newest main build.
+          key: ccache-linux-build-
           restore-keys: |
             ccache-linux-build-
 
@@ -210,6 +246,18 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "^workspace_" --output-on-failure
 
+      # Slippy-map world wrap. Same reasoning as the step above: the target is
+      # already linked by Build, the test runs in milliseconds, and it touches
+      # no network — but without a step here it would compile and go green
+      # having never executed. It pins the tile-hierarchy floor for negative
+      # tile x (the world copy west of the base one), the canonical-URL
+      # mapping, the camera crossing the dateline without the scene rect
+      # clamping it, and the wheel-zoom round trip.
+      - name: Test map wrap
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "^map_wrap_test$" --output-on-failure
+
       # The demo RX engine's worker-thread contract (#4878): affinity, 24 kHz
       # pacing on a coarse timer, keyed-mute, stallscope. This is the fix for
       # the demo making the GUI thread carry a 333 Hz precise timer plus the
@@ -282,6 +330,32 @@ jobs:
       - name: Test TCI protocol parsing and malformed-input rejection
         run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
 
+      # THE CI-V MODE MAP IS INVISIBLE FROM THE UI. A missing arm in
+      # modeFromNeutral() does not throw, does not log, and does not fail to
+      # build — setSliceMode() takes the "no equivalent" path and re-asserts the
+      # radio's current mode, so the control appears to do nothing. That is what
+      # hid the DFM hole: selecting FM-D simply reverted, and the on-air cost was
+      # a radio transmitting from the MICROPHONE instead of the modulator.
+      #
+      # These are table assertions — no radio, no sockets, no event loop, ~0.1 s
+      # against a target the Build step already linked.
+      #
+      # icom_meters_test rides along because it owns the model table's
+      # invariants, and this PR proved they were unguarded: setting the
+      # IC-9700's hasVfoModeCommand tripped "no model silently inherits a DATA
+      # command shape" and all four checks stayed green, because nothing in this
+      # file ran that target either. A capability flag that gates which frame
+      # reaches the radio is exactly the kind of claim worth failing a merge on.
+      - name: Test Icom CI-V codec, model table, command scheduler and backend
+        # icom_civ_scheduler_test and icom_backend_test are on this gate
+        # deliberately. The scheduler arbitrates PTT and the operator's control
+        # writes on a single serial command plane, and icom_backend_test is
+        # where every convergence claim about it is asserted. Leaving them to
+        # the weekly sanitizers job would repeat the hasVfoModeCommand lesson
+        # in the comment above: the assertion existed, nothing on a PR ran it,
+        # and all four checks stayed green. ~21 s for the pair.
+        run: ctest --test-dir build -R "^icom_(civ|civ_scheduler|meters|backend)_test$" --output-on-failure
+
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months
       # without anyone noticing, because nothing made the hit rate visible.
@@ -291,6 +365,24 @@ jobs:
       - name: ccache stats
         if: always()
         run: ccache --show-stats
+
+      # Save LAST, and only from a green main build.
+      #
+      # `success()` is not about correctness — ccache keys each object on a hash
+      # of the preprocessed source plus flags, so objects from a failed build are
+      # still valid, just fewer. It is about not letting a build that died early
+      # write a SPARSE entry that restore-keys then prefers over the fuller one
+      # before it, because restore-keys resolves to the most recent match. Every
+      # PR would restore that thinner cache until the next green main run.
+      - name: Save ccache objects
+        if: github.ref == 'refs/heads/main' && success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          # run_id keeps the key unique: actions/cache entries are immutable, so
+          # a stable key would make every save after the first a silent no-op
+          # and freeze the cache at its first-ever contents.
+          key: ccache-linux-build-${{ github.run_id }}
 
 
   # Cross-platform build check — runs on every PR (no path gating).
@@ -326,6 +418,13 @@ jobs:
   # 9.18 GB of the 10 GB budget across 3471 entries, LRU-evicting the shared
   # entries and reinforcing the miss.
   #
+  # Read that alongside "Compiler-cache strategy" at the bottom of this file:
+  # the same ref-scoping fact ("a PR may only read its base branch's cache")
+  # later turned out to be wasting most of the budget through the DIRECTORY
+  # caches too, not just the per-object backend this paragraph retired. Same
+  # root cause, two symptoms, fixed years apart — which is why the note below
+  # spells out the rule rather than just the fix.
+  #
   # The exact-key requirement is what makes that fatal rather than merely
   # lossy: any key drift is a total miss with no fallback. The Linux build
   # avoids it by caching a ccache DIRECTORY with prefix `restore-keys:` — it
@@ -343,9 +442,11 @@ jobs:
       # Local disk cache, not the GHA backend — see the note above. D: is the
       # fast runner volume and the one the workspace already lives on.
       SCCACHE_DIR: D:\sccache
-      # Matches ccache's cap on the Linux build, and for the same reason: every
-      # run writes a fresh cache entry, so budget pressure here is about entry
-      # size × count against the repo's 10 GB ceiling.
+      # Left at 1G. The Linux ccache was raised to 2000M because it was
+      # measurably full (1.0/1.0 GB, 95.41%); this one measured 628 MiB of 1 GiB
+      # on the same run, so raising it would buy nothing and cost transfer time
+      # on every restore. Do not raise the three caps together on symmetry
+      # grounds — check the stats step first.
       SCCACHE_CACHE_SIZE: 1G
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -383,16 +484,14 @@ jobs:
         run: .\scripts\setup\setup-deepfilter.ps1
 
       # Restored BEFORE sccache first runs, so the server sees a populated
-      # SCCACHE_DIR when it starts. Exact key never hits (run_id is unique) so
-      # every run writes a fresh entry; restore-keys pulls the most recent
-      # prior one. Same pattern as the Linux build's ccache step — the prefix
-      # fallback is the entire point, since it survives the key drift that made
-      # the exact-key GHA backend miss 100%.
-      - name: Cache sccache objects
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      # SCCACHE_DIR when it starts. The prefix fallback is the entire point,
+      # since it survives the key drift that made the exact-key GHA backend
+      # miss 100%. Same save-on-main split as the Linux ccache step.
+      - name: Restore sccache objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: D:\sccache
-          key: sccache-windows-${{ github.run_id }}
+          key: sccache-windows-
           restore-keys: |
             sccache-windows-
 
@@ -560,12 +659,22 @@ jobs:
       - name: sccache stats
         if: always()
         # Stop the server after reporting: it holds the cache files open, and
-        # actions/cache archives SCCACHE_DIR in the post-job step. Stopping
-        # first is what guarantees everything this run compiled is flushed to
-        # disk and actually ends up in the saved entry.
+        # the save step below archives SCCACHE_DIR. Stopping first is what
+        # guarantees everything this run compiled is flushed to disk and
+        # actually ends up in the saved entry — which is also why the save is
+        # an explicit step AFTER this one rather than a post-job hook.
         run: |
           sccache --show-stats
           sccache --stop-server
+
+      # Save LAST, and only from a green main build — see the Linux job's
+      # equivalent step and "Compiler-cache strategy" at the bottom of the file.
+      - name: Save sccache objects
+        if: github.ref == 'refs/heads/main' && success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: D:\sccache
+          key: sccache-windows-${{ github.run_id }}
 
   # macOS build check — runs on every PR (no path gating), same rationale
   # as check-windows above.  Catches Q_OS_MAC / CoreAudio / Cocoa-bridge
@@ -712,6 +821,22 @@ jobs:
         with:
           key: ccache-macos-ci
           max-size: 500M
+          # Same save-on-main split as the Linux and Windows jobs, expressed
+          # through this action's own `save` input rather than a restore/save
+          # pair. Restore stays on (default) so PRs read main's entry.
+          #
+          # append-timestamp stays at its default (true) deliberately: the
+          # action needs a unique key per save because actions/cache entries are
+          # immutable, so pinning it to the bare `ccache-macos-ci` would make
+          # every save after the first a silent no-op and freeze the cache.
+          #
+          # KNOWN GAP vs the other two jobs: this input is evaluated when the
+          # step runs, and the action saves from its own post-job hook, so there
+          # is no `success()` half — a failed main build here still writes an
+          # entry. Tolerated rather than worked around: the cost is a sparser
+          # cache until the next green main run, not a wrong one, and at 500M on
+          # the lighter macOS configuration that is the smallest of the three.
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Ensure offline Metal toolchain
         # Build-time ASR kernel compilation (#4535) needs the offline Metal
@@ -799,3 +924,99 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=1 -DGGML_METAL_HAS_BF16=1 -c "$src" -o - |
             xcrun -sdk macosx metallib - -o "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"
           ls -l "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Compiler-cache strategy: restore everywhere, save only on main
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# All three build jobs restore their compiler cache on every run but save only
+# from a green build of main. This section records why, because the previous
+# arrangement was a reasonable-looking pattern that failed silently for months.
+#
+# WHAT WENT WRONG BEFORE
+#
+# Every job keyed its save on github.run_id, so every run — PR runs included —
+# wrote a fresh ~0.6 GB entry. GitHub Actions caches are scoped by ref, and a
+# PR's entry lands on refs/pull/N/merge, which NO OTHER PR is permitted to
+# read. Only entries on refs/heads/main are readable repo-wide.
+#
+# So each PR run wrote an entry that nothing else could ever use, into a budget
+# with a 10 GB allowance for the whole repository, evicting by LRU. Measured
+# on 2026-08-16, with 26 PRs open:
+#
+#   refs/pull/*/merge   14 entries   8.62 GB   <- unreadable by anything else
+#   refs/heads/main      9 entries   2.00 GB   <- the only shared entries
+#                                   -------
+#                        active total 10.80 GB against a 10 GB allowance
+#
+# 80% of the budget was PR-scoped, and its only effect was evicting the shared
+# main entry. There was at that point NO Linux ccache or Windows sccache entry
+# on main at all — both had been evicted — so PR builds and main builds alike
+# were running cold. The tell is a "Restore" step completing in 0 s where a
+# healthy one takes ~12 s.
+#
+# The arithmetic says this could not have held: ~35 CI runs/day x ~2 GB of
+# compiler cache per run is 50-80 GB/day pushed through a 10 GB allowance. The
+# whole cache turned over several times a day. Capping CCACHE_MAXSIZE limits
+# each entry's SIZE and does nothing about entry COUNT, which was the binding
+# constraint.
+#
+# NOTE the 10 GB is an ALLOWANCE, not a hard cap. Since 2025-11 it is
+# configurable upward by enterprise/org/repo admins, billed at $0.07/GB-month
+# above 10 GB — but doing so "requires a valid Pro, Team, or Enterprise
+# account", and the aethersdr org is on Free. Raising it was considered and
+# rejected: it would have paid to warehouse the 8.62 GB of PR-scoped entries
+# that nothing is permitted to read. This change removes that waste instead,
+# and lands the repo well inside the free allowance.
+#
+# WHY SAVE-ON-MAIN FIXES IT
+#
+# PR runs now write nothing, so the shared main entry stops being evicted by
+# caches nobody can read. main refreshes it 9.2 times/day (median gap 54 min),
+# and ccache is incremental — each main run restores the previous entry and adds
+# to it, so there is no cold-refresh cycle to wait through.
+#
+# WHAT IT COSTS
+#
+# A PR no longer accumulates its own cache across pushes. That is a real loss on
+# paper and was already lost in practice: cache turnover was a few hours against
+# a median PR lifetime of 17.6 h, so a PR's own entry was almost always gone by
+# its second push.
+#
+# The genuine new cost is the overnight gap — up to 9.7 h between main runs, so
+# an early-morning PR restores a night-stale cache. ccache degrades in
+# proportion to how much of src/ changed, so that is a hit-rate dip rather than
+# a cold build. A scheduled nightly main run would close it; not added, because
+# the "ccache stats" / "sccache stats" steps already print the hit rate and that
+# is the number to look at before spending a job on it.
+#
+# IF YOU ARE CHANGING THIS
+#
+# - Keep run_id (or the macOS action's append-timestamp) in the SAVE key.
+#   actions/cache entries are immutable, so a stable key makes every save after
+#   the first a silent no-op and freezes the cache at its first-ever contents.
+# - Keep the save steps last, after the stats steps, and after
+#   `sccache --stop-server` on Windows — the server holds cache files open.
+# - Do not add an exact-match key to the RESTORE steps. The prefix fallback is
+#   the mechanism; an exact key that never matches just adds a lookup.
+# - SUPERSEDED main entries are swept by .github/workflows/cache-cleanup.yml.
+#   This matters because we are on the default seven-day retention: restores
+#   resolve to the most recent match, so run N's cache is unreachable the moment
+#   run N+1 saves, and an unreachable entry is never accessed again — so nothing
+#   refreshes its LRU position and nothing deletes it. Left alone, main writes
+#   ~1.66 GiB x ~9.2 runs/day and would pin the repo at its allowance on its
+#   own. That job prunes each prefix to the newest 2. (Retention is itself a
+#   configurable policy as of 2025-11; see cache-cleanup.yml's header.)
+# - IF YOU ADD A run_id-KEYED COMPILER CACHE IN ANY WORKFLOW, add its key prefix
+#   to that job's PREFIXES list. Note "any workflow", not "this file": the first
+#   version of that list was written as "one prefix per compiler cache in
+#   ci.yml" and duly missed system-libs-canary.yml's ccache-sid-canary-, which
+#   is the same run_id-keyed pattern on the same push:main trigger. The scope
+#   that matters is the repository's 10 GB allowance, not this file's share.
+# - PR-scoped caches (Qt, FFTW, DeepFilterNet, qtkeychain on refs/pull/N/merge)
+#   are NOT swept. A job for them was written and pulled before merge: a
+#   `pull_request` trigger gets a read-only token on fork PRs and cannot be
+#   elevated, and 22 of 25 open PRs are forks. It may also prove unnecessary —
+#   PRs only WRITE those when the key is not already readable, which was itself
+#   a symptom of main's copies being evicted by the churn the split above
+#   removes. Deferred to a follow-up that can measure it first.

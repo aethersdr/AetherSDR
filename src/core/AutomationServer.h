@@ -810,7 +810,14 @@ private:
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     // Correlates an extension reply with the request that caused it. Starts at
     // 1 because the sim-fault path deliberately uses 0 for fire-and-forget.
-    quint64 m_extensionRequestId{0};
+    //
+    // MUTABLE because `get hostnb` reads backend state through an extension
+    // call, and doGet() is const. The counter is a correlation token, not
+    // observable state — nothing reads it back and no answer depends on its
+    // value — so bumping it from a read does not make the read a write. The
+    // alternative, a fixed id, would work only for as long as every extension
+    // reply stayed synchronous.
+    mutable quint64 m_extensionRequestId{0};
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)
     QString m_authToken;           // shared-secret gate; empty = open (#3646)
     // Log/event channel (#3646 observability suite). The tap fills m_logRing

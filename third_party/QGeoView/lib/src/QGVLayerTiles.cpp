@@ -63,6 +63,15 @@ void QGVLayerTiles::setCameraUpdatesDuringAnimation(bool value)
     qgvDebug() << "CameraUpdatesDuringAnimation changed to" << value;
 }
 
+void QGVLayerTiles::setHorizontalWrapEnabled(bool enabled)
+{
+    if (mHorizontalWrapEnabled == enabled) {
+        return;
+    }
+    mHorizontalWrapEnabled = enabled;
+    processCamera();
+}
+
 void QGVLayerTiles::onProjection(QGVMap* geoMap)
 {
     QGVLayer::onProjection(geoMap);
@@ -147,7 +156,14 @@ void QGVLayerTiles::processCamera()
     }
     const QGVProjection* projection = getMap()->getProjection();
     const QGVCameraState camera = getMap()->getCamera();
-    const QRectF areaProjRect = camera.projRect().intersected(projection->boundaryProjRect());
+    QRectF areaProjRect = camera.projRect();
+    const QRectF world = projection->boundaryProjRect();
+    if (mHorizontalWrapEnabled) {
+        areaProjRect.setTop(qMax(areaProjRect.top(), world.top()));
+        areaProjRect.setBottom(qMin(areaProjRect.bottom(), world.bottom()));
+    } else {
+        areaProjRect = areaProjRect.intersected(world);
+    }
     const QGV::GeoRect areaGeoRect = projection->projToGeo(areaProjRect);
 
     int originZoom = scaleToZoom(camera.scale());
@@ -163,11 +179,23 @@ void QGVLayerTiles::processCamera()
                                      : static_cast<int>(mPerfomanceProfile.TilesMarginNoZoomChange);
     const int sizePerZoom = static_cast<int>(qPow(2, mCurZoom));
     const QRect maxRect = QRect(QPoint(0, 0), QPoint(sizePerZoom, sizePerZoom));
-    const QPoint topLeft = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.topLeft()).pos();
-    const QPoint bottomRight = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.bottomRight()).pos();
+    QPoint topLeft = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.topLeft()).pos();
+    QPoint bottomRight = QGV::GeoTilePos::geoToTilePos(mCurZoom, areaGeoRect.bottomRight()).pos();
+    if (mHorizontalWrapEnabled) {
+        const double tilesPerProjectionUnit = sizePerZoom / world.width();
+        topLeft.setX(static_cast<int>(qFloor(
+            (areaProjRect.left() - world.left()) * tilesPerProjectionUnit)));
+        bottomRight.setX(static_cast<int>(qFloor(
+            (areaProjRect.right() - world.left()) * tilesPerProjectionUnit)));
+    }
     QRect activeRect = QRect(topLeft, bottomRight);
     activeRect = activeRect.adjusted(-margin, -margin, margin, margin);
-    activeRect = activeRect.intersected(maxRect);
+    if (mHorizontalWrapEnabled) {
+        activeRect.setTop(qMax(activeRect.top(), maxRect.top()));
+        activeRect.setBottom(qMin(activeRect.bottom(), maxRect.bottom()));
+    } else {
+        activeRect = activeRect.intersected(maxRect);
+    }
     const bool rectChanged = (!zoomChanged && (mCurRect != activeRect));
     mCurRect = activeRect;
 
@@ -208,6 +236,31 @@ void QGVLayerTiles::processCamera()
         }
     }
 
+    // AetherSDR patch: the cull above only touches mCurZoom. Tiles at the other
+    // retained zoom levels are evicted solely by removeWhenCovered(),
+    // removeAllAbove() and removeForPerfomance(), all of which key on coverage
+    // or on zoom distance and never on position. Upstream that was safe because
+    // tile x was clamped to [0, 2^zoom], so the set was finite by construction.
+    // Horizontal wrap removes that clamp, so every world copy the camera
+    // crosses leaves behind another band of fallback tiles that nothing ever
+    // reclaims — unbounded growth on exactly the pan-forever path wrap adds.
+    // Cull those positionally too, against the same rect.
+    if (mHorizontalWrapEnabled && (zoomChanged || rectChanged)) {
+        const int fromZoom = minZoomlevel();
+        const int toZoom = maxZoomlevel();
+        for (int zoom = fromZoom; zoom <= toZoom; ++zoom) {
+            if (zoom == mCurZoom) {
+                continue;
+            }
+            for (const QGV::GeoTilePos& tilePos : existingTiles(zoom)) {
+                if (!overlapsActiveRect(tilePos)) {
+                    qgvDebug() << "delete out of active rect" << tilePos;
+                    removeTile(tilePos);
+                }
+            }
+        }
+    }
+
     QMultiMap<qreal, QGV::GeoTilePos> missing;
     for (int x = mCurRect.left(); x < mCurRect.right(); ++x) {
         for (int y = mCurRect.top(); y < mCurRect.bottom(); ++y) {
@@ -223,6 +276,42 @@ void QGVLayerTiles::processCamera()
     for (const QGV::GeoTilePos& tilePos : missing) {
         addTile(tilePos, nullptr);
     }
+}
+
+// AetherSDR patch: does `tilePos` — which may be at any zoom level — cover any
+// part of the current active rect? Used to cull off-screen fallback tiles once
+// horizontal wrap makes tile x unbounded. Everything is done in qint64 so the
+// span of a very coarse tile expressed in mCurZoom units cannot overflow.
+bool QGVLayerTiles::overlapsActiveRect(const QGV::GeoTilePos& tilePos) const
+{
+    const int zoom = tilePos.zoom();
+    if (zoom == mCurZoom) {
+        return mCurRect.contains(tilePos.pos());
+    }
+    const int deltaZoom = qAbs(zoom - mCurZoom);
+    if (deltaZoom > 30) {
+        // Far outside any retained window; leave it to removeForPerfomance().
+        return true;
+    }
+    const qint64 factor = Q_INT64_C(1) << deltaZoom;
+    qint64 left = 0, right = 0, top = 0, bottom = 0;
+    if (zoom > mCurZoom) {
+        // Finer than the current level: many child tiles per current-level one.
+        const auto floorDiv = [](qint64 value, qint64 by) {
+            const qint64 q = value / by;
+            return (value % by != 0 && (value < 0) != (by < 0)) ? q - 1 : q;
+        };
+        left = right = floorDiv(tilePos.pos().x(), factor);
+        top = bottom = floorDiv(tilePos.pos().y(), factor);
+    } else {
+        // Coarser: this one tile spans `factor` current-level tiles per axis.
+        left = static_cast<qint64>(tilePos.pos().x()) * factor;
+        right = left + factor - 1;
+        top = static_cast<qint64>(tilePos.pos().y()) * factor;
+        bottom = top + factor - 1;
+    }
+    return right >= mCurRect.left() && left <= mCurRect.right()
+            && bottom >= mCurRect.top() && top <= mCurRect.bottom();
 }
 
 void QGVLayerTiles::removeAllAbove(const QGV::GeoTilePos& tilePos)

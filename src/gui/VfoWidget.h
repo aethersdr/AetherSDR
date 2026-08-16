@@ -593,6 +593,12 @@ public:
     // (RadioCapabilities::hasManualNotch). Shows the MN button and re-targets
     // the shared level slider to the notch POSITION while it is selected.
     void setHasManualNotch(bool has);
+    // Whether THIS HOST blanks impulse noise in the radio's IQ
+    // (RadioCapabilities::hasHostNoiseBlanker). Shows the NB button on a radio
+    // that reports no radio-side DSP, because on such a radio the blanker runs
+    // here and the button reaches something real — the same exception the
+    // manual notch and the TNF controls already make.
+    void setHasHostNoiseBlanker(bool has);
     // The filter widths the RADIO actually has
     // (RadioCapabilities::rxFilterWidthsHz), widest first. Non-empty means
     // the hardware has a fixed ladder and the mode-preset grid must not be
@@ -752,6 +758,11 @@ private:
     // control on screen for every radio in the pre-report window, including
     // the Flexes that have TNFs instead and will never claim it.
     bool         m_hasManualNotch{false};
+    // Defaults FALSE like m_hasManualNotch, and for the mirror of its reason:
+    // this flag can only ADD the NB button (it is OR'd with m_hasRadioSideDsp,
+    // which already defaults true), so a permissive default would show NB in
+    // the pre-report window on radios that will never claim either.
+    bool         m_hasHostNoiseBlanker{false};
     // Mode eligibility for each radio-side DSP button, cached by the two places
     // that recompute it (the slice modeChanged handler and syncFromSlice) so
     // applyRadioSideDspVisibility() can AND it with the capability WITHOUT

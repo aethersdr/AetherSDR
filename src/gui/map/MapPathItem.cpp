@@ -6,6 +6,8 @@
 #include <QPainter>
 #include <QtMath>
 
+#include <limits>
+
 namespace AetherSDR {
 
 namespace {
@@ -41,11 +43,13 @@ QGV::GeoPos slerp(double lat1, double lon1, double lat2, double lon2,
 } // namespace
 
 MapPathItem::MapPathItem(double fromLat, double fromLon,
-                         double toLat, double toLon, const QColor& color)
+                         double toLat, double toLon, const QColor& color,
+                         int relativeWorldOffset)
     : m_fromLat(fromLat)
     , m_fromLon(fromLon)
     , m_toLat(toLat)
     , m_toLon(toLon)
+    , m_relativeWorldOffset(relativeWorldOffset)
     , m_color(color)
 {
     setSelectable(false);
@@ -61,19 +65,52 @@ void MapPathItem::onProjection(QGVMap* geoMap)
     // width means the great circle wrapped — start a new subpath.
     const double worldWidth = proj->boundaryProjRect().width();
 
-    m_projPath = QPainterPath();
+    m_baseProjPath = QPainterPath();
     QPointF prev;
     for (int i = 0; i <= kSegments; ++i) {
         const double t = static_cast<double>(i) / kSegments;
         const QPointF p = proj->geoToProj(
             slerp(m_fromLat, m_fromLon, m_toLat, m_toLon, t));
         if (i == 0 || std::abs(p.x() - prev.x()) > worldWidth / 2.0) {
-            m_projPath.moveTo(p);
+            m_baseProjPath.moveTo(p);
         } else {
-            m_projPath.lineTo(p);
+            m_baseProjPath.lineTo(p);
         }
         prev = p;
     }
+    // Anchor the world-copy choice on the DESTINATION endpoint — exactly the
+    // point MapMarkerItem rounds against for the spot this path terminates at.
+    // The path's bounding-rect centre is not usable: a great circle crossing
+    // the antimeridian is split into subpaths hard against both edges, so its
+    // centre collapses toward the projection origin and bears no relation to
+    // either endpoint. Rounding the two against different anchors makes them
+    // disagree about which copies exist over a wide band of camera positions,
+    // and a spot ends up drawn with no path running to it.
+    m_baseAnchor = proj->geoToProj(QGV::GeoPos(m_toLat, m_toLon));
+    m_appliedWorldOffset = std::numeric_limits<int>::min();
+    m_projPath = m_baseProjPath;
+    onCamera(geoMap->getCamera(), geoMap->getCamera());
+}
+
+void MapPathItem::onCamera(const QGVCameraState& oldState,
+                           const QGVCameraState& newState)
+{
+    const double worldWidth = newState.getProjection()->boundaryProjRect().width();
+    const int worldOffset = m_relativeWorldOffset + qRound(
+        (newState.projCenter().x() - m_baseAnchor.x()) / worldWidth);
+    // Compare the integer copy index rather than the mapped path. The offset
+    // only changes when the camera crosses a world boundary, so an ordinary
+    // drag frame costs two doubles here instead of a QTransform::map() over
+    // every segment plus a full QPainterPath comparison — per item, at several
+    // items per spot, on the very drag path this change exists to keep clear.
+    if (worldOffset != m_appliedWorldOffset) {
+        m_appliedWorldOffset = worldOffset;
+        m_projPath = QTransform::fromTranslate(
+            worldOffset * worldWidth, 0.0).map(m_baseProjPath);
+        resetBoundary();
+        refresh();
+    }
+    QGVDrawItem::onCamera(oldState, newState);
 }
 
 QPainterPath MapPathItem::projShape() const

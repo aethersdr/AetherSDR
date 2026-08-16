@@ -611,6 +611,18 @@
   "split": "Core: route RX/TX PCM to external apps via virtual audio devices, per-channel gain, RMS level signals (client-host plumbing). Flex: DAX channel model (4 RX + 1 TX), /aethersdr-dax-* shm names, 24 kHz FLEX-8600 native DAX rate, DAX TX stream wiring.",
   "confidence": "high"
  },
+ "core/VkampConnection.h": {
+  "tag": "peripheral(vkamp)",
+  "note": "Direct TCP control/status (port 5005) plus UDP telemetry (port 5010) client for the VK3AMP / Helios DX amplifier line (TCI_VKAMP firmware family) — a standalone Ethernet accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h and core/SpeConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/vkamp-amplifier-design.md.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/VkampProtocol.h": {
+  "tag": "peripheral(vkamp)",
+  "note": "Wire codec for the VK3AMP peripheral: ASCII CSV status/telemetry parsing, the calibration curves turning raw ADC counts into watts/amps, and the bare 2-digit command builders. Reverse-engineered from packet capture against real hardware, not a vendor spec — see docs/architecture/vkamp-amplifier-design.md Section 1 for provenance. Peripheral accessory wire, NOT behind the IRadioBackend radio seam.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/VoiceSignalDetector.h": {
   "tag": "universal",
   "note": "Engine-side DSP: detects voice signals in FFT bins using band-plan segments; radio-agnostic spectrum analysis",

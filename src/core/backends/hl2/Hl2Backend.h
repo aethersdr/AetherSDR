@@ -63,6 +63,12 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setCwPitch(int hz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    // The impulse noise blanker, run on this host — the HL2 has no firmware DSP
+    // to switch on, so this is the same arrangement as the manual notch: the
+    // seam verb lands in WDSP here rather than on a wire. The other members of
+    // the radio-side DSP family (NR, ANF) are deliberately NOT implemented and
+    // stay hidden, because implementing one of them is not implementing all.
+    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -88,7 +94,8 @@ public:
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
     void setKeying(bool key) override;
-    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
+    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
+                       bool clientLeveled) override;
     void setTxPower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
@@ -188,6 +195,12 @@ private:
     void emitAllSliceState();
     void emitAllPanState();
     void pushInitialState();
+    // Put every receiver's AGC pair where this session should come up: the
+    // remembered mode/threshold if this radio has a memory of them, the
+    // construction defaults if it does not (#4909). Called from connectRadio()
+    // ONLY, and conditionally — see the call site for which connects seed and
+    // why a reconnect must not.
+    void seedReceiverAgc();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
@@ -280,6 +293,13 @@ private:
         QString agcMode = QStringLiteral("med");
         int agcThresholdDb = 65;
 
+        // Authoritative noise-blanker state, held here for the same reason the
+        // AGC is: nothing on this radio echoes it back, and a receiver rebuilt
+        // by a sample-rate change or a reconnect has to be told again. Defaults
+        // mirror SliceModel's (off, level 50).
+        bool nbOn = false;
+        int  nbLevel = 50;
+
         // Host-side per-slice audio. The radio mixes nothing for us — a Flex
         // sums its slices on-radio and sends one stream, and an HL2 demodulates
         // every receiver here — so mute, level and balance are ours to apply.
@@ -332,6 +352,12 @@ private:
     // GUI THREAD ONLY. Nothing below the seam may touch this — see m_ioDsps for
     // what the sample path reads instead, and publishIoDsps() for why.
     std::vector<Receiver> m_rx;
+    // Whether the LAST buildReceivers() had previous receiver state to carry
+    // across. Distinguishes a rebuild (auto-reconnect: mode, passband and AGC
+    // survived) from a build (first connect, or a rebuild after
+    // tearDownReceivers() cleared m_rx) — indistinguishable by serial, and the
+    // AGC seeding at connect has to tell them apart. See connectRadio().
+    bool m_rxCarriedState = false;
 
     // ── Manual notches ────────────────────────────────────────────────────
     //
@@ -367,6 +393,11 @@ private:
     // Re-point one receiver's notch axis at its current NCO. Called wherever
     // ncoHz changes; without it the notches stay where the NCO used to be.
     void pushNotchTune(const Receiver& r);
+    // Push this receiver's noise-blanker state into its chain. Needed at every
+    // place a chain is built or rebuilt — a fresh Hl2RxDsp opens with the
+    // blanker off, so without this a reconnect or an added panadapter silently
+    // turns off a blanker the operator's slice still shows as on.
+    void pushNoiseBlanker(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
     //
@@ -388,6 +419,21 @@ private:
     // has one transmitter however many receivers it runs, so this is a CHOICE
     // among the receivers rather than a property each of them has.
     int m_txDdc = 0;
+
+    // The AGC pair the operator last set, on whichever receiver — what
+    // currentOperatingState() persists. The runtime control is per-receiver and
+    // the restore is deliberately flat (seedReceiverAgc writes every receiver),
+    // so the capture side needs one authoritative value; reading the transmit
+    // receiver instead meant a change on RX2 triggered a capture that recorded
+    // RX1. Empty mode = the operator has not touched it this session.
+    QString m_agcMode;
+    int     m_agcThresholdDb = 0;
+    // The serial seedReceiverAgc() last ran for. A DIFFERENT radio must be
+    // seeded (or radio A's AGC keeps running under radio B's identity); the
+    // SAME radio reconnecting must not be, because buildReceivers() preserved
+    // its live per-receiver AGC and flattening that mid-session is a loss, not
+    // a restore. Empty until the first connect.
+    QString m_agcSeededSerial;
 
     // The receiver the operator is working on. Separate from m_txDdc: you listen
     // on one slice while transmitting on another all the time, and conflating
@@ -650,6 +696,12 @@ private:
     // rather than merely stopping the stage pumping. -140 is the floor
     // Hl2TxDsp::micPeak reports for silence, and means "nothing measured yet".
     float m_txMicPeakMaxDbfs = -140.0f;
+
+    // True once the current transmission has carried client-leveled (TCI/DAX)
+    // audio, for which the ALC is bypassed (#4796). Gates the unkey "raise mic
+    // gain" diagnostic, whose advice only applies to the microphone path.
+    // Cleared on each key edge in setKeying().
+    bool m_txAudioClientLeveled = false;
 
     // The passband to push at the modulator for `mode`: the operator's if they
     // have chosen one, otherwise that mode's default.

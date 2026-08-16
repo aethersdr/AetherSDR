@@ -97,7 +97,7 @@ and it is the cleanest part of that codebase.
 | `setMicGain` | CI-V `14 0B`, 0000–0255 BCD |
 | `setTxMonitor` | CI-V `16 45` enable plus `14 15` level |
 | `setTxFilter` | CI-V `1A 05 0020/0021/0022` — **discrete WIDE/MID/NAR**, not Hz |
-| `submitTxAudio` | audio stream, codec 4 — **requires DATA MOD = WLAN** |
+| `submitTxAudio` | audio stream, codec 4 — **requires the model's network source** (WLAN on IC-705, LAN on IC-7300MK2) in `DATA MOD` for data modes and `DATA OFF MOD` for voice |
 | `setSliceAudioGain` | CI-V `14 01` (AF level) |
 | `createPanadapter` | `false` — one receiver, one scope |
 
@@ -253,19 +253,78 @@ not invent a dB scale from the raw register.
 
 ### Gap B — metering is a scheduler, not a subscription
 
-This is new. Flex streams meters; the HL2 embeds them. Icom needs a **poll
-scheduler** that:
+Flex streams meters; the HL2 embeds them. Icom uses one CI-V command plane for
+meters, startup snapshots, periodic controls and PTT. `IcomCivScheduler` is the
+single writer above `IcomSession::sendCiv()` and:
 
 - polls only meters currently visible in the UI;
-- runs S-meter at ~10 Hz and everything else at ~5 Hz;
+- paces dispatches into 25 ms slots and permits one ordinary command/reply
+  transaction at a time;
 - stops TX meters entirely while receiving, and RX meters while transmitting;
-- yields to user-initiated commands, so tuning never queues behind metering;
+- puts operator writes and their radio-authoritative readbacks ahead of polls;
+- coalesces duplicate reads and rapid writes by semantic register, preserving
+  the newest write generation;
+- expires a lost reply after 350 ms and ages background work so PTT or S-meter
+  traffic cannot starve slower controls;
+- lets fail-safe unkey bypass pacing and the outstanding reply slot; and
 - filters its own request/response traffic out of anything re-exported (CAT
   pass-through, TCI) — kappanhang does exactly this and it matters.
 
-wfview's per-rig `Periodic\N\Command` list with priorities is the proven shape.
-This should be a named component (`IcomMeters`) with its own test, not a timer
-sprinkled through the backend.
+The semantic key is deliberately **coarser than the register**: `04`, `06`,
+`26` and the transceive forms all key on `mode`, which is what makes an
+operator mode write supersede an in-flight mode read of any form. Coalescing
+does *not* inherit that coarseness — two reads collapse only when they ask the
+same register the same way. `04` (mode) and `26` (mode + DATA + filter) are
+both issued at connect on purpose, because `26` is what corrects `04` when the
+two disagree.
+
+Aging tops out at the **visible-meter** band, one step below the PTT fallback
+poll, not at the poll itself. Dispatch breaks an equal-priority tie in favour
+of the older entry, so work that aged all the way to `Ptt` would be dispatched
+*ahead* of the keyed-state poll rather than merely tying with it. Stopping one
+band short still beats fresh meter traffic on that tie — which is all
+anti-starvation needs — while leaving PTT an edge no amount of waiting erodes.
+
+Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
+retired before a later read is sent, or that ACK can be mistaken for the read's
+answer. An unsupported read may itself finish with `FB`/`FA`; that releases the
+slot but is never decoded as state.
+
+A transaction that outlives its 350 ms timeout, or that a fail-safe unkey
+displaces, stays **recognisable for a further two seconds**. The timeout means
+"stop waiting", not "this can never arrive": without that memory the identical
+frame is rejected as stale at 349 ms and adopted as fresh radio truth at
+351 ms, which is enough to put an obsolete reading back over a newer operator
+write on every register.
+
+PTT additionally carries an intent generation and a one-second confirmation
+window — one second because it must comfortably cover a lost reply (350 ms)
+plus the 250 ms fallback poll that follows it, and still expire well inside the
+time an operator would take to notice a wrong transmit indicator.
+
+**The window is one-directional, and that asymmetry is the point.** While a
+key-*on* intent is pending, a contradictory `RX` report is the delayed pre-key
+poll answer and is suppressed: this is RFC #4983's captured FT8 failure, where
+treating it as current state tore down transmit audio on a radio that then
+keyed normally. While a key-*off* intent is pending, a contradictory `TX`
+report is never suppressed — a lost, refused, or front-panel-overridden unkey
+is exactly the case where the radio's report is the only thing telling the
+operator they are still on the air. RFC #4983 states the rule directly
+("explicit PTT OFF and fail-safe unkey are never suppressed by a key-on
+transition guard") and Constitution VI requires every path that can transmit to
+fail closed. Radio truth wins again as soon as the bounded window expires.
+
+| group | interval | condition |
+|---|---:|---|
+| PTT fallback | 250 ms | always connected; Transceive is only a hint |
+| S meter | 100 ms | RX and visible |
+| power, SWR, ALC, compression | 200 ms | TX and visible |
+| PA current | 500 ms | TX and visible |
+| voltage | 1000 ms | visible |
+| overflow | 500 ms | RX and visible |
+| NR, NB, auto/manual notch state | 1000 ms | connected |
+| frequency, mode/DATA, monitor and VOX state | 2000 ms | connected |
+| levels, RF power, preamp, AGC, attenuator, tuner, RIT/XIT | 3000 ms | connected |
 
 #### State convergence is snapshot + transceive + polling
 
@@ -279,11 +338,10 @@ Reliable remote state therefore has three layers:
 3. rotate explicit reads on the link timer for states the model guide permits.
 
 Poll slowly enough to leave command latency and meter traffic headroom. The
-current backend uses six one-second phases, with at most four adjacent control
-reads in a phase, and gives operator writes a 500 ms quiet window. NR/NB
-function and level reads therefore rotate at about six seconds; TX state is
-faster because it gates transmit-only meters. A reply is radio
-authority and updates the model without reflecting a new command back down.
+current intervals are in the table above; priority, coalescing and aging bound
+their interaction instead of relying on independent timers to miss each other.
+A reply is radio authority and updates the model without reflecting a new
+command back down.
 Radio-authoritative Icom state must not be replayed from client persistence on
 reconnect.
 
@@ -291,6 +349,45 @@ The one measured exception is a write-only-in-practice register such as the
 IC-7300MK2 RX-ANT selection: its documented read produced only `FB`. Scope the
 send-only control to the model, keep its optimistic state session-local, and
 document why it cannot participate in the ordinary polling contract.
+
+#### `DATA OFF MOD` is written; `DATA MOD` is not. Why the two differ
+
+Both are `1A 05` SET-menu leaves the radio persists identically, so the
+asymmetry needs stating rather than assuming.
+
+`DATA OFF MOD` selects where **voice** modulation comes from, and PC Audio is
+the operator saying "my voice is on this computer" — the two answer the same
+question, so a click on that button is a legible request to change it
+(Principle II: a user action is a request). `DATA MOD` selects where **data**
+modulation comes from, and nothing in AetherSDR's UI expresses an intent about
+it: WSJT-X, fldigi and the built-in beacons all reach the radio the same way
+whichever source is selected, so a client that wrote it would be changing
+operator state on a guess. It stays read-and-report.
+
+Three rules keep the writable half inside Principle III:
+
+1. **Only an operator click writes.** The connect edge *publishes* the client's
+   PC Audio state (`icom/audio.pc.state`) so `checkModInput()` can warn about a
+   mismatch; the write lives behind `icom/audio.pc`, which nothing but the
+   button calls. Replaying the client-persisted `PcAudioEnabled` key onto the
+   register at connect is precisely the two-sources-of-truth fight Principle III
+   exists to prevent.
+2. **"Off" restores, it does not assume.** The register is four-valued on an
+   IC-705 and six-valued on an IC-7300MK2; the button has two states. The
+   backend latches the radio's own value immediately before its first write of
+   the session and puts *that* back, falling back to the profile's `micValue`
+   only when there was nothing to capture. Writing a fixed MIC would delete an
+   operator's USB or ACC selection with no undo and no dialog.
+3. **Unverified models are refused, not guessed at.** `modulationProfileFor()`
+   answers only for models whose own CI-V guide has been checked. A click on any
+   other Icom is declined and says so; nothing is read, written or shown.
+
+That third rule has a cost worth naming: on a model with no profile, Radio
+Health shows no `DATA OFF MOD` / `DATA MOD` row at all, where it used to show
+one. The old row read items 118/119 on **every** Icom and labelled the result
+from the IC-705's enum — which is how an IC-9700 correctly set to LAN reported
+"USB" and got warned at, every session. A row that is wrong is worse than a
+missing one; the fix is another verified profile, not a re-enabled guess.
 
 #### A 0000–0255 level is not a 0–255 meter
 
@@ -462,7 +559,8 @@ single-packet WLAN waveform, emit spectrum and waterfall. Proof: a screenshot
 with a real signal at a known frequency landing in the right bin.
 
 **Phase 3 — audio.** `IcomAudio`: codec 4 LPCM 48 k mono, RX first. Then TX,
-which needs DATA MOD = WLAN on the radio and **verification outside the system** —
+which needs the model's network source in DATA MOD (WLAN on IC-705, LAN on
+IC-7300MK2) and **verification outside the system** —
 a second receiver or a WebSDR, per `feedback-verify-outside-the-system`. A TX
 path that looks perfect from inside AetherSDR and is silent on the air is the
 exact failure mode this project has already been bitten by.

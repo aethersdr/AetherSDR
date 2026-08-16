@@ -54,6 +54,10 @@ public:
     void setMasterVolume(int pct);
     void setHeadphoneVolume(int pct);
     void setOtherClientTx(bool transmitting, const QString& station);
+    // Empty hides the marker. A non-empty family name keeps the experimental
+    // status visible for the whole connected session, independent of whether
+    // the operator dismissed the explanatory notice.
+    void setExperimentalRadioFamily(const QString& familyName);
 
     // Status-bar transmit timer (left of the PC Audio button). Driven by
     // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
@@ -121,6 +125,7 @@ private:
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
     QLabel*      m_appNameLabel{nullptr};
+    QLabel*      m_experimentalRadioLabel{nullptr};
     QLabel*      m_otherTxLabel{nullptr};
     QPushButton* m_mfBtn{nullptr};
     QPushButton* m_pcBtn{nullptr};

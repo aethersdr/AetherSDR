@@ -1405,13 +1405,28 @@ void SliceModel::applyChanges(const SliceDelta& d)
         int v = *d.mnLevel;
         if (m_mnLevel != v) { m_mnLevel = v; emit mnLevelChanged(v); }
     }
+    // GUARDED, like nrfLevel/anflLevel/mnLevel immediately above. These two
+    // were the only assign-and-emit pair in this block without an equality
+    // check, which was harmless while no backend published them from anything
+    // but a real change (Flex carry()s them only when the status carries the
+    // key; Sim sets them only inside setSliceAgc). HL2 publishes the pair on
+    // EVERY emitSliceState() — tune step, mode, filter, mute, TX-slice
+    // reassignment — so an unguarded emit turns a VFO drag into a stream of
+    // agcThresholdChanged at an unchanged value.
+    //
+    // That is not only churn. AgcCalibrationDialog wires agcThresholdChanged to
+    // AgcTCalibrator::onValueChanged, which in manual mode starts a settle timer
+    // that calls recordPoint() — and recordPoint() REPLACES an existing sample
+    // at the same value with a fresh currentRmsDb() reading. With the AGC
+    // Calibration dialog open on an HL2, tuning the VFO would overwrite a good
+    // calibration point with an RMS reading taken mid-tune, silently.
     if (d.agcMode.has_value()) {
-        m_agcMode = *d.agcMode;
-        emit agcModeChanged(m_agcMode);
+        const QString v = *d.agcMode;
+        if (m_agcMode != v) { m_agcMode = v; emit agcModeChanged(v); }
     }
     if (d.agcThreshold.has_value()) {
-        m_agcThreshold = *d.agcThreshold;
-        emit agcThresholdChanged(m_agcThreshold);
+        const int v = *d.agcThreshold;
+        if (m_agcThreshold != v) { m_agcThreshold = v; emit agcThresholdChanged(v); }
     }
     if (d.agcOffLevel.has_value()) {
         m_agcOffLevel = *d.agcOffLevel;

@@ -7,6 +7,8 @@
 #include <string>
 
 using AetherSDR::DeviceDiagnostics::inferAudioBusType;
+using AetherSDR::DeviceDiagnostics::TxAudioResamplingRoute;
+using AetherSDR::DeviceDiagnostics::txAudioResamplingRoute;
 
 namespace {
 
@@ -61,6 +63,46 @@ int main()
               QStringLiteral("Built-in Output"),
               QByteArray("coreaudio-default-output"),
               QStringLiteral("Unknown"));
+
+    const TxAudioResamplingRoute nativeVoice = txAudioResamplingRoute(
+        false, false, false, false);
+    report("48 kHz voice reports its egress SRC",
+           nativeVoice.active
+               && !nativeVoice.voiceInputNormalizingTo48k
+               && nativeVoice.voiceEgressResamplingTo24k
+               && !nativeVoice.radeResamplingTo24k);
+
+    const TxAudioResamplingRoute normalizedVoice = txAudioResamplingRoute(
+        false, false, true, true);
+    report("non-48 kHz voice reports both serial SRCs",
+           normalizedVoice.active
+               && normalizedVoice.voiceInputNormalizingTo48k
+               && normalizedVoice.voiceEgressResamplingTo24k
+               && !normalizedVoice.radeResamplingTo24k);
+
+    const TxAudioResamplingRoute nativeRade = txAudioResamplingRoute(
+        true, false, true, false);
+    report("native-rate RADE reports no active SRC",
+           !nativeRade.active
+               && !nativeRade.voiceInputNormalizingTo48k
+               && !nativeRade.voiceEgressResamplingTo24k
+               && !nativeRade.radeResamplingTo24k);
+
+    const TxAudioResamplingRoute resampledRade = txAudioResamplingRoute(
+        true, true, true, true);
+    report("RADE route priority reports only its active SRC",
+           resampledRade.active
+               && !resampledRade.voiceInputNormalizingTo48k
+               && !resampledRade.voiceEgressResamplingTo24k
+               && resampledRade.radeResamplingTo24k);
+
+    const TxAudioResamplingRoute daxOnly = txAudioResamplingRoute(
+        false, true, true, true);
+    report("DAX mic bypass reports no SRC",
+           !daxOnly.active
+               && !daxOnly.voiceInputNormalizingTo48k
+               && !daxOnly.voiceEgressResamplingTo24k
+               && !daxOnly.radeResamplingTo24k);
 
     std::printf("\n%s\n", g_failed == 0 ? "All tests passed." : "Some tests failed.");
     return g_failed == 0 ? 0 : 1;

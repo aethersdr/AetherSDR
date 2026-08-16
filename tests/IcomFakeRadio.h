@@ -22,7 +22,9 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <map>
+#include <string>
 #include <vector>
 
 namespace AetherSDR::icom::test {
@@ -58,6 +60,11 @@ std::uint16_t getLe16(const QByteArray& b, int at)
 {
     return static_cast<std::uint16_t>(static_cast<std::uint8_t>(b[at])
                                       | (static_cast<std::uint8_t>(b[at + 1]) << 8));
+}
+std::uint16_t getBe16(const QByteArray& b, int at)
+{
+    return static_cast<std::uint16_t>((static_cast<std::uint8_t>(b[at]) << 8)
+                                      | static_cast<std::uint8_t>(b[at + 1]));
 }
 
 // One UDP endpoint of the fake radio. Handles the handshake and pings that are
@@ -188,6 +195,48 @@ public:
     [[nodiscard]] bool serialOpened() const { return m_serialOpened; }
     [[nodiscard]] bool sawUsernameObfuscated() const { return m_usernameObfuscated; }
     [[nodiscard]] int civCommandsSeen() const { return m_civCommands; }
+    // What the radio currently holds for a 1A 05 leaf — the persisted-state
+    // question a client must not answer from its own memory.
+    [[nodiscard]] int setting(int item) const
+    {
+        auto it = m_settings.find(item);
+        return it == m_settings.end() ? -1 : static_cast<int>(it->second);
+    }
+    void setSetting(int item, std::uint8_t value) { m_settings[item] = value; }
+    [[nodiscard]] const std::vector<std::uint16_t>& renewalSequences() const
+    {
+        return m_renewalSequences;
+    }
+    [[nodiscard]] const std::vector<std::uint16_t>& deauthOuterSequences() const
+    {
+        return m_deauthOuterSequences;
+    }
+    [[nodiscard]] const std::vector<std::uint16_t>& loginTokenRequestIds() const
+    {
+        return m_loginTokenRequestIds;
+    }
+    [[nodiscard]] const std::vector<AuthId>& renewalAuthIds() const
+    {
+        return m_renewalAuthIds;
+    }
+    [[nodiscard]] const std::vector<AuthId>& streamRequestAuthIds() const
+    {
+        return m_streamRequestAuthIds;
+    }
+
+    // Lease fault injection used by IcomSession integration tests.
+    void setInjectStaleGrant(bool on) { m_injectStaleGrant = on; }
+    void setRejectRenewalsAfter(int accepted) { m_acceptRenewals = accepted; }
+    void setReissueInitialTokenOnNextLogin(bool on) { m_reissueNextInitialToken = on; }
+    void setAuthFailureOnLogin(bool on) { m_authFailureOnLogin = on; }
+    // The PREVIOUS session's teardown status, delivered on the new control
+    // association before this session has a stream grant to protect it. At
+    // that point the lifecycle exception does not apply yet, so the header
+    // IDs are the only thing separating it from a real login failure.
+    void setStaleAuthFailureBeforeLoginReply(bool on) { m_staleAuthFailureOnLogin = on; }
+    // Answer the next renewal with an inner sequence the client never sent.
+    // A client that acknowledges on packet shape alone accepts it anyway.
+    void setCorruptNextRenewalSequence(bool on) { m_corruptNextRenewalSeq = on; }
 
     // Every CI-V command the client sent, in order. Counting them says the link
     // is alive; keeping them is what lets a test assert that a particular
@@ -201,6 +250,51 @@ public:
     // shape of the stall this exists to reproduce: `isConnected()` stays true,
     // link statistics keep climbing, and the command plane is dead.
     void setCivSilent(bool silent) { m_civSilent = silent; }
+
+    // ---- BE A DIFFERENT ICOM ------------------------------------------------
+    //
+    // The fake was hard-wired to the IC-705's 0xA4 and answered 0x19 0x00 no
+    // matter who the frame was addressed to, which made it structurally unable
+    // to reproduce the bug this whole feature exists for: on a real bus CI-V is
+    // ADDRESSED, and an IC-9700 on 0xA2 ignores everything sent to 0xA4 in
+    // total silence. A fake that answers anyway turns that silent dead session
+    // into a passing test.
+    //
+    // Defaults are unchanged, so every test written before this one still faces
+    // the same IC-705 it always did.
+    void setCivAddress(std::uint8_t address) { m_addr = address; }
+    // The tighter of the two windows the name is copied into: 0x40 in a
+    // 0x90-byte connect grant, against 0x52 in a 0xA8-byte announce.
+    static constexpr std::size_t kMaxNameBytes = 0x90 - 0x40;
+
+    // TRUNCATED, because both carriers std::copy into a fixed offset in a
+    // fixed-size frame with no length check of their own. Every name the suite
+    // uses is a model designation of a handful of characters, so this has never
+    // fired — but a fake radio that scribbles past the end of its own frame
+    // fails as memory corruption somewhere else entirely, which is a debugging
+    // trap rather than a test failure. Truncating is also what a fixed-width
+    // device-name field on a real radio does.
+    void setDeviceName(std::string name)
+    {
+        m_name = std::move(name);
+        if (m_name.size() > kMaxNameBytes)
+            m_name.resize(kMaxNameBytes);
+    }
+
+    // A SECOND DEVICE ON THE BUS. Icom's own RS-BA1 server can front a serial
+    // CI-V bus carrying another radio, a rotator or an amplifier, and all of
+    // them answer a broadcast. Set this and the broadcast draws two replies with
+    // two different addresses — the case where adopting either would be a guess.
+    void setSecondResponder(std::uint8_t address) { m_secondAddr = address; }
+
+    // ECHO EVERY TRANSPORTED FRAME BACK, as a real CI-V bus does.
+    //
+    // Off by default: the suite predates it and none of its assertions expect
+    // echoes. On, it is the only way to exercise the "skip our own echo" rule
+    // against a frame that really was ours — and the echo of a broadcast is the
+    // one that matters, because it arrives FIRST (measured on both lab radios,
+    // 2026-08-14) and does not match the naive echo filter.
+    void setCivEcho(bool echo) { m_civEcho = echo; }
     [[nodiscard]] int audioPacketsFromClient() const { return m_audioFromClient; }
 
     // Push an unsolicited CI-V frame (CI-V Transceive, or a scope sweep).
@@ -230,6 +324,21 @@ public:
         m_audio->send(p);
     }
 
+    // Push the auth-failure status seen when an old session tears down during
+    // a reconnect. With stale=false it belongs to the current session and must
+    // be fatal; with stale=true it must not kill the new media lease.
+    void pushAuthFailure(bool stale)
+    {
+        auto status = m_control->frame(kLenStatus, 0x00, m_seq++);
+        status[0x30] = status[0x31] = status[0x32] = 0xff;
+        status[0x40] = 0x01;
+        if (stale) {
+            putBe32(status, 0x08, 0xCCCC0001);
+            putBe32(status, 0x0c, 0xCCCC0002);
+        }
+        m_control->send(status);
+    }
+
 private:
     void control(FakeStream& s, const QByteArray& b)
     {
@@ -242,35 +351,114 @@ private:
             m_usernameObfuscated = std::equal(expect.begin(), expect.end(),
                                               reinterpret_cast<const std::uint8_t*>(b.constData())
                                                   + 0x40);
+            const std::uint16_t tokenRequestId = getLe16(b, 0x1a);
+            m_loginTokenRequestIds.push_back(tokenRequestId);
+            if (m_authFailureOnLogin) {
+                auto status = s.frame(kLenStatus, 0x00, m_seq++);
+                status[0x30] = status[0x31] = status[0x32] = status[0x33] = 0xff;
+                s.send(status);
+                return;
+            }
+            if (m_staleAuthFailureOnLogin) {
+                m_staleAuthFailureOnLogin = false;
+                pushAuthFailure(true);
+            }
+            m_sentCaps = false;
+            m_reissueThisInitialToken = m_reissueNextInitialToken;
+            m_reissueNextInitialToken = false;
             auto reply = s.frame(0x60, 0x00, m_seq++);
             reply[0x14] = 0x02;
-            for (std::size_t i = 0; i < 6; ++i)
+            reply[0x1a] = static_cast<std::uint8_t>(tokenRequestId & 0xff);
+            reply[0x1b] = static_cast<std::uint8_t>((tokenRequestId >> 8) & 0xff);
+            for (std::size_t i = 2; i < 6; ++i) {
                 reply[0x1a + i] = static_cast<std::uint8_t>(0xC0 + i);
+            }
             s.send(reply);
             return;
         }
         case 0x40: {   // auth
             const auto kind = static_cast<std::uint8_t>(b[0x15]);
             ++m_authCount;
-            if (kind != 0x05)
+            if (kind == static_cast<std::uint8_t>(AuthKind::Deauth)) {
+                m_deauthOuterSequences.push_back(getLe16(b, 0x06));
+                return;
+            }
+            if (kind != 0x05) {
                 return;   // the FIRST auth gets no reply; only the token request does
+            }
+            const std::uint16_t innerSeq = getBe16(b, 0x16);
+            m_renewalSequences.push_back(innerSeq);
+            AuthId requestAuthId{};
+            for (std::size_t i = 0; i < requestAuthId.size(); ++i) {
+                requestAuthId[i] = static_cast<std::uint8_t>(b[0x1a + i]);
+            }
+            m_renewalAuthIds.push_back(requestAuthId);
             auto reply = s.frame(0x40, 0x00, m_seq++);
             reply[0x14] = 0x02;
             reply[0x15] = 0x05;
-            s.send(reply);
+            // A renewal reply correlates through both the 16-bit inner
+            // sequence and the current auth ID. Echoing neither used to let a
+            // client test pass while ignoring the fields the live radio uses.
+            for (int i = 0x16; i < 0x20; ++i)
+                reply[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(b[i]);
+            if (m_corruptNextRenewalSeq) {
+                m_corruptNextRenewalSeq = false;
+                // Well-formed in every other respect — right shape, right auth
+                // ID, zero response — so the outstanding-request set is the
+                // only thing that can reject it.
+                const auto bogus = static_cast<std::uint16_t>(innerSeq + 0x4000);
+                reply[0x16] = static_cast<std::uint8_t>((bogus >> 8) & 0xff);
+                reply[0x17] = static_cast<std::uint8_t>(bogus & 0xff);
+            }
+            const bool accepted = m_acceptedRenewals < m_acceptRenewals;
+            if (m_reissueThisInitialToken) {
+                m_reissueThisInitialToken = false;
+                // Rotate the six-byte material so adopting the reissued token
+                // is load-bearing in the session test rather than a no-op.
+                for (std::size_t i = 0; i < requestAuthId.size(); ++i) {
+                    reply[0x1a + i] = static_cast<std::uint8_t>(0xF0 + i);
+                }
+                reply[0x30] = reply[0x31] = reply[0x32] = reply[0x33] = 0xff;
+            } else if (accepted) {
+                ++m_acceptedRenewals;
+            } else {
+                reply[0x30] = reply[0x31] = reply[0x32] = reply[0x33] = 0xff;
+            }
 
-            if (!m_sentCaps) {
+            auto sendCapabilities = [&] {
+                if (m_sentCaps) {
+                    return;
+                }
                 m_sentCaps = true;
                 auto caps = s.frame(0xA8, 0x00, m_seq++);
                 for (std::size_t i = 0; i < 16; ++i)
                     caps[0x42 + i] = static_cast<std::uint8_t>(0x40 + i);
-                const char* name = "IC-705";
-                std::copy(name, name + 6, caps.begin() + 0x52);
+                std::copy(m_name.begin(), m_name.end(), caps.begin() + 0x52);
                 s.send(caps);
+            };
+            if (m_injectStaleGrant) {
+                // Reproduce the live reconnect race: capabilities, then an old
+                // grant, then this request's token reply. Normal fake-radio
+                // behavior below keeps its historical token-before-caps order.
+                sendCapabilities();
+                if (!m_sentPrematureGrant) {
+                    m_sentPrematureGrant = true;
+                    sendGrant(s, true);
+                }
+                s.send(reply);
+            } else {
+                s.send(reply);
+                sendCapabilities();
             }
             return;
         }
         case 0x90: {   // stream request
+            AuthId requestAuthId{};
+            for (std::size_t i = 0; i < requestAuthId.size(); ++i) {
+                requestAuthId[i] = static_cast<std::uint8_t>(b[0x1a + i]);
+            }
+            m_streamRequestAuthIds.push_back(requestAuthId);
+
             // Refuse unless the client echoed back the identity we published in
             // the capabilities packet. A real radio has to know WHICH radio the
             // client wants when a server fronts several.
@@ -286,13 +474,9 @@ private:
             m_announcedCiv   = getBe32(b, 0x7c);
             m_announcedAudio = getBe32(b, 0x80);
 
-            auto grant = s.frame(0x90, 0x00, m_seq++);
-            const char* name = "IC-705";
-            std::copy(name, name + 6, grant.begin() + 0x40);
-            for (std::size_t i = 0; i < 6; ++i)
-                grant[0x1a + i] = static_cast<std::uint8_t>(0xD0 + i);
-            grant[0x60] = 0x01;
-            s.send(grant);
+            if (m_injectStaleGrant)
+                sendGrant(s, true);
+            sendGrant(s, false);
             return;
         }
         default:
@@ -324,13 +508,32 @@ private:
         if (m_civSilent)
             return;
 
+        // THE BUS ECHOES FIRST, whoever the frame was for. This is what makes a
+        // missing echo mean "the transport is dead" rather than "the radio
+        // declined to answer" — the diagnostic that separated a wedged radio
+        // from a wrong address during the hardware measurements.
+        if (m_civEcho)
+            pushCiv(civ);
+
+        // NOT FOR US. CI-V is addressed and a real radio simply ignores traffic
+        // for somebody else — no error, no reply, nothing. That silence IS the
+        // bug being fixed, so the fake has to reproduce it. 0x00 is broadcast
+        // and every device on the bus answers it.
+        if (frame->to != m_addr && frame->to != kBroadcastAddress)
+            return;
+
         // Name itself. A real radio answers 0x19 0x00 with its own CI-V
         // address, and that is how a client learns WHICH Icom it is talking to
         // — several models speak this same transport, and the address is
         // user-changeable, so a client that assumes 0xA4 mis-decodes the rest.
         if (frame->cmd == cmd::kReadId) {
-            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kReadId, 0x00,
-                     kIc705Addr, kCivEom});
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kReadId, 0x00,
+                     m_addr, kCivEom});
+            // The other device on the bus answers the broadcast too. Only the
+            // broadcast: a directed query reaches exactly one of them.
+            if (m_secondAddr != 0 && frame->to == kBroadcastAddress)
+                pushCiv({0xFE, 0xFE, kControllerAddress, m_secondAddr, cmd::kReadId,
+                         0x00, m_secondAddr, kCivEom});
             return;
         }
 
@@ -377,6 +580,45 @@ private:
                          kCivEom});
                 return;
             }
+        }
+        if (frame->cmd == cmd::kLevel && frame->hasSub && !frame->data.empty()) {
+            if (const std::optional<int> value = decodeLevel(frame->data)) {
+                m_levels[frame->sub] = *value;
+            }
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kFunction && frame->hasSub && !frame->data.empty()) {
+            m_functions[frame->sub] = frame->data.front();
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        // ---- 1A 05 SET MENU ----------------------------------------------
+        //
+        // The item number is TWO BCD bytes, so 0118 arrives as 0x01 0x18; a
+        // fake that read them as one byte would answer the wrong leaf. Read is
+        // the two-byte form, write carries a third byte — the same read/write
+        // split as every command pair above.
+        //
+        // Held as persisted state for the same reason the levels are: DATA OFF
+        // MOD is a setting the RADIO remembers across power cycles, and a fake
+        // that ACKs the read without answering it cannot tell a client which
+        // adopts the radio's value from one that quietly keeps its own.
+        if (frame->cmd == cmd::kSetting && frame->hasSub && frame->sub == 0x05
+            && frame->data.size() >= 2) {
+            const int item = decodeBcdByte(frame->data[0]) * 100
+                + decodeBcdByte(frame->data[1]);
+            if (frame->data.size() == 2) {
+                auto it = m_settings.find(item);
+                if (it == m_settings.end())
+                    return;   // no such leaf on this model — silence, not an error
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
+                         0x05, frame->data[0], frame->data[1], it->second, kCivEom});
+                return;
+            }
+            m_settings[item] = frame->data[2];
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
         }
         if (frame->cmd == cmd::kTuneOffset && frame->hasSub && frame->data.empty()) {
             if (frame->sub == tuneOffset::kFrequency) {
@@ -447,6 +689,32 @@ private:
                      control::kTuner, m_tunerState, kCivEom});
             return;
         }
+        if (frame->cmd == cmd::kControl && frame->hasSub
+            && frame->sub == control::kTuner && !frame->data.empty()) {
+            m_tunerState = frame->data.front() == 0x00 ? 0x00 : 0x01;
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kControl && frame->hasSub
+            && frame->sub == control::kPtt) {
+            if (frame->data.empty()) {
+                const bool report = m_pttOverride ? *m_pttOverride : m_ptt;
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kControl,
+                         control::kPtt, static_cast<std::uint8_t>(report ? 1 : 0), kCivEom});
+                return;
+            }
+            // A radio that ACKs a PTT write and does not act on it is not
+            // hypothetical: the write can be lost on the bus, refused (band
+            // edge, SWR fold-back), or immediately overridden at the front
+            // panel. `FB` means "understood", never "applied" — see
+            // docs/radio-certification.md. Without a fake that can disagree
+            // with the client's intent there is no way to test what the
+            // backend does when radio truth contradicts a pending request.
+            if (!m_pttOverride)
+                m_ptt = frame->data.front() != 0;
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
 
         // Everything else is acknowledged.
         pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
@@ -481,6 +749,17 @@ public:
         {level::kNotchPos, 128},  // ~50 %
         {level::kVoxGain, 204},   // ~80 %
     };
+    // 1A 05 SET-menu leaves, by DECIMAL item number. The IC-705's DATA OFF MOD
+    // starts at USB (0x01) rather than the WLAN (0x03) this client wants: an
+    // operator with a rig interface on the USB port is the ordinary case, and
+    // a fake that already sat on WLAN could not tell "PC Audio put it back"
+    // from "PC Audio never touched it".
+    std::map<int, std::uint8_t> m_settings{
+        {118, 0x01},   // DATA OFF MOD = USB
+        {119, 0x03},   // DATA MOD     = WLAN
+        {116, 0x80},   // USB MOD level
+        {117, 0x80},   // WLAN MOD level
+    };
     // USB-D on FIL2 — NOT the client's construction default (USB, FIL1), so a
     // test asserting DIGU is asserting the client actually read 26 rather than
     // kept its own guess.
@@ -505,8 +784,27 @@ public:
     bool m_ritOn = true;
     bool m_xitOn = false;
     std::uint8_t m_tunerState = 0x01;   // matched
+    bool m_ptt = false;
+    // Force what 1C 00 REPORTS, regardless of what it is told. While set, PTT
+    // writes are still acknowledged but do not move m_ptt — the radio insists
+    // on this state. Clear it (std::nullopt) to go back to an obedient radio.
+    std::optional<bool> m_pttOverride;
 
 private:
+
+    void sendGrant(FakeStream& stream, bool stale)
+    {
+        auto grant = stream.frame(0x90, 0x00, m_seq++);
+        std::copy(m_name.begin(), m_name.end(), grant.begin() + 0x40);
+        for (std::size_t i = 0; i < 6; ++i)
+            grant[0x1a + i] = static_cast<std::uint8_t>((stale ? 0xE0 : 0xD0) + i);
+        grant[0x60] = 0x01;
+        if (stale) {
+            putBe32(grant, 0x08, 0xBBBB0001);
+            putBe32(grant, 0x0c, 0xBBBB0002);
+        }
+        stream.send(grant);
+    }
 
     void audio(FakeStream&, const QByteArray& b)
     {
@@ -521,6 +819,11 @@ private:
     std::uint16_t m_serialSeq = 0;
     std::uint16_t m_audioSeq = 0;
     std::uint16_t m_audioInner = 1;
+    // WHICH Icom this is. Defaults to the IC-705 the suite was written against.
+    std::uint8_t  m_addr = kIc705Addr;
+    std::uint8_t  m_secondAddr = 0;
+    bool          m_civEcho = false;
+    std::string   m_name = "IC-705";
     std::uint8_t  m_civSeq = 0;
     std::vector<CivFrame> m_civLog;
     bool m_sentCaps = false;
@@ -529,6 +832,20 @@ private:
     int m_authCount = 0;
     int m_civCommands = 0;
     bool m_civSilent = false;
+    bool m_injectStaleGrant = false;
+    bool m_sentPrematureGrant = false;
+    bool m_reissueNextInitialToken = false;
+    bool m_reissueThisInitialToken = false;
+    bool m_authFailureOnLogin = false;
+    bool m_staleAuthFailureOnLogin = false;
+    bool m_corruptNextRenewalSeq = false;
+    int m_acceptRenewals = std::numeric_limits<int>::max();
+    int m_acceptedRenewals = 0;
+    std::vector<std::uint16_t> m_renewalSequences;
+    std::vector<AuthId> m_renewalAuthIds;
+    std::vector<AuthId> m_streamRequestAuthIds;
+    std::vector<std::uint16_t> m_deauthOuterSequences;
+    std::vector<std::uint16_t> m_loginTokenRequestIds;
     int m_audioFromClient = 0;
     quint32 m_announcedCiv = 0;
     quint32 m_announcedAudio = 0;

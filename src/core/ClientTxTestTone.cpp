@@ -89,4 +89,29 @@ void ClientTxTestTone::process(int16_t* interleaved, int frames, int channels) n
     }
 }
 
+void ClientTxTestTone::process(float* interleaved, int frames, int channels) noexcept
+{
+    if (!interleaved || frames <= 0 || channels < 1 || channels > 2) {
+        return;
+    }
+    recacheIfDirty();
+    if (!m_cached.enabled) {
+        return;
+    }
+
+    const float inc = m_cached.phaseInc;
+    const float amp = m_cached.ampLin;
+    for (int f = 0; f < frames; ++f) {
+        const float sample = std::sin(m_phase) * amp;
+        interleaved[f * channels] = sample;
+        if (channels == 2) {
+            interleaved[f * channels + 1] = sample;
+        }
+        m_phase += inc;
+        if (m_phase > kTwoPi) {
+            m_phase -= kTwoPi;
+        }
+    }
+}
+
 } // namespace AetherSDR

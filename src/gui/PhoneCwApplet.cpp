@@ -1,5 +1,6 @@
 #include "PhoneCwApplet.h"
 #include "GuardedSlider.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "ComboStyle.h"
 #include "HGauge.h"
 #include "models/TransmitModel.h"
@@ -747,8 +748,9 @@ void PhoneCwApplet::buildCwPanel()
 
 void PhoneCwApplet::setMode(const QString& mode)
 {
-    // CWL is not a separate slice mode on fw v1.4.0.0 — only "CW" appears.
-    bool isCw = (mode == "CW");
+    // A Flex reports bare "CW"; an Icom and an HL2 spell the same mode CWU,
+    // and CWL is the reverse-side one. All three drive this applet.
+    bool isCw = isCwMode(mode);
     m_stack->setCurrentIndex(isCw ? 1 : 0);
 }
 

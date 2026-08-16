@@ -29,6 +29,23 @@ struct RestoredRadioState {
     double filterHighHz = 0.0;    // Passband
     int sampleRateHz = 0;         // SpanRate
 
+    // Agc. The AGC lives in the HOST's DSP for a radio with no AGC of its own,
+    // so the operator's choice has nowhere to live but here — without it every
+    // launch reopened the WDSP channel on Config's construction defaults
+    // ("med" / 65) and silently discarded the setting (#4909).
+    //
+    // The threshold sentinel is -1, NOT 0: zero is a legitimate AGC-T the
+    // operator can select, so "not restored" needs a value outside the 0..100
+    // control range or a deliberate 0 would be indistinguishable from an
+    // absent field and would round-trip into the default.
+    QString agcMode;              // Agc — "off" | "slow" | "med" | "fast"
+    int agcThreshold = -1;        // Agc — 0..100 OPERATOR UNITS, not dB; -1 = not
+                                  // restored. Deliberately NOT "…Db": the backend
+                                  // multiplies by its own ceiling-per-unit to reach
+                                  // real dB, and KiwiSdrClient has a genuine
+                                  // agcThresholdDb nearby. Matches
+                                  // SliceDelta::agcThreshold, the same 0..100 scale.
+
     // Per-family extension document (per-band gain/drive maps live here —
     // RFC PR 3). Versioned by its owner. GATED PER DOMAIN at the top level:
     // the engine hands over only the sub-objects named for declared domains —
@@ -39,10 +56,16 @@ struct RestoredRadioState {
     int extensionSchemaVersion = 0;
     QJsonObject extension;
 
+    // "This radio has no memory." Load returns it for an undeclared or empty
+    // domain set, and radio_state_memory_test pins that — so EVERY field added
+    // above has to be represented here or a document carrying only the new
+    // field would report itself as nothing stored. The AGC threshold is why
+    // that is worth spelling out: its absent value is -1, not 0.
     bool isEmpty() const
     {
         return rfFrequencyHz == 0.0 && mode.isEmpty() && filterLowHz == 0.0
                && filterHighHz == 0.0 && sampleRateHz == 0
+               && agcMode.isEmpty() && agcThreshold < 0
                && extension.isEmpty();
     }
 };

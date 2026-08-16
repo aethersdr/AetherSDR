@@ -1049,10 +1049,25 @@ void TciServer::onTextMessage(const QString& msg)
             continue;
         }
 
-        // IQ start/stop — track per-client IQ state, then forward to protocol
+        // IQ start/stop — track per-client IQ state, then forward to protocol.
+        //
+        // The trx is parsed with the ok flag checked for the same reason
+        // TciProtocol's argToInt exists (#4867): an unchecked toInt() turns
+        // `iq_start:abc;` into trx 0. That used to be merely wrong in the same
+        // way on both sides — the protocol also resolved it to 0 and created
+        // DAX IQ channel 1, so server bookkeeping and radio state agreed. Now
+        // that cmdIqStart rejects it, an unchecked parse here would leave the
+        // two DISAGREEING: this client registered as a subscriber on trx 0
+        // with no stream ever created for it, receiving another client's
+        // channel-1 IQ frames (onIqDataReady) and eligible to tear that
+        // client's stream down on disconnect. Drop the command instead, which
+        // is also what the protocol does with it half a dozen lines later.
         if (trimmed.startsWith("iq_start:")) {
-            int colonIdx2 = trimmed.indexOf(':');
-            int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt();
+            const int colonIdx2 = trimmed.indexOf(':');
+            bool trxOk = false;
+            const int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt(&trxOk);
+            if (!trxOk || trx < 0 || trx > 3)
+                continue;
             client.iqEnabled = true;
             client.iqChannel = trx;
             qCInfo(lcCat) << "TCI: IQ started for client"
@@ -1066,8 +1081,15 @@ void TciServer::onTextMessage(const QString& msg)
             continue;
         }
         if (trimmed.startsWith("iq_stop:")) {
-            int colonIdx2 = trimmed.indexOf(':');
-            int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt();
+            // Checked for the same reason as iq_start above: an unchecked
+            // parse would clear iqEnabled for a client whose channel really
+            // is 0 whenever any garbage arrived, while the protocol declined
+            // to remove the stream.
+            const int colonIdx2 = trimmed.indexOf(':');
+            bool trxOk = false;
+            const int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt(&trxOk);
+            if (!trxOk || trx < 0 || trx > 3)
+                continue;
             if (client.iqChannel == trx)
                 client.iqEnabled = false;
             qCInfo(lcCat) << "TCI: IQ stopped for client"
@@ -1286,10 +1308,18 @@ void TciServer::tuneSliceAndConfirm(
     }
 
     const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
+    // The in-span test is shared with the CAT/rigctld planes (#4497):
+    // PanadapterModel::spanContainsMhz is the single definition, so the three
+    // command planes cannot drift apart on what "in span" means. This used to be
+    // open-coded here and in RigctlProtocol; the copies were identical until the
+    // predicate grew a centerKnown term, which is exactly the drift the shared
+    // definition prevents. Behaviour change from the dedupe: before the radio has
+    // reported a real centre, PanadapterModel::centerMhz is a placeholder, so a
+    // TCI retune in that window now recenters instead of trusting it — the safe
+    // direction, and it establishes the centre.
     bool inSpan = false;
-    if (PanadapterModel* pan = m_model->panadapter(slice->panId())) {
-        const double halfBandwidth = pan->bandwidthMhz() / 2.0;
-        inSpan = halfBandwidth > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBandwidth;
+    if (const PanadapterModel* pan = m_model->panadapter(slice->panId())) {
+        inSpan = pan->spanContainsMhz(mhz);
     }
 
     // TUNE THROUGH THE MODEL, ON EVERY COMMAND PLANE (#4500, #4493).

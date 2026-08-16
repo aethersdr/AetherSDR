@@ -64,6 +64,13 @@ RestoredRadioState load(const RadioSettingsScope& scope,
     if (has(caps, Domain::SpanRate)) {
         state.sampleRateHz = doc.value(QStringLiteral("sampleRateHz")).toInt();
     }
+    if (has(caps, Domain::Agc)) {
+        state.agcMode = doc.value(QStringLiteral("agcMode")).toString();
+        // -1 (not 0) when the key is absent: 0 is a selectable AGC-T, so the
+        // default must sit outside the control's range — see RestoredRadioState.
+        state.agcThreshold =
+            doc.value(QStringLiteral("agcThreshold")).toInt(-1);
+    }
 
     // The extension is gated per domain too: only a declared domain's
     // sub-object is handed over, so a narrowed declaration cannot smuggle
@@ -132,6 +139,15 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
     }
     if (has(caps, Domain::SpanRate) && state.sampleRateHz > 0) {
         doc.insert(QStringLiteral("sampleRateHz"), state.sampleRateHz);
+    }
+    if (has(caps, Domain::Agc)) {
+        if (!state.agcMode.isEmpty()) {
+            doc.insert(QStringLiteral("agcMode"), state.agcMode);
+        }
+        // >= 0, so a threshold of 0 IS written — the sentinel is -1.
+        if (state.agcThreshold >= 0) {
+            doc.insert(QStringLiteral("agcThreshold"), state.agcThreshold);
+        }
     }
 
     // Extension: same per-domain sub-object gate as load().

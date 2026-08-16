@@ -73,6 +73,7 @@
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
 #include "core/SpeConnection.h"
+#include "core/VkampConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -896,6 +897,7 @@ private:
     // Settle the bookkeeping for an auto-connect that has reached a terminal
     // state. A no-op when the connect in question was a manual one.
     void noteAutoConnectFinished(bool ok);
+    void updateExperimentalRadioSupport(bool connected);
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
@@ -1000,6 +1002,9 @@ private:
     // the box is WA_DeleteOnClose and may vanish without telling us.
     QPointer<QMessageBox> m_recorderNotice;
     QString               m_recorderNoticeKey;
+    // Only one radio session can own a live notice. Per-family suppression is
+    // separate and lives under the Icom/HL2 keys in ExperimentalRadioSupport.
+    QPointer<QMessageBox> m_experimentalRadioNotice;
     // Show a non-blocking recorder notice, deduped on `key`. Non-blocking is
     // the load-bearing part: the blocking form stalls the caller, which for
     // this signal is either the automation bridge's reply path or the MOX
@@ -1035,6 +1040,7 @@ private:
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
+    VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};

@@ -210,6 +210,23 @@ bool isKnownModeString(const QString& mode) noexcept
     return kKnown.contains(mode.toUpper());
 }
 
+// The same question for the AGC vocabulary, and it needs asking for the same
+// reason: wdspAgcMode() FALLS BACK to medium for anything it does not
+// recognise, so a corrupt or hand-edited document would otherwise turn into a
+// silent "med" that capture then writes back as though the operator had chosen
+// it. Dropping the field instead leaves the receiver on its own default, which
+// is a value nobody is pretending was chosen.
+//
+// "med" and not "medium": this is SliceModel's four-way vocabulary
+// (SliceModel::m_agcMode), and the restore boundary must speak exactly what
+// the control produces or a round-trip would fail on the string alone.
+bool isKnownAgcModeString(const QString& mode) noexcept
+{
+    const QString m = mode.trimmed().toLower();
+    return m == QLatin1String("off") || m == QLatin1String("slow")
+           || m == QLatin1String("med") || m == QLatin1String("fast");
+}
+
 // Default RX passband per mode, in Hz relative to the carrier. Sign carries the
 // sideband, matching SliceModel's convention (USB-family positive, LSB-family
 // negative, carrier-straddling modes symmetric) -- a table with the wrong sign
@@ -623,6 +640,11 @@ void Hl2Backend::buildReceivers(int count)
     // rebuilt, or a reconnect leaks channel ids until the pool is exhausted.
     releaseReceiverDsps();
     const auto previous = m_rx;   // state only; every .dsp in here is now null
+    // Whether there WAS state to carry, for callers that have to tell a rebuild
+    // apart from a build. connectRadio()'s AGC seeding is the one that needs it:
+    // "same radio reconnecting" and "same radio after tearDownReceivers()" are
+    // indistinguishable by serial, and only the second must be re-seeded.
+    m_rxCarriedState = !previous.empty();
 
     m_ids.reset(count);
     m_rx.assign(static_cast<std::size_t>(count), Receiver{});
@@ -897,6 +919,10 @@ bool Hl2Backend::createPanadapter()
     // brought up to date. Otherwise adding a second panadapter gives you one
     // receiver with the interferer notched out and one without.
     seedNotches(r);
+    // Per-receiver, so a new panadapter starts from ITS OWN state rather than
+    // inheriting RX1's — which for a receiver that has never been configured is
+    // the default of off.
+    pushNoiseBlanker(r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -1380,6 +1406,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
     c.hasManualNotch = false;
+    // The one member of the noise family that is NOT moot here. WDSP's ANB runs
+    // on this host, on the raw IQ, ahead of the demodulator — the same
+    // arrangement as the manual notch and for the same reason (oracle addendum
+    // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
+    // not implemented, not because they could not be.
+    c.hasHostNoiseBlanker = true;
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -1454,6 +1486,13 @@ RadioCapabilities Hl2Backend::capabilities() const
                             | RadioCapabilities::ClientSettingsDomain::SpanRate
                             | RadioCapabilities::ClientSettingsDomain::RfGain
                             | RadioCapabilities::ClientSettingsDomain::TxSetpoints
+                            // The AGC runs in WDSP on THIS HOST — there is no
+                            // AGC register in the HPSDR map to read back, so
+                            // the client is the only place the operator's mode
+                            // and threshold can live. Without this the channel
+                            // reopened on Config's defaults every launch and
+                            // the setting reverted to med/65 (#4909).
+                            | RadioCapabilities::ClientSettingsDomain::Agc
                             // Memories: the client owns them (persistsMemories
                             // is false above). NOTE the bank itself engages on
                             // persistsMemories and keeps its own SHARED
@@ -1722,6 +1761,42 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         r.ncoHz = startFreqHz;
     }
 
+    // The remembered AGC pair (#4909), onto the receivers that now exist. THIS
+    // IS THE ONLY PLACE THE RECEIVERS ARE SEEDED — see applyRestoredState(),
+    // which resets the capture side only, and the definition of
+    // seedReceiverAgc() for why the split. The channels are OPEN but not yet
+    // CONFIGURED — configure() runs in beginDspSetup()'s lambda below, after
+    // this — so this settles the STATE and beginDspSetup()/pushInitialState()
+    // carry it into the DSP.
+    //
+    // TWO CONDITIONS, and each covers a case the other does not.
+    //
+    // A DIFFERENT RADIO must be seeded, or radio A's AGC keeps running under
+    // radio B's identity: buildReceivers() deliberately carries receiver state
+    // across a rebuild, so a same-family swap inherits it (the Ozy311 leak,
+    // PR #4619 review). Keyed on the connect request's SERIAL, which is the
+    // identity the restored document was loaded under.
+    //
+    // RECEIVERS WITH NO CARRIED STATE must be seeded whatever the serial says.
+    // tearDownReceivers() clears m_rx on a superseded connect and on a failed
+    // socket bind, and the m_queuedConnect re-drive below calls connectRadio()
+    // straight back with no applyRestoredState() in front of it — so without
+    // this the rebuild would come up on Receiver{}'s med/65 and the restored
+    // AGC would be silently lost for the session.
+    //
+    // What is deliberately NOT seeded is an auto-reconnect to the SAME radio
+    // whose receivers survived: buildReceivers() preserved their live
+    // per-receiver AGC, and pushInitialState()'s restore block touches only
+    // rx(m_txDdc), so re-seeding there overwrote RX2's live setting with the
+    // flat remembered pair while its mode and passband survived — a
+    // within-session loss on the very path the sibling mode/passband restore
+    // engineers around. Flat MEMORY across a restart is the design; flattening
+    // live receivers mid-session is not.
+    if (request.serial != m_agcSeededSerial || !m_rxCarriedState) {
+        m_agcSeededSerial = request.serial;
+        seedReceiverAgc();
+    }
+
     Hl2RxDsp::Config dc;
     dc.inputSampleRateHz = m_sampleRateHz;
     dc.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
@@ -1808,7 +1883,17 @@ void Hl2Backend::beginDspSetup()
         Receiver& r = m_rx[static_cast<std::size_t>(i)];
         Hl2RxDsp::Config dc = m_pendingConnect->dc;
         dc.mode = modeFromString(r.mode);
+        // Passband through dspFilterHz(), which folds in the CW BFO (#4914).
         std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
+        // The AGC pair, same as the other two Config assembly sites
+        // (createPanadapter and the zoom rebuild). Without it every channel
+        // opened on Config's defaults and stayed there until pushInitialState()
+        // ran at linkUp, so a restored AGC did not reach the DSP for the first
+        // second of audio — found as "the first second has the wrong AGC"
+        // rather than as a restore bug, which is why the three sites should
+        // look identical.
+        dc.agcMode = wdspAgcMode(r.agcMode);
+        dc.maximumAgcGainDb = r.agcThresholdDb * kAgcCeilingDbPerUnit;
         chains.push_back(r.dsp);
         configs.push_back(dc);
     }
@@ -2238,7 +2323,6 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     if (!r)
         return;
     const QString m = mode.trimmed().toLower();
-    const int wdspAgc = wdspAgcMode(m);
 
     // The slice's AGC threshold is a 0..100 operator value (SliceModel bounds it
     // there); the WDSP ceiling is dB of MAXIMUM GAIN. The original 1:1 map was
@@ -2252,13 +2336,64 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     // band. The ceiling is a maximum, not a limiter, so a strong band can still
     // clip at a high setting — that is correct AGC-T behaviour and the reason
     // the control exists. What was wrong was the DEFAULT landing in that region.
-    r->agcMode = m.isEmpty() ? r->agcMode : m;
+    // VALIDATE ON THE WAY IN, so the capture side can only ever store something
+    // the restore side accepts. `m` is just a trimmed lowercase copy of whatever
+    // the caller passed, and a bridge or automation call with "medium" used to
+    // land in r->agcMode, get echoed by emitSliceState(), and get persisted —
+    // while wdspAgcMode() silently ran med and the NEXT launch dropped it via
+    // isKnownAgcModeString(). The applet, the DSP, the document and the restore
+    // all disagreed. An unknown string now leaves the mode where it was.
+    if (!m.isEmpty() && isKnownAgcModeString(m))
+        r->agcMode = m;
+    else if (!m.isEmpty())
+        qCWarning(lcHl2) << "HL2: ignoring unknown AGC mode" << mode
+                         << "- keeping" << r->agcMode;
     r->agcThresholdDb = qBound(0, thresholdDb, 100);
+    // THE REMEMBERED PAIR IS THE LAST ONE THE OPERATOR SET, on whichever
+    // receiver. Capture used to read rx(m_txDdc) instead, which split the model:
+    // a change on RX2 fired the notify, then the debounced capture rewrote the
+    // document with RX1's unchanged pair, so the change that TRIGGERED the
+    // capture was not the change that got captured — and the next launch seeded
+    // every receiver from it. Flat restore is the deliberate design (see
+    // seedReceiverAgc); this makes the capture side agree with it.
+    m_agcMode = r->agcMode;
+    m_agcThresholdDb = r->agcThresholdDb;
+    // WDSP IS TOLD WHAT THE RECEIVER NOW HOLDS, not what the caller asked for.
+    // Deriving from `m` meant a refused mode still reached the DSP as
+    // wdspAgcMode()'s medium fallback while r->agcMode, the applet echo and the
+    // persisted document all kept the old value — the same four-way
+    // disagreement the check above exists to end, with the DSP as the one
+    // surface nobody can see. It also fixes the empty-mode call (a
+    // threshold-only change), which used to send medium over whatever mode the
+    // receiver was actually running.
     const double ceilingDb = r->agcThresholdDb * kAgcCeilingDbPerUnit;
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
-            Q_ARG(int, wdspAgc), Q_ARG(double, ceilingDb));
+            Q_ARG(int, wdspAgcMode(r->agcMode)), Q_ARG(double, ceilingDb));
     emitSliceState(ddc);
+    // The capture half. setSliceMode/setSliceFilter next door have always said
+    // this and AGC never did, so the operator's AGC was the one control on this
+    // radio that moved, took effect, and was gone by the next launch (#4909).
+    notifyOperatingStateChanged();
+}
+
+void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // PER-RECEIVER, unlike the notches. A notch is a fact about a frequency and
+    // therefore about the radio; a blanker setting is a judgement about how
+    // aggressively to gate one receiver's audio, and two receivers on different
+    // bands can legitimately disagree. The slice model already holds it
+    // per-slice, so honouring that is also what stops the second receiver's
+    // toggle from moving the first one's.
+    r->nbOn = on;
+    r->nbLevel = qBound(0, level, 100);
+    if (r->dsp)
+        QMetaObject::invokeMethod(r->dsp, "setNoiseBlanker", Qt::QueuedConnection,
+            Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
 }
 
 void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
@@ -2414,6 +2549,18 @@ void Hl2Backend::pushNotchTune(const Receiver& r)
     if (r.dsp)
         QMetaObject::invokeMethod(r.dsp, "setNotchTuneFrequency", Qt::QueuedConnection,
             Q_ARG(double, r.ncoHz));
+}
+
+void Hl2Backend::pushNoiseBlanker(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Sent even when OFF, and that is the point: a chain rebuilt while the
+    // operator had the blanker off is already off, but a chain rebuilt after
+    // they turned it off during a previous connect is not necessarily, and an
+    // unconditional push is the only version with no such case to reason about.
+    QMetaObject::invokeMethod(r.dsp, "setNoiseBlanker", Qt::QueuedConnection,
+        Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -2862,7 +3009,12 @@ void Hl2Backend::setKeying(bool key)
     // transmission because the pauses between words are what the hold is for.
     if (m_keyed && !key) {
         const double kHoldDbfs = m_alcHoldBelowDbfs;
-        if (m_txMicPeakMaxDbfs > -139.0f
+        // Not for client-leveled transmissions: the ALC is bypassed there
+        // (#4796), so a below-threshold peak is the client's own attenuation
+        // doing exactly what it asked for, and "raise mic gain" would send an
+        // operator chasing a control that was never in the path.
+        if (!m_txAudioClientLeveled
+            && m_txMicPeakMaxDbfs > -139.0f
             && m_txMicPeakMaxDbfs < static_cast<float>(kHoldDbfs)) {
             qCInfo(lcHl2) << "HL2 TX: microphone peaked at" << m_txMicPeakMaxDbfs
                           << "dBFS for the whole transmission, below the ALC hold"
@@ -2873,6 +3025,9 @@ void Hl2Backend::setKeying(bool key)
     }
     if (key) {
         m_txMicPeakMaxDbfs = -140.0f;
+        // A new transmission decides afresh whether it is client-leveled; the
+        // first submitTxAudio() block of the over re-marks it.
+        m_txAudioClientLeveled = false;
         // Start each transmission's peak hold from nothing, rather than trusting
         // the unkeyed branch in publishTelemetry() to have already walked it
         // down. Telemetry is 10 Hz, so a key inside 100 ms of the previous unkey
@@ -3120,7 +3275,8 @@ void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
     repushAllFrequencies();
 }
 
-void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
+void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
+                               bool clientLeveled)
 {
     // Only modulate while actually keyed. Feeding the modulator unkeyed would
     // fill the transmit queue with audio that goes out the instant MOX asserts —
@@ -3128,6 +3284,19 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
     // syllable.
     if (!m_txDsp || !m_keyed || int16Stereo.isEmpty())
         return;
+    // Remember whether THIS transmission carried client-leveled audio, so the
+    // unkey diagnostic knows a below-threshold peak was the client's own choice
+    // of level rather than a microphone the ALC declined to lift.
+    //
+    // The sticky OR — and the per-block flag it forwards — lean on mic and
+    // client audio never interleaving inside one transmission: AudioEngine
+    // steps local mic capture aside while a TCI/DAX source is actively
+    // feeding (onTxAudioReady's tciAudioFresh() gate). If that mutual
+    // exclusion is ever relaxed, Hl2TxDsp would flip its ALC per block and
+    // process m_inBuffer residue under the newest block's flag — no crash,
+    // just a level that depends on block alignment. Whoever touches the
+    // mic-capture gate owns re-checking this.
+    m_txAudioClientLeveled = m_txAudioClientLeveled || clientLeveled;
     if (sampleRateHz != 24000) {
         // Stated rather than silently resampled: the modulator's upsampler
         // assumes this rate, and a mismatch transmits at the wrong pitch.
@@ -3150,8 +3319,9 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
         const float r = static_cast<float>(pcm[2 * n + 1]) / 32768.0f;
         mono[static_cast<std::size_t>(n)] = 0.5f * (l + r);
     }
-    QMetaObject::invokeMethod(m_txDsp, [this, mono = std::move(mono)] {
-        m_txDsp->processAudioBlock(mono);
+    QMetaObject::invokeMethod(m_txDsp,
+                              [this, mono = std::move(mono), clientLeveled] {
+        m_txDsp->processAudioBlock(mono, clientLeveled);
     }, Qt::QueuedConnection);
 }
 
@@ -3360,15 +3530,26 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 // fine enough to set by ear and wide enough to cover the range between a headset
 // boom mic and a built-in laptop microphone.
 //
-// WHAT THIS DOES AND DOES NOT BUY, because the ALC sits right behind it:
-// Hl2TxDsp's ALC normalizes each block's peak to alcTargetPeak, so raising mic
-// gain on already-loud speech is largely given back and PEP barely moves. Where
-// it MATTERS is the ALC's hold threshold (alcHoldBelowDbfs, -45 dBFS): below
-// that the ALC deliberately stops lifting, so a microphone quiet enough to sit
-// under it gets no makeup at all and goes out weak. This slider is what carries
-// such a mic over the threshold — which is exactly what setKeying()'s "raise mic
-// gain" diagnostic tells the operator to do, and until now that advice pointed
-// at a control that did nothing on this backend.
+// WHAT THIS DOES AND DOES NOT BUY depends on which path the audio took, because
+// the ALC sits right behind this and is one-sided for client-leveled audio
+// (#4796).
+//
+// MIC PATH: the ALC normalizes each block's peak to alcTargetPeak, so raising
+// mic gain on already-loud speech is largely given back and PEP barely moves.
+// Where it MATTERS is the ALC's hold threshold (alcHoldBelowDbfs, -45 dBFS):
+// below that the ALC deliberately stops lifting, so a microphone quiet enough to
+// sit under it gets no makeup at all and goes out weak. This slider is what
+// carries such a mic over the threshold — which is exactly what setKeying()'s
+// "raise mic gain" diagnostic tells the operator to do, and until that
+// diagnostic existed the advice pointed at a control that did nothing here.
+//
+// CLIENT-LEVELED PATH (TCI/DAX): nothing is given back. The ALC may only reduce,
+// never lift, so this is a straight proportional attenuator all the way up to
+// alcTargetPeak — TX gain 5 is a real -18 dB on the air. The hold threshold does
+// not apply, and neither does the "raise mic gain" diagnostic, which setKeying()
+// gates off for such transmissions. Past the target the ALC limits rather than
+// letting the modulator's clamp flat-top the signal, so the last stretch of
+// travel buys reduced headroom rather than more power.
 //
 // Level 0 mutes outright rather than resolving to -20 dB. A slider at the bottom
 // of its travel means off, and a mic that is merely 20 dB down would still be
@@ -3471,6 +3652,59 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("effectiveClockHz"),
                      Hl2FreqCal::effectiveClockHz(m_freqCalPpb)},
                     {QStringLiteral("scale"), m_freqCalScale},
+                });
+            }
+            return;
+        }
+        // Noise-blanker READBACK, per receiver. Exists because the bridge's
+        // `get dsp` reports the SLICE MODEL's nb flag, which is set the moment
+        // the operator clicks and says nothing about whether the intent reached
+        // the DSP. On a radio whose blanker is a host-side stage with no wire
+        // traffic to capture, that gap is the whole difficulty of proving the
+        // feature: a backend that dropped the verb entirely would still report
+        // nb=true. This answers from the backend's own state instead.
+        if (verb == QLatin1String("nb.get")) {
+            if (requestId != 0) {
+                QVariantList rxList;
+                for (std::size_t i = 0; i < m_rx.size(); ++i) {
+                    const Receiver& r = m_rx[i];
+                    const auto* ids = m_ids.byDdc(static_cast<int>(i));
+                    // `on`/`level` are what the DSP ACTUALLY HAS, read across
+                    // the thread boundary through Hl2RxDsp's atomics — not what
+                    // this backend was asked for. Reporting the request would
+                    // make this verb certify its own input: the request is
+                    // stored in r.nbOn synchronously, before the queued call to
+                    // the chain has run, so it stays true even if the chain
+                    // never got it or refused it. requestedOn/requestedLevel
+                    // are reported alongside precisely so the two can be
+                    // COMPARED — a mismatch is the "the control moves and
+                    // nothing happens" failure this verb exists to catch.
+                    //
+                    // With no chain (a receiver between rebuilds) there is
+                    // nothing applied yet, so `on` is false rather than a
+                    // flattering echo of the request.
+                    const bool appliedOn = r.dsp && r.dsp->appliedNoiseBlankerEnabled();
+                    const int appliedLevel =
+                        r.dsp ? r.dsp->appliedNoiseBlankerLevel() : 0;
+                    rxList.append(QVariantMap{
+                        {QStringLiteral("ddc"), static_cast<int>(i)},
+                        {QStringLiteral("panId"), ids ? ids->panId : QString()},
+                        {QStringLiteral("on"), appliedOn},
+                        {QStringLiteral("level"), appliedLevel},
+                        {QStringLiteral("requestedOn"), r.nbOn},
+                        {QStringLiteral("requestedLevel"), r.nbLevel},
+                        {QStringLiteral("hasChain"), r.dsp != nullptr},
+                        // The value the APPLIED level became inside WDSP. Now a
+                        // real assertion rather than f(x) == f(x): it is
+                        // computed from the level the DSP took, so a request
+                        // that never crossed the seam shows a threshold that
+                        // does not match the requested level.
+                        {QStringLiteral("threshold"),
+                         WdspChannel::noiseBlankerThresholdForLevel(appliedLevel)},
+                    });
+                }
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("receivers"), rxList},
                 });
             }
             return;
@@ -3606,7 +3840,14 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // in a section whose thesis is "report what the modulator is running",
     // and a constant that silently stops matching the modulator is the row
     // nobody would think to suspect.
-    put("alcHoldBelowDbfs", QStringLiteral("ALC hold threshold (dBFS)"),
+    //
+    // Labelled as mic-path-only since #4796: the hold governs the ALC's MAKEUP
+    // half, and client-leveled (TCI/DAX) audio has no makeup half to hold — its
+    // gain is ceilinged at unity and released freely. A reader debugging a
+    // WSJT-X level problem against this row would otherwise chase a threshold
+    // that was never in their path.
+    put("alcHoldBelowDbfs",
+        QStringLiteral("ALC hold threshold (dBFS, mic path only)"),
         m_alcHoldBelowDbfs);
     put("alcGainDb", QStringLiteral("ALC gain applied (dB)"),
         std::isnan(m_alcGainDb) ? QVariant() : QVariant(m_alcGainDb));
@@ -3838,6 +4079,17 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     }
     if (state.sampleRateHz > 0)
         valid.sampleRateHz = nearestIqSampleRateHz(state.sampleRateHz);
+    // AGC: mode and threshold are validated INDEPENDENTLY, unlike the passband
+    // pair. They are two separate controls whose values do not constrain each
+    // other — a threshold of 40 means the same thing under "slow" as under
+    // "fast" — so a document with one bad field has no reason to lose the good
+    // one. The threshold's bound is SliceModel's own 0..100, and a value
+    // outside it is DROPPED rather than clamped: clamping would invent a
+    // setpoint the operator never chose and then persist it back.
+    if (isKnownAgcModeString(state.agcMode))
+        valid.agcMode = state.agcMode.trimmed().toLower();
+    if (state.agcThreshold >= 0 && state.agcThreshold <= 100)
+        valid.agcThreshold = state.agcThreshold;
 
     // Per-band maps ride the typed extension's domain sub-objects
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
@@ -3891,11 +4143,86 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
 
     m_restoredState = valid;
     m_haveRestoredState = true;
+    // THE CAPTURE SIDE ONLY. The remembered pair belongs to the radio whose
+    // document this is, so it is reset here — otherwise a same-family swap
+    // leaves radio A's AGC being written back under radio B's identity, the
+    // leak applyRestoredState({}) exists to close (PR #4619 review, Ozy311
+    // finding 1).
+    //
+    // The RECEIVERS are deliberately not touched here, and that is the whole
+    // shape of #4909's second half. This function runs before EVERY connect,
+    // reconnect included (RadioModel::handRestoredStateToBackend), and on a
+    // reconnect m_rx still holds the live receivers — so seeding them here
+    // flattened an operator's per-receiver AGC on every dropped link, no
+    // matter what guard connectRadio() carried. Receiver seeding lives at the
+    // one place that can tell a new radio from a returning one: connectRadio(),
+    // which has the serial.
+    const Receiver defaults;   // the constructed med/65, named once
+    m_agcMode = m_restoredState.agcMode.isEmpty() ? defaults.agcMode
+                                                  : m_restoredState.agcMode;
+    m_agcThresholdDb = m_restoredState.agcThreshold >= 0
+                           ? m_restoredState.agcThreshold
+                           : defaults.agcThresholdDb;
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
                   << valid.mode << "filter" << valid.filterLowHz << ".."
                   << valid.filterHighHz << "rate" << valid.sampleRateHz
+                  << "agc" << valid.agcMode << valid.agcThreshold
                   << "lna bands" << m_lnaDbByBand.size() << "drive bands"
                   << m_driveByBand.size();
+}
+
+// Every receiver's AGC pair set to what this session should come up with.
+//
+// EVERY receiver, which is a deliberate difference from the mode and passband
+// pushInitialState() restores onto the transmit receiver alone. Those are
+// per-slice — the operator tunes each receiver to its own signal, so pushing
+// one receiver's pair onto all of them would overwrite choices they made. The
+// AGC is captured FLAT (currentOperatingState) precisely because it is NOT
+// per-slice: it is one remembered setting. Seeding only the TX receiver would
+// leave the rest on a value the operator never chose, and this is the same rule
+// buildReceivers() already applies when a NEW receiver inherits the first one's
+// settings rather than construction ones.
+//
+// The DEFAULT branch is load-bearing rather than tidiness. buildReceivers()
+// deliberately carries receiver state across a rebuild, so "no memory for this
+// radio" has to be written as the defaults rather than skipped — otherwise a
+// same-family swap leaves radio A's AGC running under radio B's identity, the
+// leak applyRestoredState({}) exists to close (PR #4619 review, Ozy311
+// finding 1).
+//
+// ONE CALL SITE, in connectRadio(), and its condition is the point: this is a
+// RESTORE, not a re-assertion, so it must run when the radio identity changes
+// or when the receivers were rebuilt from nothing, and must NOT run on an
+// auto-reconnect whose receivers carried their live per-receiver AGC across.
+// Calling it from applyRestoredState() as well — which runs before every
+// connect, reconnect included — is what made a dropped link flatten RX2.
+//
+// Each half applies on its own, matching the independent validation in
+// applyRestoredState(): a document carrying only a threshold restores that
+// threshold against the default mode.
+// Seeds the STRUCT only. The channel buildReceivers() opened is still on
+// Config's defaults until beginDspSetup()/pushInitialState() push the pair —
+// the same open-then-configure window the mode and passband restore already
+// lives with, for the same EP2-pacing reason.
+void Hl2Backend::seedReceiverAgc()
+{
+    const Receiver defaults;   // the constructed med/65, named once
+    const bool haveMode =
+        m_haveRestoredState && !m_restoredState.agcMode.isEmpty();
+    const bool haveThreshold =
+        m_haveRestoredState && m_restoredState.agcThreshold >= 0;
+    for (Receiver& r : m_rx) {
+        r.agcMode = haveMode ? m_restoredState.agcMode : defaults.agcMode;
+        r.agcThresholdDb = haveThreshold ? m_restoredState.agcThreshold
+                                         : defaults.agcThresholdDb;
+    }
+    // Prime the remembered pair from what was just seeded, so a capture taken
+    // before the operator touches the control records the restored value rather
+    // than falling back through an empty member.
+    if (!m_rx.empty()) {
+        m_agcMode = m_rx.front().agcMode;
+        m_agcThresholdDb = m_rx.front().agcThresholdDb;
+    }
 }
 
 RestoredRadioState Hl2Backend::currentOperatingState() const
@@ -3906,6 +4233,21 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         state.mode = txRx->mode;
         state.filterLowHz = txRx->filterLowHz;
         state.filterHighHz = txRx->filterHighHz;
+    }
+    // The AGC pair, from the LAST RECEIVER THE OPERATOR TOUCHED rather than
+    // from the transmit one — see setSliceAgc(). FLAT, not per-band: unlike
+    // drive and LNA — where the right value is a property of the band — an
+    // operator's AGC is a property of how they like to listen, and making it
+    // jump on a band change would be the same surprise the TX passband comment
+    // above rejects. Falls back to the transmit receiver before the operator
+    // has set anything this session, so a capture taken on a fresh connect
+    // still records a real value rather than a default.
+    if (!m_agcMode.isEmpty()) {
+        state.agcMode = m_agcMode;
+        state.agcThreshold = m_agcThresholdDb;
+    } else if (const Receiver* txRx = rx(m_txDdc)) {
+        state.agcMode = txRx->agcMode;
+        state.agcThreshold = txRx->agcThresholdDb;
     }
     state.sampleRateHz = m_sampleRateHz;
 
@@ -4159,6 +4501,16 @@ void Hl2Backend::pushInitialState()
         // and the restored mode arrives after that.
         QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
             Q_ARG(double, rxShiftHz(r)));
+        // The AGC, for the same reason as the three above: the channel was
+        // opened by buildReceivers() BEFORE the restore ran, so it is sitting
+        // on Config's med/65 whatever the receiver now says. Pushing r's own
+        // live values (not m_restoredState) makes this idempotent — a
+        // mid-session linkUp after an EP6 glitch re-asserts what the operator
+        // currently has rather than replaying day-old state over their edits,
+        // which is the rule the passband derivation guard exists to enforce.
+        QMetaObject::invokeMethod(r.dsp, "setAgc", Qt::QueuedConnection,
+            Q_ARG(int, wdspAgcMode(r.agcMode)),
+            Q_ARG(double, r.agcThresholdDb * kAgcCeilingDbPerUnit));
         QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
             Q_ARG(bool, false));
         // The notch axis, which is measured from the NCO and defaults to ZERO.
@@ -4168,6 +4520,10 @@ void Hl2Backend::pushInitialState()
         // createPanadapter() seeded the receivers it creates; the ones built at
         // connect need it too, which is the whole set on a normal session.
         seedNotches(r);
+        // Same reasoning for the blanker: a fresh Hl2RxDsp opens with it off,
+        // so a reconnect into a session that had it on would leave the slice's
+        // NB button lit over a chain that is not blanking anything.
+        pushNoiseBlanker(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);
@@ -4567,6 +4923,19 @@ void Hl2Backend::emitSliceState(int ddc)
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;
     d.filterHigh = r->filterHighHz;
+    // The AGC pair the DSP is actually running.
+    //
+    // Never published before, which is why a RESTORED AGC would have been
+    // invisible: the backend would have come up on the operator's slow/40 and
+    // the RX Controls applet would have gone on showing SliceModel's own
+    // construction defaults (med/65) — the classic HERMES §17 shape in reverse,
+    // where the radio is right and the control lies about it (#4909).
+    //
+    // Safe to echo unconditionally: SliceModel::applyDelta() assigns these
+    // without emitting agcCommandIssued, so a published value cannot come back
+    // as a command (Principle II).
+    d.agcMode = r->agcMode;
+    d.agcThreshold = r->agcThresholdDb;
     // The HL2 has one transmitter however many receivers it runs, so EXACTLY ONE
     // slice is the transmit slice — the one on m_txDdc.
     //

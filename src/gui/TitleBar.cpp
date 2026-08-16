@@ -196,6 +196,21 @@ TitleBar::TitleBar(QWidget* parent)
     markDragHandle(m_appNameLabel);
     m_hbox->addWidget(m_appNameLabel);
 
+    m_experimentalRadioLabel = new QLabel(QStringLiteral("EXPERIMENTAL"));
+    m_experimentalRadioLabel->setObjectName(QStringLiteral("experimentalRadioBadge"));
+    m_experimentalRadioLabel->setFixedHeight(20);
+    m_experimentalRadioLabel->setAlignment(Qt::AlignCenter);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_experimentalRadioLabel,
+        "QLabel { color: {{color.accent.warning}}; border: 1px solid "
+        "{{color.accent.warning}}; border-radius: 3px; background: transparent; "
+        "font-size: 9px; font-weight: bold; padding: 0px 5px; }");
+    m_experimentalRadioLabel->setAccessibleName(
+        QStringLiteral("Experimental radio support"));
+    markDragHandle(m_experimentalRadioLabel);
+    m_experimentalRadioLabel->hide();
+    m_hbox->addWidget(m_experimentalRadioLabel);
+
     m_mfBtn = new QPushButton("multiFLEX");
     m_mfBtn->setFlat(true);
     m_mfBtn->setStyleSheet(
@@ -286,6 +301,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     // PC Audio toggle
     m_pcBtn = new QPushButton("PC Audio");
+    m_pcBtn->setObjectName(QStringLiteral("pcAudioBtn"));
     m_pcBtn->setCheckable(true);
     m_pcBtn->setFixedHeight(22);
     m_pcBtn->setFixedWidth(70);
@@ -293,7 +309,8 @@ TitleBar::TitleBar(QWidget* parent)
     bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
     m_pcBtn->setChecked(pcOn);
     m_pcBtn->setAccessibleName("PC Audio");
-    m_pcBtn->setAccessibleDescription("Toggle PC audio receive playback");
+    m_pcBtn->setAccessibleDescription(
+        "Toggle PC receive playback and PC microphone voice transmit");
     updatePcAudioToolTip();
 
     auto updatePcStyle = [this]() {
@@ -833,10 +850,13 @@ void TitleBar::setPcAudioLocked(bool locked)
     if (locked)
         setPcAudioEnabled(true);      // locked ON, never locked off
     m_pcBtn->setEnabled(!locked);
-    m_pcBtn->setToolTip(
-        locked ? tr("PC audio is required: this radio's audio is produced and "
-                    "captured on this computer, so it cannot be turned off.")
-               : QString());
+    if (locked) {
+        m_pcBtn->setToolTip(
+            tr("PC audio is required: this radio's audio is produced and "
+               "captured on this computer, so it cannot be turned off."));
+    } else {
+        updatePcAudioToolTip();
+    }
 }
 
 void TitleBar::setPcAudioEnabled(bool on)
@@ -929,6 +949,27 @@ void TitleBar::setOtherClientTx(bool transmitting, const QString& station)
     } else {
         m_otherTxLabel->setVisible(false);
     }
+}
+
+void TitleBar::setExperimentalRadioFamily(const QString& familyName)
+{
+    if (!m_experimentalRadioLabel) {
+        return;
+    }
+
+    const QString trimmed = familyName.trimmed();
+    const bool experimental = !trimmed.isEmpty();
+    m_experimentalRadioLabel->setToolTip(
+        experimental
+            ? QStringLiteral("%1 radio support is experimental").arg(trimmed)
+            : QString());
+    m_experimentalRadioLabel->setAccessibleDescription(
+        experimental
+            ? QStringLiteral("Connected to %1; some controls, meters, and features may be "
+                             "incomplete")
+                  .arg(trimmed)
+            : QString());
+    m_experimentalRadioLabel->setVisible(experimental);
 }
 
 QString TitleBar::formatTxElapsed(qint64 ms) const

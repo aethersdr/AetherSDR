@@ -272,10 +272,12 @@ turned out to be `declared-only`: named in the codec, reached by nothing.
 connect is the interesting case, and it is the one no document can report.
 
 **It answers for all of them at once.** `controls scrub` drives every settable
-control through its seam verb *at its current value* and looks for the frame on
-the wire. Nothing on the radio moves. On the IC-705 that is 25 controls in one
-call: 17 linked, 0 broken, 8 that cannot be re-asserted without changing an
-operator setting.
+control through its seam verb *at its current value* and verifies scheduler
+admission or immediate wire dispatch. Nothing on the radio moves. Poll
+`civ scheduler` until `idle:true` with no new timeout to complete the
+dispatch/readback proof. On the IC-705 that is 26 controls in one call: 18
+linked, 0 broken, 8 that cannot be re-asserted without changing an operator
+setting.
 
 Three design choices in the scrub are worth copying into any backend that grows
 one:
@@ -319,8 +321,9 @@ passed it — the meter was defined, mapped, polled and published.
 
 ### What the harness still cannot tell you
 
-- **That the radio obeyed.** The scrub proves an intent reached the wire and the
-  radio acknowledged it. An `FB` means "understood", not "applied" — an IC-705
+- **That the radio obeyed.** Scrub plus a clean scheduler drain proves an intent
+  reached the wire and the radio answered its transaction. An `FB` means
+  "understood", not "applied" — an IC-705
   answers `FB` to a P.AMP2 request above 50 MHz that it then ignores.
 - **That the value is right.** A control can be linked, in range, and scaled
   wrongly. `14 02` published as decibels instead of percent would still scrub

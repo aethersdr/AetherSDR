@@ -2,6 +2,7 @@
 #ifdef HAVE_MIDI
 
 #include "MidiMappingDialog.h"
+#include "core/AppSettings.h"
 #include "FramelessMessageBox.h"
 #include "core/MidiControlManager.h"
 #include "core/MidiSettings.h"
@@ -21,8 +22,41 @@
 #include <QSpinBox>
 #include <QFormLayout>
 #include <QDialogButtonBox>
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QStandardPaths>
 
 namespace AetherSDR {
+
+namespace {
+
+// Remembered directory for profile Import/Export (mirrors the shortcut
+// dialog's transfer-directory helpers).
+QString midiTransferDirectory()
+{
+    const QString saved = AppSettings::instance()
+                              .value(QStringLiteral("MidiImportExportPath"), QString())
+                              .toString();
+    if (!saved.isEmpty() && QDir(saved).exists())
+        return saved;
+    const QString docs =
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    return docs.isEmpty() ? QDir::homePath() : docs;
+}
+
+void rememberMidiTransferDirectory(const QString& path)
+{
+    const QFileInfo info(path);
+    if (!info.absolutePath().isEmpty()) {
+        AppSettings::instance().setValue(QStringLiteral("MidiImportExportPath"),
+                                         info.absolutePath());
+    }
+}
+
+} // namespace
 
 static const QString kGroupStyle =
     "QGroupBox { border: 1px solid #304050; border-radius: 4px; "
@@ -58,6 +92,15 @@ static const QString kBtnGlyphStyle =
     "border: 1px solid {{color.border.strong}}; padding: 0; border-radius: 3px; }"
     "QPushButton:hover { background: {{color.background.2}}; color: {{color.text.primary}}; }";
 
+// One apply site for the shared primary-button sheet — the colour ratchet
+// counts setStyleSheet() call sites, not colours (tools/audit_colours.py).
+static QPushButton* makeStyledButton(const QString& text)
+{
+    auto* btn = new QPushButton(text);
+    btn->setStyleSheet(kBtnStyle);
+    return btn;
+}
+
 MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* parent)
     : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
       m_manager(manager)
@@ -82,13 +125,11 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         m_portCombo->setMinimumWidth(250);
         grid->addWidget(m_portCombo, 0, 1);
 
-        auto* refreshBtn = new QPushButton("Refresh");
-        refreshBtn->setStyleSheet(kBtnStyle);
+        auto* refreshBtn = makeStyledButton("Refresh");
         connect(refreshBtn, &QPushButton::clicked, this, &MidiMappingDialog::refreshPortList);
         grid->addWidget(refreshBtn, 0, 2);
 
-        m_connectBtn = new QPushButton("Connect");
-        m_connectBtn->setStyleSheet(kBtnStyle);
+        m_connectBtn = makeStyledButton("Connect");
         connect(m_connectBtn, &QPushButton::clicked, this, [this] {
             if (m_manager->isOpen()) {
                 m_manager->closePort();
@@ -187,8 +228,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         connect(m_categoryCombo, &QComboBox::currentTextChanged, this, populateParams);
         populateParams();
 
-        auto* learnBtn = new QPushButton("Learn");
-        learnBtn->setStyleSheet(kBtnStyle);
+        auto* learnBtn = makeStyledButton("Learn");
         learnBtn->setToolTip("Add binding: select a parameter, click Learn, then move a knob on your controller");
         connect(learnBtn, &QPushButton::clicked, this, [this, learnBtn] {
             if (m_manager->isLearning()) {
@@ -241,8 +281,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
         // Button row
         auto* btnRow = new QHBoxLayout;
-        auto* clearAllBtn = new QPushButton("Clear All");
-        clearAllBtn->setStyleSheet(kBtnStyle);
+        auto* clearAllBtn = makeStyledButton("Clear All");
         connect(clearAllBtn, &QPushButton::clicked, this, [this] {
             m_manager->clearBindings();
             refreshBindingTable();
@@ -260,8 +299,9 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         btnRow->addWidget(new QLabel("Profile:"));
         btnRow->addWidget(m_profileCombo);
 
-        auto* saveProfileBtn = new QPushButton("Save");
-        saveProfileBtn->setStyleSheet(kBtnStyle);
+        auto* saveProfileBtn = makeStyledButton("Save");
+        saveProfileBtn->setToolTip(
+            QStringLiteral("Save the current bindings as a named profile"));
         connect(saveProfileBtn, &QPushButton::clicked, this, [this] {
             QString name = m_profileCombo->currentText().trimmed();
             if (name.isEmpty()) return;
@@ -270,13 +310,21 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         btnRow->addWidget(saveProfileBtn);
 
-        auto* loadProfileBtn = new QPushButton("Load");
-        loadProfileBtn->setStyleSheet(kBtnStyle);
+        auto* loadProfileBtn = makeStyledButton("Load");
+        loadProfileBtn->setToolTip(
+            QStringLiteral("Apply the selected profile to the current bindings"));
         connect(loadProfileBtn, &QPushButton::clicked, this, [this] {
             QString name = m_profileCombo->currentText().trimmed();
             if (name.isEmpty()) return;
             auto bindings = MidiSettings::instance().loadProfile(name);
-            if (bindings.isEmpty()) return;
+            if (bindings.isEmpty()) {
+                // A missing or empty profile silently doing nothing is the
+                // same failure class the importer refuses — say so instead.
+                FramelessMessageBox::warning(
+                    this, QStringLiteral("Load Profile"),
+                    QStringLiteral("Profile \"%1\" is empty or missing.").arg(name));
+                return;
+            }
             m_manager->clearBindings();
             for (const auto& b : bindings)
                 m_manager->addBinding(b);
@@ -285,6 +333,24 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         });
         btnRow->addWidget(loadProfileBtn);
 
+        auto* importProfileBtn = makeStyledButton("Import...");
+        importProfileBtn->setObjectName(QStringLiteral("midiProfileImportButton"));
+        importProfileBtn->setAccessibleName(QStringLiteral("Import MIDI profile"));
+        importProfileBtn->setToolTip(QStringLiteral(
+            "Import a profile file into the store — AetherSDR profile XML or SmartSDR \".map\""));
+        connect(importProfileBtn, &QPushButton::clicked, this,
+                &MidiMappingDialog::importProfileFromFile);
+        btnRow->addWidget(importProfileBtn);
+
+        auto* exportProfileBtn = makeStyledButton("Export...");
+        exportProfileBtn->setObjectName(QStringLiteral("midiProfileExportButton"));
+        exportProfileBtn->setAccessibleName(QStringLiteral("Export MIDI profile"));
+        exportProfileBtn->setToolTip(
+            QStringLiteral("Export the current bindings as an AetherSDR profile XML"));
+        connect(exportProfileBtn, &QPushButton::clicked, this,
+                &MidiMappingDialog::exportProfileToFile);
+        btnRow->addWidget(exportProfileBtn);
+
         vbox->addLayout(btnRow);
         root->addWidget(group, 1);
     }
@@ -292,8 +358,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
     // ── Close button ────────────────────────────────────────────────────
     auto* closeRow = new QHBoxLayout;
     closeRow->addStretch();
-    auto* closeBtn = new QPushButton("Close");
-    closeBtn->setStyleSheet(kBtnStyle);
+    auto* closeBtn = makeStyledButton("Close");
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     closeRow->addWidget(closeBtn);
     root->addLayout(closeRow);
@@ -315,6 +380,129 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
     if (m_manager->isOpen()) {
         m_connectBtn->setText("Disconnect");
     }
+}
+
+void MidiMappingDialog::importProfileFromFile()
+{
+    QFileDialog dialog(this, QStringLiteral("Import MIDI Profile"),
+                       midiTransferDirectory(),
+                       QStringLiteral("MIDI profiles (*.xml *.map);;All files (*)"));
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+        return;
+    const QString path = dialog.selectedFiles().first();
+    rememberMidiTransferDirectory(path);
+
+    const MidiImportResult result = MidiSettings::instance().importProfile(
+        path,
+        [this](const QString& id) { return m_manager->findParam(id) != nullptr; });
+
+    const QString fileName = QFileInfo(path).fileName();
+    if (!result.ok()) {
+        FramelessMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
+        box.setText(QStringLiteral("No bindings were imported from %1.").arg(fileName));
+        box.setStandardButtons(QMessageBox::Ok);
+        box.setDetailedText(result.errors.join(QLatin1Char('\n')));
+        box.exec();
+        return;
+    }
+
+    // Layered report, like the shortcut importer: headline count up front,
+    // per-category counts as informative text, every skipped name in the
+    // expandable details — import what maps, name what doesn't.
+    QStringList informativeLines;
+    QStringList detailLines;
+    const auto addSection = [&](const QString& header, const QStringList& names,
+                                const QString& summary) {
+        if (names.isEmpty())
+            return;
+        informativeLines << summary.arg(names.size());
+        if (!detailLines.isEmpty())
+            detailLines << QString();
+        detailLines << header;
+        detailLines << names;
+    };
+    addSection(QStringLiteral("Skipped (no matching AetherSDR control):"),
+               result.skippedUnknownParam,
+               QStringLiteral("%1 control(s) have no AetherSDR equivalent and were skipped."));
+    addSection(QStringLiteral("Skipped (invalid values):"), result.skippedBadType,
+               QStringLiteral("%1 row(s) had out-of-range values and were skipped."));
+    addSection(QStringLiteral("Dropped duplicates:"), result.duplicates,
+               QStringLiteral("%1 duplicate row(s) were dropped."));
+
+    if (result.importedCount == 0) {
+        FramelessMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
+        box.setText(QStringLiteral("No usable bindings in %1.").arg(fileName));
+        box.setStandardButtons(QMessageBox::Ok);
+        if (!informativeLines.isEmpty())
+            box.setInformativeText(informativeLines.join(QLatin1Char('\n')));
+        if (!detailLines.isEmpty())
+            box.setDetailedText(detailLines.join(QLatin1Char('\n')));
+        box.exec();
+        return;
+    }
+
+    refreshProfileList();
+    m_profileCombo->setCurrentText(result.profileName);
+
+    FramelessMessageBox box(this);
+    box.setIcon(informativeLines.isEmpty() ? QMessageBox::Information
+                                           : QMessageBox::Warning);
+    box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
+    box.setText(QStringLiteral(
+                    "Imported %1 binding(s) from %2 as profile \"%3\". "
+                    "Click Load to apply it.")
+                    .arg(result.importedCount)
+                    .arg(fileName, result.profileName));
+    box.setStandardButtons(QMessageBox::Ok);
+    if (!informativeLines.isEmpty())
+        box.setInformativeText(informativeLines.join(QLatin1Char('\n')));
+    if (!detailLines.isEmpty())
+        box.setDetailedText(detailLines.join(QLatin1Char('\n')));
+    box.exec();
+}
+
+void MidiMappingDialog::exportProfileToFile()
+{
+    const auto& bindings = m_manager->bindings();
+    if (bindings.isEmpty()) {
+        FramelessMessageBox::information(this, QStringLiteral("Export MIDI Profile"),
+                                         QStringLiteral("There are no bindings to export."));
+        return;
+    }
+
+    // yyyyMMdd_HHmmss so two exports the same day don't suggest the identical
+    // filename (matches the shortcut exporter).
+    const QString fileName = QStringLiteral("AetherSDR_MidiProfile_%1_v%2.xml")
+                                 .arg(QDateTime::currentDateTime().toString(
+                                          QStringLiteral("yyyyMMdd_HHmmss")),
+                                      QCoreApplication::applicationVersion());
+    QFileDialog dialog(this, QStringLiteral("Export MIDI Profile"),
+                       QDir(midiTransferDirectory()).filePath(fileName),
+                       QStringLiteral("MIDI profile XML (*.xml)"));
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setDefaultSuffix(QStringLiteral("xml"));
+    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+        return;
+    const QString path = dialog.selectedFiles().first();
+    rememberMidiTransferDirectory(path);
+
+    const MidiExportResult result = MidiSettings::instance().exportProfile(path, bindings);
+    if (!result.ok()) {
+        FramelessMessageBox::warning(this, QStringLiteral("Export MIDI Profile"),
+                                     result.error);
+        return;
+    }
+    FramelessMessageBox::information(
+        this, QStringLiteral("Export MIDI Profile"),
+        QStringLiteral("Exported %1 binding(s) to %2.")
+            .arg(result.exportedCount)
+            .arg(QFileInfo(path).fileName()));
 }
 
 void MidiMappingDialog::refreshPortList()

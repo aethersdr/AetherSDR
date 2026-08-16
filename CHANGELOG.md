@@ -8,6 +8,583 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.8.3] — 2026-08-16
+
+### The workspace canvas · a command scheduler for Icom · HL2 gains a noise blanker and a real BFO · VK3AMP amplifiers · the TX voice chain moves to 48 kHz float
+
+53 commits since v26.8.2. The headline is a **new shell**: the **workspace
+canvas** (RFC #4887) lands complete, all seven phases across four PRs — pans and
+applets become freely placed, resizable, layered items on a canvas that can span
+several top-level windows, with named workspaces, full-recall switching and
+radio-profile bindings. It is **experimental and off by default**: an operator who
+never opens the View menu sees the application they had, and an install that never
+enables it never gains a settings key.
+
+**Icom** moved from "a backend that works" to "a backend with a command plane".
+Every meter read, control write, reconciliation poll and PTT transition now goes
+through one **CI-V scheduler** with explicit priorities, coalescing and stale-reply
+rejection — written because a delayed PTT-OFF reply arriving after a newer PTT-ON
+was cutting transmit audio. Alongside it: the **IC-7300MK2** control surface
+completed against live hardware (18 operator-visible defects), **RS-BA1 lease
+renewal** fixed at the 255→256 sequence boundary that was freezing the panadapter,
+and a connect path that **asks the radio for its own CI-V address** instead of
+assuming the IC-705's. **WSPR** now transmits from an Icom — confirmed on the air
+with 20 PSK Reporter reception reports across the continental US and Alaska.
+
+The **Hermes-Lite 2** gained a working **NB** button — WDSP's impulse blanker
+running host-side on the raw IQ, where it is the only place it can run at all — and
+a **real BFO**, so a CW passband finally straddles the marker instead of sitting
+where a USB filter would. Its AGC mode and threshold now survive a restart, and a
+TCI/DAX client's own level control is no longer normalised away by the host speech
+ALC.
+
+Rounding it out: the **VK3AMP** amplifier joins ACOM and SPE as a supported
+peripheral; the **TX voice chain moves to a pinned 48 kHz float** path with a
+single high-quality rate conversion; **DAX RX grows to 8 channels** on a FLEX-6700;
+a **multi-hour Windows transmit crash** traced to a 2 GiB microphone backlog is
+closed; and **CAT band changes finally bring the panadapter with them**.
+
+### The workspace canvas
+
+- **Canvas core, persistence and Classic migration (#4900).** RFC #4887 phases 1
+  and 2, with no behaviour change — nothing is mounted and nothing is migrated at
+  runtime. Placement is stored as **fractions of the canvas**, never pixels, so a
+  layout authored on a 3840×1600 display restores in proportion on a 1920×1080
+  laptop; rect edges are rounded independently rather than origin+size, so two
+  items sharing a normalized edge land on the same pixel column at every canvas
+  size. Persistence is one station-scoped key, one writer, one atomic
+  whole-document write — replacing a dozen independent keys across three schemas
+  with no single writer, where a shutdown path that skipped one restored a
+  *mixture* of two layouts. A newer schema is refused rather than rewritten from
+  this build's understanding.
+
+- **Applets on the canvas — live drag, resize, snapping, escape hatches
+  (#4941).** Phases 3–5. The title bar streams the gesture and the item follows the
+  cursor; a canvas-owned frame masked to an 8 px border band carries eight resize
+  grips so everything inside still clicks through to the applet. Snapping covers
+  peer edges/centres and canvas edges at 8 px with painted guides, plus a
+  normalized 96×54 grid with its own gentler magnet — peer edges beat the grid even
+  when the grid line is nearer. Escape hatches: undo last placement, tidy, reset to
+  Classic, per-item return/front/back. **Edit Layout mode** (a field request) gives
+  the canvas two postures — locked by default, so operating the station never
+  brushes the arranging machinery.
+
+- **Named workspaces, full recall, profile bindings and pop-out import (#4964).**
+  Phase 6. A workspace remembers *which applets are open*, not just where things
+  sit. Three creation paths (from current layout, from Classic, from blank), CRUD
+  with document-owned identity, and radio-profile bindings that switch the
+  workspace when a bound global profile is recalled. Import pop-outs docks every
+  floating container and pan at a rect mapped from its window geometry — the
+  recovery path for a stale floating-pan configuration.
+
+- **Additional canvas windows (#4971).** Phase 7. A workspace can span top-level
+  windows, and every item moves between surfaces through a right-click **Move to ▸**
+  menu. Closing a canvas window **hides** it — items stay recorded and return
+  exactly on reopen; "Remove window" is the destructive path. Live cross-window
+  drag is deliberately deferred: a cross-top-level reparent is the #2495/#4617/#4319
+  crash lineage, and this phase routes it through one safe path instead. The schema
+  needed nothing — `surfaces[]` shipped in phase 2 and had round-tripped ever since.
+
+- **The palette greys undetected hardware instead of erasing it (#4968).** A field
+  report from an 8600: the **Amplifiers** category vanished from Add widget ▸. The
+  catalog is snapshotted once in MainWindow's constructor, before any radio
+  connects, so filtering on hardware availability erased seven applets — TUN, AMP,
+  ACOM, SPE, Demo Noise, Antenna Genius and ShackSwitch — permanently, and dropped
+  them from workspace recall too. Availability is a live question and is now
+  answered at menu-build time.
+
+- **Minimal mode and canvas mode hand off cleanly (#4980).** Entering minimal mode
+  from the canvas showed **no widgets at all** — minimal reparents the applet panel,
+  which in canvas mode is empty. Entering now disables the canvas synchronously
+  inside the same user action, and leaving restores it; Ctrl+M round-trips with the
+  arrangement intact. Minimal mode is also registered as a shortcut action, so it is
+  reachable from MIDI and the automation bridge — nothing could drive it
+  programmatically before, which is exactly why the collision escaped every
+  automated pass.
+
+### Icom
+
+- **A CI-V command scheduler (#5006).** The first production scheduler from
+  #4983: one ordered command plane above `IcomSession::sendCiv()`, replacing
+  independent direct sends from meter, control, startup, reconciliation and PTT
+  producers. Dispatches are paced into 25 ms slots with one reply-bearing
+  transaction in flight, prioritised emergency-unkey → operator → PTT → active
+  meter → control → maintenance, with duplicate reads and rapid writes coalesced by
+  semantic register. The load-bearing case: a pre-key PTT poll requested `OFF`, the
+  client issued `ON`, and the delayed `OFF` reply arrived afterwards — treating it
+  as current state stopped transmit audio before the radio's real `ON` confirmation.
+  Stale completions after a newer intent are now rejected. Icom-only by design;
+  Flex and HL2 behaviour is untouched.
+
+- **IC-7300MK2 remote controls, meters and certification (#4981).** Eighteen
+  operator-visible defects closed against live hardware: RF Gain that did not
+  survive an ANT-menu close or a reconnect, an ATU button that could not be clicked
+  back into bypass, no trustworthy ATU status, no RF Power meter and no SWR meter,
+  a one-way RF Power slider, MIC Gain that was never subscribed, MON and Monitor
+  Level that neither worked nor subscribed, DAX shown on a backend where it has no
+  function, notches that ignored front-panel changes, VOX with no read/write path,
+  and preamp/attenuator conflated with display RF Gain. CI-V encoding stays shared
+  with the IC-705; model-specific behaviour — meter calibration, the MK2-only
+  RX-ANT command — stays data-driven.
+
+- **WSPR, PC Audio routing and the CW decoder (#5016).** Three defects with one
+  root shape: a capability question asked the wrong way round. **WSPR** never
+  transmitted from an Icom because `prepareWsprTransmit()` armed the seam-audio
+  path correctly but `hasWsprTxStream()` accepted that latch only when
+  `hostModulates` was true — and Icom deliberately reports it false, so PSK
+  Reporter never considered the stream ready and never advanced to PTT. Readiness
+  now asks whether the backend is TX-capable and explicitly takes TX audio over the
+  seam, which is the question that was meant. Confirmed on the air from an
+  IC-7300MK2: **20 PSK Reporter reception reports across the continental US and
+  Alaska, −22 to +4 dB SNR.** **PC Audio** now switches only the model-specific
+  DATA OFF modulation input — WLAN on the IC-705, LAN on the IC-7300MK2, MIC when
+  disabled — and leaves DATA MOD untouched so the radio stays authoritative for
+  digital-mode routing; an unknown model refuses the write rather than guessing.
+  Radio Health gains DATA OFF MOD, DATA MOD and the applicable MIC/USB/ACC/WLAN/LAN
+  levels. And the **built-in CW decoder** opens again on an Icom: the mode
+  normalizer reports upper-sideband CW as `CWU`, while the activation gate
+  recognised only `CW` and `CWL`.
+
+- **Ask the radio for its own CI-V address (#4991).** An Icom connected with the
+  CI-V field left blank was addressed at a hardcoded `0xA4` — the IC-705's address.
+  CI-V is addressed, so every other model silently ignored the traffic, and because
+  a wrong address produces no error the session came up looking healthy with no
+  frequency, no scope and no transmit. Both the code comments and the intent were
+  already there and neither was wired. Measured on an IC-9700 at 172.17.0.96 with
+  the same probe built in both trees: base build `0.000000 MHz` (dead), this branch
+  `445.841350 MHz` USB (alive) — and a *typed* `A4` still dead, deliberately, because
+  auto-detect must not quietly rescue an address the operator chose. The Connect-by-IP
+  form gains a model chooser so the answer is legible.
+
+- **RS-BA1 lease renewal and diagnostics (#4995).** The frozen panadapter was a
+  media-lease failure, not a renderer failure — serial CI-V and audio stopped
+  together while the outer control socket still looked healthy. The inner renewal
+  sequence was encoded as a shifted little-endian field, accidentally byte-identical
+  only through sequence 255; at 256 it overwrote the next byte and the radio
+  answered `0xffffffff`. Fixed as the big-endian 16-bit field the radio accepts,
+  plus: token replies correlated to the current session and outstanding request, a
+  fresh random request ID per login, teardown deauth through the tracked
+  outer-sequence path, and a first renewal at 30 s (an immediate-reconnect grant was
+  measured dying at ~45 s) before returning to the 60 s cadence. `civ session`
+  reports the whole lease state, credential-free.
+
+- **DATA mode reaches the radio — DIGU/DIGL (#4989), then DFM (#4994).** Selecting
+  a data mode set the sideband but left the DATA flag clear. #4989 sends and adopts
+  it; #4994 finishes the FM half, where `DFM` was missing from the codec's mode map
+  entirely (so it fell through to "no equivalent" and the UI simply reverted) and a
+  radio already in FM-D reported back as plain FM — so the next mode write took it
+  *out* of data mode untouched by the operator, and transmit audio came from the
+  microphone. On 2 m that meant an AX.25 frame keying the radio with room noise on
+  the air. The IC-9700 additionally needed `hasVfoModeCommand`; `0x26` was measured
+  on the live radio rather than assumed, and the table invariant that blocked it was
+  corrected to ask the narrow question a measured round trip actually answers.
+
+- **The scrub TX-safety check matched a PTT read (#4913).** `icom_backend_test`
+  failed ~1 run in 2 — 14/30 on a clean build — on the Principle VI check that
+  proves `controls scrub` cannot key the transmitter. It was the test: the capture
+  predicate matched `1C 00`/`1C 01` on cmd+sub alone, and the zero-payload form is a
+  *read* the register answers and never acts on, emitted by the 250 ms meter tick
+  landing inside the observation window on timer phase. The predicate now requires a
+  payload — "can move the transmitter or the ATU" — and the keying block proves the
+  check has teeth before trusting it. 60/60 clean after; a mutation test injecting a
+  real `cmdSetPtt(true)` is caught 6/6.
+
+### Hermes-Lite 2
+
+- **A host-side impulse noise blanker (#4908).** The HL2 ships raw IQ and runs no
+  firmware DSP, so it correctly reports `hasRadioSideDsp = false` — and `VfoWidget`
+  hid NB alongside NR and ANF. That was the right conclusion about the *command* and
+  the wrong one about the *control*: the blanker can run here, and on this radio here
+  is the only place it can run at all. WDSP's ANB runs on the raw IQ ahead of the
+  demodulator, because an impulse is short in time and wide in frequency — once the
+  8192-tap bandpass has smeared it there is no spike left to blank. Held across
+  transmit, since the trigger is a ratio and an unheld blanker would gate the first
+  ~7 ms of every receive period.
+
+- **Centre the CW passband on the marker with a real BFO (#4914).** In CW the
+  panadapter drew its skirt entirely to the *right* of the marker, where a USB filter
+  sits. `defaultPassbandForMode` returned `{350, 850}` — a 500 Hz filter measured from
+  the audio the signal becomes, not from the signal — because WDSP inserts no BFO and
+  the detector is direct-conversion in every mode. On this radio that is worse than
+  cosmetic: the **gateware generates the shaped CW carrier at the TX NCO**, which is
+  the marker, so the receiver was listening 600 Hz from where the radio transmits. CW
+  is now kept in two domains with `cwBfoHz`/`dspFilterHz`/`rxShiftHz` as the only
+  translation between them.
+
+- **Persist the operator's AGC mode and threshold (#4911).** Set Slow/40, quit,
+  relaunch — the session came up Med/65, the construction default. The AGC loop for
+  this radio runs in WDSP on the host, so the client is the only place the setting can
+  live, and it was living nowhere: nothing captured it, nothing stored it, and nothing
+  echoed it back, so the applet showed one thing while the DSP ran another. The
+  threshold sentinel is `-1` rather than `0`, because zero is an AGC-T an operator can
+  select.
+
+- **Bypass the TX ALC for client-leveled TCI/DAX audio (#4910).** WSJT-X's `Pwr`
+  slider is not a rig command — it is a digital attenuator on the audio the client
+  streams. The host speech ALC ran over that audio, so the control was either
+  normalised away or frozen into a path-dependent gain: TUNE at a low setting made no
+  RF, sliding up mid-key wound the gain up, sliding back retained it. `AudioEngine`
+  already marks external client audio and already bypasses the voice compressor and EQ
+  for it; that bit now reaches the modulator. **The bypass is one-sided by design** —
+  client audio may never be *lifted*, but it is still *reduced*: removing the reduction
+  half left the hard clamp as the only thing between a hot client and the band,
+  measured at twice full scale.
+
+- **The meter surface certified on real hardware (#4916), and the five findings that
+  exposed (#4917).** `radiocert meters` run against a physical HL2 (gateware v74) into
+  a dummy load: `TX:MICPEAK` tracked a −20 dBFS tone to **+0.023 dB** while `TX:ALC`
+  did not move at all across a 20 dB sweep — the ALC normalising, measured rather than
+  assumed, and because the two meters sit on opposite sides of it and agree in opposite
+  directions they certify the host transmit path between them. Every meter on the radio
+  was correct; two of the concerns the tool reported were not. #4917 fixes the five
+  defects that run exposed — chiefly a keyed stage producing no RF now reporting
+  INCONCLUSIVE rather than advising the deletion of a working meter, and a unit check
+  reading the `acceptedUnits` set instead of a single value that reported a permanent
+  false positive on a healthy `TX:ALC`. Also documented: the RF power slider has 101
+  positions and the gateware decodes only the drive register's top nibble, so six
+  points of travel do nothing and the next single point is +1.25 dB.
+
+### Transmit audio
+
+- **The TX voice chain moves to 48 kHz float (#4875).** The TX channel strip was
+  performing several sample-rate conversions and bit-depth truncations, compounding
+  aliasing artifacts and quantization noise. The entire strip and voice pipeline is now
+  pinned to 48 kHz float with a **single** high-quality conversion to transport rate,
+  and unshaped TPDF dither applied immediately before the final quantization. A 12 %
+  SRC profile improves latency for 44.1 and 48 kHz hosts — the two most common — while
+  keeping flat response across the full 10 kHz baseband and significant alias
+  rejection, at a slight latency cost below 24 kHz. Oversampling in the non-linear
+  processors was deliberately left out to bound the blast radius, though 24 → 48 kHz is
+  already equivalent to 2× oversampling against the previous path.
+
+### Amplifiers & peripherals
+
+- **VK3AMP amplifier support (#4919).** A standalone peripheral alongside
+  ACOM/PGXL/TGXL: TCP control and status (ASCII CSV) plus UDP telemetry, with
+  calibration curves for output, reflected, current and input power unit-tested against
+  real capture values. Idle-aware keepalive and watchdog, a bypass/voltage-rail safety
+  interlock, hold-to-confirm reset, and a dockable panel with Power/Reflected/SWR
+  gauges. VK3AMP ships as 600 W / 1000 W / 2000 W units, so a persisted variant selector
+  rescales the forward-power gauge to each unit's rated output plus 25 % headroom.
+  Connection reliability came out of testing against real hardware: the amp's network
+  stack answers only broadcast ARP, so a cold connect can stall 9–12 s on Windows'
+  unicast-first neighbour-cache reconfirmation — hence an 18 s connect watchdog and an
+  explicit socket abort before redial. The companion reverse-engineering project's
+  decompile-derived fault-name table is deliberately excluded (Principle IV); v1
+  surfaces the raw numeric code.
+
+### DAX
+
+- **8 DAX RX audio channels on a FLEX-6700 (#4854).** The DAX RX path was capped at
+  4 (6600-class sizing), so slices assigned to DAX 5–8 were silently dropped — the audio
+  device was created, but no radio-side `dax_rx` stream was ever requested, and the
+  channel carried silence-fill. The wire path is now an upper bound of 8 (DAX **IQ**
+  stays at 4) while the user-facing selectors are driven from the radio's actual slice
+  capacity, so a 6300 does not present dead entries and a slice carrying a channel the
+  connected radio cannot back displays as **Off** rather than a false in-range channel.
+  Verified end-to-end on a 6700: eight `aethersdr-dax-N` sources carrying live audio and
+  eight WSJT-X instances decoding on eight slices.
+
+### CAT, rigctld & TCI
+
+- **CAT band changes follow the panadapter (#4876).** A band change issued over CAT —
+  WSJT-X/FLDigi "change band", rigctld `set_freq`, SmartCAT `FA`/`FB`, VFO up/down —
+  moved the slice and left the panadapter behind on the old band until a manual GUI
+  action. Every CAT and rigctld VFO move now routes through one recenter policy: an
+  in-span target tunes without a yank (external Doppler software steps every few seconds
+  and must not recenter each step), an out-of-span or cross-band target recenters and
+  re-bands. Both paths go through `SliceModel` so `frequencyChanged` is emitted — the
+  load-bearing signal, without which the tune did not stick on real hardware even though
+  it worked on the emulator. The single seam validates the target once (finite, > 0,
+  < 1 THz) and refuses a locked slice rather than reporting a false success.
+
+- **rigctld reports split per-client (#4853).** `cmdGetSplitVfo()` and `cmdGetVfoInfo()`
+  reported `split=1` whenever the radio's transmit slice differed from the slice a CAT
+  port controls. With N single-VFO ports — one per WSJT-X instance — only one slice holds
+  the TX flag, so every *other* port read as "in split" and WSJT-X refused emulated split
+  on all but one instance. The determination is now gated on the client's own split
+  state, mirroring what `cmdSetPtt()` already did. Verified on a FLEX-6700 with two
+  WSJT-X instances both accepting Fake It.
+
+- **Every TCI argument goes through a checked parse (#4870).** `TciProtocol.cpp`
+  converted client-supplied arguments with unchecked `QString::toInt()` in **50 places
+  across 39 handlers**. Qt returns `0` on failure, so malformed input did not fail — it
+  became a valid-looking `0` and the command proceeded. This class does not fail quietly,
+  it **succeeds convincingly**: the command applies, a well-formed notification goes out,
+  and neither the sender nor a second client watching the wire can tell. It had been
+  fixed three times one instance at a time (#4345, #4523, #4848) and survived all three.
+  Thirty of the fifty sites were the trx index, which resolves positionally — so
+  `mute:abc,true` muted **slice 0** and broadcast a notification naming it. All 66
+  conversions now route through three helpers that leave the output untouched unless the
+  argument is present and parses; `argToDouble` folds in `std::isfinite`, because Qt
+  parses `"inf"`/`"nan"` and reports success. The boolean half is covered too — twenty
+  sites where anything that was not the word `"true"` became `false` and was applied.
+
+- **Remove dead TCI receive-audio code (#4844).** `TciServer::onRxAudioReady` had no
+  producer anywhere in the tree, orphaned when TCI audio moved to the DAX pipeline, and
+  the PC Audio toggle's comment still described keeping `remote_audio_rx` alive for a TCI
+  client. Both removed. No behaviour change.
+
+- **Gate keyerless-dependent CW tests (#4856).** Two CAT integration tests asserted a
+  CW-keyer command succeeds unconditionally, but those commands need a *radio-side* keyer
+  — a keyerless target, including the demo backend, correctly refuses them. The safety
+  half matters: rigctld E6 ran `send_morse "TEST"` in an ungated block, which **keys CW on
+  a real radio**, so a plain no-TX run transmitted on the operator's licence. Both now
+  skip behind `--cw`, mirroring the suite's existing gating.
+
+### Crash & stability
+
+- **A multi-hour TCI transmit crash on Windows (#4958).** Two Microsoft Store dumps
+  from v26.8.2 resolved against the matching PDB to the first output write in
+  `TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo()`, with an input block of
+  `0x80007900` bytes — 30,976 past the signed 2 GiB boundary. The chain: fresh TCI audio
+  suppressed the local microphone callback, so the Windows pull device was never drained;
+  Qt/WASAPI kept appending at ~192 kB/s; when local mic processing resumed, `readAll()`
+  returned the multi-gigabyte residue in one `QByteArray`; and the normalizer's signed
+  `int` output-size arithmetic overflowed. Fixed at both ends — the mic source is drained
+  while TCI owns TX audio, and every pull-mode read is bounded to a frame-aligned 256 KiB
+  (~1.36 s) with oversized and partial-frame blocks rejected before allocation. Past 1 MiB
+  of residue the stale head is skipped without allocation, so the freshest block reaches
+  the air rather than a backlog replaying.
+
+- **A panadapter pop-out crash no longer becomes a boot loop (#4863).** A Store crash
+  report (26.7.2.0) landed in the pop-out path — a D3D11 access violation, this time in an
+  **AMD** UMD where every previously confirmed case of the class died in a 2016 Intel one,
+  which is independent corroboration that the extent mismatch was real rather than an
+  Intel driver quirk. That crash itself was already fixed by #4329. What was not fixed is
+  the blast radius: the pan ID was committed to `FloatingPanIds` *before* the reparent and
+  GPU re-initialize that follow, and the restore path replayed the saved list
+  unconditionally on every post-connect layout restore — so any crash inside the float path
+  was self-perpetuating, with no in-app escape. #4617's reporter had to hand-edit the
+  settings store to get his radio back.
+
+- **Shutdown phase breadcrumbs (#4979).** Windows users have reported the application
+  hanging on close and needing a force quit (#4273); existing logs showed that shutdown
+  started but not which close or thread join was still in progress. Paired `begin`/`end`
+  records with elapsed time now cover radio, audio, KiwiSDR, external controllers, spot
+  clients and late worker-thread teardown, and distinguish a blocked queued invocation from
+  a close routine that entered its worker and then blocked. Diagnostic instrumentation
+  only — no new waits, no watchdog, no ordering change.
+
+- **Release momentary keying when the radio disconnects (#4811).** A key held across a
+  disconnect stranded its flag, because the release was discarded above the bookkeeping —
+  so the first press after reconnect was silently consumed. One dead press per
+  disconnect-while-held, reported as "PTT stopped working after reconnect". The existing
+  `failSafeMomentaryKeyingToRx()` had three callers and none of them was radio disconnect;
+  it now has a fourth. Since #4611 the same class reached the CW flags through the Ulanzi
+  dial paths, so the central release covers the whole family.
+
+### GUI & workflow
+
+- **Clone to all Pans (#4881).** Tune the look on one panadapter, press the button in the
+  Display panel's SYSTEM group, and every other open pan matches — previously a second pan
+  meant re-picking every colour, fill rate, scheme, floor and 3D setting by hand. Three
+  kinds of setting live in that panel and each travels its own way: client appearance whose
+  setter already persists per-pan, client appearance whose setter does not (background image
+  and opacity, whose writes MainWindow has always owned), and radio-authoritative values —
+  FFT average, FPS, weighted average, waterfall rate, colour gain, black level — which are
+  never persisted client-side and so are cloned by sending the same commands the sliders
+  send and letting the radio echo back. Auto-black clones the operator's stored **intent**,
+  not the capability-masked value, so cloning cannot quietly downgrade every other pan.
+
+- **The mini-pan centres on the passband, not the carrier (#4874).** On SSB the carrier
+  sits at the *edge* of the receive filter, so a carrier-centred ±5 kHz window spent half
+  its width on the sideband the filter throws away. One shared helper parameterises both the
+  frame cut and the chrome — two copies of that arithmetic would let the trace and the wash
+  end up centred on different frequencies, which is the one thing a tuning aid must never do.
+  Symmetric filters give an offset of zero and render exactly as before. The hairline still
+  marks the carrier, because that is the frequency the readout above it shows.
+
+- **PSK Reporter map: navigation stalls and world wrap (#4952).** Dragging and trackpad
+  scrolling churned tiles, re-decoded cached PNGs and hit-tested markers on every drag
+  frame; horizontal navigation stopped dead at the antimeridian, forcing a pan all the way
+  around to compare Asia against North America. The camera and tile layer now repeat
+  continuously across the dateline, with wrapped requests coalesced onto canonical OSM URLs
+  so the repetition costs no extra GETs, markers and propagation paths replicated into every
+  visible world copy, a bounded 64 MiB decoded-image cache above the existing disk cache,
+  and marker hit-testing skipped while dragging. Wheel and high-resolution trackpad deltas
+  are normalized onto one symmetric zoom curve — equal notches in and out now return exactly
+  to the starting scale, where upstream lost ~11 % per round trip.
+
+- **SpotHub auto-scroll follows the correct end (#4922).** The spot model prepends, so the
+  newest spot is always row 0 — but the auto-scroll followed the *bottom*, a lambda copied
+  from the append-only console panes. It was self-latching: on an empty table
+  `value == maximum == 0`, so follow started true and `scrollToBottom()` kept it true
+  forever, pinning the viewport to the oldest end while the thumb walked down. Only Time
+  descending was visibly broken, because Time ascending happens to put the newest at the
+  bottom where the old logic was accidentally right. The follow end is now derived from the
+  current sort, and a sort by any other column does not auto-scroll at all rather than
+  disturbing where the operator put the viewport.
+
+- **The Copy Assist indicator gates on the active slice (#4932).** The status-bar **ASR**
+  indicator was greyed out whenever no slice was flagged as the transmit slice — so an
+  operator who disables TX for safety, or runs receive-only, could not open Copy Assist at
+  all. It is a receive-side feature; nothing about it depends on the TX slice. CWX and DVK
+  are transmit keyers and keep following it. Two consequences stated plainly: the indicator
+  row can now disagree with itself by design, and the auto-hide can stop a running
+  transcription when a CW slice is selected.
+
+- **Restore automatic QRhi colour-buffer sizing (#4359).** AetherSDR's global fixed,
+  ceil'd, even-aligned colour buffer could differ from the widget's natural device-pixel
+  extent at fractional scale factors, and `QRhiWidget` then scales the buffer to the
+  widget — whole-surface resampling that produced a faint stationary horizontal line even
+  after #4322 made the waterfall image and its destination rectangle 1:1. The override was
+  one of three bundled mitigations for an old Intel D3D11 crash and was never independently
+  demonstrated to be necessary; the other two were structural and remain.
+
+- **Frameless move and edge resize under xcb (#4829).** Drag-to-move on the menu bar and
+  left/right/bottom edge resize did nothing under `QT_QPA_PLATFORM=xcb` — only the
+  QSizeGrip corner worked. Two independent causes: `startSystemMove()`/`startSystemResize()`
+  report success on xcb but the WM-driven grab is unreliable there (QTBUG-69716), which Qt's
+  own QSizeGrip works around by refusing the platform path; and the edge-resize filter never
+  received any events on MainWindow at all, because a QWindow does *not* receive every
+  platform mouse event once a child acquires a native window — the status bar, central widget
+  and size grip are all native and between them cover the whole client area. The filter now
+  installs application-wide and matches by walking each event window's parent chain.
+  Reported and manually verified by @JonathanPerkins.
+
+- **The last un-scoped stylesheet in the overlay menu (#4866).** #4847 scoped all five
+  overlay panels and its description closed with "no un-scoped `QWidget { … }` selector
+  left" — one site short. An un-scoped sheet survived *inside* the Ant panel on the
+  preamp/attenuator container rows, cancelling a cascade the same way the bug worked: by
+  broadcasting a bare type selector at every descendant, tooltip labels included. A second
+  helper alongside `applyPanelStyle()` covers bare containers, and every stylesheet on a
+  container widget in that file now goes through one of the two — so there is no site left
+  where an object name and its selector are written in two places and can drift apart.
+
+### Copy Assist
+
+- **Context-carry via explicit prompt (#4831).** RFC #4818, opt-in and off by default.
+  Each decode can be conditioned on the text the backend produced on its last confident
+  segment, for continuity across utterance boundaries — names, callsigns, topic. Carried
+  through whisper's explicit `initial_prompt` rather than its internal cross-call prompt,
+  which whisper rebuilds unconditionally so the confidence gate could never reach it; that
+  was the "kept re-seeding and couldn't recover" behaviour on noisy audio. Recovery paths:
+  a 0.65 confidence gate, a 2.5 s silence-gap flush, and Clear — which turns out to have
+  been wired to nothing at all, wiping only the text box.
+
+### Controllers & MIDI
+
+- **Import and export MIDI binding profiles (#4898).** Import ingests a profile file and
+  auto-detects the dialect by content: the native `<MidiProfile>` XML, or the SmartSDR
+  iOS/Mac `.map` that controller vendors publish per device. Export writes the current
+  bindings as the same document Import reads back. The policy is import what maps, name what
+  doesn't, never silently drop — the result carries imported counts, named skips with their
+  reasons, named duplicates and file-level errors, and an existing profile name gets a
+  " (2)" suffix rather than being overwritten. Load also now reports an empty or missing
+  profile instead of silently doing nothing.
+
+### Automation bridge
+
+- **Connection-path resolution and TX drive readout (#4918).** Five gaps, all the same
+  shape — the bridge knew something and didn't say it. `connect ip <addr>` with no family
+  probed the connect dialog's selector, which on a fresh instance means Flex, costing ~25
+  minutes of a hardware session while the reply said `ok:true` throughout; `connect list`
+  never serialised `family`, so you could not read it back or work around the first gap;
+  `connect wait` could not distinguish a dead connect from one still queued behind the HL2's
+  DSP open; every connect verb replied before its real work ran, with failures reaching only
+  a warning log; and there was no applied-drive readout anywhere, so the readback shared the
+  failure it was meant to catch in the one area that is safety-adjacent.
+
+### CI, build & governance
+
+- **Restore compiler caches everywhere, save only on main (#5008).** The repository shares
+  one 10 GB Actions cache budget, and every run — PR runs included — wrote a fresh ~0.6 GB
+  entry. Actions caches are scoped by ref: a PR's entry lands on `refs/pull/N/merge`, which
+  no other PR may read. So every PR run wrote something nothing else could ever use, and its
+  only effect was evicting the shared `main` entry all 26 open PRs *can* read. Measured
+  2026-08-16: 8.62 GB across 14 PR-scoped entries against 2.00 GB on `main` — 80 % of the
+  budget unreadable, with no Linux ccache or Windows sccache entry left on `main` at all.
+  PR #5002 took 19+ minutes against a 7–13 minute norm. All three build jobs now restore on
+  every run and save only from a green `main` build.
+
+- **The colour ratchet takes its base from the merge base (#4960).** The gate compared two
+  trees not required to share a `main`: `github.sha` freezes when a run is created, while
+  `origin/<base_ref>` resolves when the job runs, so when main *loses* colours in between the
+  drop is billed to whichever PR happens to be running. #4895 — a five-line comment edit the
+  scanner cannot even see — failed with "+5", which turned out to be #4866's cleanup,
+  sign-flipped, reported against it. The two sides were 22 h 26 m apart, a gap fork PRs are
+  guaranteed by their workflow-approval hold.
+
+- **Trim three steps off the per-PR gate (#4873).** The HL2 AM/SAM DC blocker test measured
+  **188–190 s, dead flat**, across four consecutive main runs — second most expensive step in
+  the job behind the build itself, and more than every other gate step combined by two orders
+  of magnitude, against a comment claiming it "runs in well under a second". It is not a
+  flake; it is what the test does, and it still runs weekly. Stated plainly: the vendored
+  liquid-dsp build check was the only thing in CI compiling that snapshot, and nothing
+  backstops it now.
+
+- **Split test registration into `tests/tests.cmake` (#5002).** The root `CMakeLists.txt`
+  was 6,357 lines, over half of it test registration; it is now 2,780. A pure move — the
+  3,239 relocated lines are byte-identical, `ctest -N` lists the same 304 tests and the
+  target list is unchanged. `include()` rather than `add_subdirectory()` is load-bearing:
+  include executes in the caller's directory scope, so ~800 relative source paths and nine
+  `${CMAKE_CURRENT_SOURCE_DIR}` references move across untouched — the latter would have
+  failed *quietly*, handing a still-passing test an env var pointing one directory too deep.
+  Four guards make reaching for the old location fail.
+
+- **CODEOWNERS: Tier 1 narrowed (#4959), `docs/`, `resources/` and `tests/` to Tier 3
+  (#5001).** Tier 1 had accreted paths that are documentation rather than governance — 21
+  maintainer-gated paths absorbed 467 commits in twelve months, and the AI-instruction files
+  alone were 37 % of that traffic. Tier 1 is now a single test: *does a wrong change here
+  alter who decides things, or what gets signed?* `CONTRIBUTING.md` was split rather than
+  moved, with its operational bulk becoming `docs/DEVELOPER-GUIDE.md` and
+  `docs/PR-WORKFLOW.md`. #5001 then fixed the `*.md` depth trap — a glob with no slash matches
+  markdown at any depth, so every guide under `docs/` and every help topic under
+  `resources/help/` sat on the infrastructure roster while the directory around it did not —
+  and moved `tests/` (~90k lines of C++ across 305 TUs) to the roster that reviews the code it
+  tests. Nobody loses authority: the infrastructure roster is a strict subset of the reviewer
+  roster.
+
+### Documentation
+
+- **A theme style guide for agents (#4850).** `docs/style/theme-style-guide.md` — the map
+  from system states to ThemeManager tokens, published as the missing documentation behind the
+  colour drift measured in #4569, where unique colours rose by 105 while references fell ~22 %.
+  The reading is that this is a knowledge-distribution failure rather than an enforcement one:
+  the 99 shipped `color.*` tokens already name every state the drifting literals approximate,
+  but at the moment an agent picks a colour nothing told it the map existed. Covers the
+  semantic map, the consumption API, the no-new-literals rule and its boundaries, the
+  add-a-token path, and the colour-as-data exemptions.
+
+- **Correct the TCI audio guidance (#4895).** The comment telling WSJT-X users to enable PC
+  Audio was stale: the receive path uses DAX channels acquired by
+  `TciServer::ensureDaxForTci()`, and host-modulating backends relay per-slice TCI audio
+  through the backend seam. Neither consults `PcAudioEnabled`, which gates only the separate
+  `remote_audio_rx` stream.
+
+- **README and ROADMAP** now name the networked-Icom models accurately, correcting an
+  IC-9700/IC-7300 mix-up that shipped in the v26.8.2 documentation.
+
+### Contributors
+
+Big thanks to **@jensenpat** (17 PRs — the Icom CI-V scheduler, the IC-7300MK2 control
+surface, the RS-BA1 lease fix, the Icom WSPR/PC Audio/CW decoder restoration, the HL2
+noise blanker, CW BFO and AGC persistence, the HL2
+meter certification and the five radiocert defects it exposed, the PSK Reporter map rework,
+the Windows TCI transmit crash, the pop-out boot loop, shutdown breadcrumbs, Clone to all
+Pans, the theme style guide, the CI gate trim, and the Icom scrub-test flake),
+**@ten9876** (14 PRs — the workspace canvas from core to phase 7 and its palette and
+minimal-mode fixes, the TCI checked-parse sweep, the mini-pan passband centring, the last
+un-scoped overlay stylesheet, both CODEOWNERS retiers, the `tests.cmake` split, the colour
+ratchet base fix, and the Actions cache split), **@K5PTB** (4 PRs — Copy Assist
+context-carry, the CAT band-follow policy, the Copy Assist indicator gate, and the keyerless
+CW test gating), **@Ozy311** (3 PRs — the HL2 TX ALC bypass for client-leveled audio, CI-V
+address auto-detection, and the automation-bridge connection-path fixes), **@hotairfred**
+(2 PRs — 8 DAX RX channels on the 6700 and per-client rigctld split), **@M7HNF-Ian** (2 PRs
+— the SpotHub auto-scroll fix and the dead TCI receive-audio removal), **@skerker** (2 PRs
+— MIDI profile import/export and the momentary-keying release), **@rfoust** (automatic QRhi
+colour-buffer sizing), **@Silent-Gloves** (the 48 kHz float TX voice chain),
+**@ezypezy22** (VK3AMP amplifier support), **@nigelfenton** (Icom DFM and the IC-9700 `0x26`
+path), **@g4ivv** (frameless move and resize under xcb), and **@floze-the-genius** (the TCI
+audio guidance correction). The **AetherClaude** orchestrator bot contributed the
+Icom DATA-mode fix that #4994 then completed. Thanks also to **@JonathanPerkins** for reporting and verifying
+the xcb frameless bug, **@eicket** for the HL2 power-ramp observations that pinned the ALC
+behaviour, **@G0JKN** for the live IC-9700 traces behind the `0x26` mode path, and the
+Microsoft Store crash reporters whose dumps made both Windows fixes possible.
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
+
 ## [v26.8.2] — 2026-08-09
 
 ### A third radio family: networked Icom · HL2 gets notches and frequency calibration · SPE Expert amplifiers · three new spot overlays · CW timing to spec

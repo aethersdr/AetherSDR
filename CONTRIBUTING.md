@@ -96,14 +96,35 @@ GitHub on every tier — your own PR always needs review from someone else.
 
 | Tier | Paths | Who can approve |
 |---|---|---|
-| **Source (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking) |
-| **Infrastructure (Tier 2)** | `tests/`, `docs/`, `*.md` (including `README.md`, `CHANGELOG.md`, `ROADMAP.md`, and the AI-instruction files `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `.github/copilot-instructions.md`), `.claude/commands/`, `CMakeLists.txt`, `THIRD_PARTY_LICENSES`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat, @rfoust) |
-| **Maintainer-only (Tier 1)** | Governance docs (`CONSTITUTION.md` **and its canonical copy `.specify/memory/constitution.md`**, `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`), security/compliance (`SECURITY*`, `.github/CODEOWNERS`, `.github/codeql/`, `docs/RELEASE-SIGNING-KEY.pub.asc`), and the workflows that hold release secrets, feed bytes into a signed artifact, or form part of the CodeQL scanner's trust chain (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`) | `@aethersdr/maintainers` (@ten9876) |
+| **Source, tests & documentation (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** — plus `tests/`, `docs/`, and `resources/`, **markdown included** (so `docs/DEVELOPER-GUIDE.md` and the in-app help text under `resources/help/` are both here). Two files under `docs/` are carved back to Tier 1 below | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking) |
+| **Infrastructure (Tier 2)** | `*.md` *outside* `docs/`, `resources/`, and `tests/` (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, `plugins/*/README.md`, and the AI-instruction files `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `.github/copilot-instructions.md`), `.claude/commands/`, `CMakeLists.txt`, `THIRD_PARTY_LICENSES`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat, @rfoust) |
+| **Maintainer-only (Tier 1)** | Governance docs (`CONSTITUTION.md` **and its canonical copy `.specify/memory/constitution.md`**, `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`), security/compliance (`SECURITY*`, `.github/CODEOWNERS`, `.github/codeql/`, `docs/RELEASE-SIGNING-KEY.pub.asc` and the `docs/VERIFYING-RELEASES.md` that publishes its fingerprint), and the workflows that hold release secrets, feed bytes into a signed artifact, or form part of the CodeQL scanner's trust chain (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`, `streamdeck-plugins.yml`) | `@aethersdr/maintainers` (@ten9876) |
 
 The maintainer-only tier is deliberately narrow: it covers the rules of the
 project and the paths that can compromise a signed release. Everything that
 is *documentation about how to build the thing* — including the AI-instruction
 files — sits at Tier 2, so day-to-day iteration isn't maintainer-gated.
+
+Tests and documentation sit at Tier 3 alongside the code they belong to. A
+guide under `docs/`, a help topic under `resources/help/`, or a unit test under
+`tests/` is best reviewed by the same people who review the code it covers —
+and `tests/` is source code in its own right: ~90k lines of C++ against three
+files of harness glue. Most code changes touch `src/` and `tests/` together, so
+splitting them across tiers taxed nearly every well-tested PR for no gain.
+
+Note the ordering rule behind this, if you ever edit `.github/CODEOWNERS`:
+`*.md` has no slash, so it matches markdown at **any** depth, and CODEOWNERS
+resolves by *last match*, not by specificity. The `docs/`, `resources/`, and
+`tests/` lines only work because they sit below the `*.md` glob — move them
+above it and every `.md` under those directories quietly falls back to Tier 2.
+`CMakeLists.txt` has the same no-slash behaviour, which is why build config
+still reaches Tier 2 wherever it lives.
+
+A trailing slash does not anchor a pattern either: only a *leading* slash
+(`/docs/`) pins one to the repository root. So `docs/` and `tests/` also claim
+`third_party/crdv/docs/` and `third_party/crdv/tests/` — intended, since a
+vendored tree's own docs and tests belong with its code, which is already
+Tier 3.
 
 `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` are Tier 2 because their content is
 operational: architecture, build steps, style guide, protocol notes. The policy
@@ -123,9 +144,9 @@ primary goal of the decomposition was widening review of that code to the team.
 
 Bot-opened PRs (e.g. @AetherClaude's) still require a human reviewer regardless
 of tier — the bot is intentionally **not** a code owner. The Infrastructure
-tier simply means low-risk changes (test additions, documentation tweaks,
-dependency bumps, template updates) need an infrastructure owner rather than a
-maintainer.
+tier simply means changes to the repo's own scaffolding (dependency bumps,
+issue templates, CI config, build config) need an infrastructure owner rather
+than a maintainer.
 
 For the mechanics around this gate — draft-PR conventions, the stale-branch
 policy, and how to recover a red `main` — see

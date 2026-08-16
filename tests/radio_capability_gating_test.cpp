@@ -816,6 +816,9 @@ int main(int argc, char** argv)
               "active slice in CW: ASR indicator stays dimmed (nothing to transcribe)");
         check(!isVoiceMode(QStringLiteral("CWL")),
               "active slice in CWL: ASR indicator stays dimmed");
+        check(isCwMode(QStringLiteral("CW")) && isCwMode(QStringLiteral("CWU"))
+                  && isCwMode(QStringLiteral("CWL")),
+              "CW decoder gate accepts legacy CW plus explicit CWU/CWL names");
         check(!isVoiceMode(QStringLiteral("DIGU")) && !isVoiceMode(QStringLiteral("DIGL")),
               "active slice in DIGU/DIGL: ASR indicator stays dimmed");
         check(!isVoiceMode(QStringLiteral("RTTY")),

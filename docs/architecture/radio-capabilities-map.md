@@ -52,6 +52,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
 | `hasLmsNoiseFilters` | ✅ | ❌ | ❌ | `RadioModel::hasLmsNoiseFilters()` → `VfoWidget::setHasLmsNoiseFilters` | NRL / ANFL / ANFT alone — the WDSP LMS/FFT family, a THIRD tier under `hasRadioSideDsp`. Icom: ❌ (it has NR, NB and both notches, and no register these three could reach). Keeps `hasRadioSideDsp`'s permissive-on-disconnect rule |
 | `hasManualNotch` | ❌ | ❌ | ❌ | `RadioModel::hasManualNotch()` → `VfoWidget::setHasManualNotch` | The MN button and the shared level slider re-targeted to notch POSITION. Icom: ✅ (`16 48` enable, `14 0D` position, `16 57` width). **Not** permissive on disconnect — a new button must not appear on a radio that has not claimed it. Distinct from the TNFs, which are pinned to absolute frequencies, and from the auto notch, which finds its own tone |
+| `hasHostNoiseBlanker` | ❌ | ✅ | ❌ | `RadioModel::hasHostNoiseBlanker()` → `VfoWidget::setHasHostNoiseBlanker` | **THIS HOST** blanks impulse noise in the radio's IQ (WDSP ANB, ahead of the demodulator). OR'd with `hasRadioSideDsp` at the NB button, so a direct-sampling radio gets NB without claiming firmware DSP it does not have — the same exception the manual notch makes. Requires an IQ path this host demodulates: a backend fed finished audio has nothing to blank. Icom: ❌ (the radio's own blanker, under `hasRadioSideDsp`). **Not** permissive on disconnect — it can only ADD the button |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar CWX indicator, the CWX panel and its F1-F12 arming, plus every other `cwx` entry point — see below |
 | `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
@@ -61,7 +62,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar |
 | `hostFrequencyCalibration` | ❌ | ✅ | ❌ | `RadioSetupDialog` (Calibration page), `AutomationServer::doFreqCal` | Shows the Calibration page and enables the `freqcal` bridge verb. Means "**the client** owns the frequency-error correction", not "this radio has an error" — every radio does. Flex is ❌ because it calibrates itself (`radio set cal_freq` / `pll_start`), and that surface stays in the Frequency Offset group on the Receive page. HL2 is ✅ because its 76.8 MHz NCO scale is a `localparam` in the bitstream (`radio.v` M2) and no register in the HPSDR map accepts a correction — see `docs/architecture/hl2-frequency-calibration.md` |
 | `persistsMemories` | ✅ | ❌ | ❌ | `LocalMemoryBank` engagement (#4590) | host-side memory bank vs radio-side slots — the bank's ONE shared document lives at `radio_settings (local, '', MemoryBank)` since RFC #4603 PR 6, covered by settings backup/export; legacy `memories.json` is a frozen import source |
-| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
+| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
 | `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | `invokeExtension` pre-check | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page |
 | `maxNotchFilters` | 1000 | 1024 | 0 | `MainWindow::applyCapabilitiesToUi`, `SpectrumWidget::setNotchCapabilities` | The sidebar `+TNF` button and the panadapter's add/remove-notch entries. **0 hides them.** Flex's figure is a UI sanity limit (neither FlexLib nor the wire declares one); HL2's is WDSP's real notch-database size |
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
@@ -115,6 +116,7 @@ So the claim is now tiered, and each tier has its own disconnected rule:
 | `hasRadioSideDsp` | the radio runs its own RX DSP at all | permissive (assume present) |
 | `hasLmsNoiseFilters` | ...and it has the WDSP LMS/FFT family | permissive — NRL/ANFL/ANFT predate the flag, and hiding them on a Flex the moment it disconnects would be a regression, not an honesty gain |
 | `hasManualNotch` | it has one operator-placed in-passband notch | **not** permissive — MN is a new button, and a permissive default would show it on every radio in the window before a backend reports, including the Flexes that notch with TNFs instead |
+| `hasHostNoiseBlanker` | **this host** blanks impulses in the radio's IQ, whatever the radio's own DSP does | **not** permissive — it only ever ADDs the NB button, so a permissive default would show NB on a radio claiming neither capability |
 
 `hasExtendedDsp` is a fourth, orthogonal tier (the 8000-series NRS/RNN/NRF).
 
@@ -142,6 +144,22 @@ The same correction applies to the other Flex-shaped voice controls, none of
 which are capability-gated: PROC and its NOR/DX/DX+ level drive `ClientComp`,
 and the Phone applet's TX low-cut/high-cut reaches a host modulator through
 `IRadioBackend::setTxFilter`.
+
+**NB is now the same correction applied to the receive side.** The button used
+to be gated on `hasRadioSideDsp` alongside NR and ANF, on the reasoning that
+`SliceModel::setNb` emits `slice set N nb=` and that wire text reaches nothing
+without a Flex command plane. True of the COMMAND; wrong about the CONTROL. On a
+direct-sampling backend the blanker the operator is asking for runs on **this
+host** — WDSP's ANB on the raw IQ, ahead of the demodulator, which is the only
+place an impulse can still be blanked before the bandpass smears it — so hiding
+NB removed a working control. `hasHostNoiseBlanker` is what a backend claims to
+say so, and `VfoWidget::applyRadioSideDspVisibility()` ORs it with
+`hasRadioSideDsp` rather than replacing it, because on a Flex the blanker really
+is the radio's.
+
+NR and ANF stay hidden on such a radio, and the asymmetry is honest rather than
+an oversight: WDSP has the stages (`anr`, `emnr`, `anf`) and nothing wires them
+up yet. They become visible when they do something, not when they could.
 
 Two consequences worth knowing. The graphic EQ and the compressor write into the
 **same** `ClientEq`/`ClientComp` objects the Aetherial strip edits, so the two

@@ -73,6 +73,43 @@ The receiver-index policy is only one half of the routing contract. Channel
    The route uses stable Flex slice IDs internally even if public TRX indexes
    shift after topology changes.
 
+6. **Eight commands carry no receiver index at all.**
+   `cw_macros_speed`, `cw_keyer_speed`, `cw_macros_delay`, `mon_volume`,
+   `mon_enable`, `cw_terminal`, `digl_offset` and `digu_offset` are global —
+   the value is the *first* argument, not the second. So is `volume`, and
+   `mic_level` / `tx_gain` are the AetherSDR extensions with the same shape.
+
+   This matters because the dispatcher derives GET-versus-SET from the
+   argument count (`isSet = args.size() >= 2`), which is the *trx-prefixed*
+   shape every per-slice verb uses. On a global verb that derivation is wrong
+   in both directions, and all eight carried the bug until #4867: the spec
+   form `mon_volume:50;` was read as a GET and the value silently discarded,
+   while `mon_volume:0,50;` was taken as a SET whose value was read from the
+   trx slot, setting the monitor gain to `0`. Both broadcast a well-formed
+   notification, so neither the sender nor a second client could tell.
+
+   These handlers therefore re-derive GET/SET from the argument list
+   themselves — **empty args = GET, otherwise SET reading the last
+   argument** — and both wire forms are accepted, the spec one and the legacy
+   trx-prefixed one.
+
+   **`mon_volume:0;` is a SET of 0, not a read.** A client written against
+   the trx-prefixed shape of the neighbouring verbs may send it meaning "read
+   receiver 0's monitor gain"; it will instead zero the monitor and the
+   operator will hear it. This is deliberate: silently refusing a legitimate
+   `0` — an ordinary thing for an operator to ask for — would be the same
+   undetectable-from-the-wire failure pointed the other way, and the client
+   can always read the value back. Send the bare `mon_volume;` to read.
+
+7. **Booleans are spelled `true` and `false`, and nothing else is accepted.**
+   Unparseable boolean arguments are dropped, exactly as unparseable numeric
+   ones are: `mute:0,yes;` used to become `false` and *unmute* the slice.
+
+   The two exceptions are `tune` and `keyer`, which key the transmitter.
+   There, anything that is not the word `true` still means **stop / key up**,
+   because dropping an unparseable stop would leave a keyed transmitter keyed.
+   Those two fail closed rather than fail silent (Constitution VI).
+
 ## Spot Click Notifications
 
 When a visible spot is clicked, AetherSDR broadcasts the click to every

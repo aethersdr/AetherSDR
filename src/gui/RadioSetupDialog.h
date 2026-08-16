@@ -33,6 +33,7 @@ class AntennaGeniusModel;
 class KiwiSdrManager;
 class AcomConnection;
 class SpeConnection;
+class VkampConnection;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -46,6 +47,7 @@ public:
                               KiwiSdrManager* kiwiSdrManager = nullptr,
                               AcomConnection* acom = nullptr,
                               SpeConnection* spe = nullptr,
+                              VkampConnection* vkamp = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void refreshFlexControlButtonActions();
@@ -77,6 +79,11 @@ signals:
     // persists it and pushes it to the running bridge, which then refuses every
     // mutating verb (#4188 area 6) — MCP clients can read but not drive.
     void automationBridgeReadOnlyChanged(bool readOnly);
+    // Fired when the user changes the VK3AMP hardware variant (600W/1000W/
+    // 2000W) in the Peripherals tab. The selection is persisted to
+    // PeripheralSettings before this fires; MainWindow re-reads it and
+    // pushes the new scale into VkampApplet::setVariant().
+    void vkampVariantChanged();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -137,6 +144,7 @@ private:
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     AcomConnection* m_acom{nullptr};
     SpeConnection* m_spe{nullptr};
+    VkampConnection* m_vkamp{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

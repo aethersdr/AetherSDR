@@ -250,6 +250,49 @@ reports symmetric cuts, and a pitch change does not move them).
   samples at or beyond full scale**. At a 65 dB ceiling: peak 2.664, 0.27%.
 - Mode vocabulary: `off/slow/med/fast` → WDSP RXA 0/2/3/4. WDSP's "long" (1)
   has no representation in the four-way UI control.
+- **The AGC is client-owned state and nothing on the radio can be asked for
+  it.** There is no AGC register in the HPSDR map — the whole loop is WDSP on
+  this host — so the operator's mode and threshold live in the client's
+  operating-state document or nowhere. They ride the RFC #4603 `Agc` domain as
+  typed universal fields (`RestoredRadioState::agcMode` /
+  `agcThreshold` — 0..100 operator units, NOT dB; the backend multiplies by
+  `kAgcCeilingDbPerUnit` to reach real dB), captured on every `setSliceAgc` and
+  seeded back onto **every** receiver by `Hl2Backend::seedReceiverAgc()`.
+- **"Flat" means ONE remembered pair, not one AGC.** The runtime control is
+  per-receiver — `setSliceAgc(sliceId, …)` resolves `ddcForSlice()` and writes a
+  single `Receiver`, and `emitSliceState()` publishes per-DDC — so an operator
+  running two receivers really can have RX1 on `slow`/40 and RX2 on `fast`/30
+  within a session. What is flat is the *memory*: one pair is captured and it is
+  seeded onto every receiver at the next connect, so that divergence does not
+  survive a restart. This is a deliberate product call (an operator's AGC is a
+  property of how they like to listen, like the TX cut points) rather than an
+  oversight, and it is worth stating plainly because "flat" on its own reads as
+  "there is only one AGC" and sends the next person debugging RX2 looking for a
+  bug. The pair that gets remembered is **the last one the operator set**, on
+  whichever receiver — `setSliceAgc()` records it, and `currentOperatingState()`
+  reads that rather than the transmit receiver. Reading the TX receiver instead
+  meant a change on RX2 fired the capture and then persisted RX1's untouched
+  value: the change that triggered the write was not the change that got
+  written.
+- **"At the next connect" means a NEW radio, not a returning one.** The seeding
+  runs from `connectRadio()` when the connect request's serial differs from the
+  last one seeded, or when `buildReceivers()` had no previous state to carry —
+  never on a plain auto-reconnect to the same radio. `buildReceivers()`
+  deliberately preserves receiver state across a rebuild and
+  `RadioModel::handRestoredStateToBackend()` re-hands the document before EVERY
+  connect, so seeding from `applyRestoredState()` meant a dropped link flattened
+  RX2's live AGC back onto the remembered pair while its mode and passband
+  survived — the sibling restore engineers around exactly that. Flat memory
+  across a restart is the design; flattening live receivers mid-session is a
+  loss. `applyRestoredState()` still resets the CAPTURE side (the remembered
+  pair belongs to the radio whose document it is), which is what keeps radio A's
+  AGC from being written back under radio B's identity.
+- The threshold's "not restored" sentinel is **-1, not 0**: 0 is a threshold the
+  operator can select, so a zero-means-absent encoding would quietly reset
+  anyone running the AGC-T at the bottom of the slider.
+- Restore is **flat**, not per band or per mode, unlike the drive and LNA maps.
+  Same reasoning as the TX cut points in §14.9: the control is one pair, and
+  making it jump on a band change would be a surprise, not a memory.
 
 ### AM/SAM hand back a DC pedestal, and nothing upstream removes it
 
@@ -349,6 +392,7 @@ apart from that audit loses the point.
 | 13 | RX filter set via `SetRXABandpassFreqs` alone, leaving the NBP stage — the filter actually in circuit — untouched | No sideband selection and no filtering AT ALL; 0 dB rejection of a tone outside the passband | `86a3d27b` |
 | 14 | HPSDR wire IQ handedness is opposite to WDSP's | USB demodulated the lower sideband and LSB the upper — audibly swapped, while the panadapter looked correct | `79c54266` |
 | 15 | AM in neither filter-polarity family | Switching to AM kept an SSB passband that filters the carrier OUT, so the envelope detector distorts rather than going quiet | `2996f0eb` |
+| 16 | AGC reached the backend but **nothing remembered or echoed it** — `setSliceAgc` never called `notifyOperatingStateChanged()`, no `Agc` domain existed, and `emitSliceState` never published the pair | Every launch reopened the WDSP channel on `med`/65; the operator's AGC was gone, and a restored value would have been invisible anyway because the applet kept showing `SliceModel`'s own defaults | #4909 |
 
 **Gap 13 is the second instance of the §2 lesson** — a plausible low-level API
 used where both reference clients use the canonical composite one

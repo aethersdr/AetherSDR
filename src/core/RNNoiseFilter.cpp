@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace AetherSDR {
@@ -18,13 +19,16 @@ Q_LOGGING_CATEGORY(lcRn2, "aether.rn2")
 // RNNoise frame size: 480 samples at 48kHz = 10ms
 static constexpr int FRAME_SIZE = 480;
 
-RNNoiseFilter::RNNoiseFilter(OutputMode outputMode)
+RNNoiseFilter::RNNoiseFilter(OutputMode outputMode, RateDomain rateDomain)
     : m_outputMode(outputMode)
+    , m_rateDomain(rateDomain)
 {
     for (int channel = 0; channel < processingChannels(); ++channel) {
         m_states[channel] = rnnoise_create(nullptr);
-        m_up[channel] = std::make_unique<Resampler>(24000, 48000);
-        m_down[channel] = std::make_unique<Resampler>(48000, 24000);
+        if (m_rateDomain == RateDomain::Legacy24k) {
+            m_up[channel] = std::make_unique<Resampler>(24000, 48000);
+            m_down[channel] = std::make_unique<Resampler>(48000, 24000);
+        }
     }
 }
 
@@ -60,18 +64,29 @@ void RNNoiseFilter::reset()
             rnnoise_destroy(m_states[channel]);
         const bool inUse = channel < channels;
         m_states[channel] = inUse ? rnnoise_create(nullptr) : nullptr;
-        m_up[channel] = inUse ? std::make_unique<Resampler>(24000, 48000) : nullptr;
-        m_down[channel] = inUse ? std::make_unique<Resampler>(48000, 24000) : nullptr;
-        m_inAccum[channel].clear();
+        const bool needsResamplers = inUse
+            && m_rateDomain == RateDomain::Legacy24k;
+        m_up[channel] = needsResamplers
+            ? std::make_unique<Resampler>(24000, 48000)
+            : nullptr;
+        m_down[channel] = needsResamplers
+            ? std::make_unique<Resampler>(48000, 24000)
+            : nullptr;
+        m_inAccum[channel].resize(0);
         m_input24k[channel].clear();
         m_processed48k[channel].clear();
         m_processed48kFloat[channel].clear();
     }
-    m_outAccum.clear();
+    m_outAccum.resize(0);
 }
 
 QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
 {
+    if (m_rateDomain != RateDomain::Legacy24k) {
+        qCWarning(lcRn2)
+            << "RNNoiseFilter: 24 kHz process() called on native-48 kHz instance";
+        return pcm24kStereo;
+    }
     if (!isValid() || pcm24kStereo.isEmpty())
         return pcm24kStereo;
 
@@ -147,7 +162,7 @@ QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
                     reinterpret_cast<const char*>(&accumData[consumedSamples]),
                     leftoverSamples * static_cast<int>(sizeof(float)));
             } else {
-                m_inAccum[channel].clear();
+                m_inAccum[channel].resize(0);
             }
 
             // 3. Scale RNNoise output back to [-1, 1], then downsample each
@@ -209,6 +224,112 @@ QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
 
     // Not enough output yet — return silence (only happens during startup)
     return QByteArray(needed, '\0');
+}
+
+int RNNoiseFilter::process48kStereo(
+    const QByteArray& pcm48kStereo, QByteArray& output)
+{
+    output.resize(0);
+    if (m_rateDomain != RateDomain::Native48k) {
+        qCWarning(lcRn2)
+            << "RNNoiseFilter: process48kStereo() requires native-48 kHz rate domain";
+        output.resize(pcm48kStereo.size());
+        if (!pcm48kStereo.isEmpty()) {
+            std::memcpy(output.data(), pcm48kStereo.constData(),
+                        pcm48kStereo.size());
+        }
+        return output.size() / (2 * static_cast<int>(sizeof(float)));
+    }
+    if (!isValid() || pcm48kStereo.isEmpty()) {
+        output.resize(pcm48kStereo.size());
+        if (!pcm48kStereo.isEmpty()) {
+            std::memcpy(output.data(), pcm48kStereo.constData(),
+                        pcm48kStereo.size());
+        }
+        return output.size() / (2 * static_cast<int>(sizeof(float)));
+    }
+
+    const int stereoFrames =
+        pcm48kStereo.size() / (2 * static_cast<int>(sizeof(float)));
+    if (stereoFrames <= 0) {
+        return 0;
+    }
+
+    const auto* src = reinterpret_cast<const float*>(pcm48kStereo.constData());
+    const int channels = processingChannels();
+    int completeFrames = std::numeric_limits<int>::max();
+    std::array<int, 2> totalAccumSamples{0, 0};
+
+    for (int channel = 0; channel < channels; ++channel) {
+        const int start = m_inAccum[channel].size() / static_cast<int>(sizeof(float));
+        m_inAccum[channel].resize(
+            (start + stereoFrames) * static_cast<int>(sizeof(float)));
+        auto* accum = reinterpret_cast<float*>(m_inAccum[channel].data());
+        for (int frame = 0; frame < stereoFrames; ++frame) {
+            const float sample = channels == 2
+                ? src[frame * 2 + channel]
+                : 0.5f * (src[frame * 2] + src[frame * 2 + 1]);
+            accum[start + frame] = sample * 32768.0f;
+        }
+        totalAccumSamples[channel] = start + stereoFrames;
+        completeFrames = std::min(
+            completeFrames, totalAccumSamples[channel] / FRAME_SIZE);
+    }
+
+    if (completeFrames > 0) {
+        const int consumedSamples = completeFrames * FRAME_SIZE;
+        for (int channel = 0; channel < channels; ++channel) {
+            m_processed48k[channel].resize(consumedSamples);
+            auto* accum = reinterpret_cast<float*>(m_inAccum[channel].data());
+            for (int frame = 0; frame < completeFrames; ++frame) {
+                float* frameOutput =
+                    &m_processed48k[channel][frame * FRAME_SIZE];
+                float* input = &accum[frame * FRAME_SIZE];
+                if (m_dryMix > 0.0f) {
+                    rnnoise_process_frame_with_dry_mix(
+                        m_states[channel], frameOutput, input, m_dryMix);
+                } else {
+                    rnnoise_process_frame(m_states[channel], frameOutput, input);
+                }
+            }
+
+            const int leftover = totalAccumSamples[channel] - consumedSamples;
+            if (leftover > 0) {
+                std::memmove(accum, &accum[consumedSamples],
+                             leftover * sizeof(float));
+                m_inAccum[channel].resize(
+                    leftover * static_cast<int>(sizeof(float)));
+            } else {
+                m_inAccum[channel].resize(0);
+            }
+        }
+
+        const int oldOutputSamples =
+            m_outAccum.size() / static_cast<int>(sizeof(float));
+        m_outAccum.resize(
+            (oldOutputSamples + consumedSamples * 2)
+            * static_cast<int>(sizeof(float)));
+        auto* dst = reinterpret_cast<float*>(m_outAccum.data())
+            + oldOutputSamples;
+        for (int frame = 0; frame < consumedSamples; ++frame) {
+            const float left = m_processed48k[0][frame] / 32768.0f;
+            const float right = channels == 2
+                ? m_processed48k[1][frame] / 32768.0f
+                : left;
+            dst[frame * 2] = left;
+            dst[frame * 2 + 1] = right;
+        }
+    }
+
+    const int needed = pcm48kStereo.size();
+    if (m_outAccum.size() >= needed) {
+        output.resize(needed);
+        std::memcpy(output.data(), m_outAccum.constData(), needed);
+        m_outAccum.remove(0, needed);
+        return stereoFrames;
+    }
+    output.fill('\0', needed);
+    return stereoFrames;
 }
 
 } // namespace AetherSDR
