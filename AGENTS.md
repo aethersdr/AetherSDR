@@ -223,9 +223,9 @@ Paths in `tests.cmake` are relative to the **repository root**
 (`tests/foo_test.cpp`, `src/gui/Bar.cpp`) because it is pulled in with
 `include()`, not `add_subdirectory()`. Do not convert it to a subdirectory to
 "tidy it up": `include()` keeps the root's directory scope, which is what keeps
-those paths — and nine `${CMAKE_CURRENT_SOURCE_DIR}` references pointing at
+those paths — and ten `${CMAKE_CURRENT_SOURCE_DIR}` references pointing at
 `tools/` and `docs/` — resolving correctly. Under `add_subdirectory` the source
-paths fail loudly and those nine fail *silently*. The file's header says all of
+paths fail loudly and those ten fail *silently*. The file's header says all of
 this at the point of use.
 
 A test that touches `AppSettings` also needs its target name in the

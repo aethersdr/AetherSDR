@@ -73,7 +73,13 @@ def main() -> int:
             continue
         # run_*.cmake / verify_*.cmake under tests/ are ctest DRIVER scripts —
         # they are invoked BY a test, they do not declare one.
-        if rel.parts[:1] == ("tests",):
+        #
+        # Matched by name, not by directory. A directory-wide skip would exempt
+        # everything under tests/, including a future tests/CMakeLists.txt —
+        # which is precisely the file .github/CODEOWNERS warns about someone
+        # adding, and which the configure-time guard in tests/tests.cmake does
+        # not cover either, since that one scans only the root listfile.
+        if rel.parent == Path("tests") and rel.name.startswith(("run_", "verify_")):
             continue
         code = COMMENT.sub("", path.read_text(encoding="utf-8", errors="replace"))
         for match in TEST_TARGET.finditer(code):

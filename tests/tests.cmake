@@ -3,13 +3,20 @@
 # Every test target in the project is declared here. Split out of the root
 # CMakeLists.txt, which this cut roughly in half.
 #
+# Two things in here are NOT tests: ax25_replay and ax25_session_analyze are
+# EXCLUDE_FROM_ALL analysis tools. They moved with their neighbourhood rather
+# than being singled out — they sit in AETHER_SETTINGS_CONSUMERS alongside the
+# test targets, and separating them would have made the move non-verbatim for
+# no gain. If a third such tool appears, that is the point to reconsider
+# whether they want a file of their own.
+#
 # Pulled in by `include(tests/tests.cmake)` from the root file, NOT by
 # add_subdirectory(). That is deliberate and load-bearing:
 #
 #   include() executes in the CALLER's directory scope, so CMAKE_CURRENT_SOURCE_DIR
 #   is still the repository root here. Every relative path below — tests/foo.cpp,
 #   src/gui/Bar.cpp, target_include_directories(... PRIVATE src) — resolves exactly
-#   as it did when these lines lived in the root file, and the nine
+#   as it did when these lines lived in the root file, and the ten
 #   ${CMAKE_CURRENT_SOURCE_DIR} references in this file (tools/*.py,
 #   docs/automation/*.csv, AETHER_SOURCE_DIR) still point at the repo root.
 #
@@ -36,7 +43,10 @@
 # scope, so a command override could not tell the two files apart. Scanning from
 # THIS file (rather than from the root file scanning itself) is also what keeps
 # the patterns below from matching their own source text.
-file(READ "${CMAKE_SOURCE_DIR}/CMakeLists.txt" _aether_root_listfile)
+# CMAKE_CURRENT_LIST_DIR, not CMAKE_SOURCE_DIR: this resolves relative to THIS
+# file, so it keeps pointing at the right listfile if the project is ever
+# consumed from a superproject, where CMAKE_SOURCE_DIR is the parent's.
+file(READ "${CMAKE_CURRENT_LIST_DIR}/../CMakeLists.txt" _aether_root_listfile)
 string(REGEX REPLACE "#[^\n]*" "" _aether_root_code "${_aether_root_listfile}")
 string(REGEX MATCHALL "add_executable[ \t]*\\([A-Za-z0-9_-]+_test"
        _aether_stray_targets "${_aether_root_code}")
