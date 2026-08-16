@@ -88,9 +88,12 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     # never gets far enough to run anything. That is what took thread-sanitizer
     # coverage to zero for ten consecutive weekly runs (issue #4360).
     #
-    # Keyed off the flags actually arriving from the environment rather than off
-    # a known list of sanitizer names, so a future MSan/HWASan job inherits the
-    # right behaviour without editing this function.
+    # Keyed off the flags actually arriving from the environment, but matched
+    # against a DELIBERATELY NARROW list of sanitizer names — see the last
+    # paragraph for why it cannot be "any sanitizer". The list is thread,
+    # memory and hwaddress: the three that cannot coexist with address. A new
+    # sanitizer that also conflicts has to be added here; the alternation is
+    # the whole contract, so keep it and the message below in step.
     #
     # BOTH language flags are checked. Most of these targets are C, but Qt's
     # AUTOMOC generates a C++ TU (mocs_compilation.cpp) for each of them —
@@ -107,18 +110,25 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     # silently lose the ASan coverage this helper exists to give them, in the
     # one job that currently reports real results. ASan+UBSan arriving from the
     # environment is what we add anyway, so there is nothing to stand down for;
-    # only a sanitizer that cannot coexist with address (thread, memory) forces
-    # the retreat.
+    # only a sanitizer that cannot coexist with address (thread, memory,
+    # hwaddress) forces the retreat.
+    #
+    # `[a-z,]*` matches neither `-` nor `=` nor space, which is what keeps the
+    # alternation from over-reaching: `-fno-sanitize=thread` has no
+    # `-fsanitize=` substring, `-fsanitize=kernel-address` stops at the hyphen,
+    # and `-fsanitize=address` does not contain `hwaddress`. Reordered lists
+    # (`-fsanitize=undefined,thread`) still match.
     set(_aether_dv_external_sanitizer OFF)
     foreach(_aether_dv_flags "${CMAKE_CXX_FLAGS}" "${CMAKE_C_FLAGS}")
-        if(_aether_dv_flags MATCHES "-fsanitize=[a-z,]*(thread|memory)")
+        if(_aether_dv_flags MATCHES "-fsanitize=[a-z,]*(thread|memory|hwaddress)")
             set(_aether_dv_external_sanitizer ON)
         endif()
     endforeach()
     if(_aether_dv_external_sanitizer)
         message(STATUS
-            "Digital-voice tests: a conflicting sanitizer (thread/memory) is in "
-            "the C/CXX flags — not adding ASan+UBSan, they cannot coexist")
+            "Digital-voice tests: a conflicting sanitizer "
+            "(thread/memory/hwaddress) is in the C/CXX flags — not adding "
+            "ASan+UBSan, they cannot coexist")
     endif()
     # Cached so the function does not depend on its caller's scope: today every
     # call site is in this file, but a function reading a plain variable set
