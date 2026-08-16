@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 193 touchpoint headers (163 core, 30 models) — 144/193 tagged, 0/193 converted.
+**Totals:** 195 touchpoint headers (165 core, 30 models) — 144/195 tagged, 0/195 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -15,7 +15,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherClockSettings.h` | 1 | — | unconverted |
 | `core/AetherDspModePolicy.h` | 2 | — | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
-| `core/AppSettings.h` | 99 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
+| `core/AppSettings.h` | 102 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
 | `core/AudioEngine.h` | 46 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
 | `core/AudioOutputRouter.h` | 1 | ui-support — Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state | unconverted |
 | `core/AutomationBridgeSettings.h` | 3 | — | unconverted |
@@ -71,7 +71,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/KiwiSdrProtocol.h` | 9 | vendor(kiwi) — KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting | unconverted |
 | `core/KiwiSdrTxMutePolicy.h` | 2 | — | unconverted |
 | `core/LocationAddressResolver.h` | 1 | — | unconverted |
-| `core/LogManager.h` | 28 | ui-support — App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state. | unconverted |
+| `core/LogManager.h` | 30 | ui-support — App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state. | unconverted |
 | `core/MacMicPermission.h` | 1 | ui-support — macOS mic permission dialog at app startup; OS permission plumbing, no radio state — belongs in the client app | unconverted |
 | `core/MaidenheadLocator.h` | 4 | ui-support — Header-only Maidenhead grid/lat-lon/distance/bearing math; stateless shared utility, not a protocol surface | unconverted |
 | `core/MemoryCsvCompat.h` | 1 | vendor(flex) — SmartSDR memory-CSV import/export codec (exact 22-col format); Flex ecosystem interchange, not core protocol. | unconverted |
@@ -118,6 +118,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SettingsPaths.h` | 2 | — | unconverted |
 | `core/SettingsSanitizer.h` | 2 | — | unconverted |
 | `core/ShortcutManager.h` | 4 | ui-support — Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks — client input plumbing, no radio state. | unconverted |
+| `core/ShutdownTrace.h` | 2 | — | unconverted |
 | `core/SignalClassifier.h` | 1 | universal — ONNX CNN voice/carrier classifier over spectrogram patches; radio-agnostic engine DSP/analysis feature | unconverted |
 | `core/SmartLinkClient.h` | 3 | vendor(flex) — SmartLink WAN client: FlexRadio Auth0 login + TLS to smartlink.flexradio.com, WAN radio list/hole-punch. | unconverted |
 | `core/SpeConnection.h` | 2 | peripheral(spe) — Direct serial/ser2net client for the SPE Expert amplifier line (1.5K-FA primary target, protocol shared across 1.3K-FA/2K-FA) — a standalone USB/RS-232 accessory with no FlexRadio awareness at all, same precedent as core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/spe-expert-amplifier-design.md. | unconverted |
@@ -130,7 +131,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SupportBundle.h` | 1 | ui-support — Diagnostics bundle: archives logs/sysinfo and opens email client; client-side support tooling, not radio state | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 2 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 134 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 136 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | — | unconverted |
 | `core/TxKeyingMarker.h` | 6 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
 | `core/UlanziDialBackend.h` | 3 | ui-support — Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state | unconverted |
@@ -160,6 +161,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/hl2/Hl2FreqCal.h` | 1 | — | unconverted |
 | `core/backends/hl2/MetisProtocol.h` | 1 | — | unconverted |
 | `core/backends/icom/IcomCredentials.h` | 1 | — | unconverted |
+| `core/backends/icom/IcomModels.h` | 1 | — | unconverted |
 | `core/backends/icom/IcomSettings.h` | 1 | — | unconverted |
 | `core/backends/sim/NoiseMixer.h` | 1 | — | unconverted |
 | `core/backends/sim/SimBackend.h` | 3 | — | unconverted |

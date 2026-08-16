@@ -231,7 +231,7 @@ this at the point of use.
 A test that touches `AppSettings` also needs its target name in the
 `AETHER_SETTINGS_CONSUMERS` list at the bottom of `tests.cmake`.
 
-Current version: **26.8.2**.
+Current version: **26.8.3**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
