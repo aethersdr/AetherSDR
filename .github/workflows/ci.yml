@@ -38,17 +38,43 @@ jobs:
     # the cache and the compiler side.
     env:
       CCACHE_DIR: /ccache
-      # Sized from measurement, not guesswork: a full cold build of this
-      # configuration settles at ~0.5 GB. 1000M leaves headroom without wasting
-      # budget against the repo's 10 GB cache allowance, where an oversized cap
-      # risks LRU-evicting the Qt / FFTW / DeepFilterNet entries the other jobs
-      # depend on. (check-macos runs at 500M, but on a lighter configuration —
-      # no ENABLE_NVIDIA_AFX.)
+      # Raised 1000M -> 2000M. This cache was FULL and evicting internally: the
+      # last green main run before this change reported
       #
-      # This cap used to carry more weight than it could bear: entry COUNT, not
-      # entry size, was the binding constraint, and only main writes an entry
-      # now. See "Compiler-cache strategy" at the bottom of this file.
-      CCACHE_MAXSIZE: 1000M
+      #   Cache size (GB):  1.0 /  1.0 (95.41%)   Hits 2082/2210 (94.21%)
+      #
+      # A cold build settles at ~0.5 GB, so 1000M looked like 2x headroom — but
+      # this entry does not hold one build, it accumulates objects across ~9.2
+      # main merges a day. At 1.0 GB it was continuously discarding its own
+      # oldest objects, so it only ever represented a narrow window of recent
+      # main, and a PR branched from a day-old main took misses on objects that
+      # had fallen out of ccache rather than out of the GitHub cache.
+      #
+      # Raised for THIS job only. The other two are not constrained and would
+      # pay transfer time for nothing — do not raise them on symmetry grounds:
+      #   check-macos     0.3 / 0.5 GB (57.63%)
+      #   check-windows   628 MiB / 1 GiB (61%)
+      #
+      # 2000M, not the 5000M the headroom would allow, because the binding
+      # constraint is TRANSFER TIME, not storage. Entries compress to ~55% of
+      # the ccache directory (1.0 GB of ccache -> a 556 MiB entry), and restore
+      # cost scales with it: 12 s at 556 MiB today, ~24 s at 2000M, ~60 s at
+      # 5000M — paid on EVERY run, against a benefit that only materialises
+      # for misses that were eviction-caused rather than genuinely new source.
+      # This is the reversible first step; read the `cleanups` counter and the
+      # hit rate in the "ccache stats" step before going further.
+      #
+      # Budget check at 2000M, against the repo's 10 GB cache allowance:
+      #   Linux    ~1.1 GB entry x 2 retained  = 2.2 GB
+      #   Windows  ~0.32 GB x 2                = 0.6 GB
+      #   macOS    ~0.14 GB x 2                = 0.3 GB
+      #   deps (Qt 1.3 GB, DeepFilterNet, FFTW, qtkeychain)
+      #                                        ~ 2.0 GB
+      #                                        -------
+      #                                        ~ 5.1 GB
+      # See "Compiler-cache strategy" at the bottom of this file for why only
+      # main writes an entry, and cache-cleanup.yml for what prunes the rest.
+      CCACHE_MAXSIZE: 2000M
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
