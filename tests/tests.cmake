@@ -77,7 +77,60 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_digital_voice_waveform_no_args.cmake
     )
 
+    # These targets opt IN to ASan+UBSan locally, so a developer running them
+    # by hand gets the checks without configuring anything.
+    #
+    # STAND DOWN when the build is already being compiled under a sanitizer of
+    # its own. ASan and TSan are mutually exclusive — `cc1plus: error:
+    # '-fsanitize=thread' is incompatible with '-fsanitize=address'` — so
+    # adding ASan unconditionally here breaks the TSan CI job at COMPILE time,
+    # and it breaks it for the whole repo, not just these 13 targets: the job
+    # never gets far enough to run anything. That is what took thread-sanitizer
+    # coverage to zero for ten consecutive weekly runs (issue #4360).
+    #
+    # Keyed off the flags actually arriving from the environment rather than off
+    # a known list of sanitizer names, so a future MSan/HWASan job inherits the
+    # right behaviour without editing this function.
+    #
+    # BOTH language flags are checked. Most of these targets are C, but Qt's
+    # AUTOMOC generates a C++ TU (mocs_compilation.cpp) for each of them —
+    # CMAKE_AUTOMOC is ON globally — and that generated file is the one CI
+    # actually dies on, compiled by c++ with CMAKE_CXX_FLAGS. Today's workflow
+    # sets only CXXFLAGS, so CXX alone would be enough; checking CFLAGS too
+    # means a job that sets only CFLAGS does not quietly reintroduce this.
+    #
+    # ONLY A CONFLICTING SANITIZER DISARMS THIS, not any sanitizer at all.
+    # The distinction is load-bearing and the naive test gets it backwards:
+    # sanitizers.yml sets CXXFLAGS but never CFLAGS, so on the ASAN job a
+    # blanket "an external sanitizer is present" test would stand this opt-in
+    # down and nothing would replace it for the C sources — the .c files would
+    # silently lose the ASan coverage this helper exists to give them, in the
+    # one job that currently reports real results. ASan+UBSan arriving from the
+    # environment is what we add anyway, so there is nothing to stand down for;
+    # only a sanitizer that cannot coexist with address (thread, memory) forces
+    # the retreat.
+    set(_aether_dv_external_sanitizer OFF)
+    foreach(_aether_dv_flags "${CMAKE_CXX_FLAGS}" "${CMAKE_C_FLAGS}")
+        if(_aether_dv_flags MATCHES "-fsanitize=[a-z,]*(thread|memory)")
+            set(_aether_dv_external_sanitizer ON)
+        endif()
+    endforeach()
+    if(_aether_dv_external_sanitizer)
+        message(STATUS
+            "Digital-voice tests: a conflicting sanitizer (thread/memory) is in "
+            "the C/CXX flags — not adding ASan+UBSan, they cannot coexist")
+    endif()
+    # Cached so the function does not depend on its caller's scope: today every
+    # call site is in this file, but a function reading a plain variable set
+    # elsewhere would silently re-arm if it were ever called from another
+    # directory scope.
+    set(AETHER_DV_EXTERNAL_SANITIZER "${_aether_dv_external_sanitizer}"
+        CACHE INTERNAL "A conflicting sanitizer arrived in CMAKE_{C,CXX}_FLAGS")
+
     function(aether_enable_digital_voice_test_sanitizers target)
+        if(AETHER_DV_EXTERNAL_SANITIZER)
+            return()
+        endif()
         if(NOT WIN32 AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
             target_compile_options(${target} PRIVATE
                 -fsanitize=address,undefined
