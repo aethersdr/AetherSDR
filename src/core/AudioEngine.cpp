@@ -2757,7 +2757,9 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     tx["error"] = txRunning ? audioErrorName(m_audioSource->error()) : QStringLiteral("NoError");
     tx["sample_rate_hz"] = txRunning ? QJsonValue(m_txInputRate) : QJsonValue();
     tx["channel_count"] = txRunning ? QJsonValue(m_txInputChannels) : QJsonValue();
-    tx["sample_format"] = txRunning ? QStringLiteral("Int16") : QString();
+    tx["sample_format"] = txRunning
+        ? AudioSummaryLogger::sampleFormatName(m_txInputFormat)
+        : QString();
     const DeviceDiagnostics::TxAudioResamplingRoute txResampling =
         DeviceDiagnostics::txAudioResamplingRoute(
             m_radeMode.load(std::memory_order_acquire),
@@ -7414,6 +7416,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // for the separate RADE branch.
     m_txInputRate = fmt.sampleRate();
     m_txInputChannels = fmt.channelCount();
+    m_txInputFormat = fmt.sampleFormat();
     m_txInputMono = (m_txInputChannels == 1);
     m_radeTxNeedsResample = (m_txInputRate != DEFAULT_SAMPLE_RATE);
 
@@ -7548,6 +7551,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
                                        .arg(ch));
                     m_txInputRate = rate;
                     m_txInputChannels = ch;
+                    m_txInputFormat = fmt.sampleFormat();
                     m_txInputMono = (m_txInputChannels == 1);
                     m_radeTxNeedsResample = (rate != DEFAULT_SAMPLE_RATE);
                     if (m_radeTxNeedsResample) {
@@ -7700,6 +7704,7 @@ void AudioEngine::stopTxStream()
     m_txInputChannels = 2;
     m_txInputMono = false;
     m_txInputRate = DEFAULT_SAMPLE_RATE;
+    m_txInputFormat = QAudioFormat::Int16;
     m_radeTxNeedsResample = false;
     m_txMicChannelState.reset();
     m_lastTxMicChannelLog.invalidate();

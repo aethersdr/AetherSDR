@@ -995,6 +995,11 @@ private:
     bool  m_txInputMono{false};          // TX: legacy convenience mirror of m_txInputChannels == 1
     int   m_txInputChannels{2};          // TX: actual negotiated input channel count
     int   m_txInputRate{24000};          // TX: actual input sample rate
+    // TX: actual negotiated input sample format. Int16 is the first ladder rung
+    // for mic capture, but a Float32-only virtual driver legitimately lands on
+    // the Float fallback (#1090), so the support snapshot must report what was
+    // negotiated rather than assume the common case.
+    QAudioFormat::SampleFormat m_txInputFormat{QAudioFormat::Int16};
     TxMicChannelNormalizer::ChannelMode m_txMicChannelMode{
         TxMicChannelNormalizer::ChannelMode::Auto};
     TxMicChannelNormalizer::AutoState m_txMicChannelState;
