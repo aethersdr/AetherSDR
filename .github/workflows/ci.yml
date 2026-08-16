@@ -391,6 +391,13 @@ jobs:
   # 9.18 GB of the 10 GB budget across 3471 entries, LRU-evicting the shared
   # entries and reinforcing the miss.
   #
+  # Read that alongside "Compiler-cache strategy" at the bottom of this file:
+  # the same ref-scoping fact ("a PR may only read its base branch's cache")
+  # later turned out to be wasting most of the budget through the DIRECTORY
+  # caches too, not just the per-object backend this paragraph retired. Same
+  # root cause, two symptoms, fixed years apart — which is why the note below
+  # spells out the rule rather than just the fix.
+  #
   # The exact-key requirement is what makes that fatal rather than merely
   # lossy: any key drift is a total miss with no fallback. The Linux build
   # avoids it by caching a ccache DIRECTORY with prefix `restore-keys:` — it
@@ -408,9 +415,11 @@ jobs:
       # Local disk cache, not the GHA backend — see the note above. D: is the
       # fast runner volume and the one the workspace already lives on.
       SCCACHE_DIR: D:\sccache
-      # Matches ccache's cap on the Linux build, and for the same reason: every
-      # run writes a fresh cache entry, so budget pressure here is about entry
-      # size × count against the repo's 10 GB ceiling.
+      # Left at 1G. The Linux ccache was raised to 2000M because it was
+      # measurably full (1.0/1.0 GB, 95.41%); this one measured 628 MiB of 1 GiB
+      # on the same run, so raising it would buy nothing and cost transfer time
+      # on every restore. Do not raise the three caps together on symmetry
+      # grounds — check the stats step first.
       SCCACHE_CACHE_SIZE: 1G
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -963,14 +972,23 @@ jobs:
 #   `sccache --stop-server` on Windows — the server holds cache files open.
 # - Do not add an exact-match key to the RESTORE steps. The prefix fallback is
 #   the mechanism; an exact key that never matches just adds a lookup.
-# - Two kinds of dead entry are swept by .github/workflows/cache-cleanup.yml,
-#   and both matter because the 7-day retention is NOT configurable, so an
-#   entry that stops being read still costs budget for a week:
-#     * PR-scoped caches from the other steps (Qt, FFTW, DeepFilterNet,
-#       qtkeychain), deleted when the PR closes;
-#     * SUPERSEDED main entries. Restores resolve to the most recent match, so
-#       run N's cache is unreachable the moment run N+1 saves. Left alone, main
-#       writes ~1.0 GiB x ~9.2 runs/day and would pin the repo at its allowance
-#       on its own. That job prunes each prefix to the newest 2.
-#   If you add a compiler cache here, add its key prefix to that job's
-#   PREFIXES list or it will accumulate silently.
+# - SUPERSEDED main entries are swept by .github/workflows/cache-cleanup.yml.
+#   This matters because the 7-day retention is NOT configurable: restores
+#   resolve to the most recent match, so run N's cache is unreachable the moment
+#   run N+1 saves, and an unreachable entry is never accessed again — so nothing
+#   refreshes its LRU position and nothing deletes it. Left alone, main writes
+#   ~1.0 GiB x ~9.2 runs/day and would pin the repo at its allowance on its own.
+#   That job prunes each prefix to the newest 2.
+# - IF YOU ADD A run_id-KEYED COMPILER CACHE IN ANY WORKFLOW, add its key prefix
+#   to that job's PREFIXES list. Note "any workflow", not "this file": the first
+#   version of that list was written as "one prefix per compiler cache in
+#   ci.yml" and duly missed system-libs-canary.yml's ccache-sid-canary-, which
+#   is the same run_id-keyed pattern on the same push:main trigger. The scope
+#   that matters is the repository's 10 GB allowance, not this file's share.
+# - PR-scoped caches (Qt, FFTW, DeepFilterNet, qtkeychain on refs/pull/N/merge)
+#   are NOT swept. A job for them was written and pulled before merge: a
+#   `pull_request` trigger gets a read-only token on fork PRs and cannot be
+#   elevated, and 22 of 25 open PRs are forks. It may also prove unnecessary —
+#   PRs only WRITE those when the key is not already readable, which was itself
+#   a symptom of main's copies being evicted by the churn the split above
+#   removes. Deferred to a follow-up that can measure it first.
