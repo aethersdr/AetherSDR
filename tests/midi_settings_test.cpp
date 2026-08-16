@@ -193,8 +193,14 @@ int main(int argc, char** argv)
         validator);
     ok &= expect(rLeds.ok() && rLeds.importedCount == 1,
                  "a vendor-dialect LEDs section doesn't fail the import");
-    ok &= expect(rLeds.skippedUnknownParam.size() == 2,
-                 "LEDs rows are named skips, not file-level errors");
+    // Reported as one summary per feedback section rather than one line per
+    // row: every row under a known non-binding header is the same kind of
+    // thing, so naming each would flood the details list on a real device
+    // without telling the operator anything the first line didn't.
+    ok &= expect(rLeds.skippedUnknownParam.size() == 1
+                     && rLeds.skippedUnknownParam.first().contains("LEDs section")
+                     && rLeds.skippedUnknownParam.first().contains("2 row"),
+                 "a LEDs section is summarized once, with its row count");
 
     // A real device has one row per LED; the details list should name the
     // target once rather than once per row.
@@ -208,8 +214,9 @@ int main(int argc, char** argv)
                         "L3=txled\n"
                         "L4=txled\n"),
         validator);
-    ok &= expect(rLedsMany.ok() && rLedsMany.skippedUnknownParam.size() == 1,
-                 "repeated LEDs rows collapse to one named skip");
+    ok &= expect(rLedsMany.ok() && rLedsMany.skippedUnknownParam.size() == 1
+                     && rLedsMany.skippedUnknownParam.first().contains("4 row"),
+                 "repeated LEDs rows collapse to one skip that counts them");
 
     // Two functions on ONE MIDI source: MidiControlManager indexes by
     // MidiBinding::key(), so importing both would leave the earlier one
@@ -360,6 +367,184 @@ int main(int argc, char** argv)
         fakeHome.path() + "/no-such-dir/out.xml",
         settings.loadProfile("CTR2-Test_v1_0"));
     ok &= expect(!exportFail.ok(), "export to an unwritable path reports an error");
+
+    // An empty set must not report success: it serializes to a childless
+    // <MidiProfile/> that importProfile() rejects, so "exported OK" would
+    // hand the caller a file that cannot come back.
+    const auto exportEmpty =
+        settings.exportProfile(fakeHome.path() + "/empty.xml", QVector<MidiBinding>{});
+    ok &= expect(!exportEmpty.ok() && exportEmpty.exportedCount == 0,
+                 "exporting an empty binding set is refused, not written as a stub");
+
+    // ── Non-regular files: the size cap cannot see them ─────────────────────
+    //
+    // QFile::size() reports 0 for character devices, FIFOs and most /proc
+    // entries, so a size-based cap lets exactly the files with no end through.
+    // /dev/null is the safe representative: a character device that reads EOF
+    // immediately, so this pins the guard with no chance of hanging the suite
+    // the way /dev/zero or a FIFO would. Asserting the *specific* message
+    // matters — a bare !ok() check would also pass on "couldn't open".
+#ifdef Q_OS_UNIX
+    if (QFile::exists(QStringLiteral("/dev/null"))) {
+        const auto rDev = settings.importProfile(QStringLiteral("/dev/null"), validator);
+        ok &= expect(!rDev.ok() && rDev.importedCount == 0,
+                     "a character device is refused, not read");
+        ok &= expect(rDev.errors.size() == 1
+                         && rDev.errors.first().contains("not a regular file"),
+                     "the non-regular-file refusal names the reason");
+    }
+#endif
+    const auto rDir = settings.importProfile(fakeHome.path(), validator);
+    ok &= expect(!rDir.ok() && rDir.errors.size() == 1
+                     && rDir.errors.first().contains("not a regular file"),
+                 "a directory is refused before any read");
+
+    // ── ".map" section headers: decorated, commented, unknown ───────────────
+
+    // Vendors decorate headers. Matching the whole header line demoted these
+    // rows to "not a binding row" and lost both bindings.
+    const auto rDecorated = settings.importProfile(
+        writeImportFile("decorated.map",
+                        "# Controls (16 knobs)\n"
+                        "C100=freq;active\n"
+                        "C110=cwspeed;active\n"),
+        validator);
+    ok &= expect(rDecorated.ok() && rDecorated.importedCount == 2,
+                 "a decorated section header still binds its rows");
+    ok &= expect(rDecorated.skippedUnknownParam.isEmpty(),
+                 "a decorated header produces no bogus skips");
+
+    // First-word matching also has to keep recognizing a decorated *feedback*
+    // header. Bindable rows survive an unreadable header on their own (that is
+    // the per-row rule below), so this is the case that actually depends on the
+    // header being parsed: "# LEDs (8 indicators)" must still be understood as
+    // the LEDs section and summarized, not reported as an unknown row.
+    const auto rDecoratedLeds = settings.importProfile(
+        writeImportFile("decorated-leds.map",
+                        "# Controls\n"
+                        "C100=freq\n"
+                        "# LEDs (8 indicators)\n"
+                        "L1=on\n"
+                        "L2=on\n"),
+        validator);
+    ok &= expect(rDecoratedLeds.ok() && rDecoratedLeds.importedCount == 1,
+                 "a decorated LEDs header still imports the controls above it");
+    ok &= expect(rDecoratedLeds.skippedUnknownParam.size() == 1
+                     && rDecoratedLeds.skippedUnknownParam.first().contains("LEDs")
+                     && rDecoratedLeds.skippedUnknownParam.first().contains("2 row"),
+                 "a decorated LEDs header is still recognized as a feedback section");
+
+    // A comment line mid-section must not swallow the rows after it: the row
+    // still looks like a control row, so it still binds.
+    const auto rComment = settings.importProfile(
+        writeImportFile("comment.map",
+                        "# Controls\n"
+                        "C100=freq;active\n"
+                        "# the VFO knob sends relative steps\n"
+                        "C110=cwspeed;active\n"),
+        validator);
+    ok &= expect(rComment.ok() && rComment.importedCount == 2,
+                 "a comment between control rows doesn't drop the rows after it");
+
+    // A section this build doesn't know, keyed in a dialect we can't use, is a
+    // named skip — not a file-level error that loses the bindings around it.
+    const auto rUnknownSection = settings.importProfile(
+        writeImportFile("unknown-section.map",
+                        "# Controls\n"
+                        "C100=freq\n"
+                        "# Encoders\n"
+                        "E1=turn\n"),
+        validator);
+    ok &= expect(rUnknownSection.ok() && rUnknownSection.importedCount == 1,
+                 "an unknown section doesn't fail the file");
+    ok &= expect(rUnknownSection.skippedUnknownParam.size() == 1
+                     && rUnknownSection.skippedUnknownParam.first().contains("E1=turn"),
+                 "an unusable row under an unknown header is named with its key");
+
+    // Under an unreadable header the naming is per row, so two rows that share
+    // a value stay distinct — the case that made "FORMAT_VERSION=1" and a
+    // dozen other metadata rows all report as the same unreadable "1".
+    const auto rDistinct = settings.importProfile(
+        writeImportFile("distinct.map",
+                        "# Controls\n"
+                        "C100=freq\n"
+                        "# Metadata\n"
+                        "FORMAT_VERSION=1\n"
+                        "REVISION=1\n"),
+        validator);
+    ok &= expect(rDistinct.ok() && rDistinct.skippedUnknownParam.size() == 2
+                     && rDistinct.skippedUnknownParam.first().contains("FORMAT_VERSION=1")
+                     && rDistinct.skippedUnknownParam.at(1).contains("REVISION=1"),
+                 "metadata rows sharing a value are named separately, by key");
+
+    // Skips carry the whole row. "on" alone is unreadable; "L1=on" says what
+    // was skipped, and two rows sharing a value stay distinct.
+    const auto rSkipNames = settings.importProfile(
+        writeImportFile("skipnames.map",
+                        "# Controls\n"
+                        "C100=freq\n"
+                        "# LEDs\n"
+                        "L1=on\n"
+                        "L2=on\n"),
+        validator);
+    ok &= expect(rSkipNames.ok() && rSkipNames.importedCount == 1,
+                 "a LEDs section still lets the controls import");
+    ok &= expect(rSkipNames.skippedUnknownParam.size() == 1
+                     && rSkipNames.skippedUnknownParam.first().contains("2 row"),
+                 "same-valued LED rows are counted, not collapsed into one name");
+
+    // The sniff scans the first lines for a header rather than testing only
+    // the first character, so a preamble doesn't reject the whole file.
+    const auto rPreamble = settings.importProfile(
+        writeImportFile("preamble.map",
+                        "FORMAT_VERSION=1\n"
+                        "DEVICE=CTR2-Max\n"
+                        "# Controls\n"
+                        "C100=freq;active\n"),
+        validator);
+    ok &= expect(rPreamble.ok() && rPreamble.importedCount == 1,
+                 "a KEY=value preamble still sniffs as a map");
+
+    // ── XML attribute handling ──────────────────────────────────────────────
+
+    // Absent `type` now follows the same rule as absent channel/number.
+    const auto rNoType = settings.importProfile(
+        writeImportFile("notype.xml",
+                        "<MidiProfile>"
+                        "<Binding param=\"rx.afGain\" channel=\"0\" number=\"7\"/>"
+                        "</MidiProfile>\n"),
+        validator);
+    ok &= expect(rNoType.ok() && rNoType.importedCount == 1,
+                 "XML: an absent type attribute defaults to CC and still imports");
+    {
+        const auto stored = settings.loadProfile(rNoType.profileName);
+        ok &= expect(stored.size() == 1 && stored.first().msgType == MidiBinding::CC,
+                     "XML: the defaulted type really is CC");
+    }
+    // A present-but-unreadable type is still a named skip.
+    const auto rBadType = settings.importProfile(
+        writeImportFile("badtype.xml",
+                        "<MidiProfile>"
+                        "<Binding param=\"rx.afGain\" channel=\"0\" type=\"zz\" number=\"7\"/>"
+                        "</MidiProfile>\n"),
+        validator);
+    ok &= expect(rBadType.importedCount == 0 && rBadType.skippedBadType.size() == 1,
+                 "XML: a non-numeric type is still a named skip, not a default");
+
+    // Pitch Bend ignores `number` at dispatch, but an out-of-range value would
+    // be stored and re-exported as a number no MIDI message can carry.
+    const auto rPitch = settings.importProfile(
+        writeImportFile("pitch.xml",
+                        "<MidiProfile>"
+                        "<Binding param=\"rx.afGain\" channel=\"0\" type=\"3\" number=\"99999\"/>"
+                        "<Binding param=\"tx.rfPower\" channel=\"0\" type=\"3\" number=\"5\"/>"
+                        "</MidiProfile>\n"),
+        validator);
+    ok &= expect(rPitch.ok() && rPitch.importedCount == 1,
+                 "XML: an out-of-range Pitch Bend number is skipped, not stored");
+    ok &= expect(rPitch.skippedBadType.size() == 1
+                     && rPitch.skippedBadType.first().contains("number"),
+                 "XML: the out-of-range Pitch Bend row is named");
 
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();

@@ -404,6 +404,7 @@ void MidiMappingDialog::importProfileFromFile()
         box.setIcon(QMessageBox::Warning);
         box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
         box.setText(QStringLiteral("No bindings were imported from %1.").arg(fileName));
+        box.setStandardButtons(QMessageBox::Ok);
         box.setDetailedText(result.errors.join(QLatin1Char('\n')));
         box.exec();
         return;
@@ -437,6 +438,7 @@ void MidiMappingDialog::importProfileFromFile()
         box.setIcon(QMessageBox::Warning);
         box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
         box.setText(QStringLiteral("No usable bindings in %1.").arg(fileName));
+        box.setStandardButtons(QMessageBox::Ok);
         if (!informativeLines.isEmpty())
             box.setInformativeText(informativeLines.join(QLatin1Char('\n')));
         if (!detailLines.isEmpty())
@@ -457,6 +459,7 @@ void MidiMappingDialog::importProfileFromFile()
                     "Click Load to apply it.")
                     .arg(result.importedCount)
                     .arg(fileName, result.profileName));
+    box.setStandardButtons(QMessageBox::Ok);
     if (!informativeLines.isEmpty())
         box.setInformativeText(informativeLines.join(QLatin1Char('\n')));
     if (!detailLines.isEmpty())
@@ -466,7 +469,7 @@ void MidiMappingDialog::importProfileFromFile()
 
 void MidiMappingDialog::exportProfileToFile()
 {
-    const auto bindings = m_manager->bindings();
+    const auto& bindings = m_manager->bindings();
     if (bindings.isEmpty()) {
         FramelessMessageBox::information(this, QStringLiteral("Export MIDI Profile"),
                                          QStringLiteral("There are no bindings to export."));
