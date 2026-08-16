@@ -2104,8 +2104,12 @@ target_link_libraries(range_slider_a11y_test PRIVATE
 )
 set_target_properties(range_slider_a11y_test PROPERTIES AUTOMOC ON)
 add_test(NAME range_slider_a11y_test COMMAND range_slider_a11y_test)
+# Exit 77 == "no accessibility backend on this platform", not a failure. Qt
+# refuses QAccessible::setActive(true) under the headless plugins, so the
+# announcements this test asserts can never be emitted. See #4360.
 set_tests_properties(range_slider_a11y_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    SKIP_RETURN_CODE 77)
 
 # RelayBar accessibility announcements (#4565): an ATU sweep debounces to one
 # settled position, and the last-published value is forgotten on focus loss so
@@ -2122,8 +2126,10 @@ target_link_libraries(relay_bar_a11y_test PRIVATE
 )
 set_target_properties(relay_bar_a11y_test PROPERTIES AUTOMOC ON)
 add_test(NAME relay_bar_a11y_test COMMAND relay_bar_a11y_test)
+# Exit 77 == no accessibility backend; see range_slider_a11y_test above.
 set_tests_properties(relay_bar_a11y_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    SKIP_RETURN_CODE 77)
 
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
 # ancestor-isolation attribute, and native-ancestor count reported to agents.
