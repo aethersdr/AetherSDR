@@ -256,6 +256,24 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "^sim_signal_source_test$" --output-on-failure
 
+      # The MIDI settings store and the #4888 profile import/export boundary:
+      # the .map/XML importers (a parser fed contributor-supplied files —
+      # Principle VII's own example), the export round trip, the store's
+      # save/load, and the binding-collision rules. Until this step the suite
+      # ran in no job (#4898 approval: "green here means the tree compiled"),
+      # and its history shows what that costs: the suite sat green at 47
+      # checks while an unbounded read an operator could reach from the
+      # Import… picker waited for review to find it, and green again at 67
+      # while the Pitch Bend export→import round trip was broken (#5024) —
+      # Principle VIII's executed-vs-linked distinction, same as the
+      # workspace-canvas block above. Qt6::Core only — no widgets, no QPA
+      # platform, no radio, no wall clock; file I/O confined to its own temp
+      # dir. Measured, not assumed: 0.06 s warm / 0.32 s first run
+      # (RelWithDebInfo, Intel Mac), against a target the Build step already
+      # linked.
+      - name: Test MIDI settings and profile import/export
+        run: ctest --test-dir build -R "^midi_settings_test$" --output-on-failure
+
       # hl2_am_dcblock_test is deliberately NOT on this gate, and re-adding it
       # needs a measurement first. #4774 added it here on the "milliseconds
       # against an already-linked target" rationale every other step above
