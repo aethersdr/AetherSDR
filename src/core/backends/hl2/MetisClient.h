@@ -176,7 +176,7 @@ public:
     // That exists because the caller must know the receiver count BEFORE
     // start(): the DSP chains have to be built and configured first, and WDSP
     // channel setup is slow enough (~19 s on the first open a machine ever does,
-    // generating FFTW wisdom -- HERMES.md §22.3) that doing it after start()
+    // generating FFTW wisdom -- docs/HERMES.md §22.3) that doing it after start()
     // stalls the I/O thread's EP2 pacer -- and the gateware watchdog halts the
     // stream when EP2 stops arriving.
     static int effectiveNumRx(const Params& p);

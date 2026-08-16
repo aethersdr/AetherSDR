@@ -28,7 +28,7 @@ Two rules that fall out of that, both of which have already caused bugs:
    With no radio attached there is nothing to be honest about, and a control
    that stays hidden after unplugging reads as a fault.
 
-See [`HERMES.md`](../../HERMES.md) §18 for the worked narrative, including the
+See [`HERMES.md`](../HERMES.md) §18 for the worked narrative, including the
 traps and why the DAX crash guard is deliberately *not* the DAX capability.
 
 ## Wired and consumed
@@ -355,7 +355,7 @@ reporting 0 kbps.
 
 Within the struct, individual figures a transport cannot measure are `-1`, not
 `0` — `RadioModel::hasLinkRtt()` and `hasStreamCategoryStats()` are the
-predicates the readouts ask before printing. See [`HERMES.md`](../../HERMES.md)
+predicates the readouts ask before printing. See [`HERMES.md`](../HERMES.md)
 §21.3 for why a zero there is a claim the app cannot support.
 
 ## Where the values come from

@@ -1012,7 +1012,7 @@ signals:
     // instance. Three features — the CW decoder, the RTTY decoder and the QSO
     // recorder's RX tap — were bound directly to the Flex stream, so on any
     // radio without one they bound to nothing: no error, no log line, the
-    // toggle worked and nothing ever decoded. See HERMES.md §18.
+    // toggle worked and nothing ever decoded. See docs/HERMES.md §18.
     //
     // Deliberately NOT the speaker path. AudioEngine::feedAudioData keeps its
     // existing per-family wiring untouched, so nothing audible changes on any
@@ -1020,7 +1020,7 @@ signals:
     //
     // Named for the tap it carries. A future filter-flat, pre-AGC feed for
     // modems is a SEPARATE signal (rxWidebandAudioReady), not a mode flag on
-    // this one — see HERMES.md §18.5.
+    // this one — see docs/HERMES.md §18.5.
     void rxDemodAudioReady(const QByteArray& pcm24kStereoFloat);
     // The backend was replaced because the operator picked a radio of another
     // family. Consumers holding backend-owned objects (PanadapterStream) must
@@ -2008,7 +2008,7 @@ private:
     // but "does this wire have a round trip to time" is a fact about the WIRE and
     // stays true while it is down. Without the distinction a disconnected HL2
     // falls back to the Flex branch, and lastPingRtt()'s 0 renders as "< 1 ms":
-    // the exact claim HERMES.md § 21.3 exists to forbid, one state transition
+    // the exact claim docs/HERMES.md § 21.3 exists to forbid, one state transition
     // later. Latched sticky-once-true so a window that closes with no samples in
     // it cannot flip a readout mid-session, and reset in teardownBackend(),
     // because only a new backend can change the answer.

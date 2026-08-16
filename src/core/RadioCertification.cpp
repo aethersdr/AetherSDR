@@ -313,7 +313,7 @@ bool RadioCertification::keyedRfConfirmed() const
 }
 
 // ---------------------------------------------------------------------------
-// Receive stages. Every one of these is a transcription of HERMES.md 15.
+// Receive stages. Every one of these is a transcription of docs/HERMES.md 15.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ void RadioCertification::stageControlEffect(const Options& o)
     // than to the curve, and radiocert must not report one as a control defect.
     // What this control CAN certify by effect is monotonicity — one nibble up,
     // FWDPWR rises — which is the stimulus docs/radio-certification.md now
-    // carries. See HERMES.md 17.5 and 17.7 for both measurements.
+    // carries. See docs/HERMES.md 17.5 and 17.7 for both measurements.
     QJsonObject m{
         {QStringLiteral("micGain100Dbfs"), micFull},
         {QStringLiteral("micGain50Dbfs"), micHalf},
@@ -433,7 +433,7 @@ void RadioCertification::stageControlEffect(const Options& o)
     // THE EXPECTED DELTA IS ZERO, NOT THE STEP SIZE. Hl2DbReference is moved in
     // the same call as the gain and both the spectrum and the S-meter render
     // through it, specifically so a gain change does NOT slide the display
-    // (HERMES.md 17.4; the class header states it as an invariant — "a gain
+    // (docs/HERMES.md 17.4; the class header states it as an invariant — "a gain
     // change provably cannot move a reported dBm value"). On healthy hardware
     // an 8 dB LNA step moves SLC:LEVEL by 0 dB. Asserting 8 dB would have
     // replaced one permanent false positive with another.
@@ -464,7 +464,7 @@ void RadioCertification::stageControlEffect(const Options& o)
     // the effect half is the raw pre-reference dBFS, which the seam does not
     // expose (docs/CERTIFICATION.md 2.4 — the meters join).
     auto settledSLevel = [&]() -> double {
-        // LET THE EMA CATCH UP. HERMES.md 17.6: every WDSP sample is smoothed
+        // LET THE EMA CATCH UP. docs/HERMES.md 17.6: every WDSP sample is smoothed
         // (decay alpha 0.15 at ~47 samples/s, so ~0.7 s to settle) and one is
         // published per 100 ms gate. A reading taken straight after the step is
         // a blend of both gain settings, which halves the delta and lands it
@@ -823,7 +823,7 @@ void RadioCertification::stageMeterInventory()
                "rows are only judged once a keyed stage has been confirmed to "
                "produce forward power."),
            concern,
-           QStringLiteral("HERMES.md 14.4 — the orphaned meter seam"));
+           QStringLiteral("docs/HERMES.md 14.4 — the orphaned meter seam"));
 }
 
 void RadioCertification::stageMeterScale(const Options& o)
@@ -901,7 +901,7 @@ void RadioCertification::stageMeterScale(const Options& o)
                "are uncalibrated and presenting them as watts is the error this "
                "project already avoided once."),
            problems.join(QStringLiteral("; ")),
-           QStringLiteral("HERMES.md 14.4; SWR gating and the dB reference"));
+           QStringLiteral("docs/HERMES.md 14.4; SWR gating and the dB reference"));
 }
 
 void RadioCertification::stageTuning(const Options& o)
@@ -950,7 +950,7 @@ void RadioCertification::stageTuning(const Options& o)
                "a radio that reports no VFO cannot be asked where it really is."),
            bad.isEmpty() ? QString()
                          : QStringLiteral("these did not take: ") + bad.join(", "),
-           QStringLiteral("HERMES.md 14.1 — connect-time state"));
+           QStringLiteral("docs/HERMES.md 14.1 — connect-time state"));
 }
 
 void RadioCertification::stageModeMap()
@@ -1020,7 +1020,7 @@ void RadioCertification::stageModeMap()
                "against the fallback mode's — an exact match is a hint, and the "
                "only one visible from outside the backend."),
            concern,
-           QStringLiteral("HERMES.md 15.7"));
+           QStringLiteral("docs/HERMES.md 15.7"));
 }
 
 void RadioCertification::stageConsumerAgreement(const Options& o)
@@ -1057,7 +1057,7 @@ void RadioCertification::stageConsumerAgreement(const Options& o)
                "NOT YET AUTOMATED — needs a spectrum tap through the seam. Until "
                "then this is an operator check, and it is the one that found the "
                "receive inversion"),
-           QStringLiteral("HERMES.md 15.5"));
+           QStringLiteral("docs/HERMES.md 15.5"));
 }
 
 void RadioCertification::stageZeroShift(const Options& o)
@@ -1098,7 +1098,7 @@ void RadioCertification::stageZeroShift(const Options& o)
                "from here."),
            slice->frequency() > 0.0 ? QString()
                                     : QStringLiteral("could not establish a dial frequency"),
-           QStringLiteral("HERMES.md 15.4"));
+           QStringLiteral("docs/HERMES.md 15.4"));
 }
 
 void RadioCertification::stageRxSidebands(const Options& o)
@@ -1180,7 +1180,7 @@ void RadioCertification::stageRxSidebands(const Options& o)
                "Interpretation needs a real carrier present. With no antenna or "
                "no signal at the reference frequency every mode reads the noise "
                "floor and this stage is inconclusive rather than passing"),
-           QStringLiteral("HERMES.md 15.3, 15.4"));
+           QStringLiteral("docs/HERMES.md 15.3, 15.4"));
 }
 
 void RadioCertification::stagePassbandAfterModeChange(const Options& o)
@@ -1226,7 +1226,7 @@ void RadioCertification::stagePassbandAfterModeChange(const Options& o)
                "CW then DIGU is the ordering that exposed this: the narrow window "
                "survived into a wide mode and the decoder saw nothing."),
            concern,
-           QStringLiteral("HERMES.md 15.7"));
+           QStringLiteral("docs/HERMES.md 15.7"));
 }
 
 void RadioCertification::stagePreconditions()
@@ -1261,7 +1261,7 @@ void RadioCertification::stagePreconditions()
            m,
            QStringLiteral("What the app believes about itself before any key."),
            concern,
-           QStringLiteral("HERMES.md 14.1 defects 1 and 2"));
+           QStringLiteral("docs/HERMES.md 14.1 defects 1 and 2"));
 }
 
 void RadioCertification::stageControlPlane(const Options& o)
@@ -1302,7 +1302,7 @@ void RadioCertification::stageControlPlane(const Options& o)
                "the previous session — that is how a VFO once read 10 MHz while "
                "the radio transmitted on 14."),
            concern,
-           QStringLiteral("HERMES.md 14.1 defect on connect-time state"));
+           QStringLiteral("docs/HERMES.md 14.1 defect on connect-time state"));
 }
 
 void RadioCertification::stageDspLiveness(const Options& o)
@@ -1339,7 +1339,7 @@ void RadioCertification::stageDspLiveness(const Options& o)
                "Mic peak is measured pre-ALC, so it reports the level actually "
                "arriving rather than the ALC's success."),
            concern,
-           QStringLiteral("HERMES.md 14.1 defects 1 and 2"));
+           QStringLiteral("docs/HERMES.md 14.1 defects 1 and 2"));
 }
 
 void RadioCertification::stageRf(const Options& o)
@@ -1437,7 +1437,7 @@ void RadioCertification::stageRf(const Options& o)
                "converter. Absolute power is NOT reported: raw counts dressed up "
                "as watts would be a confident lie."),
            concern,
-           QStringLiteral("HERMES.md 14.1 defects 3 and 4"),
+           QStringLiteral("docs/HERMES.md 14.1 defects 3 and 4"),
            meterDependent);
 }
 
@@ -1544,7 +1544,7 @@ void RadioCertification::stageSideband(const Options& o)
     if (auto* slice = m_radio->slice(0))
         slice->setMode(o.mode);
 
-    // TAKE THE RATE FROM THE CAPTURE. This is HERMES.md 1.9, and it was still
+    // TAKE THE RATE FROM THE CAPTURE. This is docs/HERMES.md 1.9, and it was still
     // here — in the one stage this whole tool exists for — after the same defect
     // had already been found and fixed in stage-rx-sidebands.
     //
@@ -1637,7 +1637,7 @@ void RadioCertification::stageSideband(const Options& o)
     } else if (rateAssumed) {
         concern = QStringLiteral(
             "INCONCLUSIVE — no capture reported a sample rate, so the correlator "
-            "fell back to the assumed %1 Hz. An assumed rate is the HERMES.md 1.9 "
+            "fell back to the assumed %1 Hz. An assumed rate is the docs/HERMES.md 1.9 "
             "defect: the probe lands on the wrong frequency and both sidebands "
             "read the noise floor, which looks exactly like an inverted sideband")
             .arg(fs, 0, 'f', 0);
@@ -1656,7 +1656,7 @@ void RadioCertification::stageSideband(const Options& o)
             "slice mode moves BOTH chains together, a leg goes silent only when "
             "the transmitter puts the tone on the side the demodulator is not "
             "listening to — which is what a missing conjugation of the transmit "
-            "IQ looks like (HERMES.md 14.6)")
+            "IQ looks like (docs/HERMES.md 14.6)")
             .arg(db(sameTone), 0, 'f', 1).arg(db(oppTone), 0, 'f', 1)
             .arg(kRecoveredFloorDb, 0, 'f', 0);
     } else if (recoveredMatched != recoveredOpposite) {
@@ -1686,12 +1686,12 @@ void RadioCertification::stageSideband(const Options& o)
                "agree about which side of the carrier a sideband is on. A "
                "transmit-only inversion silences both.\n\n"
                "A SHARED inversion — both chains wrong in the same direction — is "
-               "invisible here BY CONSTRUCTION, which is HERMES.md 1.1 recurring "
+               "invisible here BY CONSTRUCTION, which is docs/HERMES.md 1.1 recurring "
                "one level up: this check was built to catch convention errors and "
                "still shares a convention with its subject. Only an unrelated "
                "receiver settles it, and that check is listed in manualChecks."),
            concern,
-           QStringLiteral("HERMES.md 14.6; 1.1 — a shared convention cannot self-check"));
+           QStringLiteral("docs/HERMES.md 14.6; 1.1 — a shared convention cannot self-check"));
 }
 
 void RadioCertification::stageCarrierSuppression(const Options& o)
@@ -1743,7 +1743,7 @@ void RadioCertification::stageCarrierSuppression(const Options& o)
                "SSB should be silent when the operator is. A reading here is "
                "either a DC-offset carrier or an unflushed transmit queue."),
            concern,
-           QStringLiteral("HERMES.md 14.1; queue flush on unkey"));
+           QStringLiteral("docs/HERMES.md 14.1; queue flush on unkey"));
 }
 
 void RadioCertification::stageLifecycle(const Options&)
@@ -1798,7 +1798,7 @@ void RadioCertification::stageLifecycle(const Options&)
                "AFTER unkey that greatly exceeds the before-key rate would "
                "indicate a drained backlog rather than a resumed stream."),
            concern,
-           QStringLiteral("HERMES.md 14.1; RX mute at the demodulator"));
+           QStringLiteral("docs/HERMES.md 14.1; RX mute at the demodulator"));
 }
 
 QJsonObject RadioCertification::run(const Options& o)
@@ -1838,7 +1838,7 @@ QJsonObject RadioCertification::run(const Options& o)
     // moments; and the intro tone is transmitted as audio, which lands straight
     // inside stage-carrier-suppression's assertion that nothing is being sent.
     // A diagnostic cannot measure a chain that is injecting its own audio into
-    // it (HERMES.md 1.12 — "no audio" has to mean it).
+    // it (docs/HERMES.md 1.12 — "no audio" has to mean it).
     bool quindarWas = false;
     ClientQuindarTone* quindar = m_audio ? m_audio->clientQuindarTone() : nullptr;
     if (quindar) {
@@ -1934,7 +1934,7 @@ QJsonObject RadioCertification::run(const Options& o)
         // keyed stage of an `all` run transmitted a few hundred Hz off a
         // standards station, out of band, while the report's `radio` block
         // faithfully said 14.2 MHz throughout: a value answering a different
-        // question than the one being asked (HERMES.md 1.11).
+        // question than the one being asked (docs/HERMES.md 1.11).
         //
         // It also fixes `radiocert tx` standalone, which otherwise keys on
         // whatever the operator last tuned, with no record of where that was.

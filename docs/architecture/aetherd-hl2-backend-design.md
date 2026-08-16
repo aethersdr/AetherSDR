@@ -11,7 +11,7 @@ receive path** — discover → stream → tune → engine-side demod → panada
 — behind the existing seam, with **zero** change to any UI or model consumer of
 `IRadioBackend`. Transmit is explicitly out of scope for Phase 1. The data plane
 and register facts are already proven against real hardware by the throwaway
-spike in `prototypes/hl2/` (see its README); this note is the plan to port that
+spike in `tools/hl2/` (see its README); this note is the plan to port that
 proof in-tree.
 
 ---
@@ -35,7 +35,7 @@ normalized `sliceChanged` / `meterUpdate` / spectrum / audio outlets. It is the
 first backend that exercises the "owns a DSP chain" branch of the seam, and thus
 the first real test that the seam's abstraction holds.
 
-**What the spike already proved** (`prototypes/hl2/`, live against a real HL2 at
+**What the spike already proved** (`tools/hl2/`, live against a real HL2 at
 gateware 7.4):
 
 - Metis discovery (board id `0x06`), EP2/EP6 1032-byte framing, 0.00% loss.
@@ -81,7 +81,7 @@ Hl2Backend : IRadioBackend
             S-meter level      → meterUpdate
 ```
 
-`MetisClient` ports the proven `prototypes/hl2/hpsdr.py` register map and
+`MetisClient` ports the proven `tools/hl2/hpsdr.py` register map and
 framing primitives. `Hl2Dsp` replaces the spike's Python-only signal path with
 the production engine boundary described below.
 The modulation chain is not assembled from unrelated AetherSDR and WDSP stages.
@@ -304,7 +304,7 @@ GPL/open sources. Allowed inputs used:
 - **pihpsdr `src/old_protocol.c`** (DL1YCF, GPL-3.0) — consulted as a *behavioral
   reference* for the minimal round-robin C&C init sequence a receiver needs.
 - **Live black-box observation** of the AetherSDR-owned HL2 (register effects on
-  the IQ stream), recorded in `prototypes/hl2/`.
+  the IQ stream), recorded in `tools/hl2/`.
 
 No openHPSDR, Hermes-Lite 2, or pihpsdr source is incorporated, vendored,
 translated, or linked. The facts above are expressed in original AetherSDR code.

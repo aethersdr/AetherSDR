@@ -139,7 +139,7 @@ UDP thread and DSP: it needs ≥3 packets of slack to absorb observed jitter.
 A stream started before any C&C frame has landed emits ADC-idle samples. Prime
 with C&C **before** `metis-start`. (The earlier `CONFIG_MERCURY` diagnosis was
 wrong — HL2 gateware never decodes that bit; ordering was the real cause. Both
-the design note and `prototypes/hl2/README.md` carry the correction.)
+the design note and `docs/archive/hl2-phase0-spike.md` carry the correction.)
 
 ---
 
@@ -629,7 +629,7 @@ AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
   open — any receiver, any sample rate — is **40–175 ms**. The planning cost is
   not a bug and cannot be optimised away, but it is now paid **off the GUI
   thread** and reported in the connect animation; see §22.
-- The `prototypes/hl2/` Python spike defaults to broadcasting
+- The `tools/hl2/` Python spike defaults to broadcasting
   `255.255.255.255`, which fails on macOS with `OSError 65` when multiple
   interfaces are up. Use `--bcast <subnet>.255`. The in-app Qt sweep is fine.
 

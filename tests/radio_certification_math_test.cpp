@@ -65,7 +65,7 @@ int main()
         std::fprintf(stderr, "rate 48000 -> %.1f dB, assumed 24000 -> %.1f dB\n",
                      right, wrong);
         check(right - wrong > 25.0,
-              "assuming 24 kHz on a 48 kHz capture buries a real tone (HERMES.md 1.9)");
+              "assuming 24 kHz on a 48 kHz capture buries a real tone (docs/HERMES.md 1.9)");
         check(wrong < -35.0,
               "the wrong-rate reading is indistinguishable from no signal");
     }

@@ -170,7 +170,7 @@ private:
     //
     // What did NOT change is the ORDER: every DSP chain is still open and
     // configured before MetisClient::start(), because EP2 must not stop (see
-    // the note above buildReceivers() and HERMES.md §20.8). The sequence stays
+    // the note above buildReceivers() and docs/HERMES.md §20.8). The sequence stays
     // serial on the I/O thread; only the GUI thread stopped waiting for it.
     void beginDspSetup();
 

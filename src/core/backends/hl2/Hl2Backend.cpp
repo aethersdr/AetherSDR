@@ -1337,7 +1337,7 @@ Hl2Backend::~Hl2Backend()
         // three-phase split does NOT remove, and splitting the connect is what
         // made it reachable: the operator can now use the UI while the chains
         // open, and reaching for a different radio is the obvious thing to do
-        // while waiting. HERMES.md §22.4. It is also what keeps the QPointer in
+        // while waiting. docs/HERMES.md §22.4. It is also what keeps the QPointer in
         // beginDspSetup() sound, so a fix here has to deal with that too.
         if (m_metis)
             QMetaObject::invokeMethod(m_metis, "stop", Qt::BlockingQueuedConnection);
@@ -1739,7 +1739,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     //
     // Opening a WDSP channel is slow -- ~19 s on the FIRST open this machine
     // ever does, generating FFTW wisdom, and 40-175 ms for every open after
-    // that, at any rate (HERMES.md §10 and §22.3) -- and it runs ON THE I/O
+    // that, at any rate (docs/HERMES.md §10 and §22.3) -- and it runs ON THE I/O
     // THREAD, which is the thread that paces EP2. Configuring after start()
     // therefore stalls the pacer for the whole of that, and the gateware
     // watchdog halts the stream when EP2 stops arriving. It also stalls the EP6
@@ -1913,7 +1913,7 @@ void Hl2Backend::beginDspSetup()
     // nothing is racing to clear. QPointer is reentrant, NOT thread-safe — the day
     // teardown stops blocking, a check-then-use here becomes a real race and this
     // needs a different mechanism. That blocking teardown has its own cost; see
-    // the note in ~Hl2Backend() and HERMES.md §22.4.
+    // the note in ~Hl2Backend() and docs/HERMES.md §22.4.
     QPointer<Hl2Backend> self(this);
 
     QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(txDsp)
@@ -2856,7 +2856,7 @@ void Hl2Backend::applyPanBandwidth(double hz)
     // that flushes under WDSP's 100 ms timeout, and it runs for every receiver
     // because the rate register is radio-wide — roughly 0.6-1.1 s of frozen UI
     // per rate-boundary crossing with four panadapters open. That is the
-    // "chunky zoom" operators report. HERMES.md §22.4 has the measurements.
+    // "chunky zoom" operators report. docs/HERMES.md §22.4 has the measurements.
     //
     // Not fixed here on purpose: unlike the connect, this has ordering
     // constraints that survive a partial failure — the DSP must expect the new
@@ -4415,7 +4415,7 @@ void Hl2Backend::pushInitialState()
     // The defaults (150..3000) correspond to no mode at all — they happen to
     // equal the unmapped-mode fallback — so a fresh connect in the default USB
     // left the radio with DIGU's passband while the mode indicator read USB. Same
-    // category as the mode-change stickiness in HERMES.md 15.7: mode and passband
+    // category as the mode-change stickiness in docs/HERMES.md 15.7: mode and passband
     // must agree, and CONNECT is a place they can disagree just as easily as a
     // mode change. (#4484)
     //

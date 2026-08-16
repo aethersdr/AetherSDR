@@ -2,7 +2,7 @@
 // FFT panadapter path and checks: a complex tone peaks at the expected
 // fftshifted bin, DC lands at the centre bin, partial frames accumulate across
 // calls, and a large DC offset (the direct-sampling ADC bias) is removed so it
-// does not swamp a real tone — mirroring the prototypes/hl2/spectrum.py behavior.
+// does not swamp a real tone — mirroring the tools/hl2/spectrum.py behavior.
 
 #include "core/backends/hl2/Hl2Spectrum.h"
 

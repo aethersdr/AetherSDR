@@ -27,7 +27,7 @@ inline constexpr double kPi = 3.14159265358979323846;
 // FFT because we are asking one question about one known frequency.
 //
 // `fs` MUST be the rate the samples were actually captured at. Passing a
-// constant here is the defect documented in HERMES.md 1.9: the probe lands on
+// constant here is the defect documented in docs/HERMES.md 1.9: the probe lands on
 // hz*(fsActual/fs), reads the noise floor, and the caller concludes "no signal"
 // from what is really "looked in the wrong place".
 inline double tonePower(const std::vector<float>& mono, double hz, double fs)
