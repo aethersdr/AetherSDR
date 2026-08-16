@@ -215,13 +215,13 @@ std::optional<ModulationProfile> modulationProfileFor(const IcomModel& model)
     // IC-705 CI-V guide: USB/WLAN levels 0116/0117, DATA OFF/DATA MOD
     // selections 0118/0119.
     if (model.civAddress == 0xA4) {
-        return ModulationProfile{116, -1, 117, 118, 119, 0x03,
+        return ModulationProfile{116, -1, 117, 118, 119, 0x03, 0x00,
                                  kIc705ModInputs};
     }
     // IC-7300MK2 CI-V guide: USB/ACC/LAN levels 0081/0082/0083, DATA OFF/DATA
     // MOD selections 0084/0085. LAN is value 05, not the IC-705's WLAN 03.
     if (model.civAddress == 0xB6) {
-        return ModulationProfile{81, 82, 83, 84, 85, 0x05,
+        return ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,
                                  kIc7300Mk2ModInputs};
     }
     return std::nullopt;

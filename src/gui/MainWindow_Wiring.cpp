@@ -20,6 +20,7 @@
 #include "MainWindow.h"
 
 #include "AetherDspWidget.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "BandRecallSliceSelectionPolicy.h"
 #include "models/BandPlanManager.h"
 #include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
@@ -5712,7 +5713,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 
             // CW split: offset 1 kHz up (convention). Other modes: 5 kHz up.
             const QString mode = rxSlice->mode();
-            bool isCw = mode == "CW" || mode == "CWL";
+            bool isCw = isCwMode(mode);
             double offsetMhz = isCw ? 0.001 : 0.005;
             double txFreq = rxSlice->frequency() + offsetMhz;
 

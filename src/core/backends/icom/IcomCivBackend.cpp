@@ -990,6 +990,24 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
 {
     const bool was = m_connected;
     m_connected = false;
+
+    // UNKNOWN IS THE ONLY HONEST STARTING POINT for anything the radio told
+    // us, and this object outlives the session: the same backend serves the
+    // next connect, and a radio swap in one process reaches a DIFFERENT radio.
+    // Carrying these over meant Radio Health could print the previous radio's
+    // MOD levels beside the new radio's selection, and a surviving
+    // m_lastModInputWarning silently swallowed a warning that was still true
+    // in the new session because it happened to read the same.
+    m_dataOffModInput = -1;
+    m_dataModInput = -1;
+    m_usbModLevelPercent = -1;
+    m_accessoryModLevelPercent = -1;
+    m_networkModLevelPercent = -1;
+    m_micGainReported = false;
+    m_pcAudioEnabled.reset();
+    m_dataOffModRestore.reset();
+    m_lastModInputWarning.clear();
+
     if (was)
         emit disconnected();
     if (!reason.isEmpty())
@@ -1012,14 +1030,16 @@ void IcomCivBackend::checkModInput()
     };
 
     QStringList wrong;
-    if (m_pcAudioEnabled && m_dataOffModInput >= 0) {
-        const int expected = *m_pcAudioEnabled ? mod->networkOnlyValue : 0x00;
-        if (m_dataOffModInput != expected) {
-            wrong << QStringLiteral("PC Audio is %1 but DATA OFF MOD is %2")
-                         .arg(*m_pcAudioEnabled ? QStringLiteral("on")
-                                                : QStringLiteral("off"),
-                              name(m_dataOffModInput));
-        }
+    // ONLY THE "ON" DIRECTION IS THE CLIENT'S BUSINESS. PC Audio on and
+    // DATA OFF MOD somewhere else is a real fault: the radio keys and puts no
+    // modulation on the air. PC Audio OFF makes no claim at all — the operator
+    // is then free to route voice from MIC, USB, ACC or anything else, and
+    // asserting an expected value there would be the client telling a working
+    // radio it is misconfigured.
+    if (m_pcAudioEnabled && *m_pcAudioEnabled && m_dataOffModInput >= 0
+        && m_dataOffModInput != mod->networkOnlyValue) {
+        wrong << QStringLiteral("PC Audio is on but DATA OFF MOD is %1")
+                     .arg(name(m_dataOffModInput));
     }
     if (m_dataMode && m_dataModInput >= 0
         && m_dataModInput != mod->networkOnlyValue) {
@@ -1031,9 +1051,17 @@ void IcomCivBackend::checkModInput()
         return;
     }
 
-    const QString warning = QStringLiteral("Icom modulation input: %1. Check Radio Health "
-                                           "for the reported source and level.")
-                                .arg(wrong.join(QStringLiteral(", ")));
+    // NAME THE REMEDY, because this client deliberately will not apply it
+    // unasked: DATA OFF MOD is the radio's to persist (Constitution III), so
+    // the fix has to come from the operator. Without the second sentence the
+    // advisory describes a fault and leaves them to guess that the button they
+    // already have is what corrects it.
+    const QString warning =
+        QStringLiteral("Icom modulation input: %1. Toggle PC Audio off and on to "
+                       "select it, or set it on the radio's front panel "
+                       "(MENU > SET > Connectors > MOD Input). Check Radio Health "
+                       "for the reported source and level.")
+            .arg(wrong.join(QStringLiteral(", ")));
     if (warning != m_lastModInputWarning) {
         m_lastModInputWarning = warning;
         emit configurationWarning(warning);
@@ -3014,6 +3042,22 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     if (id == QLatin1String("agc"))      { setSliceAgc(slice, m_agcMode, 0); return true; }
     if (id == QLatin1String("tx.power")) { setTxPower(m_txPowerPercent); return true; }
     if (id == QLatin1String("mic.gain")) { setMicGain(m_micGainPercent); return true; }
+    if (id == QLatin1String("mod.input.dataoff")) {
+        // Re-assert the CURRENT selection, which is the whole scrub contract:
+        // the question is whether the intent reaches the wire, not whether the
+        // radio obeys. Falls through to NOT-TESTED on a model with no verified
+        // SET-menu map, or before the readback has landed — there is no safe
+        // value to send in either case, and inventing one would move the
+        // operator's radio.
+        const auto mod = modulationProfileFor(*m_model);
+        if (!mod || m_dataOffModInput < 0)
+            return false;
+        sendUserCommand(cmdWriteSetting(
+            m_session ? m_session->civAddress() : m_model->civAddress,
+            mod->dataOffInputItem,
+            static_cast<std::uint8_t>(m_dataOffModInput)));
+        return true;
+    }
     if (id == QLatin1String("monitor") || id == QLatin1String("monitor.level")) {
         m_monitorSent = -1;
         setTxMonitor(m_monitorOn, m_monitorLevelPercent);
@@ -3249,9 +3293,37 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, true);
         return;
     }
+    // TWO VERBS, because there are two different things to say about PC Audio
+    // and only one of them is a command.
+    //
+    // `audio.pc.state` is an OBSERVATION — the client's local audio routing is
+    // on or off. It is what the connect edge publishes, and it exists so
+    // checkModInput() can advise ("PC Audio is on but DATA OFF MOD is MIC")
+    // without the client writing anything. Replaying a client-persisted value
+    // onto DATA OFF MOD at connect is what Constitution III forbids in as many
+    // words: the radio persists that register itself, so a client that pushes
+    // its remembered copy back hands the operator two sources of truth that
+    // fight on every reconnect.
+    //
+    // `audio.pc` is a REQUEST, and only an operator click issues it.
+    // Principle II allows exactly that — a user action is a request to the
+    // radio — which is why the write lives here and nowhere else.
+    if (verb == QLatin1String("audio.pc.state")) {
+        m_pcAudioEnabled = arg.toBool();
+        checkModInput();
+        if (requestId != 0) {
+            emit extensionResult(requestId, true);
+        }
+        return;
+    }
     if (verb == QLatin1String("audio.pc")) {
         const auto mod = modulationProfileFor(*m_model);
         if (!mod) {
+            // Reachable only from an operator click now that the connect edge
+            // publishes state instead of commanding. A warning that answers a
+            // request the radio cannot honour is the useful kind — unlike the
+            // once-per-session one on a correctly configured radio, which is
+            // the one the operator learns to scroll past.
             const QString reason = QStringLiteral(
                 "PC Audio cannot select DATA OFF MOD for this Icom model: "
                 "its model-specific SET-menu map is not verified.");
@@ -3262,10 +3334,29 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             return;
         }
         const bool on = arg.toBool();
+        // CAPTURE WHATEVER IS ABOUT TO BE OVERWRITTEN, every time rather than
+        // only once. This is the last moment the operator's own selection is
+        // observable — after the write the readback reports what we put there.
+        //
+        // Re-capturing matters because the register is theirs between clicks:
+        // an operator who turns PC Audio off and then moves DATA OFF MOD to ACC
+        // on the front panel must get ACC back next time, not the USB the
+        // session opened on. The link-tick poll keeps m_dataOffModInput current,
+        // so the value here is the radio's, not a stale belief.
+        //
+        // The network source is never captured: putting THAT back on "off"
+        // would leave PC Audio off with the radio still listening to the
+        // network, which is the state where nothing modulates at all.
+        if (m_dataOffModInput >= 0 && m_dataOffModInput != mod->networkOnlyValue) {
+            m_dataOffModRestore = m_dataOffModInput;
+        }
         m_pcAudioEnabled = on;
+        const auto value = static_cast<std::uint8_t>(
+            on ? mod->networkOnlyValue
+               : m_dataOffModRestore.value_or(mod->micValue));
         sendUserCommand(cmdWriteSetting(
             m_session ? m_session->civAddress() : m_model->civAddress,
-            mod->dataOffInputItem, on ? mod->networkOnlyValue : 0x00));
+            mod->dataOffInputItem, value));
         if (requestId != 0) {
             emit extensionResult(requestId, true);
         }

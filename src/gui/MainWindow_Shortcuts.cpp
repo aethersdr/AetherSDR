@@ -16,6 +16,7 @@
 #include "MainWindow.h"
 
 #include "MainWindowHelpers.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "AppletPanel.h"
 #include "BandStackPanel.h"
 #include "CwxPanel.h"
@@ -968,7 +969,7 @@ void MainWindow::registerShortcutActions()
                 QString panId = s->panId();
                 if (panId.isEmpty())
                     panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-                bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+                bool isCw = isCwMode(s->mode());
                 double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
                 m_splitActive = true;
                 m_splitRxSliceId = s->sliceId();

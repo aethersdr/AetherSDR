@@ -425,6 +425,80 @@ int main(int argc, char** argv)
         check(waitSchedulerIdle(), "PTT fixture drains");
     }
 
+    // ── PC AUDIO OWNS DATA OFF MOD ONLY WHEN THE OPERATOR CLICKS ─────────
+    //
+    // DATA OFF MOD (1A 05 item 0118 on this radio) is a SET-menu register the
+    // RADIO persists. Constitution III therefore forbids the client replaying
+    // its own remembered PC Audio flag onto it at connect — and the register is
+    // four-valued while the button is two-valued, so "off" has to put back what
+    // the operator had rather than assuming MIC. Both were live defects; both
+    // are pinned here.
+    //
+    // The fake starts at USB (0x01), the ordinary setting for an operator with
+    // a rig interface on the USB port. A fake already sitting on WLAN could not
+    // tell "PC Audio put it back" from "PC Audio never touched it".
+    {
+        const auto writesTo118 = [](const std::vector<CivFrame>& log) {
+            std::vector<int> values;
+            for (const CivFrame& f : log) {
+                // A WRITE is the three-byte form. The two-byte form is a read,
+                // and counting those would make this assertion vacuous.
+                if (f.cmd == cmd::kSetting && f.hasSub && f.sub == 0x05
+                    && f.data.size() == 3
+                    && decodeBcdByte(f.data[0]) * 100 + decodeBcdByte(f.data[1]) == 118) {
+                    values.push_back(f.data[2]);
+                }
+            }
+            return values;
+        };
+
+        check(waitSchedulerIdle(), "the connect burst drains before the check");
+        check(writesTo118(radio.civCommands()).empty(),
+              "CONNECT WRITES NOTHING to DATA OFF MOD — the client publishes its "
+              "PC Audio state, it does not replay it onto radio-owned config "
+              "(Constitution III)");
+        check(radio.setting(118) == 0x01,
+              "so the operator's own USB selection survives the connect");
+        check(waitFor([&] {
+                  return backend.healthSnapshot().values.contains(
+                      QStringLiteral("dataoffmod"));
+              }, 3000),
+              "and the client ADOPTED it — Radio Health reports DATA OFF MOD");
+
+        // The observation verb is not a back door to the write.
+        radio.clearCivLog();
+        backend.invokeExtension(QStringLiteral("icom"),
+                                QStringLiteral("audio.pc.state"), 0, true);
+        check(waitSchedulerIdle(), "the state publication settles");
+        check(writesTo118(radio.civCommands()).empty(),
+              "publishing PC Audio state writes nothing either");
+
+        // An operator CLICK is a request, and Principle II allows exactly that.
+        radio.clearCivLog();
+        backend.invokeExtension(QStringLiteral("icom"),
+                                QStringLiteral("audio.pc"), 0, true);
+        check(waitSchedulerIdle(), "the PC Audio ON request converges");
+        check(writesTo118(radio.civCommands()) == std::vector<int>{0x03},
+              "a click selects WLAN (0x03) on an IC-705");
+        check(radio.setting(118) == 0x03, "and the radio holds it");
+
+        // ...and OFF restores what was captured, NOT a hardcoded MIC. This is
+        // the assertion that fails if the restore is dropped: MIC is 0x00 and
+        // the operator's USB is 0x01, so the two cannot be confused.
+        radio.clearCivLog();
+        backend.invokeExtension(QStringLiteral("icom"),
+                                QStringLiteral("audio.pc"), 0, false);
+        check(waitSchedulerIdle(), "the PC Audio OFF request converges");
+        check(writesTo118(radio.civCommands()) == std::vector<int>{0x01},
+              "turning PC Audio off puts back the operator's USB (0x01) — NOT a "
+              "hardcoded MIC, which would destroy their rig-interface routing "
+              "with no undo");
+        check(radio.setting(118) == 0x01, "and the radio ends where it started");
+        check(radio.setting(119) == 0x03,
+              "DATA MOD is never written by PC Audio — digital routing stays "
+              "radio-authoritative");
+    }
+
     // TUNE temporarily borrows the RF-power register. Releasing it must put
     // the operator's ordinary drive back; otherwise a low-power tune silently
     // changes the next voice/data transmission (and the UI follows the poll).

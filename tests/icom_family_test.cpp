@@ -100,6 +100,13 @@ int main(int argc, char** argv)
               && mk2Mod->dataInputItem == 85
               && mk2Mod->networkOnlyValue == 0x05,
           "IC-7300MK2 uses SET 0084/0085 and LAN value 05");
+    // The fallback PC Audio "off" writes when there is nothing captured to put
+    // back. It belongs to the model, not to the call site: these two agree at
+    // 0x00 today, and a third model whose MIC is elsewhere must not inherit it.
+    check(ic705Mod && ic705Mod->micValue == 0x00
+              && mk2Mod && mk2Mod->micValue == 0x00,
+          "both verified models name MIC in their own profile rather than "
+          "leaving the caller to hardcode it");
     // An IC-9700 has no Wi-Fi and, unlike the two profiles above, no verified
     // model-specific modulation map. It must therefore remain outside this
     // read/write path instead of borrowing the IC-705's WLAN table. Pin that

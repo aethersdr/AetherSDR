@@ -561,7 +561,15 @@ public:
     // operator-issue setters so the change routes through the backend seam.
     void recallLocalMemory(int index);
     void createAudioStream();
+    // An operator CLICK on the PC Audio button. On an Icom this asks the radio
+    // to switch its voice-mode modulation input, which Principle II permits
+    // because a user action is a request. Nothing else may call it — see
+    // notePcAudioEnabled() for the connect edge.
     void setPcAudioEnabled(bool on);
+    // The client's PC Audio state, published so the backend can ADVISE on a
+    // mismatch. Writes nothing: Principle III owns DATA OFF MOD to the radio,
+    // so a connect must never replay this client-persisted flag onto it.
+    void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
     bool prepareWsprTransmit();
     void releaseWsprTransmit();

@@ -97,7 +97,7 @@ and it is the cleanest part of that codebase.
 | `setMicGain` | CI-V `14 0B`, 0000–0255 BCD |
 | `setTxMonitor` | CI-V `16 45` enable plus `14 15` level |
 | `setTxFilter` | CI-V `1A 05 0020/0021/0022` — **discrete WIDE/MID/NAR**, not Hz |
-| `submitTxAudio` | audio stream, codec 4 — **requires DATA MOD = WLAN (IC-705) or LAN (IC-7300MK2)** |
+| `submitTxAudio` | audio stream, codec 4 — **requires the model's network source** (WLAN on IC-705, LAN on IC-7300MK2) in `DATA MOD` for data modes and `DATA OFF MOD` for voice |
 | `setSliceAudioGain` | CI-V `14 01` (AF level) |
 | `createPanadapter` | `false` — one receiver, one scope |
 
@@ -349,6 +349,45 @@ The one measured exception is a write-only-in-practice register such as the
 IC-7300MK2 RX-ANT selection: its documented read produced only `FB`. Scope the
 send-only control to the model, keep its optimistic state session-local, and
 document why it cannot participate in the ordinary polling contract.
+
+#### `DATA OFF MOD` is written; `DATA MOD` is not. Why the two differ
+
+Both are `1A 05` SET-menu leaves the radio persists identically, so the
+asymmetry needs stating rather than assuming.
+
+`DATA OFF MOD` selects where **voice** modulation comes from, and PC Audio is
+the operator saying "my voice is on this computer" — the two answer the same
+question, so a click on that button is a legible request to change it
+(Principle II: a user action is a request). `DATA MOD` selects where **data**
+modulation comes from, and nothing in AetherSDR's UI expresses an intent about
+it: WSJT-X, fldigi and the built-in beacons all reach the radio the same way
+whichever source is selected, so a client that wrote it would be changing
+operator state on a guess. It stays read-and-report.
+
+Three rules keep the writable half inside Principle III:
+
+1. **Only an operator click writes.** The connect edge *publishes* the client's
+   PC Audio state (`icom/audio.pc.state`) so `checkModInput()` can warn about a
+   mismatch; the write lives behind `icom/audio.pc`, which nothing but the
+   button calls. Replaying the client-persisted `PcAudioEnabled` key onto the
+   register at connect is precisely the two-sources-of-truth fight Principle III
+   exists to prevent.
+2. **"Off" restores, it does not assume.** The register is four-valued on an
+   IC-705 and six-valued on an IC-7300MK2; the button has two states. The
+   backend latches the radio's own value immediately before its first write of
+   the session and puts *that* back, falling back to the profile's `micValue`
+   only when there was nothing to capture. Writing a fixed MIC would delete an
+   operator's USB or ACC selection with no undo and no dialog.
+3. **Unverified models are refused, not guessed at.** `modulationProfileFor()`
+   answers only for models whose own CI-V guide has been checked. A click on any
+   other Icom is declined and says so; nothing is read, written or shown.
+
+That third rule has a cost worth naming: on a model with no profile, Radio
+Health shows no `DATA OFF MOD` / `DATA MOD` row at all, where it used to show
+one. The old row read items 118/119 on **every** Icom and labelled the result
+from the IC-705's enum — which is how an IC-9700 correctly set to LAN reported
+"USB" and got warned at, every session. A row that is wrong is worse than a
+missing one; the fix is another verified profile, not a re-enabled guess.
 
 #### A 0000–0255 level is not a 0–255 meter
 

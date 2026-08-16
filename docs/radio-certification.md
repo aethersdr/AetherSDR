@@ -275,7 +275,7 @@ connect is the interesting case, and it is the one no document can report.
 control through its seam verb *at its current value* and verifies scheduler
 admission or immediate wire dispatch. Nothing on the radio moves. Poll
 `civ scheduler` until `idle:true` with no new timeout to complete the
-dispatch/readback proof. On the IC-705 that is 25 controls in one call: 17
+dispatch/readback proof. On the IC-705 that is 26 controls in one call: 18
 linked, 0 broken, 8 that cannot be re-asserted without changing an operator
 setting.
 

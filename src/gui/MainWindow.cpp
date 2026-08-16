@@ -1984,11 +1984,19 @@ MainWindow::MainWindow(QWidget* parent)
             m_radioModel.removeRxAudioStream();
         }
 
-        // On Icom this toggle owns only DATA OFF MOD: network audio while on,
-        // the radio's hand microphone while off. DATA MOD is deliberately left
-        // to the radio, since digital-mode routing is independent operator state.
-        m_radioModel.setPcAudioEnabled(on);
+        // On Icom this CLICK -- and only a click -- asks the radio to switch
+        // DATA OFF MOD: the network source while on, and whatever the operator
+        // had before we first touched it while off. DATA MOD is deliberately
+        // left alone, since digital-mode routing is independent operator state.
+        //
+        // Guarded on the connection for the same reason the audio calls below
+        // are: with no session the write is dropped anyway, and all a
+        // disconnected click could still do is raise the unverified-model
+        // advisory about a radio that is not there.
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        if (m_radioModel.isConnected()) {
+            m_radioModel.setPcAudioEnabled(on);
+        }
         if (m_radioModel.isConnected() && caps.takesTxAudioOverSeam
             && !caps.hostModulates) {
             if (on && !m_audio->isTxStreaming()) {
@@ -9351,7 +9359,7 @@ void MainWindow::updateKeyerAvailability()
     const bool hasVoiceKeyer = m_radioModel.hasVoiceKeyer();
 
     const bool txIsCw  = hasCwKeyer
-                         && (txMode == "CW" || txMode == "CWL");
+                         && isCwMode(txMode);
     // Voice-mode test through the shared predicate: the ASR block below asks
     // the same question of a DIFFERENT slice, and one list keeps the two from
     // drifting on which modes count (VoiceModeGate.h).

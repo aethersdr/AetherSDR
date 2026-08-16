@@ -1,5 +1,6 @@
 #include "CwxPanel.h"
 #include "core/AppSettings.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "core/TxKeyingMarker.h"
 #include "models/CwxModel.h"
 
@@ -303,7 +304,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
             if (!m_model) return;
             if (m_txModeProvider) {
                 const QString mode = m_txModeProvider();
-                if (mode != QLatin1String("CW") && mode != QLatin1String("CWL"))
+                if (!isCwMode(mode))
                     return;
             }
             // Log the macro text to the history feed BEFORE firing the

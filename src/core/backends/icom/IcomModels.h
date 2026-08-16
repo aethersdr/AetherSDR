@@ -110,6 +110,12 @@ struct ModulationProfile {
     int dataOffInputItem = -1;
     int dataInputItem = -1;
     std::uint8_t networkOnlyValue = 0;
+    // What PC Audio "off" falls back to when there is no captured selection to
+    // put back — the hand microphone, which every Icom has. It lives in the
+    // table rather than at the call site for the same reason networkOnlyValue
+    // does: the enum is model-specific, and a future radio whose MIC is not
+    // 0x00 must not silently inherit this one's.
+    std::uint8_t micValue = 0;
     std::span<const ModulationInputChoice> choices;
 };
 

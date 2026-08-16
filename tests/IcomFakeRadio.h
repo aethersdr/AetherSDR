@@ -195,6 +195,14 @@ public:
     [[nodiscard]] bool serialOpened() const { return m_serialOpened; }
     [[nodiscard]] bool sawUsernameObfuscated() const { return m_usernameObfuscated; }
     [[nodiscard]] int civCommandsSeen() const { return m_civCommands; }
+    // What the radio currently holds for a 1A 05 leaf — the persisted-state
+    // question a client must not answer from its own memory.
+    [[nodiscard]] int setting(int item) const
+    {
+        auto it = m_settings.find(item);
+        return it == m_settings.end() ? -1 : static_cast<int>(it->second);
+    }
+    void setSetting(int item, std::uint8_t value) { m_settings[item] = value; }
     [[nodiscard]] const std::vector<std::uint16_t>& renewalSequences() const
     {
         return m_renewalSequences;
@@ -585,6 +593,33 @@ private:
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
+        // ---- 1A 05 SET MENU ----------------------------------------------
+        //
+        // The item number is TWO BCD bytes, so 0118 arrives as 0x01 0x18; a
+        // fake that read them as one byte would answer the wrong leaf. Read is
+        // the two-byte form, write carries a third byte — the same read/write
+        // split as every command pair above.
+        //
+        // Held as persisted state for the same reason the levels are: DATA OFF
+        // MOD is a setting the RADIO remembers across power cycles, and a fake
+        // that ACKs the read without answering it cannot tell a client which
+        // adopts the radio's value from one that quietly keeps its own.
+        if (frame->cmd == cmd::kSetting && frame->hasSub && frame->sub == 0x05
+            && frame->data.size() >= 2) {
+            const int item = decodeBcdByte(frame->data[0]) * 100
+                + decodeBcdByte(frame->data[1]);
+            if (frame->data.size() == 2) {
+                auto it = m_settings.find(item);
+                if (it == m_settings.end())
+                    return;   // no such leaf on this model — silence, not an error
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
+                         0x05, frame->data[0], frame->data[1], it->second, kCivEom});
+                return;
+            }
+            m_settings[item] = frame->data[2];
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
         if (frame->cmd == cmd::kTuneOffset && frame->hasSub && frame->data.empty()) {
             if (frame->sub == tuneOffset::kFrequency) {
                 // Two BCD bytes little-endian, then a sign byte.
@@ -713,6 +748,17 @@ public:
         {level::kCompLevel, 102}, // ~40 %
         {level::kNotchPos, 128},  // ~50 %
         {level::kVoxGain, 204},   // ~80 %
+    };
+    // 1A 05 SET-menu leaves, by DECIMAL item number. The IC-705's DATA OFF MOD
+    // starts at USB (0x01) rather than the WLAN (0x03) this client wants: an
+    // operator with a rig interface on the USB port is the ordinary case, and
+    // a fake that already sat on WLAN could not tell "PC Audio put it back"
+    // from "PC Audio never touched it".
+    std::map<int, std::uint8_t> m_settings{
+        {118, 0x01},   // DATA OFF MOD = USB
+        {119, 0x03},   // DATA MOD     = WLAN
+        {116, 0x80},   // USB MOD level
+        {117, 0x80},   // WLAN MOD level
     };
     // USB-D on FIL2 — NOT the client's construction default (USB, FIL1), so a
     // test asserting DIGU is asserting the client actually read 26 rather than

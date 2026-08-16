@@ -1,5 +1,6 @@
 #include "VfoWidget.h"
 #include "PhaseKnob.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
 #include "MeterViewController.h"
 #include "DisplaySettings.h"
@@ -3188,7 +3189,7 @@ void VfoWidget::updateExtendedDspVisibility()
 {
     const QString mode = m_slice->mode();
     const bool isFm = isFmRfMode(mode);
-    const bool isCw = (mode == "CW" || mode == "CWL");
+    const bool isCw = isCwMode(mode);
     m_nrsBtn->setVisible(!isFm && m_hasExtendedDsp);
     m_rnnBtn->setVisible(!isCw && !isFm && m_hasExtendedDsp);
     m_nrfBtn->setVisible(!isFm && m_hasExtendedDsp);
@@ -4394,7 +4395,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Show/hide mode-specific DSP controls
         // Categorize by mode family (supports future/unknown modes)
         bool isRtty = (mode == "RTTY");
-        bool isCw   = (mode == "CW" || mode == "CWL");
+        bool isCw   = isCwMode(mode);
         bool isDig  = (mode == "DIGL" || mode == "DIGU" || mode == "NT");
         bool isFm   = isFmRfMode(mode);
         bool hasToneControls = hasFmToneControls(mode);
@@ -5005,7 +5006,7 @@ void VfoWidget::syncFromSlice()
     m_markLabel->setText(QString::number(m_slice->rttyMark()));
     m_shiftLabel->setText(QString::number(m_slice->rttyShift()));
     m_rttyContainer->setVisible(isRtty);
-    bool isCw = (m_slice->mode() == "CW" || m_slice->mode() == "CWL");
+    bool isCw = isCwMode(m_slice->mode());
     bool isDig = (m_slice->mode() == "DIGL" || m_slice->mode() == "DIGU" || m_slice->mode() == "NT");
     bool isFm = isFmRfMode(m_slice->mode());
     bool hasToneControls = hasFmToneControls(m_slice->mode());
@@ -5279,7 +5280,7 @@ static const ModeFilterPresets& filterPresetsFor(const QString& mode)
 
     if (mode == "USB" || mode == "LSB") return usb;
     if (mode == "AM" || mode == "SAM") return am;
-    if (mode == "CW") return cw;
+    if (isCwMode(mode)) return cw;
     if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return dig;
     if (mode == "RTTY") return rtty;
     if (mode == "DFM") return dfm;
@@ -5580,7 +5581,7 @@ void VfoWidget::rebuildFilterButtons()
     }
 
     // Add CW autotune row spanning all 4 columns when in CW mode
-    if (m_slice && (m_slice->mode() == "CW" || m_slice->mode() == "CWL")) {
+    if (m_slice && isCwMode(m_slice->mode())) {
         int row = (m_filterWidths.size() + 3) / 4 + 1;
 
         m_autotuneContainer = new QWidget;

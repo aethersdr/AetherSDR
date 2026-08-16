@@ -745,8 +745,17 @@ void MainWindow::wireRadioModel()
         } else if (seamTxAudio && m_audio->isTxStreaming()) {
             audioStopTx();
         }
+        // TELL THE BACKEND, DO NOT COMMAND IT. `pcAudioEnabled` comes from a
+        // client-persisted key; DATA OFF MOD is a SET-menu item the RADIO
+        // persists and recalls itself. Writing one from the other on the
+        // connect edge is the two-sources-of-truth fight Constitution III
+        // exists to prevent -- an operator who set DATA OFF MOD to USB for
+        // their rig interface would find it silently rewritten every session,
+        // with no dialog and no undo. Publishing the state instead lets the
+        // backend ADVISE on a mismatch (checkModInput) while the radio stays
+        // authoritative; only an operator click writes (setPcAudioEnabled).
         if (connected) {
-            m_radioModel.setPcAudioEnabled(pcAudioEnabled);
+            m_radioModel.notePcAudioEnabled(pcAudioEnabled);
         }
     });
 

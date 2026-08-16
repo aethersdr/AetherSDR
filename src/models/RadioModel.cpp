@@ -479,6 +479,15 @@ void RadioModel::setPcAudioEnabled(bool on)
                                QStringLiteral("audio.pc"), 0, on);
 }
 
+void RadioModel::notePcAudioEnabled(bool on)
+{
+    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+        return;
+    }
+    m_backend->invokeExtension(QStringLiteral("icom"),
+                               QStringLiteral("audio.pc.state"), 0, on);
+}
+
 void RadioModel::handRestoredStateToBackend(const QString& serial)
 {
     if (!m_backend) {

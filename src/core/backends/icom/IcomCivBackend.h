@@ -390,6 +390,15 @@ private:
     int m_networkModLevelPercent = -1;
     bool m_micGainReported = false;
     std::optional<bool> m_pcAudioEnabled;
+    // WHAT THE OPERATOR HAD, so "off" can put it back instead of guessing.
+    //
+    // DATA OFF MOD is a four- (IC-705) or six-valued (IC-7300MK2) enum the
+    // RADIO persists; PC Audio is a two-state button. Writing a fixed MIC on
+    // "off" therefore destroys a USB / ACC / MIC+USB selection the operator
+    // set on the front panel and never gets it back. Latched from the readback
+    // the instant before this client's FIRST write of the session, so the
+    // value put back is the radio's own, not one we invented.
+    std::optional<int> m_dataOffModRestore;
     QString m_lastModInputWarning;
     void checkModInput();
 

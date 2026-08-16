@@ -225,11 +225,22 @@ The same setting is exposed in Radio Setup > Audio > PC Audio Devices as
 "Prompt on Audio Device Changes"; that checkbox is checked when notifications
 are enabled and unchecked when the suppression setting is active.
 
-On networked Icom radios the title-bar PC Audio toggle also owns the voice-mode
-input selection. On selects the model's network source in `DATA OFF MOD`
-(WLAN on IC-705, LAN on IC-7300MK2) and opens PC microphone capture; off selects
-MIC and closes capture so the hand microphone remains the voice source.
-`DATA MOD` is separate radio-owned state and is never changed by this toggle.
+On networked Icom radios an operator **click** on the title-bar PC Audio toggle
+also requests the voice-mode input selection. On selects the model's network
+source in `DATA OFF MOD` (WLAN on IC-705, LAN on IC-7300MK2) and opens PC
+microphone capture; off puts back whatever the radio held before the first
+request of the session — `MIC` only when nothing was captured — and closes
+capture. `DATA MOD` is separate radio-owned state and is never changed by this
+toggle.
+
+Only a click writes. `DATA OFF MOD` is a SET-menu register the radio persists,
+so Constitution III forbids replaying the client-persisted `PcAudioEnabled` key
+onto it: a connect *publishes* the client's PC Audio state
+(`RadioModel::notePcAudioEnabled`) so the backend can warn about a mismatch, and
+never commands. Without that split an operator who set `DATA OFF MOD` to USB for
+a rig interface would find it silently rewritten on every connect. On a model
+with no verified SET-menu map the click is refused and says so, rather than
+guessing another radio's item numbers.
 
 Accepting the dialog queues `AudioEngine::setInputDevice()` and
 `AudioEngine::setOutputDevice()` onto the audio worker thread. Those setters are

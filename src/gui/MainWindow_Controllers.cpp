@@ -20,6 +20,7 @@
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
@@ -495,7 +496,7 @@ void MainWindow::handleFlexControlButton(int button, int action)
             QString panId = s->panId();
             if (panId.isEmpty())
                 panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-            const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+            const bool isCw = isCwMode(s->mode());
             const double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
             m_splitActive = true;
             m_splitRxSliceId = s->sliceId();
@@ -1013,7 +1014,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
                 QString panId = s->panId().isEmpty()
                     ? (m_panStack ? m_panStack->activePanId() : m_radioModel.panId())
                     : s->panId();
-                const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+                const bool isCw = isCwMode(s->mode());
                 m_splitActive    = true;
                 m_splitRxSliceId = s->sliceId();
                 m_radioModel.sendCommand(
