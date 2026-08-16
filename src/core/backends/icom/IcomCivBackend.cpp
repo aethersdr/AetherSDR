@@ -36,8 +36,12 @@ Q_LOGGING_CATEGORY(lcIcomScheduler, "aether.icom.scheduler")
 Q_LOGGING_CATEGORY(lcIcomAddr, "aether.icom.address")
 
 // Metering is examined this often; the MeterPoller decides what is actually
-// due. Deliberately faster than the fastest meter interval so a due meter is
-// not delayed by up to a whole tick.
+// due. This is ALSO the scheduler's pump, which is why it is 10 ms and not the
+// 40 ms the meter intervals alone would justify: IcomCivScheduler releases at
+// most one frame per kSlotMs (25 ms), and a tick slower than the slot would
+// stretch the effective dispatch interval to tick + slot. At 10 ms the pump
+// costs a `due()` scan and one takeNext() on an empty queue, and the slot —
+// not this timer — remains what paces the wire.
 constexpr int kMeterTickMs = 10;
 // Transport counters publish on a FIXED cadence, not on receive: "nothing
 // arrived this second" is the observation the heartbeat's alarm path waits for,
@@ -1591,19 +1595,37 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             // may confirm the intent; a contradictory value is diagnostic
             // history, not a newer state transition.  Once the window expires,
             // the next fresh radio report wins again (Constitution II).
+            //
+            // ONE DIRECTION ONLY — suppression applies while the pending intent
+            // is KEY ON, never while it is key off.  The two directions are not
+            // symmetric risks.  Swallowing a stale OFF after a key-on request
+            // costs a transmission (the captured FT8 failure).  Swallowing an
+            // unexpected ON after an unkey request costs the operator any
+            // indication that the radio is still on the air — when the unkey was
+            // lost, refused, or overridden at the front panel, that report is
+            // the only thing that says so.  RFC #4983 states the rule directly:
+            // "Explicit PTT OFF and fail-safe unkey are never suppressed by a
+            // key-on transition guard", and Constitution VI wants every path
+            // that can transmit to fail closed.
             if (m_pendingPttIntent) {
-                if (keyed == *m_pendingPttIntent) {
-                    m_pendingPttIntent.reset();
-                    m_pendingPttUntilMs = 0;
-                } else if (frameAtMs < m_pendingPttUntilMs) {
+                const bool confirmsIntent = keyed == *m_pendingPttIntent;
+                const bool guarding = *m_pendingPttIntent
+                    && !confirmsIntent && frameAtMs < m_pendingPttUntilMs;
+                if (guarding) {
                     qCWarning(lcIcomScheduler)
                         << "suppressed contradictory PTT state during confirmation"
                         << "reported" << keyed << "intent" << *m_pendingPttIntent;
                     return;
-                } else {
-                    m_pendingPttIntent.reset();
-                    m_pendingPttUntilMs = 0;
                 }
+                if (!confirmsIntent && !*m_pendingPttIntent) {
+                    // The radio says it is keyed while we asked it to stop.
+                    // Publish it and say so — this is the fail-closed path.
+                    qCWarning(lcIcomScheduler)
+                        << "radio reports KEYED after an unkey request; "
+                           "publishing radio truth";
+                }
+                m_pendingPttIntent.reset();
+                m_pendingPttUntilMs = 0;
             } else if (observation == IcomCivScheduler::Observation::Stale) {
                 return;
             }
@@ -1950,8 +1972,14 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
         serviceSchedulerWaiters(nowMs);
         return;
     }
-    traceCiv(/*outbound=*/true, dispatch->frame,
-             dispatch->priority >= IcomCivScheduler::Priority::Ptt);
+    // ROUTINE = the high-rate loops only.  `>= Ptt` also swept up Control and
+    // Maintenance, which hid the startup snapshot and the scope on/output
+    // writes from the default `civ trace` — the frames behind the documented
+    // number-one "black panadapter" cause. Before the scheduler every outbound
+    // frame was shown; keep it that way for everything but the pollers.
+    const bool routineDispatch = dispatch->priority == IcomCivScheduler::Priority::Ptt
+        || dispatch->priority == IcomCivScheduler::Priority::ActiveMeter;
+    traceCiv(/*outbound=*/true, dispatch->frame, routineDispatch);
     if (dispatch->supersedes) {
         if (dispatch->frame.size() > 5) {
             noteControlSent(dispatch->frame[4], dispatch->frame[5], true);
@@ -1997,16 +2025,25 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
 
 void IcomCivBackend::serviceSchedulerWaiters(qint64 nowMs)
 {
+    // COLLECT, ERASE, THEN EMIT. extensionResult is a direct connection, so a
+    // slot that registers another waiter would reallocate the vector under an
+    // iterator we are still holding. Finishing all mutation first makes the
+    // re-entrant case merely queue more work instead of corrupting the walk.
+    std::vector<quint64> ready;
     for (auto it = m_schedulerWaiters.begin(); it != m_schedulerWaiters.end();) {
         if (!m_civScheduler.idle() && nowMs < it->deadlineMs) {
             ++it;
             continue;
         }
-        QVariantMap result = schedulerDiagnostics();
-        result.insert(QStringLiteral("timedOut"), !m_civScheduler.idle());
-        emit extensionResult(it->requestId, result);
+        ready.push_back(it->requestId);
         it = m_schedulerWaiters.erase(it);
     }
+    if (ready.empty())
+        return;
+    QVariantMap result = schedulerDiagnostics();
+    result.insert(QStringLiteral("timedOut"), !m_civScheduler.idle());
+    for (quint64 requestId : ready)
+        emit extensionResult(requestId, result);
 }
 
 void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
@@ -2121,10 +2158,12 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
         sendUserCommand(cmdSetMode(addr, *civ, m_filter));
     }
     // CONFIRM. Everything above is a request; only the radio's own answer is
-    // state (Constitution II). This read is what corrects the optimistic
-    // publish below if the radio refused or altered the change — a mode with no
-    // DATA variant, a band where the radio will not enter it. One extra frame
-    // on the operator's own mode change, not a new poll.
+    // state (Constitution II). sendUserCommand queues that confirmation read
+    // itself, at Operator priority and one generation ahead of any poll already
+    // on the wire, and it is what corrects the optimistic publish below if the
+    // radio refused or altered the change — a mode with no DATA variant, a band
+    // where the radio will not enter it. One extra frame on the operator's own
+    // mode change, not a new poll.
     // PUBLISH THE PASSBAND NOW, from the mode we just commanded.
     //
     // Waiting for the radio to report the mode back is not good enough: the
@@ -2176,9 +2215,11 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
         sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
     else
         sendUserCommand(cmdSetMode(addr, m_mode, filter));
-    // A write is intent; the radio's own reply is state. This also corrects the
-    // optimistic passband below if the radio clamps or refuses the requested
-    // slot while CI-V Transceive is disabled.
+    // A write is intent; the radio's own reply is state. sendUserCommand
+    // schedules that readback itself now (confirmationFor maps 26 -> read 26,
+    // 06 -> read 04), so it also corrects the optimistic passband below if the
+    // radio clamps or refuses the requested slot while CI-V Transceive is off.
+    //
     // PUBLISH THE PASSBAND NOW, for the same reason setSliceMode does: the
     // radio's mode report only comes back if CI-V Transceive is on, and the
     // operator who just clicked a filter button is owed an immediate answer.

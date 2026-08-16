@@ -334,8 +334,15 @@ jobs:
       # command shape" and all four checks stayed green, because nothing in this
       # file ran that target either. A capability flag that gates which frame
       # reaches the radio is exactly the kind of claim worth failing a merge on.
-      - name: Test Icom CI-V codec and model table
-        run: ctest --test-dir build -R "^icom_(civ|meters)_test$" --output-on-failure
+      - name: Test Icom CI-V codec, model table, command scheduler and backend
+        # icom_civ_scheduler_test and icom_backend_test are on this gate
+        # deliberately. The scheduler arbitrates PTT and the operator's control
+        # writes on a single serial command plane, and icom_backend_test is
+        # where every convergence claim about it is asserted. Leaving them to
+        # the weekly sanitizers job would repeat the hasVfoModeCommand lesson
+        # in the comment above: the assertion existed, nothing on a PR ran it,
+        # and all four checks stayed green. ~21 s for the pair.
+        run: ctest --test-dir build -R "^icom_(civ|civ_scheduler|meters|backend)_test$" --output-on-failure
 
       # Mirrors check-windows' "sccache stats" step, and exists for the same
       # reason: #1963 disabled the Windows compiler cache for three months

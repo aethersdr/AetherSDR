@@ -270,15 +270,49 @@ single writer above `IcomSession::sendCiv()` and:
 - filters its own request/response traffic out of anything re-exported (CAT
   pass-through, TCI) — kappanhang does exactly this and it matters.
 
+The semantic key is deliberately **coarser than the register**: `04`, `06`,
+`26` and the transceive forms all key on `mode`, which is what makes an
+operator mode write supersede an in-flight mode read of any form. Coalescing
+does *not* inherit that coarseness — two reads collapse only when they ask the
+same register the same way. `04` (mode) and `26` (mode + DATA + filter) are
+both issued at connect on purpose, because `26` is what corrects `04` when the
+two disagree.
+
+Aging tops out at the **visible-meter** band, one step below the PTT fallback
+poll, not at the poll itself. Dispatch breaks an equal-priority tie in favour
+of the older entry, so work that aged all the way to `Ptt` would be dispatched
+*ahead* of the keyed-state poll rather than merely tying with it. Stopping one
+band short still beats fresh meter traffic on that tie — which is all
+anti-starvation needs — while leaving PTT an edge no amount of waiting erodes.
+
 Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
 retired before a later read is sent, or that ACK can be mistaken for the read's
 answer. An unsupported read may itself finish with `FB`/`FA`; that releases the
 slot but is never decoded as state.
 
+A transaction that outlives its 350 ms timeout, or that a fail-safe unkey
+displaces, stays **recognisable for a further two seconds**. The timeout means
+"stop waiting", not "this can never arrive": without that memory the identical
+frame is rejected as stale at 349 ms and adopted as fresh radio truth at
+351 ms, which is enough to put an obsolete reading back over a newer operator
+write on every register.
+
 PTT additionally carries an intent generation and a one-second confirmation
-window. A delayed pre-key `RX` answer is stale after a newer `TX` intent and
-cannot unkey the model; matching readback confirms the intent, while radio
-truth wins again when the bounded window expires.
+window — one second because it must comfortably cover a lost reply (350 ms)
+plus the 250 ms fallback poll that follows it, and still expire well inside the
+time an operator would take to notice a wrong transmit indicator.
+
+**The window is one-directional, and that asymmetry is the point.** While a
+key-*on* intent is pending, a contradictory `RX` report is the delayed pre-key
+poll answer and is suppressed: this is RFC #4983's captured FT8 failure, where
+treating it as current state tore down transmit audio on a radio that then
+keyed normally. While a key-*off* intent is pending, a contradictory `TX`
+report is never suppressed — a lost, refused, or front-panel-overridden unkey
+is exactly the case where the radio's report is the only thing telling the
+operator they are still on the air. RFC #4983 states the rule directly
+("explicit PTT OFF and fail-safe unkey are never suppressed by a key-on
+transition guard") and Constitution VI requires every path that can transmit to
+fail closed. Radio truth wins again as soon as the bounded window expires.
 
 | group | interval | condition |
 |---|---:|---|

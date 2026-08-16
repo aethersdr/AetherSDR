@@ -92,6 +92,12 @@ public:
     static constexpr int kSlotMs = 25;
     static constexpr int kReadTimeoutMs = 350;
     static constexpr int kPriorityAgingMs = 1000;
+    // How long a timed-out or displaced transaction stays recognisable, so a
+    // late answer is still generation-checked rather than adopted as fresh
+    // radio truth. Comfortably longer than kReadTimeoutMs and shorter than the
+    // slowest reconciliation interval, so it never spans two generations of
+    // the same register.
+    static constexpr int kLateReplyGraceMs = 2000;
 
 private:
     struct Queued {
@@ -101,13 +107,25 @@ private:
         std::int64_t enqueuedAtMs = 0;
     };
 
+    struct Expired {
+        Queued request;
+        std::int64_t forgetAtMs = 0;
+    };
+
+    [[nodiscard]] static bool sameReplyShape(const Request& a, const Request& b) noexcept;
     [[nodiscard]] bool matches(const CivFrame& frame, const Queued& request) const noexcept;
     [[nodiscard]] Priority effectivePriority(const Queued& request,
                                              std::int64_t nowMs) const noexcept;
     void expireRead(std::int64_t nowMs);
+    void dropStaleExpired(std::int64_t nowMs);
+
+    // Bounded: one ordinary transaction is outstanding at a time and each entry
+    // lives only kLateReplyGraceMs, so this cannot grow with queue depth.
+    static constexpr std::size_t kMaxExpiredTracked = 16;
 
     std::deque<Queued> m_queue;
     std::optional<Queued> m_inFlight;
+    std::deque<Expired> m_expired;
     std::unordered_map<std::string, std::uint64_t> m_generations;
     std::uint64_t m_sequence = 0;
     std::int64_t m_lastDispatchMs = 0;

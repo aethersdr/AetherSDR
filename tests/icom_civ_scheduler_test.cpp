@@ -150,6 +150,85 @@ int main()
               "rapid writes preserve the newest value");
     }
 
+    // Aging must survive the RE-QUEUE, not just the wait. onLinkTick re-asks
+    // for NR/NB/notch every 1000 ms — the same period as kPriorityAgingMs — so
+    // a collapse that rebuilds the entry restarts its clock and the group can
+    // never age at all. The single-enqueue fixture above cannot see that.
+    {
+        IcomCivScheduler scheduler;
+        const std::int64_t t0 = 1755300000000LL;   // a real epoch-ms, as the backend passes
+        scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), t0);
+        check(scheduler.takeNext(t0).has_value(), "aging fixture occupies the reply slot");
+        scheduler.enqueue(read("control.nr", 0x16, 0x40, Priority::Control), t0);
+        for (int tick = 1; tick <= 6; ++tick)
+            scheduler.enqueue(read("control.nr", 0x16, 0x40, Priority::Control),
+                              t0 + tick * 1000);
+        check(scheduler.stats().queueDepth == 1,
+              "a re-queued read collapses instead of accumulating");
+        scheduler.enqueue(read("meter.power", 0x15, 0x11, Priority::ActiveMeter),
+                          t0 + 6001);
+        const auto aged = scheduler.takeNext(t0 + 6001);
+        check(aged && aged->key == "control.nr",
+              "a control re-queued every second still ages past fresh meter work");
+    }
+
+    // Aging tops out BELOW the PTT fallback poll. takeNext breaks an equal
+    // priority tie on sequence and an aged entry always has the lower one, so
+    // aging as far as Priority::Ptt would dispatch ahead of the keyed-state
+    // poll rather than merely tying with it.
+    {
+        IcomCivScheduler scheduler;
+        const std::int64_t t0 = 1755300000000LL;
+        for (int i = 0; i < 10; ++i)
+            scheduler.enqueue(read("c" + std::to_string(i), 0x16,
+                                   static_cast<std::uint8_t>(0x40 + i),
+                                   Priority::Control), t0);
+        scheduler.enqueue(read("ptt", 0x1C, 0x00, Priority::Ptt), t0 + 5000);
+        const auto next = scheduler.takeNext(t0 + 5000);
+        check(next && next->key == "ptt",
+              "a fresh PTT poll outranks background work aged for five seconds");
+    }
+
+    // Two DIFFERENT registers share the coarse "mode" semantic key on purpose,
+    // so a mode write supersedes an in-flight read of either. Coalescing must
+    // not inherit that: sendConnectReadBurst queues 04 and 26 together because
+    // 26 corrects 04 when they disagree.
+    {
+        IcomCivScheduler scheduler;
+        const std::int64_t t0 = 1755300000000LL;
+        scheduler.enqueue(read("mode", 0x04, 0x00, Priority::Maintenance), t0);
+        scheduler.enqueue(read("mode", 0x26, 0x00, Priority::Maintenance), t0);
+        check(scheduler.stats().queueDepth == 2,
+              "reads of different registers are not coalesced by a shared key");
+        scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), t0);
+        scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), t0);
+        check(scheduler.stats().queueDepth == 3,
+              "while a true duplicate read still coalesces");
+    }
+
+    // A reply later than kReadTimeoutMs is still generation-checked. Without
+    // this the identical frame is Stale at 349 ms and authoritative at 351 ms.
+    {
+        IcomCivScheduler scheduler;
+        scheduler.enqueue(read("level.rf", 0x14, 0x02, Priority::Control), 0);
+        check(scheduler.takeNext(0).has_value(), "late-reply fixture dispatches");
+        scheduler.enqueue(write("level.rf", 0x14, 0x02, 99, Priority::Operator), 100);
+        check(scheduler.observe(reply(0x14, 0x02, 0x50), 360)
+                  == IcomCivScheduler::Observation::Stale,
+              "a reply that misses the timeout is still rejected against a "
+              "newer write generation");
+    }
+    {
+        // ...but a merely slow reply with nothing newer behind it is not
+        // reportable as stale; the backend should still adopt it.
+        IcomCivScheduler scheduler;
+        scheduler.enqueue(read("level.rf", 0x14, 0x02, Priority::Control), 0);
+        check(scheduler.takeNext(0).has_value(), "slow-reply fixture dispatches");
+        check(scheduler.observe(reply(0x14, 0x02, 0x50), 360)
+                  == IcomCivScheduler::Observation::Unmatched,
+              "a late reply with no newer intent behind it is not marked stale");
+    }
+
     if (g_failures == 0) {
         std::printf("icom_civ_scheduler_test: all checks passed\n");
         return 0;

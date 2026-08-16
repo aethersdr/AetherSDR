@@ -2976,8 +2976,12 @@ advancing is healthy. A growing queue plus timeouts identifies CI-V command-
 plane loss even if RS-BA1 link counters and the panadapter still move.
 `staleReplies` is expected to remain near zero; it proves an old poll was
 discarded after a newer operator intent instead of rolling the UI backward.
-Poll this read-only verb until `idle:true` when a test needs deterministic
-write/readback convergence.
+A few per session are normal — one per operator write that overtook a poll
+already on the wire. It climbing *with* `timeouts`, or tracking the rate the
+operator moves controls, means replies are routinely arriving after their
+transaction expired: read it alongside `queueDepth` and treat the pair, not
+`staleReplies` alone, as the congestion signal. Poll this read-only verb until
+`idle:true` when a test needs deterministic write/readback convergence.
 
 **`civ trace [all]`** reads the bounded decoded CI-V frame trace. The default
 omits routine meter traffic; `all` includes it. **`civ send <hex>`** injects

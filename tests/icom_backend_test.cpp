@@ -88,6 +88,11 @@ int main(int argc, char** argv)
     SliceDelta lastSliceState;
     TransmitDelta lastTransmitState;
     std::vector<QString> publishedModes;
+    // Every mox edge in order. The PTT confirmation window is defined by which
+    // transitions it lets through, so the SEQUENCE is the assertion, not the
+    // final value — a suppressed-then-corrected state and a never-suppressed
+    // one both end up in the same place.
+    std::vector<bool> moxPublications;
     const auto mergeSlice = [&lastSliceState](const SliceDelta& d) {
         if (d.nr) lastSliceState.nr = d.nr;
         if (d.nb) lastSliceState.nb = d.nb;
@@ -122,6 +127,7 @@ int main(int argc, char** argv)
         if (d.transmitFreq) lastTransmitState.transmitFreq = d.transmitFreq;
         if (d.atuEnabled) lastTransmitState.atuEnabled = d.atuEnabled;
         if (d.atuStatusRaw) lastTransmitState.atuStatusRaw = d.atuStatusRaw;
+        if (d.mox) { lastTransmitState.mox = d.mox; moxPublications.push_back(*d.mox); }
     });
 
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
@@ -364,6 +370,59 @@ int main(int argc, char** argv)
         QTest::qWait(120);
         check(radio.audioPacketsFromClient() == afterUnkey,
               "and stops again on unkey");
+    }
+
+    // ---- THE PTT CONFIRMATION WINDOW, IN BOTH DIRECTIONS ------------------
+    //
+    // RFC #4983's captured FT8 failure and its explicit counter-rule live here.
+    // The window is what lets a newer key-on intent outlive an older poll's OFF
+    // answer; it must NOT also let a client's unkey request outlive the radio
+    // saying it is still transmitting.
+    {
+        // (a) THE CAPTURED FAILURE. Key on, then have the radio insist it is
+        //     still RX — exactly the pre-key poll answer arriving late. The
+        //     model must not follow it back to RX inside the window.
+        backend.setKeying(false);
+        check(waitSchedulerIdle(), "PTT fixture starts unkeyed");
+        moxPublications.clear();
+
+        radio.m_pttOverride = false;         // radio keeps answering "RX"
+        backend.setKeying(true);
+        QTest::qWait(600);                   // several 250 ms fallback polls
+        check(std::find(moxPublications.begin(), moxPublications.end(), false)
+                  == moxPublications.end(),
+              "a contradictory PTT OFF is suppressed while a key-on intent is "
+              "pending — the captured FT8 transmit-audio teardown");
+        check(lastTransmitState.mox.value_or(false),
+              "and the model stays keyed for the operator who asked to transmit");
+
+        // The window is BOUNDED. Past it the radio wins again (Constitution II),
+        // otherwise a client belief outlives the hardware indefinitely.
+        QTest::qWait(700);
+        check(!lastTransmitState.mox.value_or(true),
+              "once the 1 s window expires the radio's own report wins again");
+
+        // (b) THE DIRECTION THAT MUST NEVER BE SUPPRESSED. Ask to unkey while
+        //     the radio insists it is transmitting — a lost or refused unkey.
+        //     Swallowing this is the one failure that leaves an operator on the
+        //     air with a UI that says otherwise (Constitution VI fails closed).
+        radio.m_pttOverride = true;
+        moxPublications.clear();
+        backend.setKeying(false);
+        check(waitFor([&] {
+                  return std::find(moxPublications.begin(), moxPublications.end(),
+                                   true) != moxPublications.end();
+              }, 1000),
+              "a radio reporting KEYED after an unkey request is published "
+              "immediately, NOT suppressed by the confirmation window");
+        check(lastTransmitState.mox.value_or(false),
+              "and the model shows the transmitter that is actually on the air");
+
+        radio.m_pttOverride.reset();
+        backend.setKeying(false);
+        check(waitFor([&] { return !lastTransmitState.mox.value_or(true); }, 2000),
+              "an obedient radio then unkeys normally");
+        check(waitSchedulerIdle(), "PTT fixture drains");
     }
 
     // TUNE temporarily borrows the RF-power register. Releasing it must put
