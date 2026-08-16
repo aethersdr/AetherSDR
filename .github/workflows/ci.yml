@@ -937,5 +937,14 @@ jobs:
 #   `sccache --stop-server` on Windows — the server holds cache files open.
 # - Do not add an exact-match key to the RESTORE steps. The prefix fallback is
 #   the mechanism; an exact key that never matches just adds a lookup.
-# - PR-scoped caches from the other steps (Qt, FFTW, DeepFilterNet, qtkeychain)
-#   are cleaned up when a PR closes by .github/workflows/cache-cleanup.yml.
+# - Two kinds of dead entry are swept by .github/workflows/cache-cleanup.yml,
+#   and both matter because the 7-day retention is NOT configurable, so an
+#   entry that stops being read still costs budget for a week:
+#     * PR-scoped caches from the other steps (Qt, FFTW, DeepFilterNet,
+#       qtkeychain), deleted when the PR closes;
+#     * SUPERSEDED main entries. Restores resolve to the most recent match, so
+#       run N's cache is unreachable the moment run N+1 saves. Left alone, main
+#       writes ~1.0 GiB x ~9.2 runs/day and would pin the repo at its allowance
+#       on its own. That job prunes each prefix to the newest 2.
+#   If you add a compiler cache here, add its key prefix to that job's
+#   PREFIXES list or it will accumulate silently.

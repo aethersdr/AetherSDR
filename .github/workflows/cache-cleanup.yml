@@ -1,41 +1,50 @@
 name: Cache cleanup
 
-# Delete a PR's Actions caches when it closes.
+# Keeps the repository's Actions cache inside its 10 GB allowance by deleting
+# entries that nothing can read any more. Two distinct jobs, two distinct
+# causes of dead entries — see each job's comment.
 #
-# The repository shares a single 10 GB Actions cache budget, evicted by LRU.
-# Caches are scoped by ref, and a PR's caches live on refs/pull/N/merge — a ref
-# that only that PR can read. Once the PR closes, nothing can ever read them
-# again, but they keep occupying budget until LRU gets around to them, evicting
-# entries on refs/heads/main that every job CAN read.
-#
-# ci.yml's save-on-main split (see "Compiler-cache strategy" there) stops PRs
-# writing the big compiler caches. This handles the rest: PR runs still populate
-# the dependency caches (Qt, FFTW3, DeepFilterNet3, qtkeychain) whose keys are
-# content-hashed rather than run-scoped, and those are not small — a single
-# install-qt-action entry runs to hundreds of MB.
-#
-# Runs on close rather than merge: an abandoned PR's caches are exactly as dead
-# as a merged one's, and abandoned PRs are the ones nobody comes back to.
+# Background for both: caches are scoped by ref and evicted by LAST ACCESS
+# date, and GitHub removes anything not accessed in over 7 days. That 7-day
+# retention is NOT configurable, so an entry that stops being read still
+# occupies budget for up to a week unless something deletes it. Both jobs here
+# exist because "stops being read" is predictable in two specific cases.
 
 on:
   pull_request:
     types: [closed]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
-# Deliberately NOT pull_request_target. That variant runs against the base repo
-# with a writable token and is the standard fork-PR privilege-escalation vector;
-# this job needs no repo contents and no fork input, so the safe trigger is the
-# ordinary one. actions:write is the only scope required, and it cannot reach
-# anything outside the cache API.
+# Deliberately NOT pull_request_target for the PR trigger. That variant runs
+# against the base repo with a writable token and is the standard fork-PR
+# privilege-escalation vector; neither job needs repo contents or fork input.
+# actions:write is the only elevated scope, and it cannot reach anything
+# outside the cache API.
+#
+# This lives here rather than as a step in ci.yml specifically so that ci.yml
+# keeps `contents: read` and nothing that compiles PR-authored code ever holds
+# a write scope.
 permissions:
   actions: write
   contents: read
 
-concurrency:
-  group: cache-cleanup-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
-  cleanup:
+  # ── Dead cause 1: the PR closed ──────────────────────────────────────────
+  # A PR's caches live on refs/pull/N/merge, a ref only that PR can read. Once
+  # it closes nothing can ever read them again.
+  #
+  # ci.yml's save-on-main split already stops PRs writing the big compiler
+  # caches. This handles the rest: PR runs still populate content-hash-keyed
+  # dependency caches (Qt, FFTW3, DeepFilterNet3, qtkeychain) that the split
+  # does not touch, and they are not small — PR #4910 held 2.3 GiB, of which a
+  # single Qt entry was 1,297 MiB.
+  #
+  # On close rather than merge: an abandoned PR's caches are exactly as dead as
+  # a merged one's, and abandoned PRs are the ones nobody comes back to.
+  pr-caches:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Delete caches for the closed PR
@@ -47,28 +56,97 @@ jobs:
           set -euo pipefail
           REF="refs/pull/${PR}/merge"
 
-          # List first purely for the log — deletion below is a single call, so
-          # without this the step would report nothing about what it removed.
-          # --limit 100 is far above what one PR accumulates (busiest observed: 4).
+          # Listed first purely for the log — the delete below is one call, so
+          # without this the step would not report what it removed.
           echo "Caches on $REF:"
           gh cache list --ref "$REF" --limit 100 \
             --json key,sizeInBytes \
             --jq '.[] | "  \(.key)  (\((.sizeInBytes/1048576)|floor) MiB)"' || true
 
-          # --all --ref deletes the whole ref's caches in one call.
           # --succeed-on-no-caches keeps the step green when there is nothing to
-          # do, which is the common case for a PR whose caches LRU already took.
+          # do, the common case for a PR whose caches LRU already took.
           gh cache delete --all --ref "$REF" --succeed-on-no-caches
 
-      - name: Report remaining repo cache usage
-        # Visibility, not a gate. The failure this whole change addresses was
-        # silent — builds got slower, nothing went red — so the usage number
-        # belongs somewhere a person will eventually read it.
-        if: always()
+  # ── Dead cause 2: a newer main cache superseded an older one ─────────────
+  # ci.yml saves a compiler cache on every green main build, keyed on run_id
+  # because actions/cache entries are immutable. Restores resolve through
+  # restore-keys to the MOST RECENT match, so the moment run N+1 saves, run N's
+  # entry is unreachable — but it still counts against the allowance for up to
+  # 7 days.
+  #
+  # That adds up faster than it looks: main runs ~9.2x/day and each writes
+  # ~1.0 GiB across the three platforms, so unmanaged this alone accumulates
+  # ~9 GiB/day and pins the repo at its 10 GB allowance holding roughly a day
+  # of caches that nothing will ever read. Pruning to the newest few keeps
+  # steady state near ~4 GB, which is what leaves the Qt/FFTW/DeepFilter
+  # entries clear of the LRU cliff.
+  prune-main:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune superseded main compiler caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # Keep 2, not 1. Only the newest is ever restored, so the second is
+          # insurance: if a save lands a sparse or corrupt entry, deleting it by
+          # hand falls back to a known-good one instead of a cold build for
+          # everybody until the next green main run.
+          KEEP: "2"
+        run: |
+          set -euo pipefail
+
+          # One prefix per compiler cache in ci.yml. The macOS key is doubled
+          # ("ccache-ccache-...") because hendrikmuhs/ccache-action prepends its
+          # own "ccache-" to the key input, which is already "ccache-macos-ci".
+          PREFIXES="ccache-linux-build- sccache-windows- ccache-ccache-macos-ci-"
+
+          total=0
+          for prefix in $PREFIXES; do
+            # created_at, not last_accessed_at: "newest" here means most
+            # recently WRITTEN. Sorting by access would rank a stale entry that
+            # a straggler run happened to read above the current one.
+            mapfile -t IDS < <(
+              gh cache list --ref refs/heads/main --key "$prefix" \
+                --limit 100 --sort created_at --order desc \
+                --json id --jq ".[${KEEP}:] | .[].id"
+            )
+
+            if [ "${#IDS[@]}" -eq 0 ]; then
+              echo "$prefix: nothing to prune (<= $KEEP entries)"
+              continue
+            fi
+
+            echo "$prefix: pruning ${#IDS[@]} superseded entr(ies)"
+            for id in "${IDS[@]}"; do
+              # Delete by id, which is unambiguous; deleting by key would need
+              # --ref and could match another ref's identically-keyed entry.
+              # Tolerate individual failures: LRU can take an entry between the
+              # list and the delete, and one 404 must not strand the rest.
+              if gh cache delete "$id"; then
+                total=$((total + 1))
+              else
+                echo "  already gone: $id"
+              fi
+            done
+          done
+          echo "Pruned $total superseded cache(s)."
+
+  # Visibility, not a gate. The failure this whole workflow addresses was
+  # silent — builds got slower, nothing went red — so the usage number belongs
+  # somewhere a person will eventually read it. Runs after whichever job fired.
+  report:
+    if: always()
+    needs: [pr-caches, prune-main]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report repo cache usage
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh api "repos/${{ github.repository }}/actions/cache/usage" \
-            --jq '"Repo Actions cache: \(.active_caches_count) entries, \((.active_caches_size_in_bytes/1073741824)*100|floor/100) GiB of 10 GiB"' \
+            --jq '"Repo Actions cache: \(.active_caches_count) entries, \((.active_caches_size_in_bytes/1073741824)*100|floor/100) GiB of 10 GiB allowance"' \
             | tee -a "$GITHUB_STEP_SUMMARY"
