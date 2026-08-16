@@ -2971,6 +2971,13 @@ producer in isolation:
    "pendingPttIntent":false}}
 ```
 
+While a PTT request is awaiting confirmation the reply also carries
+`"pttIntent"` (the requested state) and `"pttIntentRemainingMs"` (how much of
+the bounded window is left). Suppression applies only while `pttIntent` is
+`true`: a radio reporting TX after an unkey request is always published, never
+held back. See the Icom CI-V backend design doc for why the two directions are
+not symmetric.
+
 Use it when controls feel delayed or meters stop. A bounded queue with replies
 advancing is healthy. A growing queue plus timeouts identifies CI-V command-
 plane loss even if RS-BA1 link counters and the panadapter still move.

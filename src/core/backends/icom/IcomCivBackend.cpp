@@ -64,6 +64,23 @@ QByteArray floatBytes(const std::vector<float>& v)
 IcomCivBackend::IcomCivBackend(QObject* parent)
     : IRadioBackend(parent), m_model(&unknownModel())
 {
+    // MONOTONIC, NOT WALL CLOCK. Every timestamp in this file measures an
+    // INTERVAL — a dispatch slot, a reply timeout, a poll period, a stall
+    // threshold, a frame's age in the trace — and none is ever reported as an
+    // absolute time. Wall clock was therefore never the right source, and once
+    // every CI-V producer runs through one scheduler it is an actively
+    // dangerous one: a backward step (an NTP correction after suspend/resume
+    // being the realistic case) makes every `now - then` negative at once, so
+    // the dispatch slot never opens, the in-flight read never times out, and
+    // the stall detector never warns. That is a silent, total command-plane
+    // freeze — meters, controls, PTT poll and operator writes alike —
+    // recoverable only by reconnecting. QElapsedTimer cannot step backwards.
+    m_clock.start();
+}
+
+qint64 IcomCivBackend::nowMs() const
+{
+    return m_clock.elapsed();
 }
 
 IcomCivBackend::~IcomCivBackend() = default;
@@ -355,7 +372,7 @@ void IcomCivBackend::disconnectRadio()
                             percentToLevelRaw(m_preTuneTxPowerPercent)),
                 "level.rfPower");
         }
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 now = nowMs();
         pumpCiv(now);
         pumpCiv(now);
     }
@@ -376,7 +393,7 @@ void IcomCivBackend::disconnectRadio()
     m_meters.reset();
     m_civScheduler.reset();
     m_schedulerTimeoutsReported = 0;
-    serviceSchedulerWaiters(QDateTime::currentMSecsSinceEpoch());
+    serviceSchedulerWaiters(nowMs());
     m_pendingPttIntent.reset();
     m_pendingPttUntilMs = 0;
     // The radio keeps its own DSP state across our sessions and we have not
@@ -960,7 +977,7 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
 
     // Start the first snapshot request now.  Every remaining startup/control/
     // meter request leaves through the same paced writer on timer ticks.
-    pumpCiv(QDateTime::currentMSecsSinceEpoch());
+    pumpCiv(nowMs());
 
 
 }
@@ -1100,7 +1117,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         return;
     }
 
-    const qint64 frameAtMs = QDateTime::currentMSecsSinceEpoch();
+    const qint64 frameAtMs = nowMs();
     ++m_framesObserved;
     m_lastInboundCivAtMs = frameAtMs;
 
@@ -1266,7 +1283,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         if (frame.cmd == cmd::kSetModeTrx && m_session && m_model->hasVfoModeCommand) {
             const auto read = cmdReadVfoMode(m_session->civAddress());
             queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Maintenance);
-            pumpCiv(QDateTime::currentMSecsSinceEpoch());
+            pumpCiv(nowMs());
         } else if (!m_model->hasVfoModeCommand) {
             // This model has no verified DATA readback. An ordinary mode frame
             // can only justify an ordinary mode claim.
@@ -1561,7 +1578,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         if (!raw)
             return;
 
-        m_meters.markAnswered(spec->id, QDateTime::currentMSecsSinceEpoch());
+        m_meters.markAnswered(spec->id, nowMs());
         const double value = meterValue(spec->id, *raw,
                                         s9ReferenceFor(m_frequencyHz),
                                         m_model ? m_model->civAddress : 0xA4);
@@ -1931,7 +1948,7 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
     request.replyHasSub = parsed->hasSub;
     request.replySub = parsed->sub;
     request.notBeforeMs = notBeforeMs;
-    m_civScheduler.enqueue(std::move(request), QDateTime::currentMSecsSinceEpoch());
+    m_civScheduler.enqueue(std::move(request), nowMs());
 }
 
 void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
@@ -1946,7 +1963,7 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
     request.expectsReply = true;
     request.acceptsGenericReply = true;
     request.supersedes = supersedes;
-    m_civScheduler.enqueue(std::move(request), QDateTime::currentMSecsSinceEpoch());
+    m_civScheduler.enqueue(std::move(request), nowMs());
 }
 
 void IcomCivBackend::queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
@@ -1958,7 +1975,7 @@ void IcomCivBackend::queueEmergencyWriteNoReply(const std::vector<std::uint8_t>&
     request.priority = IcomCivScheduler::Priority::Emergency;
     request.supersedes = true;
     request.coalesce = false;
-    m_civScheduler.enqueue(std::move(request), QDateTime::currentMSecsSinceEpoch());
+    m_civScheduler.enqueue(std::move(request), nowMs());
 }
 
 void IcomCivBackend::pumpCiv(qint64 nowMs)
@@ -2018,7 +2035,12 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
     out.insert(QStringLiteral("pendingPttIntent"), m_pendingPttIntent.has_value());
     if (m_pendingPttIntent) {
         out.insert(QStringLiteral("pttIntent"), *m_pendingPttIntent);
-        out.insert(QStringLiteral("pttIntentDeadlineMs"), m_pendingPttUntilMs);
+        // REMAINING, not a deadline. The backend's clock is monotonic since
+        // construction, so the absolute value means nothing to a consumer;
+        // "how much longer can this suppress a contradictory report" is the
+        // question anyone reads this field to answer.
+        out.insert(QStringLiteral("pttIntentRemainingMs"),
+                   std::max<qint64>(0, m_pendingPttUntilMs - nowMs()));
     }
     return out;
 }
@@ -2050,7 +2072,7 @@ void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
 {
     if (!m_session || !m_connected)
         return;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 now = nowMs();
     const std::string key = semanticKey(frame);
     const std::optional<CivFrame> parsed = parseFrame(frame);
     if (parsed) {
@@ -2610,7 +2632,7 @@ void IcomCivBackend::setKeying(bool key)
     if (!m_model->hasTransmit)
         return;   // an unknown radio is not advertised as transmit-capable
     m_pendingPttIntent = key;
-    m_pendingPttUntilMs = QDateTime::currentMSecsSinceEpoch() + 1000;
+    m_pendingPttUntilMs = nowMs() + 1000;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
     // PUBLISH IT. Setting m_keyed silently here and leaving the announcement to
     // the poll does not work now that the poll only speaks on change: our own
@@ -2821,7 +2843,7 @@ QVariantList IcomCivBackend::meterMap() const
     const auto sv = [](std::string_view v) {
         return QString::fromUtf8(v.data(), static_cast<int>(v.size()));
     };
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 now = nowMs();
 
     QVariantList out;
     for (const auto& m : meterSpecs()) {
@@ -3132,14 +3154,14 @@ void IcomCivBackend::traceCiv(bool outbound, std::span<const std::uint8_t> frame
             hex += QLatin1Char(' ');
         hex += QStringLiteral("%1").arg(b, 2, 16, QLatin1Char('0'));
     }
-    m_civTrace.push_back({QDateTime::currentMSecsSinceEpoch(), outbound, routine, hex});
+    m_civTrace.push_back({nowMs(), outbound, routine, hex});
     while (m_civTrace.size() > kCivTraceMax)
         m_civTrace.pop_front();
 }
 
 QVariantList IcomCivBackend::civTrace(bool includeRoutine) const
 {
-    const std::int64_t now = QDateTime::currentMSecsSinceEpoch();
+    const std::int64_t now = nowMs();
     QVariantList out;
     for (const auto& e : m_civTrace) {
         // ROUTINE POLL TRAFFIC IS HIDDEN BY DEFAULT, and this was learned by
@@ -3260,8 +3282,8 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         }
         timeoutMs = std::clamp(timeoutMs, 0, 10000);
         m_schedulerWaiters.push_back(
-            SchedulerWaiter{requestId, QDateTime::currentMSecsSinceEpoch() + timeoutMs});
-        serviceSchedulerWaiters(QDateTime::currentMSecsSinceEpoch());
+            SchedulerWaiter{requestId, nowMs() + timeoutMs});
+        serviceSchedulerWaiters(nowMs());
         return;
     }
     if (verb == QLatin1String("civ.trace")) {
@@ -3367,7 +3389,7 @@ void IcomCivBackend::onMeterTick()
 {
     if (!m_session || !m_connected)
         return;
-    const std::int64_t now = QDateTime::currentMSecsSinceEpoch();
+    const std::int64_t now = nowMs();
 
     // ASK THE RADIO WHETHER IT IS TRANSMITTING, rather than assuming we are the
     // only thing that can key it.
@@ -3444,7 +3466,7 @@ void IcomCivBackend::onLinkTick()
     // warning that repeats every second is one nobody reads.
     if (!m_connected)
         return;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 now = nowMs();
 
     // CI-V Transceive is a low-latency hint, not a subscription. Queue bounded
     // reconciliation groups; the scheduler turns them into one paced stream,

@@ -6,6 +6,7 @@
 #include <QVariantMap>
 #include <QString>
 #include <QVariantList>
+#include <QElapsedTimer>
 
 #include <deque>
 #include <memory>
@@ -179,6 +180,11 @@ private:
     void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
                                     const std::string& key);
     void pumpCiv(qint64 nowMs);
+    // Monotonic milliseconds since construction. THE clock for this backend:
+    // every interval here (dispatch slot, reply timeout, poll period, stall
+    // threshold, trace age) is measured against it, and none of them survives
+    // a wall-clock step. See the constructor.
+    [[nodiscard]] qint64 nowMs() const;
     [[nodiscard]] std::string semanticKey(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
@@ -241,6 +247,7 @@ private:
     ScopeCalibration m_scopeCal;
     MeterPoller m_meters;
     IcomCivScheduler m_civScheduler;
+    QElapsedTimer m_clock;
 
     // 48 kHz mono from the radio -> 24 kHz interleaved stereo for the engine.
     //
