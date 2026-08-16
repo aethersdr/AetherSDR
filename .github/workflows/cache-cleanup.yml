@@ -1,0 +1,74 @@
+name: Cache cleanup
+
+# Delete a PR's Actions caches when it closes.
+#
+# The repository shares a single 10 GB Actions cache budget, evicted by LRU.
+# Caches are scoped by ref, and a PR's caches live on refs/pull/N/merge — a ref
+# that only that PR can read. Once the PR closes, nothing can ever read them
+# again, but they keep occupying budget until LRU gets around to them, evicting
+# entries on refs/heads/main that every job CAN read.
+#
+# ci.yml's save-on-main split (see "Compiler-cache strategy" there) stops PRs
+# writing the big compiler caches. This handles the rest: PR runs still populate
+# the dependency caches (Qt, FFTW3, DeepFilterNet3, qtkeychain) whose keys are
+# content-hashed rather than run-scoped, and those are not small — a single
+# install-qt-action entry runs to hundreds of MB.
+#
+# Runs on close rather than merge: an abandoned PR's caches are exactly as dead
+# as a merged one's, and abandoned PRs are the ones nobody comes back to.
+
+on:
+  pull_request:
+    types: [closed]
+
+# Deliberately NOT pull_request_target. That variant runs against the base repo
+# with a writable token and is the standard fork-PR privilege-escalation vector;
+# this job needs no repo contents and no fork input, so the safe trigger is the
+# ordinary one. actions:write is the only scope required, and it cannot reach
+# anything outside the cache API.
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cache-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete caches for the closed PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          REF="refs/pull/${PR}/merge"
+
+          # List first purely for the log — deletion below is a single call, so
+          # without this the step would report nothing about what it removed.
+          # --limit 100 is far above what one PR accumulates (busiest observed: 4).
+          echo "Caches on $REF:"
+          gh cache list --ref "$REF" --limit 100 \
+            --json key,sizeInBytes \
+            --jq '.[] | "  \(.key)  (\((.sizeInBytes/1048576)|floor) MiB)"' || true
+
+          # --all --ref deletes the whole ref's caches in one call.
+          # --succeed-on-no-caches keeps the step green when there is nothing to
+          # do, which is the common case for a PR whose caches LRU already took.
+          gh cache delete --all --ref "$REF" --succeed-on-no-caches
+
+      - name: Report remaining repo cache usage
+        # Visibility, not a gate. The failure this whole change addresses was
+        # silent — builds got slower, nothing went red — so the usage number
+        # belongs somewhere a person will eventually read it.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/actions/cache/usage" \
+            --jq '"Repo Actions cache: \(.active_caches_count) entries, \((.active_caches_size_in_bytes/1073741824)*100|floor/100) GiB of 10 GiB"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
