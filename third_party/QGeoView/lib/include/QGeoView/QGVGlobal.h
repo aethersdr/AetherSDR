@@ -195,10 +195,11 @@ QGV_LIB_DECL QNetworkAccessManager* getNetworkManager();
 QGV_LIB_DECL void setTileUserAgent(const QByteArray& userAgent);
 QGV_LIB_DECL QByteArray getTileUserAgent();
 
-// AetherSDR patch: helpers shared by the horizontally repeating camera and
-// tile layers. Projection x is wrapped into [left, left + width); XYZ tile x
-// is wrapped into [0, 2^zoom). Invalid inputs are returned unchanged.
-QGV_LIB_DECL double wrapProjectionX(double x, double left, double width);
+// AetherSDR patch: helper for the horizontally repeating tile layers. Maps the
+// unbounded logical tile x of a repeated world copy onto the canonical XYZ
+// range [0, 2^zoom) so the network URL stays canonical. An invalid zoom returns
+// x unchanged. The camera does NOT use this — it keeps projection x continuous
+// across the antimeridian instead (QGVMapQGView slides the scene rect).
 QGV_LIB_DECL int wrapTileX(int zoom, int x);
 
 QGV_LIB_DECL QTransform createTransfrom(QPointF const& projAnchor, double scale, double azimuth);

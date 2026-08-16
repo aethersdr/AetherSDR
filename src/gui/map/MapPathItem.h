@@ -5,6 +5,8 @@
 #include <QColor>
 #include <QVector>
 
+#include <limits>
+
 namespace AetherSDR {
 
 // Great-circle path from the home station to a reception spot.
@@ -31,6 +33,12 @@ private:
     QColor m_color;
     QPainterPath m_baseProjPath;
     QPainterPath m_projPath;
+    // Projected destination endpoint: the anchor the world-copy index is
+    // rounded against, shared with the MapMarkerItem for the same spot.
+    QPointF m_baseAnchor;
+    // Copy index currently baked into m_projPath. Seeded below any reachable
+    // value so the first onCamera() after onProjection() always applies.
+    int m_appliedWorldOffset{std::numeric_limits<int>::min()};
 };
 
 } // namespace AetherSDR

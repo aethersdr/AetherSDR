@@ -336,8 +336,17 @@ GeoTilePos GeoTilePos::parent(int parentZoom) const
     }
     const int deltaZoom = zoom() - parentZoom;
     const int factor = static_cast<int>(qPow(2, deltaZoom));
-    const int x = static_cast<int>(qFloor(pos().x() / factor));
-    const int y = static_cast<int>(qFloor(pos().y() / factor));
+    // AetherSDR patch: divide in floating point before flooring. Both operands
+    // are int, so plain `pos().x() / factor` truncates toward zero and qFloor
+    // never sees a fraction — which rounds the wrong way for negative tile x.
+    // Horizontal wrap makes x negative in the world copy west of the base one,
+    // and contains() is built on parent(), so the truncated form reports a
+    // western-copy tile as a child of a base-world tile. removeWhenCovered()
+    // counts coverage through contains(), so it would evict a fallback tile
+    // while the base world behind it was still half empty — a blank hole at the
+    // antimeridian. Identical for x >= 0, so nothing off the wrap path changes.
+    const int x = static_cast<int>(qFloor(static_cast<double>(pos().x()) / factor));
+    const int y = static_cast<int>(qFloor(static_cast<double>(pos().y()) / factor));
     return GeoTilePos(parentZoom, QPoint(x, y));
 }
 
@@ -476,18 +485,6 @@ void setTileUserAgent(const QByteArray& userAgent)
 QByteArray getTileUserAgent()
 {
     return tileUserAgent;
-}
-
-double wrapProjectionX(double x, double left, double width)
-{
-    if (!qIsFinite(x) || !qIsFinite(left) || !qIsFinite(width) || width <= 0.0) {
-        return x;
-    }
-    double offset = std::fmod(x - left, width);
-    if (offset < 0.0) {
-        offset += width;
-    }
-    return left + offset;
 }
 
 int wrapTileX(int zoom, int x)

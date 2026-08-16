@@ -246,6 +246,18 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "^workspace_" --output-on-failure
 
+      # Slippy-map world wrap. Same reasoning as the step above: the target is
+      # already linked by Build, the test runs in milliseconds, and it touches
+      # no network — but without a step here it would compile and go green
+      # having never executed. It pins the tile-hierarchy floor for negative
+      # tile x (the world copy west of the base one), the canonical-URL
+      # mapping, the camera crossing the dateline without the scene rect
+      # clamping it, and the wheel-zoom round trip.
+      - name: Test map wrap
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "^map_wrap_test$" --output-on-failure
+
       # The demo RX engine's worker-thread contract (#4878): affinity, 24 kHz
       # pacing on a coarse timer, keyed-mute, stallscope. This is the fix for
       # the demo making the GUI thread carry a 333 Hz precise timer plus the

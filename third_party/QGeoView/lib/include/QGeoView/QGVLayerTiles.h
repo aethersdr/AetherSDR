@@ -52,6 +52,9 @@ protected:
 
 private:
     void processCamera();
+    // AetherSDR patch: cross-zoom positional test used to cull off-screen
+    // fallback tiles once horizontal wrap makes tile x unbounded.
+    bool overlapsActiveRect(const QGV::GeoTilePos& tilePos) const;
     void removeAllAbove(const QGV::GeoTilePos& tilePos);
     void removeWhenCovered(const QGV::GeoTilePos& tilePos);
     void removeForPerfomance(const QGV::GeoTilePos& tilePos);

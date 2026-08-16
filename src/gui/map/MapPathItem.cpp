@@ -6,6 +6,8 @@
 #include <QPainter>
 #include <QtMath>
 
+#include <limits>
+
 namespace AetherSDR {
 
 namespace {
@@ -76,6 +78,16 @@ void MapPathItem::onProjection(QGVMap* geoMap)
         }
         prev = p;
     }
+    // Anchor the world-copy choice on the DESTINATION endpoint — exactly the
+    // point MapMarkerItem rounds against for the spot this path terminates at.
+    // The path's bounding-rect centre is not usable: a great circle crossing
+    // the antimeridian is split into subpaths hard against both edges, so its
+    // centre collapses toward the projection origin and bears no relation to
+    // either endpoint. Rounding the two against different anchors makes them
+    // disagree about which copies exist over a wide band of camera positions,
+    // and a spot ends up drawn with no path running to it.
+    m_baseAnchor = proj->geoToProj(QGV::GeoPos(m_toLat, m_toLon));
+    m_appliedWorldOffset = std::numeric_limits<int>::min();
     m_projPath = m_baseProjPath;
     onCamera(geoMap->getCamera(), geoMap->getCamera());
 }
@@ -84,13 +96,17 @@ void MapPathItem::onCamera(const QGVCameraState& oldState,
                            const QGVCameraState& newState)
 {
     const double worldWidth = newState.getProjection()->boundaryProjRect().width();
-    const double worldOffset = m_relativeWorldOffset + qRound(
-        (newState.projCenter().x() - m_baseProjPath.boundingRect().center().x())
-        / worldWidth);
-    const QPainterPath shifted = QTransform::fromTranslate(
-        worldOffset * worldWidth, 0.0).map(m_baseProjPath);
-    if (shifted != m_projPath) {
-        m_projPath = shifted;
+    const int worldOffset = m_relativeWorldOffset + qRound(
+        (newState.projCenter().x() - m_baseAnchor.x()) / worldWidth);
+    // Compare the integer copy index rather than the mapped path. The offset
+    // only changes when the camera crosses a world boundary, so an ordinary
+    // drag frame costs two doubles here instead of a QTransform::map() over
+    // every segment plus a full QPainterPath comparison — per item, at several
+    // items per spot, on the very drag path this change exists to keep clear.
+    if (worldOffset != m_appliedWorldOffset) {
+        m_appliedWorldOffset = worldOffset;
+        m_projPath = QTransform::fromTranslate(
+            worldOffset * worldWidth, 0.0).map(m_baseProjPath);
         resetBoundary();
         refresh();
     }

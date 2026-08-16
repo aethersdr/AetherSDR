@@ -38,6 +38,7 @@ protected:
     virtual QString tilePosToUrl(const QGV::GeoTilePos& tilePos) const = 0;
 
 private:
+    static QGV::GeoTilePos canonicalTile(const QGV::GeoTilePos& tilePos);
     QRectF tileProjectionRect(const QGV::GeoTilePos& tilePos) const;
     void request(const QGV::GeoTilePos& tilePos) override;
     void cancel(const QGV::GeoTilePos& tilePos) override;
@@ -45,6 +46,10 @@ private:
     void removeReply(const QGV::GeoTilePos& tilePos);
 
 private:
+    // AetherSDR patch: both maps are keyed on the CANONICAL tile, so the world
+    // copies of one tile share a single GET. mWaiting holds the unwrapped x of
+    // every copy still expecting that reply (copies differ only in x).
     QMap<QGV::GeoTilePos, QNetworkReply*> mRequest;
+    QMap<QGV::GeoTilePos, QList<int>> mWaiting;
     QCache<QUrl, QImage> mDecodedTileCache;
 };

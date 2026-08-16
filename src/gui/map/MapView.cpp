@@ -45,8 +45,11 @@ constexpr qint64 kTileCacheBytes = 256LL * 1024 * 1024;
 // aborts the reply at that point — but until then the tile stays blank with the
 // socket held open and nothing logged.
 constexpr int kTransferTimeoutMs = 15000;
-constexpr int kFirstVisibleWorldCopy = -1;
-constexpr int kLastVisibleWorldCopy = 1;
+// Upper bound on how many world copies either side of the base one markers and
+// paths are replicated into. The live value is m_worldCopyRange, derived from
+// the viewport in requiredWorldCopyRange(); this only stops a degenerate
+// aspect ratio from asking for an unbounded number of scene items.
+constexpr int kMaxWorldCopyRange = 4;
 } // namespace
 
 void MapView::ensureTileNetworkManager()
@@ -85,10 +88,21 @@ MapView::MapView(QWidget* parent)
     layout->addWidget(m_map);
 
     auto* osmLayer = new QGVLayerOSM();
-    // One tile beyond the viewport is enough to hide network latency without
-    // making every drag boundary enqueue a 7x7 block (the upstream default).
-    // Recently decoded images stay in QGVLayerTilesOnline's memory cache, so
-    // revisiting an area does not repeat PNG decode or scene upload work.
+    // Deliberately tighter than QGVLayerTiles' upstream defaults, in both
+    // dimensions — the decoded-image cache in QGVLayerTilesOnline is what pays
+    // for it, since re-entering an area now costs a memcpy rather than a fetch
+    // and a PNG decode.
+    //
+    //   * preload ring, no zoom change: 3 -> 1. One tile beyond the viewport
+    //     hides network latency without making every drag boundary enqueue a
+    //     7x7 block. (The with-zoom-change margin is already 1 upstream; it is
+    //     set here only so both are stated in one place.)
+    //   * retained fallback layers: 10 below / 10 above -> 2 below / 1 above.
+    //     This is a REDUCTION in how much coarse imagery is kept behind the
+    //     current zoom. Two levels is enough to cover a zoom transition; past
+    //     that the tiles are never drawn and only cost memory, which matters
+    //     more now that horizontal wrap lets the camera visit unboundedly many
+    //     world copies.
     osmLayer->setTilesMarginWithZoomChange(1);
     osmLayer->setTilesMarginNoZoomChange(1);
     osmLayer->setVisibleZoomLayersBelowCurrent(2);
@@ -249,23 +263,11 @@ void MapView::setHomePosition(double lat, double lon, const QString& label,
     m_hasHome = true;
 
     if (showMarker) {
-        Marker home;
-        home.lat = lat;
-        home.lon = lon;
-        home.label = label;
-        home.tooltip = label.isEmpty() ? QStringLiteral("Station location")
-                                       : label;
-        home.color = QColor(0, 122, 255);
-        home.isHome = true;
+        m_homeMarkerShown = true;
         if (m_homeMarkers.isEmpty()) {
-            for (int relativeCopy = kFirstVisibleWorldCopy;
-                 relativeCopy <= kLastVisibleWorldCopy; ++relativeCopy) {
-                auto* marker = new MapMarkerItem(home, relativeCopy);
-                marker->setZValue(10);
-                m_homeMarkers.append(marker);
-                m_markerLayer->addItem(marker);
-            }
+            rebuildHomeMarkers();
         } else {
+            const Marker home = homeMarkerData();
             for (MapMarkerItem* marker : std::as_const(m_homeMarkers)) {
                 marker->setMarker(home);
             }
@@ -291,10 +293,10 @@ void MapView::setMarkers(const QVector<Marker>& markers)
 {
     clearMarkers();
     m_markerData = markers;
-    m_markers.reserve(markers.size() * 3);
+    m_markers.reserve(markers.size() * (2 * m_worldCopyRange + 1));
     for (const Marker& m : markers) {
-        for (int relativeCopy = kFirstVisibleWorldCopy;
-             relativeCopy <= kLastVisibleWorldCopy; ++relativeCopy) {
+        for (int relativeCopy = -m_worldCopyRange;
+             relativeCopy <= m_worldCopyRange; ++relativeCopy) {
             auto* item = new MapMarkerItem(m, relativeCopy);
             m_markers.append(item);
             m_markerLayer->addItem(item);
@@ -322,10 +324,10 @@ void MapView::rebuildPaths()
     if (!m_pathsVisible || !m_hasHome) {
         return;
     }
-    m_paths.reserve(m_markerData.size() * 3);
+    m_paths.reserve(m_markerData.size() * (2 * m_worldCopyRange + 1));
     for (const Marker& m : std::as_const(m_markerData)) {
-        for (int relativeCopy = kFirstVisibleWorldCopy;
-             relativeCopy <= kLastVisibleWorldCopy; ++relativeCopy) {
+        for (int relativeCopy = -m_worldCopyRange;
+             relativeCopy <= m_worldCopyRange; ++relativeCopy) {
             auto* path = new MapPathItem(m_homeLat, m_homeLon,
                                          m.lat, m.lon, m.color, relativeCopy);
             m_paths.append(path);
@@ -494,7 +496,9 @@ void MapView::layoutOverlayButtons()
 void MapView::clampMinZoomToViewport()
 {
     // The world repeats horizontally, but not vertically. Pin the minimum
-    // scale so Web Mercator still covers the viewport north-to-south.
+    // scale so Web Mercator still covers the viewport north-to-south. (Before
+    // wrap this also had to cover it east-to-west; the repeating tile layer
+    // does that now, which is what lets a wide widget zoom out further.)
     auto* view = m_map->geoView();
     const QGVProjection* proj = m_map->getProjection();
     if (view == nullptr || proj == nullptr) {
@@ -504,11 +508,91 @@ void MapView::clampMinZoomToViewport()
     if (world.width() <= 0.0 || world.height() <= 0.0) {
         return;
     }
-    const double minScale = static_cast<double>(height()) / world.height();
+    // Floor: QGVLayerTiles::processCamera() derives a zoom as
+    // qRound(17 + log2(scale)) and returns immediately — touching no tile at
+    // all — when that lands outside the layer's [minZoomlevel, maxZoomlevel].
+    // Dropping the width term above lets a short widget reach a scale below
+    // QGVLayerOSM's zoom 0, where the failure mode is not coarse tiles but a
+    // map that silently stops updating. 2^-17.5 is the smallest scale that
+    // still rounds to zoom 0.
+    const double minTileScale = std::pow(2.0, -17.5);
+    const double minScale = qMax(static_cast<double>(height()) / world.height(),
+                                 minTileScale);
     view->setScaleLimits(minScale, view->getMaxScale());
     if (m_map->getCamera().scale() < minScale) {
         m_map->cameraTo(QGVCameraActions(m_map).scaleTo(minScale));
     }
+
+    const int range = requiredWorldCopyRange();
+    if (range != m_worldCopyRange) {
+        m_worldCopyRange = range;
+        rebuildWorldCopies();
+    }
+}
+
+int MapView::requiredWorldCopyRange() const
+{
+    auto* view = m_map != nullptr ? m_map->geoView() : nullptr;
+    const QGVProjection* proj = m_map != nullptr ? m_map->getProjection()
+                                                 : nullptr;
+    if (view == nullptr || proj == nullptr || width() <= 0) {
+        return 1;
+    }
+    const QRectF world = proj->boundaryProjRect();
+    const double minScale = view->getMinScale();
+    if (world.width() <= 0.0 || minScale <= 0.0) {
+        return 1;
+    }
+    // The viewport is widest, measured in world copies, at the minimum scale.
+    // Each item sits at its own longitude plus an integer number of worlds and
+    // re-homes to the copy nearest the camera, so the copies span
+    // camera +/- (range + 0.5) worlds. Covering a viewport `worlds` wide
+    // therefore needs range >= (worlds - 1) / 2 — at or below one world that
+    // is the single base copy, and the +/-1 default carries up to three.
+    const double worlds = width() / (world.width() * minScale);
+    const int range = static_cast<int>(std::ceil((worlds - 1.0) / 2.0));
+    return qBound(1, range, kMaxWorldCopyRange);
+}
+
+MapView::Marker MapView::homeMarkerData() const
+{
+    Marker home;
+    home.lat = m_homeLat;
+    home.lon = m_homeLon;
+    home.label = m_homeLabel;
+    home.tooltip = m_homeLabel.isEmpty() ? QStringLiteral("Station location")
+                                         : m_homeLabel;
+    home.color = QColor(0, 122, 255);
+    home.isHome = true;
+    return home;
+}
+
+void MapView::rebuildHomeMarkers()
+{
+    for (MapMarkerItem* marker : std::as_const(m_homeMarkers)) {
+        m_markerLayer->removeItem(marker);
+        delete marker;
+    }
+    m_homeMarkers.clear();
+    if (!m_homeMarkerShown || !m_hasHome) {
+        return;
+    }
+    const Marker home = homeMarkerData();
+    for (int relativeCopy = -m_worldCopyRange;
+         relativeCopy <= m_worldCopyRange; ++relativeCopy) {
+        auto* marker = new MapMarkerItem(home, relativeCopy);
+        marker->setZValue(10);
+        m_homeMarkers.append(marker);
+        m_markerLayer->addItem(marker);
+    }
+}
+
+void MapView::rebuildWorldCopies()
+{
+    rebuildHomeMarkers();
+    // setMarkers() clears m_markerData on the way through, so hand it a copy.
+    const QVector<Marker> markers = m_markerData;
+    setMarkers(markers);
 }
 
 void MapView::resizeEvent(QResizeEvent* event)
