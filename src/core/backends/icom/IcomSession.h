@@ -103,6 +103,11 @@ public:
     // Discard queued transmit audio. Call on unkey.
     void flushTxAudio();
 
+    // Arm the WIRE TAP on the audio stream: the payload bytes of every outbound
+    // audio datagram, at the last instruction before the socket. Diagnostic;
+    // keys nothing and changes nothing that is sent.
+    void setTxPayloadTapEnabled(bool on);
+
     struct Stats {
         IcomStream::Counters control;
         IcomStream::Counters serial;
@@ -130,6 +135,9 @@ signals:
     void civFrameReady(const AetherSDR::icom::CivFrame& frame);
     void audioReady(const std::vector<float>& mono);
     void audioLost(int packets);
+    // Outbound audio payload bytes, from the wire tap. LPCM s16 LE at the
+    // negotiated rate, envelope stripped.
+    void txAudioPayload(const QByteArray& lpcm);
 
 private slots:
     void onControlReady();

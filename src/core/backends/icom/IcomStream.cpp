@@ -189,6 +189,25 @@ void IcomStream::sendRaw(std::span<const std::uint8_t> packet)
         m_counters.txBytes += static_cast<quint64>(n);
         ++m_counters.txPackets;
         m_lastTxAtMs = m_activityClock.elapsed();
+
+        // THE WIRE TAP. After the write, so what is reported is what was
+        // actually handed to the socket rather than what we were about to hand
+        // it — a write that fails should not appear in the capture as if it had
+        // gone out. It also sits after the counters above (added by #5274) so
+        // the telemetry describes the same write the tap then reports on.
+        //
+        // isAudioData() rather than a size test: it is structural, and the size
+        // whitelist both reference implementations use is only correct at
+        // 48 kHz. Keepalives, pings, retransmit requests and the serial stream
+        // all fail it, so an armed tap on the CONTROL or SERIAL stream stays
+        // silent rather than capturing envelope bytes that are not audio.
+        if (m_txPayloadTapEnabled.load(std::memory_order_relaxed) && isAudioData(packet)) {
+            const auto pcm = audioPayload(packet);
+            if (!pcm.empty()) {
+                emit txAudioPayload(QByteArray(reinterpret_cast<const char*>(pcm.data()),
+                                               static_cast<qsizetype>(pcm.size())));
+            }
+        }
     }
 }
 

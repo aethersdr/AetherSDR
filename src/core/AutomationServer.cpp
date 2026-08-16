@@ -3239,11 +3239,14 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("txwave", {},
-            "txwave <arm [post|samples]|save <path>|off> — record the actual "
-            "SAMPLES of a transmission to a WAV (feed it to Direwolf's atest). "
-            "`arm` taps submitTxAudio; `arm post` taps AFTER the Icom's "
-            "24k->48k resampler, the last point AE sees its own audio — the two "
-            "bracket the client half of the transmit path",
+            "txwave <arm [post|wire|dual|samples]|save <path>|save2 <path>|off> "
+            "— record the actual SAMPLES of a transmission to a WAV (feed it to "
+            "Direwolf's atest). `arm` taps submitTxAudio; `arm post` taps AFTER "
+            "the Icom's 24k->48k resampler; `arm wire` taps the PAYLOAD OF THE "
+            "OUTBOUND UDP DATAGRAM, the last observable point before the radio; "
+            "`arm dual` records post AND wire from ONE transmission into "
+            "separate buffers (save = post, save2 = wire) so they can be "
+            "compared sample-for-sample rather than across two bursts",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doTxWave(a.action, a.value);
@@ -6469,38 +6472,75 @@ QJsonObject AutomationServer::doTxWave(const QString& action, const QString& res
         // air decodes nowhere, so which side stays decodable localises it.
         const QString arg = rest.trimmed().toLower();
         const bool post = arg.startsWith(QLatin1String("post"));
+        // `wire` is one stage beyond `post`: the payload of the UDP datagram
+        // itself, captured after the socket write. Post-resample audio decodes
+        // 3/3 in atest while the same transmission off the air decodes nowhere,
+        // so this is the last place the client can still be asked.
+        const bool wire = arg.startsWith(QLatin1String("wire"));
+        // `dual` runs the post-resample and wire taps on ONE transmission into
+        // SEPARATE buffers — `save` writes the post side, `save2` the wire.
+        // Comparing two keyings cannot distinguish "the wire alters the audio"
+        // from "those were different bursts"; this can.
+        const bool dual = arg.startsWith(QLatin1String("dual"));
         bool ok = false;
-        const int req = post ? 0 : arg.toInt(&ok);
+        const int req = (post || wire || dual) ? 0 : arg.toInt(&ok);
+        if (dual) {
+            m_radioModel->setTxDualCaptureEnabled(true, 0);
+            m_radioModel->setTxAudioRecordEnabled(true, 0);
+            m_radioModel->setTxAudioTapEnabled(true);
+            return QJsonObject{
+                {QStringLiteral("ok"), true},
+                {QStringLiteral("txwave"), QStringLiteral("armed")},
+                {QStringLiteral("tap"), QStringLiteral("dual")},
+                {QStringLiteral("note"), QStringLiteral(
+                     "save = post-resample, save2 = wire, same transmission")},
+            };
+        }
+        // EXACTLY ONE TAP OWNS THE RECORDER. They run at different rates and
+        // share one buffer, so arming two interleaves them into a WAV that
+        // decodes as nothing whatever the audio was.
+        m_radioModel->setTxDualCaptureEnabled(false, 0);
         m_radioModel->setTxPostResampleTapEnabled(post);
+        m_radioModel->setTxWireTapEnabled(wire);
         m_radioModel->setTxAudioRecordEnabled(true, ok ? req : 0);
         // Arm the level tap too, so a run reports both without a second verb.
         m_radioModel->setTxAudioTapEnabled(true);
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("txwave"), QStringLiteral("armed")},
-            {QStringLiteral("tap"), post ? QStringLiteral("post-resample")
-                                         : QStringLiteral("submitTxAudio")},
+            {QStringLiteral("tap"), wire ? QStringLiteral("wire")
+                                         : post ? QStringLiteral("post-resample")
+                                                : QStringLiteral("submitTxAudio")},
         };
     }
 
     if (a == QLatin1String("off")) {
         m_radioModel->setTxAudioRecordEnabled(false);
+        m_radioModel->setTxDualCaptureEnabled(false, 0);
         m_radioModel->setTxPostResampleTapEnabled(false);
+        m_radioModel->setTxWireTapEnabled(false);
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("txwave"), QStringLiteral("off")},
         };
     }
 
-    if (a == QLatin1String("save")) {
+    // `save` writes the primary recorder; `save2` writes the WIRE buffer filled
+    // by a dual capture. ONE writer for both — a second copy of the header code
+    // is how the two files would drift into being not-comparable, which is the
+    // whole point of capturing them together.
+    if (a == QLatin1String("save") || a == QLatin1String("save2")) {
+        const bool second = (a == QLatin1String("save2"));
         const QString path = rest.trimmed();
         if (path.isEmpty())
-            return err(QStringLiteral("txwave save: a file path is required"));
+            return err(QStringLiteral("txwave %1: a file path is required").arg(a));
 
         int rate = 0;
-        const QVector<qint16> pcm = m_radioModel->takeTxAudioRecording(&rate);
+        const QVector<qint16> pcm = second ? m_radioModel->takeTxWireRecording(&rate)
+                                           : m_radioModel->takeTxAudioRecording(&rate);
         if (pcm.isEmpty())
-            return err(QStringLiteral("txwave save: nothing recorded (arm before transmitting?)"));
+            return err(QStringLiteral("txwave %1: nothing recorded (arm before transmitting?)")
+                           .arg(a));
         if (rate <= 0)
             rate = 48000;
 
@@ -6509,7 +6549,7 @@ QJsonObject AutomationServer::doTxWave(const QString& action, const QString& res
         // ever differ, that is itself a finding.
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly))
-            return err(QStringLiteral("txwave save: cannot open '%1'").arg(path));
+            return err(QStringLiteral("txwave %1: cannot open '%2'").arg(a, path));
 
         const quint32 dataBytes = quint32(pcm.size()) * 2u;
         const quint16 channels = 2;
@@ -6543,10 +6583,16 @@ QJsonObject AutomationServer::doTxWave(const QString& action, const QString& res
         f.write(reinterpret_cast<const char*>(pcm.constData()), qint64(dataBytes));
         f.close();
 
-        m_radioModel->setTxAudioRecordEnabled(false);
+        // Only the SECOND save disarms: on a dual capture the caller needs both
+        // halves, and disarming on the first would discard the wire buffer
+        // before it could be written.
+        if (second || !m_radioModel->txDualCaptureActive())
+            m_radioModel->setTxAudioRecordEnabled(false);
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("txwave"), QStringLiteral("saved")},
+            {QStringLiteral("tap"), second ? QStringLiteral("wire")
+                                           : QStringLiteral("post-resample")},
             {QStringLiteral("path"), path},
             {QStringLiteral("samples"), pcm.size()},
             {QStringLiteral("frames"), pcm.size() / 2},
@@ -6556,7 +6602,7 @@ QJsonObject AutomationServer::doTxWave(const QString& action, const QString& res
         };
     }
 
-    return err(QStringLiteral("txwave: unknown action '%1' (arm|save|off)").arg(action));
+    return err(QStringLiteral("txwave: unknown action '%1' (arm|save|save2|off)").arg(action));
 }
 
 QJsonObject AutomationServer::doTxMonitor(const QString& action)

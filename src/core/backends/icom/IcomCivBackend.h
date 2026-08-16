@@ -164,12 +164,23 @@ signals:
     // IcomSession::sendAudio, which is the last thing AE controls.
     void txPostResampleAudio(const std::vector<float>& mono, int sampleRateHz);
 
+    // The WIRE tap, one stage beyond the post-resample one: the audio payload
+    // of each outbound UDP datagram, decoded back to float so it reaches the
+    // same recorder and the same WAV writer. Post-resample audio decodes 3/3 in
+    // atest while the transmission off the air decodes nowhere, so this is the
+    // last client-side question: do the bytes on the wire still carry it?
+    void txWireAudio(const std::vector<float>& mono, int sampleRateHz);
+
 public:
     // Arm/disarm the post-resample tap. Diagnostic; keys nothing.
     void setTxPostResampleTapEnabled(bool on)
     {
         m_txPostResampleTapEnabled.store(on, std::memory_order_relaxed);
     }
+
+    // Arm/disarm the WIRE tap. Diagnostic; keys nothing and alters nothing that
+    // is sent — it observes the datagram after the socket write.
+    void setTxWireTapEnabled(bool on);
 
 private slots:
     void onSessionConnected(const QString& deviceName);

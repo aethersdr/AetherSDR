@@ -99,6 +99,10 @@ bool IcomSession::start(const Params& params)
     connect(m_audio, &IcomStream::ready, this, &IcomSession::onAudioReady);
     connect(m_audio, &IcomStream::payloadReady, this, &IcomSession::onAudioPayload);
     connect(m_audio, &IcomStream::failed, this, &IcomSession::fail);
+    // The wire tap, forwarded verbatim: the session adds nothing to it, because
+    // anything the session did to these bytes would be a difference between
+    // what was captured and what went out.
+    connect(m_audio, &IcomStream::txAudioPayload, this, &IcomSession::txAudioPayload);
     // LOSS IS CONCEALED, not merely counted.
     //
     // This used to forward the count and stop there, and nothing downstream
@@ -769,6 +773,15 @@ void IcomSession::sendAudio(std::span<const float> mono)
 }
 
 void IcomSession::flushTxAudio() { m_tx.flush(); }
+
+void IcomSession::setTxPayloadTapEnabled(bool on)
+{
+    // Audio stream only. The control and serial streams carry no audio payload,
+    // and isAudioData() would reject their datagrams anyway — arming them would
+    // be a no-op that reads like coverage.
+    if (m_audio)
+        m_audio->setTxPayloadTapEnabled(on);
+}
 
 IcomSession::Stats IcomSession::stats() const
 {

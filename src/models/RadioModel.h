@@ -1287,6 +1287,20 @@ public:
     // Both feed the same recorder, so `txwave save` writes whichever is armed
     // and the WAV goes straight to Direwolf's atest either way.
     void setTxPostResampleTapEnabled(bool on);
+    // Arm the WIRE tap — the audio payload of each outbound UDP datagram, the
+    // last observable point on the client side (Icom only).
+    void setTxWireTapEnabled(bool on);
+    // Arm BOTH taps on ONE transmission, into separate buffers. This is the
+    // only way to ask "does the wire carry what the resampler produced" of the
+    // same samples rather than of two different bursts.
+    void setTxDualCaptureEnabled(bool on, int maxSamples = 0);
+    [[nodiscard]] bool txDualCaptureActive() const noexcept
+    {
+        return m_txDualCapture.load(std::memory_order_relaxed);
+    }
+    // Drain the WIRE buffer (the post-resample side comes from
+    // takeTxAudioRecording as usual).
+    QVector<qint16> takeTxWireRecording(int* sampleRateHz = nullptr);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1905,6 +1919,37 @@ private:
     std::atomic<bool> m_txAudioRecordEnabled{false};
     QVector<qint16> m_txAudioRecordBuffer;   // guarded by m_txAudioTapMutex
     int m_txAudioRecordCapacity{0};
+    // WHICH tap owns the recorder — THREE-STATE, not a pair of booleans.
+    //
+    // The taps run at DIFFERENT RATES (24 kHz at submitTxAudio, 48 kHz after
+    // the resampler and on the wire) and all three append to
+    // m_txAudioRecordBuffer and stamp m_txAudioTapSampleRate. Exactly one may
+    // own it, or the WAV interleaves streams that are not even the same rate.
+    //
+    // This was a bool per tap and that was WRONG: arming `post` called
+    // setTxPostResampleTapEnabled(true) and then setTxWireTapEnabled(false),
+    // and the second call CLEARED the flag the first had set — so the
+    // pre-resample path resumed recording and a `post` capture came back at
+    // 24 kHz / 16 s. One owner, one variable.
+    enum class TxRecordOwner { PreResample, PostResample, Wire };
+    std::atomic<TxRecordOwner> m_txRecordOwner{TxRecordOwner::PreResample};
+
+    // DUAL CAPTURE — the post-resample and wire taps recording the SAME
+    // transmission into separate buffers.
+    //
+    // Comparing them across two keyings answered the wrong question: the frames
+    // are identical but the audio is not the same samples, so a 0.80
+    // correlation could mean "the wire alters the audio" OR "these are two
+    // different bursts". Only one transmission observed at both points can tell
+    // those apart, and that needs a second buffer — the taps run concurrently.
+    //
+    // `m_txWireRecordBuffer` holds the wire side; the primary buffer holds the
+    // post-resample side, so `txwave save` keeps working unchanged and
+    // `txwave save2` writes the second.
+    std::atomic<bool> m_txDualCapture{false};
+    QVector<qint16> m_txWireRecordBuffer;    // guarded by m_txAudioTapMutex
+    int m_txWireRecordCapacity{0};
+    int m_txWireTapSampleRate{0};
 
     QList<SliceModel*> m_slices;
     QMap<int, QString> m_rawSliceModeLists;

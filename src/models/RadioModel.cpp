@@ -793,6 +793,11 @@ void RadioModel::setupBackend(const QString& family)
                 [this](const std::vector<float>& mono, int rateHz) {
                     if (!m_txAudioRecordEnabled.load(std::memory_order_relaxed))
                         return;
+                    // Only if THIS tap owns the recorder — the signal stays
+                    // connected whether or not it is the armed one.
+                    if (m_txRecordOwner.load(std::memory_order_relaxed)
+                        != TxRecordOwner::PostResample)
+                        return;
                     // The recorder holds interleaved int16 stereo, matching the
                     // pre-resample capture, so one WAV writer serves both and
                     // atest sees the same shape either way.
@@ -811,6 +816,60 @@ void RadioModel::setupBackend(const QString& family)
                     // the block sizes are both even, so `room` stayed even),
                     // but this is a diagnostic whose whole value is that its
                     // output can be trusted.
+                    const int take = std::min<int>(room, int(mono.size()) * 2) & ~1;
+                    if (take <= 0)
+                        return;
+                    const int oldSize = m_txAudioRecordBuffer.size();
+                    m_txAudioRecordBuffer.resize(oldSize + take);
+                    qint16* dst = m_txAudioRecordBuffer.data() + oldSize;
+                    for (int i = 0; i < take / 2; ++i) {
+                        const float v = std::clamp(mono[size_t(i)], -1.0f, 1.0f);
+                        const auto s = static_cast<qint16>(std::lround(v * 32767.0f));
+                        dst[i * 2] = s;
+                        dst[i * 2 + 1] = s;
+                    }
+                });
+        // The WIRE tap — one stage further out, and the last one there is. Same
+        // recorder, same exclusivity rule as the post-resample tap: these two
+        // and the pre-resample path all write one buffer, so exactly one of
+        // them may own it at a time or the WAV interleaves streams that are not
+        // even at the same rate. That failure produced a capture which read as
+        // a corrupt transmitter for an entire evening.
+        connect(icom, &icom::IcomCivBackend::txWireAudio, this,
+                [this](const std::vector<float>& mono, int rateHz) {
+                    if (!m_txAudioRecordEnabled.load(std::memory_order_relaxed))
+                        return;
+                    // DUAL CAPTURE: write the SECOND buffer and leave the
+                    // primary to the post-resample tap, so one transmission is
+                    // observed at both points.
+                    if (m_txDualCapture.load(std::memory_order_relaxed)) {
+                        QMutexLocker lock(&m_txAudioTapMutex);
+                        m_txWireTapSampleRate = rateHz;
+                        const int room = m_txWireRecordCapacity - m_txWireRecordBuffer.size();
+                        if (room <= 0)
+                            return;
+                        const int take = std::min<int>(room, int(mono.size()) * 2) & ~1;
+                        if (take <= 0)
+                            return;
+                        const int oldSize = m_txWireRecordBuffer.size();
+                        m_txWireRecordBuffer.resize(oldSize + take);
+                        qint16* dst = m_txWireRecordBuffer.data() + oldSize;
+                        for (int i = 0; i < take / 2; ++i) {
+                            const float v = std::clamp(mono[size_t(i)], -1.0f, 1.0f);
+                            const auto s = static_cast<qint16>(std::lround(v * 32767.0f));
+                            dst[i * 2] = s;
+                            dst[i * 2 + 1] = s;
+                        }
+                        return;
+                    }
+                    if (m_txRecordOwner.load(std::memory_order_relaxed)
+                        != TxRecordOwner::Wire)
+                        return;
+                    QMutexLocker lock(&m_txAudioTapMutex);
+                    m_txAudioTapSampleRate = rateHz;
+                    const int room = m_txAudioRecordCapacity - m_txAudioRecordBuffer.size();
+                    if (room <= 0)
+                        return;
                     const int take = std::min<int>(room, int(mono.size()) * 2) & ~1;
                     if (take <= 0)
                         return;
@@ -8142,11 +8201,22 @@ void RadioModel::noteTxAudioSubmission(const QByteArray& int16Stereo, int sample
     QMutexLocker lock(&m_txAudioTapMutex);
     ++m_txAudioTapBlocks;
     m_txAudioTapSamples += samples;
-    m_txAudioTapSampleRate = sampleRateHz;
     if (peak > m_txAudioTapPeak)
         m_txAudioTapPeak = peak;
     m_txAudioTapSumSquares += sumSquares;
 
+    // STAND ASIDE UNLESS THIS PATH OWNS THE RECORDER. All three taps write this
+    // buffer and this rate at DIFFERENT rates (24 kHz here, 48 kHz after the
+    // resampler and on the wire). Recording two interleaves them into one WAV
+    // stamped with whichever wrote last — the file then fails to decode for a
+    // reason that has nothing to do with the audio under test, which is exactly
+    // the confusion this diagnostic exists to remove.
+    // The level accumulator above still runs: peak/RMS at submitTxAudio stay
+    // meaningful regardless of which side is being recorded.
+    if (m_txRecordOwner.load(std::memory_order_relaxed) != TxRecordOwner::PreResample)
+        return;
+
+    m_txAudioTapSampleRate = sampleRateHz;
     if (m_txAudioRecordEnabled.load(std::memory_order_relaxed))
         recordTxAudioSamples(pcm, samples);
 }
@@ -8192,8 +8262,74 @@ void RadioModel::setTxPostResampleTapEnabled(bool on)
     // tap exists to bracket that resampler. A no-op elsewhere rather than an
     // error — asking a Flex for its post-resample audio is a question with no
     // referent, not a failure.
+    //
+    // Claim the recorder BEFORE arming the backend tap, so no post-resample
+    // block can land while the pre-resample path is still appending. See
+    // m_txAudioRecordPostResample: the two taps carry different sample rates
+    // and share one buffer.
+    // Claim or release ownership WITHOUT disturbing another tap's claim: a
+    // plain store here is what let `setTxWireTapEnabled(false)` clear the claim
+    // `setTxPostResampleTapEnabled(true)` had just made, two lines apart.
+    if (on)
+        m_txRecordOwner.store(TxRecordOwner::PostResample, std::memory_order_relaxed);
+    else if (m_txRecordOwner.load(std::memory_order_relaxed) == TxRecordOwner::PostResample)
+        m_txRecordOwner.store(TxRecordOwner::PreResample, std::memory_order_relaxed);
     if (auto* backend = qobject_cast<icom::IcomCivBackend*>(m_backend.get()))
         backend->setTxPostResampleTapEnabled(on);
+}
+
+void RadioModel::setTxWireTapEnabled(bool on)
+{
+    // Same exclusivity, same release-only-your-own-claim rule as above.
+    if (on)
+        m_txRecordOwner.store(TxRecordOwner::Wire, std::memory_order_relaxed);
+    else if (m_txRecordOwner.load(std::memory_order_relaxed) == TxRecordOwner::Wire)
+        m_txRecordOwner.store(TxRecordOwner::PreResample, std::memory_order_relaxed);
+    if (auto* backend = qobject_cast<icom::IcomCivBackend*>(m_backend.get()))
+        backend->setTxWireTapEnabled(on);
+}
+
+void RadioModel::setTxDualCaptureEnabled(bool on, int maxSamples)
+{
+    // Arms BOTH taps at once. The post-resample side owns the PRIMARY recorder
+    // (so `txwave save` is unchanged) and the wire side writes its own buffer,
+    // which is why this cannot be expressed with the single-owner enum: here
+    // two taps really do record simultaneously, into different places.
+    constexpr int kDefaultSamples = 48000 * 2 * 8;
+    constexpr int kMaxSamples = 48000 * 2 * 30;
+    const int cap = std::clamp(maxSamples > 0 ? maxSamples : kDefaultSamples, 1, kMaxSamples);
+
+    {
+        QMutexLocker lock(&m_txAudioTapMutex);
+        if (on) {
+            m_txWireRecordBuffer.clear();
+            m_txWireRecordBuffer.reserve(cap);
+            m_txWireRecordCapacity = cap;
+            m_txWireTapSampleRate = 0;
+        } else {
+            m_txWireRecordCapacity = 0;
+        }
+    }
+    m_txDualCapture.store(on, std::memory_order_relaxed);
+
+    // Post-resample claims the primary recorder; the wire tap is armed at the
+    // backend so its datagrams are emitted at all.
+    m_txRecordOwner.store(on ? TxRecordOwner::PostResample : TxRecordOwner::PreResample,
+                          std::memory_order_relaxed);
+    if (auto* backend = qobject_cast<icom::IcomCivBackend*>(m_backend.get())) {
+        backend->setTxPostResampleTapEnabled(on);
+        backend->setTxWireTapEnabled(on);
+    }
+}
+
+QVector<qint16> RadioModel::takeTxWireRecording(int* sampleRateHz)
+{
+    QMutexLocker lock(&m_txAudioTapMutex);
+    if (sampleRateHz)
+        *sampleRateHz = m_txWireTapSampleRate;
+    QVector<qint16> out;
+    out.swap(m_txWireRecordBuffer);
+    return out;
 }
 
 QVector<qint16> RadioModel::takeTxAudioRecording(int* sampleRateHz)

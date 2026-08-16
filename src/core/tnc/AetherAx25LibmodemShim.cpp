@@ -90,6 +90,18 @@ constexpr int kTxPreambleFlags = ax25::kAx25Hf300PreambleFlags;        // HF 300
 constexpr int kVhf1200TxPreambleFlags = ax25::kAx25Vhf1200PreambleFlags; // VHF: ~0.43 s
 constexpr int kTxPostambleFlags = ax25::kAx25TxPostambleFlags;
 constexpr int kTxVitaPacketFrames = 128;
+// ⚠ MEASURED 2026-08-15: on the IC-9700's RS-BA1 LAN audio path this value has
+// NO EFFECT ON TRANSMITTED DEVIATION. Raised to 0.90 on the bench — the
+// modulator moved as expected (txprobe −9.1 → −0.9 dBFS peak, +8.2 dB) and the
+// level received at an independent receiver did not change at all (rms 4763 vs
+// 4710–4779 at 0.35). The radio's own `LAN MOD Level` is equally inert: 8 % and
+// 80 % measure the same on air. The 9700 appears to limit/AGC LAN audio to a
+// fixed deviation.
+//
+// Left at 0.35 because nothing on this path justifies changing it, and 0.35 is
+// what every other backend has been validated against. If deviation ever needs
+// to be operator-settable, this constant is where it would live — there is no
+// control for it anywhere today.
 constexpr double kTxAfskAmplitude = 0.35;
 // Phase diversity compensates for 300 baud HF timing drift until the shim grows
 // a proper packet-synchronous timing loop. Phase 1 is retained because captures

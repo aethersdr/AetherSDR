@@ -734,9 +734,40 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
                 onCivFrame(frame, sessionGeneration);
             });
     connect(m_session.get(), &IcomSession::audioReady, this, &IcomCivBackend::onAudio);
+    // The wire tap. Decoded back to float with the SAME decodeAudio() the
+    // receive path uses, so a difference between this and the post-resample tap
+    // is a difference in the BYTES, not in how they were interpreted here.
+    connect(m_session.get(), &IcomSession::txAudioPayload, this,
+            [this](const QByteArray& lpcm) {
+                // KEYED ONLY, and this is not optional for a diagnostic.
+                //
+                // The audio stream runs continuously once the session is up:
+                // the packetiser is fed between overs and those frames go out
+                // as ordinary audio datagrams. An ungated tap therefore records
+                // the whole stream, and the 600 ms burst under test arrives
+                // diluted in seconds of inter-burst audio — measured at 96.7 %
+                // non-zero over a 2.1 s capture, which atest cannot sync on.
+                // The result reads as "the wire is corrupt" when the only thing
+                // wrong is the instrument. submitTxAudio gates on exactly this
+                // for the same reason; so does this.
+                if (!m_keyed && !m_tuning)
+                    return;
+                const auto* p = reinterpret_cast<const std::uint8_t*>(lpcm.constData());
+                auto mono = decodeAudio(AudioCodec::Lpcm1ch16,
+                                        std::span<const std::uint8_t>(
+                                            p, static_cast<std::size_t>(lpcm.size())));
+                if (!mono.empty())
+                    emit txWireAudio(mono, m_audioRateHz);
+            });
 
     if (!m_session->start(p))
         emit connectionError(QStringLiteral("could not open the Icom session"));
+}
+
+void IcomCivBackend::setTxWireTapEnabled(bool on)
+{
+    if (m_session)
+        m_session->setTxPayloadTapEnabled(on);
 }
 
 void IcomCivBackend::disconnectRadio()

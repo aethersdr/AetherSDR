@@ -9,6 +9,7 @@
 #include <deque>
 #include <QObject>
 
+#include <atomic>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -118,7 +119,31 @@ public:
     };
     [[nodiscard]] Counters counters() const;
 
+    // THE WIRE TAP — the outbound audio payload, at the last instruction before
+    // the socket.
+    //
+    // Every tap upstream of this point has now been cleared (modulator,
+    // submitTxAudio, the 24k->48k resampler, the LPCM encode, the packetiser),
+    // and atest decodes all of them; the same transmission off the air decodes
+    // nowhere. What remains between here and the antenna is UDP and the radio,
+    // so this answers the one question left on the client side: do the BYTES
+    // handed to the socket still carry correct AFSK?
+    //
+    // Emitted only for datagrams isAudioData() accepts, and only while armed —
+    // this is on the transmit path at ~100 packets/s.
+    //
+    // ⚠ Payload only, envelope stripped: a consumer reassembling these gets the
+    // 1364+556 halves back in send order, which is the same byte stream
+    // TxPacketizer produced. That is deliberate — reassembling to LPCM and
+    // feeding it to atest is the whole point.
+    void setTxPayloadTapEnabled(bool on) noexcept
+    {
+        m_txPayloadTapEnabled.store(on, std::memory_order_relaxed);
+    }
+
 signals:
+    // Outbound audio payload bytes (LPCM s16 LE at the negotiated rate).
+    void txAudioPayload(const QByteArray& lpcm);
     // Handshake complete; the stream will now carry payload.
     void ready();
     void failed(const QString& reason);
@@ -165,6 +190,8 @@ private:
     // number and can be asked for) but must not reset the quiet clock, or the
     // idle cadence never relaxes.
     void sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayload);
+
+    std::atomic<bool> m_txPayloadTapEnabled{false};
 
     QUdpSocket* m_socket = nullptr;
     QTimer* m_idleTimer = nullptr;
