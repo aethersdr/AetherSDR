@@ -40,10 +40,10 @@ jobs:
       CCACHE_DIR: /ccache
       # Sized from measurement, not guesswork: a full cold build of this
       # configuration settles at ~0.5 GB. 1000M leaves headroom without wasting
-      # budget against the repo's 10 GB ceiling, where an oversized cap risks
-      # LRU-evicting the Qt / FFTW / DeepFilterNet entries the other jobs depend
-      # on. (check-macos runs at 500M, but on a lighter configuration — no
-      # ENABLE_NVIDIA_AFX.)
+      # budget against the repo's 10 GB cache allowance, where an oversized cap
+      # risks LRU-evicting the Qt / FFTW / DeepFilterNet entries the other jobs
+      # depend on. (check-macos runs at 500M, but on a lighter configuration —
+      # no ENABLE_NVIDIA_AFX.)
       #
       # This cap used to carry more weight than it could bear: entry COUNT, not
       # entry size, was the binding constraint, and only main writes an entry
@@ -879,13 +879,13 @@ jobs:
 # read. Only entries on refs/heads/main are readable repo-wide.
 #
 # So each PR run wrote an entry that nothing else could ever use, into a budget
-# capped at 10 GB for the whole repository, evicting by LRU. Measured on
-# 2026-08-16, with 26 PRs open:
+# with a 10 GB allowance for the whole repository, evicting by LRU. Measured
+# on 2026-08-16, with 26 PRs open:
 #
 #   refs/pull/*/merge   14 entries   8.62 GB   <- unreadable by anything else
 #   refs/heads/main      9 entries   2.00 GB   <- the only shared entries
 #                                   -------
-#                        active total 10.80 GB against a 10 GB ceiling
+#                        active total 10.80 GB against a 10 GB allowance
 #
 # 80% of the budget was PR-scoped, and its only effect was evicting the shared
 # main entry. There was at that point NO Linux ccache or Windows sccache entry
@@ -894,10 +894,18 @@ jobs:
 # healthy one takes ~12 s.
 #
 # The arithmetic says this could not have held: ~35 CI runs/day x ~2 GB of
-# compiler cache per run is 50-80 GB/day pushed through a 10 GB budget. The
+# compiler cache per run is 50-80 GB/day pushed through a 10 GB allowance. The
 # whole cache turned over several times a day. Capping CCACHE_MAXSIZE limits
 # each entry's SIZE and does nothing about entry COUNT, which was the binding
 # constraint.
+#
+# NOTE the 10 GB is an ALLOWANCE, not a hard cap. Since 2025-11 it is
+# configurable upward by enterprise/org/repo admins, billed at $0.07/GB-month
+# above 10 GB — but doing so "requires a valid Pro, Team, or Enterprise
+# account", and the aethersdr org is on Free. Raising it was considered and
+# rejected: it would have paid to warehouse the 8.62 GB of PR-scoped entries
+# that nothing is permitted to read. This change removes that waste instead,
+# and lands the repo well inside the free allowance.
 #
 # WHY SAVE-ON-MAIN FIXES IT
 #
