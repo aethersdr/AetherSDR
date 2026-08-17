@@ -3550,6 +3550,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         applet->panId(), sw,
         m_radioModel.panMinBandwidthMhz(applet->panId()),
         m_radioModel.panMaxBandwidthMhz(applet->panId()));
+    QObject::disconnect(&m_radioModel, &RadioModel::panBandwidthLimitsChanged,
+                        sw, nullptr);
     connect(&m_radioModel, &RadioModel::panBandwidthLimitsChanged,
             sw, [this, applet, sw](const QString& panId, double minMhz, double maxMhz) {
         // Applets exist before any backend connects, so a connect-time report has
@@ -3579,7 +3581,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // Antenna list → this overlay menu (per-pan, mirrors VfoWidget pattern) (#1260)
     connect(&m_radioModel, &RadioModel::antListChanged,
-            menu, &SpectrumOverlayMenu::setAntennaList);
+            menu, &SpectrumOverlayMenu::setAntennaList,
+            Qt::UniqueConnection);
     menu->setAntennaList(m_radioModel.antennaList());
 
     // Apply smart spot filter state to this (possibly new) panadapter
@@ -3606,7 +3609,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     if (auto* pan = m_radioModel.panadapter(applet->panId())) {
         connect(pan, &PanadapterModel::wideChanged,
-                sw, &SpectrumWidget::setWideActive);
+                sw, &SpectrumWidget::setWideActive,
+                Qt::UniqueConnection);
         sw->setWideActive(pan->wideActive());
         connect(pan, &PanadapterModel::wnbStateChanged,
                 sw, &SpectrumWidget::syncWnbState,
@@ -3625,6 +3629,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //      local change while waiting for the radio to confirm the command, and
         //   b) in multi-pan setups, a level update on pan B doesn't incorrectly
         //      update pan A's dBm scale.
+        QObject::disconnect(pan, &PanadapterModel::levelChanged, sw, nullptr);
         connect(pan, &PanadapterModel::levelChanged,
                 sw, [sw, pendingDbm, setStreamDbmRange,
                      applyAuthoritativeDbmRange,
@@ -3711,7 +3716,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── Pan activation: clicking on this pan makes it active ─────────────
     connect(applet, &PanadapterApplet::activated,
-            m_panStack, &PanadapterStack::setActivePan);
+            m_panStack, &PanadapterStack::setActivePan,
+            Qt::UniqueConnection);
 
     // ── Close pan: X button on title bar closes this pan ────────────────
     connect(applet, &PanadapterApplet::closeRequested,
@@ -3937,24 +3943,31 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             markers.append({e.id, e.freqMhz, e.widthHz, e.depthDb, e.permanent});
         swGuard->setTnfMarkers(markers);
     };
-    connect(tnf, &TnfModel::tnfChanged,  this, rebuildTnfMarkers);
-    connect(tnf, &TnfModel::tnfRemoved,  this, rebuildTnfMarkers);
+    QObject::disconnect(tnf, &TnfModel::tnfChanged, sw, nullptr);
+    QObject::disconnect(tnf, &TnfModel::tnfRemoved, sw, nullptr);
+    connect(tnf, &TnfModel::tnfChanged,  sw, rebuildTnfMarkers);
+    connect(tnf, &TnfModel::tnfRemoved,  sw, rebuildTnfMarkers);
     connect(tnf, &TnfModel::globalEnabledChanged,
-            sw, &SpectrumWidget::setTnfGlobalEnabled);
-    connect(tnf, &TnfModel::globalEnabledChanged,
-            this, [this](bool on) {
-        m_tnfIndicator->setStyleSheet(on
-            ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
-            : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-    });
+            sw, &SpectrumWidget::setTnfGlobalEnabled,
+            Qt::UniqueConnection);
+    QObject::disconnect(m_tnfIndicatorConnection);
+    m_tnfIndicatorConnection = connect(
+        tnf, &TnfModel::globalEnabledChanged,
+        this, [this](bool on) {
+            m_tnfIndicator->setStyleSheet(on
+                ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
+                : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
+        });
 
     // FDX indicator style update
-    connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
-        bool fdx = m_radioModel.fullDuplexEnabled();
-        m_fdxIndicator->setStyleSheet(fdx
-            ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
-            : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-    });
+    QObject::disconnect(m_fdxIndicatorConnection);
+    m_fdxIndicatorConnection = connect(
+        &m_radioModel, &RadioModel::infoChanged, this, [this]() {
+            const bool fdx = m_radioModel.fullDuplexEnabled();
+            m_fdxIndicator->setStyleSheet(fdx
+                ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
+                : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
+        });
     connect(sw, &SpectrumWidget::tnfCreateRequested,   tnf, &TnfModel::createTnf,
             Qt::UniqueConnection);
     connect(sw, &SpectrumWidget::tnfMoveRequested,     tnf, &TnfModel::setTnfFreq,
@@ -4009,8 +4022,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         connect(spotRebuildTimer.timer, &QTimer::timeout, sw, rebuildSpots);
         QPointer<QTimer> rebuildTimerGuard(spotRebuildTimer.timer);
         auto scheduleRebuildSpots = [rebuildTimerGuard]() {
-            if (rebuildTimerGuard && !rebuildTimerGuard->isActive()) {
-                rebuildTimerGuard->start();
+            if (rebuildTimerGuard) {
+                startSingleShotTimerIfIdle(rebuildTimerGuard.data());
             }
         };
         // Use the per-widget timer as the connection context so removing the
@@ -4060,27 +4073,38 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── Per-pan display controls (client-side) ───────────────────────────
     connect(menu, &SpectrumOverlayMenu::fftFillAlphaChanged,
-            sw, &SpectrumWidget::setFftFillAlpha);
+            sw, &SpectrumWidget::setFftFillAlpha,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::fftFillColorChanged,
-            sw, &SpectrumWidget::setFftFillColor);
+            sw, &SpectrumWidget::setFftFillColor,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::fftLineColorChanged,
-            sw, &SpectrumWidget::setFftLineColor);
+            sw, &SpectrumWidget::setFftLineColor,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::fftHeatMapChanged,
-            sw, &SpectrumWidget::setFftHeatMap);
+            sw, &SpectrumWidget::setFftHeatMap,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::showGridChanged,
-            sw, &SpectrumWidget::setShowGrid);
+            sw, &SpectrumWidget::setShowGrid,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::freqGridSpacingChanged,
-            sw, &SpectrumWidget::setFreqGridSpacing);
+            sw, &SpectrumWidget::setFreqGridSpacing,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::freqScaleFontPtChanged,
-            sw, &SpectrumWidget::setFreqScaleFontPt);
+            sw, &SpectrumWidget::setFreqScaleFontPt,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::fftLineWidthChanged,
-            sw, &SpectrumWidget::setFftLineWidth);
+            sw, &SpectrumWidget::setFftLineWidth,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::noiseFloorPositionChanged,
-            sw, &SpectrumWidget::setNoiseFloorPosition);
+            sw, &SpectrumWidget::setNoiseFloorPosition,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::noiseFloorEnableChanged,
-            sw, &SpectrumWidget::setNoiseFloorEnable);
+            sw, &SpectrumWidget::setNoiseFloorEnable,
+            Qt::UniqueConnection);
     connect(sw, &SpectrumWidget::noiseFloorPositionResolved,
-            menu, &SpectrumOverlayMenu::syncNoiseFloorPosition);
+            menu, &SpectrumOverlayMenu::syncNoiseFloorPosition,
+            Qt::UniqueConnection);
 
     // ── Auto-squelch wiring ───────────────────────────────────────────────
     // RxApplet signals → per-pan spectrum widget
@@ -4206,7 +4230,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan) {
             connect(pan, &PanadapterModel::daxiqChannelChanged,
-                    menu, &SpectrumOverlayMenu::syncDaxIqChannel);
+                    menu, &SpectrumOverlayMenu::syncDaxIqChannel,
+                    Qt::UniqueConnection);
             menu->syncDaxIqChannel(pan->daxiqChannel());
 
             // DAX IQ channel restore deferred — the radio persists
@@ -4242,17 +4267,23 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
-            sw, &SpectrumWidget::setWfColorScheme);
+            sw, &SpectrumWidget::setWfColorScheme,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::spectrumRenderModeChanged,
-            sw, &SpectrumWidget::setSpectrumRenderMode);
+            sw, &SpectrumWidget::setSpectrumRenderMode,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::dssFloorDepthChanged,
-            sw, &SpectrumWidget::setDssFloorDepth);
+            sw, &SpectrumWidget::setDssFloorDepth,
+            Qt::UniqueConnection);
     connect(sw, &SpectrumWidget::dssFloorDepthResolved,
-            menu, &SpectrumOverlayMenu::syncDssFloorDepth);
+            menu, &SpectrumOverlayMenu::syncDssFloorDepth,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::dssGainChanged,
-            sw, &SpectrumWidget::setDssGain);
+            sw, &SpectrumWidget::setDssGain,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::dssRowSpanChanged,
-            sw, &SpectrumWidget::setDssRowSpan);
+            sw, &SpectrumWidget::setDssRowSpan,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,
             this, [this, applet, sw](int v) {
         if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
@@ -4425,9 +4456,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     // NB Waterfall Blanker (#277)
     connect(menu, &SpectrumOverlayMenu::wfBlankerEnabledChanged,
-            sw, &SpectrumWidget::setWfBlankerEnabled);
+            sw, &SpectrumWidget::setWfBlankerEnabled,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::wfBlankerThresholdChanged,
-            sw, &SpectrumWidget::setWfBlankerThreshold);
+            sw, &SpectrumWidget::setWfBlankerThreshold,
+            Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
             this, [sw] {
         const QString path = getBackgroundImagePath(sw->window(), "Choose Background Image");

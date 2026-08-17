@@ -1425,6 +1425,8 @@ private:
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
     QLabel* m_fdxIndicator{nullptr};
+    QMetaObject::Connection m_tnfIndicatorConnection;
+    QMetaObject::Connection m_fdxIndicatorConnection;
     // Manufacturer row above the model. Hidden unless the connected radio
     // reports a make its own model string does not already carry — see
     // refreshRadioIdentityLabels().

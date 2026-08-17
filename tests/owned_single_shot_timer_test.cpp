@@ -59,12 +59,10 @@ int main(int argc, char** argv)
     CHECK(firstSpotTimer.timer == secondSpotTimer.timer);
 
     QSignalSpy spotTimeouts(firstSpotTimer.timer, &QTimer::timeout);
-    firstSpotTimer.timer->start();
+    CHECK(startSingleShotTimerIfIdle(firstSpotTimer.timer));
     QTest::qWait(60);
     const int spotRemainingBeforeSchedule = firstSpotTimer.timer->remainingTime();
-    if (!secondSpotTimer.timer->isActive()) {
-        secondSpotTimer.timer->start();
-    }
+    CHECK(!startSingleShotTimerIfIdle(secondSpotTimer.timer));
     const int spotRemainingAfterSchedule = secondSpotTimer.timer->remainingTime();
     CHECK(spotRemainingAfterSchedule <= spotRemainingBeforeSchedule);
     CHECK(spotTimeouts.wait(500));

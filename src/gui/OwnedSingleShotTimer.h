@@ -23,6 +23,7 @@ inline OwnedSingleShotTimer ensureOwnedSingleShotTimer(QObject* owner,
 
     QTimer* timer = owner->findChild<QTimer*>(objectName, Qt::FindDirectChildrenOnly);
     if (timer != nullptr) {
+        Q_ASSERT(timer->interval() == intervalMs);
         return {timer, false};
     }
 
@@ -31,6 +32,17 @@ inline OwnedSingleShotTimer ensureOwnedSingleShotTimer(QObject* owner,
     timer->setSingleShot(true);
     timer->setInterval(intervalMs);
     return {timer, true};
+}
+
+inline bool startSingleShotTimerIfIdle(QTimer* timer)
+{
+    Q_ASSERT(timer != nullptr);
+    if (timer->isActive()) {
+        return false;
+    }
+
+    timer->start();
+    return true;
 }
 
 } // namespace AetherSDR
