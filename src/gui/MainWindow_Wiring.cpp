@@ -28,6 +28,7 @@
 #include "AppletPanel.h"
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
+#include "OwnedSingleShotTimer.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #include "PanadapterMessageOverlay.h"
@@ -3681,22 +3682,24 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // old yPixels scale.  This causes a ~5 dB noise-floor offset until restart.
     // A 300ms debounce avoids flooding the radio during animated resizes.
     {
-        auto* resizeTimer = new QTimer(sw);  // parented to sw → auto-deleted
-        resizeTimer->setSingleShot(true);
-        resizeTimer->setInterval(300);
-        connect(sw, &SpectrumWidget::dimensionsChanged,
-                resizeTimer, [resizeTimer](int, int) { resizeTimer->start(); });
-        connect(resizeTimer, &QTimer::timeout,
-                this, [this, applet, sw]() {
-            auto* pan = m_radioModel.panadapter(applet->panId());
-            if (!pan || !sw) {
-                return;
-            }
-            if (!panPixelDimensionsReady(sw)) {
-                return;
-            }
-            requestPanDimensionsForRadio(pan->panId(), sw);
-        });
+        const OwnedSingleShotTimer resizeTimer = ensureOwnedSingleShotTimer(
+            sw, QStringLiteral("panDimensionDebounceTimer"), 300);
+        if (resizeTimer.newlyCreated) {
+            connect(sw, &SpectrumWidget::dimensionsChanged,
+                    resizeTimer.timer,
+                    [timer = resizeTimer.timer](int, int) { timer->start(); });
+            connect(resizeTimer.timer, &QTimer::timeout,
+                    this, [this, applet, sw]() {
+                auto* pan = m_radioModel.panadapter(applet->panId());
+                if (!pan || !sw) {
+                    return;
+                }
+                if (!panPixelDimensionsReady(sw)) {
+                    return;
+                }
+                requestPanDimensionsForRadio(pan->panId(), sw);
+            });
+        }
     }
 
     // ── Tuning step size → this pan's spectrum widget ─────────────────────
@@ -3952,12 +3955,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
             : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
     });
-    connect(sw, &SpectrumWidget::tnfCreateRequested,   tnf, &TnfModel::createTnf);
-    connect(sw, &SpectrumWidget::tnfMoveRequested,     tnf, &TnfModel::setTnfFreq);
-    connect(sw, &SpectrumWidget::tnfRemoveRequested,   tnf, &TnfModel::requestRemoveTnf);
-    connect(sw, &SpectrumWidget::tnfWidthRequested,    tnf, &TnfModel::setTnfWidth);
-    connect(sw, &SpectrumWidget::tnfDepthRequested,    tnf, &TnfModel::setTnfDepth);
-    connect(sw, &SpectrumWidget::tnfPermanentRequested,tnf, &TnfModel::setTnfPermanent);
+    connect(sw, &SpectrumWidget::tnfCreateRequested,   tnf, &TnfModel::createTnf,
+            Qt::UniqueConnection);
+    connect(sw, &SpectrumWidget::tnfMoveRequested,     tnf, &TnfModel::setTnfFreq,
+            Qt::UniqueConnection);
+    connect(sw, &SpectrumWidget::tnfRemoveRequested,   tnf, &TnfModel::requestRemoveTnf,
+            Qt::UniqueConnection);
+    connect(sw, &SpectrumWidget::tnfWidthRequested,    tnf, &TnfModel::setTnfWidth,
+            Qt::UniqueConnection);
+    connect(sw, &SpectrumWidget::tnfDepthRequested,    tnf, &TnfModel::setTnfDepth,
+            Qt::UniqueConnection);
+    connect(sw, &SpectrumWidget::tnfPermanentRequested, tnf, &TnfModel::setTnfPermanent,
+            Qt::UniqueConnection);
 
     // ── Spot markers ─────────────────────────────────────────────────────
     auto* spots = &m_radioModel.spotModel();
@@ -3994,20 +4003,31 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // that stutters the waterfall. A short single-shot timer collapses a burst
     // of N spot signals into one rebuild. Parented to sw so it dies with the
     // pan; QPointer in rebuildSpots already guards against a dangling widget.
-    auto* spotRebuildTimer = new QTimer(sw);
-    spotRebuildTimer->setSingleShot(true);
-    spotRebuildTimer->setInterval(50);  // ~20 Hz, below the FFT repaint cadence
-    connect(spotRebuildTimer, &QTimer::timeout, sw, rebuildSpots);
-    QPointer<QTimer> rebuildTimerGuard(spotRebuildTimer);
-    auto scheduleRebuildSpots = [rebuildTimerGuard]() {
-        if (rebuildTimerGuard && !rebuildTimerGuard->isActive())
-            rebuildTimerGuard->start();
-    };
-    connect(spots, &SpotModel::spotAdded,   this, scheduleRebuildSpots);
-    connect(spots, &SpotModel::spotUpdated, this, scheduleRebuildSpots);
-    connect(spots, &SpotModel::spotRemoved, this, scheduleRebuildSpots);
-    connect(spots, &SpotModel::spotsCleared,this, scheduleRebuildSpots);
-    connect(spots, &SpotModel::spotsRefreshed, this, scheduleRebuildSpots);
+    const OwnedSingleShotTimer spotRebuildTimer = ensureOwnedSingleShotTimer(
+        sw, QStringLiteral("spotRebuildTimer"), 50);  // ~20 Hz, below FFT repaint cadence
+    if (spotRebuildTimer.newlyCreated) {
+        connect(spotRebuildTimer.timer, &QTimer::timeout, sw, rebuildSpots);
+        QPointer<QTimer> rebuildTimerGuard(spotRebuildTimer.timer);
+        auto scheduleRebuildSpots = [rebuildTimerGuard]() {
+            if (rebuildTimerGuard && !rebuildTimerGuard->isActive()) {
+                rebuildTimerGuard->start();
+            }
+        };
+        // Use the per-widget timer as the connection context so removing the
+        // pan also removes these model subscriptions.  MainWindow outlives
+        // every pan, so using `this` would retain one inert QPointer callback
+        // for every pan that had ever existed.
+        connect(spots, &SpotModel::spotAdded,
+                spotRebuildTimer.timer, scheduleRebuildSpots);
+        connect(spots, &SpotModel::spotUpdated,
+                spotRebuildTimer.timer, scheduleRebuildSpots);
+        connect(spots, &SpotModel::spotRemoved,
+                spotRebuildTimer.timer, scheduleRebuildSpots);
+        connect(spots, &SpotModel::spotsCleared,
+                spotRebuildTimer.timer, scheduleRebuildSpots);
+        connect(spots, &SpotModel::spotsRefreshed,
+                spotRebuildTimer.timer, scheduleRebuildSpots);
+    }
     {
         auto& s = AppSettings::instance();
         sw->setShowSpots(s.value("IsSpotsEnabled", "True").toString() == "True");

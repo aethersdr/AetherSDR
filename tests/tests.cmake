@@ -2703,6 +2703,13 @@ target_link_libraries(panadapter_dbm_range_test PRIVATE aethercore Qt6::Core)
 set_target_properties(panadapter_dbm_range_test PROPERTIES AUTOMOC ON)
 add_test(NAME panadapter_dbm_range_test COMMAND panadapter_dbm_range_test)
 
+# wirePanadapter() can see the placeholder SpectrumWidget more than once. The
+# helper keeps one timer/path per widget while retaining separate per-pan timers.
+add_executable(owned_single_shot_timer_test tests/owned_single_shot_timer_test.cpp)
+target_include_directories(owned_single_shot_timer_test PRIVATE src)
+target_link_libraries(owned_single_shot_timer_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME owned_single_shot_timer_test COMMAND owned_single_shot_timer_test)
+
 # The bridge preserves dragAt, target-tune, memory-recall, and authenticated
 # positional requests across its bare and JSON protocol forms.
 add_executable(automation_drag_at_test tests/automation_drag_at_test.cpp)
