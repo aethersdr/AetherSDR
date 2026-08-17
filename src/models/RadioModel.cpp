@@ -4200,11 +4200,31 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     // The time value is a 16-bit relative millisecond counter, not an epoch
     // timestamp.  Flex clients reset it after a short idle gap; the radio
     // accepts 0x0000 as a timing resync marker.
+    // NOTE: m_netCwLastSendMs stores the BACK-DATED value, so the idle test
+    // below compares a real elapsed() against a back-dated floor — the
+    // effective reset threshold is 3000 minus the last edge's back-date,
+    // i.e. as low as 2900 ms.  Harmless: crossing it only emits a fresh
+    // 0x0000 resync marker.
     constexpr qint64 kNetCwIdleResetMs = 3000;
     quint16 timeMs = 0;
+    // Trace-side observability: record what back-dating actually did to
+    // this edge, so a log capture distinguishes a session where back-dates
+    // applied cleanly from one where they were clamped or abandoned — the
+    // final time= value alone reads identically in both.
+    qint64 traceSchedAgeMs = -1;    // -1 = edge carried no schedule
+    qint64 traceBackdateMs = 0;     // ms actually subtracted from time=
+    bool   traceFellBack   = false; // ordering fallback re-stamped at send time
+    if (scheduledAt != std::chrono::steady_clock::time_point{})
+        traceSchedAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - scheduledAt).count();
     if (!m_netCwClock.isValid()
         || m_netCwLastSendMs < 0
         || (m_netCwClock.elapsed() - m_netCwLastSendMs) > kNetCwIdleResetMs) {
+        // A burst's FIRST edge is never back-dated: this branch restarts the
+        // counter at 0, so it is stamped at send time and the burst's first
+        // element reconstructs short by that edge's age (wake latency + the
+        // queued GUI hop).  Every later delta is exact — the error is one
+        // element once per >3 s idle gap, i.e. once per over.
         if (m_netCwClock.isValid())
             m_netCwClock.restart();
         else
@@ -4227,10 +4247,11 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
         // exactly the quantity wake latency was corrupting.
         if (scheduledAt != std::chrono::steady_clock::time_point{}) {
             constexpr qint64 kMaxScheduleAgeMs = 100;
-            const qint64 age = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - scheduledAt).count();
-            if (age > 0)
-                elapsed -= std::min(age, kMaxScheduleAgeMs);
+            const qint64 age = traceSchedAgeMs;
+            if (age > 0) {
+                traceBackdateMs = std::min(age, kMaxScheduleAgeMs);
+                elapsed -= traceBackdateMs;
+            }
             // Strictly increasing, not merely non-decreasing: two edges
             // sharing a time= reconstruct as a zero-length element on the
             // radio, which is worse than the late edge the back-dating
@@ -4248,8 +4269,11 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
             // This comparison also covers a fresh burst, where `elapsed` can
             // go negative because the clock is younger than the age clamp —
             // m_netCwLastSendMs is >= 0 in this branch, so that lands here too.
-            if (elapsed <= m_netCwLastSendMs)
+            if (elapsed <= m_netCwLastSendMs) {
                 elapsed = std::max(m_netCwClock.elapsed(), m_netCwLastSendMs + 1);
+                traceFellBack   = true;
+                traceBackdateMs = 0;   // the send went out un-back-dated
+            }
         }
         timeMs = static_cast<quint16>(elapsed & 0xFFFF);
         m_netCwLastSendMs = elapsed;
@@ -4289,6 +4313,9 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
             << " stream=0x" << QString::number(m_netCwStreamId, 16).toUpper()
             << " index=" << index
             << " time=0x" << tsHex
+            << " schedAgeMs=" << traceSchedAgeMs
+            << " backdateMs=" << traceBackdateMs
+            << " backdateFallback=" << (traceFellBack ? 1 : 0)
             << " cmd=\"" << baseCmd << "\""
             << " payloadBytes=" << payload.size()
             << " packetBytes=" << packet0.size()

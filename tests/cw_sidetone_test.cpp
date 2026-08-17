@@ -690,5 +690,75 @@ int main()
                      "scheduled timestamps render as sample-exact elements");
     }
 
+    // ── 16. A wall-clock echo between scheduled edges raises the ordering
+    // floor, and the next scheduled edge clamps UP to it (#4890).  Queue
+    // order equals stamp order because of the max() clamp in setKeyDown(),
+    // NOT because steady_clock is monotonic: a scheduled instant lies in the
+    // past, so it CAN arrive below a floor a wall-clock echo raised.  The
+    // documented consequence is that the clamped edge reverts to wall-clock
+    // rhythm (the pre-#4890 behaviour) — never a reorder, never a phantom
+    // element.  This pins the clamp that until now rested only on bench
+    // measurement.
+    {
+        using clock = std::chrono::steady_clock;
+        CwSidetoneGenerator gen(48000);
+        gen.setEnabled(true);
+        gen.setVolume(1.0f);
+        gen.setShapingMs(0.0f);
+
+        const auto unit = std::chrono::milliseconds(48);   // 25 WPM dit
+        // Old enough that the scheduled key-up sits clearly below the echo's
+        // wall-clock floor, young enough to survive the stale-edge drop
+        // (100 ms << kReanchorIdleMs).
+        const auto t0 = clock::now() - std::chrono::milliseconds(100);
+
+        gen.setKeyDown(true, t0);           // scheduled key-down, 100 ms old
+        const auto echoBefore = clock::now();
+        gen.setKeyDown(true);               // GUI echo: same state, wall clock
+        const auto echoAfter = clock::now();
+        gen.setKeyDown(false, t0 + unit);   // scheduled key-up: below the floor
+
+        std::vector<float> cat;
+        for (int b = 0; b < 100; ++b) {                    // 100×128 ≈ 267 ms
+            auto blk = runFrames(gen, 128);
+            cat.insert(cat.end(), blk.begin(), blk.end());
+        }
+
+        // The same-state echo edge must be a rendering no-op: one burst.
+        ok &= expect(toneBursts(cat) == 1,
+                     "echo interleave: same-state echo renders no extra burst");
+
+        // The key-up clamped to the echo's stamp, so the element runs from
+        // t0 to the echo instant (bracketed by the two clock reads around
+        // it) — wall-clock length, NOT the scheduled 48 ms.
+        int start = -1, end = -1;
+        bool loud = false;
+        for (int i = 0; i + 8 <= static_cast<int>(cat.size()); i += 8) {
+            float peak = 0.0f;
+            for (int j = i; j < i + 8; ++j) peak = std::max(peak, std::abs(cat[j]));
+            const bool nowLoud = peak > 0.1f;
+            if (nowLoud && !loud && start < 0) start = i;
+            if (!nowLoud && loud && end < 0)   end = i;
+            loud = nowLoud;
+        }
+        const auto toSamples = [](clock::duration d) {
+            return static_cast<int64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()
+                * 48000 / 1'000'000'000LL);
+        };
+        const int tol = 16;                                // 8-sample windows ×2
+        const int64_t len = (start >= 0 && end > start) ? end - start : -1;
+        const int64_t lo  = toSamples(echoBefore - t0) - tol;
+        const int64_t hi  = toSamples(echoAfter  - t0) + tol;
+        const int unitSamples = 48 * 48;                   // 2304 @ 48 kHz
+        const bool clamped = len >= lo && len <= hi && len > unitSamples + tol;
+        if (!clamped)
+            std::printf("  echo clamp: len=%lld want [%lld..%lld] sched=%d\n",
+                        static_cast<long long>(len), static_cast<long long>(lo),
+                        static_cast<long long>(hi), unitSamples);
+        ok &= expect(clamped,
+                     "echo interleave: clamped edge reverts to wall-clock spacing");
+    }
+
     return ok ? 0 : 1;
 }

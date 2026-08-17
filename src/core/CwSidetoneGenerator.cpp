@@ -145,10 +145,17 @@ void CwSidetoneGenerator::reset() noexcept
     // Drop queued edges (consumer-side drain: only the tail moves).
     m_edgeTail.store(m_edgeHead.load(std::memory_order_acquire),
                      std::memory_order_release);
-    // m_lastQueuedStamp is deliberately NOT cleared: steady_clock is
-    // monotonic, so a retained floor can never sit above a stamp a later
-    // edge carries.  Clearing it changes nothing, while keeping it preserves
-    // the ordering floor for any edge queued after this drain.
+    // m_lastQueuedStamp is deliberately NOT cleared, and must not be: it is
+    // a plain time_point written by producers under m_edgeLock, while
+    // reset() runs on the audio thread WITHOUT that lock — clearing it here
+    // would be a data race.  Retaining it is also correct: queue ordering
+    // is enforced by the max() clamp in setKeyDown(), not by steady_clock's
+    // monotonicity — a scheduled instant lies a few ms in the past, so an
+    // edge CAN carry a stamp below a floor a wall-clock echo raised (see
+    // the echo note in setKeyDown()).  The cost of the retained floor is
+    // bounded and one-sided: the first edge queued after this drain clamps
+    // up to it rather than to its own scheduled instant, then the grid
+    // re-establishes itself within an element or two.
 }
 
 void CwSidetoneGenerator::setSampleRateHz(int hz) noexcept
