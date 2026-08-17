@@ -384,21 +384,26 @@ QVector<MidiBinding> parseProfileXml(const QByteArray& bytes,
                 << param + QStringLiteral(" (channel \"%1\")").arg(channelAttr.toString());
             continue;
         }
-        // Range-checked for every type, Pitch Bend included. Pitch Bend
-        // ignores `number` at dispatch (key() substitutes 0xFF and
-        // sourceDisplayName() omits it), so an out-of-range value there is
-        // inert rather than dangerous — but storing and re-exporting a number
-        // no MIDI message can carry leaves a file that says something untrue,
-        // and Principle VII asks the boundary to validate ranges, not just
-        // the ranges that currently matter.
+        // Range-checked per type. Pitch Bend's message carries no controller
+        // number: Learn and manual entry store -1 for it and the shared
+        // writer exports that verbatim, so a Pitch Bend row must accept -1
+        // to round-trip the app's own export (#5024). In-range numbers on a
+        // PB row stay accepted as before, but every accepted PB row now
+        // stores -1 — dispatch ignores the number anyway (key() substitutes
+        // 0xFF), and normalizing means the store can never re-export a
+        // number no PB message can carry. Out-of-range values remain named
+        // skips for every type (Principle VII).
         const auto numberAttr = attrs.value("number");
         bool numberOk = true;
-        const int number = numberAttr.isNull() ? 0 : numberAttr.toInt(&numberOk);
-        if (!numberOk || number < 0 || number > 127) {
+        int number = numberAttr.isNull() ? 0 : numberAttr.toInt(&numberOk);
+        const int numberFloor = (type == MidiBinding::PitchBend) ? -1 : 0;
+        if (!numberOk || number < numberFloor || number > 127) {
             result.skippedBadType
                 << param + QStringLiteral(" (number \"%1\")").arg(numberAttr.toString());
             continue;
         }
+        if (type == MidiBinding::PitchBend)
+            number = -1;
 
         if (paramValidator && !paramValidator(param)) {
             result.skippedUnknownParam << param;

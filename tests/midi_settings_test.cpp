@@ -376,6 +376,61 @@ int main(int argc, char** argv)
     ok &= expect(!exportEmpty.ok() && exportEmpty.exportedCount == 0,
                  "exporting an empty binding set is refused, not written as a stub");
 
+    // Pitch Bend round trip (#5024): Learn and manual entry store number = -1
+    // (the PB message carries no controller number) and the writer exports it
+    // verbatim, so the app's own export must come back as a binding, not a
+    // "bad values" skip.
+    {
+        MidiBinding pb;
+        pb.paramId = "rx.afGain";
+        pb.channel = 2;
+        pb.msgType = MidiBinding::PitchBend;
+        pb.number = -1;
+        const auto pbExported = settings.exportProfile(
+            fakeHome.path() + "/pb.xml", QVector<MidiBinding>{pb});
+        ok &= expect(pbExported.ok() && pbExported.exportedCount == 1,
+                     "a learned Pitch Bend binding exports");
+        const auto rPb = settings.importProfile(fakeHome.path() + "/pb.xml", validator);
+        ok &= expect(rPb.ok() && rPb.importedCount == 1
+                         && rPb.skippedBadType.isEmpty(),
+                     "the app's own Pitch Bend export re-imports as a binding");
+        const auto pbStored = settings.loadProfile(rPb.profileName);
+        ok &= expect(pbStored.size() == 1
+                         && pbStored.first().msgType == MidiBinding::PitchBend
+                         && pbStored.first().number == -1
+                         && pbStored.first().channel == 2,
+                     "the round-tripped Pitch Bend keeps number -1 and its channel");
+
+        // A hand-written PB row may omit the meaningless number entirely —
+        // normalize to -1 rather than the other attributes' default of 0.
+        const auto rPbAbsent = settings.importProfile(
+            writeImportFile("pb-absent.xml",
+                            "<MidiProfile>"
+                            "<Binding param=\"rx.afGain\" channel=\"0\" type=\"3\"/>"
+                            "</MidiProfile>\n"),
+            validator);
+        ok &= expect(rPbAbsent.ok() && rPbAbsent.importedCount == 1,
+                     "a Pitch Bend row without a number imports");
+        const auto pbAbsentStored = settings.loadProfile(rPbAbsent.profileName);
+        ok &= expect(pbAbsentStored.size() == 1 && pbAbsentStored.first().number == -1,
+                     "an absent Pitch Bend number normalizes to -1");
+
+        // An in-range number on a hand-written PB row stays accepted (it
+        // always was), but the stored binding normalizes to -1 so the store
+        // can never re-export a number no PB message carries.
+        const auto rPbInRange = settings.importProfile(
+            writeImportFile("pb-inrange.xml",
+                            "<MidiProfile>"
+                            "<Binding param=\"rx.afGain\" channel=\"0\" type=\"3\" number=\"64\"/>"
+                            "</MidiProfile>\n"),
+            validator);
+        ok &= expect(rPbInRange.ok() && rPbInRange.importedCount == 1,
+                     "an in-range Pitch Bend number still imports");
+        const auto pbInRangeStored = settings.loadProfile(rPbInRange.profileName);
+        ok &= expect(pbInRangeStored.size() == 1 && pbInRangeStored.first().number == -1,
+                     "an accepted Pitch Bend row stores number -1, not the file's value");
+    }
+
     // ── Non-regular files: the size cap cannot see them ─────────────────────
     //
     // QFile::size() reports 0 for character devices, FIFOs and most /proc
