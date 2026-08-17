@@ -1031,8 +1031,7 @@ AudioEngine::createNr2Filter(const QString& label, bool forceLegacyGeometry) con
     // key off NR2's output) go dead. So the MAIN-source filter uses the original
     // geometry when the connected source is the demo, while real radios and Kiwi
     // (larger, hop-aligned blocks) keep the improved 1024 geometry.
-    const bool useOriginal = forceLegacyGeometry
-        || m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
+    const bool useOriginal = forceLegacyGeometry;
     const int fftSize = useOriginal ? kNr2OriginalFftSize : kNr2FftSize;
     const int overlap = useOriginal ? kNr2OriginalOverlap : kNr2Overlap;
     auto filter = std::make_unique<SpectralNR>(
@@ -1852,11 +1851,6 @@ AudioEngine::AudioEngine(QObject* parent)
 
     // Restore saved audio device selections
     auto& s = AppSettings::instance();
-    const Nr2SettingsModel::Config nr2Config =
-        Nr2SettingsModel::instance().config();
-    m_nr2UseOriginalGeometry.store(
-        nr2Config.legacyGeometryAndGainMapping,
-        std::memory_order_relaxed);
     QByteArray savedOutId = s.value("AudioOutputDeviceId", "").toByteArray();
     QByteArray savedInId  = s.value("AudioInputDeviceId",  "").toByteArray();
 
@@ -6916,28 +6910,6 @@ void AudioEngine::setNr2AeFilter(bool on)
             source->nr2->setAeFilter(on);
         }
     }
-}
-
-void AudioEngine::setNr2UseOriginalGeometry(bool useOriginal)
-{
-    const bool previous = m_nr2UseOriginalGeometry.exchange(
-        useOriginal, std::memory_order_relaxed);
-    if (previous == useOriginal) {
-        return;
-    }
-
-    qCInfo(lcAudio).noquote()
-        << "AudioEngine: NR2 comparison mode switched to"
-        << (useOriginal ? "original geometry/gain"
-                        : "1024/4 with WDSP gain mapping");
-    if (!m_nr2Enabled.load(std::memory_order_relaxed)) {
-        return;
-    }
-
-    // Re-enter through the normal lifecycle so every Flex/Kiwi NR2 instance,
-    // presentation buffer, and startup estimator is rebuilt together.
-    setNr2Enabled(false);
-    setNr2Enabled(true);
 }
 
 void AudioEngine::setMainSourceLegacyNr2(bool legacy)

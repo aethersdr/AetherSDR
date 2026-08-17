@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QSignalSpy>
 
 #include <array>
@@ -41,6 +42,26 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (app.arguments().contains(QStringLiteral("--clean-profile"))) {
+        AppSettings& cleanSettings = AppSettings::instance();
+        cleanSettings.load();
+        const Nr2SettingsModel::Config clean =
+            Nr2SettingsModel::instance().config();
+        expect(clean.version == Nr2SettingsModel::kConfigVersion,
+               "a clean profile starts at the current config version");
+        return g_failures == 0 ? 0 : 1;
+    }
+
+    QProcess cleanProfileProcess;
+    cleanProfileProcess.start(
+        QCoreApplication::applicationFilePath(),
+        {QStringLiteral("--clean-profile")});
+    const bool cleanProfileFinished = cleanProfileProcess.waitForFinished();
+    expect(cleanProfileFinished
+               && cleanProfileProcess.exitStatus() == QProcess::NormalExit
+               && cleanProfileProcess.exitCode() == 0,
+           "a fresh settings profile reports the current schema version");
+
     AppSettings& settings = AppSettings::instance();
     settings.load();
     settings.setValue(QStringLiteral("ClientNr2Enabled"), QStringLiteral("True"));
@@ -57,7 +78,7 @@ int main(int argc, char* argv[])
 
     Nr2SettingsModel& model = Nr2SettingsModel::instance();
     const Nr2SettingsModel::Config migrated = model.config();
-    expect(migrated.version == 1, "migration writes config version 1");
+    expect(migrated.version == 2, "migration writes config version 2");
     expect(migrated.enabled, "migration preserves enabled state");
     expect(migrated.gainMethod == 1, "migration preserves gain method");
     expect(migrated.npeMethod == 2, "migration preserves NPE method");
@@ -70,8 +91,6 @@ int main(int argc, char* argv[])
            "migration preserves smoothing value");
     expect(nearlyEqual(migrated.qspp, 0.35f),
            "migration preserves voice threshold");
-    expect(migrated.legacyGeometryAndGainMapping,
-           "migration preserves legacy comparison state");
 
     const std::array<QString, 9> legacyKeys = {
         QStringLiteral("ClientNr2Enabled"),
@@ -98,8 +117,11 @@ int main(int argc, char* argv[])
     expect(parseError.error == QJsonParseError::NoError
                && document.isObject(),
            "NR2 persists as one JSON settings object");
-    expect(document.object().value(QStringLiteral("version")).toInt() == 1,
+    expect(document.object().value(QStringLiteral("version")).toInt() == 2,
            "persisted NR2 object is versioned");
+    expect(!document.object().contains(
+               QStringLiteral("legacyGeometryAndGainMapping")),
+           "retired original-geometry setting is not persisted");
 
     QSignalSpy changed(&model, &Nr2SettingsModel::configChanged);
     model.setGainFloor(0.15f);

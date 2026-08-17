@@ -9766,9 +9766,8 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
     auto* popup = new DspParamPopup(this);
     Nr2SettingsModel& model = Nr2SettingsModel::instance();
     const Nr2SettingsModel::Config initial = model.config();
-    const bool thresholdAvailable = initial.gainMethod == 2
-        || (!initial.legacyGeometryAndGainMapping
-            && initial.gainMethod == 0);
+    const bool thresholdAvailable = initial.gainMethod == 0
+        || initial.gainMethod == 2;
 
     const DspParamPopup::SliderControl reduction = popup->addSlider(
         "Reduction", 50, 200,
@@ -9823,19 +9822,8 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
             QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
         });
 
-    QCheckBox* legacy = popup->addCheckbox(
-        "Original NR2 (geometry + gain mapping)",
-        initial.legacyGeometryAndGainMapping,
-        [this](bool useOriginal) {
-            Nr2SettingsModel::instance()
-                .setLegacyGeometryAndGainMapping(useOriginal);
-            QMetaObject::invokeMethod(m_audio, [this, useOriginal]() {
-                m_audio->setNr2UseOriginalGeometry(useOriginal);
-            });
-        });
-
     connect(&model, &Nr2SettingsModel::configChanged, popup,
-            [reduction, naturalness, smoothing, threshold, aeFilter, legacy]() {
+            [reduction, naturalness, smoothing, threshold, aeFilter]() {
         const Nr2SettingsModel::Config config =
             Nr2SettingsModel::instance().config();
         reduction.slider->setValue(static_cast<int>(
@@ -9847,11 +9835,9 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
         threshold.slider->setValue(static_cast<int>(
             std::lround(config.qspp * 100.0f)));
         aeFilter->setChecked(config.aeFilter);
-        legacy->setChecked(config.legacyGeometryAndGainMapping);
 
-        const bool available = config.gainMethod == 2
-            || (!config.legacyGeometryAndGainMapping
-                && config.gainMethod == 0);
+        const bool available = config.gainMethod == 0
+            || config.gainMethod == 2;
         threshold.setEnabled(available);
         threshold.setToolTip(available
             ? QStringLiteral(

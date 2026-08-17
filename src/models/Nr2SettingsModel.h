@@ -14,8 +14,10 @@ class Nr2SettingsModel final : public QObject {
     Q_OBJECT
 
 public:
+    static constexpr int kConfigVersion = 2;
+
     struct Config {
-        int version{1};
+        int version{kConfigVersion};
         bool enabled{false};
         int gainMethod{2};
         int npeMethod{0};
@@ -24,7 +26,6 @@ public:
         float gainFloor{0.0f};
         float gainSmooth{0.85f};
         float qspp{0.20f};
-        bool legacyGeometryAndGainMapping{false};
 
         bool operator==(const Config&) const = default;
     };
@@ -42,7 +43,6 @@ public:
     void setGainFloor(float value);
     void setGainSmooth(float value);
     void setQspp(float value);
-    void setLegacyGeometryAndGainMapping(bool enabled);
 
 signals:
     void configChanged();

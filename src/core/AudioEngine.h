@@ -233,15 +233,10 @@ public:
     void setNr2AeFilter(bool on);
     QJsonObject nr2RuntimeDiagnostics() const;
     QJsonObject opusTxPacingDiagnostics() const;
-    Q_INVOKABLE void setNr2UseOriginalGeometry(bool useOriginal);
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
     // filter uses the original 256/2 geometry the demo's tiny frames need. Rebuilds
     // the active main NR2 filter if enabled so the change takes effect immediately.
     Q_INVOKABLE void setMainSourceLegacyNr2(bool legacy);
-    bool nr2UseOriginalGeometry() const
-    {
-        return m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
-    }
     // Client-side RN2 (RNNoise neural noise suppression)
     Q_INVOKABLE void setRn2Enabled(bool on);
     bool rn2Enabled() const { return m_rn2Enabled.load(); }
@@ -1027,11 +1022,10 @@ private:
     std::unique_ptr<SpectralNR> m_nr2;
     std::unique_ptr<SpectralNR> m_kiwiSdrNr2;
     std::atomic<bool> m_nr2Enabled{false};
-    std::atomic<bool> m_nr2UseOriginalGeometry{false};
     // Set true while the connected MAIN source is the demo (SimBackend), whose
     // 128-sample frames need the original 256/2 NR2 geometry (see createNr2Filter).
-    // Independent of the user-facing m_nr2UseOriginalGeometry setting, and scoped
-    // to the main filter only — real radios and Kiwi keep the 1024/4 geometry.
+    // This is scoped to the main filter only — real radios and Kiwi keep the
+    // 1024/4 geometry.
     std::atomic<bool> m_mainSourceLegacyNr2{false};
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH

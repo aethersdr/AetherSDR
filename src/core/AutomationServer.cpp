@@ -4319,8 +4319,6 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             {QStringLiteral("gainMethod"), nr2.gainMethod},
             {QStringLiteral("npeMethod"), nr2.npeMethod},
             {QStringLiteral("aeFilter"), nr2.aeFilter},
-            {QStringLiteral("legacyGeometryAndGainMapping"),
-                nr2.legacyGeometryAndGainMapping},
         };
         tuning[QStringLiteral("nr4")] = QJsonObject{
             {QStringLiteral("reductionDb"),  s.value("NR4ReductionAmount", "100").toFloat()},

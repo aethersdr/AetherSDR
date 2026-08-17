@@ -1419,12 +1419,6 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     connect(w, &AetherDspWidget::nr2AeFilterChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
     });
-    connect(w, &AetherDspWidget::nr2UseOriginalGeometryChanged,
-            this, [this](bool useOriginal) {
-        QMetaObject::invokeMethod(m_audio, [this, useOriginal]() {
-            m_audio->setNr2UseOriginalGeometry(useOriginal);
-        });
-    });
     // NR4
     connect(w, &AetherDspWidget::nr4ReductionChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4ReductionAmount(v); });

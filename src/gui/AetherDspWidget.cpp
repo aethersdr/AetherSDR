@@ -438,8 +438,6 @@ void AetherDspWidget::resetCurrentTab()
         if (m_nr2GainGroup) m_nr2GainGroup->button(2)->click();
         if (m_nr2NpeGroup)  m_nr2NpeGroup->button(0)->click();
         if (m_nr2AeCheck)        m_nr2AeCheck->setChecked(true);
-        if (m_nr2OriginalGeometryCheck)
-            m_nr2OriginalGeometryCheck->setChecked(false);
         if (m_nr2GainMaxSlider)  m_nr2GainMaxSlider->setValue(100);
         if (m_nr2GainFloorSlider)m_nr2GainFloorSlider->setValue(0);
         if (m_nr2SmoothSlider)   m_nr2SmoothSlider->setValue(85);
@@ -571,17 +569,6 @@ QWidget* AetherDspWidget::buildNr2Page()
     auto valStyle = QStringLiteral(
         "QLabel { color: #c8d8e8; font-size: 11px; min-width: 40px; }"
         "QLabel:disabled { color: #48515a; }");
-
-    auto* agcGuidance = new QLabel(
-        "Tip: Disable slice AGC for more consistent NR2 results.");
-    agcGuidance->setObjectName(QStringLiteral("nr2AgcGuidanceLabel"));
-    agcGuidance->setAccessibleName(QStringLiteral("NR2 AGC guidance"));
-    agcGuidance->setWordWrap(true);
-    agcGuidance->setStyleSheet(labelStyle);
-    agcGuidance->setToolTip(
-        "Slice AGC can briefly raise background noise as it recovers after "
-        "a strong signal.");
-    vbox->addWidget(agcGuidance);
 
     // Gain Method — exclusive toggle row, styled like the slice DSP buttons.
     {
@@ -840,26 +827,6 @@ QWidget* AetherDspWidget::buildNr2Page()
     }
 
     vbox->addLayout(sliderGrid);
-
-    m_nr2OriginalGeometryCheck = new QCheckBox(
-        "Original NR2 (geometry + gain mapping)");
-    m_nr2OriginalGeometryCheck->setObjectName(
-        QStringLiteral("nr2OriginalGeometryCheck"));
-    m_nr2OriginalGeometryCheck->setAccessibleName(
-        QStringLiteral("Use original NR2 geometry and gain mapping"));
-    m_nr2OriginalGeometryCheck->setToolTip(
-        "Comparison switch: use the original 256-point/50% geometry and the "
-        "pre-test gain-method mapping. Unchecked uses 1024/75% and the faithful "
-        "Gaussian/Gamma mapping. Streaming, estimator, and safety fixes "
-        "remain enabled in both modes.");
-    connect(m_nr2OriginalGeometryCheck, &QCheckBox::toggled,
-            this, [this](bool useOriginal) {
-        Nr2SettingsModel::instance()
-            .setLegacyGeometryAndGainMapping(useOriginal);
-        updateNr2ControlAvailability();
-        emit nr2UseOriginalGeometryChanged(useOriginal);
-    });
-    vbox->addWidget(m_nr2OriginalGeometryCheck);
     vbox->addStretch();
     updateNr2ControlAvailability();
     return page;
@@ -872,10 +839,7 @@ void AetherDspWidget::updateNr2ControlAvailability()
     }
 
     const int gainMethod = m_nr2GainGroup->checkedId();
-    const bool useOriginal = m_nr2OriginalGeometryCheck
-        && m_nr2OriginalGeometryCheck->isChecked();
-    const bool thresholdAvailable = gainMethod == 2
-        || (!useOriginal && gainMethod == 0);
+    const bool thresholdAvailable = gainMethod == 0 || gainMethod == 2;
     const QString tooltip = thresholdAvailable
         ? QStringLiteral(
             "Speech-presence threshold used by this gain method. Lower "
@@ -1793,11 +1757,6 @@ void AetherDspWidget::syncNr2Settings()
     }
     m_nr2QsppLabel->setText(QString::number(qspp / 100.0f, 'f', 2));
 
-    {
-        QSignalBlocker blocker(m_nr2OriginalGeometryCheck);
-        m_nr2OriginalGeometryCheck->setChecked(
-            config.legacyGeometryAndGainMapping);
-    }
     updateNr2ControlAvailability();
 }
 
