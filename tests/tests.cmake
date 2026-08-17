@@ -2997,6 +2997,15 @@ target_link_libraries(automation_tx_watchdog_test PRIVATE
 )
 add_test(NAME automation_tx_watchdog_test COMMAND automation_tx_watchdog_test)
 
+add_executable(automation_rn2_probe_test
+    tests/automation_rn2_probe_test.cpp
+)
+target_include_directories(automation_rn2_probe_test PRIVATE src)
+target_link_libraries(automation_rn2_probe_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_rn2_probe_test COMMAND automation_rn2_probe_test)
+
 add_executable(aetherclock_model_test tests/aetherclock_model_test.cpp)
 target_include_directories(aetherclock_model_test PRIVATE src)
 target_link_libraries(aetherclock_model_test PRIVATE aethercore Qt6::Core Qt6::Test)

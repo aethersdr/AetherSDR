@@ -2601,6 +2601,83 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### RN2 deterministic stereo probe
+
+`audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof
+surface for RN2. It creates a deterministic three-second stereo float32 signal
+inside `AudioEngine`; it neither connects to a radio nor changes RX routing,
+playback, TX permission, or TX state. It may take up to 120 seconds through the
+automation bridge because it deliberately runs a selected filter and a fresh,
+aligned reference filter.
+
+The two temporary filters use `probeDryMix=1.0`, reported in the response. That
+keeps the proof independent of a user's RN2 strength and of whether RNNoise
+classifies the synthetic tones as speech: RNNoise still executes its frame,
+resampler, accumulator, channel-mode, and FIFO paths, while this probe measures
+those transport contracts rather than denoising quality. Production RX/TX RN2
+settings and DSP behavior are untouched.
+
+The legacy no-option form remains unchanged, including its 24 kHz / 960-frame
+RX-compatible defaults. `probeNr2Stereo` is the older SpectralNR/`NR2` alias;
+it is not an RN2 spelling and still takes no RN2 options.
+
+```text
+# Legacy RX-compatible run with an irregular cyclic partition sequence.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 blocks=73,211,17,604,91
+
+# Native 48 kHz, stereo-preserving RN2.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=PreserveRxStereo blocks=73,211,17,604,91
+
+# Native 48 kHz, intentional mono/downmix path duplicated to L/R.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=ProcessedMono blocks=73,211,17,604,91
+```
+
+The same request is available through JSON; the CLI driver preserves all
+key/value tokens in `value`:
+
+```json
+→ {"cmd":"audioCapture","action":"probeDspStereo",
+   "value":"RN2 rate=Native48k output=ProcessedMono blocks=480,960"}
+```
+
+Only `probeDspStereo RN2` accepts case-insensitive `rate`, `output`, and
+`blocks` tokens. `rate` is `Legacy24k` (default) or `Native48k`; `output` is
+`PreserveRxStereo` (default) or `ProcessedMono`; `blocks` is a bounded,
+positive comma-separated cyclic list of input-frame counts (default `960`).
+Unknown, repeated, non-positive, oversized, or excessive-count options fail
+before running a filter. These options are rejected for `all` and every
+non-RN2 mode. The legacy comma form `RN2,strict` remains valid.
+
+Every RN2 response retains the established `frames`, `discardFrames`, RMS
+`input`/`output`, `ratioError`, level-ratio, `audible`, and `preserved` fields.
+It additionally reports canonical `rateDomain`, `sampleRate`, `outputMode`,
+and `blockPartitions`; input/output frame and byte totals; `inputCoverage`,
+`outputCoverage`, per-block `blockOutput`, and `outputSizeExact`; and the
+selected/reference `firstAudibleFrame` and millisecond positions. No fixed
+latency limit is asserted: those positions are evidence for the caller to
+inspect. `startupLatencyDeltaFrames`/`Ms` and `startupLatencyEquivalent` make
+partition-dependent leading silence explicit. `sequenceComparisonFrames`,
+`sequenceMaxError`, `sequenceEquivalent`, and `sequenceOrder` compare a
+substantial first-audible-aligned deterministic window against the fresh
+reference run. `fifoOrderPreserved` means that aligned payload stayed in
+reference order; `fifoSequenceEquivalent` is stricter and is true only when
+both that payload and its startup position match the reference.
+`firstOutputSizeMismatchBlock` and `sequenceFirstMismatchFrame`/`Channel` are
+`-1` on a clean run and identify the first failing location otherwise.
+
+For `PreserveRxStereo`, `ratioPreserved` is the explicit ratio-preservation
+result (and `preserved` keeps its historical meaning). For `ProcessedMono`,
+`leftRightMaxDelta` and `duplicated` prove that the intentional mono result was
+copied to both output channels; `ok` requires audibility, exact output sizing,
+duplication, and sequence equivalence. In preserve mode, `ok` also requires
+the legacy stereo-ratio check.
+
+This probe cannot expose RN2's internal one-time resampler divergence warning
+latch: it is not surfaced by the public filter API, and two matched resamplers
+cannot be induced to diverge through public inputs without invasive fault
+injection. The output-size and aligned-reference evidence above therefore
+proves the public contract, not that hidden warning-latch path.
+
 ### `floors`
 Per-pan **measured FFT noise floor** and the **display floor** (dBm), read off the
 live spectrum without a screenshot — the numeric way to assert post-TX floor
@@ -3465,7 +3542,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
-| `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
+| `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler> — CI-V inject, frame trace, RS-BA1 lease health, or command-scheduler health (Icom; send is TX-gated) |

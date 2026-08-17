@@ -69,6 +69,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStringList>
+#include <QVector>
 #include <QtGlobal>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
@@ -2929,25 +2930,416 @@ constexpr int kAutomationDspProbeFrames = AudioEngine::DEFAULT_SAMPLE_RATE * 3;
 constexpr int kAutomationDspProbeDiscardFrames =
     AudioEngine::DEFAULT_SAMPLE_RATE + AudioEngine::DEFAULT_SAMPLE_RATE / 2;
 constexpr int kAutomationDspProbeBlockFrames = 960;
+constexpr int kAutomationRn2ProbeMaxBlockPartitions = 64;
+constexpr float kAutomationRn2ProbeDryMix = 1.0f;
 
-QByteArray makeAutomationDspStereoProbeInput()
+QByteArray makeAutomationDspStereoProbeInput(int sampleRate = AudioEngine::DEFAULT_SAMPLE_RATE)
 {
-    QByteArray input(kAutomationDspProbeFrames * 2 * static_cast<int>(sizeof(float)),
-                     Qt::Uninitialized);
+    const int frames = sampleRate * 3;
+    QByteArray input(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
     auto* src = reinterpret_cast<float*>(input.data());
-    for (int i = 0; i < kAutomationDspProbeFrames; ++i) {
-        const double t = static_cast<double>(i) / AudioEngine::DEFAULT_SAMPLE_RATE;
-        const float envelope = static_cast<float>(
-            0.62 + 0.38 * std::sin(2.0 * std::numbers::pi * 4.2 * t));
-        const float signal = static_cast<float>(
-            envelope * (0.30 * std::sin(2.0 * std::numbers::pi * 720.0 * t)
-                      + 0.16 * std::sin(2.0 * std::numbers::pi * 1180.0 * t)
-                      + 0.08 * std::sin(2.0 * std::numbers::pi * 1740.0 * t))
-          + 0.03 * std::sin(2.0 * std::numbers::pi * 43.0 * t));
+    for (int i = 0; i < frames; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const float envelope =
+            static_cast<float>(0.62 + 0.38 * std::sin(2.0 * std::numbers::pi * 4.2 * t));
+        const float signal =
+            static_cast<float>(envelope * (0.30 * std::sin(2.0 * std::numbers::pi * 720.0 * t) +
+                                           0.16 * std::sin(2.0 * std::numbers::pi * 1180.0 * t) +
+                                           0.08 * std::sin(2.0 * std::numbers::pi * 1740.0 * t)) +
+                               0.03 * std::sin(2.0 * std::numbers::pi * 43.0 * t));
         src[2 * i] = 0.80f * signal;
         src[2 * i + 1] = 0.20f * signal;
     }
     return input;
+}
+
+struct AutomationRn2ProbeOptions {
+    RNNoiseFilter::RateDomain rateDomain{RNNoiseFilter::RateDomain::Legacy24k};
+    RNNoiseFilter::OutputMode outputMode{RNNoiseFilter::OutputMode::PreserveRxStereo};
+    QVector<int> blockPartitions{kAutomationDspProbeBlockFrames};
+};
+
+QString rn2ProbeRateDomainName(RNNoiseFilter::RateDomain rateDomain)
+{
+    return rateDomain == RNNoiseFilter::RateDomain::Native48k ? QStringLiteral("Native48k")
+                                                              : QStringLiteral("Legacy24k");
+}
+
+QString rn2ProbeOutputModeName(RNNoiseFilter::OutputMode outputMode)
+{
+    return outputMode == RNNoiseFilter::OutputMode::ProcessedMono
+               ? QStringLiteral("ProcessedMono")
+               : QStringLiteral("PreserveRxStereo");
+}
+
+int rn2ProbeSampleRate(RNNoiseFilter::RateDomain rateDomain)
+{
+    return rateDomain == RNNoiseFilter::RateDomain::Native48k ? 48000
+                                                              : AudioEngine::DEFAULT_SAMPLE_RATE;
+}
+
+QStringList automationDspProbeTokens(const QString& request)
+{
+    QStringList tokens;
+    QString token;
+    const auto appendToken = [&tokens, &token]() {
+        if (!token.isEmpty()) {
+            tokens.append(token);
+            token.clear();
+        }
+    };
+
+    for (qsizetype i = 0; i < request.size(); ++i) {
+        const QChar character = request.at(i);
+        if (character.isSpace()) {
+            appendToken();
+            continue;
+        }
+        if (character == QLatin1Char(',')) {
+            // Commas retain the legacy "RN2,strict" spelling, except inside
+            // blocks= where they are the intentionally comma-separated frame list.
+            const bool nextIsFrame = i + 1 < request.size() && request.at(i + 1).isDigit();
+            if (token.startsWith(QStringLiteral("blocks="), Qt::CaseInsensitive) && nextIsFrame) {
+                token.append(character);
+            } else {
+                appendToken();
+            }
+            continue;
+        }
+        token.append(character);
+    }
+    appendToken();
+    return tokens;
+}
+
+QJsonObject stereoRmsRatio(const QByteArray& pcm, int startFrame);
+
+bool parseAutomationRn2ProbeOptions(const QStringList& optionTokens,
+                                    AutomationRn2ProbeOptions& options, QString& error)
+{
+    bool sawRate = false;
+    bool sawOutput = false;
+    bool sawBlocks = false;
+    for (const QString& token : optionTokens) {
+        const qsizetype separator = token.indexOf(QLatin1Char('='));
+        if (separator <= 0 || separator != token.lastIndexOf(QLatin1Char('='))) {
+            error = QStringLiteral("RN2 probe options must be key=value tokens");
+            return false;
+        }
+        const QString key = token.left(separator).trimmed().toLower();
+        const QString value = token.mid(separator + 1).trimmed();
+        if (key == QLatin1String("rate")) {
+            if (sawRate) {
+                error = QStringLiteral("RN2 probe option rate may appear only once");
+                return false;
+            }
+            sawRate = true;
+            if (value.compare(QStringLiteral("Legacy24k"), Qt::CaseInsensitive) == 0) {
+                options.rateDomain = RNNoiseFilter::RateDomain::Legacy24k;
+            } else if (value.compare(QStringLiteral("Native48k"), Qt::CaseInsensitive) == 0) {
+                options.rateDomain = RNNoiseFilter::RateDomain::Native48k;
+            } else {
+                error = QStringLiteral("RN2 probe rate must be Legacy24k or Native48k");
+                return false;
+            }
+        } else if (key == QLatin1String("output")) {
+            if (sawOutput) {
+                error = QStringLiteral("RN2 probe option output may appear only once");
+                return false;
+            }
+            sawOutput = true;
+            if (value.compare(QStringLiteral("PreserveRxStereo"), Qt::CaseInsensitive) == 0) {
+                options.outputMode = RNNoiseFilter::OutputMode::PreserveRxStereo;
+            } else if (value.compare(QStringLiteral("ProcessedMono"), Qt::CaseInsensitive) == 0) {
+                options.outputMode = RNNoiseFilter::OutputMode::ProcessedMono;
+            } else {
+                error =
+                    QStringLiteral("RN2 probe output must be PreserveRxStereo or ProcessedMono");
+                return false;
+            }
+        } else if (key == QLatin1String("blocks")) {
+            if (sawBlocks) {
+                error = QStringLiteral("RN2 probe option blocks may appear only once");
+                return false;
+            }
+            sawBlocks = true;
+            const QStringList frameTokens = value.split(QLatin1Char(','), Qt::KeepEmptyParts);
+            if (frameTokens.isEmpty() ||
+                frameTokens.size() > kAutomationRn2ProbeMaxBlockPartitions) {
+                error = QStringLiteral("RN2 probe blocks has an excessive partition count");
+                return false;
+            }
+            options.blockPartitions.clear();
+            for (const QString& frameToken : frameTokens) {
+                bool valid = false;
+                const int frames = frameToken.toInt(&valid);
+                if (!valid || frames <= 0) {
+                    error = QStringLiteral(
+                        "RN2 probe blocks must contain positive, bounded frame counts");
+                    return false;
+                }
+                options.blockPartitions.append(frames);
+            }
+        } else {
+            error = QStringLiteral("unknown RN2 probe option: ") + key;
+            return false;
+        }
+    }
+
+    // A rate token may follow blocks. Re-check once the final rate is known.
+    const int maxFrames = rn2ProbeSampleRate(options.rateDomain) * 3;
+    for (const int frames : options.blockPartitions) {
+        if (frames > maxFrames) {
+            error = QStringLiteral("RN2 probe blocks exceeds the selected three-second input");
+            return false;
+        }
+    }
+    return true;
+}
+
+struct AutomationRn2ProbeRun {
+    QByteArray output;
+    QJsonArray blockResults;
+    int inputCoverageFrames{0};
+    int outputCoverageFrames{0};
+    int firstOutputSizeMismatchBlock{-1};
+    bool outputSizeExact{true};
+};
+
+AutomationRn2ProbeRun runAutomationRn2Probe(RNNoiseFilter& filter, const QByteArray& input,
+                                            const QVector<int>& partitions,
+                                            RNNoiseFilter::RateDomain rateDomain)
+{
+    AutomationRn2ProbeRun run;
+    const int frameBytes = 2 * static_cast<int>(sizeof(float));
+    const int inputFrames = input.size() / frameBytes;
+    run.output.reserve(input.size());
+    int offsetFrames = 0;
+    int partitionIndex = 0;
+    int blockIndex = 0;
+    while (offsetFrames < inputFrames) {
+        const int requestedFrames = partitions.at(partitionIndex);
+        const int blockFrames = std::min(requestedFrames, inputFrames - offsetFrames);
+        const QByteArray block = input.mid(offsetFrames * frameBytes, blockFrames * frameBytes);
+        QByteArray blockOutput;
+        if (rateDomain == RNNoiseFilter::RateDomain::Native48k) {
+            filter.process48kStereo(block, blockOutput);
+        } else {
+            blockOutput = filter.process(block);
+        }
+        const int outputFrames = blockOutput.size() / frameBytes;
+        const bool exact = blockOutput.size() == block.size();
+        if (!exact && run.firstOutputSizeMismatchBlock < 0) {
+            run.firstOutputSizeMismatchBlock = blockIndex;
+        }
+        run.output.append(blockOutput);
+        run.inputCoverageFrames += blockFrames;
+        run.outputCoverageFrames += outputFrames;
+        run.outputSizeExact = run.outputSizeExact && exact;
+        run.blockResults.append(QJsonObject{
+            {QStringLiteral("inputFrames"), blockFrames},
+            {QStringLiteral("inputBytes"), block.size()},
+            {QStringLiteral("outputFrames"), outputFrames},
+            {QStringLiteral("outputBytes"), blockOutput.size()},
+            {QStringLiteral("outputSizeExact"), exact},
+        });
+        offsetFrames += blockFrames;
+        partitionIndex = (partitionIndex + 1) % partitions.size();
+        ++blockIndex;
+    }
+    run.outputSizeExact = run.outputSizeExact && run.output.size() == input.size();
+    return run;
+}
+
+int firstAudibleFrame(const QByteArray& pcm)
+{
+    constexpr float kAudibleEpsilon = 1.0e-7f;
+    const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+    const int frames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
+    for (int frame = 0; frame < frames; ++frame) {
+        if (std::fabs(samples[2 * frame]) > kAudibleEpsilon ||
+            std::fabs(samples[2 * frame + 1]) > kAudibleEpsilon) {
+            return frame;
+        }
+    }
+    return -1;
+}
+
+QJsonObject completedAutomationRn2Probe(const AutomationRn2ProbeOptions& options,
+                                        const QByteArray& input,
+                                        const AutomationRn2ProbeRun& selected,
+                                        const AutomationRn2ProbeRun& reference)
+{
+    constexpr double kMinOutputInputRmsRatio = 0.02;
+    constexpr float kSequenceTolerance = 1.0e-5f;
+    constexpr float kDuplicateTolerance = 1.0e-7f;
+    const int sampleRate = rn2ProbeSampleRate(options.rateDomain);
+    const int discardFrames = sampleRate + sampleRate / 2;
+    const QJsonObject inputRms = stereoRmsRatio(input, discardFrames);
+    const QJsonObject outputRms = stereoRmsRatio(selected.output, discardFrames);
+    const double inputRatio = inputRms.value(QStringLiteral("ratio")).toDouble();
+    const double outputRatio = outputRms.value(QStringLiteral("ratio")).toDouble();
+    const double ratioError = std::fabs(outputRatio - inputRatio);
+    const double leftLevelRatio =
+        outputRms.value(QStringLiteral("leftRms")).toDouble() /
+        std::max(inputRms.value(QStringLiteral("leftRms")).toDouble(), 1.0e-12);
+    const double rightLevelRatio =
+        outputRms.value(QStringLiteral("rightRms")).toDouble() /
+        std::max(inputRms.value(QStringLiteral("rightRms")).toDouble(), 1.0e-12);
+    const bool audible =
+        leftLevelRatio >= kMinOutputInputRmsRatio && rightLevelRatio >= kMinOutputInputRmsRatio;
+    const bool ratioPreserved = ratioError < 0.08 && audible;
+    const int selectedFirstAudible = firstAudibleFrame(selected.output);
+    const int referenceFirstAudible = firstAudibleFrame(reference.output);
+
+    const int selectedFrames = selected.output.size() / (2 * static_cast<int>(sizeof(float)));
+    const int referenceFrames = reference.output.size() / (2 * static_cast<int>(sizeof(float)));
+    int comparisonFrames = 0;
+    int firstSequenceMismatchFrame = -1;
+    int firstSequenceMismatchChannel = -1;
+    float maxSequenceError = -1.0f;
+    if (selectedFirstAudible >= 0 && referenceFirstAudible >= 0) {
+        comparisonFrames = std::min({sampleRate, selectedFrames - selectedFirstAudible,
+                                     referenceFrames - referenceFirstAudible});
+        maxSequenceError = 0.0f;
+        const auto* selectedSamples = reinterpret_cast<const float*>(selected.output.constData());
+        const auto* referenceSamples = reinterpret_cast<const float*>(reference.output.constData());
+        for (int frame = 0; frame < comparisonFrames; ++frame) {
+            for (int channel = 0; channel < 2; ++channel) {
+                const float error = std::fabs(
+                    selectedSamples[2 * (selectedFirstAudible + frame) + channel] -
+                    referenceSamples[2 * (referenceFirstAudible + frame) + channel]);
+                maxSequenceError = std::max(maxSequenceError, error);
+                if (error > kSequenceTolerance && firstSequenceMismatchFrame < 0) {
+                    firstSequenceMismatchFrame = frame;
+                    firstSequenceMismatchChannel = channel;
+                }
+            }
+        }
+    }
+    const bool sequenceEquivalent =
+        comparisonFrames == sampleRate && maxSequenceError <= kSequenceTolerance;
+    const bool startupLatencyMeasured =
+        selectedFirstAudible >= 0 && referenceFirstAudible >= 0;
+    const int startupLatencyDeltaFrames = startupLatencyMeasured
+        ? selectedFirstAudible - referenceFirstAudible
+        : -1;
+    const bool startupLatencyEquivalent =
+        startupLatencyMeasured && startupLatencyDeltaFrames == 0;
+    const bool fifoOrderPreserved = sequenceEquivalent;
+    const bool fifoSequenceEquivalent =
+        fifoOrderPreserved && startupLatencyEquivalent;
+
+    float leftRightMaxDelta = 0.0f;
+    const auto* outputSamples = reinterpret_cast<const float*>(selected.output.constData());
+    for (int frame = 0; frame < selectedFrames; ++frame) {
+        leftRightMaxDelta = std::max(
+            leftRightMaxDelta, std::fabs(outputSamples[2 * frame] - outputSamples[2 * frame + 1]));
+    }
+    const bool duplicated = leftRightMaxDelta <= kDuplicateTolerance;
+    const bool preserveRxStereo = options.outputMode == RNNoiseFilter::OutputMode::PreserveRxStereo;
+    const bool inputCoverageComplete =
+        selected.inputCoverageFrames == input.size() / (2 * static_cast<int>(sizeof(float)));
+    const bool outputCoverageComplete =
+        selected.outputCoverageFrames == input.size() / (2 * static_cast<int>(sizeof(float)));
+    const bool ok = preserveRxStereo
+                        ? audible && inputCoverageComplete && outputCoverageComplete &&
+                              selected.outputSizeExact && ratioPreserved &&
+                              startupLatencyMeasured && fifoOrderPreserved
+                        : audible && inputCoverageComplete && outputCoverageComplete &&
+                              selected.outputSizeExact && duplicated && startupLatencyMeasured &&
+                              fifoOrderPreserved;
+
+    QJsonArray partitions;
+    for (const int frames : options.blockPartitions) {
+        partitions.append(frames);
+    }
+    return QJsonObject{
+        {QStringLiteral("ok"), ok},
+        {QStringLiteral("mode"), QStringLiteral("RN2")},
+        {QStringLiteral("available"), true},
+        {QStringLiteral("skipped"), false},
+        {QStringLiteral("tested"), true},
+        {QStringLiteral("frames"), selectedFrames},
+        {QStringLiteral("discardFrames"), discardFrames},
+        {QStringLiteral("input"), inputRms},
+        {QStringLiteral("output"), outputRms},
+        {QStringLiteral("ratioError"), ratioError},
+        {QStringLiteral("leftLevelRatio"), leftLevelRatio},
+        {QStringLiteral("rightLevelRatio"), rightLevelRatio},
+        {QStringLiteral("minimumLevelRatio"), kMinOutputInputRmsRatio},
+        {QStringLiteral("audible"), audible},
+        {QStringLiteral("preserved"), ratioPreserved},
+        {QStringLiteral("ratioPreserved"), ratioPreserved},
+        {QStringLiteral("rateDomain"), rn2ProbeRateDomainName(options.rateDomain)},
+        {QStringLiteral("sampleRate"), sampleRate},
+        {QStringLiteral("outputMode"), rn2ProbeOutputModeName(options.outputMode)},
+        {QStringLiteral("probeDryMix"), kAutomationRn2ProbeDryMix},
+        {QStringLiteral("blockPartitions"), partitions},
+        {QStringLiteral("config"), QJsonObject{
+             {QStringLiteral("rateDomain"), rn2ProbeRateDomainName(options.rateDomain)},
+             {QStringLiteral("sampleRate"), sampleRate},
+             {QStringLiteral("outputMode"), rn2ProbeOutputModeName(options.outputMode)},
+             {QStringLiteral("blockPartitions"), partitions},
+         }},
+        {QStringLiteral("referenceBlockFrames"),
+         options.rateDomain == RNNoiseFilter::RateDomain::Native48k ? 480 : 960},
+        {QStringLiteral("inputFrames"),
+         input.size() / (2 * static_cast<int>(sizeof(float)))},
+        {QStringLiteral("inputBytes"), input.size()},
+        {QStringLiteral("outputFrames"), selectedFrames},
+        {QStringLiteral("outputBytes"), selected.output.size()},
+        {QStringLiteral("inputCoverage"), QJsonObject{
+             {QStringLiteral("frames"), selected.inputCoverageFrames},
+             {QStringLiteral("bytes"),
+              selected.inputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+             {QStringLiteral("complete"), inputCoverageComplete},
+         }},
+        {QStringLiteral("outputCoverage"), QJsonObject{
+             {QStringLiteral("frames"), selected.outputCoverageFrames},
+             {QStringLiteral("bytes"),
+              selected.outputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+             {QStringLiteral("complete"), outputCoverageComplete},
+         }},
+        {QStringLiteral("outputSizeExact"), selected.outputSizeExact},
+        {QStringLiteral("firstOutputSizeMismatchBlock"),
+         selected.firstOutputSizeMismatchBlock},
+        {QStringLiteral("inputCoverageComplete"), inputCoverageComplete},
+        {QStringLiteral("outputCoverageComplete"), outputCoverageComplete},
+        {QStringLiteral("inputCoverageFrames"), selected.inputCoverageFrames},
+        {QStringLiteral("inputCoverageBytes"),
+         selected.inputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+        {QStringLiteral("outputCoverageFrames"), selected.outputCoverageFrames},
+        {QStringLiteral("outputCoverageBytes"),
+         selected.outputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+        {QStringLiteral("blockOutput"), selected.blockResults},
+        {QStringLiteral("firstAudibleFrame"), selectedFirstAudible},
+        {QStringLiteral("firstAudibleMs"),
+         selectedFirstAudible < 0 ? -1.0
+                                  : 1000.0 * selectedFirstAudible / sampleRate},
+        {QStringLiteral("referenceFirstAudibleFrame"), referenceFirstAudible},
+        {QStringLiteral("referenceFirstAudibleMs"),
+         referenceFirstAudible < 0 ? -1.0
+                                   : 1000.0 * referenceFirstAudible / sampleRate},
+        {QStringLiteral("startupLatencyMeasured"), startupLatencyMeasured},
+        {QStringLiteral("startupLatencyDeltaFrames"), startupLatencyDeltaFrames},
+        {QStringLiteral("startupLatencyDeltaMs"),
+         startupLatencyMeasured
+             ? 1000.0 * startupLatencyDeltaFrames / sampleRate
+             : -1.0},
+        {QStringLiteral("startupLatencyEquivalent"), startupLatencyEquivalent},
+        {QStringLiteral("sequenceComparisonFrames"), comparisonFrames},
+        {QStringLiteral("sequenceComparisonCount"), comparisonFrames},
+        {QStringLiteral("sequenceMaxError"), maxSequenceError},
+        {QStringLiteral("sequenceFirstMismatchFrame"), firstSequenceMismatchFrame},
+        {QStringLiteral("sequenceFirstMismatchChannel"), firstSequenceMismatchChannel},
+        {QStringLiteral("sequenceEquivalent"), sequenceEquivalent},
+        {QStringLiteral("sequenceOrder"), QStringLiteral("firstAudibleAligned")},
+        {QStringLiteral("fifoOrderPreserved"), fifoOrderPreserved},
+        {QStringLiteral("fifoSequenceEquivalent"), fifoSequenceEquivalent},
+        {QStringLiteral("leftRightMaxDelta"), leftRightMaxDelta},
+        {QStringLiteral("duplicated"), duplicated},
+    };
 }
 
 QJsonObject stereoRmsRatio(const QByteArray& pcm, int startFrame)
@@ -3064,16 +3456,16 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
     }
 
     const QByteArray input = makeAutomationDspStereoProbeInput();
-    QString tokenText = mode.trimmed();
-    tokenText.replace(QLatin1Char(','), QLatin1Char(' '));
-    const QStringList requestTokens =
-        tokenText.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    const QStringList requestTokens = automationDspProbeTokens(mode.trimmed());
     QStringList modeTokens;
+    QStringList rn2OptionTokens;
     bool strictCoverage = false;
     for (const QString& token : requestTokens) {
         const QString normalizedToken = token.toUpper();
         if (normalizedToken == QLatin1String("STRICT")) {
             strictCoverage = true;
+        } else if (token.contains(QLatin1Char('='))) {
+            rn2OptionTokens.append(token);
         } else {
             modeTokens.append(normalizedToken);
         }
@@ -3088,8 +3480,24 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
     const QString normalizedMode = modeTokens.isEmpty()
         ? QStringLiteral("ALL")
         : modeTokens.constFirst();
+    if (!rn2OptionTokens.isEmpty() && normalizedMode != QLatin1String("RN2")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("RN2 probe options require probeDspStereo RN2")},
+        };
+    }
+    AutomationRn2ProbeOptions rn2Options;
+    QString rn2OptionError;
+    if (normalizedMode == QLatin1String("RN2") &&
+        !parseAutomationRn2ProbeOptions(rn2OptionTokens, rn2Options, rn2OptionError)) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"), rn2OptionError},
+        };
+    }
 
-    const auto probeOne = [this, &input](const QString& requestedMode) -> QJsonObject {
+    const auto probeOne = [this, &input, &rn2Options](const QString& requestedMode) -> QJsonObject {
         if (requestedMode == QLatin1String("NR2")) {
             std::unique_ptr<SpectralNR> nr2 = createNr2Filter(
                 QStringLiteral("automation probe"));
@@ -3113,8 +3521,11 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
         }
 
         if (requestedMode == QLatin1String("RN2")) {
-            RNNoiseFilter rn2;
+            const int sampleRate = rn2ProbeSampleRate(rn2Options.rateDomain);
+            const QByteArray rn2Input = makeAutomationDspStereoProbeInput(sampleRate);
+            RNNoiseFilter rn2(rn2Options.outputMode, rn2Options.rateDomain);
             applyRn2Settings(rn2);
+            rn2.setDryMix(kAutomationRn2ProbeDryMix);
             if (!rn2.isValid()) {
                 return QJsonObject{
                     {QStringLiteral("ok"), false},
@@ -3124,9 +3535,27 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                     {QStringLiteral("error"), QStringLiteral("RN2 initialization failed")},
                 };
             }
-            const QByteArray output = processAutomationDspProbeBlocks(
-                input, [&rn2](const QByteArray& block) { return rn2.process(block); });
-            return completedAutomationDspProbe(requestedMode, input, output);
+            const AutomationRn2ProbeRun selected = runAutomationRn2Probe(
+                rn2, rn2Input, rn2Options.blockPartitions, rn2Options.rateDomain);
+
+            const int referenceBlockFrames =
+                rn2Options.rateDomain == RNNoiseFilter::RateDomain::Native48k ? 480 : 960;
+            RNNoiseFilter reference(rn2Options.outputMode, rn2Options.rateDomain);
+            applyRn2Settings(reference);
+            reference.setDryMix(kAutomationRn2ProbeDryMix);
+            if (!reference.isValid()) {
+                return QJsonObject{
+                    {QStringLiteral("ok"), false},
+                    {QStringLiteral("mode"), requestedMode},
+                    {QStringLiteral("available"), false},
+                    {QStringLiteral("skipped"), false},
+                    {QStringLiteral("error"),
+                     QStringLiteral("RN2 aligned-reference initialization failed")},
+                };
+            }
+            const AutomationRn2ProbeRun alignedReference = runAutomationRn2Probe(
+                reference, rn2Input, QVector<int>{referenceBlockFrames}, rn2Options.rateDomain);
+            return completedAutomationRn2Probe(rn2Options, rn2Input, selected, alignedReference);
         }
 
         if (requestedMode == QLatin1String("NR4")) {

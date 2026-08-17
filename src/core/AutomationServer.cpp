@@ -3249,7 +3249,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("audioCapture", {},
-            "audioCapture <start|stop|status|read|probeNr2Stereo|probeDspStereo> [args]",
+            "audioCapture <start|stop|status|read|probeNr2Stereo|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k|Native48k output=PreserveRxStereo|ProcessedMono blocks=<frames,...>",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doAudioCapture(a.action.isEmpty() ? QStringLiteral("status")
