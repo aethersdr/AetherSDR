@@ -5634,6 +5634,29 @@ void IcomCivBackend::onLinkTick()
     }
     m_lastTxDroppedBytes = s.txDroppedBytes;
 
+    // ---- TX FEED vs DRAIN ------------------------------------------------
+    //
+    // Starvation is the quiet half of the same problem and nothing else
+    // reports it: onTxPump() finding less than a whole 20 ms frame simply
+    // sends nothing, which is indistinguishable from "nothing to send".
+    //
+    // Reported once per keyed tick while the numbers are moving. The ratio
+    // that matters is txFramesSent vs the audio actually handed in: a 597 ms
+    // AX.25 burst is ~30 frames of 960 samples, so markedly fewer frames sent
+    // — with txPumpEmpty climbing — means the wire got a fragment of the
+    // transmission, with the preamble already on the air.
+    if (m_keyed && s.txSubmitCalls != m_lastTxSubmitCalls) {
+        const double submittedMs =
+            s.txSubmitSamples > 0 ? (static_cast<double>(s.txSubmitSamples) / 48.0) : 0.0;
+        qCInfo(lcIcomLink).nospace()
+            << "Icom TX flow: submitted " << s.txSubmitCalls << " call(s)/"
+            << s.txSubmitSamples << " samples (" << submittedMs << " ms), frames sent "
+            << s.txFramesSent << " (" << (s.txFramesSent * 20) << " ms), pump ticks "
+            << s.txPumpTicks << " of which " << s.txPumpEmpty << " found no whole frame"
+            << ", pending=" << s.txPendingBytes;
+        m_lastTxSubmitCalls = s.txSubmitCalls;
+    }
+
     // ---- CI-V STALL DETECTION ------------------------------------------
     //
     // The UDP transport can be perfectly healthy while the COMMAND PLANE is

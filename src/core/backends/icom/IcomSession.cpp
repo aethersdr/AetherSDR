@@ -736,13 +736,33 @@ void IcomSession::onTxPump()
     // Drain every frame that is ready, not just one: a host audio callback can
     // deliver several frames' worth in one block, and pacing them out one per
     // 10 ms tick would fall permanently behind.
+    ++m_txPumpTicks;
+    bool sentAny = false;
     for (auto chunks = m_tx.takeFrame(); !chunks.empty(); chunks = m_tx.takeFrame()) {
         for (const auto& c : chunks) {
             m_audio->sendTracked(buildAudio(m_audio->localSessionId(),
                                             m_audio->remoteSessionId(), 0, m_audioSendSeq++,
                                             c.bytes));
         }
+        ++m_txFramesSent;
+        sentAny = true;
     }
+    // A tick that found less than a whole 20 ms frame. Harmless for voice —
+    // the next tick is 10 ms away — but on a digital burst it is a GAP in the
+    // middle of a frame whose preamble has already gone out, and nothing else
+    // reports it: takeFrame() returning {} is indistinguishable from "nothing
+    // to send" here.
+    if (!sentAny)
+        ++m_txPumpEmpty;
+}
+
+void IcomSession::resetTxFlowCounters()
+{
+    m_txSubmitCalls = 0;
+    m_txSubmitSamples = 0;
+    m_txFramesSent = 0;
+    m_txPumpTicks = 0;
+    m_txPumpEmpty = 0;
 }
 
 void IcomSession::sendCiv(std::span<const std::uint8_t> frame)
@@ -769,6 +789,8 @@ void IcomSession::sendAudio(std::span<const float> mono)
 {
     if (!m_params.enableTx)
         return;
+    ++m_txSubmitCalls;
+    m_txSubmitSamples += mono.size();
     m_tx.submit(mono);
 }
 
@@ -792,6 +814,11 @@ IcomSession::Stats IcomSession::stats() const
     s.txDroppedBytes = m_tx.droppedBytes();
     s.txDropEvents   = m_tx.dropEvents();
     s.txPendingBytes = m_tx.pendingBytes();
+    s.txSubmitCalls   = m_txSubmitCalls;
+    s.txSubmitSamples = m_txSubmitSamples;
+    s.txFramesSent    = m_txFramesSent;
+    s.txPumpTicks     = m_txPumpTicks;
+    s.txPumpEmpty     = m_txPumpEmpty;
     return s;
 }
 

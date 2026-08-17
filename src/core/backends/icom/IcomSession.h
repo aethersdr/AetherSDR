@@ -119,7 +119,26 @@ public:
         std::size_t txDroppedBytes = 0;
         std::size_t txDropEvents = 0;
         std::size_t txPendingBytes = 0;
+        // FEED vs DRAIN. The packetiser can be starved as well as overrun, and
+        // starvation is the quieter failure: onTxPump() simply sends nothing on
+        // a tick where takeFrame() has less than a whole 20 ms frame, so the
+        // radio's jitter buffer sees a gap rather than an error. On an AX.25
+        // burst that gap lands in the middle of a frame whose preamble has
+        // already gone out.
+        //
+        // txSubmitCalls/txSubmitSamples = what the modem HANDED US.
+        // txFramesSent = whole 20 ms frames that actually reached the wire.
+        // txPumpTicks = pump ticks while keyed; txPumpEmpty = ticks that found
+        // less than a frame ready. A burst whose audio is 597 ms should yield
+        // ~30 frames; markedly fewer, with txPumpEmpty climbing, is starvation.
+        std::size_t txSubmitCalls = 0;
+        std::size_t txSubmitSamples = 0;
+        std::size_t txFramesSent = 0;
+        std::size_t txPumpTicks = 0;
+        std::size_t txPumpEmpty = 0;
     };
+    // Zero the feed/drain counters so one transmission can be measured alone.
+    void resetTxFlowCounters();
     [[nodiscard]] Stats stats() const;
     // Credential-free RS-BA1 lease state for health and automation diagnostics.
     [[nodiscard]] QVariantMap leaseDiagnostics() const;
@@ -208,6 +227,12 @@ private:
 
     std::uint16_t m_serialSendSeq = 0;
     std::uint16_t m_audioSendSeq = 1;
+    // Feed/drain instrumentation — see Stats above.
+    std::size_t m_txSubmitCalls = 0;
+    std::size_t m_txSubmitSamples = 0;
+    std::size_t m_txFramesSent = 0;
+    std::size_t m_txPumpTicks = 0;
+    std::size_t m_txPumpEmpty = 0;
 
     CivReassembler m_civ;
     TxPacketizer m_tx;
