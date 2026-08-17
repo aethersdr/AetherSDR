@@ -189,26 +189,15 @@ void IcomStream::sendRaw(std::span<const std::uint8_t> packet)
         m_counters.txBytes += static_cast<quint64>(n);
         ++m_counters.txPackets;
         m_lastTxAtMs = m_activityClock.elapsed();
-
-        // THE WIRE TAP. After the write, so what is reported is what was
-        // actually handed to the socket rather than what we were about to hand
-        // it — a write that fails should not appear in the capture as if it had
-        // gone out. It also sits after the counters above (added by #5274) so
-        // the telemetry describes the same write the tap then reports on.
-        //
-        // isAudioData() rather than a size test: it is structural, and the size
-        // whitelist both reference implementations use is only correct at
-        // 48 kHz. Keepalives, pings, retransmit requests and the serial stream
-        // all fail it, so an armed tap on the CONTROL or SERIAL stream stays
-        // silent rather than capturing envelope bytes that are not audio.
-        if (m_txPayloadTapEnabled.load(std::memory_order_relaxed) && isAudioData(packet)) {
-            const auto pcm = audioPayload(packet);
-            if (!pcm.empty()) {
-                emit txAudioPayload(QByteArray(reinterpret_cast<const char*>(pcm.data()),
-                                               static_cast<qsizetype>(pcm.size())));
-            }
-        }
     }
+    // NO WIRE TAP HERE, deliberately. sendRaw() is called again for every
+    // retransmit, so tapping here double-recorded a packet that only went on
+    // the air once. The tap moved to the first-send path; see the commit that
+    // made this change.
+    //
+    // The byte/packet counters above are a different thing and DO belong here:
+    // they count writes to the socket, and a retransmit really is another
+    // write. Telemetry from #5274 — left exactly as main has it.
 }
 
 void IcomStream::flush()
@@ -268,6 +257,37 @@ void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayloa
     packet[0x06] = static_cast<std::uint8_t>(seq & 0xff);
     packet[0x07] = static_cast<std::uint8_t>((seq >> 8) & 0xff);
     sendRaw(packet);
+
+    // THE WIRE TAP — here, on the FIRST transmission of a payload, and NOT in
+    // sendRaw().
+    //
+    // sendRaw() is also the replay path: a retransmit request is served by
+    // sendRaw(*it) on the retained copy, and sendRawTwice() deliberately writes
+    // the same bytes twice. A tap in sendRaw() therefore records a packet again
+    // every time the radio asks for it, out of order and interleaved with the
+    // live stream — which is indistinguishable from corrupted audio in the
+    // capture and is NOT what went on the air once.
+    //
+    // Measured 2026-08-17, IC-9700 over LAN: the wire capture ran 234 ms LONGER
+    // than the post-resample capture of the same transmission, with duplicated
+    // and reordered 20 ms frames, and Direwolf decoded 0 of 3 bursts from it
+    // while decoding 4 of 5 from the post capture. Placed here it records each
+    // payload exactly once, in send order.
+    //
+    // isAudioData() rather than a size test: it is structural, and the size
+    // whitelist both reference implementations use is only correct at 48 kHz.
+    // Keepalives, pings, retransmit requests and the serial stream all fail it,
+    // so an armed tap on the CONTROL or SERIAL stream stays silent rather than
+    // capturing envelope bytes that are not audio.
+    if (isPayload && m_txPayloadTapEnabled.load(std::memory_order_relaxed)
+        && isAudioData(packet)) {
+        const auto pcm = audioPayload(packet);
+        if (!pcm.empty()) {
+            emit txAudioPayload(QByteArray(reinterpret_cast<const char*>(pcm.data()),
+                                           static_cast<qsizetype>(pcm.size())));
+        }
+    }
+
     retain(seq, packet);
     // Only PAYLOAD resets the quiet clock. Letting the keepalive reset it would
     // make the stream permanently believe it had just sent something real, so
