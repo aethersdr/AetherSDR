@@ -1136,7 +1136,10 @@ int main(int argc, char** argv)
         backend.setSliceAudioGain(0, 42);
         QTest::qWait(120);
         {
-            const QString line = lastLineStartingWith(QStringLiteral("TX -> fe fe"));
+            // The scheduler keeps draining unrelated commands during the wait,
+            // so select the AF-gain frame rather than whichever TX happened last.
+            const QString line =
+                lastLineStartingWith(QStringLiteral("TX -> fe fe a4 e0 14 01"));
             check(!line.isNull(), "the outbound frame reaches the CI-V trace");
             check(line.contains(QStringLiteral("cmd=14")) && line.contains(QStringLiteral("sub=01")),
                   "a TX frame still decodes from index 4/5, past the envelope");
