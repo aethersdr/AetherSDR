@@ -750,7 +750,42 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
                 // The result reads as "the wire is corrupt" when the only thing
                 // wrong is the instrument. submitTxAudio gates on exactly this
                 // for the same reason; so does this.
-                if (!m_keyed && !m_tuning)
+                //
+                // LATCHED, not sampled per packet. Gating on the INSTANTANEOUS
+                // key state truncates the capture at a point that MOVES from
+                // run to run, because unkey and the packetiser's drain race:
+                // setKeying(false) clears m_keyed and only then calls
+                // flushTxAudio(), while onTxPump() fires every 10 ms in
+                // between, so a variable number of frames escape after the tap
+                // has already stopped recording.
+                //
+                // Measured 2026-08-17, IC-9700, two identical AX.25 bursts: the
+                // wire capture diverged from the post-resample capture at frame
+                // 8 (160 ms) on one run and frame 24 (480 ms) on the next, and
+                // came out 828 samples SHORTER than the post capture on one and
+                // 3264 samples LONGER on the other — while the post capture was
+                // 86016 samples both times. A capture whose LENGTH varies for a
+                // transmission of constant length is an instrument fault, and
+                // it reads exactly like "the wire is corrupt".
+                //
+                // So: latch on at key-down, and hold until the packetiser has
+                // actually drained. The burst is then captured whole, and the
+                // inter-burst stream still never reaches the recording.
+                const bool keyingNow = m_keyed || m_tuning;
+                if (keyingNow) {
+                    m_wireTapLatched = true;
+                } else if (m_wireTapLatched) {
+                    // Unkeyed: keep recording only while audio from the
+                    // transmission that just ended is still queued or in
+                    // flight. flushTxAudio() empties the queue on unkey, so
+                    // this closes promptly rather than bleeding into the next
+                    // over.
+                    const bool draining =
+                        m_session && m_session->stats().txPendingBytes > 0;
+                    if (!draining)
+                        m_wireTapLatched = false;
+                }
+                if (!m_wireTapLatched)
                     return;
                 const auto* p = reinterpret_cast<const std::uint8_t*>(lpcm.constData());
                 auto mono = decodeAudio(AudioCodec::Lpcm1ch16,

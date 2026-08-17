@@ -434,6 +434,11 @@ private:
     // readback of OFF (or completed teardown). Capability may change while a
     // command is in flight, but the obligation to release the radio may not.
     bool m_xfcReleaseRequired = false;
+
+    // Latch for the txwave WIRE tap. Sampling m_keyed per packet truncates the
+    // capture at a point that moves between runs, because unkey races the
+    // packetiser drain — see the tap in IcomCivBackend.cpp.
+    bool m_wireTapLatched = false;
     std::optional<bool> m_pendingPttIntent;
     qint64 m_pendingPttUntilMs = 0;
     bool m_pttIncidentReported = false;
