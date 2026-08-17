@@ -591,20 +591,45 @@ int main()
             }
         };
 
-        for (int burst = 0; burst < 8; ++burst)
-            cleanBurst(130, nullptr);          // 130×128 ≈ 347 ms > kReanchorIdleMs
+        // Release the stall's anchor (it ran late, so releasing it does not
+        // halve the slack) so the next burst re-anchors fresh: the onset that
+        // burst renders IS the carried slack, measured end to end.
+        for (int b = 0; b < 100; ++b) runFrames(gen, 128);  // > kReanchorIdleMs
 
+        // seg is mono — runFrames() returns one entry per frame.
+        const auto onsetOf = [](const std::vector<float>& seg) -> int64_t {
+            for (int i = 0; i + 8 <= static_cast<int>(seg.size()); i += 8) {
+                float peak = 0.0f;
+                for (int j = i; j < i + 8; ++j)
+                    peak = std::max(peak, std::abs(seg[j]));
+                if (peak > 0.1f) return i;
+            }
+            return -1;
+        };
+
+        // Both ends of the decay are pinned.  Near end: the first fresh
+        // anchor after the stall spends the full taught slack, so the onset
+        // sits at the cap (1920 samples = 40 ms at 48 kHz).  If the idle
+        // counter survived the anchor take, the still-saturated counter
+        // would release each new anchor once per empty run-up block and
+        // halve the slack every time — collapsing the onset to under five
+        // blocks (measured: 632 samples) and silently capping carried slack
+        // at one audio block instead of kAnchorSlackCapMs.
+        std::vector<float> first;
+        cleanBurst(130, &first);           // 130×128 ≈ 347 ms > kReanchorIdleMs
+        const int64_t onset0 = onsetOf(first);
+        ok &= expect(onset0 >= 1920 - 256 && onset0 <= 1920 + 256,
+                     "slack decay: first fresh anchor spends the full taught slack");
+
+        for (int burst = 0; burst < 8; ++burst)
+            cleanBurst(130, nullptr);
+
+        // Far end: after repeated clean bursts the slack must have decayed
+        // back to (about) the block start instead of staying latched at what
+        // the stall taught it.
         std::vector<float> seg;
         cleanBurst(40, &seg);
-        int64_t onset = -1;
-        for (int i = 0; i + 8 <= static_cast<int>(seg.size()); i += 8) {
-            float peak = 0.0f;
-            for (int j = i; j < i + 8; ++j) peak = std::max(peak, std::abs(seg[j]));
-            if (peak > 0.1f) { onset = i / 2; break; }
-        }
-        // Onset offset within the burst IS the carried slack. After repeated
-        // clean bursts it must have decayed back to (about) the block start
-        // instead of staying latched at what the stall taught it.
+        const int64_t onset = onsetOf(seg);
         ok &= expect(onset >= 0 && onset <= 256,
                      "slack decay: onset returns to the block start after clean bursts");
     }

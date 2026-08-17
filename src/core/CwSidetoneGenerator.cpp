@@ -295,6 +295,15 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
             m_anchorPos  = blockStart + m_anchorSlack;
             m_haveAnchor = true;
             m_anchorWentLate = false;
+            // A fresh edge is activity: restart the idle clock.  Left
+            // running, a counter still saturated from the stall that
+            // taught the slack releases this anchor in the run-up blocks
+            // before its first edge renders (slack > one block maps the
+            // edge past blockEnd, so the clear below never fires), halving
+            // the slack once per block until it fits inside one — which
+            // silently caps carried slack at the sink's block size instead
+            // of kAnchorSlackCapMs.
+            m_idleSamples = 0;
         }
         int64_t target = m_anchorPos +
             std::chrono::duration_cast<std::chrono::nanoseconds>(
