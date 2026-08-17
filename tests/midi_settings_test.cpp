@@ -273,6 +273,67 @@ int main(int argc, char** argv)
         ok &= expect(same, "XML round trip preserves every binding field");
     }
 
+    // ── Direct band/mode select vocabulary (#5027) ──────────────────────────
+    // The CTR2-Quad and CTR2-Max maps carry one row per band and per mode —
+    // the full set measured from the vendor's published packages. Every
+    // target param is registered by MainWindow's controller table, so these
+    // rows are vocabulary only.
+    {
+        QSet<QString> bandModeRegistry = {
+            "global.band160m", "global.band80m", "global.band60m",
+            "global.band40m",  "global.band30m", "global.band20m",
+            "global.band17m",  "global.band15m", "global.band12m",
+            "global.band10m",  "global.band6m",
+            "global.modeCW",   "global.modeLSB", "global.modeUSB",
+            "global.modeAM",   "global.modeFM",  "global.modeRTTY",
+            "global.modeDIGL", "global.modeDIGU", "global.modeSAM",
+        };
+        const auto bandModeValidator = [&bandModeRegistry](const QString& id) {
+            return bandModeRegistry.contains(id);
+        };
+        const auto rBandMode = settings.importProfile(
+            writeImportFile("bandmode.map",
+                            "# Buttons\n"
+                            "B37=band160\n"
+                            "B38=band80\n"
+                            "B39=band60\n"
+                            "B40=band40\n"
+                            "B41=band30\n"
+                            "B42=band20\n"
+                            "B43=band17\n"
+                            "B44=band15\n"
+                            "B45=band12\n"
+                            "B46=band10\n"
+                            "B47=band6\n"
+                            "B25=modecw\n"
+                            "B26=modelsb\n"
+                            "B27=modeusb\n"
+                            "B28=modeam\n"
+                            "B29=modefm\n"
+                            "B30=modertty\n"
+                            "B31=modedigl\n"
+                            "B32=modedigu\n"
+                            "B33=modesam\n"),
+            bandModeValidator);
+        ok &= expect(rBandMode.ok() && rBandMode.importedCount == 20,
+                     "all 11 band + 9 mode select rows import");
+        ok &= expect(rBandMode.skippedUnknownParam.isEmpty()
+                         && rBandMode.duplicates.isEmpty(),
+                     "band/mode vocabulary leaves no named skips");
+        const auto stored = settings.loadProfile(rBandMode.profileName);
+        bool found160 = false;
+        bool foundCw = false;
+        for (const auto& b : stored) {
+            if (b.paramId == "global.band160m")
+                found160 = b.msgType == MidiBinding::NoteOn && b.number == 37
+                           && !b.relative && b.channel == -1;
+            if (b.paramId == "global.modeCW")
+                foundCw = b.msgType == MidiBinding::NoteOn && b.number == 25;
+        }
+        ok &= expect(found160, "band160 row becomes a NoteOn 37 global.band160m binding");
+        ok &= expect(foundCw, "modecw row becomes a NoteOn 25 global.modeCW binding");
+    }
+
     const auto r5 = settings.importProfile(configRoot + "/AetherSDR/midi.settings", validator);
     ok &= expect(!r5.ok(), "midi.settings itself is rejected (wrong root element)");
 
