@@ -4150,7 +4150,7 @@ bool AudioEngine::startSidetoneStream()
         }
         explicitSelection = (dev.id() == m_outputDevice.id());
         if (!explicitSelection) {
-            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the system default output instead";
+            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the backend's default output instead";
         }
     }
 
