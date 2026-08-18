@@ -3009,6 +3009,19 @@ void Hl2Backend::setKeying(bool key)
                           "without AETHER_AUTOMATION_ALLOW_TX";
         return;
     }
+    // A manual PTT/MOX asserted while Break-In owns the current key transfers
+    // that ownership to the operator. The backend is already keyed, so without
+    // this explicit handoff the pending CW hang timer would later unkey a PTT
+    // that is still being held.
+    //
+    // The automatic CW path sets m_cwAutoKeyed only AFTER its own setKeying(true)
+    // call below, so that internal key-up cannot be mistaken for manual intent.
+    if (key && m_keyed && m_cwAutoKeyed) {
+        if (m_cwHangTimer) {
+            m_cwHangTimer->stop();
+        }
+        m_cwAutoKeyed = false;
+    }
     // THE ALC'S HOLD THRESHOLD IS A SILENT CLIFF, so say when an operator has
     // fallen off it.
     //
@@ -3210,8 +3223,8 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs)
         // an MOX/PTT the operator already asserted — matching Flex behavior and
         // piHPSDR's software-keyer path.
         if (breakIn && !m_keyed) {
-            m_cwAutoKeyed = true;
             setKeying(true);
+            m_cwAutoKeyed = true;
         }
         return;
     }
