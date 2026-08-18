@@ -3766,3 +3766,45 @@ foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
         target_link_libraries(${_settings_consumer} PRIVATE aether_sqlite3)
     endif()
 endforeach()
+
+# ── FFTW planner bound for the HL2 / WDSP tests ─────────────────────────────
+#
+# WDSP builds every FFT with FFTW_PATIENT. The first OpenChannel in a cold
+# process therefore spends 20 s (macOS arm64) to 190 s (CI x86_64) measuring
+# plans before the test does any work of its own. A CI container starts cold on
+# every run, so that cost was paid in full every time and thrown away.
+#
+# It also could not be fixed by caching the wisdom file. Measured: the app's own
+# 38 KB cache made NO difference to wdsp_channel_test (22.8 s warm vs 22.4 s
+# cold) because the app's plan set and the tests' plan set are different FFTW
+# problems. Only a cache the tests themselves wrote helped (22.4 s -> 2.4 s),
+# which a fresh container never has.
+#
+# So bound the planner instead. These tests assert that the DSP is CORRECT,
+# never that it is optimal, and a time-limited plan is still a correct plan.
+# WdspChannel reads this var, caps FFTW via fftw_set_timelimit(), and — because
+# rushed plans must never reach the cache the real app imports — skips the
+# wisdom export entirely while it is set.
+#
+# Applied to EVERY registered test, not to an hl2_*/wdsp_* name prefix. The
+# prefix was the first attempt and it leaked: `automation_connect_wait_phase_test`
+# and `transmit_model_test` both drive HL2 DSP without an hl2_ name, so they ran
+# unbounded AND exported — observed clobbering a developer's real 38 KB cache
+# with an 11 KB test-only one mid-review. Naming is not a reliable proxy for
+# what a test opens, and the failure is silent: the suite still passes, it just
+# quietly degrades the next real connect.
+#
+# Blanket application is safe because the variable is read in exactly one place
+# (WdspChannel), so it is inert in every test that never opens a channel, and it
+# cannot be escaped by a future test under any name.
+#
+# To re-check this hasn't regressed:
+#   XDG_CACHE_HOME=$(mktemp -d) ctest --test-dir build -j8
+#   find "$XDG_CACHE_HOME" -name wdsp-fftw-wisdom   # must print nothing
+get_property(_aether_registered_tests DIRECTORY PROPERTY TESTS)
+foreach(_aether_test IN LISTS _aether_registered_tests)
+    # APPEND, so the QT_QPA_PLATFORM=offscreen entries already set on the
+    # GUI-touching ones survive rather than being replaced.
+    set_property(TEST ${_aether_test} APPEND PROPERTY ENVIRONMENT
+        "AETHER_WDSP_FFTW_TIMELIMIT=${AETHER_TEST_FFTW_TIMELIMIT}")
+endforeach()

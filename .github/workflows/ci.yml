@@ -286,37 +286,38 @@ jobs:
       - name: Test MIDI settings and profile import/export
         run: ctest --test-dir build -R "^midi_settings_test$" --output-on-failure
 
-      # hl2_am_dcblock_test is deliberately NOT on this gate, and re-adding it
-      # needs a measurement first. #4774 added it here on the "milliseconds
-      # against an already-linked target" rationale every other step above
-      # earns its slot with, but that rationale was never measured: the step
-      # ran 188-190 s here, dead flat across runs. That is NOT the test's own
-      # work, and the flatness is the tell: the same binary runs in 2.5 s with
-      # a warm FFTW wisdom cache and 178 s with a cold one (measured locally,
-      # RelWithDebInfo, by pointing XDG_CACHE_HOME at an empty dir). The cost
-      # is WDSP's first OpenChannel measuring FFTW PATIENT plans, which
-      # WdspChannel::open() caches to $XDG_CACHE_HOME/aethersdr/wdsp-fftw-wisdom
-      # — and a CI container starts without that file every single run. Six
-      # 4 s bursts of 48 kHz audio through the real chain is the 2.5 s part.
+      # hl2_am_dcblock_test is deliberately NOT on this gate. The reason it
+      # came off (#4873) is now fixed, but re-adding it is a coverage call
+      # somebody should make deliberately rather than a side effect of this
+      # comment being updated.
       #
-      # So the slot is recoverable, and cheaply: cache wdsp-fftw-wisdom the way
-      # ccache is cached above (or prime it in the CI image) and this step is
-      # ~3 s, not 190. Anything else that opens a WDSP channel on this gate
-      # pays the same 190 s once until that lands, so it is worth doing before
-      # the next WDSP test wants a slot rather than after.
+      # The history, because the old note here recommended a fix we went on to
+      # reject. The step ran 188-190 s, dead flat across runs. That was never
+      # the test's own work: it was WDSP's first OpenChannel measuring FFTW
+      # PATIENT plans, and a CI container starts cold every run. The note
+      # proposed caching wdsp-fftw-wisdom the way ccache is cached above.
       #
-      # Until then coverage sits on the weekly sanitizers job, which runs the
-      # full ctest suite unfiltered — the same place the rest of the HL2 suite
-      # (hl2_backend_test and friends, tens of seconds apiece against timers
-      # and sockets) already lives. Read that as a weaker backstop than it
-      # sounds: sanitizers.yml has concluded failure on every run since
-      # 2026-06-08, its TSan entry has run zero tests since 2026-07-13
-      # (#4360), and ASan failures append to a sticky issue that is already
-      # open — so a reintroduced pedestal arrives as one more comment on a red
-      # job rather than as a new signal. hl2_am_dcblock_test has also never
-      # actually run there (it landed 2026-08-05, after the last weekly run),
-      # and CMakeLists sets no TIMEOUT for it against ctest's 1500 s default
-      # at -O0 + ASan.
+      # That would not have worked. Measured on macOS/arm64: the APP's own
+      # 38 KB wisdom cache made no difference at all to wdsp_channel_test —
+      # 22.8 s warm vs 22.4 s cold — because the app's plan set and the tests'
+      # plan set are different FFTW problems. Only a cache the tests themselves
+      # had written helped (22.4 s -> 2.4 s), which is precisely what a fresh
+      # container never has. Caching would have stored an entry that never hit.
+      #
+      # So the planner is bounded instead, in CMake rather than here: every
+      # test now runs with AETHER_WDSP_FFTW_TIMELIMIT set, which
+      # caps fftw_set_timelimit() and skips the wisdom export entirely (rushed
+      # plans must never reach the cache the app imports). See the block at the
+      # end of tests/tests.cmake. Being a ctest property it applies to LOCAL
+      # runs and to the weekly sanitizers job identically — there is no CI-only
+      # workaround to drift out of sync with what developers see.
+      #
+      # Measured, cold cache, ctest -R '^(hl2|wdsp)_' -j8, macOS/arm64:
+      #   before: 100.5 s wall / 632.0 s CPU
+      #   after:   21.6 s wall /   9.3 s CPU
+      # The remaining wall time is socket and timer waits in hl2_backend_test,
+      # not FFTW. hl2_am_dcblock_test alone is ~3 s on this gate's hardware
+      # class if the slot is ever wanted back.
 
       # ulanzi_mapping_migration_test was on this gate (added by #4834) and is
       # not any more. Unlike hl2_am_dcblock_test above it was not costing

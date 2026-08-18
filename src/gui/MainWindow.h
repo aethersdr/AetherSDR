@@ -895,6 +895,15 @@ private:
     void setPaTempDisplayUnit(bool useFahrenheit);
     void setPanadapterConnectionAnimation(bool visible, const QString& label = {});
     void finishPanadapterConnectionAnimation();
+
+    // HL2 first-connect WDSP setup dialog (#5052). arm() is called from every
+    // dspSetupProgress and only starts a delay; show() builds the window if the
+    // build is still running when that delay expires; dismiss() is called from
+    // dspSetupFinished AND from setPanadapterConnectionAnimation(false), which
+    // is the net that catches a backend destroyed mid-build.
+    void armWdspSetupDialog();
+    void showWdspSetupDialog();
+    void dismissWdspSetupDialog();
     void syncMemorySpot(int memoryIndex);
     void removeMemorySpot(int memoryIndex);
     void clearMemorySpotFeed();
@@ -1675,6 +1684,8 @@ private:
     bool m_startupGeometryReapplied{false};
     QByteArray m_startupGeometryForFirstShow;
     QAction* m_minimalModeAction{nullptr};
+    QDialog* m_wdspSetupDialog{nullptr};     // HL2 first-connect setup (#5052)
+    QTimer* m_wdspSetupDelayTimer{nullptr};  // delay-arm, so warm connects show nothing
     bool m_panadapterConnectionAnimationVisible{false};
     bool m_waitingForFirstPanadapterFrame{false};
     QString m_panadapterConnectionAnimationLabel;

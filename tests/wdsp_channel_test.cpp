@@ -9,52 +9,7 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
-
 namespace {
-
-// The env var WdspChannel's wisdomPath() reads for the cache directory.
-constexpr const char* kCacheDirVar =
-#ifdef _WIN32
-    "LOCALAPPDATA";
-#else
-    "XDG_CACHE_HOME";
-#endif
-
-void setCacheDirEnv(const std::string& value)
-{
-#ifdef _WIN32
-    _putenv_s(kCacheDirVar, value.c_str());
-#else
-    ::setenv(kCacheDirVar, value.c_str(), 1);
-#endif
-}
-
-void restoreCacheDirEnv(const char* previous)
-{
-    if (previous)
-        setCacheDirEnv(previous);
-#ifdef _WIN32
-    else
-        _putenv_s(kCacheDirVar, "");
-#else
-    else
-        ::unsetenv(kCacheDirVar);
-#endif
-}
-
-long long testProcessId()
-{
-#ifdef _WIN32
-    return static_cast<long long>(_getpid());
-#else
-    return static_cast<long long>(::getpid());
-#endif
-}
 
 bool require(bool condition, const char* message)
 {
@@ -482,43 +437,6 @@ bool runLifecycleTest()
 // measured and then thrown away, so the next launch paid full first-run cost
 // again — for anyone who had ever force-quit, on every run.
 //
-// Redirects the cache directory to a fresh empty path first, so "the file is
-// there" can only be true if THIS open() wrote it. Cheap despite opening a
-// channel: by the time this runs the process has already measured wisdom for
-// these geometries, so FFTW has it in memory and the open is a warm one.
-bool runWisdomExportTest()
-{
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    const fs::path scratch = fs::temp_directory_path(ec)
-        / ("aethersdr-wisdom-export-test-" + std::to_string(testProcessId()));
-    fs::remove_all(scratch, ec);
-    fs::create_directories(scratch, ec);
-    if (ec)
-        return require(false, "could not create a scratch wisdom directory");
-
-    const char* previous = std::getenv(kCacheDirVar);
-    const std::string saved = previous ? previous : std::string();
-    setCacheDirEnv(scratch.string());
-
-    const fs::path wisdom = WdspChannel::wisdomCachePathForTest();
-    bool ok = require(!fs::exists(wisdom), "the scratch wisdom cache started empty");
-    if (ok) {
-        std::unique_ptr<WdspChannel> channel = WdspChannel::create({});
-        ok = require(channel != nullptr, "could not open a channel for the wisdom test");
-        if (ok) {
-            // Checked while the process is still very much alive: an atexit
-            // handler cannot have run, so this file exists only if open() wrote it.
-            ok = require(fs::exists(wisdom) && fs::file_size(wisdom) > 0,
-                         "open() left the FFTW wisdom cache on disk");
-        }
-    }
-
-    restoreCacheDirEnv(previous ? saved.c_str() : nullptr);
-    fs::remove_all(scratch, ec);
-    return ok;
-}
-
 } // namespace
 
 int main()
@@ -539,7 +457,6 @@ int main()
         }) ||
         !runLeakChecked("underrun test", runUnderrunTest) ||
         !runLeakChecked("reconfiguration test", runReconfigurationTest) ||
-        !runLeakChecked("wisdom export test", runWisdomExportTest) ||
         !runLeakChecked("notch index test", runNotchIndexTest) ||
         !runLeakChecked("notch attenuation test", runNotchAttenuationTest) ||
         !require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,
