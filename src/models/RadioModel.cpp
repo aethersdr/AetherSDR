@@ -3786,6 +3786,25 @@ bool RadioModel::refuseKeyOnTransmitIncapableBackend()
     return false;
 }
 
+bool RadioModel::forwardNonFlexCwKeying(bool down)
+{
+    if (!m_backend) {
+        return false;
+    }
+    // Release is unconditional. Capability or pan state may change while an
+    // element is down; applying the preflight to key-up could leave the carrier
+    // (and Break-In MOX) asserted indefinitely.
+    if (down
+        && (!refuseKeyOnTransmitIncapableBackend()
+            || transmitStartBlockedByInhibit(QStringLiteral("cw-key")))) {
+        return false;
+    }
+    emit backendCwKeyingForwarded(down);
+    m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
+                           m_transmitModel.cwDelay());
+    return true;
+}
+
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 {
     if (tx) {
@@ -4055,8 +4074,6 @@ QString RadioModel::audioCompressionParam() const
 void RadioModel::sendCwKey(bool down, const QString& debugSource,
                            quint64 debugTraceId, quint64 debugSourceMs)
 {
-    const bool prev = m_cwKeyActive;
-    m_cwKeyActive = down;
     // Send only the key edge — the radio's break-in setting decides whether
     // it transmits.  With break_in=1 (QSK), `cw key 1` triggers TX and
     // break_in_delay holds the relay between elements.  With break_in=0,
@@ -4064,12 +4081,15 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     // explicitly asserts CW PTT (Space PTT, MOX, or hardware PTT) — the
     // standard semi-break-in workflow per FlexLib Radio.cs:8890–8965.
     if (m_backend && !usesFlexCommandPlane()) {
-        m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
-                               m_transmitModel.cwDelay());
+        if (!forwardNonFlexCwKeying(down)) {
+            return;
+        }
     } else {
         sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
                          debugSource, debugTraceId, debugSourceMs);
     }
+    const bool prev = m_cwKeyActive;
+    m_cwKeyActive = down;
     if (prev != down)
         emit cwKeyDownChanged(down);
 }
@@ -4101,15 +4121,16 @@ void RadioModel::sendCwPtt(bool on, const QString& debugSource,
 void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
                                quint64 debugTraceId, quint64 debugSourceMs)
 {
-    const bool prev = m_cwKeyActive;
-    m_cwKeyActive = down;
     if (m_backend && !usesFlexCommandPlane()) {
-        m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
-                               m_transmitModel.cwDelay());
+        if (!forwardNonFlexCwKeying(down)) {
+            return;
+        }
     } else {
         sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
                          debugSource, debugTraceId, debugSourceMs);
     }
+    const bool prev = m_cwKeyActive;
+    m_cwKeyActive = down;
     if (prev != down)
         emit cwKeyDownChanged(down);
 }

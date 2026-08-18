@@ -399,6 +399,63 @@ int main(int argc, char** argv)
               "HL2 declares Memories (the #4590 bank's channels are client-"
               "owned; the bank engages on persistsMemories and keeps its own "
               "shared document — RFC #4603 PR 6)");
+
+        // CW-down is a transmit start even though the carrier and PTT envelope
+        // are separate below the seam. Pin both public element entry points:
+        // a receive-only pan must stop them before Hl2Backend sees the edge,
+        // while release remains unconditional. The final uninhibited edge is
+        // the control proving this fixture really can cross the backend seam.
+        QString fixtureError;
+        check(model.automationApplySliceFixture(0, QString(), &fixtureError),
+              "CW inhibit fixture creates a slice");
+        SliceModel* cwSlice = model.slice(0);
+        check(cwSlice != nullptr, "CW inhibit fixture resolves its slice");
+        if (cwSlice) {
+            SliceDelta txOn;
+            txOn.txSlice = true;
+            txOn.panId = QStringLiteral("0");
+            cwSlice->applyChanges(txOn);
+            const QString panId = cwSlice->panId();
+            check(model.txSlice() == cwSlice,
+                  "CW inhibit fixture assigns the transmit slice");
+            check(!panId.isEmpty(), "CW inhibit fixture has a pan identity");
+            model.setPanTransmitInhibited(
+                panId, true, QStringLiteral("receive-only CW regression"));
+            check(model.panTransmitInhibited(panId),
+                  "CW inhibit fixture marks its pan receive-only");
+            QSignalSpy keyEdgeSpy(&model, &RadioModel::cwKeyDownChanged);
+            QSignalSpy forwardedSpy(&model,
+                                    &RadioModel::backendCwKeyingForwarded);
+
+            model.sendCwKey(true);
+            check(forwardedSpy.count() == 0,
+                  "inhibited straight-key down never crosses the backend seam");
+            model.sendCwKey(false);  // release must always be accepted
+            check(forwardedSpy.count() == 1
+                      && !forwardedSpy.last().value(0).toBool(),
+                  "straight-key release crosses the seam despite the inhibit");
+
+            model.sendCwKeyEdge(true);
+            check(forwardedSpy.count() == 1,
+                  "inhibited iambic down never crosses the backend seam");
+            model.sendCwKeyEdge(false);  // release must always be accepted
+            check(forwardedSpy.count() == 2
+                      && !forwardedSpy.last().value(0).toBool(),
+                  "iambic release crosses the seam despite the inhibit");
+            check(keyEdgeSpy.count() == 0,
+                  "refused CW downs do not publish false key-active state");
+
+            model.setPanTransmitInhibited(panId, false);
+            check(!model.panTransmitInhibited(panId),
+                  "CW inhibit fixture can clear the receive-only state");
+            model.sendCwKeyEdge(true);
+            check(forwardedSpy.count() == 3
+                      && forwardedSpy.last().value(0).toBool(),
+                  "the same uninhibited down crosses the backend seam");
+            check(keyEdgeSpy.count() == 1,
+                  "an accepted down publishes one key-active edge");
+            model.sendCwKeyEdge(false);
+        }
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -612,6 +669,15 @@ int main(int argc, char** argv)
               "TX-intent ownership check runs disconnected, on the sim backend");
         check(!model.backendCapabilities().canTransmit,
               "TX-intent ownership check runs against an RX-only backend");
+        QSignalSpy cwForwardedSpy(&model,
+                                  &RadioModel::backendCwKeyingForwarded);
+        model.sendCwKey(true);
+        check(cwForwardedSpy.count() == 0,
+              "CW down never crosses the seam of a receive-only backend");
+        model.sendCwKey(false);
+        check(cwForwardedSpy.count() == 1
+                  && !cwForwardedSpy.last().value(0).toBool(),
+              "CW release still crosses a receive-only backend seam");
         QSignalSpy spy(&model.transmitModel(), &TransmitModel::tuneCommandIssued);
         const bool invoked = QMetaObject::invokeMethod(
             &model.transmitModel(), "tuneCommandIssued", Qt::DirectConnection,
