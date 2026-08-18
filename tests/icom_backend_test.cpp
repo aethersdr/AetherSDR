@@ -816,7 +816,67 @@ int main(int argc, char** argv)
         check(!sentFrame(cmd::kSetting, settingSub::kFilterWidth),
               "and does NOT redefine the slot's stored width");
 
-        // 4. THE WIDTH IS RE-READ AFTER A SLOT CHANGE, because the radio holds a
+        // 4. A MODE CHANGE RE-READS THE WIDTH — the regression this whole
+        //    context-stamping design exists for, and the one that shipped past
+        //    an earlier version of this test.
+        //
+        //    setSliceMode() advances m_mode OPTIMISTICALLY before the write
+        //    goes out, so by the time the radio's 26 confirmation arrives, a
+        //    "did the mode change?" test compares the new mode against itself
+        //    and says no. The re-read never fired, nothing zeroed the width,
+        //    and every mode inherited the one read at connect. On a real
+        //    IC-7300MK2 that painted AM's 9 kHz window over every SSB filter.
+        //
+        //    The fake holds a DIFFERENT width per (mode, DATA, slot), which is
+        //    what makes carrying one across visible here instead of plausible.
+        //    Pin the slot first: step 3 above left the radio on FIL3, and the
+        //    fixture defines its per-mode widths on FIL1. Selecting the SSB
+        //    ladder's widest entry is a slot pick, so this moves the slot
+        //    without redefining anything.
+        backend.setSliceFilter(0, 300, 3300);   // 3000 Hz — ladder, so FIL1
+        check(waitSchedulerIdle(), "the slot returns to FIL1");
+
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("AM"));
+        check(waitFor([&] {
+                  return lastSliceState.filterLow.value_or(0) == -4500
+                      && lastSliceState.filterHigh.value_or(0) == 4500;
+              }, 4000),
+              "a mode change adopts THAT mode's width (AM 9 kHz), not the one "
+              "the previous mode was read at");
+        check(waitFor([&] {
+                  return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                                     [](const CivFrame& f) {
+                                         return f.cmd == cmd::kSetting && f.hasSub
+                                             && f.sub == settingSub::kFilterWidth
+                                             && f.data.empty();
+                                     });
+              }, 3000),
+              "and it got there by ASKING (1A 03), not by keeping the old value");
+
+        // 5. THE DATA FLAG IS PART OF THE CONTEXT. USB and USB-D are different
+        //    filter contexts on the radio and hold different widths — proven
+        //    live, where plain USB read 3.0 kHz and USB-D read 3.6 kHz.
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        check(waitFor([&] {
+                  return lastSliceState.filterHigh.value_or(0)
+                             - lastSliceState.filterLow.value_or(0) == 3000;
+              }, 4000),
+              "plain USB reads its own 3.0 kHz");
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("DIGU"));
+        check(waitFor([&] {
+                  return lastSliceState.filterHigh.value_or(0)
+                             - lastSliceState.filterLow.value_or(0) == 3600;
+              }, 4000),
+              "and USB-D reads its own 3.6 kHz — the DATA flag selects a "
+              "different stored width, so it must re-read across it");
+
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        check(waitSchedulerIdle(), "settle back into USB");
+
+        // 6. THE WIDTH IS RE-READ AFTER A SLOT CHANGE, because the radio holds a
         //    different one per slot and announces none of them.
         check(waitFor([&] {
                   return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),

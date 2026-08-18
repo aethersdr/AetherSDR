@@ -24,6 +24,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <tuple>
 #include <string>
 #include <vector>
 
@@ -604,10 +605,12 @@ private:
             && frame->sub == settingSub::kFilterWidth) {
             if (frame->data.empty()) {
                 pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
-                         settingSub::kFilterWidth, m_filterWidthCode, kCivEom});
+                         settingSub::kFilterWidth, currentWidthCode(), kCivEom});
                 return;
             }
-            m_filterWidthCode = frame->data.front();
+            // A WRITE REDEFINES THE SELECTED SLOT IN THE CURRENT MODE, exactly
+            // as the radio's own filter knob does — not a global width.
+            m_filterWidths[{m_mode, m_dataOn, m_filter}] = frame->data.front();
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
@@ -759,10 +762,28 @@ public:
         // item here rather than being accidentally right.
         {func::kTxBandwidth, 1},
     };
-    // The IF width of the SELECTED slot, as a BCD code — 0x24 is code 24, which
-    // is 2.4 kHz in SSB. Starts at the radio's SSB FIL1 default so a connect
-    // into USB adopts 3.0 kHz rather than the client's own guess.
-    std::uint8_t m_filterWidthCode = 0x34;   // code 34 -> 3000 Hz in SSB
+    // The IF width, as a BCD code, PER (mode, DATA, slot) — which is how the
+    // real radio stores it, and the distinction a fixture must reproduce.
+    //
+    // A SINGLE SHARED CODE HID A LIVE BUG. With one global width the client
+    // could carry the previous mode's width across a mode change and still
+    // match the fixture, so the test passed while a real IC-7300MK2 drew AM's
+    // 9 kHz window over every SSB filter. Different codes per context are what
+    // make that failure visible here.
+    std::map<std::tuple<std::uint8_t, bool, std::uint8_t>, std::uint8_t> m_filterWidths{
+        {{0x01, false, 1}, 0x34},   // USB   FIL1 -> code 34 = 3000 Hz
+        {{0x01, true,  1}, 0x40},   // USB-D FIL1 -> code 40 = 3600 Hz
+        {{0x00, false, 1}, 0x34},   // LSB   FIL1 -> 3000 Hz
+        {{0x02, false, 1}, 0x44},   // AM    FIL1 -> code 44 = 9000 Hz
+        {{0x03, false, 1}, 0x11},   // CW    FIL1 -> code 11 = 700 Hz
+    };
+    std::uint8_t m_filterWidthFallback = 0x18;   // code 18 -> 1400 Hz
+
+    [[nodiscard]] std::uint8_t currentWidthCode() const
+    {
+        auto it = m_filterWidths.find({m_mode, m_dataOn, m_filter});
+        return it == m_filterWidths.end() ? m_filterWidthFallback : it->second;
+    }
 
     std::map<std::uint8_t, int> m_levels{
         {level::kAf, 128},        // ~50 %

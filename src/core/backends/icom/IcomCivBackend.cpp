@@ -315,10 +315,31 @@ void IcomCivBackend::publishModeState()
     publishCapabilities();
 }
 
+bool IcomCivBackend::passbandWidthIsCurrent() const
+{
+    if (m_ifWidthMode != m_mode || m_ifWidthData != m_dataMode || m_ifWidthSlot != m_filter)
+        return false;
+    // FM, DV AND WFM ARE FULLY DESCRIBED BY A STAMPED ZERO. Their slots are
+    // fixed and 1A 03 does not apply, so "no width" is the complete answer
+    // there rather than a missing one — without this the request test would
+    // never be satisfied in FM and would re-ask on every frame that touched it.
+    if (filterWidthLimitsFor(currentLadderMode().toStdString()).maxHz <= 0)
+        return true;
+    return m_ifWidthHz > 0;
+}
+
 std::pair<int, int> IcomCivBackend::currentPassbandHz() const
 {
     const std::string ladder = currentLadderMode().toStdString();
-    if (m_ifWidthHz > 0) {
+    // A WIDTH FROM ANOTHER CONTEXT IS WORSE THAN NO WIDTH. Falling back to the
+    // slot ladder for the few hundred ms until 1A 03 answers draws a plausible
+    // window; carrying the previous mode's width across draws a confident wrong
+    // one — live, that was AM's 9 kHz painted over every SSB filter.
+    // BOTH CONDITIONS, and they are different questions: passbandWidthIsCurrent()
+    // answers "should we ask again", which FM satisfies with a zero. Drawing
+    // needs an actual width, so it tests that separately — a zero here means the
+    // slot ladder, not a passband collapsed to nothing.
+    if (m_ifWidthHz > 0 && passbandWidthIsCurrent()) {
         const auto edges = passbandFromWidthAndPbt(passbandCentreHz(ladder),
                                                     m_ifWidthHz, m_pbtInner, m_pbtOuter);
         return {edges.lowHz, edges.highHz};
@@ -360,8 +381,13 @@ void IcomCivBackend::requestPassbandState()
     } else {
         // No settable width here. Drop any width carried over from the previous
         // mode rather than drawing this mode's passband with it — a 250 Hz CW
-        // window left standing in FM is a worse answer than the slot ladder.
+        // window left standing in FM is a worse answer than the slot ladder —
+        // and STAMP the context, because "this mode has no width" is a complete
+        // answer that must not be re-asked on every frame.
         m_ifWidthHz = 0;
+        m_ifWidthMode = m_mode;
+        m_ifWidthData = m_dataMode;
+        m_ifWidthSlot = m_filter;
     }
     for (std::uint8_t which : {level::kPbtInner, level::kPbtOuter}) {
         const auto pbt = cmdReadLevel(addr, which);
@@ -1682,23 +1708,12 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         const auto st = decodeVfoMode(frame.data);
         if (!st)
             return;
-        const CivMode previousMode = m_mode;
         const bool previousData = m_dataMode;
         m_mode = st->mode;
         m_dataMode = st->dataMode;
         // Zero means the radio named a slot outside 1..3 — see VfoModeState.
         // Keeping the previous slot is what stops mode and filter clobbering
         // each other, which is the whole reason the three travel in one frame.
-        // A WIDTH WE DO NOT HAVE is as good a reason to ask as a move. The slot
-        // branch of setSliceFilter zeroes m_ifWidthHz precisely because the new
-        // slot's width is a different number only the radio knows — but it also
-        // sets m_filter optimistically, so by the time the confirmation lands
-        // the slot no longer looks changed. Without this the re-read fired on
-        // front-panel slot changes and not on our own.
-        const bool needWidth = m_ifWidthHz == 0
-            && filterWidthLimitsFor(currentLadderMode().toStdString()).maxHz > 0;
-        const bool moved = (st->filter != 0 && st->filter != m_filter)
-                        || previousMode != m_mode || previousData != m_dataMode;
         if (st->filter != 0)
             m_filter = st->filter;
         publishModeState();
@@ -1708,9 +1723,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // quietly stale afterwards — which is the exact failure this whole
         // change exists to remove, reintroduced one level up.
         //
-        // The DATA flag counts as a move too: USB and USB-D are different
-        // filter contexts on the radio and hold different widths.
-        if (moved || needWidth)
+        // The DATA flag counts too: USB and USB-D are different filter contexts
+        // on the radio and hold different widths.
+        //
+        // ASKED BY CONTEXT, NOT BY CHANGE. Comparing the reply against our own
+        // state cannot see a move the optimistic setters have already applied —
+        // that is what left every mode drawing AM's width on real hardware.
+        if (!passbandWidthIsCurrent())
             requestPassbandState();
         // A TRANSMIT slot change rides on the same edge, because which TBW item
         // is live depends on m_dataMode.
@@ -1746,6 +1765,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             if (!hz)
                 return;
             m_ifWidthHz = *hz;
+            // STAMP WHAT THIS ANSWER IS ABOUT, at the only place that knows:
+            // the decode. Anywhere else runs ahead of the radio.
+            m_ifWidthMode = m_mode;
+            m_ifWidthData = m_dataMode;
+            m_ifWidthSlot = m_filter;
             publishPassband();
             return;
         }

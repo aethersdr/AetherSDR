@@ -183,6 +183,11 @@ private:
     // it has. Signed in SliceModel's convention.
     [[nodiscard]] std::pair<int, int> currentPassbandHz() const;
 
+    // Is the width we hold an answer about the mode/DATA/slot we are in NOW?
+    // False means m_ifWidthHz belongs to a context the operator has left, and
+    // must not be drawn or trusted until 1A 03 answers again.
+    [[nodiscard]] bool passbandWidthIsCurrent() const;
+
     // Emit ONLY the passband. See the definition — a width or PBT reply has
     // nothing to say about the mode, and saying it anyway republishes a stale
     // one during a front-panel mode change.
@@ -364,6 +369,24 @@ private:
     // and it wins. FM/DV/WFM have no settable width at all and stay zero
     // forever, which is correct rather than missing.
     int m_ifWidthHz = 0;
+
+    // WHICH CONTEXT THAT WIDTH WAS READ FOR — the mode, DATA flag and slot in
+    // force when 1A 03 answered.
+    //
+    // THE RADIO HOLDS A SEPARATE WIDTH FOR EVERY COMBINATION, so a width read
+    // in AM says nothing about USB. Deciding staleness by watching for a
+    // CHANGE instead does not work, and failed live: every setter here moves
+    // m_mode/m_filter optimistically before the write goes out, so by the time
+    // the radio's confirmation arrives the "did it move?" test compares the new
+    // value against itself and says no. The symptom was every mode drawing AM's
+    // 9 kHz window — a 9 kHz passband over a 3 kHz SSB filter — because the
+    // connect-time read was never superseded.
+    //
+    // Recording the context the answer BELONGS TO instead is not fooled by an
+    // optimistic write, because it is stamped only where the reply is decoded.
+    CivMode m_ifWidthMode = CivMode::Usb;
+    bool    m_ifWidthData = false;
+    int     m_ifWidthSlot = 0;
 
     // Twin PBT, 0..255 with 128 centred. Together they slide the passband;
     // apart they narrow it from the inside. Defaulting to centre means a radio
