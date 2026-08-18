@@ -1899,6 +1899,11 @@ private:
     std::atomic<bool> m_txAudioTapEnabled{false};
     mutable QMutex m_txAudioTapMutex;
     quint64 m_txAudioTapBlocks{0};
+    // Duplicate detection at the submit funnel — a block count cannot see the
+    // same block arriving twice. See noteTxAudioSubmission().
+    std::uint64_t m_txAudioTapLastHash{0};
+    quint64 m_txAudioTapRepeats{0};
+    std::set<std::uint64_t> m_txAudioTapHashes;
     quint64 m_txAudioTapSamples{0};
     int m_txAudioTapPeak{0};
     double m_txAudioTapSumSquares{0.0};

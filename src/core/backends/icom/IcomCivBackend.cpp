@@ -2908,6 +2908,31 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     if (m_txPostResampleTapEnabled.load(std::memory_order_relaxed))
         emit txPostResampleAudio(mono, m_audioRateHz);
 
+    // THE FAR END OF THE HASH PAIR. RadioModel::noteTxAudioSubmission() hashes
+    // what this backend was GIVEN; this hashes what it HANDS ON, after the
+    // 24k->48k resample. Comparing the two distinct-counts localises a
+    // duplication to one side of the resampler without a radio: equal counts
+    // mean this stretch is faithful and the repetition arrived from upstream.
+    //
+    // Needed because a real burst reached the wire as 35 frames of which only
+    // 11 were distinct (tshark, 2026-08-17) while the post-resample tap showed
+    // all 89 the modulator built — and the packetiser between them measures
+    // clean offline, so one of those observations is not what it appears.
+    {
+        std::uint64_t h = 1469598103934665603ULL;
+        const auto* raw = reinterpret_cast<const std::uint8_t*>(mono.data());
+        const std::size_t n = mono.size() * sizeof(float);
+        for (std::size_t i = 0; i < n; ++i) {
+            h ^= raw[i];
+            h *= 1099511628211ULL;
+        }
+        ++m_txOutBlocks;
+        if (m_txOutBlocks > 1 && h == m_txOutLastHash)
+            ++m_txOutRepeats;
+        m_txOutLastHash = h;
+        m_txOutHashes.insert(h);
+    }
+
     m_session->sendAudio(mono);
 }
 
@@ -5653,7 +5678,11 @@ void IcomCivBackend::onLinkTick()
             << s.txSubmitSamples << " samples (" << submittedMs << " ms), frames sent "
             << s.txFramesSent << " (" << (s.txFramesSent * 20) << " ms), pump ticks "
             << s.txPumpTicks << " of which " << s.txPumpEmpty << " found no whole frame"
-            << ", pending=" << s.txPendingBytes;
+            << ", pending=" << s.txPendingBytes
+            // DISTINCT, not just count. A burst that arrives as a few blocks
+            // repeated many times is invisible to every other number here.
+            << "; out-blocks " << m_txOutBlocks << " (" << m_txOutHashes.size()
+            << " distinct, " << m_txOutRepeats << " consecutive repeats)";
         m_lastTxSubmitCalls = s.txSubmitCalls;
     }
 

@@ -8198,12 +8198,37 @@ void RadioModel::noteTxAudioSubmission(const QByteArray& int16Stereo, int sample
         sumSquares += static_cast<double>(v) * static_cast<double>(v);
     }
 
+    // CONTENT HASH, because a count of blocks cannot detect the same block
+    // arriving twice — and that is precisely the failure mode under
+    // investigation. Captured off the wire with tshark on 2026-08-17, one AX.25
+    // burst left the machine as 35 frames of which only ELEVEN were distinct:
+    // the two preamble frames repeated 24 times in place of the information
+    // field. Every level, tone and block-count measurement called that healthy,
+    // because the blocks really were submitted. They were duplicates.
+    //
+    // FNV-1a over the PCM. Cheap, allocation-free, and adequate for "is this
+    // byte-for-byte the block I just saw" — this is duplicate detection, not
+    // cryptography.
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto* raw = reinterpret_cast<const std::uint8_t*>(int16Stereo.constData());
+    for (int i = 0; i < int16Stereo.size(); ++i) {
+        hash ^= raw[i];
+        hash *= 1099511628211ULL;
+    }
+
     QMutexLocker lock(&m_txAudioTapMutex);
     ++m_txAudioTapBlocks;
     m_txAudioTapSamples += samples;
     if (peak > m_txAudioTapPeak)
         m_txAudioTapPeak = peak;
     m_txAudioTapSumSquares += sumSquares;
+    // Consecutive repeats are the signature of a stalled producer re-offering
+    // its last buffer; total distinct is the signature of a burst whose payload
+    // never reached us at all. They are different faults, so count both.
+    if (m_txAudioTapBlocks > 1 && hash == m_txAudioTapLastHash)
+        ++m_txAudioTapRepeats;
+    m_txAudioTapLastHash = hash;
+    m_txAudioTapHashes.insert(hash);
 
     // STAND ASIDE UNLESS THIS PATH OWNS THE RECORDER. All three taps write this
     // buffer and this rate at DIFFERENT rates (24 kHz here, 48 kHz after the
@@ -8362,6 +8387,13 @@ QJsonObject RadioModel::txAudioTapSnapshot() const
         // Digital silence is the finding this exists to name, so say it rather
         // than leaving a reader to infer it from a -140 reading.
         {QStringLiteral("silent"), m_txAudioTapPeak == 0},
+        // DUPLICATE DETECTION. `blocks` counts submissions; `distinctBlocks`
+        // counts how many carried content not seen before, and `repeatedBlocks`
+        // how many were byte-identical to the block immediately before. A burst
+        // that arrives as a handful of distinct blocks repeated many times
+        // reads as perfectly healthy on every other field here.
+        {QStringLiteral("distinctBlocks"), qint64(m_txAudioTapHashes.size())},
+        {QStringLiteral("repeatedBlocks"), qint64(m_txAudioTapRepeats)},
     };
 }
 
@@ -8374,6 +8406,9 @@ void RadioModel::setTxAudioTapEnabled(bool on)
         m_txAudioTapPeak = 0;
         m_txAudioTapSumSquares = 0.0;
         m_txAudioTapSampleRate = 0;
+        m_txAudioTapLastHash = 0;
+        m_txAudioTapRepeats = 0;
+        m_txAudioTapHashes.clear();
     }
     m_txAudioTapEnabled.store(on, std::memory_order_relaxed);
 }
