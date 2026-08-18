@@ -311,6 +311,22 @@ struct RadioCapabilities {
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
 
+    // The TRANSMIT passband edges this radio can actually reach, in Hz,
+    // ASCENDING. Empty means continuous — the Phone applet's low/high cut
+    // steppers keep their own 50 Hz granularity and every value they show is a
+    // value the transmitter has.
+    //
+    // NON-EMPTY IS A HARD LIST, NOT A HINT. An Icom does not have continuous TX
+    // cut at all: it stores a handful of low edges and a handful of high edges
+    // and nothing between them exists. Left continuous, the steppers walked
+    // 50 Hz at a time through values the radio silently rounded away — twelve
+    // clicks to move the low cut from 100 to 200 Hz, eleven of which changed
+    // the label and nothing else. The two lists are independent because the
+    // radios treat them independently: an IC-7300MK2 has six low edges and four
+    // high ones.
+    QList<int> txFilterLowEdgesHz;
+    QList<int> txFilterHighEdgesHz;
+
     // The RADIO stores named configuration profiles (global / TX / mic) that a
     // client can list, load and save. The seam already carries ProfileDelta and
     // profileChanged in both directions; this is the flag that says whether the

@@ -473,6 +473,150 @@ std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter
 }
 
 // ---------------------------------------------------------------------------
+// IF filter width (1A 03), Twin PBT (14 07 / 14 08)
+// ---------------------------------------------------------------------------
+
+WidthClass widthClassFor(const std::string& mode) noexcept
+{
+    const std::string u = upperMode(mode);
+    // FM AND ITS RELATIVES HAVE NO SETTABLE WIDTH. 1A 03 simply does not apply
+    // there — the three FM slots are fixed at 15/10/7 kHz in the radio, and
+    // sending a width code in FM either does nothing or lands in whatever mode
+    // the radio was in last. Offering a resize control for FM would be a slider
+    // wired to nothing, which is exactly what this whole change is removing.
+    if (u == "FM" || u == "NFM" || u == "DFM" || u == "WFM" || u == "DV" || u == "DSTAR")
+        return WidthClass::Fixed;
+    if (u == "AM" || u == "SAM")
+        return WidthClass::Am;
+    if (u == "RTTY" || u == "RTTYR")
+        return WidthClass::Rtty;
+    return WidthClass::Ssb;   // LSB/USB/DIGL/DIGU/CW/CWU/CWL
+}
+
+std::optional<int> filterWidthHzFromCode(const std::string& mode, std::uint8_t code) noexcept
+{
+    switch (widthClassFor(mode)) {
+    case WidthClass::Fixed:
+        return std::nullopt;
+    case WidthClass::Am:
+        if (code > 49)
+            return std::nullopt;
+        return 200 + static_cast<int>(code) * 200;
+    case WidthClass::Rtty:
+        if (code <= 9)
+            return 50 + static_cast<int>(code) * 50;
+        if (code <= 31)
+            return 600 + (static_cast<int>(code) - 10) * 100;
+        return std::nullopt;
+    case WidthClass::Ssb:
+        if (code <= 9)
+            return 50 + static_cast<int>(code) * 50;
+        if (code <= 40)
+            return 600 + (static_cast<int>(code) - 10) * 100;
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint8_t> filterWidthCodeFor(const std::string& mode, int hz) noexcept
+{
+    if (widthClassFor(mode) == WidthClass::Fixed)
+        return std::nullopt;
+    // SEARCH THE DECODER, do not invert it. Two arithmetic branches that must
+    // agree across a discontinuity (the 500 Hz -> 600 Hz gap) is precisely the
+    // shape wfview got wrong, and the table is 50 entries. Nearest wins; a tie
+    // takes the WIDER code, because the request that lands exactly between two
+    // widths came from a drag and losing audio is more noticeable than keeping
+    // 50 Hz of it.
+    std::optional<std::uint8_t> best;
+    int bestDelta = 0;
+    for (int code = 0; code <= 49; ++code) {
+        const auto w = filterWidthHzFromCode(mode, static_cast<std::uint8_t>(code));
+        if (!w)
+            continue;
+        const int delta = std::abs(*w - hz);
+        if (!best || delta <= bestDelta) {
+            best = static_cast<std::uint8_t>(code);
+            bestDelta = delta;
+        }
+    }
+    return best;
+}
+
+FilterWidthLimits filterWidthLimitsFor(const std::string& mode) noexcept
+{
+    switch (widthClassFor(mode)) {
+    case WidthClass::Fixed: return {0, 0, 0};
+    case WidthClass::Am:    return {200, 10000, 200};
+    case WidthClass::Rtty:  return {50, 2700, 100};
+    case WidthClass::Ssb:   return {50, 3600, 100};
+    }
+    return {0, 0, 0};
+}
+
+std::vector<std::uint8_t> cmdReadFilterWidth(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kSetting, settingSub::kFilterWidth);
+}
+
+std::vector<std::uint8_t> cmdSetFilterWidth(std::uint8_t to, std::uint8_t code)
+{
+    // ONE BCD BYTE carrying the code as its own decimal value: code 40 goes on
+    // the wire as 0x40, not 0x28. Sending the binary value instead reaches a
+    // different, valid width and the radio accepts it without complaint.
+    const std::array<std::uint8_t, 1> body{encodeBcdByte(std::clamp<int>(code, 0, 49))};
+    return buildFrameSub(to, cmd::kSetting, settingSub::kFilterWidth, body);
+}
+
+int pbtShiftHz(int code, int widthHz) noexcept
+{
+    if (widthHz <= 0)
+        return 0;
+    const int offset = std::clamp(code, 0, 255) - kPbtCentreCode;
+    return static_cast<int>(std::lround(static_cast<double>(offset) * widthHz
+                                        / static_cast<double>(kPbtSpanCodes)));
+}
+
+int pbtCodeForShiftHz(int shiftHz, int widthHz) noexcept
+{
+    if (widthHz <= 0)
+        return kPbtCentreCode;
+    const double steps = static_cast<double>(shiftHz) * kPbtSpanCodes
+                       / static_cast<double>(widthHz);
+    return std::clamp(kPbtCentreCode + static_cast<int>(std::lround(steps)), 0, 255);
+}
+
+PassbandEdges passbandFromWidthAndPbt(int centreHz, int widthHz, int innerCode,
+                                       int outerCode) noexcept
+{
+    if (widthHz <= 0)
+        return {centreHz, centreHz};
+    const int inner = pbtShiftHz(innerCode, widthHz);
+    const int outer = pbtShiftHz(outerCode, widthHz);
+    // TOGETHER SLIDES, APART NARROWS. The mean is where the window ended up;
+    // the separation is how much of it the two edges have eaten from inside.
+    const int shift = (inner + outer) / 2;
+    const int effective = std::max(0, widthHz - std::abs(inner - outer));
+    const int centre = centreHz + shift;
+    return {centre - effective / 2, centre + effective / 2};
+}
+
+int passbandCentreHz(const std::string& mode) noexcept
+{
+    const std::string u = upperMode(mode);
+    // CW's slice frequency IS the tone (see passbandForModeAndFilter), so the
+    // passband is centred on it and the offset here is zero.
+    if (u == "CW" || u == "CWU" || u == "CWL")
+        return 0;
+    if (!isSingleSideband(mode))
+        return 0;   // AM, SAM, FM, WFM straddle the carrier
+    // 1500 Hz for voice. The data modes sit lower because their own filters are
+    // narrow and centred on the tone pair rather than on speech.
+    const int centre = (u == "RTTY" || u == "RTTYR") ? 1000 : 1500;
+    return isLowerSideband(mode) ? -centre : centre;
+}
+
+// ---------------------------------------------------------------------------
 // Command builders
 // ---------------------------------------------------------------------------
 

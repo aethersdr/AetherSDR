@@ -6,6 +6,7 @@
 
 #include "core/backends/icom/CivCodec.h"
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -482,8 +483,138 @@ static void testSubcommandPredicate()
     check(subAddressed == 11, "exactly eleven CI-V commands are sub-addressed");
 }
 
+// ---------------------------------------------------------------------------
+// IF filter width (1A 03), Twin PBT, and the TX passband decomposition
+// ---------------------------------------------------------------------------
+
+static void testFilterWidth()
+{
+    // THE CODE TABLES, from the IC-705 and IC-7300MK2 guides (identical).
+    check(filterWidthHzFromCode("USB", 0) == 50, "SSB code 0 is 50 Hz");
+    check(filterWidthHzFromCode("USB", 9) == 500, "SSB code 9 is 500 Hz");
+    // THE OFF-BY-ONE wfview has: its decoder branches on `code <= 10` and
+    // returns 550 Hz here. Code 10 is the first entry of the 100 Hz table.
+    check(filterWidthHzFromCode("USB", 10) == 600, "SSB code 10 is 600 Hz, not 550");
+    check(filterWidthHzFromCode("USB", 40) == 3600, "SSB tops out at 3.6 kHz");
+    check(!filterWidthHzFromCode("USB", 41), "SSB code 41 is out of range");
+
+    check(filterWidthHzFromCode("CW", 40) == 3600, "CW shares the SSB table");
+    check(filterWidthHzFromCode("RTTY", 31) == 2700, "RTTY tops out at 2.7 kHz");
+    check(!filterWidthHzFromCode("RTTY", 32), "RTTY has no code 32");
+    check(filterWidthHzFromCode("AM", 0) == 200, "AM code 0 is 200 Hz");
+    check(filterWidthHzFromCode("AM", 49) == 10000, "AM tops out at 10 kHz");
+    check(!filterWidthHzFromCode("AM", 50), "AM has no code 50");
+
+    // NO SETTABLE WIDTH in FM and friends — three fixed slots and no command.
+    check(!filterWidthHzFromCode("FM", 10), "FM has no width code table");
+    check(!filterWidthHzFromCode("WFM", 0), "WFM has no width code table");
+    check(!filterWidthCodeFor("FM", 10000), "FM refuses a width request");
+    check(filterWidthLimitsFor("FM").maxHz == 0, "FM advertises no width range");
+    check(filterWidthLimitsFor("USB").maxHz == 3600, "SSB range tops at 3.6 kHz");
+    check(filterWidthLimitsFor("AM").maxHz == 10000, "AM range tops at 10 kHz");
+    check(filterWidthLimitsFor("RTTY").maxHz == 2700, "RTTY range tops at 2.7 kHz");
+
+    // ROUND TRIP: every code the table defines must survive Hz and come back.
+    for (int code = 0; code <= 49; ++code) {
+        for (const char* mode : {"USB", "CW", "RTTY", "AM"}) {
+            const auto hz = filterWidthHzFromCode(mode, static_cast<std::uint8_t>(code));
+            if (!hz)
+                continue;
+            const auto back = filterWidthCodeFor(mode, *hz);
+            check(back && *back == code, "width code survives a round trip");
+        }
+    }
+
+    // THE GAP. 550 Hz is not a width this radio has; a request there must land
+    // on a real neighbour rather than encode something the table cannot decode.
+    const auto gap = filterWidthCodeFor("USB", 550);
+    check(gap.has_value(), "a width in the 500-600 gap still encodes");
+    const auto gapHz = filterWidthHzFromCode("USB", *gap);
+    check(gapHz && (*gapHz == 500 || *gapHz == 600), "and lands on a real width");
+
+    // Requests past the ends CLAMP to the ends rather than wrapping.
+    const auto tooWide = filterWidthCodeFor("USB", 99999);
+    check(tooWide && filterWidthHzFromCode("USB", *tooWide) == 3600, "over-wide clamps to 3.6 kHz");
+    const auto rttyWide = filterWidthCodeFor("RTTY", 3600);
+    check(rttyWide && filterWidthHzFromCode("RTTY", *rttyWide) == 2700,
+          "RTTY clamps to its own 2.7 kHz ceiling, not SSB's");
+
+    // ON THE WIRE the code is BCD, so code 40 is 0x40 and not 0x28. Sending the
+    // binary value reaches a different, valid width and the radio accepts it.
+    check(bytesAre(cmdSetFilterWidth(kIc705, 40),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x03, 0x40, 0xFD}),
+          "width code 40 goes out as BCD 0x40");
+    check(bytesAre(cmdSetFilterWidth(kIc705, 49),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x03, 0x49, 0xFD}),
+          "width code 49 goes out as BCD 0x49");
+    check(bytesAre(cmdReadFilterWidth(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x03, 0xFD}),
+          "the width read carries no payload");
+}
+
+static void testTwinPbt()
+{
+    // Centre is centre, whatever the width.
+    check(pbtShiftHz(kPbtCentreCode, 2400) == 0, "code 128 is no shift");
+    check(pbtCodeForShiftHz(0, 2400) == kPbtCentreCode, "no shift is code 128");
+
+    // SCALED BY THE WIDTH: full deflection is one whole filter width, so the
+    // same code means very different Hz in a wide and a narrow filter.
+    check(pbtShiftHz(255, 2400) == 2400, "full clockwise is one width up");
+    check(pbtShiftHz(255, 250) == 250, "the same code is 250 Hz in a narrow filter");
+    check(pbtShiftHz(1, 2400) == -2400, "full anticlockwise is one width down");
+
+    // A zero width must not divide by itself.
+    check(pbtShiftHz(200, 0) == 0, "no width means no shift");
+    check(pbtCodeForShiftHz(500, 0) == kPbtCentreCode, "no width means centre");
+
+    // Codes clamp rather than wrapping through the far end of the passband.
+    check(pbtCodeForShiftHz(99999, 2400) == 255, "an over-large shift clamps high");
+    check(pbtCodeForShiftHz(-99999, 2400) == 0, "an over-large negative clamps low");
+
+    // TOGETHER SLIDES. Both PBTs at the same code move the window and keep it
+    // the same width — which is the decomposition setSliceFilter relies on.
+    const int code = pbtCodeForShiftHz(300, 2400);
+    const auto slid = passbandFromWidthAndPbt(1500, 2400, code, code);
+    check(slid.highHz - slid.lowHz == 2400, "a matched pair keeps the width");
+    check(std::abs((slid.lowHz + slid.highHz) / 2 - 1800) <= 20,
+          "a matched pair moves the centre by the shift");
+
+    // APART NARROWS, from the inside, which is the only asymmetric response an
+    // Icom can produce and the reason width alone cannot describe one.
+    const auto narrowed = passbandFromWidthAndPbt(1500, 2400,
+                                                  pbtCodeForShiftHz(-300, 2400),
+                                                  pbtCodeForShiftHz(300, 2400));
+    check(narrowed.highHz - narrowed.lowHz < 2400, "a split pair narrows the passband");
+    check(std::abs((narrowed.lowHz + narrowed.highHz) / 2 - 1500) <= 20,
+          "and a symmetric split leaves the centre alone");
+
+    // Centred, unshifted, an SSB passband sits where the radio puts it: around
+    // 1500 Hz, NOT with its low edge pinned at 300.
+    const auto ssb = passbandFromWidthAndPbt(passbandCentreHz("USB"), 2400,
+                                             kPbtCentreCode, kPbtCentreCode);
+    check(ssb.lowHz == 300 && ssb.highHz == 2700, "2.4 kHz USB is 300..2700");
+    const auto narrowSsb = passbandFromWidthAndPbt(passbandCentreHz("USB"), 1800,
+                                                   kPbtCentreCode, kPbtCentreCode);
+    check(narrowSsb.lowHz == 600 && narrowSsb.highHz == 2400,
+          "1.8 kHz USB narrows SYMMETRICALLY to 600..2400, not 300..2100");
+
+    // LSB mirrors, sign carrying the sideband.
+    const auto lsb = passbandFromWidthAndPbt(passbandCentreHz("LSB"), 2400,
+                                             kPbtCentreCode, kPbtCentreCode);
+    check(lsb.lowHz == -2700 && lsb.highHz == -300, "2.4 kHz LSB mirrors to -2700..-300");
+
+    // CW is centred on the tone, and AetherSDR's CW slice frequency IS the tone.
+    check(passbandCentreHz("CW") == 0, "CW has no carrier offset");
+    check(passbandCentreHz("AM") == 0, "AM straddles the carrier");
+    const auto cw = passbandFromWidthAndPbt(0, 500, kPbtCentreCode, kPbtCentreCode);
+    check(cw.lowHz == -250 && cw.highHz == 250, "500 Hz CW is +/-250 about the tone");
+}
+
 int main()
 {
+    testFilterWidth();
+    testTwinPbt();
     testFraming();
     testBcd();
     testReassembler();

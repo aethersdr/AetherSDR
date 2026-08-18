@@ -368,6 +368,10 @@ public:
     // "use the operator's own presets", which is what every radio without a
     // fixed IF ladder wants and what a disconnected app should show.
     QList<int> radioFilterWidthsHz() const;
+    // The transmit passband edges the radio can reach, ascending. Empty means
+    // continuous — see RadioCapabilities::txFilterLowEdgesHz.
+    QList<int> radioTxFilterLowEdgesHz() const;
+    QList<int> radioTxFilterHighEdgesHz() const;
     // Whether the RADIO computes the waterfall black level per tile
     // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
     // the Display panel's Black Level button. Same permissive disconnected rule.

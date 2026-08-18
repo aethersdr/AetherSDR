@@ -3693,6 +3693,22 @@ QList<int> RadioModel::radioFilterWidthsHz() const
     return backendCapabilities().rxFilterWidthsHz;
 }
 
+QList<int> RadioModel::radioTxFilterLowEdgesHz() const
+{
+    if (!m_backend || !isConnected()) {
+        return {};
+    }
+    return backendCapabilities().txFilterLowEdgesHz;
+}
+
+QList<int> RadioModel::radioTxFilterHighEdgesHz() const
+{
+    if (!m_backend || !isConnected()) {
+        return {};
+    }
+    return backendCapabilities().txFilterHighEdgesHz;
+}
+
 bool RadioModel::hasRadioSideWaterfallAutoBlack() const
 {
     if (!m_backend || !isConnected()) {

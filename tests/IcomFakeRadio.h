@@ -593,6 +593,24 @@ private:
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
+        // ---- 1A 03 IF FILTER WIDTH ---------------------------------------
+        //
+        // ONE BCD BYTE, and its meaning depends on the mode — code 40 is
+        // 3.6 kHz in SSB and out of range in RTTY. The fake stores the CODE
+        // rather than Hz, exactly as the radio does, so a client that decodes
+        // it against the wrong mode gets the wrong width here too instead of
+        // being quietly rescued by a fake that stored the answer.
+        if (frame->cmd == cmd::kSetting && frame->hasSub
+            && frame->sub == settingSub::kFilterWidth) {
+            if (frame->data.empty()) {
+                pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
+                         settingSub::kFilterWidth, m_filterWidthCode, kCivEom});
+                return;
+            }
+            m_filterWidthCode = frame->data.front();
+            pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
         // ---- 1A 05 SET MENU ----------------------------------------------
         //
         // The item number is TWO BCD bytes, so 0118 arrives as 0x01 0x18; a
@@ -736,7 +754,16 @@ public:
         {func::kVox, 1},             // VOX ON
         {func::kPreamp, 2},          // P.AMP2
         {func::kAgc, 3},             // SLOW
+        // SSB TX bandwidth slot: MID. Deliberately NOT WIDE, so a client that
+        // routes the edge read/write to slot 0 by default reads the wrong SET
+        // item here rather than being accidentally right.
+        {func::kTxBandwidth, 1},
     };
+    // The IF width of the SELECTED slot, as a BCD code — 0x24 is code 24, which
+    // is 2.4 kHz in SSB. Starts at the radio's SSB FIL1 default so a connect
+    // into USB adopts 3.0 kHz rather than the client's own guess.
+    std::uint8_t m_filterWidthCode = 0x34;   // code 34 -> 3000 Hz in SSB
+
     std::map<std::uint8_t, int> m_levels{
         {level::kAf, 128},        // ~50 %
         {level::kRf, 255},        // 100 %
@@ -748,6 +775,11 @@ public:
         {level::kCompLevel, 102}, // ~40 %
         {level::kNotchPos, 128},  // ~50 %
         {level::kVoxGain, 204},   // ~80 %
+        // TWIN PBT, both at CENTRE. Seeded at 128 rather than left absent so a
+        // client that reads them gets an answer — an unanswered read looks the
+        // same as a centred passband on screen and would hide the difference.
+        {level::kPbtInner, 128},
+        {level::kPbtOuter, 128},
     };
     // 1A 05 SET-menu leaves, by DECIMAL item number. The IC-705's DATA OFF MOD
     // starts at USB (0x01) rather than the WLAN (0x03) this client wants: an
@@ -757,6 +789,14 @@ public:
     std::map<int, std::uint8_t> m_settings{
         {118, 0x01},   // DATA OFF MOD = USB
         {119, 0x03},   // DATA MOD     = WLAN
+        // TX passband edges, IC-705 numbering. One packed BCD byte: high digit
+        // indexes the low-edge table (100/200/300/500), low digit the high-edge
+        // table (2500/2700/2800/2900). Each slot holds a DIFFERENT pair so a
+        // client reading the wrong one is visibly wrong rather than plausible.
+        {19, 0x00},    // WIDE  = 100 .. 2500
+        {20, 0x21},    // MID   = 300 .. 2700
+        {21, 0x32},    // NAR   = 500 .. 2800
+        {22, 0x13},    // SSB-D = 200 .. 2900
         {116, 0x80},   // USB MOD level
         {117, 0x80},   // WLAN MOD level
     };

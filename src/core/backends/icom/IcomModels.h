@@ -124,6 +124,54 @@ struct ModulationProfile {
 [[nodiscard]] std::optional<ModulationProfile>
 modulationProfileFor(const IcomModel& model);
 
+// THE SSB TRANSMIT PASSBAND, and why it cannot be two sliders.
+//
+// AetherSDR's seam carries setTxFilter(lowHz, highHz) — two continuous
+// numbers, because that is what a Flex takes. An Icom does not have that
+// control at all. It has:
+//
+//   * a SHORT LIST of low edges and a SHORT LIST of high edges, and nothing in
+//     between is reachable;
+//   * FOUR STORED SLOTS holding one (low, high) pair each — WIDE, MID, NAR for
+//     voice SSB and one more for SSB-DATA;
+//   * 16 58, which picks WHICH voice slot is live — and the radio also swaps
+//     slots on its own depending on whether the speech compressor is on.
+//
+// So a request lands by SNAPPING both edges to the nearest the model has and
+// writing them into the slot currently in circuit. What the operator then sees
+// must be the snapped pair read back from the radio, never the pair they asked
+// for: an IC-705 asked for 150 Hz gives 100 or 200, and a Phone applet that
+// kept showing 150 would be reporting a passband that does not exist.
+//
+// THE MODELS GENUINELY DIFFER, which is the reason this is per-model metadata
+// and not a shared constant. The IC-7300MK2 added two low edges the IC-705 does
+// not have (120 and 150 Hz), and the two radios keep the four slots at
+// completely different SET-menu item numbers.
+struct TxBandwidthProfile {
+    // Ascending. Snapping assumes it.
+    std::span<const int> lowEdgesHz;
+    std::span<const int> highEdgesHz;
+    // 1A 05 item numbers, decimal as the guide prints them.
+    int wideItem = -1;
+    int midItem = -1;
+    int narrowItem = -1;
+    int dataItem = -1;
+};
+
+// Empty for a model whose own guide has not been read. The caller must then
+// leave setTxFilter() unimplemented and say so through capabilities rather than
+// borrowing another radio's item numbers — writing a TX bandwidth into whatever
+// SET item happens to live at that number on an unread model is a silent
+// misconfiguration of the transmitter.
+[[nodiscard]] std::optional<TxBandwidthProfile>
+txBandwidthProfileFor(const IcomModel& model);
+
+// The nearest value in an ascending table. Ties take the LOWER index, which for
+// a low edge is the wider passband and for a high edge is the narrower one —
+// both the conservative direction for a transmitter.
+[[nodiscard]] int nearestEdgeHz(std::span<const int> table, int hz) noexcept;
+[[nodiscard]] int edgeIndexFor(std::span<const int> table, int hz) noexcept;
+
 // Look up by the address the radio reported. Returns nullptr for an address we
 // do not recognise — which is a real and expected outcome, not an error: Icom
 // has ~130 CI-V addresses and this table has a handful.

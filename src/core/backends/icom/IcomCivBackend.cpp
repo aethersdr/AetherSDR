@@ -202,6 +202,19 @@ RadioCapabilities IcomCivBackend::capabilities() const
         c.rxFilterWidthsHz = QList<int>(widths.begin(), widths.end());
     }
 
+    // THE TRANSMIT PASSBAND IS A SHORT LIST, NOT A SLIDER. Published so the
+    // Phone applet's low/high cut steppers walk the edges the radio HAS —
+    // without this they stepped 50 Hz at a time through values it rounds away,
+    // and eleven clicks out of twelve moved the label and nothing else.
+    //
+    // EMPTY FOR AN UNREAD MODEL, which is what leaves the control continuous
+    // and, correctly, unwired: setTxFilter() declines there too, so the two
+    // agree rather than the UI promising what the backend refuses.
+    if (const auto tbw = txBandwidthProfileFor(*m_model)) {
+        c.txFilterLowEdgesHz  = QList<int>(tbw->lowEdgesHz.begin(), tbw->lowEdgesHz.end());
+        c.txFilterHighEdgesHz = QList<int>(tbw->highEdgesHz.begin(), tbw->highEdgesHz.end());
+    }
+
     c.hasProfiles = false;
     c.hasWaveforms = false;
     c.hasMultiClientSessions = false;
@@ -282,10 +295,17 @@ void IcomCivBackend::publishModeState()
     SliceDelta s;
     s.mode = neutral;
     // The passband travels WITH the mode, in the same delta, because the radio
-    // will never send one. Applied after the mode by SliceModel's own ordering,
-    // which is what stops a narrow CW window surviving into DIGU.
-    const auto [low, high] =
-        passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
+    // will never send one unprompted. Applied after the mode by SliceModel's
+    // own ordering, which is what stops a narrow CW window surviving into DIGU.
+    //
+    // THE RADIO'S OWN WIDTH WINS WHERE WE HAVE IT. 1A 03 reports the Hz the
+    // selected slot is actually defined as and 14 07 / 14 08 report where that
+    // window sits, so between them they describe the real response. The slot
+    // ladder below is the FALLBACK for the interval before the radio has
+    // answered, and for FM/DV/WFM where there is no settable width to read —
+    // it is a table of factory defaults, and an operator who redefined a slot
+    // is exactly who it is wrong for.
+    const auto [low, high] = currentPassbandHz();
     s.filterLow  = low;
     s.filterHigh = high;
     emit sliceChanged(sliceId(), s);
@@ -293,6 +313,80 @@ void IcomCivBackend::publishModeState()
     // rebuilt from the new one. Change-gated inside the models, so the repeat
     // this produces on an unchanged mode costs nothing.
     publishCapabilities();
+}
+
+std::pair<int, int> IcomCivBackend::currentPassbandHz() const
+{
+    const std::string ladder = currentLadderMode().toStdString();
+    if (m_ifWidthHz > 0) {
+        const auto edges = passbandFromWidthAndPbt(passbandCentreHz(ladder),
+                                                    m_ifWidthHz, m_pbtInner, m_pbtOuter);
+        return {edges.lowHz, edges.highHz};
+    }
+    return passbandForModeAndFilter(ladder, m_filter);
+}
+
+// THE PASSBAND ALONE, WITHOUT THE MODE, and the distinction is load-bearing.
+//
+// A width or PBT reply says nothing about the operating mode, but it arrives
+// asynchronously — so routing it through publishModeState() republished
+// whatever m_mode/m_dataMode happened to hold at that instant. During a
+// front-panel mode change the two are briefly out of step (the 01 push carries
+// no DATA flag, so the DATA half is still the previous mode's until 26
+// answers), and a width reply landing in that window put a stale DIGL on the
+// slice's mode indicator. Publishing only what the frame actually reported
+// removes the window rather than narrowing it.
+void IcomCivBackend::publishPassband()
+{
+    const auto [low, high] = currentPassbandHz();
+    SliceDelta s;
+    s.filterLow  = low;
+    s.filterHigh = high;
+    emit sliceChanged(sliceId(), s);
+}
+
+void IcomCivBackend::requestPassbandState()
+{
+    if (!m_session)
+        return;
+    const std::uint8_t addr = m_session->civAddress();
+    // ONLY WHERE THERE IS A WIDTH TO READ. 1A 03 does not apply in FM, DV or
+    // WFM — those modes have three fixed slots and no width command — so asking
+    // there spends a round trip to be told nothing, or worse, is answered with
+    // the width of whatever mode the radio was in last.
+    if (filterWidthLimitsFor(currentLadderMode().toStdString()).maxHz > 0) {
+        const auto width = cmdReadFilterWidth(addr);
+        queueRead(width, semanticKey(width), IcomCivScheduler::Priority::Maintenance);
+    } else {
+        // No settable width here. Drop any width carried over from the previous
+        // mode rather than drawing this mode's passband with it — a 250 Hz CW
+        // window left standing in FM is a worse answer than the slot ladder.
+        m_ifWidthHz = 0;
+    }
+    for (std::uint8_t which : {level::kPbtInner, level::kPbtOuter}) {
+        const auto pbt = cmdReadLevel(addr, which);
+        queueRead(pbt, semanticKey(pbt), IcomCivScheduler::Priority::Maintenance);
+    }
+    pumpCiv(nowMs());
+}
+
+int IcomCivBackend::activeTxBandwidthItem() const
+{
+    const auto profile = txBandwidthProfileFor(*m_model);
+    if (!profile)
+        return -1;
+    // A DATA MODE USES ITS OWN SLOT, and 16 58 has nothing to say about it —
+    // that command selects among the three VOICE slots only. Reshaping a voice
+    // slot while the radio is transmitting FT8 would change a passband the
+    // operator cannot hear and leave the one in circuit untouched.
+    if (m_dataMode)
+        return profile->dataItem;
+    switch (m_txBandwidthSlot) {
+    case 0:  return profile->wideItem;
+    case 1:  return profile->midItem;
+    case 2:  return profile->narrowItem;
+    default: return -1;   // 16 58 has not answered; guessing would reshape the wrong slot
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +622,31 @@ void IcomCivBackend::sendConnectReadBurst()
                             func::kManualNotch,
                             func::kCompressor, func::kMonitorFn, func::kVox})
         queueStartupRead(cmdReadFunction(m_session->civAddress(), fn));
+
+    // THE PASSBAND ITSELF, not just the slot that holds it: the width the
+    // selected slot is actually defined as (1A 03) and where both Twin PBT
+    // edges are sitting (14 07 / 14 08). Without these the connect snapshot
+    // knew which of three buttons was lit and had to invent the Hz.
+    //
+    // Queued unconditionally here rather than through requestPassbandState(),
+    // because at this point in the burst the mode reads above have not been
+    // answered yet — m_mode is still the constructor's USB, and gating a read
+    // on a mode we have not been told is how a connect into FM ends up asking
+    // for a width that does not exist there. The decode validates the code
+    // against the mode that has arrived by the time the reply lands.
+    {
+        const auto width = cmdReadFilterWidth(m_session->civAddress());
+        queueStartupRead(width);
+    }
+    for (std::uint8_t which : {level::kPbtInner, level::kPbtOuter})
+        queueStartupRead(cmdReadLevel(m_session->civAddress(), which));
+
+    // WHICH TRANSMIT PASSBAND IS IN CIRCUIT. 16 58 names one of three stored
+    // slots; the edges live in the slot, so this read is what tells the follow
+    // -up which SET item to ask for. Asking for all four slots instead would
+    // read three passbands the transmitter is not using.
+    if (txBandwidthProfileFor(*m_model))
+        queueStartupRead(cmdReadFunction(m_session->civAddress(), func::kTxBandwidth));
 
     // The attenuator is NOT sub-addressed, so it needs its own read rather than
     // a slot in the loop above.
@@ -1333,6 +1452,19 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // one point ahead of the front panel for roughly half their range.
         const int pct = levelRawToPercent(*raw);
         switch (frame.sub) {
+        // TWIN PBT — RAW, NOT A PERCENTAGE. Every other 0..255 level on this
+        // radio is a magnitude that maps onto 0..100 sensibly; these two are a
+        // SIGNED POSITION about 128, and how many Hz a step is worth depends on
+        // the width in circuit. Rounding them through levelRawToPercent first
+        // would quantise the centre away — 128 becomes 50%, and 50% back is
+        // 127 — so the passband would drift one step every time it was
+        // round-tripped.
+        case level::kPbtInner:
+        case level::kPbtOuter: {
+            (frame.sub == level::kPbtInner ? m_pbtInner : m_pbtOuter) = *raw;
+            publishPassband();
+            return;
+        }
         case level::kRfPower: {
             m_txPowerPercent = pct;
             TransmitDelta t; t.rfPower = pct;
@@ -1415,6 +1547,23 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         const int v = frame.data[0];
         switch (frame.sub) {
+        // WHICH OF THE THREE TRANSMIT PASSBANDS IS IN CIRCUIT. Not a passband
+        // itself — it names the SET item that holds one, so the only useful
+        // thing to do with it is go and read that item.
+        case func::kTxBandwidth: {
+            if (v > 2)
+                return;   // 00 WIDE, 01 MID, 02 NAR; anything else is not this reply
+            if (m_txBandwidthSlot == v)
+                return;
+            m_txBandwidthSlot = v;
+            const int item = activeTxBandwidthItem();
+            if (item >= 0 && m_session) {
+                const auto read = cmdReadSetting(m_session->civAddress(), item);
+                queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Maintenance);
+                pumpCiv(nowMs());
+            }
+            return;
+        }
         case func::kNoiseReduce: {
             m_nrEnableSent = v ? 1 : 0;   // adopt, so we do not re-send it
             SliceDelta d; d.nr = (v != 0);
@@ -1533,23 +1682,107 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         const auto st = decodeVfoMode(frame.data);
         if (!st)
             return;
+        const CivMode previousMode = m_mode;
+        const bool previousData = m_dataMode;
         m_mode = st->mode;
         m_dataMode = st->dataMode;
         // Zero means the radio named a slot outside 1..3 — see VfoModeState.
         // Keeping the previous slot is what stops mode and filter clobbering
         // each other, which is the whole reason the three travel in one frame.
+        // A WIDTH WE DO NOT HAVE is as good a reason to ask as a move. The slot
+        // branch of setSliceFilter zeroes m_ifWidthHz precisely because the new
+        // slot's width is a different number only the radio knows — but it also
+        // sets m_filter optimistically, so by the time the confirmation lands
+        // the slot no longer looks changed. Without this the re-read fired on
+        // front-panel slot changes and not on our own.
+        const bool needWidth = m_ifWidthHz == 0
+            && filterWidthLimitsFor(currentLadderMode().toStdString()).maxHz > 0;
+        const bool moved = (st->filter != 0 && st->filter != m_filter)
+                        || previousMode != m_mode || previousData != m_dataMode;
         if (st->filter != 0)
             m_filter = st->filter;
         publishModeState();
+        // THE WIDTH AND BOTH PBTs ARE PER MODE AND PER SLOT, and the radio
+        // swaps all three without announcing any of them. A width read once at
+        // connect is right until the operator's first mode or filter change and
+        // quietly stale afterwards — which is the exact failure this whole
+        // change exists to remove, reintroduced one level up.
+        //
+        // The DATA flag counts as a move too: USB and USB-D are different
+        // filter contexts on the radio and hold different widths.
+        if (moved || needWidth)
+            requestPassbandState();
+        // A TRANSMIT slot change rides on the same edge, because which TBW item
+        // is live depends on m_dataMode.
+        if (previousData != m_dataMode) {
+            const int item = activeTxBandwidthItem();
+            if (item >= 0 && m_session) {
+                const auto read = cmdReadSetting(m_session->civAddress(), item);
+                queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Maintenance);
+                pumpCiv(nowMs());
+            }
+        }
         checkModInput();
         return;
     }
 
     case cmd::kSetting: {
+        if (!frame.hasSub)
+            return;
+        // 1A 03 <bcd code> — THE IF WIDTH IN CIRCUIT. One byte, BCD, and its
+        // meaning depends on the mode: code 40 is 3.6 kHz in SSB, out of range
+        // in RTTY, and 8.2 kHz in AM. Decoding it against the mode the radio is
+        // actually in is what stops a stale reply from a mode change still in
+        // flight being adopted as this mode's width.
+        if (frame.sub == settingSub::kFilterWidth) {
+            if (frame.data.empty())
+                return;
+            const auto hz = filterWidthHzFromCode(currentLadderMode().toStdString(),
+                                                  static_cast<std::uint8_t>(
+                                                      decodeBcdByte(frame.data[0])));
+            // A code this mode's table does not define is a reply we have
+            // mis-attributed, not a narrow filter. Keep the previous width
+            // rather than publishing a passband from a byte we cannot read.
+            if (!hz)
+                return;
+            m_ifWidthHz = *hz;
+            publishPassband();
+            return;
+        }
         // 1A 05 <item hi> <item lo> <value>
-        if (!frame.hasSub || frame.sub != 0x05 || frame.data.size() < 3)
+        if (frame.sub != settingSub::kMenu || frame.data.size() < 3)
             return;
         const int item = decodeBcdByte(frame.data[0]) * 100 + decodeBcdByte(frame.data[1]);
+
+        // TRANSMIT PASSBAND EDGES, which are a different shape from every other
+        // SET item: one packed BCD byte whose high digit indexes this model's
+        // low-edge table and whose low digit indexes the high-edge table.
+        //
+        // PUBLISHED FROM THE REPLY, never from the request. The tables are
+        // short and model-specific, so a Phone applet asking for 150 Hz on an
+        // IC-705 gets 100 or 200 — and showing 150 afterwards would put a
+        // number on screen that the transmitter cannot produce.
+        if (const auto profile = txBandwidthProfileFor(*m_model)) {
+            const bool isTbwItem = item == profile->wideItem || item == profile->midItem
+                                || item == profile->narrowItem || item == profile->dataItem;
+            if (isTbwItem) {
+                if (item != activeTxBandwidthItem())
+                    return;   // a slot the transmitter is not using
+                const int lowIdx  = (frame.data[2] >> 4) & 0x0f;
+                const int highIdx = frame.data[2] & 0x0f;
+                if (lowIdx >= static_cast<int>(profile->lowEdgesHz.size())
+                    || highIdx >= static_cast<int>(profile->highEdgesHz.size()))
+                    return;   // not the packed-nibble shape we expect; do not guess
+                m_txFilterLowHz  = profile->lowEdgesHz[static_cast<std::size_t>(lowIdx)];
+                m_txFilterHighHz = profile->highEdgesHz[static_cast<std::size_t>(highIdx)];
+                TransmitDelta t;
+                t.txFilterLow  = m_txFilterLowHz;
+                t.txFilterHigh = m_txFilterHighHz;
+                emit transmitChanged(t);
+                return;
+            }
+        }
+
         const auto mod = modulationProfileFor(*m_model);
         if (!mod)
             return;
@@ -1949,10 +2182,18 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         }
         break;
     case cmd::kSetting:
-        if (parsed->hasSub && parsed->sub == 0x05 && parsed->data.size() >= 3) {
+        if (parsed->hasSub && parsed->sub == settingSub::kMenu && parsed->data.size() >= 3) {
             const int item = decodeBcdByte(parsed->data[0]) * 100
                 + decodeBcdByte(parsed->data[1]);
             return cmdReadSetting(addr, item);
+        }
+        // A WIDTH WRITE IS INTENT; the read is what makes it state. The radio
+        // clamps a code the current mode does not reach — RTTY stops at 2.7 kHz
+        // where SSB goes to 3.6 — and answers with what it took, so echoing the
+        // requested width instead would draw a passband 900 Hz wider than the
+        // one in circuit.
+        if (parsed->hasSub && parsed->sub == settingSub::kFilterWidth) {
+            return cmdReadFilterWidth(addr);
         }
         break;
     case cmd::kAttenuator:
@@ -2242,48 +2483,160 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
 
 void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
 {
-    // The radio has three fixed IF filters, not a continuous passband, so this
-    // can only SNAP. What the radio actually took comes back on its own mode
-    // report — we must not echo the requested width as if it were applied.
-    const int width = std::abs(highHz - lowHz);
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     // The LADDER mode, not the neutral one: the two differ in RTTY, where the
     // radio's own widths are 2.4k/500/250 — see currentLadderMode().
-    const QString neutral = currentLadderMode();
-    // MODE-AWARE. Snapping against the SSB thresholds whatever the mode put
-    // every AM width on FIL1 and every CW width on FIL3 — three buttons and one
-    // filter, in both directions.
-    const int filter = filterForWidthHz(neutral.toStdString(), width);
-    m_filter = filter;
-    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
-    // THE FILTER BUTTON MUST NOT DROP THE RADIO OUT OF DATA. Command 06 carries
-    // mode and slot with no DATA byte, and writing it is what clears DATA on
-    // the radio — so a filter change sent as 06 took an operator running FT8 in
-    // USB-D back to plain USB and their transmit audio back to the microphone,
-    // from a button that says nothing about the mode. 26 restates DATA with the
-    // new slot in the same frame.
+    const std::string ladder = currentLadderMode().toStdString();
+    const int width = std::abs(highHz - lowHz);
+
+    // ── Which control did the operator actually touch? ────────────────────
     //
-    // m_dataMode here is the RADIO's reported state, not a guess: it is read at
-    // connect, re-read after every front-panel mode change, and confirmed after
-    // every mode write, so this re-asserts what the radio said (Constitution
-    // II) rather than pushing a client belief over it.
-    if (m_model->hasVfoModeCommand)
-        sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
-    else
-        sendUserCommand(cmdSetMode(addr, m_mode, filter));
-    // A write is intent; the radio's own reply is state. sendUserCommand
-    // schedules that readback itself now (confirmationFor maps 26 -> read 26,
-    // 06 -> read 04), so it also corrects the optimistic passband below if the
-    // radio clamps or refuses the requested slot while CI-V Transceive is off.
+    // ONE SEAM VERB, TWO RADIO CONTROLS, and conflating them is how an Icom
+    // ends up with three filter buttons that all select the same width.
     //
-    // PUBLISH THE PASSBAND NOW, for the same reason setSliceMode does: the
-    // radio's mode report only comes back if CI-V Transceive is on, and the
-    // operator who just clicked a filter button is owed an immediate answer.
-    // If the radio disagrees its own report corrects this a few ms later.
+    //   * The FILTER BUTTONS emit one of the three widths this backend
+    //     published as rxFilterWidthsHz. On the radio that is a SLOT change —
+    //     FIL1/FIL2/FIL3 — and it must stay one, because the slots are the
+    //     operator's own three presets and clicking through them must not
+    //     redefine them.
+    //   * DRAGGING A PASSBAND EDGE emits anything at all. On the radio that is
+    //     a WIDTH change (1A 03) on the slot already selected, plus a PBT shift
+    //     if the window also moved — exactly what turning the radio's own
+    //     FILTER and PBT knobs does.
+    //
+    // An exact ladder match is therefore read as a button press. The one
+    // ambiguous case — a drag that lands precisely on a ladder value — selects
+    // the slot whose factory default is that width, which produces that width
+    // anyway, so nothing is lost by guessing button.
+    const auto ladderWidths = filterWidthsForMode(ladder);
+    const bool isSlotPick = std::find(ladderWidths.begin(), ladderWidths.end(), width)
+                            != ladderWidths.end();
+    const FilterWidthLimits limits = filterWidthLimitsFor(ladder);
+
+    // FM, DV and WFM have no settable width at all, so the slot IS the only
+    // filter control the radio offers there and every request has to be a slot
+    // pick. Sending 1A 03 in FM writes a width into whichever mode the radio
+    // last had one for.
+    if (isSlotPick || limits.maxHz <= 0) {
+        // MODE-AWARE. Snapping against the SSB thresholds whatever the mode put
+        // every AM width on FIL1 and every CW width on FIL3 — three buttons and
+        // one filter, in both directions.
+        const int filter = filterForWidthHz(ladder, width);
+        m_filter = filter;
+        // THE FILTER BUTTON MUST NOT DROP THE RADIO OUT OF DATA. Command 06
+        // carries mode and slot with no DATA byte, and writing it is what
+        // clears DATA on the radio — so a filter change sent as 06 took an
+        // operator running FT8 in USB-D back to plain USB and their transmit
+        // audio back to the microphone, from a button that says nothing about
+        // the mode. 26 restates DATA with the new slot in the same frame.
+        //
+        // m_dataMode here is the RADIO's reported state, not a guess: it is
+        // read at connect, re-read after every front-panel mode change, and
+        // confirmed after every mode write, so this re-asserts what the radio
+        // said (Constitution II) rather than pushing a client belief over it.
+        if (m_model->hasVfoModeCommand)
+            sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
+        else
+            sendUserCommand(cmdSetMode(addr, m_mode, filter));
+
+        // THE NEW SLOT'S WIDTH IS A DIFFERENT NUMBER and only the radio knows
+        // it. Drop the width we hold for the old slot so the fallback ladder
+        // draws the window until 1A 03 answers, rather than leaving the
+        // previous slot's Hz on screen under a new slot's label.
+        m_ifWidthHz = 0;
+        // A write is intent; the radio's own reply is state. sendUserCommand
+        // schedules the mode readback itself (confirmationFor maps 26 -> read
+        // 26, 06 -> read 04), and that reply's handler asks for the width and
+        // PBT of whatever slot the radio actually landed on.
+        SliceDelta d;
+        const auto [low, high] = passbandForModeAndFilter(ladder, filter);
+        d.filterLow  = low;
+        d.filterHigh = high;
+        emit sliceChanged(sliceId(), d);
+        return;
+    }
+
+    // ── A resize, and/or a shift ──────────────────────────────────────────
+    //
+    // THE ICOM DECOMPOSITION. AetherSDR's seam carries two independent edges
+    // because that is what a Flex takes; an Icom has no such command. What it
+    // has is a WIDTH that opens and closes symmetrically about the mode's
+    // filter centre, and a PBT PAIR that slides the result. So two edges become
+    // one width plus one shift, and that is exactly reversible — which is why
+    // the drawn passband can be trusted afterwards.
+    const int requestedWidth = std::clamp(width, limits.minHz, limits.maxHz);
+    const auto code = filterWidthCodeFor(ladder, requestedWidth);
+    if (!code)
+        return;
+    const auto appliedWidth = filterWidthHzFromCode(ladder, *code);
+    if (!appliedWidth)
+        return;
+
+    // The shift is measured against where this mode PUTS its passband, not
+    // against zero: in USB the filter is centred at +1500 Hz, so a request for
+    // 300..2700 is a centred filter and needs no PBT at all. Measuring from
+    // zero instead would shove every SSB passband a whole 1500 Hz sideways.
+    const int requestedCentre = (lowHz + highHz) / 2;
+    const int shift = requestedCentre - passbandCentreHz(ladder);
+    const int pbtCode = pbtCodeForShiftHz(shift, *appliedWidth);
+
+    sendUserCommand(cmdSetFilterWidth(addr, *code));
+    // BOTH PBTs TO THE SAME CODE. Apart they narrow the passband from the
+    // inside, and the width command has already set the width — so moving them
+    // apart here would subtract from a window that is already the right size,
+    // and the operator's drag would come out narrower than they drew it.
+    sendUserCommand(cmdSetLevel(addr, level::kPbtInner, pbtCode));
+    sendUserCommand(cmdSetLevel(addr, level::kPbtOuter, pbtCode));
+
+    // Optimistic, and corrected by the read-backs sendUserCommand queues. Same
+    // reason setSliceMode publishes early: the radio's own report only arrives
+    // unprompted when CI-V Transceive is on, and the operator dragging an edge
+    // is owed an answer now.
+    m_ifWidthHz = *appliedWidth;
+    m_pbtInner = pbtCode;
+    m_pbtOuter = pbtCode;
+    const auto edges = passbandFromWidthAndPbt(passbandCentreHz(ladder), m_ifWidthHz,
+                                                m_pbtInner, m_pbtOuter);
     SliceDelta d;
-    const auto [low, high] = passbandForModeAndFilter(neutral.toStdString(), filter);
-    d.filterLow  = low;
-    d.filterHigh = high;
+    d.filterLow  = edges.lowHz;
+    d.filterHigh = edges.highHz;
     emit sliceChanged(sliceId(), d);
+}
+
+void IcomCivBackend::setTxFilter(int lowHz, int highHz)
+{
+    // NO PROFILE, NO WRITE. The SET-menu item numbers that hold the transmit
+    // passband are model-specific and this backend only has them for radios
+    // whose own guide has been read. Borrowing another model's numbers would
+    // put a passband into whatever setting happens to live there — a silent
+    // misconfiguration of the transmitter, which is worse in every way than a
+    // control that declines.
+    const auto profile = txBandwidthProfileFor(*m_model);
+    if (!profile || !m_session)
+        return;
+    const int item = activeTxBandwidthItem();
+    if (item < 0)
+        return;   // 16 58 has not answered; reshaping a guessed slot is not a fix
+
+    // SNAP BOTH EDGES to what this model can actually reach. The IC-7300MK2
+    // has six low edges (it added 120 and 150 Hz); the IC-705 has four. Nothing
+    // between them exists, and the read-back this write triggers is what puts
+    // the snapped pair on screen instead of the requested one.
+    const int lowIdx  = edgeIndexFor(profile->lowEdgesHz, lowHz);
+    const int highIdx = edgeIndexFor(profile->highEdgesHz, highHz);
+
+    // ONE PACKED BCD BYTE: high digit indexes the low-edge table, low digit the
+    // high-edge table. Both tables are shorter than ten entries, so each index
+    // is a single BCD digit and the pair fits one byte — which is how the guide
+    // draws it (two Xs, one per digit, exactly as the four-X RX HPF/LPF item
+    // carries two two-digit values).
+    const auto packed = static_cast<std::uint8_t>((lowIdx << 4) | highIdx);
+    sendUserCommand(cmdWriteSetting(m_session->civAddress(), item, packed));
+    // No optimistic publish. Unlike the receive passband, the operator cannot
+    // hear this one, so there is nothing to be owed an instant answer about —
+    // and the whole point of snapping is that the number they asked for is not
+    // the number they get. confirmationFor() reads the item straight back and
+    // the decode publishes the pair the radio actually holds.
 }
 
 void IcomCivBackend::setSliceAgc(int, const QString& mode, int)

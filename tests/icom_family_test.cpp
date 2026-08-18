@@ -113,6 +113,50 @@ int main(int argc, char** argv)
     // distinction so the old false warning cannot quietly come back.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+
+    // ── TX bandwidth: the models genuinely differ ─────────────────────────
+    {
+        const auto ic705Tbw = icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xA4));
+        const auto mk2Tbw   = icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xB6));
+        check(ic705Tbw && ic705Tbw->wideItem == 19 && ic705Tbw->midItem == 20
+                  && ic705Tbw->narrowItem == 21 && ic705Tbw->dataItem == 22,
+              "IC-705 TX bandwidth lives at SET 0019/0020/0021/0022");
+        check(mk2Tbw && mk2Tbw->wideItem == 14 && mk2Tbw->midItem == 15
+                  && mk2Tbw->narrowItem == 16 && mk2Tbw->dataItem == 17,
+              "IC-7300MK2 TX bandwidth lives at SET 0014/0015/0016/0017");
+
+        // THE MK2 ADDED TWO LOW EDGES the IC-705 has not got. This is the whole
+        // reason the tables are per-model rather than one shared constant, so
+        // it is pinned rather than left as a comment.
+        check(ic705Tbw && ic705Tbw->lowEdgesHz.size() == 4,
+              "the IC-705 offers four TX low edges");
+        check(mk2Tbw && mk2Tbw->lowEdgesHz.size() == 6,
+              "the IC-7300MK2 offers six — it added 120 and 150 Hz");
+        check(mk2Tbw && mk2Tbw->lowEdgesHz[1] == 120 && mk2Tbw->lowEdgesHz[2] == 150,
+              "and those two are where the guide puts them");
+        check(ic705Tbw && mk2Tbw
+                  && ic705Tbw->highEdgesHz.size() == 4 && mk2Tbw->highEdgesHz.size() == 4,
+              "both share the same four high edges");
+
+        // SNAPPING is what makes the seam's continuous Hz honest. A request the
+        // radio cannot reach must land on one it can, per model.
+        check(mk2Tbw && icom::nearestEdgeHz(mk2Tbw->lowEdgesHz, 130) == 120,
+              "an IC-7300MK2 reaches 120 Hz");
+        check(ic705Tbw && icom::nearestEdgeHz(ic705Tbw->lowEdgesHz, 130) == 100,
+              "an IC-705 asked for the same lands on 100 — it has no 120");
+        check(ic705Tbw && icom::nearestEdgeHz(ic705Tbw->highEdgesHz, 3300) == 2900,
+              "a 3.3 kHz high cut clamps to the 2.9 kHz ceiling");
+        check(mk2Tbw && icom::edgeIndexFor(mk2Tbw->lowEdgesHz, 500) == 5
+                  && icom::edgeIndexFor(mk2Tbw->highEdgesHz, 2500) == 0,
+              "edge indices are what goes in the packed BCD nibbles");
+
+        // AN UNREAD MODEL GETS NOTHING, so setTxFilter() declines rather than
+        // writing a passband into whatever SET item happens to share the number.
+        check(!icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xA2)),
+              "the IC-9700 has no TBW profile and must not borrow one");
+        check(!icom::txBandwidthProfileFor(icom::unknownModel()),
+              "and neither does an unrecognised radio");
+    }
     check(AetherSDR::icom::modelForCivAddress(0xA4)->hasWifi,
           "the IC-705 does — the one model the WLAN check is legitimate for");
 
