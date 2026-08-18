@@ -715,6 +715,37 @@ int main(int argc, char** argv)
                  "profile store: delete with ../ removes nothing outside the store");
     QFile::remove(appConfigDir + "/planted.xml");
 
+    // A legacy file whose name the guard refuses (backslash is a legal Unix
+    // filename character, and the pre-guard GUI could create it) must not
+    // list: the list may only hand out names load/delete will serve. The
+    // file itself stays on disk.
+#ifndef Q_OS_WIN
+    {
+        QFile legacy(appConfigDir + "/midi/back\\slash.xml");
+        QDir().mkpath(appConfigDir + "/midi");
+        if (legacy.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            legacy.write("<MidiProfile version=\"1\">"
+                         "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\""
+                         " number=\"7\" inverted=\"False\"/></MidiProfile>\n");
+            legacy.close();
+        }
+    }
+    ok &= expect(!settings.availableProfiles().contains("back\\slash"),
+                 "profile store: a legacy separator-named file does not list");
+    ok &= expect(QFile::exists(appConfigDir + "/midi/back\\slash.xml"),
+                 "profile store: the unlisted legacy file stays on disk");
+    QFile::remove(appConfigDir + "/midi/back\\slash.xml");
+#endif
+
+    // An import whose file name derives a refused store name ("...map" ->
+    // "..") falls back to the default name instead of surfacing a
+    // misleading write error.
+    const auto rDotsName = settings.importProfile(
+        writeImportFile("...map", mapContent), validator);
+    ok &= expect(rDotsName.ok()
+                     && rDotsName.profileName.startsWith("Imported profile"),
+                 "import: a refused derived name falls back to the default");
+
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();
 

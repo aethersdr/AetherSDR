@@ -633,12 +633,19 @@ QStringList MidiSettings::availableProfiles() const
 {
     QDir dir(profileDir());
     QStringList result;
-    for (const auto& fi : dir.entryInfoList({"*.xml"}, QDir::Files))
+    for (const auto& fi : dir.entryInfoList({"*.xml"}, QDir::Files)) {
         // completeBaseName(), not baseName(): the writers below append exactly
         // one ".xml", so the reader must strip exactly one extension —
         // baseName() cuts at the FIRST dot, so a dotted name ("CTR2 v1.0")
         // listed truncated and could then never be loaded. (#4974)
-        result.append(fi.completeBaseName());
+        const QString name = fi.completeBaseName();
+        // List only names the other three operations will serve: a legacy
+        // file whose name the store now refuses (e.g. a backslash, legal in
+        // Unix filenames and creatable by the pre-guard GUI) would otherwise
+        // list but never load or delete. The file itself stays on disk.
+        if (isValidProfileName(name))
+            result.append(name);
+    }
     return result;
 }
 
@@ -759,7 +766,10 @@ MidiImportResult MidiSettings::importProfile(
     // and the store rejects separator-bearing names itself (#4975), so a name
     // taken from anywhere else is guarded too.
     QString name = QFileInfo(filePath).completeBaseName().trimmed();
-    if (name.isEmpty())
+    // Not just isEmpty(): a file named "...map" derives ".." here, which the
+    // store rightly refuses — without this fallback the refusal surfaces as a
+    // misleading "couldn't write" error instead of a stored profile.
+    if (!isValidProfileName(name))
         name = QStringLiteral("Imported profile");
     const QStringList existing = availableProfiles();
     const auto taken = [&existing](const QString& candidate) {
