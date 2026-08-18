@@ -11,13 +11,20 @@
 #include "core/backends/hl2/Hl2Bands.h"
 
 #include "core/backends/SliceDelta.h"
+#include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
+#include <QHostAddress>
 #include <QJsonObject>
 #include <QEventLoop>
+#include <QNetworkDatagram>
 #include <QObject>
+#include <QSignalSpy>
 #include <QTimer>
+#include <QUdpSocket>
 #include <QVariantMap>
+
+#include <cstdint>
 
 #include <iostream>
 #include <map>
@@ -55,6 +62,68 @@ RadioConnectRequest hl2Request(const QString& serial, int numRx = 1)
     if (numRx > 1)
         req.params.insert(QStringLiteral("numRx"), numRx);
     return req;
+}
+
+// A fake HL2 on loopback, answering every EP2 with an EP6.
+//
+// Needed by exactly the cases that read a RESTORED value back out of
+// currentOperatingState(). That accessor reports the LIVE receiver, and the
+// restore only reaches the receiver in pushInitialState(), which Hl2Backend
+// runs from MetisClient::linkUp — the FIRST EP6. A connect to TEST-NET-1 (what
+// hl2Request() builds, and what every case here that only needs connectRadio()
+// to have run uses) never gets one, so an unlinked backend answers
+// currentOperatingState() with the receiver's construction defaults no matter
+// what was restored into it. Asserting a restored passband against that reads
+// as a product bug and is really the test never having reached the code.
+//
+// Same shape as hl2_backend_test's fake: the packet only has to be well-formed
+// enough for MetisClient to call it a link.
+struct FakeHl2Radio {
+    QUdpSocket socket;
+    std::uint32_t seq = 0;
+
+    static QByteArray ep6(std::uint32_t s)
+    {
+        QByteArray p(static_cast<int>(hl2::kUsbPacketSize), 0);
+        auto* b = reinterpret_cast<std::uint8_t*>(p.data());
+        b[0] = 0xEF; b[1] = 0xFE; b[2] = 0x01; b[3] = 0x06;
+        b[4] = static_cast<std::uint8_t>(s >> 24);
+        b[5] = static_cast<std::uint8_t>(s >> 16);
+        b[6] = static_cast<std::uint8_t>(s >> 8);
+        b[7] = static_cast<std::uint8_t>(s);
+        b[8] = b[9] = b[10] = 0x7F;
+        b[8 + hl2::kFrameSize] = b[9 + hl2::kFrameSize] = b[10 + hl2::kFrameSize] = 0x7F;
+        return p;
+    }
+
+    bool bind()
+    {
+        if (!socket.bind(QHostAddress::LocalHost, 0))
+            return false;
+        QObject::connect(&socket, &QUdpSocket::readyRead, &socket, [this] {
+            while (socket.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = socket.receiveDatagram();
+                socket.writeDatagram(ep6(seq++), dg.senderAddress(), dg.senderPort());
+            }
+        });
+        return true;
+    }
+
+    quint16 port() { return socket.localPort(); }
+};
+
+// Connect to a fake radio and wait for the link, so pushInitialState() has run
+// and currentOperatingState() describes a seeded receiver. Bounded, so a
+// backend that never links fails the check rather than hanging the suite.
+bool linkUpConnect(hl2::Hl2Backend& backend, FakeHl2Radio& radio, const QString& serial)
+{
+    QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
+    RadioConnectRequest req;
+    req.host = QStringLiteral("127.0.0.1");
+    req.port = radio.port();
+    req.serial = serial;
+    backend.connectRadio(req);
+    return connectedSpy.wait(120'000) || !connectedSpy.isEmpty();
 }
 
 // Let a connect finish before issuing the next one.
@@ -679,17 +748,32 @@ int main(int argc, char** argv)
     // clientSettingsDomain, so those old pairs are on operators' disks. Replayed
     // they get the BFO added a second time and the demodulator opens a whole
     // pitch above the marker — silence, which capture then writes back.
+    //
+    // Read back through a LINKED backend. currentOperatingState() reports the
+    // live receiver, and applyRestoredState() only validates into
+    // m_restoredState — pushInitialState() is what copies the survivor onto the
+    // receiver, and it runs on the first EP6. Asserted against an unlinked
+    // backend these three read the receiver's construction defaults instead,
+    // which is 0..0 for every case and so fails all three no matter what the
+    // guard does. That is how they were written and they have been red on main
+    // since #4914 (no unfiltered ctest gate catches it — #5032).
     {
+        FakeHl2Radio radio;
+        check(radio.bind(), "the fake radio for the CW guard binds");
+
         hl2::Hl2Backend backend;
         RestoredRadioState stale;
         stale.mode = QStringLiteral("CWU");
         stale.filterLowHz  = 350.0;    // the old audio-relative domain
         stale.filterHighHz = 850.0;
         backend.applyRestoredState(stale);
+        check(linkUpConnect(backend, radio, QStringLiteral("AA:BB:CC:DD:EE:01")),
+              "the CW-guard backend links up");
 
         const RestoredRadioState snap = backend.currentOperatingState();
         check(snap.filterLowHz < 0.0 && snap.filterHighHz > 0.0,
               "a pre-#4914 CW passband is dropped for one that contains the carrier");
+        backend.disconnectRadio();
 
         // The same pair under a NON-CW mode is legitimate and must survive:
         // the guard keys on the mode, not on the numbers.
@@ -699,9 +783,12 @@ int main(int argc, char** argv)
         ssb.filterLowHz  = 350.0;
         ssb.filterHighHz = 850.0;
         usb.applyRestoredState(ssb);
+        check(linkUpConnect(usb, radio, QStringLiteral("AA:BB:CC:DD:EE:02")),
+              "the USB backend links up");
         const RestoredRadioState usbSnap = usb.currentOperatingState();
         check(usbSnap.filterLowHz == 350.0 && usbSnap.filterHighHz == 850.0,
               "a one-sided passband under USB is untouched by the CW guard");
+        usb.disconnectRadio();
 
         // And a NEW-domain CW pair must pass through unchanged, or the guard
         // would be rewriting the operator's own width on every connect.
@@ -711,9 +798,12 @@ int main(int argc, char** argv)
         fresh.filterLowHz  = -150.0;
         fresh.filterHighHz =  150.0;
         cw.applyRestoredState(fresh);
+        check(linkUpConnect(cw, radio, QStringLiteral("AA:BB:CC:DD:EE:03")),
+              "the new-domain CW backend links up");
         const RestoredRadioState cwSnap = cw.currentOperatingState();
         check(cwSnap.filterLowHz == -150.0 && cwSnap.filterHighHz == 150.0,
               "a new-domain CW passband survives the guard unchanged");
+        cw.disconnectRadio();
     }
 
     // ---- the flat AGC model, across more than one receiver -----------------
