@@ -225,6 +225,8 @@ private:
     // They are deliberately independent of speech-stop timing.
     std::vector<double> m_commonReferencePsd;
     std::vector<double> m_residualReferencePsd;
+    std::vector<double> m_residualReferenceGainRatio;
+    std::vector<std::uint8_t> m_residualReferenceValid;
     std::vector<std::uint8_t> m_commonNoiseLike;
     double m_commonReferenceAlpha{0.0};
     double m_commonScaleAlpha{0.0};
@@ -313,7 +315,7 @@ private:
     void applyCommonModeNoiseEstimate();
     void scalePowerHistory(double ratio,
                            const std::vector<std::uint8_t>* binMask = nullptr);
-    void updateResidualReference();
+    void updateResidualReference(double gainMax, bool afterCap);
 
     // Spectral gain computation (dispatches on m_gainMethod)
     void computeGain();

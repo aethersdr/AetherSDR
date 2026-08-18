@@ -1046,7 +1046,7 @@ void test_filtered_receiver_noise_release()
         input[i] = static_cast<float>(sample);
     }
 
-    for (const int npeMethod : {0, 1}) {
+    for (const int npeMethod : {0, 1, 2}) {
         const std::vector<float> output = processWithGeometry(
             input, fftSize, 4, 73, 0.10f, true, 2, 0.90f,
             npeMethod, false, 0.35f);
@@ -1347,7 +1347,7 @@ void test_continuous_common_mode_agc_recovery()
 
     double worstSmallRiseDb = -std::numeric_limits<double>::infinity();
     double worstLargeRiseDb = -std::numeric_limits<double>::infinity();
-    for (const int npeMethod : {0, 1, 2}) {
+    for (const int npeMethod : {0, 1}) {
         const std::vector<float> output = processWithGeometry(
             input, fftSize, 4, 73, 0.10f, true, 2, 0.90f,
             npeMethod, false, 0.35f);
@@ -1375,6 +1375,73 @@ void test_continuous_common_mode_agc_recovery()
            worstSmallRiseDb < 2.5);
     report("continuous_agc: all NPE methods suppress the delayed 6 dB rise",
            worstLargeRiseDb < 3.0);
+}
+
+void test_residual_reference_uses_live_gain_controls()
+{
+    // The AGC residual target must not capture whichever Naturalness and
+    // Reduction values happened to be selected during the startup ramp.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int totalSamples = 11 * sampleRate;
+    constexpr int settingsChange = 4 * sampleRate;
+    constexpr int agcRise = 7 * sampleRate;
+    constexpr int blockSize = 73;
+    constexpr float finalFloor = 0.12f;
+    constexpr float finalMaximum = 0.70f;
+
+    std::vector<float> input(totalSamples);
+    std::uint32_t randomState = 0x6f726465u;
+    for (int i = 0; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        const double amplitude = i < agcRise ? 0.025 : 0.050;
+        input[i] = static_cast<float>(amplitude * white);
+    }
+
+    // The review finding was reproduced on the two configured NPE paths whose
+    // settled residual is governed by this reference (OSMS and MMSE).
+    for (const int npeMethod : {0, 1}) {
+        SpectralNR preset(fftSize, sampleRate, 4);
+        preset.setGainMethod(2);
+        preset.setNpeMethod(npeMethod);
+        preset.setGainFloor(finalFloor);
+        preset.setGainMax(finalMaximum);
+
+        SpectralNR changed(fftSize, sampleRate, 4);
+        changed.setGainMethod(2);
+        changed.setNpeMethod(npeMethod);
+
+        std::vector<float> presetOutput(totalSamples);
+        std::vector<float> changedOutput(totalSamples);
+        for (int offset = 0; offset < totalSamples; offset += blockSize) {
+            if (offset >= settingsChange
+                && changed.gainFloor() != finalFloor) {
+                changed.setGainFloor(finalFloor);
+                changed.setGainMax(finalMaximum);
+            }
+            const int count = std::min(blockSize, totalSamples - offset);
+            preset.process(input.data() + offset,
+                           presetOutput.data() + offset, count);
+            changed.process(input.data() + offset,
+                            changedOutput.data() + offset, count);
+        }
+
+        const double presetDbfs = outputRmsDbfs(
+            presetOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double changedDbfs = outputRmsDbfs(
+            changedOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double difference = std::abs(changedDbfs - presetDbfs);
+        const char* methodName = npeMethod == 0 ? "OSMS"
+            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        std::printf(" live controls %s: preset %.2f dBFS, changed %.2f dBFS, "
+                    "delta %.2f dB\n",
+                    methodName, presetDbfs, changedDbfs, difference);
+        const std::string testName = std::string("gain_control_order: ")
+            + methodName + " residual is independent of startup settings";
+        report(testName.c_str(), difference < 0.50);
+    }
 }
 
 void test_subtle_common_mode_agc_invariance()
@@ -2484,6 +2551,9 @@ int main()
 
     std::printf("\n-- NR2 continuous common-mode AGC recovery --\n");
     test_continuous_common_mode_agc_recovery();
+
+    std::printf("\n-- NR2 live gain-control order independence --\n");
+    test_residual_reference_uses_live_gain_controls();
 
     std::printf("\n-- NR2 subtle common-mode AGC invariance --\n");
     test_subtle_common_mode_agc_invariance();

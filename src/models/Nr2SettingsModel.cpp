@@ -67,8 +67,6 @@ QJsonObject toJson(const Nr2SettingsModel::Config& config)
 Nr2SettingsModel::Config fromJson(const QJsonObject& object)
 {
     Nr2SettingsModel::Config config = Nr2SettingsModel::defaults();
-    config.version = object.value(QStringLiteral("version"))
-                         .toInt(Nr2SettingsModel::kConfigVersion);
     config.enabled = object.value(QStringLiteral("enabled"))
                          .toBool(config.enabled);
     config.gainMethod = object.value(QStringLiteral("gainMethod"))

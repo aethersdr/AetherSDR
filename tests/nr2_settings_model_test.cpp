@@ -31,6 +31,38 @@ bool nearlyEqual(float lhs, float rhs)
     return std::abs(lhs - rhs) < 1.0e-5f;
 }
 
+bool runChildProfile(const QString& argument)
+{
+    constexpr int kChildTimeoutMs = 5000;
+    QProcess process;
+    process.start(QCoreApplication::applicationFilePath(), {argument});
+    if (!process.waitForStarted(kChildTimeoutMs)) {
+        std::fprintf(stderr, "Child %s did not start: %s\n",
+                     argument.toUtf8().constData(),
+                     process.errorString().toUtf8().constData());
+        return false;
+    }
+    if (!process.waitForFinished(kChildTimeoutMs)) {
+        process.kill();
+        process.waitForFinished(kChildTimeoutMs);
+        std::fprintf(stderr, "Child %s timed out: %s\n",
+                     argument.toUtf8().constData(),
+                     process.errorString().toUtf8().constData());
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit
+        || process.exitCode() != 0) {
+        std::fprintf(stderr,
+                     "Child %s failed: status=%d code=%d error=%s\n",
+                     argument.toUtf8().constData(),
+                     static_cast<int>(process.exitStatus()),
+                     process.exitCode(),
+                     process.errorString().toUtf8().constData());
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -52,15 +84,40 @@ int main(int argc, char* argv[])
         return g_failures == 0 ? 0 : 1;
     }
 
-    QProcess cleanProfileProcess;
-    cleanProfileProcess.start(
-        QCoreApplication::applicationFilePath(),
-        {QStringLiteral("--clean-profile")});
-    const bool cleanProfileFinished = cleanProfileProcess.waitForFinished();
-    expect(cleanProfileFinished
-               && cleanProfileProcess.exitStatus() == QProcess::NormalExit
-               && cleanProfileProcess.exitCode() == 0,
+    if (app.arguments().contains(QStringLiteral("--v1-profile"))) {
+        AppSettings& v1Settings = AppSettings::instance();
+        v1Settings.load();
+        const QJsonObject v1Object{
+            {QStringLiteral("version"), 1},
+            {QStringLiteral("enabled"), true},
+            {QStringLiteral("gainMethod"), 1},
+            {QStringLiteral("gainFloor"), 0.12},
+        };
+        v1Settings.setValue(
+            QStringLiteral("NR2"),
+            QString::fromUtf8(QJsonDocument(v1Object).toJson(
+                QJsonDocument::Compact)));
+        v1Settings.save();
+
+        const Nr2SettingsModel::Config migrated =
+            Nr2SettingsModel::instance().config();
+        expect(migrated.version == Nr2SettingsModel::kConfigVersion,
+               "a v1 JSON object migrates to the current schema");
+        expect(migrated.enabled && migrated.gainMethod == 1
+                   && nearlyEqual(migrated.gainFloor, 0.12f),
+               "v1 JSON migration preserves recognized settings");
+        const QJsonDocument persisted = QJsonDocument::fromJson(
+            v1Settings.value(QStringLiteral("NR2")).toString().toUtf8());
+        expect(persisted.object().value(QStringLiteral("version")).toInt()
+                   == Nr2SettingsModel::kConfigVersion,
+               "v1 JSON migration rewrites the persisted schema version");
+        return g_failures == 0 ? 0 : 1;
+    }
+
+    expect(runChildProfile(QStringLiteral("--clean-profile")),
            "a fresh settings profile reports the current schema version");
+    expect(runChildProfile(QStringLiteral("--v1-profile")),
+           "a version-1 JSON profile migrates without losing settings");
 
     AppSettings& settings = AppSettings::instance();
     settings.load();

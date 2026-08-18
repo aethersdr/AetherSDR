@@ -432,6 +432,8 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
     m_nstatNoisePsd.resize(m_msize);
     m_commonReferencePsd.resize(m_msize);
     m_residualReferencePsd.resize(m_msize);
+    m_residualReferenceGainRatio.resize(m_msize, 1.0);
+    m_residualReferenceValid.resize(m_msize, 0);
     m_commonNoiseLike.resize(m_msize, 0);
 
     m_actMinBuf.resize(m_U);
@@ -564,6 +566,10 @@ void SpectralNR::reset()
               m_commonReferencePsd.end(), 0.0);
     std::fill(m_residualReferencePsd.begin(),
               m_residualReferencePsd.end(), 0.0);
+    std::fill(m_residualReferenceGainRatio.begin(),
+              m_residualReferenceGainRatio.end(), 1.0);
+    std::fill(m_residualReferenceValid.begin(),
+              m_residualReferenceValid.end(), 0);
     std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 0);
 
     for (auto& v : m_actMinBuf)
@@ -967,7 +973,9 @@ bool SpectralNR::updateMaskFromCurrentFrame()
     // not by speech-stop state or a release timer.
     detectCommonModeScale();
 
-    // Selected noise-floor estimator.
+    // This order is load-bearing: NSTAT updates the common-mode classification
+    // maps consumed by applyCommonModeNoiseEstimate(), even when another NPE
+    // method is selected for the actual noise floor.
     estimateNoise();
     applyCommonModeNoiseEstimate();
 
@@ -983,6 +991,11 @@ bool SpectralNR::updateMaskFromCurrentFrame()
     // would otherwise pass proportionally louder post-AGC static.
     const double gainMax = std::max(0.0, m_gainMax.load());
     const double gainFloor = std::clamp(m_gainFloor.load(), 0.0, gainMax);
+    // Capture an estimator-level residual target before either the AGC cap or
+    // the user gain controls are applied. The current Naturalness/Reduction
+    // values are folded into that target below, so changing either control
+    // after startup has the same result as selecting it before audio starts.
+    updateResidualReference(gainMax, false);
     // Preserve the residual headroom used by the original AGC-release path.
     // The stored PSD is an upper-envelope target captured while the estimator
     // is converging; reproducing it at unity makes the recovered static
@@ -996,14 +1009,22 @@ bool SpectralNR::updateMaskFromCurrentFrame()
         if (m_commonNoiseLike[k] != 0) {
             const double noisePsd = std::max({m_noisePsd[k], EpsFloor,
                 m_commonReferencePsd[k] * m_commonDetectedScale});
+            const double referenceGain = std::clamp(
+                m_residualReferenceGainRatio[k] * gainMax,
+                gainFloor, gainMax);
             const double residualPsd = std::max(
-                m_residualReferencePsd[k], EpsFloor);
+                referenceGain * referenceGain
+                    * m_residualReferencePsd[k],
+                EpsFloor);
             const double residualHeadroom = m_commonSilenceRecoveryContext
                 ? 1.0
                 : kCommonResidualHeadroom;
             const double residualGainCap = residualHeadroom
                 * std::sqrt(std::clamp(
                     residualPsd / noisePsd, 0.0, 1.0));
+            // Naturalness participates in the pre-change referenceGain above;
+            // scale that user-selected residual with the receiver level rather
+            // than treating the startup value as a permanently absolute floor.
             frameGainFloor = std::min(frameGainFloor, residualGainCap);
             frameGainMax = std::min(gainMax, std::max(
                 frameGainFloor, residualGainCap));
@@ -1031,7 +1052,10 @@ bool SpectralNR::updateMaskFromCurrentFrame()
                         + (1.0 - smoothing) * m_mask[k];
     }
 
-    updateResidualReference();
+    // Exact silence can postpone the first usable target until after startup.
+    // In that case preserve the established silence-recovery behavior by
+    // seeding from the already-capped output mask, not reset-time unity.
+    updateResidualReference(gainMax, true);
 
     // Startup ramp: crossfade from dry (gain=1) to processed over ~1 second
     // to avoid transients while the noise estimator converges.
@@ -1528,7 +1552,12 @@ void SpectralNR::detectCommonModeScale()
             m_commonScaleLog = m_commonScaleAlpha * m_commonScaleLog
                 + (1.0 - m_commonScaleAlpha) * instantaneousLogScale;
             m_commonDetectedScale = std::exp(m_commonScaleLog);
-            fineCommonRise = m_commonDetectedScale > 1.0;
+            // A bare >1 comparison lets ordinary periodogram variance engage
+            // the residual controller on stationary noise. Require 0.2 dB of
+            // coherent power motion before treating the fine estimate as AGC.
+            constexpr double kFineCommonRisePowerRatio = 1.0471285480508996;
+            fineCommonRise =
+                instantaneousScale > kFineCommonRisePowerRatio;
             if (m_commonReturnScale < kReturnQuietScaleMax
                 && instantaneousScale >= kReturnStartingScaleMin) {
                 // A down-scale followed by raw scale ~= 1 is a return to the
@@ -1678,18 +1707,33 @@ void SpectralNR::scalePowerHistory(
     }
 }
 
-void SpectralNR::updateResidualReference()
+void SpectralNR::updateResidualReference(double gainMax, bool afterCap)
 {
     for (int k = 0; k < m_msize; ++k) {
-        const double residualPsd = m_smoothMask[k] * m_smoothMask[k]
-            * std::max(m_noisePsd[k], EpsFloor);
-        if (m_frameCount < m_rampFrames
-            || m_residualReferencePsd[k] <= EpsFloor) {
-            // This is an output-level ceiling, not a second noise estimator.
-            // Seed it while the fail-open startup ramp converges, then keep it
-            // fixed so later AGC or estimator changes cannot teach a louder
-            // residual into the protected target.
-            m_residualReferencePsd[k] = residualPsd;
+        const bool startupSeed = m_frameCount < m_rampFrames && !afterCap;
+        const bool lateSeed = m_frameCount >= m_rampFrames && afterCap
+            && m_residualReferenceValid[k] == 0;
+        if (startupSeed || lateSeed) {
+            const double sourceGain = lateSeed ? m_smoothMask[k] : m_mask[k];
+            const double gainRatio = gainMax > EpsFloor
+                ? std::clamp(sourceGain / gainMax, 0.0, 1.0)
+                : 0.0;
+            if (lateSeed) {
+                m_residualReferenceGainRatio[k] = gainRatio;
+            } else {
+                const double smoothing = m_gainSmooth.load();
+                m_residualReferenceGainRatio[k] = smoothing
+                        * m_residualReferenceGainRatio[k]
+                    + (1.0 - smoothing) * gainRatio;
+            }
+            // Keep the estimator-level noise PSD separate from gain. The live
+            // user floor/cap is deliberately not baked into either value.
+            const double noisePsd = std::max(m_noisePsd[k], EpsFloor);
+            const double outputPsd = sourceGain * sourceGain * noisePsd;
+            if (outputPsd > EpsFloor) {
+                m_residualReferencePsd[k] = noisePsd;
+                m_residualReferenceValid[k] = 1;
+            }
         }
     }
 }
@@ -2102,7 +2146,6 @@ void SpectralNR::estimateNoiseNstat()
             m_commonSilenceRecoveryContext = false;
         }
     }
-
 }
 
 // ─── Artifact Elimination Filter ──────────────────────────────────────────────

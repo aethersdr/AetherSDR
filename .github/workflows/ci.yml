@@ -286,6 +286,12 @@ jobs:
       - name: Test MIDI settings and profile import/export
         run: ctest --test-dir build -R "^midi_settings_test$" --output-on-failure
 
+      # NR2's AGC recovery and settings migration claims are deterministic,
+      # headless, and already built by the Linux `all` target. Run them on PRs
+      # so a compiled-but-unexecuted regression cannot merge unnoticed.
+      - name: Test NR2 DSP and settings migration
+        run: ctest --test-dir build -R "^(spectral_nr|nr2_settings_model)_test$" --output-on-failure
+
       # Restored after #4877 bounded FFTW planning for every test. This step was
       # previously 188-190 s on a cold runner; it now measures ~3 s while still
       # exercising six four-second AM/SAM audio bursts through the real HL2 DSP.
