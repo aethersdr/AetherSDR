@@ -3799,12 +3799,41 @@ endforeach()
 # cannot be escaped by a future test under any name.
 #
 # To re-check this hasn't regressed:
-#   XDG_CACHE_HOME=$(mktemp -d) ctest --test-dir build -j8
-#   find "$XDG_CACHE_HOME" -name wdsp-fftw-wisdom   # must print nothing
+#   ctest --test-dir build -j8 && \
+#     find "$HOME/.cache/aethersdr" -newer build/CMakeCache.txt   # must be empty
+set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
+
+# The isolation TU, compiled once and linked into every test target below. An
+# OBJECT library rather than STATIC on purpose: its only content is a
+# namespace-scope object whose CONSTRUCTOR is the entire point, and a static
+# library's unreferenced object file can be dropped at link time, which would
+# silently remove the protection.
+add_library(aether_test_wisdom_isolation OBJECT
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/TestWdspWisdomIsolation.cpp)
+target_compile_definitions(aether_test_wisdom_isolation PRIVATE
+    AETHER_TEST_WISDOM_DIR="${AETHER_TEST_WISDOM_DIR}"
+    AETHER_TEST_FFTW_TIMELIMIT_STR="${AETHER_TEST_FFTW_TIMELIMIT}")
+
 get_property(_aether_registered_tests DIRECTORY PROPERTY TESTS)
+set(_aether_test_targets "")
 foreach(_aether_test IN LISTS _aether_registered_tests)
-    # APPEND, so the QT_QPA_PLATFORM=offscreen entries already set on the
-    # GUI-touching ones survive rather than being replaced.
+    # ctest ENVIRONMENT covers `ctest` runs and documents the values in
+    # CTestTestfile.cmake. APPEND, so the QT_QPA_PLATFORM=offscreen entries
+    # already set on the GUI-touching ones survive rather than being replaced.
     set_property(TEST ${_aether_test} APPEND PROPERTY ENVIRONMENT
-        "AETHER_WDSP_FFTW_TIMELIMIT=${AETHER_TEST_FFTW_TIMELIMIT}")
+        "AETHER_WDSP_FFTW_TIMELIMIT=${AETHER_TEST_FFTW_TIMELIMIT}"
+        "AETHER_WDSP_WISDOM_DIR=${AETHER_TEST_WISDOM_DIR}")
+    # ...and the linked-in initializer covers running the binary DIRECTLY, which
+    # ctest properties cannot reach and which is how a test is usually debugged.
+    if(TARGET ${_aether_test})
+        list(APPEND _aether_test_targets ${_aether_test})
+    endif()
+endforeach()
+# A target can back more than one registered test; link the TU once per target.
+list(REMOVE_DUPLICATES _aether_test_targets)
+foreach(_aether_target IN LISTS _aether_test_targets)
+    get_target_property(_aether_type ${_aether_target} TYPE)
+    if(_aether_type STREQUAL "EXECUTABLE")
+        target_link_libraries(${_aether_target} PRIVATE aether_test_wisdom_isolation)
+    endif()
 endforeach()

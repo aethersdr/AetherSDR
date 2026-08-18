@@ -357,6 +357,18 @@ end of `tests/tests.cmake`), which bounds the planner through
 app imports, **skips the wisdom export entirely while it is set**. One knob, so
 it is not possible to bound the planner and forget to isolate the cache.
 
+Two independent layers, because one was not enough. The planner bound stops the
+export; separately, `AETHER_WDSP_WISDOM_DIR` **redirects the cache path** to
+`<build>/test-fftw-wisdom`. Both are set by `tests/TestWdspWisdomIsolation.cpp`,
+a TU linked into every test target whose static initializer runs **before
+main()** — because a ctest `ENVIRONMENT` property only covers `ctest`, and
+running a test binary directly (`./build/hl2_rxdsp_test`, the normal way to
+debug one) inherits nothing and would export straight over the operator's real
+cache. Verified: full `ctest` with no isolation, and four binaries run directly
+with a scrubbed environment, all leave `~/.cache/aethersdr/wdsp-fftw-wisdom`
+byte-identical; forcing the unbounded escape hatch writes 15 KB into the build
+dir instead of the real cache.
+
 It is applied to *every* registered test rather than to an `hl2_*`/`wdsp_*` name
 prefix, which was the first attempt and leaked: `automation_connect_wait_phase_test`
 and `transmit_model_test` drive HL2 DSP without an `hl2_` name, ran unbounded, and

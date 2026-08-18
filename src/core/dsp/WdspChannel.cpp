@@ -51,6 +51,23 @@ std::string wisdomPath()
 {
     namespace fs = std::filesystem;
     fs::path dir;
+    // Explicit override, consulted before anything else. This exists so a TEST
+    // process can be pointed at a build-local cache and be structurally unable
+    // to reach the operator's real one — see tests/TestWdspWisdomIsolation.cpp,
+    // which sets it before main() so it holds for a test binary run DIRECTLY,
+    // not only for one launched through ctest.
+    //
+    // Redirecting beats suppressing the export: the tests keep a persistent
+    // cache of their own, so repeat runs import instead of re-measuring, and
+    // there is no "did we remember to disable writing" question left to get
+    // wrong. Never set by the app.
+    if (const char* override = std::getenv("AETHER_WDSP_WISDOM_DIR");
+        override != nullptr && *override != '\0') {
+        dir = override;
+        std::error_code overrideEc;
+        fs::create_directories(dir, overrideEc);   // best-effort
+        return (dir / "wdsp-fftw-wisdom").string();
+    }
 #ifdef _WIN32
     if (const char* la = std::getenv("LOCALAPPDATA")) dir = la;
 #else
