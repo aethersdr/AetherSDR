@@ -500,20 +500,25 @@ QString TciProtocol::generateInitBurst()
     burst += QStringLiteral("tx_stream_audio_buffering:50;");
     burst += QStringLiteral("iq_samplerate:48000;");
 
+    // START is a bidirectional device-state notification and belongs in the
+    // state dump, not after it: WSJT-X's TCITransceiver gates its
+    // frequency/PTT path on a "SDR switched on" flag fed only by START, and
+    // evaluates that flag at READY time. Emitting START after READY (as
+    // before) leaves the flag false when WSJT-X checks it (#5007). Real
+    // ExpertSDR3 emits START as part of the dump, before READY closes it.
+    // This does not disturb the argument-less audio_start/iq_start
+    // avoidance from #3913 (stream lifecycle commands are still never
+    // emitted here) or the READY-after-iq_samplerate ordering SDC/CW
+    // Skimmer need (#3498/#3502) — only START's position relative to READY
+    // changes.
+    burst += QStringLiteral("start;");
+
     // READY terminates the settings dump — it must follow EVERY setting
-    // (in particular iq_samplerate), because SDC / CW Skimmer reads its
-    // cached settings the moment READY arrives.  Matches real
+    // (in particular iq_samplerate and start), because SDC / CW Skimmer
+    // reads its cached settings the moment READY arrives.  Matches real
     // ExpertSDR3 behavior and the spec's READY definition ("sent after
     // the initialization commands").  Reported by Yuri UT4LW.
     burst += QStringLiteral("ready;");
-
-    // START is a bidirectional device-state notification. Stream lifecycle
-    // commands are client-owned: AUDIO_START and IQ_START require a receiver
-    // argument and are sent by the client after READY. Emitting the old
-    // argument-less audio_start primer here wedged SDC before it processed
-    // START, so its TCI connection never became active and it never requested
-    // the IQ stream used by the CW skimmer (#3913 test-build finding).
-    burst += QStringLiteral("start;");
 
     return burst;
 }
@@ -662,13 +667,13 @@ std::optional<TciProtocol::TrxRequest> TciProtocol::takeTrxRequest()
 QString TciProtocol::cmdStart()
 {
     m_started = true;
-    return {};
+    return QStringLiteral("start;");
 }
 
 QString TciProtocol::cmdStop()
 {
     m_started = false;
-    return {};
+    return QStringLiteral("stop;");
 }
 
 // ── VFO: get/set frequency ─────────────────────────────────────────────────
