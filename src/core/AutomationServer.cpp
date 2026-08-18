@@ -100,6 +100,25 @@ struct ResolvedAction {
     QPointer<QMenu> menu;
 };
 
+// The context object for the deferred-to-the-main-loop singleShot()s below.
+//
+// `qApp` is NOT usable here. Once <QApplication> is included this file gets the
+// QtWidgets spelling of the macro — static_cast<QApplication*>(instance()) —
+// and the bridge's own console tests construct a plain QCoreApplication. That
+// downcast is then undefined behaviour, and UBSan's vptr check makes it fatal:
+// automation_connect_family_test and automation_connect_wait_phase_test both
+// aborted inside doConnect() on the weekly sanitizers run, mid-test, so their
+// remaining assertions never ran at all.
+//
+// singleShot() only ever wants a QObject to take thread affinity and lifetime
+// from, which the application object is regardless of its concrete type. The
+// QApplication-ness was never used — every site below passed `qApp` straight
+// through as a QObject*.
+QObject* appContext()
+{
+    return QCoreApplication::instance();
+}
+
 // mark→tail correlation (#3756): doMark needs the seq/mono the log tap assigns
 // to the MARK message itself, not whatever m_logSeq/back() read afterward — a
 // concurrent logging thread can push between the qCInfo() and the re-lock. The
@@ -3913,7 +3932,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             // (#3646 fidelity — re-entrancy crash fix)
             QPointer<QAction> ag = menuAction;
             QPointer<QMenu> mg = menu;
-            QTimer::singleShot(0, qApp, [ag, mg]() {
+            QTimer::singleShot(0, appContext(), [ag, mg]() {
                 if (!ag) return;
                 // Activate the main window first so a menu action that opens a
                 // dialog / pops a menu has a valid active window (avoids the
@@ -4044,7 +4063,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                 action == QLatin1String("toggle") && b->isCheckable();
             QPointer<QAbstractButton> bg = b;
             QPointer<QWidget> win = b->window();
-            QTimer::singleShot(0, qApp, [bg, win, useToggle]() {
+            QTimer::singleShot(0, appContext(), [bg, win, useToggle]() {
                 if (!bg) return;
                 // Activate the button's window first so a popup menu it raises
                 // has a valid active window (backgrounded automation otherwise
@@ -5712,7 +5731,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
             QPointer<QObject> guard(conn->asQObject());
             QPointer<AutomationServer> self(this);
-            QTimer::singleShot(0, qApp, [guard, self, conn, selectedSerial] {
+            QTimer::singleShot(0, appContext(), [guard, self, conn, selectedSerial] {
                 if (!guard) {
                     return;
                 }
@@ -5742,7 +5761,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
                 QPointer<QObject> guard(conn->asQObject());
                 QPointer<AutomationServer> self(this);
-                QTimer::singleShot(0, qApp, [guard, self, conn, serial] {
+                QTimer::singleShot(0, appContext(), [guard, self, conn, serial] {
                     if (!guard) {
                         return;
                     }
@@ -5850,7 +5869,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
 
         QPointer<QObject> guard(conn->asQObject());
         QPointer<AutomationServer> self(this);
-        QTimer::singleShot(0, qApp, [guard, self, conn, target, family] {
+        QTimer::singleShot(0, appContext(), [guard, self, conn, target, family] {
             if (!guard) {
                 return;
             }
@@ -5897,7 +5916,7 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
     const bool wasVisible = conn && conn->automationDialogVisible();
     QPointer<QObject> guardedHost = host;
     QPointer<QObject> guard(conn ? conn->asQObject() : nullptr);
-    QTimer::singleShot(0, qApp, [guardedHost, guard, conn, show] {
+    QTimer::singleShot(0, appContext(), [guardedHost, guard, conn, show] {
         if (guardedHost) {
             const char* method = show ? "showConnectionDialog" : "hideConnectionDialog";
             if (QMetaObject::invokeMethod(guardedHost, method, Qt::DirectConnection)) {
@@ -5935,7 +5954,7 @@ QJsonObject AutomationServer::doDisconnect()
 
     QPointer<QObject> guard(conn->asQObject());
     QPointer<AutomationServer> self(this);
-    QTimer::singleShot(0, qApp, [guard, self, conn] {
+    QTimer::singleShot(0, appContext(), [guard, self, conn] {
         if (!guard) {
             return;
         }
@@ -8348,7 +8367,7 @@ QJsonObject AutomationServer::doClose(const QString& target) const
     const QString title = win->windowTitle();
     const QString cls = shortClassName(win);
     QPointer<QWidget> wg = win;
-    QTimer::singleShot(0, qApp, [wg]() {
+    QTimer::singleShot(0, appContext(), [wg]() {
         if (wg) wg->close();
     });
     qCInfo(lcAutomation).noquote() << "close window for" << target << "(" << cls << ")";
@@ -9063,7 +9082,7 @@ QJsonObject AutomationServer::doShowMenu(const QString& target) const
     QPointer<QMenu> mg = menu;
     QPointer<QWidget> bg = w;
     QPointer<QWidget> win = w->window();
-    QTimer::singleShot(0, qApp, [mg, bg, win]() {
+    QTimer::singleShot(0, appContext(), [mg, bg, win]() {
         if (!mg || !bg)
             return;
         if (win && win->isVisible()) {   // realize + activate so Cocoa has an anchor
@@ -9160,7 +9179,7 @@ QJsonObject AutomationServer::postDeferredMenuTrigger(
 
     QPointer<QWidget> wp = w;
     QPointer<QWidget> win = w->window();
-    QTimer::singleShot(0, qApp, [wp, win, local, send = std::move(send)]() {
+    QTimer::singleShot(0, appContext(), [wp, win, local, send = std::move(send)]() {
         if (!wp)
             return;
         if (win && win->isVisible()) {   // realize + activate so Cocoa has an anchor
@@ -9400,7 +9419,7 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     if (transmitControl) {
         markTxBridgeInitiated();
     }
-    QTimer::singleShot(0, qApp, [wp, win, local, global]() {
+    QTimer::singleShot(0, appContext(), [wp, win, local, global]() {
         if (!wp)
             return;
         raiseWindowForPopup(win);  // valid active window for any popup it raises
