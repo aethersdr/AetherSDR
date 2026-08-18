@@ -1019,7 +1019,21 @@ public:
             return false;
 
         TciServer server(&model);
+        // In production this runs at session setup (MainWindow_Session.cpp),
+        // which is what makes frequencyChanged -> broadcastSliceFrequencies()
+        // live for a real move; without it this test would only ever exercise
+        // tuneSliceAndConfirm's own explicit confirmation, never the automatic
+        // path it now defers to on channel 0 (#5086).
+        server.wireSlice(0, slice);
         QWebSocket client;
+        // broadcastSliceFrequencies() bails early on an empty m_clients (it
+        // has no client to send to yet), unlike the explicit confirmation
+        // below it, which broadcast()s unconditionally. A registered client
+        // is what makes the automatic path observable here at all.
+        QWebSocket sock;
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
 
         QStringList sent;
         QObject::connect(&server, &TciServer::tciMessage,
@@ -1130,6 +1144,60 @@ public:
         const long long parked = TciProtocol::mhzToHz(slice->frequency());
         server.tuneSliceAndConfirm(&client, 0, 0, 0, parked);
         return sent.contains(QStringLiteral("vfo:0,0,%1;").arg(parked));
+    }
+
+    // #5086: a channel-0 SET that actually moves the frequency is already
+    // broadcast once by frequencyChanged -> broadcastSliceFrequencies(),
+    // fired synchronously inside setFrequency()/tuneAndRecenter() before
+    // tuneSliceAndConfirm's own confirmation runs. Sending it again produced
+    // two near-simultaneous vfo: frames for the same value, suspected of
+    // racing a TCI client's own frequency-restore scheduler (intermittent RX
+    // frequency drift on WSJT-X "Fake It" split, after a TX/RX cycle). Exactly
+    // one vfo:0,0,<hz>; must reach the wire per real move, not two.
+    static bool vfoSetChannelZeroBroadcastsExactlyOnce()
+    {
+        RadioModel model;
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error))
+            return false;
+        SliceModel* slice = model.slice(0);
+        if (!slice)
+            return false;
+
+        TciServer server(&model);
+        // Matches production session setup (MainWindow_Session.cpp): without
+        // this, frequencyChanged -> broadcastSliceFrequencies() is never
+        // live, and the test can't observe the duplicate this fix removes.
+        server.wireSlice(0, slice);
+        QWebSocket client;
+        // broadcastSliceFrequencies() bails early on an empty m_clients,
+        // unlike the explicit confirmation, which broadcast()s
+        // unconditionally — a registered client makes the automatic path
+        // observable here at all.
+        QWebSocket sock;
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx"))
+                sent << msg.trimmed();
+        });
+
+        const long long want = TciProtocol::mhzToHz(slice->frequency()) - 1000;
+        server.tuneSliceAndConfirm(&client, 0, 0, 0, want);
+
+        const QString expected = QStringLiteral("vfo:0,0,%1;").arg(want);
+        const int occurrences = sent.count(expected);
+        if (occurrences != 1) {
+            std::printf("      expected exactly one %s, saw %d (sent: %s)\n",
+                        qPrintable(expected), occurrences,
+                        qPrintable(sent.join(QStringLiteral(" "))));
+            return false;
+        }
+        return true;
     }
 
     // #4744: switching from resampled TCI RX to native rate carries staged
@@ -1276,6 +1344,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::vfoSetConfirmsTruthWhenRefused();
     const bool vfoAcksNoOp
         = AetherSDR::TciServerReviewTest::vfoSetAcknowledgesANoOp();
+    const bool vfoChannelZeroOnce
+        = AetherSDR::TciServerReviewTest::vfoSetChannelZeroBroadcastsExactlyOnce();
     const bool txTrxResets
         = AetherSDR::TciServerReviewTest::lastTxTrxResetsOnClose();
     const bool activeSliceSeed
@@ -1336,6 +1406,9 @@ int main(int argc, char** argv)
                 vfoConfirmsRefusal ? "PASS" : "FAIL");
     std::printf("%s  vfo: SET still acknowledges a no-op\n",
                 vfoAcksNoOp ? "PASS" : "FAIL");
+    std::printf("%s  vfo: SET on channel 0 broadcasts exactly once per move "
+                "(#5086)\n",
+                vfoChannelZeroOnce ? "PASS" : "FAIL");
     std::printf("%s  PTT route log shows the cache disagreeing with live TX "
                 "(#4547)\n",
                 routeLogStaleCache ? "PASS" : "FAIL");
@@ -1355,6 +1428,7 @@ int main(int argc, char** argv)
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
+        && vfoChannelZeroOnce
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload
         ? 0 : 1;
