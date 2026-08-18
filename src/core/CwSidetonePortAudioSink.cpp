@@ -60,8 +60,26 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
         }
     }
 
-    if (partials.isEmpty())
+    if (partials.isEmpty()) {
+        // Name every output-capable candidate so field reports show what was
+        // available to match, not just that nothing did (#4978). Failure-path
+        // only — the second enumeration costs nothing on a successful match.
+        QStringList candidates;
+        for (PaDeviceIndex i = 0; i < count; ++i) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+            if (!info || info->maxOutputChannels <= 0 || !info->name)
+                continue;
+            const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+            candidates << QStringLiteral("\"%1\" [%2]")
+                              .arg(QString::fromUtf8(info->name),
+                                   api && api->name ? QString::fromUtf8(api->name)
+                                                    : QStringLiteral("?"));
+        }
+        qCWarning(lcAudio) << "CwSidetonePortAudioSink: no PortAudio output matches"
+                           << device.description()
+                           << "- candidates:" << qUtf8Printable(candidates.join(QStringLiteral(", ")));
         return paNoDevice;
+    }
 
     if (partials.size() == 1) {
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
@@ -91,9 +109,13 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
     }
 #endif
 
+    QStringList matchedNames;
+    for (const Candidate& c : partials)
+        matchedNames << QStringLiteral("\"%1\"").arg(c.rawName);
     qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                        << device.description()
-                       << "matched multiple PortAudio outputs";
+                       << "matched multiple PortAudio outputs:"
+                       << qUtf8Printable(matchedNames.join(QStringLiteral(", ")));
     return paNoDevice;
 }
 
