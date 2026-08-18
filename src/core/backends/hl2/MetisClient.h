@@ -29,8 +29,8 @@ namespace AetherSDR::hl2 {
 // the GUI thread, any GUI stall long enough to miss it would wedge the radio --
 // after which the board stops answering discovery until it is power-cycled.
 //
-// RX-ONLY: every C&C it sends comes from MetisProtocol's even-C0 encoders, so
-// the MOX bit is never set — this class cannot key the radio.
+// TX remains fail-closed: enableTransmit() must explicitly open the final wire
+// gate before either MOX or transmit samples can leave this object.
 class MetisClient : public QObject {
     Q_OBJECT
 
@@ -211,6 +211,15 @@ public:
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
 
+    // Software CW for a PC/USB/MIDI keyer. The carrier is generated in the EP2
+    // packet builder so its envelope is sample-paced by the radio's fixed
+    // 48 kHz transmit stream rather than by GUI or producer-thread timing.
+    // It still requires MOX; Hl2Backend owns break-in and manual-PTT policy.
+    Q_INVOKABLE void setCwKeyDown(bool down);
+    Q_INVOKABLE void clearCwKeying();
+    [[nodiscard]] bool cwModeActive() const noexcept { return m_cwMode; }
+    [[nodiscard]] bool cwKeyDown() const noexcept { return m_cwKeyDown; }
+
     // Build the EP2 packet this client would send next, without sending it.
     // Exists so the gate can be tested on the exact bytes that would go out.
     std::array<std::uint8_t, kUsbPacketSize> buildNextControlPacket();
@@ -353,6 +362,9 @@ private:
     double m_toneHz = 0.0;
     double m_toneAmp = 0.0;
     double m_tonePhase = 0.0;   // radians, carried across packets
+    bool m_cwMode = false;      // while true, CW owns TX IQ (silence between elements)
+    bool m_cwKeyDown = false;
+    double m_cwEnvelope = 0.0;  // 0..1 raised-cosine ramp position
     bool m_mox = false;         // requested key state, only honoured if m_txAllowed
 
     std::uint32_t m_txSeq = 0;           // outgoing EP2 sequence

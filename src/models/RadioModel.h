@@ -1421,6 +1421,9 @@ private:
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend(const QString& serial);  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
+    void scheduleOperatingStateSave();
+    void captureClientOwnedCwState(RestoredRadioState& state) const;
+    void restoreClientOwnedCwState(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these

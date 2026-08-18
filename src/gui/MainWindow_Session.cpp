@@ -1091,6 +1091,7 @@ void MainWindow::wireRadioModel()
                                        ? IambicKeyer::Mode::IambicA
                                        : IambicKeyer::Mode::IambicB);
             m_iambicKeyer->setWpm(tx.cwSpeed());
+            m_iambicKeyer->setSwapPaddles(tx.cwSwapPaddles());
             if (wantOn && !m_iambicKeyer->isRunning()) {
                 m_iambicKeyer->start();
             } else if (!wantOn && m_iambicKeyer->isRunning()) {
@@ -1142,19 +1143,16 @@ void MainWindow::wireRadioModel()
             if (m_cwxLocalKeyer) m_cwxLocalKeyer->stop();
         });
 
-        // Local iambic keyer — when the radio's iambic mode is on, this
-        // state machine runs in parallel and drives the local sidetone gate
-        // at sub-5 ms latency (the radio's keyed-back signal carries 50–200
-        // ms of round-trip jitter that's painful for paddle ops).  The radio
-        // still produces the on-air signal; we forward paddle states to it,
-        // and both engines run at the same WPM to stay phase-aligned.
+        // Local iambic keyer — when iambic mode is on, this state machine drives
+        // the local sidetone gate and produces the completed element edges.
+        // Flex forwards those edges over NetCW; a host-modulating backend such
+        // as HL2 turns them into shaped IQ. Keeping the timing here avoids
+        // radio-round-trip jitter in both the sidetone and the RF pattern.
         m_iambicKeyer = std::make_unique<IambicKeyer>();
         m_iambicKeyer->setOnKeyDownChange([this](bool down) {
             // Drive the local sidetone gate (lock-free atomic on the audio
             // thread) and the radio's per-element key edge in parallel.
-            // The radio sees `cw key 1` / `cw key 0` matching our element
-            // timing — same RF pattern the radio's own iambic engine
-            // would have produced from a hardware paddle.
+            // The backend sees key-down/key-up matching our element timing.
             if (m_audio)
                 m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
             const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);

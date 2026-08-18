@@ -102,6 +102,25 @@ int main(int argc, char** argv)
     // mic selection.
     commands.clear();
 
+    // CW controls must adopt operator intent even when no radio-side status
+    // echo exists (HL2/software keyer). Otherwise the shortcut toggles the
+    // same stale value forever and the local iambic keyer never sees swap.
+    int cwPhoneEdges = 0;
+    QObject::connect(&tx, &TransmitModel::phoneStateChanged,
+                     [&cwPhoneEdges] { ++cwPhoneEdges; });
+    tx.setCwSwapPaddles(true);
+    ok &= expect(tx.cwSwapPaddles()
+                 && commands == QStringList({"cw swap 1"})
+                 && cwPhoneEdges == 1,
+                 "CW paddle swap is adopted locally and still commands Flex");
+    commands.clear();
+    tx.setCwlEnabled(true);
+    ok &= expect(tx.cwlEnabled()
+                 && commands == QStringList({"cw cwl_enabled 1"})
+                 && cwPhoneEdges == 2,
+                 "CWL selection is adopted locally and still commands Flex");
+    commands.clear();
+
     tx.startTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",

@@ -394,6 +394,16 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_txDsp->moveToThread(m_ioThread);
     m_ioThread->start();
 
+    m_cwHangTimer = new QTimer(this);
+    m_cwHangTimer->setSingleShot(true);
+    connect(m_cwHangTimer, &QTimer::timeout, this, [this] {
+        if (!m_cwAutoKeyed) {
+            return;
+        }
+        m_cwAutoKeyed = false;
+        setKeying(false);
+    });
+
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
     // rather than one per receiver, because the demux has already happened at
     // the wire: blocks[i] is DDC i. Fanning out here keeps the sample path a
@@ -1493,6 +1503,11 @@ RadioCapabilities Hl2Backend::capabilities() const
                             // reopened on Config's defaults every launch and
                             // the setting reverted to med/65 (#4909).
                             | RadioCapabilities::ClientSettingsDomain::Agc
+                            // CW timing and sidetone are also host-owned. A
+                            // Flex persists these in radio firmware; HL2 has no
+                            // corresponding readable state, so RadioModel keeps
+                            // the complete CW surface per radio.
+                            | RadioCapabilities::ClientSettingsDomain::Cw
                             // Memories: the client owns them (persistsMemories
                             // is false above). NOTE the bank itself engages on
                             // persistsMemories and keeps its own SHARED
@@ -3036,7 +3051,18 @@ void Hl2Backend::setKeying(bool key)
         m_fwdPeakWatts = 0.0;
     }
 
+    const bool keyChanged = m_keyed != key;
     m_keyed = key;
+    if (keyChanged) {
+        // Manual PTT is already mirrored optimistically by RadioModel, but CW
+        // break-in keys inside this backend. Publish that edge so the TX
+        // indicator, TCI clients and receive-side TX gates see the real state.
+        // TransmitDelta::mox is observed state, not client intent, so this does
+        // not start microphone capture or feed a second key command back down.
+        TransmitDelta delta;
+        delta.mox = key;
+        emit transmitChanged(delta);
+    }
     // MUTE RECEIVE AUDIO WHILE TRANSMITTING.
     //
     // The HL2 keeps receiving while it transmits, and what it receives is our
@@ -3088,6 +3114,10 @@ void Hl2Backend::setKeying(bool key)
     if (key && !m_tuning && m_toneFromTune)
         setTxTestTone(0.0, 0.0);
     if (!key) {
+        if (m_cwHangTimer) {
+            m_cwHangTimer->stop();
+        }
+        m_cwAutoKeyed = false;
         // An unkey ends tune too, however it was started — so the drive register
         // has to come back HERE, not in setTune()'s release branch.
         //
@@ -3132,10 +3162,73 @@ void Hl2Backend::setKeying(bool key)
         // on hardware — a key with no audio at all still produced ~1000 counts
         // of forward power for a moment, which was the previous transmission's
         // last half second going out on the air.
-        if (m_txDsp)
+        if (m_txDsp) {
             QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
-        if (m_metis)
+        }
+        if (m_metis) {
             QMetaObject::invokeMethod(m_metis, "flushTxIq", Qt::QueuedConnection);
+        }
+        if (m_metis) {
+            QMetaObject::invokeMethod(m_metis, "clearCwKeying", Qt::QueuedConnection);
+        }
+    }
+}
+
+void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs)
+{
+    if (!m_txAllowed) {
+        if (down) {
+            qWarning() << "Hl2Backend: CW key refused — automation bridge is active "
+                          "without AETHER_AUTOMATION_ALLOW_TX";
+        }
+        return;
+    }
+
+    const Receiver* txReceiver = rx(m_txDdc);
+    const QString mode = txReceiver ? txReceiver->mode.toUpper() : QString();
+    if (mode != QLatin1String("CW") && mode != QLatin1String("CWU")
+        && mode != QLatin1String("CWL")) {
+        // A key binding pressed in SSB must not become an unmodulated carrier.
+        // Release still clears a previously-held edge during a mode change.
+        if (down) {
+            qCWarning(lcHl2) << "HL2 CW key ignored outside CW mode:" << mode;
+            return;
+        }
+    }
+
+    if (m_cwHangTimer) {
+        m_cwHangTimer->stop();
+    }
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, "setCwKeyDown", Qt::QueuedConnection,
+            Q_ARG(bool, down));
+    }
+
+    if (down) {
+        // Full break-in raises MOX on the first element and keeps it through
+        // the configured inter-element hang. With break-in off, CW only rides
+        // an MOX/PTT the operator already asserted — matching Flex behavior and
+        // piHPSDR's software-keyer path.
+        if (breakIn && !m_keyed) {
+            m_cwAutoKeyed = true;
+            setKeying(true);
+        }
+        return;
+    }
+
+    if (m_cwAutoKeyed && m_cwHangTimer) {
+        // Preserve the complete five-millisecond fall even when the sidebar is
+        // set to zero delay; otherwise MOX could fall before the shaped tail is
+        // emitted. The configured delay remains the dominant hang at normal
+        // operating values.
+        constexpr int kCwEnvelopeReleaseMs = 6;
+        m_cwHangTimer->start(std::max(kCwEnvelopeReleaseMs,
+                                      std::clamp(breakInDelayMs, 0, 2000)));
+    } else if (!m_keyed && m_metis) {
+        // A break-in-off key press without manual PTT produced no RF. Do not
+        // leave CW owning the IQ stream after its release, or a later voice MOX
+        // would correctly key but transmit only silence.
+        QMetaObject::invokeMethod(m_metis, "clearCwKeying", Qt::QueuedConnection);
     }
 }
 

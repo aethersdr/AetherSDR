@@ -94,6 +94,7 @@ public:
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
     void setKeying(bool key) override;
+    void setCwKeying(bool down, bool breakIn, int breakInDelayMs) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        bool clientLeveled) override;
     void setTxPower(int percent) override;
@@ -646,6 +647,8 @@ private:
     bool m_adcOverload = false;
     bool m_keyed = false;
     bool m_tuning = false;
+    bool m_cwAutoKeyed = false;
+    QTimer* m_cwHangTimer = nullptr;
     bool m_txMonitor = false;
     bool m_toneFromTune = false;
     // Last drive the operator asked for through setTxPower(), so TUNE can drop to

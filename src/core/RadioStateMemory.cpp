@@ -71,6 +71,19 @@ RestoredRadioState load(const RadioSettingsScope& scope,
         state.agcThreshold =
             doc.value(QStringLiteral("agcThreshold")).toInt(-1);
     }
+    if (has(caps, Domain::Cw)) {
+        state.cwSpeed = doc.value(QStringLiteral("cwSpeed")).toInt();
+        state.cwPitch = doc.value(QStringLiteral("cwPitch")).toInt();
+        state.cwBreakIn = doc.value(QStringLiteral("cwBreakIn")).toInt(-1);
+        state.cwDelay = doc.value(QStringLiteral("cwDelay")).toInt(-1);
+        state.cwSidetone = doc.value(QStringLiteral("cwSidetone")).toInt(-1);
+        state.cwIambic = doc.value(QStringLiteral("cwIambic")).toInt(-1);
+        state.cwIambicMode = doc.value(QStringLiteral("cwIambicMode")).toInt(-1);
+        state.cwSwapPaddles = doc.value(QStringLiteral("cwSwapPaddles")).toInt(-1);
+        state.cwlEnabled = doc.value(QStringLiteral("cwlEnabled")).toInt(-1);
+        state.monGainCw = doc.value(QStringLiteral("monGainCw")).toInt(-1);
+        state.monPanCw = doc.value(QStringLiteral("monPanCw")).toInt(-1);
+    }
 
     // The extension is gated per domain too: only a declared domain's
     // sub-object is handed over, so a narrowed declaration cannot smuggle
@@ -106,7 +119,7 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
     }
 
     // Read-only toward the future: never overwrite a document written by a
-    // newer schema — a v1 rebuild would drop the fields v1 doesn't know and
+    // newer schema — an older rebuild would drop fields it doesn't know and
     // stamp the version back down (PR #4614 review, three independent
     // reports). Mirrors SettingsDatabase's own newer-schema rule.
     // EXACT row only: the guard judges the document this write would
@@ -147,6 +160,41 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
         // >= 0, so a threshold of 0 IS written — the sentinel is -1.
         if (state.agcThreshold >= 0) {
             doc.insert(QStringLiteral("agcThreshold"), state.agcThreshold);
+        }
+    }
+    if (has(caps, Domain::Cw)) {
+        if (state.cwSpeed > 0) {
+            doc.insert(QStringLiteral("cwSpeed"), state.cwSpeed);
+        }
+        if (state.cwPitch > 0) {
+            doc.insert(QStringLiteral("cwPitch"), state.cwPitch);
+        }
+        if (state.cwBreakIn >= 0) {
+            doc.insert(QStringLiteral("cwBreakIn"), state.cwBreakIn);
+        }
+        if (state.cwDelay >= 0) {
+            doc.insert(QStringLiteral("cwDelay"), state.cwDelay);
+        }
+        if (state.cwSidetone >= 0) {
+            doc.insert(QStringLiteral("cwSidetone"), state.cwSidetone);
+        }
+        if (state.cwIambic >= 0) {
+            doc.insert(QStringLiteral("cwIambic"), state.cwIambic);
+        }
+        if (state.cwIambicMode >= 0) {
+            doc.insert(QStringLiteral("cwIambicMode"), state.cwIambicMode);
+        }
+        if (state.cwSwapPaddles >= 0) {
+            doc.insert(QStringLiteral("cwSwapPaddles"), state.cwSwapPaddles);
+        }
+        if (state.cwlEnabled >= 0) {
+            doc.insert(QStringLiteral("cwlEnabled"), state.cwlEnabled);
+        }
+        if (state.monGainCw >= 0) {
+            doc.insert(QStringLiteral("monGainCw"), state.monGainCw);
+        }
+        if (state.monPanCw >= 0) {
+            doc.insert(QStringLiteral("monPanCw"), state.monPanCw);
         }
     }
 

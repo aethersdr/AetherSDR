@@ -2333,9 +2333,9 @@ void MainWindow::wireExternalControllers()
         m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);
         m_lastCwPaddleSourceMs.store(0, std::memory_order_relaxed);
         // When the local iambic keyer is running, feed it the raw paddle
-        // state — it forwards to the radio AND drives the sidetone gate
-        // directly.  Otherwise pass straight through to the radio (radio's
-        // RF iambic is still authoritative for the on-air signal).
+        // state — it emits timed element edges AND drives the sidetone gate
+        // directly. Otherwise the paddle acts as a straight key. The backend
+        // decides whether those edges use a radio-side keyer or host IQ.
         if (m_iambicKeyer && m_iambicKeyer->isRunning()) {
             m_iambicKeyer->setPaddleState(dit, dah);
         } else {

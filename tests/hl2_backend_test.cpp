@@ -103,6 +103,7 @@ int main(int argc, char** argv)
 
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<TransmitDelta>();
     // QSignalSpy stores a notchChanged argument by metatype, so the notch
     // session-scope case below reads an empty QVariant without this.
     qRegisterMetaType<NotchDelta>();
@@ -276,10 +277,18 @@ int main(int argc, char** argv)
     // ---- keying does not disturb the link ----
     // Whether this actually keys depends on the transmit gate above; what
     // matters here is that asking does not upset the connection either way.
+    QSignalSpy keyStateSpy(&backend, &IRadioBackend::transmitChanged);
     backend.setKeying(true);
     check(backend.isConnected(), "setKeying(true) does not disrupt the link");
+    check(!keyStateSpy.isEmpty()
+              && keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(false),
+          "key-down publishes observed MOX for backend-owned CW break-in");
+    keyStateSpy.clear();
     backend.setKeying(false);
     check(backend.isConnected(), "setKeying(false) does not disrupt the link");
+    check(!keyStateSpy.isEmpty()
+              && !keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(true),
+          "key-up publishes observed MOX for backend-owned CW break-in");
 
     // ---- invokeExtension honors the async contract ----
     backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("noop"), 42, {});

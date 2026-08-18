@@ -1841,6 +1841,9 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         {QStringLiteral("cwDelay"),         t->cwDelay()},
         {QStringLiteral("cwSidetone"),      t->cwSidetone()},
         {QStringLiteral("cwIambic"),        t->cwIambic()},
+        {QStringLiteral("cwIambicMode"),    t->cwIambicMode()},
+        {QStringLiteral("cwSwapPaddles"),   t->cwSwapPaddles()},
+        {QStringLiteral("cwlEnabled"),      t->cwlEnabled()},
         {QStringLiteral("monGainCw"),       t->monGainCw()},
         {QStringLiteral("monPanCw"),        t->monPanCw()},
         // ATU / APD

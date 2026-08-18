@@ -753,11 +753,19 @@ void TransmitModel::setCwIambicMode(int mode)
 
 void TransmitModel::setCwSwapPaddles(bool on)
 {
+    if (m_cwSwapPaddles != on) {
+        m_cwSwapPaddles = on;
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("cw swap %1").arg(on ? 1 : 0));
 }
 
 void TransmitModel::setCwlEnabled(bool on)
 {
+    if (m_cwlEnabled != on) {
+        m_cwlEnabled = on;
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("cw cwl_enabled %1").arg(on ? 1 : 0));
 }
 

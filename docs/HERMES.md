@@ -1081,6 +1081,44 @@ Practical check before claiming a control works: trace the widget's `connect()`
 to the model method it calls, and confirm that method reaches
 `IRadioBackend`. If it only emits `commandReady`, it is Flex-only.
 
+#### Client-timed CW on HL2
+
+Keyboard, serial and MIDI paddles run through AetherSDR's `IambicKeyer`; their
+output is already a timed stream of complete key-down/key-up elements. Flex
+sends those elements over NetCW. HL2 routes them through the typed
+`IRadioBackend::setCwKeying` seam instead, because a Flex `cw key` command has no
+meaning on a Protocol 1 connection.
+
+The HL2 implementation deliberately uses host-generated IQ rather than the
+gateware's CWX state machine. CWX is useful for radio-side timing, but its MOX
+semantics do not cover the existing semi-break-in workflow where the operator
+holds manual MOX/PTT and sends several client-timed elements. The software path
+keeps both workflows consistent:
+
+- with **Break In** enabled, the first element raises MOX and key-up starts the
+  configured delay before MOX falls;
+- with **Break In** disabled, elements produce RF only inside an already-active
+  manual MOX/PTT envelope;
+- the EP2 builder generates a zero-offset carrier at the TX NCO with a 5 ms
+  raised-cosine edge, paced by the fixed 48 kHz transmit stream;
+- CW owns the IQ payload until that PTT envelope ends, so queued microphone IQ
+  cannot leak into inter-element spaces;
+- both MOX and carrier generation remain behind `MetisClient`'s final
+  transmit-permission gate.
+
+The marker is already the transmit carrier frequency. `cwPitch` continues to
+control the receive BFO and local sidetone; adding the pitch to transmit IQ
+would move the on-air signal away from the displayed frequency. Sidebar speed,
+iambic mode and paddle swap configure the local keyer, while Break In and Delay
+configure the HL2 PTT envelope.
+
+HL2 also declares the client-owned `Cw` operating-state domain. AetherSDR stores
+the complete sidebar surface (speed, pitch, Break In, delay, sidetone enable,
+iambic enable/mode, paddle swap, CWL, monitor gain and monitor pan) in the
+radio-scoped `OperatingState` document and restores it before the backend
+connects. Flex declares no client-owned CW domain, so its radio-reported values
+remain authoritative and are never overwritten by this path.
+
 ### 14.6 The wrong-sideband bug, and why nothing internal could find it
 
 Transmit went out on the WRONG SIDEBAND for the entire bring-up. The HPSDR wire

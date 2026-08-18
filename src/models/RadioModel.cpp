@@ -445,8 +445,85 @@ void RadioModel::persistOperatingState(bool force)
     if (!RadioStateMemory::shouldEngage(caps)) {
         return;
     }
-    RadioStateMemory::store(settingsScope(), caps,
-                            m_backend->currentOperatingState());
+    RestoredRadioState state = m_backend->currentOperatingState();
+    if (caps.clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::Cw)) {
+        captureClientOwnedCwState(state);
+    }
+    RadioStateMemory::store(settingsScope(), caps, state);
+}
+
+void RadioModel::scheduleOperatingStateSave()
+{
+    if (!m_backend || !isConnected()
+        || !RadioStateMemory::shouldEngage(m_backend->capabilities())) {
+        return;
+    }
+    m_operatingStateSaveTimer.start();
+    if (!m_operatingStateMaxWaitTimer.isActive()) {
+        m_operatingStateMaxWaitTimer.start();
+    }
+}
+
+void RadioModel::captureClientOwnedCwState(RestoredRadioState& state) const
+{
+    state.cwSpeed = m_transmitModel.cwSpeed();
+    state.cwPitch = m_transmitModel.cwPitch();
+    state.cwBreakIn = m_transmitModel.cwBreakIn() ? 1 : 0;
+    state.cwDelay = m_transmitModel.cwDelay();
+    state.cwSidetone = m_transmitModel.cwSidetone() ? 1 : 0;
+    state.cwIambic = m_transmitModel.cwIambic() ? 1 : 0;
+    state.cwIambicMode = m_transmitModel.cwIambicMode();
+    state.cwSwapPaddles = m_transmitModel.cwSwapPaddles() ? 1 : 0;
+    state.cwlEnabled = m_transmitModel.cwlEnabled() ? 1 : 0;
+    state.monGainCw = m_transmitModel.monGainCw();
+    state.monPanCw = m_transmitModel.monPanCw();
+}
+
+void RadioModel::restoreClientOwnedCwState(const RestoredRadioState& state)
+{
+    // FULL replacement, not a present-only merge. An empty/older document is
+    // the construction defaults for this radio; keeping the previous model
+    // values would leak radio A's keyer and sidetone preferences into radio B.
+    auto rangedOrDefault = [](int value, int absent, int low, int high,
+                              int fallback, const char* name) {
+        if (value == absent) {
+            return fallback;
+        }
+        if (value >= low && value <= high) {
+            return value;
+        }
+        qWarning() << "RadioModel: dropping invalid restored CW" << name << value;
+        return fallback;
+    };
+    auto boolOrDefault = [](int value, bool fallback, const char* name) {
+        if (value < 0) {
+            return fallback;
+        }
+        if (value == 0 || value == 1) {
+            return value != 0;
+        }
+        qWarning() << "RadioModel: dropping invalid restored CW" << name << value;
+        return fallback;
+    };
+
+    TransmitDelta delta;
+    delta.cwSpeed = rangedOrDefault(state.cwSpeed, 0, 5, 100, 20, "speed");
+    delta.cwPitch = rangedOrDefault(state.cwPitch, 0, 100, 6000, 600, "pitch");
+    delta.cwBreakIn = boolOrDefault(state.cwBreakIn, false, "break-in");
+    delta.cwDelay = rangedOrDefault(state.cwDelay, -1, 0, 2000, 500, "delay");
+    delta.cwSidetone = boolOrDefault(state.cwSidetone, true, "sidetone");
+    delta.cwIambic = boolOrDefault(state.cwIambic, true, "iambic");
+    delta.cwIambicMode =
+        rangedOrDefault(state.cwIambicMode, -1, 0, 1, 0, "iambic mode");
+    delta.cwSwapPaddles =
+        boolOrDefault(state.cwSwapPaddles, false, "swap paddles");
+    delta.cwlEnabled = boolOrDefault(state.cwlEnabled, false, "CWL");
+    delta.monGainCw =
+        rangedOrDefault(state.monGainCw, -1, 0, 100, 50, "sidetone gain");
+    delta.monPanCw =
+        rangedOrDefault(state.monPanCw, -1, 0, 100, 50, "sidetone pan");
+    m_transmitModel.applyChanges(delta);
 }
 
 void RadioModel::flushPendingOperatingState()
@@ -506,6 +583,10 @@ void RadioModel::handRestoredStateToBackend(const QString& serial)
 
     const RestoredRadioState state =
         RadioStateMemory::load(RadioSettingsScope(m_family, serial), caps);
+    if (caps.clientSettingsDomains.testFlag(
+            RadioCapabilities::ClientSettingsDomain::Cw)) {
+        restoreClientOwnedCwState(state);
+    }
     // UNCONDITIONALLY — an empty state is the reset that stops a same-family
     // backend reuse leaking radio A's maps and live members into radio B
     // ("this radio has no memory" is information, not a no-op).
@@ -1029,12 +1110,7 @@ void RadioModel::setupBackend(const QString& family)
     // for an empty declaration (Flex, Sim) the signal is never emitted AND
     // the store call is gated again in persistOperatingState().
     connect(m_backend.get(), &IRadioBackend::operatingStateChanged, this,
-            [this] {
-        m_operatingStateSaveTimer.start();
-        if (!m_operatingStateMaxWaitTimer.isActive()) {
-            m_operatingStateMaxWaitTimer.start();
-        }
-    });
+            [this] { scheduleOperatingStateSave(); });
     // Flush the pending capture BEFORE the rest of the disconnect teardown
     // touches identity — this connection is made first, and same-thread
     // signal delivery runs slots in connection order, so the scope still
@@ -1764,6 +1840,21 @@ RadioModel::RadioModel(QObject* parent)
             [this](int hz) {
         if (m_backend && !usesFlexCommandPlane())
             m_backend->setCwPitch(hz);
+    });
+
+    // Host-keyed radios have nowhere to retain their keyer and sidetone
+    // controls. Persist the complete CW surface only when the live backend
+    // explicitly declares client ownership of that domain. Flex declares an
+    // empty domain set, so its radio-authoritative state is never captured or
+    // reasserted by this path.
+    connect(&m_transmitModel, &TransmitModel::phoneStateChanged, this,
+            [this] {
+        if (!m_backend
+            || !m_backend->capabilities().clientSettingsDomains.testFlag(
+                RadioCapabilities::ClientSettingsDomain::Cw)) {
+            return;
+        }
+        scheduleOperatingStateSave();
     });
 
     // And on connect, for the same reason the power push above exists:
@@ -3972,8 +4063,13 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     // the radio queues the key but doesn't transmit until the operator
     // explicitly asserts CW PTT (Space PTT, MOX, or hardware PTT) — the
     // standard semi-break-in workflow per FlexLib Radio.cs:8890–8965.
-    sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                     debugSource, debugTraceId, debugSourceMs);
+    if (m_backend && !usesFlexCommandPlane()) {
+        m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
+                               m_transmitModel.cwDelay());
+    } else {
+        sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
+                         debugSource, debugTraceId, debugSourceMs);
+    }
     if (prev != down)
         emit cwKeyDownChanged(down);
 }
@@ -3994,8 +4090,12 @@ void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
 void RadioModel::sendCwPtt(bool on, const QString& debugSource,
                            quint64 debugTraceId, quint64 debugSourceMs)
 {
-    sendNetCwCommand(on ? QStringLiteral("cw ptt 1") : QStringLiteral("cw ptt 0"),
-                     debugSource, debugTraceId, debugSourceMs);
+    if (m_backend && !usesFlexCommandPlane()) {
+        m_backend->setKeying(on);
+    } else {
+        sendNetCwCommand(on ? QStringLiteral("cw ptt 1") : QStringLiteral("cw ptt 0"),
+                         debugSource, debugTraceId, debugSourceMs);
+    }
 }
 
 void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
@@ -4003,8 +4103,13 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
 {
     const bool prev = m_cwKeyActive;
     m_cwKeyActive = down;
-    sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                     debugSource, debugTraceId, debugSourceMs);
+    if (m_backend && !usesFlexCommandPlane()) {
+        m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
+                               m_transmitModel.cwDelay());
+    } else {
+        sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
+                         debugSource, debugTraceId, debugSourceMs);
+    }
     if (prev != down)
         emit cwKeyDownChanged(down);
 }

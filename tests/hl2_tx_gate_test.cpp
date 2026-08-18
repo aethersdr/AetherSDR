@@ -36,6 +36,20 @@ static bool anyFrameKeyed(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
     return false;
 }
 
+static bool payloadNonZero(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+    for (const std::size_t fs : frameStarts) {
+        const std::uint8_t* pay = pkt.data() + fs + 8;
+        for (std::size_t k = 0; k < kFramePayload; ++k) {
+            if (pay[k] != 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -139,16 +153,6 @@ int main(int argc, char** argv)
     // still being fed IQ is not transmitting, but it is one stray MOX bit away
     // from doing so with whatever happens to be in the buffer.
     {
-        auto payloadNonZero = [](const std::array<std::uint8_t, kUsbPacketSize>& pkt) {
-            const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
-            for (const std::size_t fs : frameStarts) {
-                const std::uint8_t* pay = pkt.data() + fs + 8;
-                for (std::size_t k = 0; k < kFramePayload; ++k)
-                    if (pay[k] != 0) return true;
-            }
-            return false;
-        };
-
         MetisClient c2;
         std::vector<std::complex<float>> tone(512, std::complex<float>(0.5f, -0.5f));
 
@@ -197,6 +201,49 @@ int main(int argc, char** argv)
             c2.buildNextControlPacket();
         check(!payloadNonZero(c2.buildNextControlPacket()),
               "an empty queue transmits silence rather than repeating");
+    }
+
+    // ---- PC/MIDI CW is a shaped, packet-paced carrier under MOX ----
+    {
+        MetisClient cw;
+        cw.setCwKeyDown(true);
+        check(!cw.cwModeActive(),
+              "CW down is not latched while the transmit gate is closed");
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "a refused CW edge puts no samples on the wire");
+
+        cw.enableTransmit(true);
+        cw.setCwKeyDown(true);
+        check(cw.cwModeActive() && cw.cwKeyDown(),
+              "an allowed CW down edge enters software-CW mode");
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "CW still requires MOX — break-in policy belongs to the backend");
+
+        cw.setMox(true);
+        bool sawCarrier = false;
+        for (int i = 0; i < 5; ++i) {
+            sawCarrier |= payloadNonZero(cw.buildNextControlPacket());
+        }
+        check(sawCarrier, "key-down emits the raised-cosine CW carrier under MOX");
+
+        // Voice queued behind manual PTT must not leak between CW elements.
+        std::vector<std::complex<float>> voice(512, std::complex<float>(0.4f, -0.4f));
+        cw.queueTxIq(voice);
+        cw.setCwKeyDown(false);
+        for (int i = 0; i < 6; ++i) {
+            cw.buildNextControlPacket();
+        }
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "key-up finishes its five-ms fall then emits silence, not queued voice");
+
+        cw.clearCwKeying();
+        check(!cw.cwModeActive() && !cw.cwKeyDown(),
+              "ending the CW PTT envelope releases IQ ownership");
+        check(!payloadNonZero(cw.buildNextControlPacket()),
+              "ending CW drops microphone IQ queued during the element sequence");
+        cw.queueTxIq(voice);
+        check(payloadNonZero(cw.buildNextControlPacket()),
+              "normal transmit IQ resumes after CW mode is cleared");
     }
 
     if (g_failures == 0)

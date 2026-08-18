@@ -356,6 +356,19 @@ public:
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
 
+    // A client-timed CW element. This is deliberately separate from setKeying:
+    // setKeying is the transmitter/PTT envelope, while this is the carrier
+    // inside that envelope. A host-modulating backend turns the element into
+    // shaped IQ and may use breakIn to raise/drop PTT around it; a radio-side
+    // keyer translates it to its own key-line protocol. Flex keeps using its
+    // timestamped NetCW path above this seam, so the default is a no-op.
+    virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs)
+    {
+        Q_UNUSED(down);
+        Q_UNUSED(breakIn);
+        Q_UNUSED(breakInDelayMs);
+    }
+
     // Let receive audio through WHILE TRANSMITTING.
     //
     // Receive audio is normally muted on transmit — the radio hears its own
