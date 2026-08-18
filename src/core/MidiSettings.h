@@ -59,6 +59,12 @@ public:
     QVector<MidiBinding> loadProfile(const QString& name) const;
     void deleteProfile(const QString& name);
 
+    // A profile name is a name, not a path: the store concatenates it into
+    // profileDir(), so all three operations above refuse a name this predicate
+    // rejects (separators, "." / "..", empty). Public so the GUI can validate
+    // against the same rule it will be held to.
+    static bool isValidProfileName(const QString& name);
+
     // Import a profile file into the store. Accepts the native <MidiProfile>
     // XML or a SmartSDR iOS/Mac ".map" (auto-detected by content). The store
     // name derives from the file name; an existing name gets a " (2)" style
