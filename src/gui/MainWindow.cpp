@@ -1652,7 +1652,16 @@ MainWindow::MainWindow(QWidget* parent)
     // no demo audio, no ANF/NB, no legacy-NR2 geometry). One event, one signal.
     wireBackendSeam(m_radioModel.backend());
     connect(&m_radioModel, &RadioModel::backendRebuilt, this,
-            [this] { wireBackendSeam(m_radioModel.backend()); });
+            [this] {
+        // A family switch can destroy an HL2 backend while its uncancellable
+        // DSP build is still running. That backend then cannot emit
+        // dspSetupFinished(), so cancel its delayed dialog before wiring the
+        // replacement backend. Otherwise the overdue timer can mistake the
+        // replacement connection animation for the original HL2 connect and
+        // show a stale application-modal dialog over Flex/Icom.
+        dismissWdspSetupDialog();
+        wireBackendSeam(m_radioModel.backend());
+    });
     connect(m_audio, &AudioEngine::receivePresentationOutputAudioReady,
             this, [this](const QString& source, const QString& sourceId,
                          const QByteArray& pcm, int sampleRate) {
