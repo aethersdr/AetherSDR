@@ -5449,9 +5449,9 @@ void SpectrumWidget::appendHistoryRow(const quint8* intensityData,
     // Stamp the frequency frame this row was captured in, so the viewport can
     // remap it later regardless of how the center/bandwidth has since panned.
     const FrequencyFrame requestedFrame{frameCenterMhz, frameBandwidthMhz};
-    const FrequencyFrame stampFrame = requestedFrame.isValid()
-        ? requestedFrame
-        : FrequencyFrame{m_centerMhz, m_bandwidthMhz};
+    const FrequencyFrame stampFrame = stampFrameForHistoryRow(
+        requestedFrame,
+        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz});
     if (m_wfHistoryWriteRow >= 0 && m_wfHistoryWriteRow < m_wfHistoryRowCenterMhz.size()) {
         m_wfHistoryRowCenterMhz[m_wfHistoryWriteRow] = stampFrame.centerMhz;
         m_wfHistoryRowBwMhz[m_wfHistoryWriteRow] = stampFrame.bandwidthMhz;
@@ -7471,6 +7471,19 @@ void SpectrumWidget::applyDeferredRangeIfIdle()
 void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
                                                bool animateSmallNudges)
 {
+    // Record this as confirmed REGARDLESS of whether it changes the
+    // on-screen display below -- appendHistoryRow()'s callers depend on
+    // m_confirmedCenterMhz/m_confirmedBandwidthMhz being current even when
+    // the guard just below turns the rest of this call into a no-op (the
+    // common case: a zoom gesture's optimistic guess already matched what
+    // the backend just confirmed). Must run before every early return in
+    // this function, which is why it's first. The three OTHER early
+    // returns below (drag-hold, settle-pending, stale-echo) do NOT get
+    // this treatment -- they legitimately don't represent "this value is
+    // confirmed truth right now" (see their own comments).
+    m_confirmedCenterMhz    = centerMhz;
+    m_confirmedBandwidthMhz = bandwidthMhz;
+
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
 
@@ -8499,13 +8512,19 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // tile bin via: binIdx = (freq - tileLowFreq) / binBandwidth.
     const int srcSize = binsIntensity.size();
     const double tileBw = (srcSize > 0) ? (highFreqMhz - lowFreqMhz) / srcSize : 0.0;
-    const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    // Confirmed geometry, not the on-screen m_centerMhz/m_bandwidthMhz (which
+    // may hold an operator's not-yet-real zoom guess) -- this is what lays
+    // out the row's ACTUAL pixel data, and it must always agree with the
+    // stamp given to appendHistoryRow() below, or remapHistoryRowInto() will
+    // show the wrong signal at the wrong frequency later, not just a black
+    // gap. See m_confirmedCenterMhz's own declaration comment.
+    const double panStartMhz = m_confirmedCenterMhz - m_confirmedBandwidthMhz / 2.0;
 
     QVector<quint8> levels(destWidth, 0);
     QVector<quint8> supplementalLevels(destWidth, 0);
     if (tileBw > 0) {
         for (int x = 0; x < destWidth; ++x) {
-            const double freq = panStartMhz + (static_cast<double>(x) / destWidth) * m_bandwidthMhz;
+            const double freq = panStartMhz + (static_cast<double>(x) / destWidth) * m_confirmedBandwidthMhz;
             const double binF = (freq - lowFreqMhz) / tileBw;
             const int binIdx = static_cast<int>(binF);
             if (binIdx >= 0 && binIdx < srcSize) {
@@ -8546,7 +8565,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     const double incomingSupplementalBandwidthMhz =
         highFreqMhz - lowFreqMhz;
     const WaterfallBlankerFrameBundle incomingFrames{
-        FrequencyFrame{m_centerMhz, m_bandwidthMhz},
+        // Confirmed geometry -- must match panStartMhz above. The
+        // supplemental frame is untouched: it's already derived from the
+        // tile's own real bounds (lowFreqMhz/highFreqMhz), not the
+        // on-screen guess.
+        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz},
         FrequencyFrame{incomingSupplementalCenterMhz,
                        incomingSupplementalBandwidthMhz},
     };
@@ -12197,7 +12220,13 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         useTxFilterMask = txWaterfallMaskRange(txMaskLowMhz, txMaskHighMhz);
 
     const int srcSize = bins.size();
-    const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    // Confirmed geometry, not the on-screen guess -- this call passes no
+    // explicit frame to appendHistoryRow() below (relies on ITS OWN
+    // fallback, also fixed to use m_confirmedCenterMhz/m_confirmedBandwidthMhz),
+    // so the pixel layout here must use the same values or the row's data
+    // and its stamp would disagree about what span it covers. See
+    // m_confirmedCenterMhz's own declaration comment.
+    const double panStartMhz = m_confirmedCenterMhz - m_confirmedBandwidthMhz / 2.0;
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
     QVector<quint8> levels(destWidth, 0);
@@ -12206,7 +12235,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         if (useTxFilterMask) {
             const double freqMhz = panStartMhz
                 + (static_cast<double>(x) / static_cast<double>(destWidth))
-                    * m_bandwidthMhz;
+                    * m_confirmedBandwidthMhz;
             if (freqMhz < txMaskLowMhz || freqMhz > txMaskHighMhz) {
                 scanline[x] = qRgb(0, 0, 0);
                 continue;
@@ -12261,8 +12290,13 @@ void SpectrumWidget::pushKiwiSdrWaterfallRow(const QVector<float>& bins,
 
     const int srcSize = bins.size();
     if (rowCenterMhz <= 0.0 || rowBandwidthMhz <= 0.0) {
-        rowCenterMhz = m_centerMhz;
-        rowBandwidthMhz = m_bandwidthMhz;
+        // Confirmed geometry, not the on-screen guess -- see
+        // m_confirmedCenterMhz's own declaration comment. No pixel-layout
+        // consistency concern here (unlike updateWaterfallRow()/
+        // pushWaterfallRow() above): this function resamples bins onto
+        // destWidth proportionally, independent of these values either way.
+        rowCenterMhz = m_confirmedCenterMhz;
+        rowBandwidthMhz = m_confirmedBandwidthMhz;
     }
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();

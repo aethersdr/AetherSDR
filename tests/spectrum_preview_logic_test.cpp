@@ -1066,6 +1066,39 @@ int testDssSupplementalCoverageCalibration()
     return 0;
 }
 
+int testStampFrameForHistoryRow()
+{
+    using namespace AetherSDR;
+    const FrequencyFrame requested{14.2, 0.1};
+    const FrequencyFrame confirmed{14.0, 0.2};
+
+    const FrequencyFrame withRequested =
+        stampFrameForHistoryRow(requested, confirmed);
+    if (!nearlyEqual(withRequested.centerMhz, requested.centerMhz)
+        || !nearlyEqual(withRequested.bandwidthMhz, requested.bandwidthMhz)) {
+        return fail("a valid per-row frame must be stamped as-is");
+    }
+
+    // Zero bandwidth, negative bandwidth, and non-finite center all mark a
+    // caller's per-row frame as absent -- the row must fall back to the last
+    // backend-confirmed geometry, never an on-screen zoom guess.
+    const FrequencyFrame zeroBandwidth{14.2, 0.0};
+    const FrequencyFrame negativeBandwidth{14.2, -0.1};
+    const FrequencyFrame nonFiniteCenter{
+        std::numeric_limits<double>::quiet_NaN(), 0.1};
+    for (const FrequencyFrame& invalid :
+         {zeroBandwidth, negativeBandwidth, nonFiniteCenter}) {
+        const FrequencyFrame stamped =
+            stampFrameForHistoryRow(invalid, confirmed);
+        if (!nearlyEqual(stamped.centerMhz, confirmed.centerMhz)
+            || !nearlyEqual(stamped.bandwidthMhz, confirmed.bandwidthMhz)) {
+            return fail(
+                "an absent per-row frame must fall back to the confirmed frame");
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -1132,5 +1165,8 @@ int main()
         result != 0) {
         return result;
     }
-    return testStablePresentationAnchor();
+    if (const int result = testStablePresentationAnchor(); result != 0) {
+        return result;
+    }
+    return testStampFrameForHistoryRow();
 }

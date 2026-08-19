@@ -68,6 +68,17 @@ struct FrequencyFrame {
     }
 };
 
+// A history row is stamped with whatever frame the caller explicitly
+// supplied; callers that have no per-row frame of their own (the Legacy/2D
+// waterfall path) fall back to the last frame the backend actually
+// confirmed, never an on-screen zoom guess that might not become true --
+// see SpectrumWidget's m_confirmedCenterMhz/m_confirmedBandwidthMhz.
+[[nodiscard]] inline FrequencyFrame stampFrameForHistoryRow(
+    const FrequencyFrame& requested, const FrequencyFrame& confirmed) noexcept
+{
+    return requested.isValid() ? requested : confirmed;
+}
+
 // A native waterfall tile supplies two independently calibrated rows: the
 // viewport row and the full-tile supplemental row. A blanked row must keep
 // their capture frames paired with the matching pixels.
