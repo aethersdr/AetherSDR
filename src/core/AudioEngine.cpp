@@ -8804,18 +8804,27 @@ void AudioEngine::setDaxTxMode(bool on)
     }
 }
 
+void AudioEngine::clearTxAccumulators()
+{
+    // Marshal: a foreign-thread clear can land mid-drain-loop and segfault (#5094).
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, &AudioEngine::clearTxAccumulators,
+                                   Qt::QueuedConnection);
+        return;
+    }
+    m_txAccumulator.clear();
+    m_txFloatAccumulator.clear();
+    m_daxPreTxBuffer.clear();
+    m_opusTxPacer.clear();
+}
+
 void AudioEngine::setTransmitting(bool tx)
 {
     if (m_transmitting == tx) return;
     m_transmitting = tx;
 
-    if (!tx) {
-        // On unkey: drop any partial packet residue so next burst starts cleanly.
-        m_txAccumulator.clear();
-        m_txFloatAccumulator.clear();
-        m_daxPreTxBuffer.clear();
-        m_opusTxPacer.clear();
-    }
+    // On unkey: drop any partial packet residue so next burst starts cleanly.
+    if (!tx) clearTxAccumulators();
 }
 
 void AudioEngine::setRadioTransmitting(bool tx)
@@ -8869,8 +8878,7 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
     if (m_daxTxUseRadioRoute == on) return;
     m_daxTxUseRadioRoute = on;
     // Switching route changes payload format; drop partial buffered samples.
-    m_txFloatAccumulator.clear();
-    m_daxPreTxBuffer.clear();
+    clearTxAccumulators();
     m_daxRadioTxChannelState.reset();
     m_lastDaxRadioChannelLog.invalidate();
     qCDebug(lcDax) << "AudioEngine: DAX TX route"

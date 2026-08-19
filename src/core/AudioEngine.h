@@ -213,7 +213,8 @@ public:
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
     void setRadioTransmitting(bool tx);  // raw interlock state (regardless of TX ownership)
-    void clearTxAccumulators() { m_txAccumulator.clear(); m_txFloatAccumulator.clear(); m_daxPreTxBuffer.clear(); }
+    // Self-marshals onto the AudioEngine thread; safe from any caller.
+    Q_INVOKABLE void clearTxAccumulators();
     Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
