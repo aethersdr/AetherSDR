@@ -69,13 +69,21 @@ public:
             connect(m_connection, &QTcpSocket::readyRead, this, [this]() {
                 m_received += m_connection->readAll();
             });
-            sendScript();
+            if (m_autoReplay) {
+                sendScript();
+            }
         });
     }
 
     quint16 port() const { return m_server.serverPort(); }
     int connections() const { return m_connections; }
     QByteArray received() const { return m_received; }
+
+    // Accept the next connection but say nothing until the test calls send().
+    // The real device replays its roster on reconnect; how LONG it takes to is
+    // not something the client gets to assume, and that window is the whole
+    // subject of testReconnectStaysStaleUntilAuthoritativeReplay().
+    void setAutoReplay(bool on) { m_autoReplay = on; }
 
     void send(const QByteArray& data)
     {
@@ -114,6 +122,7 @@ private:
     QByteArray m_received;
     int m_chunk{0};
     int m_connections{0};
+    bool m_autoReplay{true};
 };
 
 // Pump the event loop until `predicate` holds or the deadline passes.
@@ -352,6 +361,46 @@ void testDropKeepsLastStateVisibleThenReconnects()
            std::to_string(device.connections()));
 }
 
+void testReconnectStaysStaleUntilAuthoritativeReplay()
+{
+    FakeDevice device(kRoster + kUpdates);
+    GreenHeronModel model;
+    model.connectToHost(QStringLiteral("127.0.0.1"), device.port());
+    waitFor([&]() {
+        return model.switchState(QStringLiteral("AS-84F-3")).selected
+               == QLatin1String("Beam-15");
+    });
+    report("a fresh connection that has replayed is ready", model.isReady());
+
+    // Connection 2 is accepted but deliberately silent. TCP is up; the device
+    // has not yet said a word about where the relays are.
+    device.setAutoReplay(false);
+    device.drop();
+
+    const bool reconnected =
+        waitFor([&]() { return device.connections() >= 2 && model.isConnected(); },
+                10000);
+    report("TCP comes back up before any replay", reconnected,
+           std::to_string(device.connections()));
+
+    // THE WINDOW. The roster on screen predates the drop; nothing on this
+    // connection has confirmed it. Every end-state assertion in this file
+    // passes here, which is exactly why the bug survived the first review.
+    report("the retained panel stays stale until authoritative replay",
+           model.isStale());
+    report("a reconnect that has not replayed is not ready", !model.isReady());
+    report("a stale pre-replay selection is refused",
+           !model.selectPort(QStringLiteral("AS-84F-1"), QStringLiteral("Beam-20")));
+
+    // The device finally speaks. Now — and not before — the panel is live.
+    device.send(kRoster + kUpdates);
+    report("authoritative replay clears the gate",
+           waitFor([&]() { return model.isReady(); }));
+    report("replay also clears stale", !model.isStale());
+    report("a selection after replay is accepted",
+           model.selectPort(QStringLiteral("AS-84F-1"), QStringLiteral("Beam-20")));
+}
+
 void testDeliberateDisconnectClearsThePanel()
 {
     FakeDevice device(kRoster + kUpdates);
@@ -406,6 +455,7 @@ int main(int argc, char** argv)
     testSelectRefusedWhenNotConnected();
     testKeepAliveIsTheNulByte();
     testDropKeepsLastStateVisibleThenReconnects();
+    testReconnectStaysStaleUntilAuthoritativeReplay();
     testDeliberateDisconnectClearsThePanel();
     testUnreachableHostReportsWithoutDying();
     testEmptyHostIsRejected();

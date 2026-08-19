@@ -59,10 +59,21 @@ public:
     void disconnectFromHost();
 
     bool    isConnected() const { return m_connected; }
-    // True when the link has dropped but the last known panel is still shown.
-    // Blanking the grid on every blip loses more than it protects.
+    // True when the link is down and we are still showing the last panel the
+    // device sent. Blanking the grid on every blip loses more than it
+    // protects. This is a STATUS-TEXT signal, not a safety one: it is false
+    // during a first connect that has not replayed yet. Gate anything that
+    // acts on the panel — enablement, commands — on isReady() instead.
     bool    isStale()     const { return m_stale; }
     bool    isWanted()    const { return m_wantConnected; }
+
+    // The only flag anything may act on. TCP being up is not the same as the
+    // device having told us where the relays are: a reconnect re-establishes
+    // the socket long before SWITCHADD/SWITCHUPDATE/SWITCHLOCKS arrive, and in
+    // that window the retained roster is a pre-drop guess. Enabling the panel
+    // or sending SET_SWITCH off isConnected() alone moves real relays from
+    // that guess. Both the view's enablement and selectPort() gate on THIS.
+    bool    isReady()     const { return m_connected && !m_awaitingReplay; }
     QString host()        const { return m_host; }
     quint16 port()        const { return m_port; }
     QString lastError()   const { return m_lastError; }
@@ -93,7 +104,8 @@ public:
 
     // Ask the device to put `switchName` on `portName`. Fire-and-forget; the
     // local model is deliberately not updated. Returns false if we are not
-    // connected or the names could not be encoded.
+    // ready (see isReady() — connected is not enough) or the names could not
+    // be encoded.
     bool selectPort(const QString& switchName, const QString& portName);
 
 signals:
@@ -116,6 +128,9 @@ private:
     void openSocket();
     void teardownSocket();
     void applyRecord(const GreenHeron::Record& record);
+    // Called for every record the device names a switch in: this connection
+    // has now vouched for the panel, so the replay gate opens.
+    void noteAuthoritativeState();
     void scheduleReconnect();
     void setLastError(const QString& message);
 
@@ -132,6 +147,12 @@ private:
     bool    m_wantConnected{false};
     bool    m_connected{false};
     bool    m_stale{false};
+    // Set for every socket we open, cleared by the first record the device
+    // sends on it. Deliberately not folded into m_stale: the view needs to
+    // tell "link down, showing the last panel" from "link up, waiting to hear"
+    // — they read differently to an operator, and only one of them is going to
+    // resolve on its own.
+    bool    m_awaitingReplay{false};
     QString m_lastError;
 
     QByteArray m_pending;   // partial tail between reads

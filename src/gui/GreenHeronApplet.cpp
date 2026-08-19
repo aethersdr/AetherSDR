@@ -409,10 +409,13 @@ void GreenHeronApplet::syncFromModel()
         rebuildPortList();
     }
 
-    // Stale means the link dropped and what is on screen is the last thing the
-    // device said. Leave it visible — it is still the best information
-    // available — but refuse input, since nothing would reach the relays.
-    m_portHost->setEnabled(m_model->isConnected());
+    // Stale means what is on screen is the last thing the device said, not
+    // something this connection has confirmed — the link is down, or it is
+    // back up and the replay has not landed. Leave it visible; it is still the
+    // best information available. Refuse input either way: in the first case
+    // nothing would reach the relays, and in the second something would, from
+    // a roster that predates the drop.
+    m_portHost->setEnabled(m_model->isReady());
 
     const QMap<QString, QString> held = m_model->locksBySwitch(switchName);
     for (const QString& port : state.ports) {
@@ -470,7 +473,12 @@ void GreenHeronApplet::updateStatus()
     // Idle reads as neither good nor bad, so it takes the muted text token
     // rather than a status colour.
     QString colourToken = QStringLiteral("color.text.disabled");
-    if (m_model->isConnected()) {
+    if (m_model->isConnected() && !m_model->isReady()) {
+        // TCP is up and the device has not spoken yet. Saying "connected"
+        // here would put a green light on a panel nobody has vouched for.
+        text = tr("Connected — waiting for switch state");
+        colourToken = QStringLiteral("color.accent.warning");
+    } else if (m_model->isConnected()) {
         const QString switchName = effectiveSwitch();
         const GreenHeronSwitchState state = m_model->switchState(switchName);
         if (state.ports.isEmpty()) {
