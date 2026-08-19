@@ -687,6 +687,8 @@ int main(int argc, char** argv)
                  "name guard: '.' rejected");
     ok &= expect(!MidiSettings::isValidProfileName(".."),
                  "name guard: '..' rejected");
+    ok &= expect(!MidiSettings::isValidProfileName(".hidden"),
+                 "name guard: leading-dot (hidden-file) name rejected");
     ok &= expect(!MidiSettings::isValidProfileName("   "),
                  "name guard: whitespace-only rejected");
 
@@ -698,6 +700,15 @@ int main(int argc, char** argv)
     settings.saveProfile("a/b", saved);
     ok &= expect(!QDir(appConfigDir + "/midi/a").exists(),
                  "profile store: save with a separator creates no directory chain");
+    // A leading dot is the Unix hidden-file convention: the listing's
+    // QDir::Files scan omits ".hidden.xml", so an accepted save would
+    // succeed and then vanish from availableProfiles() (#5083 review).
+    // The guard refuses the name before a file exists to hide.
+    settings.saveProfile(".hidden", saved);
+    ok &= expect(!QFile::exists(appConfigDir + "/midi/.hidden.xml"),
+                 "profile store: leading-dot name writes no hidden file");
+    ok &= expect(settings.loadProfile(".hidden").isEmpty(),
+                 "profile store: leading-dot name loads nothing");
 
     {
         QFile planted(appConfigDir + "/planted.xml");

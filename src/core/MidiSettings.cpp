@@ -615,17 +615,23 @@ void MidiSettings::writeBindingsToXml(const QString& filePath,
 bool MidiSettings::isValidProfileName(const QString& name)
 {
     // Separators are tested directly rather than via an allowlist so
-    // non-ASCII station and contest names keep working. "." and ".." are the
-    // two names that are pure path syntax. Rejecting (not stripping) is
-    // deliberate: stripping "../foo" to "foo" would silently overwrite an
-    // unrelated existing profile. (#4975)
+    // non-ASCII station and contest names keep working. A leading dot is
+    // filesystem semantics too: on Unix it is the hidden-file convention, so
+    // the QDir::Files listing omits an accepted ".hidden.xml" — saved, but
+    // vanished from availableProfiles() — and refusing it also covers "."
+    // and "..", the two names that are pure path syntax. Rejecting (not
+    // stripping) is deliberate: stripping "../foo" to "foo" would silently
+    // overwrite an unrelated existing profile. (#4975)
     const QString trimmed = name.trimmed();
-    if (trimmed.isEmpty())
+    if (trimmed.isEmpty()) {
         return false;
-    if (trimmed == QLatin1String(".") || trimmed == QLatin1String(".."))
+    }
+    if (trimmed.startsWith(QLatin1Char('.'))) {
         return false;
-    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
+    }
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\'))) {
         return false;
+    }
     return true;
 }
 
@@ -643,8 +649,9 @@ QStringList MidiSettings::availableProfiles() const
         // file whose name the store now refuses (e.g. a backslash, legal in
         // Unix filenames and creatable by the pre-guard GUI) would otherwise
         // list but never load or delete. The file itself stays on disk.
-        if (isValidProfileName(name))
+        if (isValidProfileName(name)) {
             result.append(name);
+        }
     }
     return result;
 }
@@ -652,15 +659,17 @@ QStringList MidiSettings::availableProfiles() const
 void MidiSettings::saveProfile(const QString& name,
                                 const QVector<MidiBinding>& bindings)
 {
-    if (!isValidProfileName(name))
+    if (!isValidProfileName(name)) {
         return;
+    }
     writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
 }
 
 QVector<MidiBinding> MidiSettings::loadProfile(const QString& name) const
 {
-    if (!isValidProfileName(name))
+    if (!isValidProfileName(name)) {
         return {};
+    }
     return parseBindingsFromXml(profileDir() + "/" + name + ".xml");
 }
 
@@ -668,8 +677,9 @@ void MidiSettings::deleteProfile(const QString& name)
 {
     // The guard matters most here: a mis-resolved delete is the one
     // unrecoverable operation of the three. (#4975)
-    if (!isValidProfileName(name))
+    if (!isValidProfileName(name)) {
         return;
+    }
     QFile::remove(profileDir() + "/" + name + ".xml");
 }
 
@@ -769,8 +779,9 @@ MidiImportResult MidiSettings::importProfile(
     // Not just isEmpty(): a file named "...map" derives ".." here, which the
     // store rightly refuses — without this fallback the refusal surfaces as a
     // misleading "couldn't write" error instead of a stored profile.
-    if (!isValidProfileName(name))
+    if (!isValidProfileName(name)) {
         name = QStringLiteral("Imported profile");
+    }
     const QStringList existing = availableProfiles();
     const auto taken = [&existing](const QString& candidate) {
         for (const auto& p : existing)

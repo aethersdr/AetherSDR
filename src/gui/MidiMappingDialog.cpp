@@ -311,7 +311,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                 FramelessMessageBox::warning(
                     this, QStringLiteral("Save Profile"),
                     QStringLiteral("\"%1\" isn't a valid profile name — a name "
-                                   "can't contain / or \\ or be \".\" or \"..\".")
+                                   "can't contain / or \\ or start with \".\".")
                         .arg(name));
                 return;
             }

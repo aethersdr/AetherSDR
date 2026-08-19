@@ -61,8 +61,9 @@ public:
 
     // A profile name is a name, not a path: the store concatenates it into
     // profileDir(), so all three operations above refuse a name this predicate
-    // rejects (separators, "." / "..", empty). Public so the GUI can validate
-    // against the same rule it will be held to.
+    // rejects (separators, a leading dot — hidden-file semantics that would
+    // drop the file from the listing — and empty). Public so the GUI can
+    // validate against the same rule it will be held to.
     static bool isValidProfileName(const QString& name);
 
     // Import a profile file into the store. Accepts the native <MidiProfile>
