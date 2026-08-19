@@ -3803,6 +3803,26 @@ endforeach()
 #     find "$HOME/.cache/aethersdr" -newer build/CMakeCache.txt   # must be empty
 set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
 
+# The per-plan bound itself. MUST BE SET: it is referenced three times below —
+# the ctest ENVIRONMENT property, the compile definition behind
+# TestWdspWisdomIsolation.cpp, and through those the AETHER_WDSP_FFTW_TIMELIMIT
+# the app reads — and an undefined CMake variable expands to the EMPTY STRING at
+# every one of them rather than erroring. WdspChannel treats an empty value as
+# "unset" and returns -1.0 (plannerTimeLimitSeconds()), so the planner runs
+# fully unbounded and the entire bound is silently inert.
+#
+# That failure is invisible to the isolation re-check documented above: the
+# wisdom REDIRECT still works with the bound dead, so no file appears under
+# $HOME/.cache/aethersdr and the check passes. It is also invisible to the test
+# suite, which still passes — just slowly. Measured cold on macOS/arm64,
+# hl2_backend_test: 124.8 s with the variable undefined, 22.5 s with it set
+# here, of which only 2.4 s is CPU. The rest is socket and timer waits.
+#
+# 0.001 s per plan, not per process — FFTW cannot interrupt a measurement in
+# progress, so the total still scales with the number of distinct plans.
+set(AETHER_TEST_FFTW_TIMELIMIT "0.001" CACHE STRING
+    "Seconds FFTW may spend measuring each plan under test (empty = unbounded)")
+
 # The isolation TU, compiled once and linked into every test target below. An
 # OBJECT library rather than STATIC on purpose: its only content is a
 # namespace-scope object whose CONSTRUCTOR is the entire point, and a static
