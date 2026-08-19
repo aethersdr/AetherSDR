@@ -2,10 +2,17 @@
 
 #include <QFlags>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QVariantMap>
 
 namespace AetherSDR {
+
+struct TxPowerBand {
+    double lowHz = 0.0;
+    double highHz = 0.0;
+    double maxWatts = 0.0;
+};
 
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
@@ -102,6 +109,19 @@ struct RadioCapabilities {
     // keying intent regardless of client requests.
     bool canTransmit = false;
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
+    // Optional band-specific barefoot limits. Empty means the single maximum
+    // above applies across the radio's transmit range.
+    QVector<TxPowerBand> txPowerBands;
+
+    [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const
+    {
+        for (const TxPowerBand& band : txPowerBands) {
+            if (frequencyHz >= band.lowHz && frequencyHz <= band.highHz) {
+                return band.maxWatts;
+            }
+        }
+        return txPowerMaxWatts;
+    }
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams
@@ -261,6 +281,10 @@ struct RadioCapabilities {
     // TunerModel::presenceChanged), and the HL2 declares it false while
     // genuinely having a PA. It already means something other than this.
     bool hasSupplyVoltageTelemetry = false;
+    bool hasPaTemperatureTelemetry = false;
+    bool hasMainFanTelemetry = false;
+    // Zero means no PA-current meter. Non-zero is the face maximum in amps.
+    double paCurrentMaxAmps = 0.0;
 
     // The radio exposes SELECTABLE HARDWARE microphone inputs — the Phone
     // applet's MIC / BAL / LINE / ACC choices, which are FlexRadio's front and
@@ -278,6 +302,35 @@ struct RadioCapabilities {
     // hear network audio produces a transmission with no modulation, which
     // looks like a hardware fault.
     bool hasSelectableMicInputs = false;
+    // Operator-facing input names. Empty means the client cannot select one.
+    QStringList micInputChoices;
+    // Empty means the processor follows the backend's existing all-mode
+    // behaviour. A non-empty list restricts PROC/compression to those modes.
+    QStringList speechProcessorModes;
+
+    // FM repeater-access modes this backend can actually command. Values are
+    // the canonical SliceModel tokens; the UI supplies the translated labels.
+    // Keep this explicit per backend so an Icom extension cannot silently add
+    // unsupported DTCS choices to the shipping Flex surface.
+    QStringList fmRepeaterAccessModes;
+    // Independent TX/RX CTCSS, DTCS polarity, and native duplex direction.
+    // False preserves the established Flex offset/reverse behavior.
+    bool hasExtendedFmRepeaterControls = false;
+
+    // Radio-side downward expander/compander exposed by the Phone panel.
+    // This is a distinct command from ordinary speech compression: an Icom
+    // supports PROC but has no Flex DEXP verb.
+    bool hasDownwardExpander = false;
+    bool hasContinuousSpeechProcessorLevel = false;
+    // VOX enable/gain and VOX hang time are not universally the same feature.
+    bool hasVoxDelayControl = false;
+    // The Phone panel's transmitted-audio passband reaches real hardware/DSP.
+    bool hasTxFilterControl = false;
+
+    // The operator can select among receive antenna inputs through this
+    // backend. False suppresses the ANT panel; a fixed band connector is
+    // status, not a selectable control.
+    bool hasSelectableRxAntenna = false;
 
     // Transmit audio reaches this backend through IRadioBackend::submitTxAudio
     // rather than through a Flex DAX/VITA-49 stream.
@@ -374,6 +427,10 @@ struct RadioCapabilities {
     // every family and must never be gated on this — on a radio reporting false
     // it is the only automatic floor the operator has.
     bool hasRadioSideWaterfallAutoBlack = false;
+    // Frequency-stamped history is useful for continuously pannable receivers.
+    // Radios whose scope jumps as one hardware aperture should start a fresh
+    // history on a large retune instead of exposing a partly black overlap.
+    bool preservesWaterfallHistoryOnLargeRetune = true;
 
     // NO hasTrackingNotchFilters HERE, deliberately. TNF looks like it belongs
     // beside the three below — TnfModel's whole surface is `tnf create/remove/

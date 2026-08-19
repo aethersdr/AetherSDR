@@ -104,7 +104,11 @@ static void testPowerAndOthers()
 
     check(near(meterValue(MeterId::Comp, 130, 0), 15.0), "COMP 15 dB");
     check(near(meterValue(MeterId::Vd, 75, 0), 5.0), "Vd 5 V");
+    check(near(meterValue(MeterId::Vd, 185, 0, 0xA2), 13.8),
+          "IC-9700 Vd uses its desktop calibration");
     check(near(meterValue(MeterId::Id, 121, 0), 2.0), "Id 2 A");
+    check(near(meterValue(MeterId::Id, 121, 0, 0xA2), 10.0),
+          "IC-9700 Id uses its 20 A calibration");
     check(near(meterValue(MeterId::Vd, 13, 0, 0xB6), 10.0),
           "IC-7300MK2 Vd uses its desktop calibration");
     check(near(meterValue(MeterId::Id, 97, 0, 0xB6), 10.0),
@@ -155,6 +159,13 @@ static void testPollerVisibilityAndTxSplit()
     auto tx = p.due(3000);
     check(contains(tx, MeterId::Swr), "and IS polled while transmitting");
     check(!contains(tx, MeterId::SMeter), "while the RX-only S-meter stops");
+
+    p.markAnswered(MeterId::Swr, 3000);
+    p.setTransmitting(false);
+    p.setTransmitting(true);
+    auto rekey = p.due(3010);
+    check(contains(rekey, MeterId::Swr),
+          "a new TX edge bypasses the previous transmission's poll interval");
 }
 
 static void testPollerInFlight()
@@ -365,11 +376,19 @@ static void testPowerCurveIsNotShared()
     const IcomModel* ic705 = modelForCivAddress(0xA4);
     const IcomModel* ic9700 = modelForCivAddress(0xA2);
     check(ic705 && !powerCurveFor(*ic705).empty(), "the IC-705 has a measured watts curve");
-    // Handing back the IC-705's curve for another radio would produce a watts
-    // figure an operator would act on, derived from a different PA. Empty means
-    // "report percent", which is honest.
-    check(ic9700 && powerCurveFor(*ic9700).empty(),
-          "another model gets NO curve rather than the IC-705's");
+    // IC-9700 Po is a relative indication on every module, not calibrated
+    // watts inferred from each band's advertised maximum output.
+    check(ic9700 && !powerCurveFor(*ic9700, 144'000'000ULL).empty(),
+          "the IC-9700 has its own relative Po curve");
+    check(ic9700 && near(meterValue(MeterId::Power, 213, 0, 0xA2,
+                                    144'000'000ULL), 100.0),
+          "IC-9700 2 m nominal Po is 100 percent");
+    check(ic9700 && near(meterValue(MeterId::Power, 213, 0, 0xA2,
+                                    440'000'000ULL), 100.0),
+          "IC-9700 70 cm nominal Po is also 100 percent");
+    check(ic9700 && near(meterValue(MeterId::Power, 213, 0, 0xA2,
+                                    1'296'000'000ULL), 100.0),
+          "IC-9700 23 cm nominal Po is also 100 percent");
     check(powerCurveFor(unknownModel()).empty(), "and nor does an unknown radio");
 }
 

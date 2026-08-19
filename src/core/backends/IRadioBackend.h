@@ -106,6 +106,10 @@ public:
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
+    // Some radios require an acknowledged, asynchronous logout after their
+    // connected edge drops. The application may keep its live object graph
+    // until this becomes false; ordinary backends complete immediately.
+    virtual bool shutdownPending() const { return false; }
 
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.
@@ -579,6 +583,7 @@ public:
     {
         Q_UNUSED(level);
     }
+    virtual void setMicInput(const QString& input) { Q_UNUSED(input); }
 
     // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
     //

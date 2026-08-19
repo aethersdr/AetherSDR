@@ -143,6 +143,10 @@ public:
     // Same range update, but snaps instead of using the small pan-follow
     // animation. Center Lock uses this so the locked slice stays pinned.
     void setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz);
+    void setPreserveWaterfallHistoryOnLargeRetune(bool preserve)
+    {
+        m_preserveWaterfallHistoryOnLargeRetune = preserve;
+    }
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
@@ -394,6 +398,19 @@ public:
             reacquireNoiseFloorLock();
         }
         markOverlayDirty();
+    }
+    void setRfGainUnitSuffix(const QString& suffix) {
+        if (m_rfGainUnitSuffix != suffix) {
+            m_rfGainUnitSuffix = suffix;
+            markOverlayDirty();
+        }
+    }
+    void setPreampIndicator(const QString& label) {
+        const QString visibleLabel = label == QLatin1String("OFF") ? QString() : label;
+        if (m_preampIndicator != visibleLabel) {
+            m_preampIndicator = visibleLabel;
+            markOverlayDirty();
+        }
     }
     void setWideActive(bool on) {
         if (m_wideActive != on) {
@@ -1083,6 +1100,7 @@ private:
     // large fixed buffers behind indirection so this can't silently regress.
     static_assert(sizeof(WaterfallStreamState) < 16 * 1024);
     void clearCurrentWaterfallRows();
+    bool m_preserveWaterfallHistoryOnLargeRetune{true};
     void resetKiwiSdrWaterfallDisplayRange();
     void resetCurrentWaterfallRowsForSize(const QSize& waterfallSize,
                                           const QSize& historySize);
@@ -1741,6 +1759,8 @@ private:
     bool m_wnbActive{false};
     bool m_wnbUpdating{false};
     int  m_rfGainValue{0};
+    QString m_rfGainUnitSuffix{QStringLiteral(" dB")};
+    QString m_preampIndicator;
     bool m_wideActive{false};
 
     // HF propagation forecast overlay

@@ -110,6 +110,13 @@ struct SliceDelta {
     // FM duplex/repeater
     std::optional<QString>     fmToneMode;
     std::optional<double>      fmToneValue;
+    // Extended repeater access. fmToneValue remains the Flex-compatible TX
+    // CTCSS value; these fields carry the independent IC-9700 registers.
+    std::optional<double>      fmToneTxValue;
+    std::optional<double>      fmToneRxValue;
+    std::optional<int>         fmDtcsCode;
+    std::optional<bool>        fmDtcsTxReverse;
+    std::optional<bool>        fmDtcsRxReverse;
     std::optional<QString>     repeaterOffsetDir;
     std::optional<double>      fmRepeaterOffsetFreq;
     std::optional<double>      txOffsetFreq;

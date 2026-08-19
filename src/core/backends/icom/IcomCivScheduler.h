@@ -84,6 +84,10 @@ public:
     std::uint64_t enqueue(Request request, std::int64_t nowMs);
     [[nodiscard]] std::optional<Dispatch> takeNext(std::int64_t nowMs);
     [[nodiscard]] Observation observe(const CivFrame& frame, std::int64_t nowMs);
+    // Discard queued periodic reconciliation/maintenance work while preserving
+    // operator, PTT and meter traffic. An already-dispatched read remains
+    // tracked until reply/timeout so a late answer cannot become authoritative.
+    void dropBackground() noexcept;
 
     void reset() noexcept;
     [[nodiscard]] Stats stats() const;

@@ -118,14 +118,18 @@ static void testPasscode()
 
 static void testLoginAndAuth()
 {
-    auto login = buildLogin(0x11111111, 0x22222222, 3, 0xBEEF, "beer", "beerbeer");
+    auto login = buildLogin(0x11111111, 0x22222222, 3, 0xBEEF,
+                            "beer", "beerbeer", "AetherSDR-a1b2c3");
     check(login.size() == kLenLogin, "login is 128 bytes");
     check(login[0x14] == 0x01, "requestreply is 0x01");
     check(login[0x15] == 0x00, "login requesttype is 0x00");
     check(login[0x1a] == 0xef && login[0x1b] == 0xbe,
           "login carries the caller's little-endian token-request ID");
-    check(std::memcmp(login.data() + 0x60, "icom-pc", 7) == 0,
-          "the client name is PLAIN TEXT while the credentials are not");
+    check(std::memcmp(login.data() + 0x60, "AetherSDR-a1b2c3", 16) == 0,
+          "the caller's client name is plain text while the credentials are not");
+    auto longName = buildLogin(1, 2, 0, 1, "u", "p", "AetherSDR-name-is-too-long");
+    check(std::memcmp(longName.data() + 0x60, "AetherSDR-name-i", 16) == 0,
+          "an over-long client name stops at the radio's 16-byte field boundary");
     const auto user = encodePasscode("beer");
     check(std::equal(user.begin(), user.end(), login.begin() + 0x40), "username at 0x40");
     const auto pass = encodePasscode("beerbeer");
@@ -134,10 +138,13 @@ static void testLoginAndAuth()
     // A login reply carrying the bad-credentials sentinel.
     std::vector<std::uint8_t> reply(kLenLoginReply, 0);
     reply[0] = 0x60;
+    reply[0x1a] = 0xef; reply[0x1b] = 0xbe;
     reply[0x30] = 0xff; reply[0x31] = 0xff; reply[0x32] = 0xff; reply[0x33] = 0xfe;
     AuthId id{};
     check(parseLoginReply(reply, id) == LoginResult::BadCredentials,
           "0xFFFFFFFE is specifically bad username/password");
+    check(id[0] == 0xef && id[1] == 0xbe,
+          "a rejected login still returns its correlation identity");
 
     // A successful one hands back the six auth bytes.
     std::vector<std::uint8_t> ok(kLenLoginReply, 0);
@@ -153,6 +160,15 @@ static void testLoginAndAuth()
     check(auth[0x16] == 0x00 && auth[0x17] == 0x04,
           "the inner sequence is a big-endian u16 at 0x16");
     check(std::equal(id.begin(), id.end(), auth.begin() + 0x1a), "auth id is echoed at 0x1a");
+
+    auto deauthReply = auth;
+    deauthReply[0x14] = 0x02;
+    deauthReply[0x15] = static_cast<std::uint8_t>(AuthKind::Deauth);
+    check(isAuthOperationReply(deauthReply, AuthKind::Deauth, 4, id),
+          "token-removal acknowledgement correlates by operation, sequence and auth id");
+    deauthReply[0x17] ^= 0x01;
+    check(!isAuthOperationReply(deauthReply, AuthKind::Deauth, 4, id),
+          "a stale token-removal acknowledgement is rejected");
 
     const auto seq255 = buildAuth(1, 2, 0x00ff, id, AuthKind::Renew);
     const auto seq256 = buildAuth(1, 2, 0x0100, id, AuthKind::Renew);
@@ -323,6 +339,10 @@ static void testSerialEnvelope()
           "serial open is 0xc0 with magic 0x05");
     auto close = buildSerialOpen(1, 2, 1, false);
     check(close[0x15] == 0x00, "serial close is magic 0x00");
+    auto restart = buildSerialRestart(1, 2, 2);
+    check(restart.size() == kLenOpenClose && restart[0x10] == 0xc0
+              && restart[0x15] == 0x04,
+          "serial restart is 0xc0 with data-start magic 0x04");
 }
 
 static void testAudioEnvelope()

@@ -82,6 +82,35 @@ QString statusText(HealthApplet& applet)
     return label ? label->text() : QStringLiteral("<missing>");
 }
 
+QString powerText(HealthApplet& applet)
+{
+    const QList<QLabel*> labels = applet.findChildren<QLabel*>();
+    for (QLabel* label : labels) {
+        if (label->text().startsWith(QStringLiteral("PWR "))) {
+            return label->text();
+        }
+    }
+    return QStringLiteral("<missing>");
+}
+
+void testRelativePowerIsNotLabelledWatts()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(1, QStringLiteral("FWDPWR"),
+                              QStringLiteral("Percent")));
+    model.defineMeter(txMeter(2, QStringLiteral("SWR"), QStringLiteral("SWR")));
+    HealthApplet applet;
+    applet.setMeterModel(&model);
+    applet.show();
+
+    model.updateValues({1, 2}, {50, rawMeterValue(1.1f)});
+    processEventsFor(120);
+    const QString text = powerText(applet);
+    report("relative forward power is labelled as percent, not watts",
+           text.contains(QLatin1Char('%')) && !text.contains(QLatin1String(" W")),
+           text);
+}
+
 void testUnkeyTransientDoesNotLatchWarning()
 {
     MeterModel model;
@@ -177,6 +206,7 @@ int main(int argc, char** argv)
     testKeyTransientDoesNotPoisonBaseline();
     testIntermittentSwrOutliersDoNotLatchWarning();
     testSustainedHighSwrStillWarnsAtLowPower();
+    testRelativePowerIsNotLabelledWatts();
 
     std::printf("\n%d health applet test(s) failed\n", g_failed);
     return g_failed == 0 ? 0 : 1;

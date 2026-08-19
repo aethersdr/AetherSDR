@@ -58,6 +58,12 @@ public:
         // actually fires ahead of the steady cadence, rather than only that
         // the flag was set.
         int initialMaintenanceMs = 30000;
+        // IC-9700 orderly shutdown timing. Production follows the intervals
+        // verified against SDR9700; tests shorten them to exercise retry and
+        // timeout behavior without slowing the suite.
+        int shutdownSettleMs = 500;
+        int shutdownRetryMs = 500;
+        int shutdownMaxAttempts = 8;
         // Zero selects a fresh random nonzero ID. Tests may override it to
         // prove reconnect correlation deterministically.
         quint16 tokenRequestId = 0;
@@ -72,6 +78,7 @@ public:
 
     Q_INVOKABLE bool start(const AetherSDR::icom::IcomSession::Params& params);
     Q_INVOKABLE void stop();
+    [[nodiscard]] bool isStopping() const noexcept { return m_stopping; }
 
     [[nodiscard]] bool isConnected() const noexcept { return m_connected; }
     [[nodiscard]] QString deviceName() const { return m_deviceName; }
@@ -93,6 +100,9 @@ public:
 
     // Send one CI-V frame. Frames are built by CivCodec's cmd* helpers.
     void sendCiv(std::span<const std::uint8_t> frame);
+    // Send one RS-BA1 CI-V data restart while retaining the authenticated
+    // control and audio streams. The backend owns the bounded retry policy.
+    bool reopenCivPipe();
     // Queue transmit audio (mono float). Nothing leaves until a full 20 ms
     // frame is available — the radio's jitter buffer reads a short packet as a
     // discontinuity.
@@ -112,6 +122,9 @@ public:
 signals:
     void connected(const QString& deviceName);
     void disconnected(const QString& reason);
+    // Emitted after an asynchronous IC-9700 token-removal handshake has
+    // finished and all three local sockets are closed.
+    void shutdownFinished();
     // One decoded CI-V frame from the radio. Echoes of our own commands are
     // already filtered out — see onSerialPayload().
     void civFrameReady(const AetherSDR::icom::CivFrame& frame);
@@ -128,6 +141,7 @@ private slots:
     void onTokenRenew();
     void onTxPump();
     void onCivFrameTimeout();
+    void onShutdownStep();
 
 private:
     void fail(const QString& reason);
@@ -135,6 +149,10 @@ private:
     [[nodiscard]] bool isCurrentControlPacket(std::span<const std::uint8_t> packet) const;
     void requestStreamsIfReady();
     void openMediaStreams();
+    void beginOrderlyShutdown();
+    void finishShutdown();
+    void stopImmediate();
+    void stopOperationalTimers();
 
     Params m_params;
 
@@ -148,6 +166,7 @@ private:
     // Re-sends the CI-V data-stream open until the radio actually starts
     // streaming. One open is not reliably enough — see onSerialReady().
     QTimer* m_civOpenRetry = nullptr;
+    QTimer* m_shutdownTimer = nullptr;
     bool    m_civDataSeen = false;
     int     m_civOpenAttempts = 0;
 
@@ -181,6 +200,9 @@ private:
     bool m_streamsRequested = false;
     bool m_streamGranted = false;
     bool m_connected = false;
+    bool m_stopping = false;
+    int m_shutdownAttempts = 0;
+    std::uint16_t m_shutdownInnerSeq = 0;
     // Re-entrancy guard: a teardown makes several streams fail at once, and
     // each one calling stop() again would delete objects mid-signal.
     bool m_failing = false;

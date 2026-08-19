@@ -464,6 +464,12 @@ void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
 {
     if (m_userDisconnected) return;
     if (m_radioModel.isConnected()) return;
+    // RadioModel owns retries once an attempt reaches the backend. Discovery
+    // may see the same radio while that retry is pending; a second RS-BA1
+    // login would displace the first session on a single-client Icom radio.
+    if (m_radioModel.isConnectAttemptInFlight()) {
+        return;
+    }
     if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
         return;
     const QString lastSerial = AppSettings::instance()
@@ -1769,6 +1775,10 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::rfGainInfoChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setRfGainRange);
+        connect(pan, &PanadapterModel::rfGainInfoChanged,
+                this, [applet](int, int, int, const QString& unitSuffix) {
+            applet->spectrumWidget()->setRfGainUnitSuffix(unitSuffix);
+        });
         connect(pan, &PanadapterModel::rfGainChanged,
                 this, [applet](int gain) {
             applet->spectrumWidget()->setRfGain(gain);
@@ -1783,6 +1793,20 @@ void MainWindow::wirePanLifecycle()
         connect(pan, &PanadapterModel::preampStepChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setPreampStep);
+        const auto updatePreampIndicator = [pan, applet] {
+            const QStringList labels = pan->preampLabels();
+            const int step = pan->preampStep();
+            applet->spectrumWidget()->setPreampIndicator(
+                step >= 0 && step < labels.size() ? labels.at(step) : QString());
+        };
+        connect(pan, &PanadapterModel::preampLabelsChanged,
+                this, [updatePreampIndicator](const QStringList&) {
+            updatePreampIndicator();
+        });
+        connect(pan, &PanadapterModel::preampStepChanged,
+                this, [updatePreampIndicator](int) {
+            updatePreampIndicator();
+        });
         connect(pan, &PanadapterModel::attenuatorLabelsChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setAttenuatorLabels);
@@ -1805,8 +1829,10 @@ void MainWindow::wirePanLifecycle()
         applet->spectrumWidget()->overlayMenu()->setRfGainRange(
             pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
             pan->rfGainUnitSuffix());
+        applet->spectrumWidget()->setRfGainUnitSuffix(pan->rfGainUnitSuffix());
         applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
         applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
+        updatePreampIndicator();
         applet->spectrumWidget()->overlayMenu()->setAttenuatorLabels(pan->attenuatorLabels());
         applet->spectrumWidget()->overlayMenu()->setAttenuatorStep(pan->attenuatorStep());
 

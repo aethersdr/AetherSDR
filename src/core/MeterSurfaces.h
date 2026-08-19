@@ -80,7 +80,7 @@ inline constexpr std::array<MeterSurface, 9> kMeterSurfaces{{
     {"SLC:LEVEL", "dBm", "MeterModel::sLevelChanged / sLevel()",
      "S-meter applet; VFO slice signal flag; AGC calibration dialog", true},
 
-    {"TX:FWDPWR", "Watts,dBm", "MeterModel::directionalPowerMetersChanged / fwdPowerInstant()",
+    {"TX:FWDPWR", "Watts,dBm,Percent", "MeterModel::directionalPowerMetersChanged / fwdPowerInstant()",
      "TX Controls power gauge (PEP peak-hold); Health applet", true},
 
     {"TX:REFPWR", "Watts,dBm", "MeterModel::directionalPowerMetersChanged / reflectedPower()",

@@ -90,6 +90,14 @@ public:
         publishAutomationState();
         update();
     }
+    void setUnit(const QString& unit) {
+        if (m_unit == unit) {
+            return;
+        }
+        m_unit = unit;
+        publishAutomationState();
+        update();
+    }
 
     // The normalised [0,1] fill fraction, after ballistics. Distinct from
     // value()/min()/max(): those are the INPUTS, this is the derived state that

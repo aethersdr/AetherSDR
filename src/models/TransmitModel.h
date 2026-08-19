@@ -56,6 +56,7 @@ public:
     bool    micAcc()                const { return m_micAcc; }
     bool    speechProcessorEnable() const { return m_speechProcEnable; }
     int     speechProcessorLevel()  const { return m_speechProcLevel; }
+    int     speechProcessorLevelMaximum() const { return m_speechProcLevelMaximum; }
     bool    companderOn()           const { return m_companderOn; }
     int     companderLevel()        const { return m_companderLevel; }
     bool    daxOn()                 const { return m_daxOn; }
@@ -239,6 +240,7 @@ public:
     void setMicAcc(bool on);
     void setSpeechProcessorEnable(bool on);
     void setSpeechProcessorLevel(int level);
+    void setSpeechProcessorLevelMaximum(int maximum);
     // Adopt speech-processor state that did NOT come from this model — the
     // client-side compressor on a host-modulating backend, where PROC drives our
     // own DSP and the operator can also reach that same compressor through the
@@ -332,6 +334,7 @@ signals:
     // this, or a Flex's own `transmit set miclevel=` echo would be handed
     // straight back to the seam as a fresh command.
     void micLevelCommandIssued(int level);
+    void micInputCommandIssued(const QString& input);
     // The operator moved PROC or its NOR/DX/DX+ level. OPERATOR INTENT ONLY,
     // for the same reason as txFilterCommandIssued — and here the distinction is
     // what protects the operator's own work: the client compressor these drive is
@@ -414,6 +417,7 @@ private:
     bool    m_micAcc{false};
     bool    m_speechProcEnable{false};
     int     m_speechProcLevel{0};
+    int     m_speechProcLevelMaximum{2};
     bool    m_companderOn{false};
     int     m_companderLevel{0};
     bool    m_daxOn{false};

@@ -364,7 +364,8 @@ std::array<std::uint8_t, 16> encodePasscode(std::string_view s)
 
 std::vector<std::uint8_t> buildLogin(std::uint32_t localSid, std::uint32_t remoteSid,
                                      std::uint16_t innerSeq, std::uint16_t tokenRequestId,
-                                     std::string_view username, std::string_view password)
+                                     std::string_view username, std::string_view password,
+                                     std::string_view clientName)
 {
     auto p = framed(kLenLogin, PacketType::Idle, 0, localSid, remoteSid);
     writeInner(p, kLenLogin - kHeaderSize, 0x01, 0x00, innerSeq);
@@ -381,11 +382,10 @@ std::vector<std::uint8_t> buildLogin(std::uint32_t localSid, std::uint32_t remot
     std::copy(user.begin(), user.end(), p.begin() + 0x40);
     std::copy(pass.begin(), pass.end(), p.begin() + 0x50);
 
-    // The client name, in PLAIN TEXT, unlike the credentials above it. Both
-    // reference implementations send exactly "icom-pc"; it is not known whether
-    // the radio validates it, so we do not get creative.
-    static constexpr char kClientName[] = "icom-pc";
-    std::memcpy(p.data() + 0x60, kClientName, sizeof(kClientName) - 1);
+    // The client/station name is a plain-text 16-byte field, unlike the
+    // credentials above it. Truncate at the radio's field boundary.
+    const std::size_t clientNameLen = std::min<std::size_t>(clientName.size(), 16);
+    std::memcpy(p.data() + 0x60, clientName.data(), clientNameLen);
     return p;
 }
 
@@ -393,12 +393,15 @@ LoginResult parseLoginReply(std::span<const std::uint8_t> pkt, AuthId& authId)
 {
     if (!startsWith(pkt, kLenLoginReply, 0x60))
         return LoginResult::NotALoginReply;
+    // Copy the echoed request identity even on rejection. A delayed rejection
+    // from an earlier login must be correlated before it is allowed to condemn
+    // the credentials used by the current attempt.
+    std::copy_n(pkt.begin() + 0x1a, authId.size(), authId.begin());
     // 0xFFFFFFFE in the error word is specifically "bad username/password", as
     // opposed to the 0xFFFFFF... prefix the status packet uses for a general
     // auth failure. Distinguishing them is what lets the UI say which one.
     if (pkt[0x30] == 0xff && pkt[0x31] == 0xff && pkt[0x32] == 0xff && pkt[0x33] == 0xfe)
         return LoginResult::BadCredentials;
-    std::copy_n(pkt.begin() + 0x1a, authId.size(), authId.begin());
     return LoginResult::Ok;
 }
 
@@ -429,6 +432,18 @@ AuthReply parseAuthReply(std::span<const std::uint8_t> pkt)
     out.result = out.response == 0 ? AuthReplyResult::Accepted
                                    : AuthReplyResult::Nonzero;
     return out;
+}
+
+bool isAuthOperationReply(std::span<const std::uint8_t> pkt, AuthKind kind,
+                          std::uint16_t innerSeq, const AuthId& authId)
+{
+    if (!startsWith(pkt, kLenToken, 0x40)
+        || pkt[0x14] != 0x02
+        || pkt[0x15] != static_cast<std::uint8_t>(kind)
+        || getBe16(pkt, 0x16) != innerSeq) {
+        return false;
+    }
+    return std::equal(authId.begin(), authId.end(), pkt.begin() + 0x1a);
 }
 
 bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId)
@@ -527,6 +542,15 @@ std::vector<std::uint8_t> buildSerialOpen(std::uint32_t localSid, std::uint32_t 
     p[0x12] = 0x00;
     putBe16(p, 0x13, sendSeq);
     p[0x15] = open ? 0x05 : 0x00;
+    return p;
+}
+
+std::vector<std::uint8_t> buildSerialRestart(std::uint32_t localSid,
+                                             std::uint32_t remoteSid,
+                                             std::uint16_t sendSeq)
+{
+    auto p = buildSerialOpen(localSid, remoteSid, sendSeq, true);
+    p[0x15] = 0x04;
     return p;
 }
 

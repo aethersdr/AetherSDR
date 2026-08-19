@@ -102,6 +102,12 @@ int main(int argc, char** argv)
     check(waitFor([&] { return radio.serialOpened(); }),
           "the CI-V pipe is explicitly opened after its handshake");
 
+    const int opensBeforeRecovery = radio.serialOpenCount();
+    check(session.reopenCivPipe(),
+          "a live session can re-open only its CI-V pipe");
+    check(waitFor([&] { return radio.serialOpenCount() > opensBeforeRecovery; }),
+          "targeted CI-V recovery sends another serial-open packet");
+
     // The ports the client announced must be the ones it actually bound. This
     // is the reason binding is separable from handshaking.
     check(radio.announcedCivPort() != 0 && radio.announcedAudioPort() != 0,
@@ -204,6 +210,78 @@ int main(int argc, char** argv)
     check(deauthSeqs.size() >= 2 && deauthSeqs[0] != 0 && deauthSeqs[1] != 0
               && deauthSeqs[0] != deauthSeqs[1],
           "each deauthentication has a distinct nonzero tracked outer sequence");
+
+    // IC-9700 shutdown is stricter than the legacy best-effort path above. Its
+    // LAN server must see the media departure, then acknowledge token removal,
+    // before the control endpoint departs. Drop the first acknowledgement to
+    // prove the retry is functional rather than merely scheduled.
+    {
+        FakeIc705 ic9700;
+        ic9700.setCivAddress(0xA2);
+        ic9700.setDeviceName("IC-9700");
+        ic9700.setIgnoredDeauthReplies(1);
+        IcomSession ic9700Session;
+        QString ic9700Name;
+        int shutdownFinished = 0;
+        QObject::connect(&ic9700Session, &IcomSession::connected, &app,
+                         [&](const QString& name) { ic9700Name = name; });
+        QObject::connect(&ic9700Session, &IcomSession::shutdownFinished, &app,
+                         [&] { ++shutdownFinished; });
+        IcomSession::Params ic9700Params = p;
+        ic9700Params.controlPort = ic9700.controlPort();
+        ic9700Params.serialPort = ic9700.serialPort();
+        ic9700Params.audioPort = ic9700.audioPort();
+        ic9700Params.civAddress = 0xA2;
+        ic9700Params.tokenRequestId = 0x9700;
+        ic9700Params.shutdownSettleMs = 10;
+        ic9700Params.shutdownRetryMs = 10;
+        check(ic9700Session.start(ic9700Params), "IC-9700 session starts");
+        check(waitFor([&] { return ic9700Name == QStringLiteral("IC-9700"); }),
+              "IC-9700 session reaches connected state before shutdown test");
+        ic9700Session.stop();
+        check(ic9700Session.isStopping(),
+              "IC-9700 stop remains alive while token removal is unacknowledged");
+        check(waitFor([&] { return shutdownFinished == 1; }, 2500),
+              "IC-9700 shutdown finishes after a correlated token-removal acknowledgement");
+        check(ic9700.deauthOuterSequences().size() == 2,
+              "IC-9700 retries token removal after a dropped acknowledgement");
+        check(ic9700.deauthFollowedSerialClose(),
+              "IC-9700 closes the CI-V stream before removing its token");
+        check(!ic9700Session.isStopping() && !ic9700Session.isConnected(),
+              "IC-9700 shutdown leaves no live local session");
+    }
+
+    // A missing radio acknowledgement must not retain the backend forever.
+    // Bound the retry count, then close the control endpoint as a fallback.
+    {
+        FakeIc705 silentIc9700;
+        silentIc9700.setCivAddress(0xA2);
+        silentIc9700.setDeviceName("IC-9700");
+        silentIc9700.setIgnoredDeauthReplies(99);
+        IcomSession timeoutSession;
+        QString timeoutName;
+        int shutdownFinished = 0;
+        QObject::connect(&timeoutSession, &IcomSession::connected, &app,
+                         [&](const QString& name) { timeoutName = name; });
+        QObject::connect(&timeoutSession, &IcomSession::shutdownFinished, &app,
+                         [&] { ++shutdownFinished; });
+        IcomSession::Params timeoutParams = p;
+        timeoutParams.controlPort = silentIc9700.controlPort();
+        timeoutParams.serialPort = silentIc9700.serialPort();
+        timeoutParams.audioPort = silentIc9700.audioPort();
+        timeoutParams.civAddress = 0xA2;
+        timeoutParams.shutdownSettleMs = 10;
+        timeoutParams.shutdownRetryMs = 10;
+        timeoutParams.shutdownMaxAttempts = 3;
+        check(timeoutSession.start(timeoutParams), "IC-9700 timeout session starts");
+        check(waitFor([&] { return timeoutName == QStringLiteral("IC-9700"); }),
+              "IC-9700 timeout session connects before shutdown");
+        timeoutSession.stop();
+        check(waitFor([&] { return shutdownFinished == 1; }, 500),
+              "IC-9700 shutdown has a bounded fallback when acknowledgements are lost");
+        check(silentIc9700.deauthOuterSequences().size() == 3,
+              "IC-9700 shutdown stops at the configured retry limit");
+    }
 
     // A reconnect is a new login identity, not a replay of token request zero.
     // The live IC-7300MK2 accepts the login itself but rejects the first token
@@ -327,7 +405,7 @@ int main(int argc, char** argv)
         check(waitFor([&] { return !failedLoginReason.isEmpty(); }),
               "a current-session auth failure before the stream grant is fatal");
         check(failedLoginReason.contains(QStringLiteral("authentication failed")),
-              "the pre-grant failure retains its actionable reason");
+              "other Icom models retain the existing actionable login diagnostic");
         failedLoginSession.stop();
     }
 

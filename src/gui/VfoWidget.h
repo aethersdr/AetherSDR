@@ -610,6 +610,7 @@ public:
     // the VFO grid was simply never given it, so the two filter surfaces
     // in the app disagreed about what the radio could do.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setFmRepeaterAccessModes(const QStringList& modes);
 
     // Reflect whether any client-side AetherDSP NR module (NR2 / NR4 / MNR /
     // BNR / DFNR / RN2) is active by accenting the ADSP launcher, so the cue is
@@ -624,6 +625,7 @@ public:
     void setMarkerWidth(int widthPx);
     void setFilterEdgesHidden(bool hide);
 private:
+    void updateFmToneControlVisibility(const QString& mode);
     int  m_markerWidth{1};
     bool m_filterEdgesHidden{false};
     // Marker: single button cycling Off → 1 px → 3 px on click.  Label
@@ -710,6 +712,10 @@ private:
     QWidget*       m_fmToneContainer{nullptr};
     QComboBox*     m_fmToneModeCmb{nullptr};
     QComboBox*     m_fmToneValueCmb{nullptr};
+    QComboBox*     m_fmToneRxValueCmb{nullptr};
+    QComboBox*     m_fmDtcsCodeCmb{nullptr};
+    QComboBox*     m_fmDtcsTxPolarityCmb{nullptr};
+    QComboBox*     m_fmDtcsRxPolarityCmb{nullptr};
     QDoubleSpinBox* m_fmOffsetSpin{nullptr};
     QPushButton*   m_fmOffsetDown{nullptr};
     QPushButton*   m_fmSimplexBtn{nullptr};

@@ -306,6 +306,41 @@ void testForwardPowerHonoursItsDeclaredUnit()
         report("an undeclared unit is treated as dBm, as it always was",
                nearlyEqual(model.fwdPowerInstant(), 100.0f));
     }
+    {
+        MeterModel model;
+        int unitChanges = 0;
+        QObject::connect(&model, &MeterModel::forwardPowerUnitChanged,
+                         [&unitChanges](const QString&) { ++unitChanges; });
+        model.defineMeter(txMeter(8, "FWDPWR", "Percent"));
+        model.updateValues({8}, {50});
+        report("a relative FWDPWR percentage remains on its native scale",
+               nearlyEqual(model.fwdPowerInstant(), 50.0f));
+        report("and its declared unit is exposed to presentation consumers",
+               model.forwardPowerUnit() == QStringLiteral("Percent")
+               && unitChanges == 1);
+    }
+}
+
+void testForwardPowerHistoryDoesNotCrossTransmitEdges()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "Watts"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    model.setTransmitting(true);
+    model.updateValues({8, 10}, {80, rawDb(1.2f)});
+    const bool firstKeyReachedReading = nearlyEqual(model.fwdPower(), 80.0f);
+
+    model.setTransmitting(false);
+    const bool unkeyCleared = nearlyEqual(model.fwdPower(), 0.0f)
+        && nearlyEqual(model.fwdPowerInstant(), 0.0f)
+        && !model.swrIfLive().has_value();
+
+    model.setTransmitting(true);
+    model.updateValues({8}, {40});
+    report("MeterModel gives every transmission an unsmoothed first power sample",
+           firstKeyReachedReading && unkeyCleared
+               && nearlyEqual(model.fwdPower(), 40.0f));
 }
 
 // REFPWR was missed when FWDPWR and ALC were fixed, and MeterSurfaces.h already
@@ -332,11 +367,8 @@ void testReflectedPowerHonoursItsDeclaredUnit()
     }
 }
 
-void testAlcPercentIsMappedOntoTheGaugeRange()
+void testAlcPreservesItsDeclaredUnit()
 {
-    // The ALC consumers are a -20..0 dBFS gauge. A radio running its own ALC
-    // reports a percentage of ITS full scale; handed over raw it pins the gauge
-    // and stays there, which is what "ALC is completely pegged" looked like.
     MeterModel model;
     model.defineMeter(txMeter(11, "ALC", "Percent"));
 
@@ -344,16 +376,15 @@ void testAlcPercentIsMappedOntoTheGaugeRange()
     QObject::connect(&model, &MeterModel::swAlcChanged, [&alc](float v) { alc = v; });
 
     model.updateValues({11}, {0});
-    report("0 % ALC lands at the gauge floor", nearlyEqual(alc, -20.0f));
+    report("0 % ALC remains zero percent", nearlyEqual(alc, 0.0f));
 
     model.updateValues({11}, {50});
-    report("50 % ALC lands mid-scale", nearlyEqual(alc, -10.0f));
+    report("50 % ALC remains fifty percent", nearlyEqual(alc, 50.0f));
 
     model.updateValues({11}, {100});
-    report("100 % ALC lands at the gauge ceiling", nearlyEqual(alc, 0.0f));
+    report("100 % ALC remains full relative scale", nearlyEqual(alc, 100.0f));
 
-    // A dBFS backend must be untouched — this is a mapping for radios that
-    // cannot speak dBFS, not a reinterpretation of the ones that can.
+    // A native dBFS backend remains untouched as well.
     MeterModel dbfs;
     dbfs.defineMeter(txMeter(11, "ALC", "dBFS"));
     float passthrough = 999.0f;
@@ -914,8 +945,9 @@ int main(int argc, char** argv)
     testRemovingAdjacentMetersDoesNotClearCompPeak();
     testMicPeakAvailabilityTracksTheMeterList();
     testForwardPowerHonoursItsDeclaredUnit();
+    testForwardPowerHistoryDoesNotCrossTransmitEdges();
     testReflectedPowerHonoursItsDeclaredUnit();
-    testAlcPercentIsMappedOntoTheGaugeRange();
+    testAlcPreservesItsDeclaredUnit();
     testDirectionalPowerUsesDirectReflectedMeter();
     testNativeSwrRemainsRadioProvidedAtLowPower();
     testForwardPowerSnapsToZeroWhenTheCarrierStops();

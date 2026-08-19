@@ -5,7 +5,9 @@
 // Pure protocol: no sockets, no Qt, no hardware.
 
 #include "core/backends/icom/CivCodec.h"
+#include "models/FmRepeaterValues.h"
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -41,6 +43,11 @@ static void testFraming()
 
     auto s = buildFrameSub(kIc705, cmd::kScope, scope::kOnOff, std::array<std::uint8_t, 1>{0x01});
     check(bytesAre(s, {0xFE, 0xFE, 0xA4, 0xE0, 0x27, 0x10, 0x01, 0xFD}), "scope on frame");
+
+    const auto mainScope = cmdScopeMainSub(0xA2, false);
+    check(bytesAre(mainScope,
+                   {0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x12, 0x00, 0xFD}),
+          "IC-9700 MAIN scope selection frame");
 
     auto parsed = parseFrame(s);
     check(parsed.has_value(), "parses a sub-addressed frame");
@@ -476,10 +483,59 @@ static void testSubcommandPredicate()
                   "a bare command keeps both payload bytes");
         }
     }
-    // The eleven that carry subcommands: 12 14 15 16 18 19 1A 1C 21 26 27. A
+    // The twelve that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 26 27. A
     // change to the list is a deliberate protocol decision, so it should have
     // to come past this number rather than arrive as a silent side effect.
-    check(subAddressed == 11, "exactly eleven CI-V commands are sub-addressed");
+    check(subAddressed == 12, "exactly twelve CI-V commands are sub-addressed");
+}
+
+static void testRepeaterAccess()
+{
+    constexpr std::uint8_t radio = 0xA2;
+    check(bytesAre(cmdReadRepeaterAccess(radio),
+                   {0xFE,0xFE,0xA2,0xE0,0x16,0x5D,0xFD}),
+          "IC-9700 repeater access read");
+    check(bytesAre(cmdSetRepeaterAccess(radio, 0x09),
+                   {0xFE,0xFE,0xA2,0xE0,0x16,0x5D,0x09,0xFD}),
+          "CTCSS TX/RX access selection");
+    check(bytesAre(cmdSetTone(radio, tone::kTxCtcss, 1273),
+                   {0xFE,0xFE,0xA2,0xE0,0x1B,0x00,0x00,0x12,0x73,0xFD}),
+          "127.3 Hz TX CTCSS BCD encoding");
+    check(bytesAre(cmdSetTone(radio, tone::kDtcs, 23, true, true),
+                   {0xFE,0xFE,0xA2,0xE0,0x1B,0x02,0x11,0x00,0x23,0xFD}),
+          "DTCS 023 with independent reversed polarities");
+    const std::array<std::uint8_t, 3> dtcs{0x10,0x07,0x54};
+    const auto decoded = decodeTone(dtcs);
+    check(decoded && decoded->value == 754 && decoded->txReverse
+              && !decoded->rxReverse, "DTCS payload decoding");
+    const std::array<std::uint8_t, 3> badBcd{0x00,0x0A,0x23};
+    check(!decodeTone(badBcd), "malformed tone BCD is rejected");
+
+    check(bytesAre(cmdReadRepeaterOffset(radio),
+                   {0xFE,0xFE,0xA2,0xE0,0x0C,0xFD}),
+          "IC-9700 repeater offset read");
+    check(bytesAre(cmdSetRepeaterOffset(radio, 5'000'000ULL),
+                   {0xFE,0xFE,0xA2,0xE0,0x0D,0x00,0x00,0x05,0xFD}),
+          "5 MHz repeater offset is little-endian BCD in 100 Hz units");
+    const std::array<std::uint8_t, 3> offset{0x00,0x00,0x05};
+    check(decodeRepeaterOffset(offset) == 5'000'000ULL,
+          "repeater offset reply decodes to Hz");
+    const std::array<std::uint8_t, 3> badOffset{0x00,0x0A,0x05};
+    check(!decodeRepeaterOffset(badOffset), "malformed repeater offset BCD is rejected");
+    check(bytesAre(cmdReadDuplex(radio), {0xFE,0xFE,0xA2,0xE0,0x0F,0xFD}),
+          "IC-9700 duplex read");
+    check(bytesAre(cmdSetDuplex(radio, 0x11),
+                   {0xFE,0xFE,0xA2,0xE0,0x0F,0x11,0xFD}),
+          "IC-9700 duplex-minus write");
+}
+
+static void testRepeaterValueValidation()
+{
+    check(AetherSDR::fm::isCtcssTone(103.5), "standard CTCSS tone is accepted");
+    check(!AetherSDR::fm::isCtcssTone(103.6), "non-standard CTCSS tone is rejected");
+    check(!AetherSDR::fm::isCtcssTone(std::nan("")), "non-finite CTCSS tone is rejected");
+    check(AetherSDR::fm::isDtcsCode(23), "standard DTCS 023 code is accepted");
+    check(!AetherSDR::fm::isDtcsCode(199), "non-standard DTCS code is rejected");
 }
 
 int main()
@@ -490,6 +546,8 @@ int main()
     testModes();
     testCommands();
     testDataMode();
+    testRepeaterAccess();
+    testRepeaterValueValidation();
     testSubcommandPredicate();
 
     if (g_failures == 0)

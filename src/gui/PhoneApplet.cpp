@@ -88,6 +88,16 @@ PhoneApplet::PhoneApplet(QWidget* parent)
     setVisible(false);
 }
 
+void PhoneApplet::setControlVisibility(bool downwardExpander, bool txFilter)
+{
+    if (m_dexpRow) {
+        m_dexpRow->setVisible(downwardExpander);
+    }
+    if (m_txFilterSection) {
+        m_txFilterSection->setVisible(txFilter);
+    }
+}
+
 void PhoneApplet::buildUI()
 {
     auto* outer = new QVBoxLayout(this);
@@ -213,9 +223,9 @@ void PhoneApplet::buildUI()
 
     // ── DEXP row: toggle + level slider ────────────────────────────────
     {
-        auto* rowW = new QWidget;
-        rowW->setFixedHeight(24);
-        auto* row = new QHBoxLayout(rowW);
+        m_dexpRow = new QWidget;
+        m_dexpRow->setFixedHeight(24);
+        auto* row = new QHBoxLayout(m_dexpRow);
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(4);
 
@@ -253,14 +263,16 @@ void PhoneApplet::buildUI()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_dexpLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
         row->addWidget(m_dexpLabel);
 
-        vbox->addWidget(rowW);
+        vbox->addWidget(m_dexpRow);
     }
 
     // ── TX filter section ────────────────────────────────────────────────
     // Two columns: Low Cut (left) and High Cut (right), each with header
     // centered over < value > step buttons.
     {
-        auto* grid = new QHBoxLayout;
+        m_txFilterSection = new QWidget;
+        auto* grid = new QHBoxLayout(m_txFilterSection);
+        grid->setContentsMargins(0, 0, 0, 0);
         grid->setSpacing(0);
 
         // ── Left column: Low Cut ─────────────────────────────────────────
@@ -372,7 +384,7 @@ void PhoneApplet::buildUI()
         highCol->addLayout(highRow);
         grid->addLayout(highCol);
 
-        vbox->addLayout(grid);
+        vbox->addWidget(m_txFilterSection);
     }
 
 }

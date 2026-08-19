@@ -136,6 +136,12 @@ MeterApplet::MeterApplet(QWidget* parent)
     m_supplyGauge->setAccessibleName(tr("Supply voltage"));
     vbox->addWidget(m_supplyGauge);
 
+    m_paCurrentGauge = new HGauge(0.0f, 4.0f, 3.5f, "PA Current", "",
+        {{0, "0"}, {1, "1"}, {2, "2"}, {3, "3"}, {4, "4"}},
+        this, 3.0f);
+    m_paCurrentGauge->setAccessibleName(tr("PA drain current"));
+    vbox->addWidget(m_paCurrentGauge);
+
     // ── Main Fan gauge ─────────────────────────────────────────────────────────
     m_fanGauge = new HGauge(0.0f, 3000.0f, 2500.0f, "Main Fan", "",
         {{0, "0"}, {500, "500"}, {1000, "1k"}, {1500, "1.5k"}, {2000, "2k"}, {3000, "3k"}},
@@ -150,9 +156,20 @@ MeterApplet::MeterApplet(QWidget* parent)
 
 void MeterApplet::setMeterModel(MeterModel* model)
 {
+    if (m_model == model) {
+        return;
+    }
+    if (m_model) {
+        m_model->disconnect(this);
+    }
     m_model = model;
+    m_fanIdx = -1;
+    m_paCurrentIdx = -1;
+    if (!m_model) {
+        return;
+    }
 
-    connect(model, &MeterModel::hwTelemetryChanged,
+    connect(m_model, &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyV) {
         if (m_model->hasPaTemp()) {
             m_paTemp    = paTemp;
@@ -166,28 +183,67 @@ void MeterApplet::setMeterModel(MeterModel* model)
         m_supplyGauge->setLabel(QString("+%1V").arg(supplyV, 0, 'f', 2));
     });
 
-    connect(model, &MeterModel::meterUpdated,
+    connect(m_model, &MeterModel::meterUpdated,
             this, &MeterApplet::onMeterUpdated);
 
     resolveIndices();
 }
 
+void MeterApplet::setTelemetryVisibility(bool paTemperature, bool supplyVoltage,
+                                         bool mainFan, double paCurrentMaxAmps)
+{
+    m_paTempGauge->setVisible(paTemperature);
+    m_tempUnitBtn->setVisible(paTemperature);
+    m_supplyGauge->setVisible(supplyVoltage);
+    m_fanGauge->setVisible(mainFan);
+    const bool paCurrent = paCurrentMaxAmps > 0.0;
+    m_paCurrentGauge->setVisible(paCurrent);
+    if (paCurrent) {
+        const float maximum = static_cast<float>(paCurrentMaxAmps);
+        m_paCurrentGauge->setRange(0.0f, maximum, maximum * 0.875f,
+            {{0.0f, "0"},
+             {maximum * 0.25f, QString::number(maximum * 0.25f, 'g', 3)},
+             {maximum * 0.5f, QString::number(maximum * 0.5f, 'g', 3)},
+             {maximum * 0.75f, QString::number(maximum * 0.75f, 'g', 3)},
+             {maximum, QString::number(maximum, 'g', 3)}},
+            maximum * 0.75f);
+    }
+}
+
 void MeterApplet::resolveIndices()
 {
-    if (!m_model || m_resolved) return;
+    if (!m_model) {
+        return;
+    }
 
-    m_fanIdx = m_model->findMeter("RAD", "MAINFAN");
-    m_resolved = (m_fanIdx >= 0);
+    // Definitions arrive independently; keep resolving each missing index.
+    if (m_fanIdx < 0) {
+        m_fanIdx = m_model->findMeter("RAD", "MAINFAN");
+    }
+    if (m_paCurrentIdx < 0) {
+        m_paCurrentIdx = m_model->findMeter("RAD", "PACURRENT");
+    }
 }
 
 void MeterApplet::onMeterUpdated(int index, float value)
 {
-    if (!m_resolved)
-        resolveIndices();
+    resolveIndices();
 
     if (index == m_fanIdx && m_fanIdx >= 0) {
         m_fanGauge->setValue(value);
         m_fanGauge->setLabel(QStringLiteral("%1 rpm").arg(static_cast<int>(value)));
+    }
+    if (index == m_paCurrentIdx && m_paCurrentIdx >= 0) {
+        // The Icom backend publishes an explicit zero when TX ends because
+        // PACURRENT polling stops in receive. Snap that idle edge instead of
+        // feeding it through HGauge's display smoothing, which otherwise
+        // leaves the last keyed current visibly latched after unkey.
+        if (value <= 0.0f) {
+            m_paCurrentGauge->setValueImmediate(0.0f);
+        } else {
+            m_paCurrentGauge->setValue(value);
+        }
+        m_paCurrentGauge->setLabel(QStringLiteral("%1 A").arg(value, 0, 'f', 2));
     }
 }
 

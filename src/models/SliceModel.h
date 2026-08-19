@@ -185,6 +185,11 @@ public:
     // Getters — FM duplex/repeater
     QString fmToneMode()          const { return m_fmToneMode; }
     QString fmToneValue()         const { return m_fmToneValue; }
+    QString fmToneTxValue()       const { return m_fmToneTxValue; }
+    QString fmToneRxValue()       const { return m_fmToneRxValue; }
+    int     fmDtcsCode()          const { return m_fmDtcsCode; }
+    bool    fmDtcsTxReverse()     const { return m_fmDtcsTxReverse; }
+    bool    fmDtcsRxReverse()     const { return m_fmDtcsRxReverse; }
     QString repeaterOffsetDir()   const { return m_repeaterOffsetDir; }
     double  fmRepeaterOffsetFreq()const { return m_fmRepeaterOffsetFreq; }
     double  txOffsetFreq()        const { return m_txOffsetFreq; }
@@ -299,6 +304,9 @@ public:
     // Setters — FM duplex/repeater
     void setFmToneMode(const QString& mode);
     void setFmToneValue(const QString& value);
+    void setFmRepeaterAccess(const QString& mode, double txCtcssHz,
+                             double rxCtcssHz, int dtcsCode,
+                             bool dtcsTxReverse, bool dtcsRxReverse);
     void setRepeaterOffsetDir(const QString& dir);
     void setFmRepeaterOffsetFreq(double mhz);
     void setTxOffsetFreq(double mhz);
@@ -453,8 +461,13 @@ signals:
     // FM duplex/repeater signals
     void fmToneModeChanged(const QString& mode);
     void fmToneValueChanged(const QString& value);
+    void fmRepeaterAccessChanged();
+    void fmRepeaterAccessCommandIssued(const QString& mode, double txCtcssHz,
+                                       double rxCtcssHz, int dtcsCode,
+                                       bool dtcsTxReverse, bool dtcsRxReverse);
     void repeaterOffsetDirChanged(const QString& dir);
     void fmRepeaterOffsetFreqChanged(double mhz);
+    void repeaterOffsetCommandIssued(const QString& dir, double mhz);
     void txOffsetFreqChanged(double mhz);
     void fmDeviationChanged(int hz);
 
@@ -592,6 +605,11 @@ private:
     // FM duplex/repeater state
     QString m_fmToneMode{"off"};
     QString m_fmToneValue{"100.0"};
+    QString m_fmToneTxValue{"100.0"};
+    QString m_fmToneRxValue{"100.0"};
+    int     m_fmDtcsCode{23};
+    bool    m_fmDtcsTxReverse{false};
+    bool    m_fmDtcsRxReverse{false};
     QString m_repeaterOffsetDir{"simplex"};
     double  m_fmRepeaterOffsetFreq{0.0};
     double  m_txOffsetFreq{0.0};

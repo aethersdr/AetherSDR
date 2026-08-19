@@ -304,7 +304,8 @@ using RadioId = std::array<std::uint8_t, 16>;
                                                     std::uint16_t innerSeq,
                                                     std::uint16_t tokenRequestId,
                                                     std::string_view username,
-                                                    std::string_view password);
+                                                    std::string_view password,
+                                                    std::string_view clientName);
 
 // Outcome of the 0x60 login reply.
 enum class LoginResult { Ok, BadCredentials, NotALoginReply };
@@ -330,6 +331,11 @@ struct AuthReply {
     AuthId authId{};
 };
 [[nodiscard]] AuthReply parseAuthReply(std::span<const std::uint8_t> pkt);
+// Correlate an acknowledgement for a specific authentication operation.
+// Token removal uses request type 0x01 rather than the renewal parser's 0x05.
+[[nodiscard]] bool isAuthOperationReply(std::span<const std::uint8_t> pkt,
+                                        AuthKind kind, std::uint16_t innerSeq,
+                                        const AuthId& authId);
 
 // Extract the radio identity from the 0xA8 capabilities packet.
 [[nodiscard]] bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId);
@@ -403,6 +409,12 @@ struct StreamGrant {
                                                          std::uint32_t remoteSid,
                                                          std::uint16_t sendSeq,
                                                          bool open);
+
+// Restart an already-open CI-V data pipe. The IC-9700 distinguishes this
+// data-start request (magic 0x04) from the initial open above (magic 0x05).
+[[nodiscard]] std::vector<std::uint8_t> buildSerialRestart(std::uint32_t localSid,
+                                                            std::uint32_t remoteSid,
+                                                            std::uint16_t sendSeq);
 
 // Wrap one raw CI-V frame for the serial stream.
 //

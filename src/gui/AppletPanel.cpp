@@ -1622,6 +1622,13 @@ void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
         m_rxApplet->setRadioFilterWidths(widthsHz);
 }
 
+void AppletPanel::setFmRepeaterAccessModes(const QStringList& modes)
+{
+    if (m_rxApplet) {
+        m_rxApplet->setFmRepeaterAccessModes(modes);
+    }
+}
+
 void AppletPanel::setMicLevelMeterAvailable(bool available)
 {
     if (m_phoneCwApplet)
@@ -1632,6 +1639,13 @@ void AppletPanel::setSelectableMicInputs(bool selectable)
 {
     if (m_phoneCwApplet)
         m_phoneCwApplet->setSelectableMicInputs(selectable);
+}
+
+void AppletPanel::setMicInputChoices(const QStringList& choices)
+{
+    if (m_phoneCwApplet) {
+        m_phoneCwApplet->setMicInputChoices(choices);
+    }
 }
 
 void AppletPanel::setProfilesVisible(bool visible)

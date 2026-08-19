@@ -53,6 +53,7 @@ public slots:
     // across overs. (#2561)
     void setTransmitting(bool tx);
     void setPowerScale(int maxWatts, bool hasAmplifier);
+    void setForwardPowerUnit(const QString& unit);
 
 private:
     void buildUI();
@@ -98,6 +99,7 @@ private:
     // Gauges (HGauge*)
     QWidget* m_fwdGauge{nullptr};
     QWidget* m_swrGauge{nullptr};
+    bool m_forwardPowerIsRelative{false};
 
     // Sliders
     GuardedSlider* m_rfPowerSlider{nullptr};

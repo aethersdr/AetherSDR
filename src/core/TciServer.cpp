@@ -132,7 +132,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             &TciServer::onRadioTransmittingChanged);
         connect(&m_model->meterModel(), &MeterModel::txMetersChanged,
                 this, [this](float fwd, float swr, bool swrValid) {
-            m_cachedFwdPower = fwd;
+            const QString unit = m_model->meterModel().forwardPowerUnit();
+            m_cachedFwdPower =
+                unit.compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0
+                ? 0.0f : fwd;
             // TCI's wire format has no absent marker; 1.0 is what this cache
             // held before any SWR arrived, so absence maps back to it rather
             // than to 0.0 (which is out of the meter's domain).
@@ -143,8 +146,21 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             m_cachedMicLevel = micLevel;
         });
         connect(&m_model->meterModel(), &MeterModel::swAlcChanged,
-                this, [this](float dbfs) {
-            m_cachedAlc = dbfs;
+                this, [this](float value) {
+            const QString unit = m_model->meterModel().swAlcUnit();
+            m_cachedAlcDbfsValid = unit.isEmpty()
+                || unit.compare(QLatin1String("dBFS"), Qt::CaseInsensitive) == 0;
+            if (m_cachedAlcDbfsValid) {
+                m_cachedAlc = value;
+            }
+        });
+        connect(&m_model->meterModel(), &MeterModel::swAlcUnitChanged,
+                this, [this](const QString& unit) {
+            m_cachedAlcDbfsValid = unit.isEmpty()
+                || unit.compare(QLatin1String("dBFS"), Qt::CaseInsensitive) == 0;
+            if (!m_cachedAlcDbfsValid) {
+                m_cachedAlc = 0.0f;
+            }
         });
 
         // RF/tune power → `drive:` / `tune_drive:` broadcast (#4161). Without
@@ -3336,13 +3352,19 @@ void TciServer::broadcastStatus()
             // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
             // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
             // peak; index-based parsers safely ignore the extra field.
-            cs.socket->sendTextMessage(
-                QStringLiteral("tx_sensors:0,%1,%2,%3,%4,%5;")
-                    .arg(m_cachedMicLevel, 0, 'f', 1)
-                    .arg(m_cachedFwdPower, 0, 'f', 1)
-                    .arg(m_cachedFwdPower, 0, 'f', 1)  // peak ≈ avg for now
-                    .arg(m_cachedSwr, 0, 'f', 1)
-                    .arg(m_cachedAlc, 0, 'f', 1));
+            QString message = QStringLiteral("tx_sensors:0,%1,%2,%3,%4")
+                .arg(m_cachedMicLevel, 0, 'f', 1)
+                .arg(m_cachedFwdPower, 0, 'f', 1)
+                .arg(m_cachedFwdPower, 0, 'f', 1)  // peak ≈ avg for now
+                .arg(m_cachedSwr, 0, 'f', 1);
+            // The trailing dBFS field is an AetherSDR extension. Omit it when
+            // the radio declares a relative indication rather than inventing
+            // a physical conversion TCI cannot label honestly.
+            if (m_cachedAlcDbfsValid) {
+                message += QStringLiteral(",%1").arg(m_cachedAlc, 0, 'f', 1);
+            }
+            message += QLatin1Char(';');
+            cs.socket->sendTextMessage(message);
         }
     }
 }

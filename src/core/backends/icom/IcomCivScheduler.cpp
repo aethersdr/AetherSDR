@@ -45,8 +45,8 @@ std::uint64_t IcomCivScheduler::enqueue(Request request, std::int64_t nowMs)
     // duplicate erased and re-pushed the queued entry instead of collapsing
     // into it.  That reset enqueuedAtMs, and enqueuedAtMs is what
     // effectivePriority() ages on: any group re-queued at or faster than
-    // kPriorityAgingMs (onLinkTick re-queues NR/NB/notch every 1000 ms) could
-    // never age at all, and an Operator confirmation read was demoted to
+    // kPriorityAgingMs (or another periodic producer re-queuing at that rate)
+    // could never age at all, and an Operator confirmation read was demoted to
     // Control by the next poll tick that touched the same register.
     if (request.notBeforeMs < nowMs) {
         request.notBeforeMs = nowMs;
@@ -284,6 +284,15 @@ IcomCivScheduler::Observation IcomCivScheduler::observe(const CivFrame& frame,
         return Observation::Stale;
     }
     return Observation::Accepted;
+}
+
+void IcomCivScheduler::dropBackground() noexcept
+{
+    std::erase_if(m_queue, [](const Queued& queued) {
+        return queued.request.priority == Priority::Control
+            || queued.request.priority == Priority::Maintenance;
+    });
+    m_stats.queueDepth = m_queue.size();
 }
 
 void IcomCivScheduler::reset() noexcept

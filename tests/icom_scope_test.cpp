@@ -76,6 +76,28 @@ static void testWlanSinglePacket()
     check(f->raw.size() == static_cast<std::size_t>(kScopePointsIc705), "475 points");
     check(f->raw[0] == 0 && f->raw[10] == 10, "waveform data is positional and intact");
     check(!f->outOfRange, "in range");
+    check(f->receiver == 0x00, "receiver byte identifies MAIN");
+}
+
+static void testReceiverIsolation()
+{
+    std::vector<std::uint8_t> wave(kScopePointsIc705, 42);
+    ScopeDecoder single;
+    CivFrame sub = makeFirst(1, 1, ScopeMode::Centre,
+                             439'864'060, 500'000, false, wave);
+    sub.data[0] = 0x01;
+    const auto decodedSub = single.feed(sub);
+    check(decodedSub && decodedSub->receiver == 0x01,
+          "IC-9700 SUB receiver byte survives decoding");
+
+    ScopeDecoder divided;
+    check(!divided.feed(makeFirst(1, 2, ScopeMode::Centre,
+                                  144'254'300, 500'000, false, {})),
+          "MAIN first division begins assembly");
+    CivFrame subContinuation = makeContinuation(2, 2, wave);
+    subContinuation.data[0] = 0x01;
+    check(!divided.feed(subContinuation),
+          "a SUB continuation is never spliced into a MAIN sweep");
 }
 
 static void testCentreModeHalfWidth()
@@ -312,6 +334,7 @@ static void testDbmMapping()
 int main()
 {
     testWlanSinglePacket();
+    testReceiverIsolation();
     testCentreModeHalfWidth();
     testZoomEscapesTheSnap();
     testScrollModesAndNegativeEdge();

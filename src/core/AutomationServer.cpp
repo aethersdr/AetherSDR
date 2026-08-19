@@ -2074,8 +2074,9 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
     }
 
     return QJsonObject{
-        {QStringLiteral("fwdPower"),        m->fwdPower()},           // Watts (smoothed)
-        {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // Watts (peak)
+        {QStringLiteral("fwdPower"),        m->fwdPower()},           // native declared unit
+        {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // native unit, unsmoothed
+        {QStringLiteral("fwdPowerUnit"),    m->forwardPowerUnit()},
         {QStringLiteral("fwdPowerAgeMs"),   age(m->fwdPowerUpdatedAtMs())},
         {QStringLiteral("reflectedPower"),  m->reflectedPower()},
         {QStringLiteral("reflectedPowerAgeMs"),
@@ -2091,7 +2092,8 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          m->paTemp()},             // °C
         {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
-        {QStringLiteral("swAlc"),           m->swAlc()},              // dBFS post-ALC SSB peak
+        {QStringLiteral("swAlc"),           m->swAlc()},              // native declared unit
+        {QStringLiteral("swAlcUnit"),       m->swAlcUnit()},
         {QStringLiteral("hwAlc"),           m->hwAlc()},              // dBFS external HW-ALC
         {QStringLiteral("micPeak"),         m->micPeak()},            // dBFS
         {QStringLiteral("micLevel"),        m->micLevel()},           // dBFS

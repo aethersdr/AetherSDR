@@ -30,6 +30,7 @@ struct AntennaHealthSample {
     QString incidentLabel;
     bool active{false};
     bool incident{false};
+    bool powerRelative{false};
 };
 
 class HealthApplet : public QWidget {
@@ -66,6 +67,7 @@ private:
         qint64 swrQualifyingPowerUpdatedAtMs{0};
         qint64 swrSampleUpdatedAtMs{0};
         bool valid{false};
+        bool powerRelative{false};
     };
 
     void cacheMeters(MeterSource source, float fwdPowerWatts, float swr);
@@ -80,7 +82,7 @@ private:
     void showPausedState();
     void updateStatusLabels(const AntennaHealthSample& sample, MeterSource source);
     QString sourceText(MeterSource source) const;
-    QString formatPower(float watts) const;
+    QString formatPower(float value, bool relative) const;
     float computeSeverity(float powerWatts, float swr) const;
     void pushRecent(float powerWatts, float swr, float returnLossDb);
     void recomputeRecentStats();

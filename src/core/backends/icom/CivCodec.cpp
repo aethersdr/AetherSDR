@@ -60,6 +60,7 @@ bool commandHasSubcommand(std::uint8_t command)
     case cmd::kLevel:
     case cmd::kMeter:
     case cmd::kFunction:
+    case cmd::kTone:
     case cmd::kPower:
     case cmd::kReadId:
     case cmd::kSetting:
@@ -613,6 +614,12 @@ std::vector<std::uint8_t> cmdScopeDataOutput(std::uint8_t to, bool on)
     return buildFrameSub(to, cmd::kScope, scope::kDataOutput, body);
 }
 
+std::vector<std::uint8_t> cmdScopeMainSub(std::uint8_t to, bool sub)
+{
+    const std::array<std::uint8_t, 1> body{static_cast<std::uint8_t>(sub ? 0x01 : 0x00)};
+    return buildFrameSub(to, cmd::kScope, scope::kMainSub, body);
+}
+
 std::vector<std::uint8_t> cmdScopeMode(std::uint8_t to, bool fixed)
 {
     // 0000 = centre, 0001 = fixed. Two BCD bytes, not one.
@@ -688,6 +695,95 @@ std::vector<std::uint8_t> cmdReadLevel(std::uint8_t to, std::uint8_t which)
 std::vector<std::uint8_t> cmdReadFunction(std::uint8_t to, std::uint8_t which)
 {
     return buildFrameSub(to, cmd::kFunction, which);
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kFunction, func::kRepeaterAccess);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to, std::uint8_t mode)
+{
+    const std::array<std::uint8_t, 1> body{mode};
+    return buildFrameSub(to, cmd::kFunction, func::kRepeaterAccess, body);
+}
+
+std::vector<std::uint8_t> cmdReadTone(std::uint8_t to, std::uint8_t which)
+{
+    return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::vector<std::uint8_t> cmdSetTone(std::uint8_t to, std::uint8_t which, int value,
+                                     bool txReverse, bool rxReverse)
+{
+    const int v = std::clamp(value, 0, 9999);
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((txReverse ? 0x10 : 0x00) | (rxReverse ? 0x01 : 0x00)),
+        static_cast<std::uint8_t>((((v / 1000) % 10) << 4) | ((v / 100) % 10)),
+        static_cast<std::uint8_t>((((v / 10) % 10) << 4) | (v % 10)),
+    };
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::optional<ToneRegister> decodeTone(std::span<const std::uint8_t> payload)
+{
+    const auto validBcd = [](std::uint8_t b) {
+        return (b & 0x0f) <= 9 && ((b >> 4) & 0x0f) <= 9;
+    };
+    if (payload.size() != 3 || (payload[0] & 0xEE) != 0
+        || !validBcd(payload[1]) || !validBcd(payload[2])) {
+        return std::nullopt;
+    }
+    return ToneRegister{decodeBcdByte(payload[1]) * 100 + decodeBcdByte(payload[2]),
+                        (payload[0] & 0x10) != 0, (payload[0] & 0x01) != 0};
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kReadRepeaterOffset);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to, std::uint64_t hz)
+{
+    // Command 0D carries three little-endian BCD bytes in 100 Hz units.
+    // IC-9700 offsets are unsigned; command 0F owns the direction.
+    const std::uint64_t units = std::min<std::uint64_t>(hz / 100ULL, 999'999ULL);
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>((((units / 10ULL) % 10ULL) << 4)
+                                  | (units % 10ULL)),
+        static_cast<std::uint8_t>((((units / 1000ULL) % 10ULL) << 4)
+                                  | ((units / 100ULL) % 10ULL)),
+        static_cast<std::uint8_t>((((units / 100'000ULL) % 10ULL) << 4)
+                                  | ((units / 10'000ULL) % 10ULL)),
+    };
+    return buildFrame(to, cmd::kSetRepeaterOffset, body);
+}
+
+std::optional<std::uint64_t> decodeRepeaterOffset(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3) {
+        return std::nullopt;
+    }
+    for (std::uint8_t byte : payload) {
+        if ((byte & 0x0f) > 9 || ((byte >> 4) & 0x0f) > 9) {
+            return std::nullopt;
+        }
+    }
+    const std::uint64_t units = static_cast<std::uint64_t>(decodeBcdByte(payload[0]))
+        + static_cast<std::uint64_t>(decodeBcdByte(payload[1])) * 100ULL
+        + static_cast<std::uint64_t>(decodeBcdByte(payload[2])) * 10'000ULL;
+    return units * 100ULL;
+}
+
+std::vector<std::uint8_t> cmdReadDuplex(std::uint8_t to)
+{
+    return buildFrame(to, cmd::kDuplex);
+}
+
+std::vector<std::uint8_t> cmdSetDuplex(std::uint8_t to, std::uint8_t mode)
+{
+    const std::array<std::uint8_t, 1> body{mode};
+    return buildFrame(to, cmd::kDuplex, body);
 }
 
 std::vector<std::uint8_t> cmdReadSetting(std::uint8_t to, int item)

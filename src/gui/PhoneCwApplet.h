@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QStringList>
 #include <QWidget>
 
 class QPushButton;
@@ -24,11 +25,16 @@ public:
     // Narrow the mic-source dropdown to PC on a radio whose input this client
     // cannot choose (capability hasSelectableMicInputs). Idempotent.
     void setSelectableMicInputs(bool selectable);
+    void setMicInputChoices(const QStringList& choices);
     // Show or hide the mic-level gauge. False on a radio that defines no
     // microphone-peak meter at all — the face would be permanently at its floor
     // and read as a fault rather than as an absence.
     void setMicLevelMeterAvailable(bool available);
     void setDaxVisible(bool visible);
+    // Empty modes preserves the established all-mode processor surface.
+    // Continuous selects a 0..100 level rather than NOR / DX / DX+.
+    void setSpeechProcessorCapabilities(const QStringList& modes,
+                                        bool continuous);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
@@ -57,6 +63,7 @@ public slots:
 
     // CW meter (ALC 0–100)
     void updateAlc(float alc);
+    void setAlcUnit(const QString& unit);
 
     // Switch between Phone and CW sub-panels based on slice mode.
     void setMode(const QString& mode);
@@ -70,6 +77,7 @@ private:
     void syncPhoneFromModel();
     void syncCwFromModel();
     void applyLevelMeterReceiveGate();
+    void applySpeechProcessorVisibility();
 
     TransmitModel* m_model{nullptr};
     QStackedWidget* m_stack{nullptr};
@@ -86,13 +94,23 @@ private:
 
     QComboBox*   m_micSourceCombo{nullptr};
     bool          m_selectableMicInputs{true};
+    QStringList   m_micInputChoices{QStringLiteral("MIC"), QStringLiteral("BAL"),
+                                    QStringLiteral("LINE"), QStringLiteral("ACC"),
+                                    QStringLiteral("PC")};
     QSlider*     m_micLevelSlider{nullptr};
     QLabel*      m_micLevelLabel{nullptr};
     QPushButton* m_accBtn{nullptr};
 
     QPushButton* m_procBtn{nullptr};
-    QSlider*     m_procSlider{nullptr};   // 3-position: 0=NOR, 1=DX, 2=DX+
+    QWidget*     m_procGroup{nullptr};
+    QLabel*      m_procLowLabel{nullptr};
+    QLabel*      m_procMidLabel{nullptr};
+    QLabel*      m_procHighLabel{nullptr};
+    QSlider*     m_procSlider{nullptr};
     QPushButton* m_daxBtn{nullptr};
+    QStringList  m_speechProcessorModes;
+    QString      m_mode;
+    bool         m_continuousSpeechProcessorLevel{false};
 
     QPushButton* m_monBtn{nullptr};
     QSlider*     m_monSlider{nullptr};
@@ -104,6 +122,7 @@ private:
     // panel is active for the current mode.
     HGauge*      m_alcGaugePhone{nullptr};
     HGauge*      m_alcGaugeCw{nullptr};
+    bool         m_alcIsRelative{false};
 
     // ── CW sub-panel widgets ─────────────────────────────────────────────
 

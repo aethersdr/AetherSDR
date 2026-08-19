@@ -62,6 +62,26 @@ int main()
 
     {
         IcomCivScheduler scheduler;
+        scheduler.enqueue(read("control", 0x16, 0x40, Priority::Control), 1000);
+        scheduler.enqueue(read("maintenance", 0x1a, 0x05, Priority::Maintenance), 1000);
+        scheduler.enqueue(read("meter", 0x15, 0x11, Priority::ActiveMeter), 1000);
+        scheduler.enqueue(write("ptt", 0x1c, 0x00, 1, Priority::Operator), 1000);
+
+        scheduler.dropBackground();
+        check(scheduler.stats().queueDepth == 2,
+              "keying drops queued control/maintenance reconciliation");
+        const auto first = scheduler.takeNext(1000);
+        check(first && first->priority == Priority::Operator,
+              "while preserving operator traffic");
+        check(scheduler.observe(ok(), 1010) == IcomCivScheduler::Observation::Accepted,
+              "the preserved operator write still completes normally");
+        const auto second = scheduler.takeNext(1030);
+        check(second && second->priority == Priority::ActiveMeter,
+              "and preserving active meter traffic");
+    }
+
+    {
+        IcomCivScheduler scheduler;
         scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), 1000);
         scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), 1000);
         check(scheduler.stats().queueDepth == 1, "duplicate reads coalesce");
@@ -151,8 +171,8 @@ int main()
     }
 
     // Aging must survive the RE-QUEUE, not just the wait. onLinkTick re-asks
-    // for NR/NB/notch every 1000 ms — the same period as kPriorityAgingMs — so
-    // a collapse that rebuilds the entry restarts its clock and the group can
+    // at the synthetic worst-case rate of every 1000 ms — the same period as
+    // kPriorityAgingMs — so a collapse that rebuilds the entry restarts its clock and the group can
     // never age at all. The single-enqueue fixture above cannot see that.
     {
         IcomCivScheduler scheduler;

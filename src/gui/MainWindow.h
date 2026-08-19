@@ -474,6 +474,7 @@ private:
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
     void wireMeters();              // MainWindow_Wiring.cpp
+    void refreshRadioPowerScale();  // MainWindow_Wiring.cpp
     void wireSpotSubsystem();       // MainWindow_Spots.cpp
     // RadioSession precursors (#3351 Phase 2c / #3445) — MainWindow_Session.cpp
     void wireDiscovery();

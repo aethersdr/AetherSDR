@@ -62,6 +62,7 @@ struct CurvePoint {
 // source it came from.
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc705();   // raw -> watts
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc7300Mk2(); // raw -> watts
+[[nodiscard]] std::span<const CurvePoint> powerCurveIc9700(); // raw -> relative %
 [[nodiscard]] std::span<const CurvePoint> swrCurve();          // raw -> SWR
 [[nodiscard]] std::span<const CurvePoint> compCurve();         // raw -> dB
 [[nodiscard]] std::span<const CurvePoint> vdCurve();           // raw -> volts
@@ -131,7 +132,8 @@ struct MeterSpec {
 // Convert a raw reading to the spec's unit. `s9Dbm` selects the S-meter
 // reference and is ignored by every other meter.
 [[nodiscard]] double meterValue(MeterId id, int raw, double s9Dbm,
-                                std::uint8_t civAddress = 0xA4);
+                                std::uint8_t civAddress = 0xA4,
+                                std::uint64_t frequencyHz = 0);
 
 // ---------------------------------------------------------------------------
 // The poll scheduler
@@ -159,7 +161,7 @@ public:
     void setVisible(MeterId id, bool visible);
     [[nodiscard]] bool isVisible(MeterId id) const;
 
-    void setTransmitting(bool tx) noexcept { m_transmitting = tx; }
+    void setTransmitting(bool tx) noexcept;
     [[nodiscard]] bool isTransmitting() const noexcept { return m_transmitting; }
 
     // Which meters should be requested now. Marks each returned meter in

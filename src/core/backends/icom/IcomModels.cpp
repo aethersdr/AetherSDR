@@ -31,7 +31,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*hasScope*/ true, /*scopePoints*/ 475, /*scopeMaxAmplitude*/ 160,
         /*scopeDivisionsUsb*/ 11,
         /*freqBytes*/ kFreqBytes,
-        /*hasTransmit*/ true, /*txPowerMaxWatts*/ 10.0,
+        /*hasTransmit*/ true, /*txPowerMaxWatts*/ 10.0, /*hasTuner*/ true,
         /*tuningMinHz*/ 30'000ULL, /*tuningMaxHz*/ 470'000'000ULL,
         /*verified*/ true,
         /*hasVfoModeCommand*/ true,
@@ -55,7 +55,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*hasNetwork*/ true, /*hasWifi*/ false,
         /*hasScope*/ true, 475, 160, 11,
         kFreqBytes,
-        true, 100.0,
+        true, 100.0, /*hasTuner*/ false,
         144'000'000ULL, 1'300'000'000ULL,
         /*verified*/ false,
         // 0x26 MEASURED on the live radio at 10.0.0.7, 2026-08-14 (G0JKN), the
@@ -79,7 +79,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         // exactly why the scope geometry cannot be a compile-time constant.
         /*hasScope*/ true, 689, 200, 15,
         kFreqBytes,
-        true, 100.0,
+        true, 100.0, /*hasTuner*/ true,
         30'000ULL, 60'000'000ULL,
         /*verified*/ false,
     },
@@ -88,7 +88,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, false,
         true, 689, 200, 15,
         kFreqBytes,
-        true, 200.0,
+        true, 200.0, /*hasTuner*/ true,
         30'000ULL, 60'000'000ULL,
         false,
     },
@@ -100,7 +100,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*hasNetwork*/ false, /*hasWifi*/ false,
         true, 475, 160, 11,
         kFreqBytes,
-        true, 100.0,
+        true, 100.0, /*hasTuner*/ true,
         30'000ULL, 74'800'000ULL,
         false,
     },
@@ -121,7 +121,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*hasNetwork*/ true, /*hasWifi*/ false,   // Ethernet, not WiFi
         /*hasScope*/ true, 475, 160, 11,
         kFreqBytes,
-        true, 100.0,
+        true, 100.0, /*hasTuner*/ true,
         30'000ULL, 74'800'000ULL,
         /*verified*/ true,
         /*hasVfoModeCommand*/ true,
@@ -134,7 +134,7 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, false,
         true, 475, 160, 11,
         /*freqBytes*/ 6,
-        true, 10.0,
+        true, 10.0, /*hasTuner*/ false,
         144'000'000ULL, 10'500'000'000ULL,
         false,
     },
@@ -148,7 +148,7 @@ constexpr IcomModel kUnknown{
     /*hasScope*/ false, /*scopePoints*/ 0, /*scopeMaxAmplitude*/ 0,
     /*scopeDivisionsUsb*/ 11,
     /*freqBytes*/ kFreqBytes,
-    /*hasTransmit*/ false, /*txPowerMaxWatts*/ 0.0,
+    /*hasTransmit*/ false, /*txPowerMaxWatts*/ 0.0, /*hasTuner*/ false,
     /*tuningMinHz*/ 0, /*tuningMaxHz*/ 0,
     /*verified*/ false,
     // No 0x26: see the field's comment. An unknown radio gets the mode command
@@ -172,6 +172,15 @@ constexpr std::array<ModulationInputChoice, 6> kIc7300Mk2ModInputs{{
     {0x05, "LAN",     ModSourceNetwork},
 }};
 
+constexpr std::array<ModulationInputChoice, 6> kIc9700ModInputs{{
+    {0x00, "MIC",     ModSourceMic},
+    {0x01, "ACC",     ModSourceAccessory},
+    {0x02, "MIC+ACC", ModSourceMic | ModSourceAccessory},
+    {0x03, "USB",     ModSourceUsb},
+    {0x04, "MIC+USB", ModSourceMic | ModSourceUsb},
+    {0x05, "LAN",     ModSourceNetwork},
+}};
+
 }  // namespace
 
 const IcomModel* modelForCivAddress(std::uint8_t addr)
@@ -180,6 +189,19 @@ const IcomModel* modelForCivAddress(std::uint8_t addr)
         if (m.civAddress == addr)
             return &m;
     return nullptr;
+}
+
+std::string_view declaredBandsFor(const IcomModel& model) noexcept
+{
+    // The IC-9700 cannot tune the gaps between its 144, 430/440 and 1200 MHz
+    // modules. Its 144--1300 MHz min/max range is valid for coarse boundary
+    // checks but cannot describe a band menu. These are the canonical BandDefs
+    // tokens consumed by parseDeclaredBands(). Keep other models empty until
+    // their exact native band sets are attested.
+    if (model.civAddress == 0xA2) {
+        return "2m,440,23cm";
+    }
+    return {};
 }
 
 namespace {
@@ -212,6 +234,12 @@ const IcomModel& unknownModel() { return kUnknown; }
 
 std::optional<ModulationProfile> modulationProfileFor(const IcomModel& model)
 {
+    // IC-9700 guide: ACC/USB/LAN levels 0112/0113/0114 and DATA OFF/DATA MOD
+    // selections 0115/0116. LAN is the network source used by PC Audio.
+    if (model.civAddress == 0xA2) {
+        return ModulationProfile{113, 112, 114, 115, 116, 0x05, 0x00,
+                                 kIc9700ModInputs};
+    }
     // IC-705 CI-V guide: USB/WLAN levels 0116/0117, DATA OFF/DATA MOD
     // selections 0118/0119.
     if (model.civAddress == 0xA4) {
@@ -236,15 +264,21 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
     return frame.data[0];
 }
 
-std::span<const CurvePoint> powerCurveFor(const IcomModel& model)
+std::span<const CurvePoint> powerCurveFor(const IcomModel& model, std::uint64_t frequencyHz)
 {
+    (void)frequencyHz;
     // Only models with their own verified conversion are named here. Every
     // other model returns EMPTY so the caller reports percent rather than a
     // watts figure derived from a different radio's PA.
-    if (model.civAddress == 0xA4)
+    if (model.civAddress == 0xA4) {
         return powerCurveIc705();
-    if (model.civAddress == 0xB6)
+    }
+    if (model.civAddress == 0xB6) {
         return powerCurveIc7300Mk2();
+    }
+    if (model.civAddress == 0xA2) {
+        return powerCurveIc9700();
+    }
     return {};
 }
 
@@ -255,8 +289,16 @@ std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
     // is published once rather than rewritten on every band change under an
     // operator who may be mid-adjustment.
     static constexpr std::array<std::string_view, 3> kIc705{"OFF", "P.AMP1", "P.AMP2"};
-    if (model.civAddress == 0xA4 || model.civAddress == 0xB6)
+    // The IC-9700 manual names one internal receive-preamp position on each of
+    // its three bands. Its separate per-band external-preamp power settings are
+    // not additional gain positions in this register.
+    static constexpr std::array<std::string_view, 2> kIc9700{"OFF", "P.AMP"};
+    if (model.civAddress == 0xA2) {
+        return kIc9700;
+    }
+    if (model.civAddress == 0xA4 || model.civAddress == 0xB6) {
         return kIc705;
+    }
     return {};
 }
 
@@ -277,6 +319,21 @@ double s9ReferenceFor(std::uint64_t hz) noexcept
     // 30 MHz and -93 dBm above. Using -73 everywhere reports VHF signals 20 dB
     // hot, which on a 2 m weak-signal band is the entire usable range.
     return usesVhfSReference(hz) ? kS9DbmVhf : kS9DbmHf;
+}
+
+bool supportsFrequency(const IcomModel& model, std::uint64_t frequencyHz) noexcept
+{
+    if (model.civAddress == 0xA2) {
+        // Union of the IC-9700 regional hardware coverage documented by the
+        // SDR9700 oracle. Region-specific restrictions remain radio-owned.
+        return (frequencyHz >= 144'000'000ULL && frequencyHz <= 148'000'000ULL)
+            || (frequencyHz >= 430'000'000ULL && frequencyHz <= 450'000'000ULL)
+            || (frequencyHz >= 1'240'000'000ULL && frequencyHz <= 1'300'000'000ULL);
+    }
+    if (model.tuningMaxHz <= model.tuningMinHz) {
+        return true;
+    }
+    return frequencyHz >= model.tuningMinHz && frequencyHz <= model.tuningMaxHz;
 }
 
 }  // namespace AetherSDR::icom

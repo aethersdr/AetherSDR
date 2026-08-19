@@ -32,6 +32,15 @@ constexpr std::array<CurvePoint, 4> kPowerIc7300Mk2{{
     {0, 0.0}, {143, 50.0}, {213, 100.0}, {255, 130.0},
 }};
 
+// IC-9700 Po meter, raw -> relative percent. The CI-V guide and the local
+// reference client define an indicated scale, not a calibrated wattmeter.
+// RF POWER=100 is a drive setpoint while 15 11 is independent PA telemetry.
+constexpr std::array<CurvePoint, 13> kPowerIc9700Relative{{
+    {0, 0.0},   {21, 5.0},  {43, 10.0}, {65, 15.0}, {83, 20.0},
+    {95, 25.0}, {105, 30.0},{114, 35.0},{124, 40.0},{143, 50.0},
+    {183, 75.0},{213, 100.0},{255, 120.0},
+}};
+
 // SWR. Icom's guide: 0 = 1.0, 48 = 1.5, 80 = 2.0, 120 = 3.0.
 //
 // The guide stops at 3.0 and the field is a full byte. The final point is an
@@ -52,9 +61,19 @@ constexpr std::array<CurvePoint, 3> kVd{{
     {0, 0.0}, {75, 5.0}, {241, 16.0},
 }};
 
+// IC-9700 desktop-radio Vd calibration from its CI-V guide. Raw 185 is the
+// nominal 13.8 V point; the portable-radio curve above under-reports it.
+constexpr std::array<CurvePoint, 4> kVdIc9700{{
+    {0, 0.0}, {13, 10.0}, {185, 13.8}, {241, 16.0},
+}};
+
 // Id (PA current), raw -> amps. Icom's guide: 0 = 0 A, 121 = 2 A, 241 = 4 A.
 constexpr std::array<CurvePoint, 3> kId{{
     {0, 0.0}, {121, 2.0}, {241, 4.0},
+}};
+
+constexpr std::array<CurvePoint, 3> kIdIc9700{{
+    {0, 0.0}, {121, 10.0}, {241, 20.0},
 }};
 
 // IC-7300MK2 desktop-radio calibration from its own CI-V guide.
@@ -80,22 +99,22 @@ constexpr std::array<MeterSpec, 8> kSpecs{{
     {MeterId::SMeter,   meter::kSMeter,   "SLC", "LEVEL",   "dBm",  -140.0,  -10.0,
      MeterWhen::RxOnly, 100},
     {MeterId::Power,    meter::kPower,    "TX",  "FWDPWR",  "Watts",   0.0,   12.0,
-     MeterWhen::TxOnly, 200},
+     MeterWhen::TxOnly, 250},
     {MeterId::Swr,      meter::kSwr,      "TX",  "SWR",     "SWR",     1.0,    6.4,
-     MeterWhen::TxOnly, 200},
+     MeterWhen::TxOnly, 250},
     {MeterId::Alc,      meter::kAlc,      "TX",  "ALC",     "Percent", 0.0,  100.0,
-     MeterWhen::TxOnly, 200},
+     MeterWhen::TxOnly, 250},
     {MeterId::Comp,     meter::kComp,     "TX",  "COMPPEAK","dB",      0.0,   25.5,
-     MeterWhen::TxOnly, 200},
-    {MeterId::Vd,       meter::kVd,       "RAD", "+13.8A",  "Volts",   0.0,   16.0,
-     MeterWhen::Always, 1000},
-    {MeterId::Id,       meter::kId,       "RAD", "PACURRENT","Amps",   0.0,    4.0,
      MeterWhen::TxOnly, 500},
+    {MeterId::Vd,       meter::kVd,       "RAD", "+13.8A",  "Volts",   0.0,   16.0,
+     MeterWhen::Always, 2000},
+    {MeterId::Id,       meter::kId,       "RAD", "PACURRENT","Amps",   0.0,    4.0,
+     MeterWhen::TxOnly, 1000},
     // OVF is a boolean the radio reports through the meter command. It belongs
     // in the health snapshot rather than on a meter face, but it is polled the
     // same way, so it lives here.
     {MeterId::Overflow, meter::kOverflow, "RAD", "OVF",     "Percent", 0.0,    1.0,
-     MeterWhen::RxOnly, 500},
+     MeterWhen::RxOnly, 1000},
 }};
 
 std::size_t indexOf(MeterId id) noexcept { return static_cast<std::size_t>(id); }
@@ -131,6 +150,7 @@ double interpolateCurve(std::span<const CurvePoint> curve, int raw)
 
 std::span<const CurvePoint> powerCurveIc705() { return kPowerIc705; }
 std::span<const CurvePoint> powerCurveIc7300Mk2() { return kPowerIc7300Mk2; }
+std::span<const CurvePoint> powerCurveIc9700() { return kPowerIc9700Relative; }
 std::span<const CurvePoint> swrCurve()        { return kSwr; }
 std::span<const CurvePoint> compCurve()       { return kComp; }
 std::span<const CurvePoint> vdCurve()         { return kVd; }
@@ -176,22 +196,31 @@ const MeterSpec* meterSpecForSub(std::uint8_t sub)
     return nullptr;
 }
 
-double meterValue(MeterId id, int raw, double s9Dbm, std::uint8_t civAddress)
+double meterValue(MeterId id, int raw, double s9Dbm, std::uint8_t civAddress,
+                  std::uint64_t frequencyHz)
 {
+    (void)frequencyHz; // Reserved for a future band-specific IC-9700 curve.
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
-    case MeterId::Power:    return interpolateCurve(
-                                civAddress == 0xB6 ? powerCurveIc7300Mk2()
-                                                   : powerCurveIc705(), raw);
+    case MeterId::Power:
+        if (civAddress == 0xA2) {
+            return interpolateCurve(powerCurveIc9700(), raw);
+        }
+        return interpolateCurve(civAddress == 0xB6 ? powerCurveIc7300Mk2()
+                                                    : powerCurveIc705(), raw);
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
     case MeterId::Comp:     return interpolateCurve(kComp, raw);
     case MeterId::Vd:       return interpolateCurve(
-                                civAddress == 0xB6
+                                civAddress == 0xA2
+                                    ? std::span<const CurvePoint>(kVdIc9700)
+                                : civAddress == 0xB6
                                     ? std::span<const CurvePoint>(kVdIc7300Mk2)
                                     : std::span<const CurvePoint>(kVd), raw);
     case MeterId::Id:       return interpolateCurve(
-                                civAddress == 0xB6
+                                civAddress == 0xA2
+                                    ? std::span<const CurvePoint>(kIdIc9700)
+                                : civAddress == 0xB6
                                     ? std::span<const CurvePoint>(kIdIc7300Mk2)
                                     : std::span<const CurvePoint>(kId), raw);
     // OVF is 00/01 from the radio, not a scaled reading.
@@ -220,6 +249,28 @@ void MeterPoller::setVisible(MeterId id, bool visible)
 }
 
 bool MeterPoller::isVisible(MeterId id) const { return stateFor(id).visible; }
+
+void MeterPoller::setTransmitting(bool tx) noexcept
+{
+    if (m_transmitting == tx) {
+        return;
+    }
+    m_transmitting = tx;
+    if (!tx) {
+        return;
+    }
+
+    // Make visible TX meters due on the next backend tick instead of carrying
+    // a 200/500 ms interval (or an unanswered request) across transmissions.
+    for (const MeterSpec& spec : kSpecs) {
+        if (spec.when != MeterWhen::TxOnly) {
+            continue;
+        }
+        State& state = stateFor(spec.id);
+        state.inFlight = false;
+        state.nextDueMs = 0;
+    }
+}
 
 std::vector<MeterId> MeterPoller::due(std::int64_t nowMs)
 {

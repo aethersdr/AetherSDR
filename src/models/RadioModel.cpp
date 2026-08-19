@@ -1200,7 +1200,36 @@ void RadioModel::setupBackend(const QString& family)
             // the DSP keeps whatever it was opened with — a dead slider.
             connect(s, &SliceModel::agcCommandIssued, this,
                     [this, s](const QString& mode, int thresholdDb) {
-                if (m_backend) m_backend->setSliceAgc(s->sliceId(), mode, thresholdDb);
+                        if (m_backend) m_backend->setSliceAgc(s->sliceId(), mode, thresholdDb);
+                    });
+            connect(s, &SliceModel::fmRepeaterAccessCommandIssued, this,
+                    [this](const QString& mode, double txCtcssHz, double rxCtcssHz,
+                           int dtcsCode, bool dtcsTxReverse, bool dtcsRxReverse) {
+                if (!m_backend
+                    || !m_backend->capabilities().hasExtendedFmRepeaterControls) {
+                    return;
+                }
+                QVariantMap access;
+                access.insert(QStringLiteral("mode"), mode);
+                access.insert(QStringLiteral("txCtcssHz"), txCtcssHz);
+                access.insert(QStringLiteral("rxCtcssHz"), rxCtcssHz);
+                access.insert(QStringLiteral("dtcsCode"), dtcsCode);
+                access.insert(QStringLiteral("dtcsTxReverse"), dtcsTxReverse);
+                access.insert(QStringLiteral("dtcsRxReverse"), dtcsRxReverse);
+                m_backend->invokeExtension(QStringLiteral("icom"),
+                                           QStringLiteral("repeater.access"), 0, access);
+            });
+            connect(s, &SliceModel::repeaterOffsetCommandIssued, this,
+                    [this](const QString& direction, double offsetMhz) {
+                if (!m_backend
+                    || !m_backend->capabilities().hasExtendedFmRepeaterControls) {
+                    return;
+                }
+                QVariantMap offset;
+                offset.insert(QStringLiteral("direction"), direction);
+                offset.insert(QStringLiteral("offsetMhz"), offsetMhz);
+                m_backend->invokeExtension(QStringLiteral("icom"),
+                                           QStringLiteral("repeater.offset"), 0, offset);
             });
             // Receive DSP the radio runs. Same reasoning as AGC above: the
             // applet toggles drive SliceModel, whose Flex wire text a non-Flex
@@ -1774,6 +1803,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(this, &RadioModel::radioTransmittingChanged,
             this, [this](bool transmitting) {
+        m_meterModel.setTransmitting(transmitting);
         if (!transmitting) {
             applyPendingDStarRuntimeConfiguration();
         }
@@ -2055,6 +2085,12 @@ RadioModel::RadioModel(QObject* parent)
             [this](int level) {
         if (m_backend && !usesFlexCommandPlane())
             m_backend->setMicGain(level);
+    });
+    connect(&m_transmitModel, &TransmitModel::micInputCommandIssued, this,
+            [this](const QString& input) {
+        if (m_backend && !usesFlexCommandPlane()) {
+            m_backend->setMicInput(input);
+        }
     });
 
     // Forward transmit model commands to the radio
@@ -3557,6 +3593,11 @@ void RadioModel::disconnectFromRadio()
     }
 }
 
+bool RadioModel::backendShutdownPending() const
+{
+    return m_backend && m_backend->shutdownPending();
+}
+
 void RadioModel::acceptPresentedWanCert()
 {
     if (m_wanConn)
@@ -3749,6 +3790,8 @@ void RadioModel::publishCapabilities(bool connected)
     // greyed out after unplugging an HL2 would look like a fault. Every
     // capability below follows the same `!connected || caps.x` shape.
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
+    m_transmitModel.setSpeechProcessorLevelMaximum(
+        connected && caps.hasContinuousSpeechProcessorLevel ? 100 : 2);
 
     emit capabilitiesChanged(connected, caps);
 }

@@ -11,6 +11,7 @@
 #include "MainWindow.h"
 
 #include "MainWindowHelpers.h"
+#include <QEventLoop>
 #include "WindowGeometryRestore.h"
 
 #include "CwDecodeSettings.h"
@@ -3862,6 +3863,25 @@ void MainWindow::closeEvent(QCloseEvent* event)
     {
         ShutdownTrace trace("radio.disconnect");
         m_radioModel.disconnectFromRadio();
+        if (m_radioModel.backendShutdownPending()) {
+            // Keep the complete object graph alive while a backend performs an
+            // acknowledged logout. This wait belongs here, never in a
+            // destructor: optional controller and UI callbacks remain safe.
+            QEventLoop logoutWait;
+            QTimer poll;
+            poll.setInterval(10);
+            connect(&poll, &QTimer::timeout, &logoutWait, [this, &logoutWait] {
+                if (!m_radioModel.backendShutdownPending()) {
+                    logoutWait.quit();
+                }
+            });
+            QTimer::singleShot(5000, &logoutWait, &QEventLoop::quit);
+            poll.start();
+            logoutWait.exec(QEventLoop::ExcludeUserInputEvents);
+            if (m_radioModel.backendShutdownPending()) {
+                trace.fail("backend_shutdown_timeout");
+            }
+        }
     }
     audioStopRx();
 
@@ -7085,6 +7105,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        m_appletPanel->setMicInputChoices(connected ? caps.micInputChoices
+                                                    : QStringList{});
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
         // The mic-level gauge follows the METER, not the capability: a Flex
         // does not let a client pick its input either and still publishes
@@ -7094,8 +7116,29 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // than stranding them on the last radio's three filters.
         m_appletPanel->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                       : QList<int>{});
+        m_appletPanel->setFmRepeaterAccessModes(
+            connected ? caps.fmRepeaterAccessModes
+                      : QStringList{QStringLiteral("off"),
+                                    QStringLiteral("ctcss_tx")});
         m_appletPanel->setMicLevelMeterAvailable(
             !connected || m_radioModel.meterModel().hasMicPeakMeter());
+        if (m_appletPanel->phoneCwApplet()) {
+            m_appletPanel->phoneCwApplet()->setSpeechProcessorCapabilities(
+                connected ? caps.speechProcessorModes : QStringList{},
+                connected && caps.hasContinuousSpeechProcessorLevel);
+        }
+        if (m_appletPanel->phoneApplet()) {
+            m_appletPanel->phoneApplet()->setControlVisibility(
+                !connected || caps.hasDownwardExpander,
+                !connected || caps.hasTxFilterControl);
+        }
+        if (m_appletPanel->meterApplet()) {
+            m_appletPanel->meterApplet()->setTelemetryVisibility(
+                !connected || caps.hasPaTemperatureTelemetry,
+                !connected || caps.hasSupplyVoltageTelemetry,
+                !connected || caps.hasMainFanTelemetry,
+                connected ? caps.paCurrentMaxAmps : 0.0);
+        }
     }
 
     // ── Display dBm scale: who owns it ─────────────────────────────────────
@@ -7194,6 +7237,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             if (!sw) {
                 continue;
             }
+            sw->setPreserveWaterfallHistoryOnLargeRetune(
+                !connected || caps.preservesWaterfallHistoryOnLargeRetune);
             for (auto* vfo : sw->findChildren<VfoWidget*>()) {
                 vfo->setHasExtendedDsp(extendedDsp);
                 vfo->setHasRadioSideDsp(radioSideDsp);
@@ -7204,6 +7249,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 // radio; only the applet was being told what the hardware has.
                 vfo->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                     : QList<int>{});
+                vfo->setFmRepeaterAccessModes(
+                    connected ? caps.fmRepeaterAccessModes
+                              : QStringList{QStringLiteral("off"),
+                                            QStringLiteral("ctcss_tx")});
             }
             // WNB lives in the pan's overlay menu, not the VFO.
             applyRadioSideDspToPanDisplay(sw);

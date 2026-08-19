@@ -56,6 +56,10 @@ struct IcomModel {
     bool hasTransmit = true;
     double txPowerMaxWatts = 0.0;
 
+    // Never infer this from hasTransmit. The IC-9700 transmits but has no ATU;
+    // models such as the IC-705 can drive an attached tuner with CI-V 1C 01.
+    bool hasTuner = false;
+
     std::uint64_t tuningMinHz = 0;
     std::uint64_t tuningMaxHz = 0;
 
@@ -124,10 +128,19 @@ struct ModulationProfile {
 [[nodiscard]] std::optional<ModulationProfile>
 modulationProfileFor(const IcomModel& model);
 
+// Most Icoms have one continuous range; the IC-9700 has three disjoint bands.
+[[nodiscard]] bool supportsFrequency(const IcomModel& model,
+                                     std::uint64_t frequencyHz) noexcept;
+
 // Look up by the address the radio reported. Returns nullptr for an address we
 // do not recognise — which is a real and expected outcome, not an error: Icom
 // has ~130 CI-V addresses and this table has a handful.
 [[nodiscard]] const IcomModel* modelForCivAddress(std::uint8_t addr);
+
+// Exact native amateur-band declaration for menus and band selection. Empty
+// means the model has not been verified as a discontinuous band-only receiver;
+// callers must then retain their ordinary tuning-range behaviour.
+[[nodiscard]] std::string_view declaredBandsFor(const IcomModel& model) noexcept;
 
 // Look up by the name the radio reports in its RS-BA1 capabilities packet
 // ("IC-705"). That name arrives during the HANDSHAKE — before the session is
@@ -160,13 +173,15 @@ modulationProfileFor(const IcomModel& model);
 // not model-dependent — see sMeterDbm().
 [[nodiscard]] double s9ReferenceFor(std::uint64_t hz) noexcept;
 
-// raw -> watts for this model's Po meter.
+// Raw Po meter conversion for this model. Calibrated models return watts;
+// the IC-9700 returns its documented relative indication.
 //
 // EMPTY means we have no measured curve for this model, and the caller must
 // report PERCENT rather than inventing watts. That distinction is the whole
 // point: a power meter showing "50 W" derived from another radio's curve is a
 // number an operator will act on.
-[[nodiscard]] std::span<const CurvePoint> powerCurveFor(const IcomModel& model);
+[[nodiscard]] std::span<const CurvePoint> powerCurveFor(const IcomModel& model,
+                                                        std::uint64_t frequencyHz = 0);
 
 // The front-end stages this model offers, in register order (index 0 is OFF).
 //

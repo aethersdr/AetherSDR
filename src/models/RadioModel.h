@@ -741,6 +741,7 @@ public:
     // Called by MainWindow when the user cancels the conflict dialog.
     void cancelMultiFlexConflict();
     void disconnectFromRadio();
+    bool backendShutdownPending() const;
     void forceDisconnect();  // Close TCP but allow auto-reconnect
     // Send `radio reboot` (FlexLib Radio.cs:2575), surface a notification to
     // the operator, then trigger forceDisconnect so the standard reconnect

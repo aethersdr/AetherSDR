@@ -1955,6 +1955,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
             updateTMate2Display();
 #endif
     });
+    connect(s, &SliceModel::frequencyChanged, this, [this](double) {
+        refreshRadioPowerScale();
+    });
 
     // Feed current frequency immediately (AG may connect later and reprocess).
     if (s->sliceId() == m_activeSliceId && s->frequency() > 0.0)
@@ -2182,7 +2185,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Refresh the split-pair visualization whenever this slice's TX role changes,
     // so an externally-initiated split (rigctld / CAT / TCI / front panel) is
     // reflected on the panadapter, not just GUI-initiated split. (#3726)
-    connect(s, &SliceModel::txSliceChanged, this, [this](bool) { updateSplitState(); });
+    connect(s, &SliceModel::txSliceChanged, this, [this](bool) {
+        updateSplitState();
+        refreshRadioPowerScale();
+    });
 
     // Slice Link bookkeeping: the eligible-peer roster follows diversity and
     // letter changes; a member entering diversity dissolves the link (the
@@ -3676,6 +3682,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // echo a range — one runaway pane is enough to churn the session.
         sw->setRadioOwnsDbmScale(!m_radioModel.isConnected()
                                  || m_radioModel.backendCapabilities().radioOwnsDbmScale);
+        sw->setPreserveWaterfallHistoryOnLargeRetune(
+            !m_radioModel.isConnected()
+            || m_radioModel.backendCapabilities().preservesWaterfallHistoryOnLargeRetune);
 
         wirePanDisplayStatus(applet, pan);
     }
@@ -5140,24 +5149,42 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             }
             clearSwrSweepForBandChange(s->sliceId(), applet->panId(), bandName);
             m_bandSettings.setCurrentBand(bandName);
+            // The IC-9700's three declared hardware-band buttons are intended
+            // as an immediately usable VHF/UHF starting point.  Its generic
+            // BandDefs entries use weak-signal USB on 2 m and 23 cm, which
+            // also produces no carrier (and therefore no Po/SWR indication)
+            // on a bare PTT.  Keep that generic/Flex policy intact and apply
+            // the maintainer-selected FM default only to the Icom backend.
+            const QString requestedMode = caps.family == QLatin1String("icom")
+                ? QStringLiteral("FM") : mode;
             // MODE FIRST, then frequency. The backend adopts a mode-appropriate
             // passband on a mode CHANGE (Hl2Backend::setSliceMode), and the
             // frequency move is what re-selects the companion filter board — so
             // this order leaves both the passband and the band filter settled
             // for the band being arrived at, not the one being left.
-            if (!mode.isEmpty())
-                s->setMode(mode);
-            s->setFrequency(freqMhz);
-            // Centre the window on the new band. Without this the panadapter
-            // keeps the old band's NCO until the tune happens to fall outside
-            // the usable passband, so a band change could leave the trace
-            // centred a whole band away from the slice that just moved.
-            m_radioModel.requestPanCenter(applet->panId(), freqMhz);
+            if (!requestedMode.isEmpty())
+                s->setMode(requestedMode);
+            // One tune pipeline owns both the slice and pan move. Sending a
+            // direct slice tune followed by an independent pan-centre request
+            // let a rejected/echoed slice change leave RX Controls on the old
+            // frequency while the hardware scope jumped to the new band.
+            applyTuneRequest(s, freqMhz, TuneIntent::AbsoluteJump,
+                             "non-flex-band-select");
+            // Rebind the active-slice controls after the synthetic single-slice
+            // band jump.  Unlike a Flex band-stack recall, this path does not
+            // rebuild or reactivate the slice, so there is no subsequent
+            // setActiveSliceInternal() call to refresh an applet binding that
+            // was displaced while the IC-9700 changed scope bands.  Without
+            // this, the pan/VFO followed the model while RX Controls could
+            // retain the preceding band's frequency.
+            if (m_appletPanel && m_appletPanel->rxApplet()) {
+                m_appletPanel->rxApplet()->setSlice(s);
+            }
             qCDebug(lcProtocol).noquote().nospace()
                 << "MainWindow: band switch (no radio band stack) band=" << bandName
                 << " pan=" << applet->panId()
                 << " freq_mhz=" << QString::number(freqMhz, 'f', 6)
-                << " mode=" << mode;
+                << " mode=" << requestedMode;
             return;
         }
 
@@ -5909,6 +5936,45 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 // MTR / HLTH / TX applet routing. Runs once at construction; kept in this
 // TU with the rest of the model→UI wiring.
 
+void MainWindow::refreshRadioPowerScale()
+{
+    int maxW = m_radioModel.transmitModel().maxPowerLevel();
+    const RadioCapabilities backendCaps = m_radioModel.backendCapabilities();
+    if (!backendCaps.txPowerBands.isEmpty()) {
+        SliceModel* powerSlice = nullptr;
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (slice->isTxSlice()) {
+                powerSlice = slice;
+                break;
+            }
+        }
+        if (!powerSlice) {
+            powerSlice = activeSlice();
+        }
+        if (powerSlice) {
+            const double bandMax = backendCaps.txPowerMaxWattsAt(
+                powerSlice->frequency() * 1'000'000.0);
+            if (bandMax > 0.0) {
+                maxW = qRound(bandMax);
+            }
+        }
+    }
+
+    // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
+    // max_power_level only reports the exciter limit (100W). Use model
+    // name to detect the true PA capability. (#484)
+    const QString& model = m_radioModel.model();
+    if (model.startsWith("AU-") && maxW <= 100) {
+        maxW = 500;
+    }
+    const bool ampActive = m_radioModel.amplifier().present()
+                        && m_radioModel.amplifier().operate();
+    m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
+    m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
+    m_appletPanel->setMeterPowerScale(maxW, ampActive);
+    m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
+}
+
 void MainWindow::wireMeters()
 {
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
@@ -6500,24 +6566,10 @@ void MainWindow::wireMeters()
     // action calls setPowerScale(200, false) straight at the widget, and a
     // cache out here would then skip the real re-apply that has to
     // overwrite it.
-    auto updatePowerScale = [this]() {
-        int maxW = m_radioModel.transmitModel().maxPowerLevel();
-        // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
-        // max_power_level only reports the exciter limit (100W). Use model
-        // name to detect the true PA capability. (#484)
-        const QString& model = m_radioModel.model();
-        if (model.startsWith("AU-") && maxW <= 100) {
-            maxW = 500;
-        }
-        const bool ampActive = m_radioModel.amplifier().present()
-                            && m_radioModel.amplifier().operate();
-        m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
-        m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
-        m_appletPanel->setMeterPowerScale(maxW, ampActive);
-        m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
-    };
-    connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
-    connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
+    connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged,
+            this, &MainWindow::refreshRadioPowerScale);
+    connect(&m_radioModel.amplifier(), &AmpModel::stateChanged,
+            this, &MainWindow::refreshRadioPowerScale);
     // Also refresh on infoChanged (#4813): maxPowerLevelChanged only fires when
     // the numeric value actually changes, which it doesn't on connect if the
     // radio's exciter limit matches TransmitModel's compiled-in default (100W —
@@ -6530,7 +6582,8 @@ void MainWindow::wireMeters()
     // connect (RadioModel.cpp, connectToRadio()), but infoChanged is the
     // signal actually tied to the info data this branch reads, so it doesn't
     // depend on that seeding holding for every connect path.
-    connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
+    connect(&m_radioModel, &RadioModel::infoChanged,
+            this, &MainWindow::refreshRadioPowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.
     // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)
@@ -6604,7 +6657,7 @@ void MainWindow::wireMeters()
         }
     });
     connect(&m_radioModel.transmitModel(), &TransmitModel::maxPowerLevelChanged,
-            this, updatePowerScale);
+            this, &MainWindow::refreshRadioPowerScale);
 
     // ── Meter applet: all meters consolidated ──────────────────────────────
     m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
@@ -6623,6 +6676,10 @@ void MainWindow::wireMeters()
     // sample and reset the hold on un-key. (#2561)
     connect(&m_radioModel.meterModel(), &MeterModel::txPeakChanged,
             m_appletPanel->txApplet(), &TxApplet::updatePeakPower);
+    connect(&m_radioModel.meterModel(), &MeterModel::forwardPowerUnitChanged,
+            m_appletPanel->txApplet(), &TxApplet::setForwardPowerUnit);
+    m_appletPanel->txApplet()->setForwardPowerUnit(
+        m_radioModel.meterModel().forwardPowerUnit());
     auto updateTxMeterGate = [this]() {
         const auto& tx = m_radioModel.transmitModel();
         m_appletPanel->txApplet()->setTransmitting(

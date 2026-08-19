@@ -7,7 +7,7 @@ namespace {
 
 // Offsets inside a 0x27 0x00 frame's data (i.e. after cmd + subcommand).
 //
-//   data[0]      0x00, fixed
+//   data[0]      receiver: 00 MAIN, 01 SUB
 //   data[1]      division index, BCD 01..11
 //   data[2]      division maximum, BCD — 01 over WLAN, 11 over USB
 // then, ONLY when the division index is 1:
@@ -18,7 +18,7 @@ namespace {
 //   data[15..]   waveform, when this frame is also the LAST division (WLAN)
 // and for every division after the first:
 //   data[3..]    waveform
-constexpr std::size_t kOffFixed      = 0;
+constexpr std::size_t kOffReceiver   = 0;
 constexpr std::size_t kOffDivision   = 1;
 constexpr std::size_t kOffDivisionMax = 2;
 constexpr std::size_t kOffMode       = 3;
@@ -57,6 +57,8 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
         // sweep was left half-assembled by packet loss, this is where it gets
         // discarded — keeping it would splice two sweeps into one trace.
         m_partial = ScopeFrame{};
+        m_partial.receiver = frame.data[kOffReceiver];
+        m_receiver = m_partial.receiver;
         m_assembling = true;
         m_expectedDivision = 1;
 
@@ -126,6 +128,12 @@ std::optional<ScopeFrame> ScopeDecoder::feed(const CivFrame& frame)
     // Continuation divisions (USB transport only).
     if (!m_assembling)
         return std::nullopt;   // mid-sweep frame with no first division — dropped
+    if (frame.data[kOffReceiver] != m_receiver) {
+        // MAIN and SUB share the same command stream. Never splice divisions
+        // from different receivers into one positional waveform.
+        m_assembling = false;
+        return std::nullopt;
+    }
     if (division != m_expectedDivision + 1) {
         // A gap means the sweep is unrecoverable: the waveform is positional and
         // there is no per-division index inside the payload to re-align against.
@@ -152,6 +160,7 @@ void ScopeDecoder::reset() noexcept
     m_partial = ScopeFrame{};
     m_assembling = false;
     m_expectedDivision = 0;
+    m_receiver = 0;
 }
 
 std::vector<float> toDbm(const ScopeFrame& frame, const ScopeGeometry& geom,

@@ -492,11 +492,20 @@ void HealthApplet::setMeterModel(MeterModel* model)
                    this, nullptr);
         disconnect(m_model, &MeterModel::tgxlMetersChanged, this, nullptr);
         disconnect(m_model, &MeterModel::ampMetersChanged,  this, nullptr);
+        disconnect(m_model, &MeterModel::forwardPowerUnitChanged, this, nullptr);
     }
 
     m_model = model;
     if (!m_model)
         return;
+
+    m_radioSnapshot.powerRelative = m_model->forwardPowerUnit()
+        .compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0;
+    connect(m_model, &MeterModel::forwardPowerUnitChanged,
+            this, [this](const QString& unit) {
+        m_radioSnapshot.powerRelative =
+            unit.compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0;
+    });
 
     // Emission order matters: MeterModel::updateValues() emits
     // directionalPowerMetersChanged (carrying the INSTANTANEOUS forward power
@@ -533,6 +542,9 @@ void HealthApplet::setMeterModel(MeterModel* model)
 
 void HealthApplet::setPowerScale(int maxWatts, bool hasAmplifier)
 {
+    m_radioSnapshot.powerRelative = m_model
+        && m_model->forwardPowerUnit()
+            .compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0;
     if (m_havePowerScale && maxWatts == m_lastMaxWatts && hasAmplifier == m_lastHasAmplifier) {
         return;
     }
@@ -787,6 +799,7 @@ void HealthApplet::appendFrame()
 
     AntennaHealthSample sample;
     sample.powerWatts = m_displayPower;
+    sample.powerRelative = snapshot.powerRelative;
     sample.swr = m_displaySwr;
     sample.powerAverage = m_baselineReady ? m_powerAverage : std::max(1.0f, m_displayPower);
     sample.swrAverage = m_baselineReady ? m_swrAverage : 1.0f;
@@ -964,7 +977,9 @@ void HealthApplet::updateStatusLabels(const AntennaHealthSample& sample,
     m_returnLossLabel->setText(sample.active
         ? QStringLiteral("RL %1dB").arg(sample.returnLossDb, 0, 'f', 0)
         : QStringLiteral("RL --"));
-    m_powerLabel->setText(QStringLiteral("PWR %1").arg(formatPower(sample.powerWatts)));
+    m_powerLabel->setText(QStringLiteral("PWR %1")
+                              .arg(formatPower(sample.powerWatts,
+                                               sample.powerRelative)));
     m_varianceLabel->setText(sample.active
         ? QStringLiteral("VAR %1").arg(m_swrSpan, 0, 'f', 2)
         : QStringLiteral("VAR --"));
@@ -1015,8 +1030,12 @@ QString HealthApplet::sourceText(MeterSource source) const
     return QStringLiteral("--");
 }
 
-QString HealthApplet::formatPower(float watts) const
+QString HealthApplet::formatPower(float value, bool relative) const
 {
+    if (relative) {
+        return QStringLiteral("%1 %").arg(value, 0, 'f', 0);
+    }
+    const float watts = value;
     if (watts >= 995.0f)
         return QStringLiteral("%1 kW").arg(watts / 1000.0f, 0, 'f', 2);
     if (watts >= 100.0f)

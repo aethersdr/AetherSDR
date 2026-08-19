@@ -1422,6 +1422,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
     // not implemented, not because they could not be.
     c.hasHostNoiseBlanker = true;
+    c.fmRepeaterAccessModes = {QStringLiteral("off"),
+                               QStringLiteral("ctcss_tx")};
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -1486,6 +1488,14 @@ RadioCapabilities Hl2Backend::capabilities() const
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    c.hasPaTemperatureTelemetry = true;
+    c.hasMainFanTelemetry = false;
+    c.paCurrentMaxAmps = 0.0;
+    // TX passband edges are implemented by the host-side WDSP transmitter.
+    // There is no separate HL2 DEXP/compander command.
+    c.hasDownwardExpander = false;
+    c.hasContinuousSpeechProcessorLevel = false;
+    c.hasTxFilterControl = true;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
     // These are the domains the client owns as the radio's memory

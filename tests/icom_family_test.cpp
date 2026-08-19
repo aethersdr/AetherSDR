@@ -107,14 +107,35 @@ int main(int argc, char** argv)
               && mk2Mod && mk2Mod->micValue == 0x00,
           "both verified models name MIC in their own profile rather than "
           "leaving the caller to hardcode it");
-    // An IC-9700 has no Wi-Fi and, unlike the two profiles above, no verified
-    // model-specific modulation map. It must therefore remain outside this
-    // read/write path instead of borrowing the IC-705's WLAN table. Pin that
-    // distinction so the old false warning cannot quietly come back.
+    // The IC-9700 has its own LAN modulation map. It must not borrow the
+    // IC-705's WLAN item numbers or source value merely because both radios
+    // use this transport.
+    const auto ic9700Mod = icom::modulationProfileFor(
+        *icom::modelForCivAddress(0xA2));
+    check(ic9700Mod && ic9700Mod->dataOffInputItem == 115
+              && ic9700Mod->dataInputItem == 116
+              && ic9700Mod->networkOnlyValue == 0x05,
+          "IC-9700 uses SET 0115/0116 and LAN value 05");
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
-          "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+          "the IC-9700 has Ethernet rather than the IC-705 WLAN source");
     check(AetherSDR::icom::modelForCivAddress(0xA4)->hasWifi,
           "the IC-705 does — the one model the WLAN check is legitimate for");
+    check(AetherSDR::icom::declaredBandsFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2)) == "2m,440,23cm",
+          "the IC-9700 declares only its three discontinuous native bands");
+    check(AetherSDR::icom::declaredBandsFor(
+              *AetherSDR::icom::modelForCivAddress(0xA4)).empty(),
+          "continuous-coverage Icoms retain range-gated band menus");
+    check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasTuner,
+          "the IC-9700 does not inherit ATU controls merely because it transmits");
+    const auto ic9700Preamp = AetherSDR::icom::preampLabelsFor(
+        *AetherSDR::icom::modelForCivAddress(0xA2));
+    check(ic9700Preamp.size() == 2
+              && ic9700Preamp[0] == "OFF" && ic9700Preamp[1] == "P.AMP",
+          "the IC-9700 publishes its verified single preamp position without "
+          "inventing a second gain level");
+    check(AetherSDR::icom::modelForCivAddress(0xA4)->hasTuner,
+          "the IC-705 retains its external-tuner command surface");
 
     check(!caps.radioOwnsDbmScale,
           "the scope scale is FIXED (ScopeCalibration), not the radio's to set — "
@@ -230,6 +251,20 @@ int main(int argc, char** argv)
     check(icom::modelForCivAddress(0xB6)->hasNetwork,
           "the IC-7300MK2 CAN - it has an Ethernet port, and dropping it from "
           "the chooser would hide the model this backend was validated on");
+
+    const icom::IcomModel* ic9700 = icom::modelForCivAddress(0xA2);
+    check(ic9700 && icom::supportsFrequency(*ic9700, 146'520'000ULL),
+          "IC-9700 accepts 2 m frequencies");
+    check(ic9700 && icom::supportsFrequency(*ic9700, 440'000'000ULL),
+          "IC-9700 accepts 70 cm frequencies");
+    check(ic9700 && icom::supportsFrequency(*ic9700, 1'296'000'000ULL),
+          "IC-9700 accepts 23 cm frequencies");
+    check(ic9700 && !icom::supportsFrequency(*ic9700, 200'000'000ULL)
+              && !icom::supportsFrequency(*ic9700, 800'000'000ULL),
+          "IC-9700 rejects gaps between its three tuning ranges");
+    const icom::IcomModel* ic705 = icom::modelForCivAddress(0xA4);
+    check(ic705 && icom::supportsFrequency(*ic705, 14'225'000ULL),
+          "continuous-range Icom validation is unchanged");
 
     // The name is FREE TEXT set on the radio, so the match has to survive the
     // ways it is really written.

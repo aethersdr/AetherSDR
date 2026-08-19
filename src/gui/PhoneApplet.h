@@ -28,6 +28,7 @@ public:
     explicit PhoneApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
+    void setControlVisibility(bool downwardExpander, bool txFilter);
 
 private:
     void buildUI();
@@ -50,10 +51,12 @@ private:
 
     // DEXP (radio compander control)
     QPushButton* m_dexpBtn{nullptr};
+    QWidget*     m_dexpRow{nullptr};
     GuardedSlider* m_dexpSlider{nullptr};
     QLabel*      m_dexpLabel{nullptr};
 
     // TX filter
+    QWidget* m_txFilterSection{nullptr};
     QSlider* m_lowCutSlider{nullptr};
     ScrollableLabel* m_lowCutLabel{nullptr};
     QPushButton* m_lowCutDown{nullptr};

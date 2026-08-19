@@ -126,6 +126,26 @@ void testTxMetersAreLiveOnly()
            powerGauge->value() == 0.0f);
 }
 
+void testRelativePowerDescribesBandMaximum()
+{
+    TxApplet applet;
+    QSlider* slider = powerSlider(applet, QStringLiteral("RF power"));
+    report("relative RF power slider exists", slider != nullptr);
+    if (!slider) {
+        return;
+    }
+
+    applet.setForwardPowerUnit(QStringLiteral("Percent"));
+    applet.setPowerScale(75, false);
+    report("relative RF power names the 70 cm maximum",
+           slider->accessibleDescription().contains(QStringLiteral("75 W maximum")));
+    applet.setPowerScale(10, false);
+    report("relative RF power follows the 23 cm maximum",
+           slider->accessibleDescription().contains(QStringLiteral("10 W maximum")));
+    report("relative RF power command remains percentage based",
+           slider->maximum() == 100);
+}
+
 void testAtuSuccessTogglesToBypass()
 {
     TransmitModel model;
@@ -180,6 +200,7 @@ int main(int argc, char** argv)
     testReleaseReconcilesAuthoritativePower(QStringLiteral("RF power"), true);
     testReleaseReconcilesAuthoritativePower(QStringLiteral("Tune power"), false);
     testTxMetersAreLiveOnly();
+    testRelativePowerDescribesBandMaximum();
     testAtuSuccessTogglesToBypass();
 
     std::printf("\n%s\n",

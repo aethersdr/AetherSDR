@@ -71,6 +71,7 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     [[nodiscard]] bool isConnected() const override;
+    [[nodiscard]] bool shutdownPending() const override;
 
     // ---- intents DOWN ----
     void setSliceFrequency(int sliceId, double hz) override;
@@ -89,6 +90,7 @@ public:
     void setTxPower(int percent) override;
     void setSpeechProcessor(bool on, int level) override;
     void setMicGain(int gainPercent) override;
+    void setMicInput(const QString& input) override;
     void setTxAudioMonitor(bool on) override;
     void setTxMonitor(bool on, int level) override;
     void setSliceNoiseReduction(int sliceId, bool on, int level) override;
@@ -154,6 +156,7 @@ private slots:
 
 private:
     void publishCapabilities();
+    void publishRadioIdentity();
     // Publish the scope's dBm axis, derived from the SAME ScopeCalibration that
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.
@@ -173,6 +176,7 @@ private:
     // mode indicator that never changed.
     void publishModeState();
     void publishMeterDefs();
+    void publishIdleTxMeters();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
@@ -203,12 +207,19 @@ private:
     // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
     // it belongs to that scheduler work, not here.
     void sendConnectReadBurst();
+    void startSession(const IcomSession::Params& params);
+    void onSessionShutdownFinished();
+    void startPendingSessionWhenReady();
     // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
     void adoptReportedCivAddress(std::uint8_t reported);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
     std::unique_ptr<IcomSession> m_session;
+    std::optional<IcomSession::Params> m_pendingSessionStart;
+    std::optional<IcomSession::Params> m_activeSessionParams;
+    qint64 m_pendingSessionNotBeforeMs = 0;
+    int m_staleSessionRetries = 0;
     const IcomModel* m_model = nullptr;
 
     // ---- CI-V address resolution (see IcomSettings::CivSelection) ------------
@@ -298,7 +309,8 @@ private:
     // rather than inferred from our own commands. Slow: it only has to notice a
     // transmission, and it shares the CI-V stream with tuning.
     std::int64_t m_lastPttPollMs = 0;
-    static constexpr int kPttPollMs = 250;
+    static constexpr int kPttPollRxMs = 500;
+    static constexpr int kPttPollTxMs = 250;
     // The scope geometry the RADIO last reported, from its own sweeps. Both pan
     // intents reason against it: a zoom step needs to know which of the eight
     // spans it is leaving, and a centre request needs a truth to snap back to.
@@ -463,10 +475,15 @@ private:
     QString m_lastOutboundCiv;      // the last frame we sent, as hex
     qint64  m_lastOutboundCivAtMs = 0;
     bool    m_civStallReported = false;
-    // Long enough that a quiet moment is not an alarm — the slowest poll here is
-    // 1 s and a user-command guard can defer it — short enough that an operator
-    // has not yet had time to wonder why the S-meter stopped.
-    static constexpr qint64 kCivStallMs = 5000;
+    qint64  m_civRecoveryStartedAtMs = 0;
+    qint64  m_lastCivRecoveryAttemptAtMs = 0;
+    int     m_civRecoveryAttempts = 0;
+    bool    m_civRecoveryProbeSent = false;
+    // SDR9700's hardware-proven watchdog begins targeted CI-V recovery after
+    // two seconds while the authenticated control stream remains healthy.
+    static constexpr qint64 kCivStallMs = 2000;
+    static constexpr qint64 kCivRecoveryIntervalMs = 1000;
+    static constexpr int kMaxCivRecoveryAttempts = 3;
     // Note the id for a frame we are about to send or have just decoded.
     void noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlScheduled(std::uint8_t cmd, std::uint8_t sub, bool hasSub);

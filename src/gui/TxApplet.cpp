@@ -633,6 +633,7 @@ void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
         m_smoothedPower = 0.0f;
         static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
         static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
+        static_cast<HGauge*>(m_swrGauge)->setLabel(QStringLiteral("SWR"));
         return;
     }
     m_smoothedPower = fwdPower;
@@ -640,7 +641,11 @@ void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
     // Absent SWR parks the gauge at its 1.0 rest position; a raw 0.0 would
     // read as an off-scale value, and holding the last ratio is exactly the
     // stale display #4533 removed.
-    static_cast<HGauge*>(m_swrGauge)->setValue(swrValid ? swr : 1.0f);
+    auto* swrGauge = static_cast<HGauge*>(m_swrGauge);
+    swrGauge->setValue(swrValid ? swr : 1.0f);
+    swrGauge->setLabel(swrValid
+        ? QStringLiteral("SWR %1").arg(swr, 0, 'f', 2)
+        : QStringLiteral("SWR --"));
 }
 
 void TxApplet::updatePeakPower(float fwdPowerInstant)
@@ -673,6 +678,7 @@ void TxApplet::setTransmitting(bool tx)
         static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
         static_cast<HGauge*>(m_fwdGauge)->setPeakValue(0.0f);
         static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
+        static_cast<HGauge*>(m_swrGauge)->setLabel(QStringLiteral("SWR"));
     }
 }
 
@@ -784,12 +790,40 @@ void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
     m_lastMaxWatts = maxWatts;
     m_lastHasAmplifier = hasAmplifier;
 
+    if (m_forwardPowerIsRelative && maxWatts > 0) {
+        const QString description = QStringLiteral(
+            "Transmit RF power level, 0 to 100 percent of this band's %1 W maximum")
+            .arg(maxWatts);
+        m_rfPowerSlider->setAccessibleDescription(description);
+        m_rfPowerSlider->setToolTip(description);
+    } else {
+        m_rfPowerSlider->setAccessibleDescription(
+            QStringLiteral("Transmit RF power level, 0 to 100 percent of maximum"));
+        m_rfPowerSlider->setToolTip(QString());
+    }
+
     // TX applet always shows exciter (barefoot) power regardless of
     // hasAmplifier — cached above only so a redundant call can be detected.
     // Amplified output power is shown in the AMP applet.
     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
     float gaugeFullScaleW = 0.0f;
-    if (maxWatts > 100) {
+    if (m_forwardPowerIsRelative) {
+        gauge->setLabel(QStringLiteral("RF Pwr (%)"));
+        gauge->setUnit(QStringLiteral("%"));
+        gauge->setRange(0.0f, 120.0f, 100.0f,
+            {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
+        gauge->setAccessibleDescription("Icom relative forward-power indication in percent");
+        gauge->setHoverValueFormatter([](float v) {
+            return QStringLiteral("%1 %").arg(QString::number(std::lround(v)));
+        });
+        gaugeFullScaleW = 120.0f;
+    } else if (maxWatts > 100) {
+        gauge->setLabel(QStringLiteral("RF Pwr"));
+        gauge->setUnit(QStringLiteral("W"));
+        gauge->setAccessibleDescription("RF forward power in watts");
+        gauge->setHoverValueFormatter([](float v) {
+            return QStringLiteral("%1 W").arg(QString::number(std::lround(v)));
+        });
         // Aurora (500 W): 0–600 W, red > 500 W
         gauge->setRange(0.0f, 600.0f, 500.0f,
             {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
@@ -797,6 +831,12 @@ void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
         gaugeFullScaleW = 600.0f;
     } else {
         // Barefoot: 0–120 W, red > 100 W
+        gauge->setLabel(QStringLiteral("RF Pwr"));
+        gauge->setUnit(QStringLiteral("W"));
+        gauge->setAccessibleDescription("RF forward power in watts");
+        gauge->setHoverValueFormatter([](float v) {
+            return QStringLiteral("%1 W").arg(QString::number(std::lround(v)));
+        });
         gauge->setRange(0.0f, 120.0f, 100.0f,
             {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
         gaugeFullScaleW = 120.0f;
@@ -805,6 +845,17 @@ void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
     // zero) so the visual feel is the same whether the rig is barefoot
     // or an Aurora 500 W exciter. (#2561)
     m_peakDecayWattsPerSec = gaugeFullScaleW / 2.5f;
+}
+
+void TxApplet::setForwardPowerUnit(const QString& unit)
+{
+    const bool relative = unit.compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0;
+    if (m_forwardPowerIsRelative == relative) {
+        return;
+    }
+    m_forwardPowerIsRelative = relative;
+    m_havePowerScale = false;
+    setPowerScale(m_lastMaxWatts > 0 ? m_lastMaxWatts : 100, m_lastHasAmplifier);
 }
 
 } // namespace AetherSDR

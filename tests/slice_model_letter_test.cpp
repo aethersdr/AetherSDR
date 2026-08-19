@@ -552,6 +552,57 @@ int main(int argc, char** argv)
         EXPECT_EQ(s.filterHigh(), -95);
     }
 
+    // ── Extended FM repeater commands preserve the complete access tuple for
+    // family backends (Icom uses this instead of the legacy Flex command).
+    {
+        SliceModel s(0);
+        QSignalSpy accessSpy(&s, &SliceModel::fmRepeaterAccessCommandIssued);
+        s.setFmRepeaterAccess(QStringLiteral("dtcs_txrx"), 100.0, 123.0,
+                              23, true, false);
+
+        EXPECT_EQ(accessSpy.count(), 1);
+        const QList<QVariant> args = accessSpy.takeFirst();
+        EXPECT_EQ(args.at(0).toString(), QStringLiteral("dtcs_txrx"));
+        EXPECT_EQ(args.at(1).toDouble(), 100.0);
+        EXPECT_EQ(args.at(2).toDouble(), 123.0);
+        EXPECT_EQ(args.at(3).toInt(), 23);
+        EXPECT_EQ(args.at(4).toBool(), true);
+        EXPECT_EQ(args.at(5).toBool(), false);
+    }
+
+    // ── Optional boolean status fields must apply false as a real update;
+    // testing optional truthiness here would leave reverse polarity stuck on.
+    {
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.fmDtcsTxReverse = true;
+            d.fmDtcsRxReverse = true;
+        }));
+        EXPECT_EQ(s.fmDtcsTxReverse(), true);
+        EXPECT_EQ(s.fmDtcsRxReverse(), true);
+
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.fmDtcsTxReverse = false;
+            d.fmDtcsRxReverse = false;
+        }));
+        EXPECT_EQ(s.fmDtcsTxReverse(), false);
+        EXPECT_EQ(s.fmDtcsRxReverse(), false);
+    }
+
+    // ── Native duplex changes carry direction and magnitude together. This
+    // drives Icom's -, +, and SIMPLEX controls without REV semantics.
+    {
+        SliceModel s(0);
+        QSignalSpy offsetSpy(&s, &SliceModel::repeaterOffsetCommandIssued);
+        s.setFmRepeaterOffsetFreq(0.6);
+        s.setRepeaterOffsetDir(QStringLiteral("up"));
+
+        EXPECT_EQ(offsetSpy.count(), 2);
+        const QList<QVariant> args = offsetSpy.takeLast();
+        EXPECT_EQ(args.at(0).toString(), QStringLiteral("up"));
+        EXPECT_EQ(args.at(1).toDouble(), 0.6);
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");
         return 0;

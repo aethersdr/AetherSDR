@@ -458,6 +458,7 @@ void TransmitModel::setMicSelection(const QString& input)
         m_micSelection = normalized;
         emit micStateChanged();
     }
+    emit micInputCommandIssued(normalized);
     emit commandReady(QString("mic input %1").arg(normalized));
 }
 
@@ -495,18 +496,34 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
 
 void TransmitModel::setSpeechProcessorLevel(int level)
 {
-    // NOR=0, DX=1, DX+=2 (pcap confirmed: speech_processor_level, not compander_level).
+    // Flex uses NOR=0, DX=1, DX+=2; continuous-level radios publish a larger
+    // maximum through capabilities.
     // Optimistic update: radio does not echo in incremental status.
-    level = qBound(0, level, 2);
+    level = qBound(0, level, m_speechProcLevelMaximum);
     m_speechProcLevel = level;
     emit micStateChanged();
     emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_level=%1").arg(level));
 }
 
+void TransmitModel::setSpeechProcessorLevelMaximum(int maximum)
+{
+    maximum = qBound(2, maximum, 100);
+    if (m_speechProcLevelMaximum == maximum) {
+        return;
+    }
+    m_speechProcLevelMaximum = maximum;
+    const int boundedLevel = qBound(0, m_speechProcLevel,
+                                    m_speechProcLevelMaximum);
+    if (boundedLevel != m_speechProcLevel) {
+        m_speechProcLevel = boundedLevel;
+        emit micStateChanged();
+    }
+}
+
 bool TransmitModel::applySpeechProcessorState(bool on, int level)
 {
-    level = qBound(0, level, 2);
+    level = qBound(0, level, m_speechProcLevelMaximum);
     if (m_speechProcEnable == on && m_speechProcLevel == level) {
         return false;
     }

@@ -171,7 +171,7 @@ constexpr std::array kSpecs = {
                 0, 1, "on/off", 0, 1,
                 "setVox", "phoneVoxBtn", true,
                 "Enable only. The trigger threshold is a separate level (14 16) "
-                "and the DELAY is a SET-menu item (1A 05 0359, in 0.1 s steps) — "
+                "and the DELAY is a SET-menu item (1A 05 0330, in 0.1 s steps) — "
                 "not 14 17, which is the ANTI-vox gain."},
     ControlSpec{"vox.gain", 0x14, 0x16, true, "VOX gain",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,

@@ -251,8 +251,16 @@ QJsonObject RadioCertification::renderedSnapshot() const
     // seam's dBm.
     const qint64 fwdAge = ageOf(meters.fwdPowerUpdatedAtMs());
     const bool fwdLive = fwdAge >= 0 && fwdAge <= MeterModel::kTxMeterStaleMs;
-    out[QStringLiteral("fwdPowerWatts")] =
+    const QString fwdUnit = meters.forwardPowerUnit();
+    const bool fwdIsWatts =
+        fwdUnit.compare(QLatin1String("Watts"), Qt::CaseInsensitive) == 0
+        || fwdUnit.compare(QLatin1String("W"), Qt::CaseInsensitive) == 0;
+    out[QStringLiteral("fwdPowerValue")] =
         fwdLive ? QJsonValue(static_cast<double>(meters.fwdPowerInstant())) : QJsonValue();
+    out[QStringLiteral("fwdPowerUnit")] = fwdUnit;
+    out[QStringLiteral("fwdPowerWatts")] =
+        fwdLive && fwdIsWatts
+        ? QJsonValue(static_cast<double>(meters.fwdPowerInstant())) : QJsonValue();
     out[QStringLiteral("fwdPowerAgeMs")] = static_cast<double>(fwdAge);
     out[QStringLiteral("fwdPowerLive")] = fwdLive;
 
@@ -275,8 +283,14 @@ QJsonObject RadioCertification::renderedSnapshot() const
     const int alcIdx = meters.findMeter(QStringLiteral("TX"), QStringLiteral("ALC"));
     const qint64 alcAge = alcIdx >= 0 ? meters.valueAgeMs(alcIdx) : -1;
     const bool alcLive = alcAge >= 0 && alcAge <= MeterModel::kTxMeterStaleMs;
-    out[QStringLiteral("alcDbfs")] =
+    const QString alcUnit = meters.swAlcUnit();
+    out[QStringLiteral("alcValue")] =
         alcLive ? QJsonValue(static_cast<double>(meters.swAlc())) : QJsonValue();
+    out[QStringLiteral("alcUnit")] = alcUnit;
+    const bool alcIsDbfs = alcUnit.isEmpty()
+        || alcUnit.compare(QLatin1String("dBFS"), Qt::CaseInsensitive) == 0;
+    out[QStringLiteral("alcDbfs")] = alcLive && alcIsDbfs
+        ? QJsonValue(static_cast<double>(meters.swAlc())) : QJsonValue();
     out[QStringLiteral("alcAgeMs")] = static_cast<double>(alcAge);
     out[QStringLiteral("alcLive")] = alcLive;
     return out;

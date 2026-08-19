@@ -3031,7 +3031,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         // from the declaration in BandDefs order instead of the HF layout
         // + model capability flags: the radio said what it can do, so the
         // menu offers exactly that (an IC-9700 gets 2m/440/23cm, not an
-        // HF grid it can't tune).  Utility and XVTR rows are unaffected.
+        // HF grid or utility/XVTR rows it can't tune).
         // NB buttons are built from BandDefs here, not via makeBandBtn():
         // BAND_GRID only carries the curated HF-menu entries, so declared
         // VHF/UHF names (440, 23cm, ...) have no BAND_GRID row to reuse.
@@ -3040,7 +3040,15 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             const QString bandName = QString::fromLatin1(def.name);
             if (!m_declaredBands.contains(bandName))
                 continue;
-            auto* btn = new QPushButton(bandName, m_bandPanel);
+            QString buttonLabel = bandName;
+            if (bandName == QLatin1String("2m")) {
+                buttonLabel = QStringLiteral("144");
+            } else if (bandName == QLatin1String("440")) {
+                buttonLabel = QStringLiteral("430");
+            } else if (bandName == QLatin1String("23cm")) {
+                buttonLabel = QStringLiteral("1240");
+            }
+            auto* btn = new QPushButton(buttonLabel, m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
             btn->setStyleSheet(bandBtnStyle);
             const double  freq = def.defaultFreqMhz;
@@ -3080,56 +3088,61 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         }
     }
 
-    // XVTR bands (inserted between HF and utility)
+    // XVTR bands (inserted between HF and utility). A non-empty declared set
+    // is authoritative: do not append configured transverters or generic
+    // utility destinations that the radio did not declare.
     m_xvtrBandBtns.clear();
-    for (int i = 0; i < bands.size(); ++i) {
-        auto* btn = new QPushButton(bands[i].name, m_bandPanel);
-        btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
-        btn->setStyleSheet(xvtrBtnStyle);
-        const double freq = bands[i].rfFreqMhz;
-        const QString name = bands[i].name;
-        const QString stackKey = bands[i].stackKey;
-        connect(btn, &QPushButton::clicked, this, [this, name, freq, stackKey]() {
-            hideAllSubPanels();
-            emit bandSelected(name, freq, "USB", stackKey);
-        });
-        grid->addWidget(btn, row + i / 3, i % 3);
-        m_xvtrBandBtns.append(btn);
-    }
-    if (!bands.isEmpty())
-        row += (bands.size() + 2) / 3;  // advance past XVTR rows
-
-    // Utility buttons: WWV, GEN, 2200, 630, XVTR config
-    constexpr int utilLayout[][3] = {
-        {11, 12, -1},   // WWV, GEN
-        {13, 14, 15},   // 2200, 630, XVTR
-    };
-    for (int r = 0; r < 2; ++r) {
-        for (int col = 0; col < 3; ++col) {
-            int idx = utilLayout[r][col];
-            if (idx < 0) continue;
-            auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
+    if (m_declaredBands.isEmpty()) {
+        for (int i = 0; i < bands.size(); ++i) {
+            auto* btn = new QPushButton(bands[i].name, m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
-            btn->setStyleSheet(bandBtnStyle);
-            QString bandName = QString::fromLatin1(BAND_GRID[idx].bandName);
-            double freq = BAND_GRID[idx].freqMhz;
-            QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
-            if (idx == 15) {
-                connect(btn, &QPushButton::clicked, this, [this]() {
-                    hideAllSubPanels();
-                    emit xvtrSetupRequested();
-                });
-            } else if (bandName.isEmpty()) {
-                btn->setEnabled(false);
-            } else {
-                connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
-                    hideAllSubPanels();
-                    emit bandSelected(bandName, freq, mode);
-                });
-            }
-            grid->addWidget(btn, row, col);
+            btn->setStyleSheet(xvtrBtnStyle);
+            const double freq = bands[i].rfFreqMhz;
+            const QString name = bands[i].name;
+            const QString stackKey = bands[i].stackKey;
+            connect(btn, &QPushButton::clicked, this, [this, name, freq, stackKey]() {
+                hideAllSubPanels();
+                emit bandSelected(name, freq, "USB", stackKey);
+            });
+            grid->addWidget(btn, row + i / 3, i % 3);
+            m_xvtrBandBtns.append(btn);
         }
-        ++row;
+        if (!bands.isEmpty()) {
+            row += (bands.size() + 2) / 3;
+        }
+
+        // Utility buttons: WWV, GEN, 2200, 630, XVTR config
+        constexpr int utilLayout[][3] = {
+            {11, 12, -1},
+            {13, 14, 15},
+        };
+        for (int r = 0; r < 2; ++r) {
+            for (int col = 0; col < 3; ++col) {
+                const int idx = utilLayout[r][col];
+                if (idx < 0) {
+                    continue;
+                }
+                auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
+                btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
+                btn->setStyleSheet(bandBtnStyle);
+                const QString bandName = QString::fromLatin1(BAND_GRID[idx].bandName);
+                const double freq = BAND_GRID[idx].freqMhz;
+                const QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
+                if (idx == 15) {
+                    connect(btn, &QPushButton::clicked, this, [this]() {
+                        hideAllSubPanels();
+                        emit xvtrSetupRequested();
+                    });
+                } else {
+                    connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
+                        hideAllSubPanels();
+                        emit bandSelected(bandName, freq, mode);
+                    });
+                }
+                grid->addWidget(btn, row, col);
+            }
+            ++row;
+        }
     }
 
     m_bandPanel->adjustSize();

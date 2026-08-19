@@ -193,6 +193,7 @@ public:
     [[nodiscard]] std::uint8_t announcedRxCodec() const { return m_announcedRxCodec; }
     [[nodiscard]] int authCount() const { return m_authCount; }
     [[nodiscard]] bool serialOpened() const { return m_serialOpened; }
+    [[nodiscard]] int serialOpenCount() const { return m_serialOpenCount; }
     [[nodiscard]] bool sawUsernameObfuscated() const { return m_usernameObfuscated; }
     [[nodiscard]] int civCommandsSeen() const { return m_civCommands; }
     // What the radio currently holds for a 1A 05 leaf — the persisted-state
@@ -210,6 +211,11 @@ public:
     [[nodiscard]] const std::vector<std::uint16_t>& deauthOuterSequences() const
     {
         return m_deauthOuterSequences;
+    }
+    void setIgnoredDeauthReplies(int count) { m_ignoredDeauthReplies = count; }
+    [[nodiscard]] bool deauthFollowedSerialClose() const
+    {
+        return m_deauthFollowedSerialClose;
     }
     [[nodiscard]] const std::vector<std::uint16_t>& loginTokenRequestIds() const
     {
@@ -229,6 +235,10 @@ public:
     void setRejectRenewalsAfter(int accepted) { m_acceptRenewals = accepted; }
     void setReissueInitialTokenOnNextLogin(bool on) { m_reissueNextInitialToken = on; }
     void setAuthFailureOnLogin(bool on) { m_authFailureOnLogin = on; }
+    void setAuthFailureOnStreamRequestOnce(bool on)
+    {
+        m_authFailureOnStreamRequestOnce = on;
+    }
     // The PREVIOUS session's teardown status, delivered on the new control
     // association before this session has a stream grant to protect it. At
     // that point the lifecycle exception does not apply yet, so the header
@@ -381,6 +391,18 @@ private:
             ++m_authCount;
             if (kind == static_cast<std::uint8_t>(AuthKind::Deauth)) {
                 m_deauthOuterSequences.push_back(getLe16(b, 0x06));
+                m_deauthFollowedSerialClose = !m_serialOpened;
+                if (m_ignoredDeauthReplies > 0) {
+                    --m_ignoredDeauthReplies;
+                    return;
+                }
+                auto reply = s.frame(kLenToken, 0x00, m_seq++);
+                reply[0x14] = 0x02;
+                reply[0x15] = static_cast<std::uint8_t>(AuthKind::Deauth);
+                for (int i = 0x16; i < 0x20; ++i) {
+                    reply[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(b[i]);
+                }
+                s.send(reply);
                 return;
             }
             if (kind != 0x05) {
@@ -459,6 +481,12 @@ private:
             }
             m_streamRequestAuthIds.push_back(requestAuthId);
 
+            if (m_authFailureOnStreamRequestOnce) {
+                m_authFailureOnStreamRequestOnce = false;
+                pushAuthFailure(false);
+                return;
+            }
+
             // Refuse unless the client echoed back the identity we published in
             // the capabilities packet. A real radio has to know WHICH radio the
             // client wants when a server fronts several.
@@ -488,7 +516,11 @@ private:
     {
         const auto marker = static_cast<std::uint8_t>(b[0x10]);
         if (b.size() == 0x16 && marker == 0xc0) {
-            m_serialOpened = static_cast<std::uint8_t>(b[0x15]) == 0x05;
+            const std::uint8_t magic = static_cast<std::uint8_t>(b[0x15]);
+            m_serialOpened = magic == 0x04 || magic == 0x05;
+            if (m_serialOpened) {
+                ++m_serialOpenCount;
+            }
             return;
         }
         if (marker != 0xc1)
@@ -828,6 +860,7 @@ private:
     std::vector<CivFrame> m_civLog;
     bool m_sentCaps = false;
     bool m_serialOpened = false;
+    int m_serialOpenCount = 0;
     bool m_usernameObfuscated = false;
     int m_authCount = 0;
     int m_civCommands = 0;
@@ -837,6 +870,7 @@ private:
     bool m_reissueNextInitialToken = false;
     bool m_reissueThisInitialToken = false;
     bool m_authFailureOnLogin = false;
+    bool m_authFailureOnStreamRequestOnce = false;
     bool m_staleAuthFailureOnLogin = false;
     bool m_corruptNextRenewalSeq = false;
     int m_acceptRenewals = std::numeric_limits<int>::max();
@@ -845,6 +879,8 @@ private:
     std::vector<AuthId> m_renewalAuthIds;
     std::vector<AuthId> m_streamRequestAuthIds;
     std::vector<std::uint16_t> m_deauthOuterSequences;
+    int m_ignoredDeauthReplies = 0;
+    bool m_deauthFollowedSerialClose = false;
     std::vector<std::uint16_t> m_loginTokenRequestIds;
     int m_audioFromClient = 0;
     quint32 m_announcedCiv = 0;

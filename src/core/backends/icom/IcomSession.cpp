@@ -11,6 +11,19 @@
 
 namespace AetherSDR::icom {
 
+namespace {
+
+QString processClientName()
+{
+    // Stable for this app process so a full radio-session reconnect retains
+    // its station identity, but a second AetherSDR instance is distinguishable.
+    static const QString name = QStringLiteral("AetherSDR-%1").arg(
+        QRandomGenerator::global()->bounded(0x1000000), 6, 16, QLatin1Char('0'));
+    return name;
+}
+
+} // namespace
+
 // The RS-BA1 handshake is a multi-step chain with no error packet for most of
 // its failure modes — a radio that refuses at any step simply stops answering.
 // Without these lines the whole sequence is a black box that either works or
@@ -29,7 +42,7 @@ constexpr int kTxPumpMs = 10;
 // while the link is demonstrably fine.
 constexpr int kCivFrameTimeoutMs = 100;
 // Re-send the CI-V data-stream open at the reference's cadence until the radio
-// starts streaming. Matches kappanhang / SDR9700 startCivDataTimer(100).
+// starts streaming. Matches the two independently tested reference clients.
 constexpr int kCivOpenRetryMs = 100;
 // ~5 s of asking. Long enough for a slow radio, short enough that a radio which
 // will never answer says so rather than retrying silently forever.
@@ -45,7 +58,7 @@ std::span<const std::uint8_t> asSpan(const QByteArray& b)
 
 IcomSession::IcomSession(QObject* parent) : QObject(parent) {}
 
-IcomSession::~IcomSession() { stop(); }
+IcomSession::~IcomSession() { stopImmediate(); }
 
 bool IcomSession::start(const Params& params)
 {
@@ -130,12 +143,100 @@ bool IcomSession::start(const Params& params)
 
 void IcomSession::stop()
 {
+    if (m_stopping) {
+        return;
+    }
+
+    // The IC-9700's LAN server was verified to require an acknowledged token
+    // removal before the control endpoint departs. Keep this model-gated until
+    // the same shutdown contract has been exercised on the other Icoms.
+    if (m_params.civAddress == 0xA2 && m_control && m_control->isReady()
+        && m_authOk) {
+        beginOrderlyShutdown();
+        return;
+    }
+    stopImmediate();
+}
+
+void IcomSession::stopOperationalTimers()
+{
     for (QTimer** t : {&m_tokenTimer, &m_txTimer, &m_civTimeout, &m_civOpenRetry}) {
         if (*t) {
             (*t)->stop();
             (*t)->deleteLater();
             *t = nullptr;
         }
+    }
+}
+
+void IcomSession::beginOrderlyShutdown()
+{
+    m_stopping = true;
+    m_connected = false;
+    m_shutdownAttempts = 0;
+    stopOperationalTimers();
+
+    // Close the CI-V data pipe before its UDP endpoint departs. Audio has no
+    // corresponding payload close; its type-0x05 departure is sufficient.
+    if (m_serial && m_serial->isReady()) {
+        m_serial->sendTracked(buildSerialOpen(m_serial->localSessionId(),
+                                              m_serial->remoteSessionId(),
+                                              m_serialSendSeq++, false));
+        m_serial->flush();
+    }
+
+    if (!m_shutdownTimer) {
+        m_shutdownTimer = new QTimer(this);
+        m_shutdownTimer->setSingleShot(true);
+        connect(m_shutdownTimer, &QTimer::timeout, this, &IcomSession::onShutdownStep);
+    }
+    // Hardware-verified IC-9700 settle interval from SDR9700: let stream-close
+    // traffic complete before removing the authentication token.
+    m_shutdownTimer->start(m_params.shutdownSettleMs);
+}
+
+void IcomSession::onShutdownStep()
+{
+    if (!m_stopping) {
+        return;
+    }
+    if (m_shutdownAttempts == 0) {
+        if (m_serial) {
+            m_serial->stop();
+        }
+        if (m_audio) {
+            m_audio->stop();
+        }
+    }
+    if (!m_control || !m_control->isReady()
+        || m_shutdownAttempts >= m_params.shutdownMaxAttempts) {
+        if (m_shutdownAttempts >= m_params.shutdownMaxAttempts) {
+            qCWarning(lcIcom) << "IC-9700 did not acknowledge token removal after"
+                              << m_params.shutdownMaxAttempts << "attempts";
+        }
+        finishShutdown();
+        return;
+    }
+
+    m_shutdownInnerSeq = m_innerSeq++;
+    ++m_shutdownAttempts;
+    qCInfo(lcIcom) << "IC-9700 token-removal attempt" << m_shutdownAttempts << "of"
+                   << m_params.shutdownMaxAttempts;
+    m_control->sendTracked(buildAuth(m_control->localSessionId(),
+                                     m_control->remoteSessionId(),
+                                     m_shutdownInnerSeq, m_authId,
+                                     AuthKind::Deauth));
+    m_control->flush();
+    m_shutdownTimer->start(m_params.shutdownRetryMs);
+}
+
+void IcomSession::stopImmediate()
+{
+    stopOperationalTimers();
+    if (m_shutdownTimer) {
+        m_shutdownTimer->stop();
+        m_shutdownTimer->deleteLater();
+        m_shutdownTimer = nullptr;
     }
     // DEAUTHENTICATE BEFORE TEARING DOWN.
     //
@@ -152,7 +253,7 @@ void IcomSession::stop()
     // token request was rejected with 0xffffffff until the old lease expired.
     // Two distinct tracked sequence numbers also avoid depending on a replay
     // request we cannot serve after closing the socket.
-    if (m_control && m_control->isReady()) {
+    if (m_control && m_control->isReady() && m_authOk && !m_stopping) {
         const auto bye = buildAuth(m_control->localSessionId(),
                                    m_control->remoteSessionId(), m_innerSeq++, m_authId,
                                    AuthKind::Deauth);
@@ -198,6 +299,15 @@ void IcomSession::stop()
     m_audioSendSeq = 1;
     m_civ.reset();
     m_tx.flush();
+    m_stopping = false;
+}
+
+void IcomSession::finishShutdown()
+{
+    // The media endpoints have already departed. The control departure must be
+    // last, after token removal acknowledgement (or the bounded timeout).
+    stopImmediate();
+    emit shutdownFinished();
 }
 
 void IcomSession::fail(const QString& reason)
@@ -266,12 +376,22 @@ void IcomSession::onControlReady()
     m_control->sendTracked(buildLogin(m_control->localSessionId(), m_control->remoteSessionId(),
                                       m_innerSeq++, m_tokenRequestId,
                                       m_params.username.toStdString(),
-                                      m_params.password.toStdString()));
+                                      m_params.password.toStdString(),
+                                      processClientName().toStdString()));
 }
 
 void IcomSession::onControlPayload(const QByteArray& packet)
 {
     const auto pkt = asSpan(packet);
+
+    if (m_stopping && isCurrentControlPacket(pkt)
+        && isAuthOperationReply(pkt, AuthKind::Deauth,
+                                m_shutdownInnerSeq, m_authId)) {
+        qCInfo(lcIcom) << "IC-9700 token removal acknowledged after"
+                       << m_shutdownAttempts << "attempt(s)";
+        finishShutdown();
+        return;
+    }
 
     // Dispatch on LENGTH, not on type: every one of these rides packet type
     // 0x00, and the length is the only thing that distinguishes them.
@@ -279,7 +399,20 @@ void IcomSession::onControlPayload(const QByteArray& packet)
     case static_cast<qsizetype>(kLenLoginReply): {
         qCInfo(lcIcom) << "got login reply";
         AuthId id{};
-        switch (parseLoginReply(pkt, id)) {
+        const LoginResult result = parseLoginReply(pkt, id);
+        const std::uint16_t echoedRequest = static_cast<std::uint16_t>(id[0])
+            | (static_cast<std::uint16_t>(id[1]) << 8U);
+        if (result != LoginResult::NotALoginReply
+            && echoedRequest != m_tokenRequestId) {
+            qCWarning(lcIcom) << "ignoring delayed login reply for request"
+                              << QStringLiteral("0x%1").arg(echoedRequest, 4, 16,
+                                                             QLatin1Char('0'))
+                              << "current request is"
+                              << QStringLiteral("0x%1").arg(m_tokenRequestId, 4, 16,
+                                                             QLatin1Char('0'));
+            return;
+        }
+        switch (result) {
         case LoginResult::BadCredentials:
             fail(QStringLiteral("the radio rejected the username or password"));
             return;
@@ -403,8 +536,13 @@ void IcomSession::onControlPayload(const QByteArray& packet)
                                      "session's stream grant";
                 return;
             }
-            fail(QStringLiteral("authentication failed — check the user name and password, "
-                                "or power-cycle the radio"));
+            if (m_params.civAddress == 0xA2) {
+                fail(QStringLiteral("the previous IC-9700 network session is still closing; "
+                                    "AetherSDR will retry automatically"));
+            } else {
+                fail(QStringLiteral("authentication failed; check the Icom username/password "
+                                    "and power-cycle the radio if a previous session is stuck"));
+            }
             return;
         case StatusKind::Disconnected:
             fail(QStringLiteral("the radio dropped the session"));
@@ -581,7 +719,16 @@ void IcomSession::onTokenRenew()
     if (sinceAck < cadenceMs)
         return;
     m_renewRetries = 0;
-    sendRenewal(QStringLiteral("scheduled"));
+    const bool earlyMaintenance = m_initialMaintenancePending;
+    sendRenewal(earlyMaintenance
+                    ? QStringLiteral("scheduled early maintenance")
+                    : QStringLiteral("scheduled"));
+    // This is a one-shot shorter window. Clear the state when the renewal is
+    // dispatched, not when its acknowledgement arrives, so a lost ACK cannot
+    // cause retries or diagnostics to re-enter the early cadence.
+    if (earlyMaintenance) {
+        m_initialMaintenancePending = false;
+    }
 }
 
 void IcomSession::onSerialReady()
@@ -601,7 +748,7 @@ void IcomSession::onSerialReady()
     // auto-ranges into a runaway MainWindow rejects once a second. The operator
     // sees a blank frequency and a waterfall that keeps resetting.
     //
-    // kappanhang and the SDR9700 reference both re-send the open on a 100 ms
+    // Both independently tested reference clients re-send the open on a 100 ms
     // timer until data flows (their startCivDataTimer), and Aether-gate does the
     // same driving THIS radio — 1356 frames in 45 s, 30.1 fps. An IC-705 that
     // happens to start on the first open would never expose this.
@@ -748,6 +895,18 @@ void IcomSession::sendCiv(std::span<const std::uint8_t> frame)
     m_serial->sendTracked(buildSerialData(m_serial->localSessionId(),
                                           m_serial->remoteSessionId(), 0, m_serialSendSeq++,
                                           frame));
+}
+
+bool IcomSession::reopenCivPipe()
+{
+    if (!m_serial || !m_serial->isReady()) {
+        return false;
+    }
+
+    m_serial->sendTracked(buildSerialRestart(m_serial->localSessionId(),
+                                             m_serial->remoteSessionId(),
+                                             m_serialSendSeq++));
+    return true;
 }
 
 void IcomSession::sendAudio(std::span<const float> mono)

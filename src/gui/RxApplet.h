@@ -181,6 +181,7 @@ public:
     // An EMPTY list restores the operator's own configurable set, so this is
     // reversible on disconnect rather than a one-way edit of their settings.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setFmRepeaterAccessModes(const QStringList& modes);
 private:
     // The list actually in force: the radio's when it declared one, else the
     // operator's configurable set. Every site that indexes filter buttons must
@@ -194,6 +195,8 @@ private:
     void updateAgcCombo();
     void updateOffsetDirButtons();
     void applyOffsetDir(const QString& dir);
+    void updateFmToneControlVisibility(const QString& mode);
+    void sendFmRepeaterAccess();
     static QString formatHz(int hz);
     static QString formatStepLabel(int hz);
 
@@ -264,6 +267,10 @@ private:
     QWidget*        m_fmContainer{nullptr};
     QComboBox*      m_toneModeCmb{nullptr};
     QComboBox*      m_toneValueCmb{nullptr};
+    QComboBox*      m_toneRxValueCmb{nullptr};
+    QComboBox*      m_dtcsCodeCmb{nullptr};
+    QComboBox*      m_dtcsTxPolarityCmb{nullptr};
+    QComboBox*      m_dtcsRxPolarityCmb{nullptr};
     QDoubleSpinBox* m_offsetSpin{nullptr};
     QPushButton*    m_offsetDown{nullptr};
     QPushButton*    m_simplexBtn{nullptr};

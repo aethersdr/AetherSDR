@@ -372,6 +372,19 @@ int main(int argc, char** argv)
                      "applying radio status does not emit mic operator intent");
     }
 
+    // Flex has three processor presets. A continuous-level backend must opt in,
+    // and returning to Flex must not leave an out-of-range percentage behind.
+    tx.setSpeechProcessorLevel(100);
+    ok &= expect(tx.speechProcessorLevel() == 2,
+                 "default speech processor level remains Flex-safe");
+    tx.setSpeechProcessorLevelMaximum(100);
+    tx.setSpeechProcessorLevel(73);
+    ok &= expect(tx.speechProcessorLevel() == 73,
+                 "continuous backend capability admits a percentage level");
+    tx.setSpeechProcessorLevelMaximum(2);
+    ok &= expect(tx.speechProcessorLevel() == 2,
+                 "returning to Flex clamps stale continuous state");
+
     ClientQuindarTone quindar;
     quindar.prepare(24000.0);
     quindar.setEnabled(true);

@@ -764,18 +764,45 @@ void SliceModel::setPlayOn(bool on)
 
 void SliceModel::setFmToneMode(const QString& mode)
 {
-    if (m_fmToneMode == mode) return;
-    m_fmToneMode = mode;
-    sendCommand(QString("slice set %1 fm_tone_mode=%2").arg(m_id).arg(mode));
-    emit fmToneModeChanged(mode);
+    setFmRepeaterAccess(mode, m_fmToneTxValue.toDouble(), m_fmToneRxValue.toDouble(),
+                        m_fmDtcsCode, m_fmDtcsTxReverse, m_fmDtcsRxReverse);
 }
 
 void SliceModel::setFmToneValue(const QString& value)
 {
-    if (m_fmToneValue == value) return;
+    const double hz = value.toDouble();
+    if (m_fmToneValue == value && m_fmToneTxValue == value) return;
     m_fmToneValue = value;
+    m_fmToneTxValue = value;
     sendCommand(QString("slice set %1 fm_tone_value=%2").arg(m_id).arg(value));
     emit fmToneValueChanged(value);
+    emit fmRepeaterAccessChanged();
+    emit fmRepeaterAccessCommandIssued(m_fmToneMode, hz, m_fmToneRxValue.toDouble(),
+                                       m_fmDtcsCode, m_fmDtcsTxReverse,
+                                       m_fmDtcsRxReverse);
+}
+
+void SliceModel::setFmRepeaterAccess(const QString& mode, double txCtcssHz,
+                                     double rxCtcssHz, int dtcsCode,
+                                     bool dtcsTxReverse, bool dtcsRxReverse)
+{
+    const bool modeChanged = m_fmToneMode != mode;
+    m_fmToneMode = mode;
+    m_fmToneTxValue = QString::number(txCtcssHz, 'f', 1);
+    m_fmToneRxValue = QString::number(rxCtcssHz, 'f', 1);
+    m_fmToneValue = m_fmToneTxValue;
+    m_fmDtcsCode = dtcsCode;
+    m_fmDtcsTxReverse = dtcsTxReverse;
+    m_fmDtcsRxReverse = dtcsRxReverse;
+    sendCommand(QString("slice set %1 fm_tone_mode=%2 fm_tone_value=%3")
+                    .arg(m_id).arg(mode).arg(m_fmToneValue));
+    if (modeChanged) {
+        emit fmToneModeChanged(mode);
+    }
+    emit fmToneValueChanged(m_fmToneValue);
+    emit fmRepeaterAccessChanged();
+    emit fmRepeaterAccessCommandIssued(mode, txCtcssHz, rxCtcssHz, dtcsCode,
+                                       dtcsTxReverse, dtcsRxReverse);
 }
 
 void SliceModel::setRepeaterOffsetDir(const QString& dir)
@@ -784,6 +811,7 @@ void SliceModel::setRepeaterOffsetDir(const QString& dir)
     m_repeaterOffsetDir = dir;
     sendCommand(QString("slice set %1 repeater_offset_dir=%2").arg(m_id).arg(dir));
     emit repeaterOffsetDirChanged(dir);
+    emit repeaterOffsetCommandIssued(m_repeaterOffsetDir, m_fmRepeaterOffsetFreq);
 }
 
 void SliceModel::setFmRepeaterOffsetFreq(double mhz)
@@ -793,6 +821,7 @@ void SliceModel::setFmRepeaterOffsetFreq(double mhz)
     sendCommand(QString("slice set %1 fm_repeater_offset_freq=%2")
                     .arg(m_id).arg(mhz, 0, 'f', 6));
     emit fmRepeaterOffsetFreqChanged(mhz);
+    emit repeaterOffsetCommandIssued(m_repeaterOffsetDir, m_fmRepeaterOffsetFreq);
 }
 
 void SliceModel::setTxOffsetFreq(double mhz)
@@ -1514,6 +1543,31 @@ void SliceModel::applyChanges(const SliceDelta& d)
         double v = *d.fmToneValue;
         m_fmToneValue = QString::number(v, 'f', 1);
         emit fmToneValueChanged(m_fmToneValue);
+    }
+    bool repeaterChanged = false;
+    if (d.fmToneTxValue) {
+        m_fmToneTxValue = QString::number(*d.fmToneTxValue, 'f', 1);
+        m_fmToneValue = m_fmToneTxValue;
+        repeaterChanged = true;
+    }
+    if (d.fmToneRxValue) {
+        m_fmToneRxValue = QString::number(*d.fmToneRxValue, 'f', 1);
+        repeaterChanged = true;
+    }
+    if (d.fmDtcsCode) {
+        m_fmDtcsCode = *d.fmDtcsCode;
+        repeaterChanged = true;
+    }
+    if (d.fmDtcsTxReverse.has_value()) {
+        m_fmDtcsTxReverse = *d.fmDtcsTxReverse;
+        repeaterChanged = true;
+    }
+    if (d.fmDtcsRxReverse.has_value()) {
+        m_fmDtcsRxReverse = *d.fmDtcsRxReverse;
+        repeaterChanged = true;
+    }
+    if (repeaterChanged) {
+        emit fmRepeaterAccessChanged();
     }
     if (d.repeaterOffsetDir.has_value()) {
         m_repeaterOffsetDir = *d.repeaterOffsetDir;

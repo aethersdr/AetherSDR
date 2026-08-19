@@ -53,6 +53,10 @@ enum class ScopeMode : std::uint8_t {
 
 // One fully-assembled sweep.
 struct ScopeFrame {
+    // Receiver selector carried by every 0x27 0x00 division: 00 MAIN, 01 SUB.
+    // AetherSDR currently exposes the Icom MAIN receiver as slice 0, so the
+    // backend uses this to prevent SUB sweeps from being painted onto it.
+    std::uint8_t receiver = 0;
     ScopeMode mode = ScopeMode::Centre;
     // Edges, in Hz, ALREADY normalised out of whichever representation the
     // radio used — see the note on Centre mode in IcomScope.cpp.
@@ -146,6 +150,7 @@ private:
     ScopeFrame m_partial;
     bool m_assembling = false;
     int  m_expectedDivision = 0;
+    std::uint8_t m_receiver = 0;
 };
 
 // ---------------------------------------------------------------------------

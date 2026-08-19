@@ -2,6 +2,7 @@
 #include "core/AppSettings.h"
 #include "core/backends/TransmitDelta.h"
 #include "gui/PhoneCwApplet.h"
+#include "gui/HGauge.h"
 #include "models/TransmitModel.h"
 
 #include <QApplication>
@@ -96,6 +97,34 @@ int main(int argc, char** argv)
           "synthetic PC operator move reaches the radio model");
     check(clientGain.isEmpty(),
           "synthetic PC operator move does not alter client PcMicGain");
+
+    QList<HGauge*> alcGauges;
+    for (QWidget* child : applet.findChildren<QWidget*>()) {
+        HGauge* gauge = dynamic_cast<HGauge*>(child);
+        if (!gauge) {
+            continue;
+        }
+        if (gauge->accessibleName().contains(QLatin1String("ALC gauge"))) {
+            alcGauges.append(gauge);
+        }
+    }
+    check(alcGauges.size() == 2, "Phone and CW ALC gauges exist");
+    applet.setAlcUnit(QStringLiteral("Percent"));
+    applet.updateAlc(0.0f);
+    bool relativeIdle = true;
+    for (HGauge* gauge : alcGauges) {
+        relativeIdle = relativeIdle && gauge->value() == 0.0f
+            && gauge->accessibleDescription().contains(QLatin1String("relative"));
+    }
+    check(relativeIdle, "relative ALC uses a zero-percent idle face");
+    applet.setAlcUnit(QStringLiteral("dBFS"));
+    applet.updateAlc(-20.0f);
+    bool dbfsIdle = true;
+    for (HGauge* gauge : alcGauges) {
+        dbfsIdle = dbfsIdle && gauge->value() == -20.0f
+            && gauge->accessibleDescription().contains(QLatin1String("dBFS"));
+    }
+    check(dbfsIdle, "Flex ALC restores the minus-20-dBFS idle face");
 
     return failures == 0 ? 0 : 1;
 }

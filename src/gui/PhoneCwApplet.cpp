@@ -7,6 +7,7 @@
 #include "Theme.h"
 #include "core/AppSettings.h"
 
+#include <algorithm>
 #include <QPushButton>
 #include <QLabel>
 #include <QLineEdit>
@@ -142,9 +143,8 @@ void PhoneCwApplet::setSelectableMicInputs(bool selectable)
     // to its network port. PC is the only source we can actually feed.
     const QString wanted = selectable ? m_micSourceCombo->currentText()
                                       : QStringLiteral("PC");
-    const QStringList items = selectable
-        ? QStringList{"MIC", "BAL", "LINE", "ACC", "PC"}
-        : QStringList{"PC"};
+    const QStringList items = selectable ? m_micInputChoices
+                                         : QStringList{QStringLiteral("PC")};
     QStringList existing;
     for (int i = 0; i < m_micSourceCombo->count(); ++i)
         existing << m_micSourceCombo->itemText(i);
@@ -178,6 +178,20 @@ void PhoneCwApplet::setSelectableMicInputs(bool selectable)
                          "Its own input selection is made on the radio."));
 }
 
+void PhoneCwApplet::setMicInputChoices(const QStringList& choices)
+{
+    const QStringList normalized = choices.isEmpty()
+        ? QStringList{QStringLiteral("MIC"), QStringLiteral("BAL"),
+                      QStringLiteral("LINE"), QStringLiteral("ACC"),
+                      QStringLiteral("PC")}
+        : choices;
+    if (m_micInputChoices == normalized) {
+        return;
+    }
+    m_micInputChoices = normalized;
+    setSelectableMicInputs(m_selectableMicInputs);
+}
+
 void PhoneCwApplet::setMicLevelMeterAvailable(bool available)
 {
     if (m_micLevelMeterAvailable == available)
@@ -196,6 +210,38 @@ void PhoneCwApplet::setDaxVisible(bool visible)
         const QSignalBlocker blocker(m_daxBtn);
         m_daxBtn->setChecked(false);
     }
+}
+
+void PhoneCwApplet::setSpeechProcessorCapabilities(const QStringList& modes,
+                                                   bool continuous)
+{
+    m_speechProcessorModes = modes;
+    m_continuousSpeechProcessorLevel = continuous;
+
+    if (!m_procSlider) {
+        return;
+    }
+
+    const QSignalBlocker blocker(m_procSlider);
+    if (continuous) {
+        m_procLowLabel->setText(QStringLiteral("0"));
+        m_procMidLabel->setText(QStringLiteral("50"));
+        m_procHighLabel->setText(QStringLiteral("100"));
+        m_procSlider->setRange(0, 100);
+        m_procSlider->setPageStep(10);
+        m_procSlider->setAccessibleDescription(
+            QStringLiteral("Speech processor level, 0 to 100"));
+    } else {
+        m_procLowLabel->setText(QStringLiteral("NOR"));
+        m_procMidLabel->setText(QStringLiteral("DX"));
+        m_procHighLabel->setText(QStringLiteral("DX+"));
+        m_procSlider->setRange(0, 2);
+        m_procSlider->setPageStep(1);
+        m_procSlider->setAccessibleDescription(
+            QStringLiteral("Speech processor level: Normal, DX, or DX+"));
+    }
+    syncPhoneFromModel();
+    applySpeechProcessorVisibility();
 }
 
 void PhoneCwApplet::buildPhonePanel()
@@ -349,26 +395,26 @@ void PhoneCwApplet::buildPhonePanel()
         row->addWidget(m_procBtn);
 
         // 3-position slider with NOR / DX / DX+ labels
-        auto* procGroup = new QWidget;
-        auto* procVbox = new QVBoxLayout(procGroup);
+        m_procGroup = new QWidget;
+        auto* procVbox = new QVBoxLayout(m_procGroup);
         procVbox->setContentsMargins(0, 0, 0, 0);
         procVbox->setSpacing(0);
 
         auto* labelsRow = new QHBoxLayout;
         labelsRow->setContentsMargins(0, 0, 0, 0);
-        auto* norLbl = new QLabel("NOR");
-        auto* dxLbl = new QLabel("DX");
-        auto* dxPlusLbl = new QLabel("DX+");
+        m_procLowLabel = new QLabel("NOR");
+        m_procMidLabel = new QLabel("DX");
+        m_procHighLabel = new QLabel("DX+");
         const QString tickLabelStyle = "QLabel { color: #c8d8e8; font-size: 8px; }";
-        norLbl->setStyleSheet(tickLabelStyle);
-        dxLbl->setStyleSheet(tickLabelStyle);
-        dxPlusLbl->setStyleSheet(tickLabelStyle);
-        norLbl->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
-        dxLbl->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
-        dxPlusLbl->setAlignment(Qt::AlignRight | Qt::AlignBottom);
-        labelsRow->addWidget(norLbl);
-        labelsRow->addWidget(dxLbl);
-        labelsRow->addWidget(dxPlusLbl);
+        m_procLowLabel->setStyleSheet(tickLabelStyle);
+        m_procMidLabel->setStyleSheet(tickLabelStyle);
+        m_procHighLabel->setStyleSheet(tickLabelStyle);
+        m_procLowLabel->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
+        m_procMidLabel->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
+        m_procHighLabel->setAlignment(Qt::AlignRight | Qt::AlignBottom);
+        labelsRow->addWidget(m_procLowLabel);
+        labelsRow->addWidget(m_procMidLabel);
+        labelsRow->addWidget(m_procHighLabel);
         procVbox->addLayout(labelsRow);
 
         m_procSlider = new GuardedSlider(Qt::Horizontal);
@@ -382,7 +428,7 @@ void PhoneCwApplet::buildPhonePanel()
         applyPrimarySliderStyle(m_procSlider);
         procVbox->addWidget(m_procSlider);
 
-        row->addWidget(procGroup, 1);
+        row->addWidget(m_procGroup, 1);
 
         m_daxBtn = new QPushButton("DAX");
         m_daxBtn->setCheckable(true);
@@ -400,8 +446,9 @@ void PhoneCwApplet::buildPhonePanel()
 
         connect(m_procSlider, &QSlider::valueChanged, this, [this](int pos) {
             if (!m_updatingFromModel && m_model) {
-                static constexpr int kLevels[] = {0, 1, 2};
-                m_model->setSpeechProcessorLevel(kLevels[qBound(0, pos, 2)]);
+                m_model->setSpeechProcessorLevel(
+                    m_continuousSpeechProcessorLevel ? qBound(0, pos, 100)
+                                                     : qBound(0, pos, 2));
             }
         });
 
@@ -750,8 +797,26 @@ void PhoneCwApplet::setMode(const QString& mode)
 {
     // A Flex reports bare "CW"; an Icom and an HL2 spell the same mode CWU,
     // and CWL is the reverse-side one. All three drive this applet.
+    m_mode = mode;
     bool isCw = isCwMode(mode);
     m_stack->setCurrentIndex(isCw ? 1 : 0);
+    applySpeechProcessorVisibility();
+}
+
+void PhoneCwApplet::applySpeechProcessorVisibility()
+{
+    const bool available = m_speechProcessorModes.isEmpty()
+        || std::any_of(m_speechProcessorModes.cbegin(),
+                       m_speechProcessorModes.cend(),
+                       [this](const QString& mode) {
+            return mode.compare(m_mode, Qt::CaseInsensitive) == 0;
+        });
+    if (m_procBtn) {
+        m_procBtn->setVisible(available);
+    }
+    if (m_procGroup) {
+        m_procGroup->setVisible(available);
+    }
 }
 
 // ── Model binding ────────────────────────────────────────────────────────────
@@ -855,8 +920,9 @@ void PhoneCwApplet::syncPhoneFromModel()
     m_procBtn->setChecked(m_model->speechProcessorEnable());
 
     {
-        int level = m_model->speechProcessorLevel();
-        int pos = qBound(0, level, 2);
+        const int level = m_model->speechProcessorLevel();
+        const int pos = m_continuousSpeechProcessorLevel
+            ? qBound(0, level, 100) : qBound(0, level, 2);
         m_procSlider->setValue(pos);
     }
 
@@ -956,7 +1022,13 @@ void PhoneCwApplet::updateCompression(float compPeak)
     // MeterModel exposes COMPPEAK as a positive 0..25 dB compression amount.
     // The P/CW gauge face is reversed: 0 = none, -25 = full.
     const float compressionDb = qBound(0.0f, compPeak, 25.0f);
-    m_compGauge->setValue(-compressionDb);
+    if (compressionDb <= 0.0f) {
+        // TX-only metering stops after unkey. The backend's explicit idle
+        // sample must empty the face now, not decay through display smoothing.
+        m_compGauge->setValueImmediate(0.0f);
+    } else {
+        m_compGauge->setValue(-compressionDb);
+    }
 }
 
 void PhoneCwApplet::updateAlc(float alc)
@@ -964,8 +1036,56 @@ void PhoneCwApplet::updateAlc(float alc)
     // Single source (MeterModel::swAlcChanged) → both panel mirrors.
     // HGauge clamps to its construction range, so values outside [-20, 0]
     // pin at the appropriate end.
-    if (m_alcGaugePhone) m_alcGaugePhone->setValue(alc);
-    if (m_alcGaugeCw)    m_alcGaugeCw->setValue(alc);
+    const float idleValue = m_alcIsRelative ? 0.0f : kAlcGaugeFloorDbfs;
+    const bool idle = alc <= idleValue;
+    if (m_alcGaugePhone) {
+        idle ? m_alcGaugePhone->setValueImmediate(idleValue)
+             : m_alcGaugePhone->setValue(alc);
+    }
+    if (m_alcGaugeCw) {
+        idle ? m_alcGaugeCw->setValueImmediate(idleValue)
+             : m_alcGaugeCw->setValue(alc);
+    }
+}
+
+void PhoneCwApplet::setAlcUnit(const QString& unit)
+{
+    const bool relative = unit.compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0;
+    if (m_alcIsRelative == relative) {
+        return;
+    }
+    m_alcIsRelative = relative;
+
+    for (HGauge* gauge : {m_alcGaugePhone, m_alcGaugeCw}) {
+        if (!gauge) {
+            continue;
+        }
+        if (relative) {
+            gauge->setLabel(QStringLiteral("ALC (%)"));
+            gauge->setUnit(QStringLiteral("%"));
+            gauge->setFillFromRight(false);
+            gauge->setRange(0.0f, 100.0f, 100.0f,
+                            {{0, "0"}, {25, "25"}, {50, "50"},
+                             {75, "75"}, {100, "100"}});
+            gauge->setAccessibleDescription(
+                "Icom relative automatic-level-control indication");
+            gauge->setHoverValueFormatter([](float value) {
+                return QStringLiteral("%1 %").arg(QString::number(value, 'f', 1));
+            });
+            gauge->setValueImmediate(0.0f);
+        } else {
+            gauge->setLabel(QStringLiteral("ALC"));
+            gauge->setUnit(QStringLiteral("dBFS"));
+            gauge->setFillFromRight(true);
+            gauge->setRange(kAlcGaugeFloorDbfs, 0.0f, -3.0f,
+                            {{-20, "-20"}, {-15, "-15"}, {-10, "-10"},
+                             {-5, "-5"}, {0, "0"}});
+            gauge->setAccessibleDescription(
+                "Automatic level control — post-software-ALC SSB peak (dBFS)");
+            gauge->setHoverValueFormatter(alcHoverFormatter());
+            gauge->setValueImmediate(kAlcGaugeFloorDbfs);
+        }
+    }
 }
 
 bool PhoneCwApplet::eventFilter(QObject* obj, QEvent* ev)

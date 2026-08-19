@@ -185,9 +185,13 @@ inline constexpr std::uint8_t kReadFreq     = 0x03;
 inline constexpr std::uint8_t kReadMode     = 0x04;
 inline constexpr std::uint8_t kSetFreq      = 0x05;
 inline constexpr std::uint8_t kSetMode      = 0x06;
+inline constexpr std::uint8_t kReadRepeaterOffset = 0x0C;
+inline constexpr std::uint8_t kSetRepeaterOffset  = 0x0D;
+inline constexpr std::uint8_t kDuplex       = 0x0F;
 inline constexpr std::uint8_t kLevel        = 0x14;   // sub-addressed levels
 inline constexpr std::uint8_t kMeter        = 0x15;   // sub-addressed meters
 inline constexpr std::uint8_t kFunction     = 0x16;   // sub-addressed on/off functions
+inline constexpr std::uint8_t kTone         = 0x1B;   // repeater tone/code registers
 inline constexpr std::uint8_t kPower        = 0x18;   // 00 off, 01 on
 inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceiver ID
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
@@ -282,7 +286,20 @@ inline constexpr std::uint8_t kManualNotch   = 0x48;
 inline constexpr std::uint8_t kManualNotchWidth = 0x57;
 inline constexpr std::uint8_t kBreakIn       = 0x47;   // 00 off, 01 semi, 02 full
 inline constexpr std::uint8_t kDialLock      = 0x50;
+inline constexpr std::uint8_t kRepeaterAccess = 0x5D;
 }  // namespace func
+
+namespace tone {
+inline constexpr std::uint8_t kTxCtcss = 0x00;
+inline constexpr std::uint8_t kRxCtcss = 0x01;
+inline constexpr std::uint8_t kDtcs    = 0x02;
+}
+
+struct ToneRegister {
+    int value = 0;  // CTCSS tenths-of-Hz or the three-digit DTCS code
+    bool txReverse = false;
+    bool rxReverse = false;
+};
 
 // SET-menu items reached through 1A 05 <two BCD bytes>.
 //
@@ -293,7 +310,8 @@ inline constexpr std::uint8_t kDialLock      = 0x50;
 // is no error anywhere: the transmit path is working perfectly into a modulator
 // that is listening somewhere else.
 namespace setting {
-inline constexpr int kVoxDelay        = 359;   // 00..20, in 0.1 s steps
+// IC-9700 CI-V guide p.12: SET > Function > VOX DELAY.
+inline constexpr int kVoxDelay        = 330;   // 00..20, in 0.1 s steps
 }  // namespace setting
 
 // Read or write a 1A 05 SET-menu item. `item` is the DECIMAL menu number as
@@ -439,6 +457,22 @@ struct VfoModeState {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadFunction(std::uint8_t to, std::uint8_t which);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetFunction(std::uint8_t to, std::uint8_t which,
                                                         int value);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to,
+                                                              std::uint8_t mode);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTone(std::uint8_t to, std::uint8_t which);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetTone(std::uint8_t to, std::uint8_t which,
+                                                   int value, bool txReverse = false,
+                                                   bool rxReverse = false);
+[[nodiscard]] std::optional<ToneRegister> decodeTone(std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to,
+                                                              std::uint64_t hz);
+[[nodiscard]] std::optional<std::uint64_t>
+decodeRepeaterOffset(std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadDuplex(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetDuplex(std::uint8_t to,
+                                                      std::uint8_t mode);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit);
 // Attenuator. `db` is the dB figure the radio prints (0 or 20 on an
 // IC-705), encoded as one BCD byte. The read form carries no payload.
@@ -453,6 +487,7 @@ struct VfoModeState {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadId(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeOnOff(std::uint8_t to, bool on);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeDataOutput(std::uint8_t to, bool on);
+[[nodiscard]] std::vector<std::uint8_t> cmdScopeMainSub(std::uint8_t to, bool sub);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeMode(std::uint8_t to, bool fixed);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeSpan(std::uint8_t to, int spanHz);
 [[nodiscard]] std::vector<std::uint8_t> cmdScopeReference(std::uint8_t to, double db);

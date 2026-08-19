@@ -2615,7 +2615,9 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // only stable identity this radio has for us. It has to be SOMETHING:
         // the restore/persist scope keys off it.
         info.serial   = QStringLiteral("icom:%1").arg(resolved.toString());
-        info.nickname = info.model;
+        // Leave the nickname empty so the connected UI can replace the generic
+        // pre-identification model with the CI-V-reported identity (IC-9700).
+        info.nickname.clear();
         // Manual Icom sessions use the same retention path as routed Flex and
         // HL2 sessions. Without this marker MainWindow removes
         // LastRoutedRadioIp immediately, so the startup checkbox has no host to

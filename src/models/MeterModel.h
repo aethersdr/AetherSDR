@@ -49,6 +49,11 @@ public:
     // indexes against this slice instead of using last-match-wins globals.
     void setActiveTxSlice(int sliceIndex);
 
+    // Start a fresh TX-meter measurement epoch. TX-only producers commonly
+    // stop before a final zero reply arrives, so cached smoothing state must
+    // not cross an unkey/re-key boundary.
+    void setTransmitting(bool transmitting);
+
     // Process a batch of raw meter values from a VITA-49 packet.
     // ids[i] is the meter index, vals[i] is the raw int16 value.
     void updateValues(const QVector<quint16>& ids, const QVector<qint16>& vals);
@@ -195,6 +200,8 @@ public:
     // This is the indicator users actually want — moves with voice peaks
     // and CW keying envelope.  Drives the ALC gauges in the Phone/CW applet.
     float swAlc() const { return m_swAlc; }
+    QString swAlcUnit() const { return m_swAlcUnit; }
+    QString forwardPowerUnit() const { return m_fwdPwrUnit; }
 
     // Convenience: the TX-filter input/output pair (dBFS, from TX "SC_MIC" and
     // TX "SC_FILT_2").  SC_MIC is where PC/remote audio enters the TX chain;
@@ -290,6 +297,8 @@ signals:
     // Emitted when the post-software-ALC SSB-peak meter changes (dBFS).
     // Drives the in-app ALC gauges; fires during voice peaks and CW keying.
     void swAlcChanged(float dbfs);
+    void swAlcUnitChanged(const QString& unit);
+    void forwardPowerUnitChanged(const QString& unit);
 
     // Emitted when either side of the TX-filter pair changes (dBFS in, dBFS out).
     void txFilterLevelsChanged(float scFilt1, float scFilt2);
@@ -311,7 +320,6 @@ private:
     void recomputeSourceIndexMins();
     // Map a radio-side ALC reading onto the dBFS range the gauges are built
     // for. Identity when the backend already declares dBFS.
-    float convertAlcToGaugeDbfs(float raw) const;
     bool isTxWaveformMeter(const MeterDef& def) const;
     bool hasExplicitTxWaveformSourceIndex(const MeterDef& def) const;
     int implicitTxWaveformSliceIndex() const;
