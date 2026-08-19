@@ -3515,6 +3515,7 @@ if(UNIX)
     target_link_libraries(issue_report_test PRIVATE pthread)
 endif()
 set_target_properties(issue_report_test PROPERTIES AUTOMOC ON)
+add_test(NAME issue_report_test COMMAND issue_report_test)
 
 add_executable(perf_telemetry_test
     tests/perf_telemetry_test.cpp
