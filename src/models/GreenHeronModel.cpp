@@ -65,6 +65,7 @@ void GreenHeronModel::disconnectFromHost()
     m_pending.clear();
     m_connected = false;
     m_stale = false;
+    m_awaitingReplay = false;
     m_lastError.clear();
 
     emit connectionStateChanged();
@@ -74,6 +75,11 @@ void GreenHeronModel::disconnectFromHost()
 void GreenHeronModel::openSocket()
 {
     teardownSocket();
+
+    // Armed here rather than in onSocketConnected() so it also covers the
+    // attempt that never reaches ESTABLISHED: nothing may be sent, and no
+    // retained panel may be acted on, until the device speaks on THIS socket.
+    m_awaitingReplay = true;
 
     m_socket = new QTcpSocket(this);
     connect(m_socket, &QTcpSocket::connected, this, &GreenHeronModel::onSocketConnected);
@@ -137,7 +143,11 @@ void GreenHeronModel::onSocketConnected()
 {
     m_connectTimer->stop();
     m_connected = true;
-    m_stale = false;
+    // NOT cleared here. A reconnect that retained a roster is still showing a
+    // pre-drop guess until the device replays it; clearing on the TCP event
+    // opened a window where that guess was live and clickable. m_stale drops
+    // in applyRecord(), when the device has actually vouched for the panel.
+    m_stale = !m_switches.isEmpty();
     m_backoffMs = kBackoffStartMs;
     m_lastError.clear();
     m_keepAliveTimer->start();
@@ -208,10 +218,17 @@ void GreenHeronModel::onSocketReadyRead()
         return;
     }
 
+    const bool wasAwaitingReplay = m_awaitingReplay;
     for (const QByteArray& raw : records) {
         applyRecord(parse(raw));
     }
     emit panelChanged();
+    // The gate opening changes what the panel is allowed to do, not just what
+    // it shows. Anything wired only to connectionStateChanged — the natural
+    // place to watch enablement from — would otherwise stay disabled forever.
+    if (wasAwaitingReplay && !m_awaitingReplay) {
+        emit connectionStateChanged();
+    }
 }
 
 void GreenHeronModel::onKeepAlive()
@@ -225,6 +242,12 @@ void GreenHeronModel::onKeepAlive()
 
 // ── State ───────────────────────────────────────────────────────────────────
 
+void GreenHeronModel::noteAuthoritativeState()
+{
+    m_awaitingReplay = false;
+    m_stale = false;
+}
+
 void GreenHeronModel::applyRecord(const Record& record)
 {
     // The empty-name guard sits inside the three known verbs, not above the
@@ -236,6 +259,7 @@ void GreenHeronModel::applyRecord(const Record& record)
         if (record.switchName.isEmpty()) {
             return;
         }
+        noteAuthoritativeState();
         GreenHeronSwitchState& state = m_switches[record.switchName];
         state.name = record.switchName;
         QStringList ports;
@@ -255,6 +279,7 @@ void GreenHeronModel::applyRecord(const Record& record)
         if (record.switchName.isEmpty()) {
             return;
         }
+        noteAuthoritativeState();
         GreenHeronSwitchState& state = m_switches[record.switchName];
         state.name = record.switchName;
         state.selected = record.selected;
@@ -265,6 +290,7 @@ void GreenHeronModel::applyRecord(const Record& record)
         if (record.switchName.isEmpty()) {
             return;
         }
+        noteAuthoritativeState();
         GreenHeronSwitchState& state = m_switches[record.switchName];
         state.name = record.switchName;
         state.locks = record.locks;
@@ -334,8 +360,11 @@ QMap<QString, QString> GreenHeronModel::locksBySwitch(const QString& name) const
 
 bool GreenHeronModel::selectPort(const QString& switchName, const QString& portName)
 {
-    if (m_socket == nullptr || !m_connected) {
-        setLastError(tr("Not connected"));
+    // isReady(), not m_connected: a reconnect whose replay has not landed is
+    // showing a pre-drop roster, and this call moves real relays.
+    if (m_socket == nullptr || !isReady()) {
+        setLastError(m_connected ? tr("Waiting for the switch to report its state")
+                                 : tr("Not connected"));
         return false;
     }
 

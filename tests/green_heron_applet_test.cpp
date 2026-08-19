@@ -69,16 +69,42 @@ public:
         m_server.listen(QHostAddress::LocalHost, 0);
         connect(&m_server, &QTcpServer::newConnection, this, [this]() {
             m_connection = m_server.nextPendingConnection();
-            m_connection->write(kScript);
-            m_connection->flush();
+            ++m_connections;
+            if (m_autoReplay) {
+                replay();
+            }
         });
     }
 
     quint16 port() const { return m_server.serverPort(); }
+    int connections() const { return m_connections; }
+
+    // Accept the next connection but stay silent — the reconnect window the
+    // tile has to survive without going live on a pre-drop roster.
+    void setAutoReplay(bool on) { m_autoReplay = on; }
+
+    void replay()
+    {
+        if (m_connection != nullptr) {
+            m_connection->write(kScript);
+            m_connection->flush();
+        }
+    }
+
+    void drop()
+    {
+        if (m_connection != nullptr) {
+            m_connection->abort();
+            m_connection->deleteLater();
+            m_connection = nullptr;
+        }
+    }
 
 private:
     QTcpServer m_server;
     QTcpSocket* m_connection{nullptr};
+    int m_connections{0};
+    bool m_autoReplay{true};
 };
 
 // The same roster, but delivered the way the wire actually delivers it: one
@@ -239,6 +265,50 @@ void testShowsOnlyTheChosenSwitch()
            free != nullptr && free->isEnabled() && !free->isChecked());
 }
 
+void testReconnectLeavesTheTileDeadUntilReplay()
+{
+    FakeDevice device;
+    GreenHeronApplet applet;
+    applet.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"))
+        ->setText(QStringLiteral("127.0.0.1"));
+    applet.findChild<QSpinBox*>(QStringLiteral("greenHeronPort"))
+        ->setValue(device.port());
+    applet.findChild<QPushButton*>(QStringLiteral("greenHeronConnect"))->click();
+
+    auto* combo = applet.findChild<QComboBox*>(QStringLiteral("greenHeronSwitch"));
+    waitFor([&]() { return combo->count() == 4; });
+    combo->setCurrentText(QStringLiteral("AS-84F-1"));
+    const bool live = waitFor([&]() {
+        QPushButton* b = portButton(applet, QStringLiteral("OFF"));
+        return b != nullptr && b->isEnabled();
+    });
+    report("the tile is live once the device has replayed", live);
+
+    // The link blips and comes back, but the device has not spoken yet.
+    device.setAutoReplay(false);
+    device.drop();
+    const bool back = waitFor(
+        [&]() { return device.connections() >= 2 && applet.model()->isConnected(); },
+        10000);
+    report("the tile's link comes back before any replay", back,
+           std::to_string(device.connections()));
+
+    // The buttons are still on screen — they are the best information there
+    // is — but they must not be clickable. They name a roster from before the
+    // drop, and clicking one sends SET_SWITCH to real relays.
+    QPushButton* retained = portButton(applet, QStringLiteral("OFF"));
+    report("the retained buttons are still shown", retained != nullptr);
+    report("but nothing on the retained panel is clickable",
+           retained != nullptr && !retained->isEnabled());
+
+    device.replay();
+    report("the tile comes back to life once the device replays",
+           waitFor([&]() {
+               QPushButton* b = portButton(applet, QStringLiteral("OFF"));
+               return b != nullptr && b->isEnabled();
+           }));
+}
+
 void testSwitchChoiceAndAddressPersist()
 {
     {
@@ -382,6 +452,7 @@ int main(int argc, char** argv)
 
     testAppletBasics();
     testShowsOnlyTheChosenSwitch();
+    testReconnectLeavesTheTileDeadUntilReplay();
     testSwitchChoiceAndAddressPersist();
     testPartialRosterKeepsTheRememberedSwitch();
     testConfigIsOneOwnedObject();
