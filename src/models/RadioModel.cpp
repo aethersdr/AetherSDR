@@ -4123,6 +4123,11 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
                                std::chrono::steady_clock::time_point scheduledAt)
 {
     if (m_backend && !usesFlexCommandPlane()) {
+        // `scheduledAt` stops here on this branch: setCwKeying() carries no
+        // timestamp, so a non-Flex backend applies the edge at forward time
+        // (worker wake plus its queued thread hop), uncorrected.  Only the
+        // Flex netcw path below back-dates time= to the scheduled instant;
+        // the sidetone and trace consume the instant upstream either way.
         if (!forwardNonFlexCwKeying(down)) {
             return;
         }
