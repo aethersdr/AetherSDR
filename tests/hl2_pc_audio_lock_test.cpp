@@ -22,6 +22,7 @@
 #include "gui/TitleBar.h"
 
 #include <QApplication>
+#include <QLabel>
 #include <QPushButton>
 
 #include <cstdio>
@@ -50,6 +51,21 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
 
     TitleBar bar;
+    QLabel* experimental =
+        bar.findChild<QLabel*>(QStringLiteral("experimentalRadioBadge"));
+    check(experimental != nullptr, "experimental radio badge is discoverable by objectName");
+    if (experimental) {
+        check(experimental->isHidden(), "experimental badge starts hidden");
+        bar.setExperimentalRadioFamily(QStringLiteral("Hermes-Lite 2"));
+        check(!experimental->isHidden(),
+              "experimental badge appears for an experimental family");
+        check(experimental->text() == QLatin1String("EXPERIMENTAL"),
+              "experimental badge uses the explicit title-bar label");
+        check(experimental->toolTip().contains(QLatin1String("Hermes-Lite 2")),
+              "experimental badge identifies the connected family accessibly");
+        bar.setExperimentalRadioFamily(QString());
+        check(experimental->isHidden(), "experimental badge clears on disconnect");
+    }
     QPushButton* pc = pcAudioButton(bar);
     check(pc != nullptr, "PC Audio button is discoverable by accessibleName");
     if (!pc) {

@@ -12,7 +12,8 @@ namespace {
 
 // Single nested-JSON key holding this backend's config (Principle V).
 // Shape: {"username":string, "lastHost":string, "controlPort":int,
-//         "serialPort":int, "audioPort":int, "civAddress":int}
+//         "serialPort":int, "audioPort":int, "civAddress":int,
+//         "civSelection":"auto"|"model"|"custom"}
 //
 // Deliberately NO password field. See the header.
 const QString kRootKey = QStringLiteral("Icom");
@@ -23,6 +24,12 @@ constexpr const char* kFieldControlPort = "controlPort";
 constexpr const char* kFieldSerialPort  = "serialPort";
 constexpr const char* kFieldAudioPort   = "audioPort";
 constexpr const char* kFieldCivAddress  = "civAddress";
+// WHICH of the three ways the address was chosen — see IcomSettings::CivSelection.
+// Absent means a pre-existing settings file, which civSelection() migrates.
+constexpr const char* kFieldCivSelection = "civSelection";
+constexpr const char* kSelAuto   = "auto";
+constexpr const char* kSelModel  = "model";
+constexpr const char* kSelCustom = "custom";
 
 // Validate a port on the way OUT, not just on the way in. A hand-edited or
 // truncated settings file must not be able to command a nonsense port
@@ -125,10 +132,60 @@ std::uint8_t IcomSettings::civAddress()
     return static_cast<std::uint8_t>(v);
 }
 
+IcomSettings::CivSelection IcomSettings::civSelection()
+{
+    const QJsonObject obj = readObj();
+    const QString sel = obj.value(QLatin1String(kFieldCivSelection)).toString();
+    if (sel == QLatin1String(kSelAuto))
+        return CivSelection::Auto;
+    if (sel == QLatin1String(kSelModel))
+        return CivSelection::Model;
+    if (sel == QLatin1String(kSelCustom))
+        return CivSelection::Custom;
+
+    // MIGRATION — a settings file written before this field existed.
+    //
+    // Back then the connect panel had one free-text hex box, and it wrote
+    // kDefaultCivAddress whenever that box was left BLANK. So a stored 0xA4 is
+    // very nearly always "the operator never touched this", not "the operator
+    // deliberately chose the IC-705": choosing it required typing A4 into a
+    // field whose placeholder already said the default was A4.
+    //
+    // Reading it as Auto is also the safe direction of the two. On an actual
+    // IC-705 auto-detect resolves to 0xA4 and nothing changes; on any other
+    // radio it repairs the exact silent-dead-session this feature exists to
+    // cure. Reading it as a pin would carry that dead session forward.
+    //
+    // Anything OTHER than the default had to be typed, so it migrates to Custom
+    // and keeps pinning the destination.
+    if (!obj.contains(QLatin1String(kFieldCivAddress)))
+        return CivSelection::Auto;
+    return civAddress() == kDefaultCivAddress ? CivSelection::Auto : CivSelection::Custom;
+}
+
+void IcomSettings::setCivAddressAuto()
+{
+    QJsonObject obj = readObj();
+    obj[QLatin1String(kFieldCivSelection)] = QLatin1String(kSelAuto);
+    // The address is left where it is ON PURPOSE. Switching to Auto and back to
+    // Custom in one sitting should not silently discard the value that was
+    // typed, and nothing reads it while the selection says Auto.
+    writeObj(obj);
+}
+
+void IcomSettings::setCivAddressFromModel(std::uint8_t address)
+{
+    QJsonObject obj = readObj();
+    obj[QLatin1String(kFieldCivAddress)] = int(address);
+    obj[QLatin1String(kFieldCivSelection)] = QLatin1String(kSelModel);
+    writeObj(obj);
+}
+
 void IcomSettings::setCivAddress(std::uint8_t address)
 {
     QJsonObject obj = readObj();
     obj[QLatin1String(kFieldCivAddress)] = int(address);
+    obj[QLatin1String(kFieldCivSelection)] = QLatin1String(kSelCustom);
     writeObj(obj);
 }
 

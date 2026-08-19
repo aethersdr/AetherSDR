@@ -302,7 +302,7 @@ using RadioId = std::array<std::uint8_t, 16>;
 [[nodiscard]] std::vector<std::uint8_t> buildLogin(std::uint32_t localSid,
                                                     std::uint32_t remoteSid,
                                                     std::uint16_t innerSeq,
-                                                    std::uint16_t authStartId,
+                                                    std::uint16_t tokenRequestId,
                                                     std::string_view username,
                                                     std::string_view password);
 
@@ -316,8 +316,20 @@ enum class LoginResult { Ok, BadCredentials, NotALoginReply };
                                                    const AuthId& authId,
                                                    AuthKind kind);
 
-// True when this is the 0x40 reply confirming a Renew-kind auth succeeded.
-[[nodiscard]] bool isAuthAccepted(std::span<const std::uint8_t> pkt);
+// A 0x40 requesttype=0x05 packet is only an ordinary successful renewal when
+// its response word is zero. The radio also sends the same reply shape with
+// 0xffffffff: during initial reconnect authentication that supplies the token
+// wfview continues with, while during an established lease it is a rejection.
+// The protocol parser preserves the distinction and IcomSession applies the
+// required session context.
+enum class AuthReplyResult { NotRenewal, Accepted, Nonzero };
+struct AuthReply {
+    AuthReplyResult result = AuthReplyResult::NotRenewal;
+    std::uint16_t innerSeq = 0;
+    std::uint32_t response = 0;
+    AuthId authId{};
+};
+[[nodiscard]] AuthReply parseAuthReply(std::span<const std::uint8_t> pkt);
 
 // Extract the radio identity from the 0xA8 capabilities packet.
 [[nodiscard]] bool parseCapabilities(std::span<const std::uint8_t> pkt, RadioId& radioId);
@@ -370,10 +382,9 @@ struct StreamRequest {
 
 [[nodiscard]] std::vector<std::uint8_t> buildStreamRequest(const StreamRequest& req);
 
-// The 0x90 reply. On success it carries the device name AND — the trap — a
-// possibly CHANGED pair of session IDs and a new auth ID. Caching those from
-// the login and never re-reading them authenticates correctly exactly once and
-// then fails every renewal.
+// The 0x90 reply. Its header IDs identify the control session the grant belongs
+// to; callers must reject a delayed grant from a previous session. The auth ID
+// in a valid current-session grant replaces the login value for renewals.
 struct StreamGrant {
     bool granted = false;
     std::string deviceName;

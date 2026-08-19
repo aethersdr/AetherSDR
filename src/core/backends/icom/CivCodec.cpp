@@ -47,6 +47,40 @@ std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd, std::
     return buildFrame(to, cmd, body);
 }
 
+// Which commands carry a subcommand is a per-command fact, not a positional
+// one. Treating every second byte as a subcommand would turn command 0x05's
+// first frequency digit into a "subcommand"; treating none of them as one
+// would collapse every 0x27 scope reply into a single undifferentiated blob.
+// So the set is enumerated — ONCE, here, because a second copy of it can drift
+// silently and a drift produces exactly the wrong-but-plausible decode this
+// enumeration exists to prevent. parseFrame() and the CI-V trace both read it.
+bool commandHasSubcommand(std::uint8_t command)
+{
+    switch (command) {
+    case cmd::kLevel:
+    case cmd::kMeter:
+    case cmd::kFunction:
+    case cmd::kPower:
+    case cmd::kReadId:
+    case cmd::kSetting:
+    case cmd::kControl:
+    case cmd::kScope:
+    // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
+    // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
+    // reply parsed with the subcommand sitting in the payload, so the decode
+    // could not tell an enable from an offset and dropped all three.
+    case cmd::kTuneOffset:
+    case cmd::kRxAntenna:
+    // 0x26 is sub-addressed by VFO: 26 00 is the selected VFO, 26 01 the
+    // unselected one. Without this the selector stays in the payload and every
+    // mode/DATA/filter field is decoded one byte off.
+    case cmd::kVfoMode:
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
 {
     // FE FE <to> <from> <cmd> ... <FD>  — the shortest legal frame is 6 bytes
@@ -69,32 +103,14 @@ std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
     if (bodyEnd <= bodyBegin)
         return f;   // bare command or FB/FA with no data
 
-    // Which commands carry a subcommand is a per-command fact, not a positional
-    // one. Treating every second byte as a subcommand would turn command 0x05's
-    // first frequency digit into a "subcommand"; treating none of them as one
-    // would collapse every 0x27 scope reply into a single undifferentiated
-    // blob. So the set is enumerated.
-    switch (f.cmd) {
-    case cmd::kLevel:
-    case cmd::kMeter:
-    case cmd::kFunction:
-    case cmd::kPower:
-    case cmd::kReadId:
-    case cmd::kSetting:
-    case cmd::kControl:
-    case cmd::kScope:
-    // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
-    // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
-    // reply parsed with the subcommand sitting in the payload, so the decode
-    // could not tell an enable from an offset and dropped all three.
-    case cmd::kTuneOffset:
+    // See commandHasSubcommand() above for why this is an enumeration and not a
+    // positional rule.
+    if (commandHasSubcommand(f.cmd)) {
         f.hasSub = true;
         f.sub    = frame[bodyBegin];
         f.data.assign(frame.begin() + bodyBegin + 1, frame.begin() + bodyEnd);
-        break;
-    default:
+    } else {
         f.data.assign(frame.begin() + bodyBegin, frame.begin() + bodyEnd);
-        break;
     }
     return f;
 }
@@ -253,6 +269,17 @@ std::optional<int> decodeLevel(std::span<const std::uint8_t> bcd)
     return t * 1000 + h * 100 + d * 10 + u;
 }
 
+int percentToLevelRaw(int percent)
+{
+    const int pct = std::clamp(percent, 0, 100);
+    return (pct * 255 + 99) / 100; // ceil(pct * 255 / 100)
+}
+
+int levelRawToPercent(int raw)
+{
+    return std::clamp(raw, 0, 255) * 100 / 255;
+}
+
 // ---------------------------------------------------------------------------
 // Modes
 // ---------------------------------------------------------------------------
@@ -275,6 +302,21 @@ std::optional<CivMode> modeFromNeutral(const std::string& neutral, bool& dataMod
     // microphone while the operator is running FT8.
     if (u == "DIGU") { dataModeOut = true; return CivMode::Usb; }
     if (u == "DIGL") { dataModeOut = true; return CivMode::Lsb; }
+    // DFM is FM with the same DATA flag, and it was missing here. Two costs,
+    // and the second is the expensive one:
+    //
+    //   1. DFM fell through to nullopt, so setSliceMode() took the "no
+    //      equivalent" path and re-asserted the radio's current mode. Selecting
+    //      DFM in the UI simply reverted — indistinguishable from the control
+    //      being ignored.
+    //   2. Worse, a radio the operator had put into FM-D from the front panel
+    //      reported back as plain FM (modeToNeutral was lossy the same way), so
+    //      the next mode write cleared the DATA flag and transmit audio came
+    //      from the MICROPHONE rather than the WLAN modulator — exactly the
+    //      failure the DIGU/DIGL comment above describes, but for packet
+    //      instead of FT8. A 2 m AX.25 frame keyed the radio and put room noise
+    //      on the air.
+    if (u == "DFM")  { dataModeOut = true; return CivMode::Fm; }
     if (u == "RTTY") return CivMode::Rtty;
 
     // DSB, SAM and DRM have no IC-705 equivalent. Returning nullopt rather than
@@ -291,7 +333,12 @@ std::string modeToNeutral(CivMode mode, bool dataMode)
     case CivMode::Am:   return "AM";
     case CivMode::Cw:   return "CWU";
     case CivMode::CwR:  return "CWL";
-    case CivMode::Fm:   return "FM";
+    // Symmetric with Lsb/Usb above: the DATA flag is what distinguishes FM-D
+    // from FM, and returning plain "FM" for both made the round trip lossy. A
+    // radio sitting in FM-D reported as FM, so the UI showed FM, and the next
+    // mode write sent FM with the flag clear — silently taking the radio OUT of
+    // data mode and back onto the microphone.
+    case CivMode::Fm:   return dataMode ? "DFM" : "FM";
     case CivMode::Wfm:  return "WFM";
     // AetherSDR has no RTTY neutral mode. Mapping to the data mode on the
     // matching sideband is LOSSY IN NAME but correct in the two things that
@@ -452,6 +499,40 @@ std::vector<std::uint8_t> cmdReadMode(std::uint8_t to)
     return buildFrame(to, cmd::kReadMode);
 }
 
+std::vector<std::uint8_t> cmdReadVfoMode(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kVfoMode, vfoMode::kSelected);
+}
+
+std::vector<std::uint8_t> cmdSetVfoMode(std::uint8_t to, CivMode mode, bool dataMode,
+                                        int filter)
+{
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>(mode),
+        static_cast<std::uint8_t>(dataMode ? 0x01 : 0x00),
+        static_cast<std::uint8_t>(std::clamp(filter, 1, 3)),
+    };
+    return buildFrameSub(to, cmd::kVfoMode, vfoMode::kSelected, body);
+}
+
+std::optional<VfoModeState> decodeVfoMode(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3)
+        return std::nullopt;
+    // The DATA byte is a two-valued flag. Anything else is a frame we have
+    // mis-parsed — a resync artefact, or a model whose payload is not this
+    // shape — and guessing "on" from it would put the radio's modulation source
+    // somewhere the operator did not ask for.
+    if (payload[1] > 0x01)
+        return std::nullopt;
+    VfoModeState s;
+    s.mode = static_cast<CivMode>(payload[0]);
+    s.dataMode = payload[1] != 0;
+    if (payload[2] >= 1 && payload[2] <= 3)
+        s.filter = payload[2];
+    return s;
+}
+
 std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value)
 {
     const auto bcd = encodeLevel(std::clamp(value, 0, 255));
@@ -482,6 +563,13 @@ std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db)
 std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to)
 {
     return buildFrame(to, cmd::kAttenuator);
+}
+
+std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
+{
+    const std::array<std::uint8_t, 1> body{
+        static_cast<std::uint8_t>(rxAntenna ? 1 : 0)};
+    return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
 }
 
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)

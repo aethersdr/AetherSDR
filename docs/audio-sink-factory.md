@@ -9,8 +9,9 @@
 Every audio sink and source in AetherSDR currently answers two questions on its
 own:
 
-1. **"What rate / sample format does this device want, and how do I get my
-   24 kHz canonical audio onto it?"** — reimplemented ~9 times with ~6 divergent
+1. **"What rate / sample format does this device want, and how do I bridge it
+   to the selected route's canonical device-boundary rate?"** — reimplemented
+   ~9 times with ~6 divergent
    fallback ladders and per-OS `#ifdef` branches that have drifted apart. This
    is the root of a recurring class of platform bugs (44.1k-only devices
    silently failing on some sinks, WASAPI Float32-only devices rejecting Int16,
@@ -84,7 +85,7 @@ The ladder, in one place, owns:
 | Int16 ↔ Float32 | both tried per rate; Float-first output, Int16-first input | [#2669] / [#1090] |
 | `preferredFormat()` catch-all | final rung for Float32-only virtual drivers / WASAPI | [#3231] |
 | macOS mic preferred-rate-first | avoids silent 48 k open on 16 k-native mics | PR [#2930] |
-| macOS Bluetooth-HFP mic | native 8/16/24 k first, never forced to 48 k | [#2615] |
+| macOS Bluetooth-HFP mic | open native 8/16/24 k first; normal voice then normalizes to 48 k, while RADE converts separately to 24 k | [#2615] |
 | Windows probe-at-open | skip unreliable `isFormatSupported`, try at open | [#2120] / [#2929] |
 
 ### Layer 2 — `AudioDeviceNegotiator` (live wrapper, Qt Multimedia) — next

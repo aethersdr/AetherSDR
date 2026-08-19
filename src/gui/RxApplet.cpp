@@ -2,6 +2,7 @@
 
 #include "gui/FilterStepMath.h"
 #include "FilterPassbandWidget.h"
+#include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
@@ -270,7 +271,7 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
 
     if (mode == "USB" || mode == "LSB")  return ssbSettings;
     if (mode == "AM"  || mode == "SAM")  return amSettings;
-    if (mode == "CW")                    return cwSettings;
+    if (isCwMode(mode))                  return cwSettings;
     if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return digSettings;
     if (mode == "RTTY")                  return rttySettings;
     if (mode == "FM" || mode == "NFM" || mode == "DFM") return fmSettings;
@@ -2529,7 +2530,7 @@ void RxApplet::applyFilterPreset(int widthHz)
         int mid = -shift / 2;  // midpoint between mark(0) and space(-shift)
         lo = mid - widthHz / 2;
         hi = mid + widthHz / 2;
-    } else if (mode == "CW" || mode == "CWL") {
+    } else if (isCwMode(mode)) {
         // Centered on carrier — the radio's BFO/demodulator applies the
         // pitch offset internally so signals at 0 Hz are heard at the sidetone.
         lo = -widthHz / 2;
@@ -2701,7 +2702,7 @@ void RxApplet::updateModeSettings(const QString& mode)
     m_xitContainer->setVisible(!isFM);
 
     // QSK visibility — only meaningful in CW mode
-    m_qskBtn->setVisible(mode == "CW");
+    m_qskBtn->setVisible(isCwMode(mode));
 
     // Disable squelch in digital, RTTY, and CW modes
     // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
@@ -2709,7 +2710,7 @@ void RxApplet::updateModeSettings(const QString& mode)
     // CW: radio locks squelch on at fixed level, rejects changes
     bool sqlDisabled = (mode == "DIGU" || mode == "DIGL" || mode == "NT"
                         || mode == "RTTY"
-                        || mode == "CW" || mode == "CWL");
+                        || isCwMode(mode));
     m_sqlBtn->setEnabled(!sqlDisabled);
     // Slider enabled when the mode allows squelch AND we're not in SqlMode::Off.
     // Manual mode = threshold input; Auto mode = dB margin input.

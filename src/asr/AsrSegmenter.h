@@ -48,6 +48,14 @@ public:
         // repeated leading words at the text level (Approach A) using the
         // continuesPrevious flag below.
         int overlapMs = 0;
+        // Idle silence AFTER an utterance's hangover close counts toward this;
+        // once it reaches longGapMs the run is a real pause and consumeLongGap()
+        // reports it so the worker can flush any carried ASR context and start
+        // the next utterance clean. The hangover silence itself is part of the
+        // utterance and is NOT counted, so the effective wall-clock pause before
+        // a flush is hangoverMs + longGapMs (~2.8 s at the defaults). Fixed, not
+        // UI-exposed. 0 disables.
+        int longGapMs = 2500;
     };
 
     // One closed utterance. `continuesPrevious` is true when this segment was
@@ -103,6 +111,11 @@ public:
 
     bool inSpeech() const { return m_inSpeech; }
 
+    // True once per idle-silence gap that reaches Config::longGapMs; clears on
+    // read. The worker polls this each feed() and, when set, flushes the
+    // backend's carried context so a real pause starts the next utterance clean.
+    bool consumeLongGap();
+
 private:
     int framesToSamples(int ms) const;
     // forceCap: true when this close is the maxSegmentMs cap firing mid-speech
@@ -124,6 +137,10 @@ private:
     int m_speechSamples = 0;        // speech-only samples (excludes hangover), gates minSpeech
     bool m_pendingContinues = false; // next emitted segment was seeded with carried overlap audio
     int m_pendingOverlapMs = 0;      // ms of audio carried into that next segment (for its overlapMs)
+    int m_longGapSamples = 0;       // Config::longGapMs in samples (0 = disabled)
+    int m_idleSilence = 0;          // contiguous silence samples while NOT in speech
+    bool m_longGapFired = false;    // latched when the current idle gap crossed the threshold
+    bool m_longGapPending = false;  // consumable one-shot for consumeLongGap()
 };
 
 } // namespace AetherSDR

@@ -34,8 +34,8 @@
 
 namespace {
 int wheelAreaMargin = 10;
-double wheelExponentDown = qPow(2, 1.0 / 2.0);
-double wheelExponentUp = qPow(2, 1.0 / 1.5);
+constexpr double kWheelDeltaPerDoubling = 240.0;
+constexpr double kTrackpadPixelsPerDoubling = 120.0;
 }
 
 QGVMapQGView::QGVMapQGView(QGVMap* geoMap)
@@ -48,6 +48,7 @@ QGVMapQGView::QGVMapQGView(QGVMap* geoMap)
     mMaxScale = 1e+2;
     mScale = 1.0;
     mAzimuth = 0.0;
+    mHorizontalWrapEnabled = false;
     mMouseActions = QGV::MouseAction::All;
     mViewRect = viewport()->rect();
     mState = QGV::MapState::Idle;
@@ -63,7 +64,10 @@ QGVMapQGView::QGVMapQGView(QGVMap* geoMap)
     setOptimizationFlag(DontAdjustForAntialiasing, true);
     setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
     setRenderHint(QPainter::Antialiasing, true);
-    setCacheMode(QGraphicsView::CacheBackground);
+    // Tiles are scene items, not the QGraphicsView background. Caching the
+    // solid fallback brush adds no value and leaves stale/black buffers when
+    // the scene rectangle slides to support repeated worlds.
+    setCacheMode(QGraphicsView::CacheNone);
     setMouseTracking(true);
     setBackgroundBrush(QBrush(Qt::lightGray));
     setAcceptDrops(true);
@@ -114,6 +118,27 @@ void QGVMapQGView::setScaleLimits(double minScale, double maxScale)
     cameraScale(mScale);
 }
 
+void QGVMapQGView::setHorizontalWrapEnabled(bool enabled)
+{
+    if (mHorizontalWrapEnabled == enabled) {
+        return;
+    }
+    mHorizontalWrapEnabled = enabled;
+    if (enabled) {
+        updateHorizontalWrapSceneRect(viewRect().center());
+    } else {
+        QRectF sceneRect = mGeoMap->getProjection()->boundaryProjRect();
+        sceneRect.adjust(-sceneRect.width(), -sceneRect.height(),
+                         sceneRect.width(), sceneRect.height());
+        scene()->setSceneRect(sceneRect);
+    }
+}
+
+bool QGVMapQGView::horizontalWrapEnabled() const
+{
+    return mHorizontalWrapEnabled;
+}
+
 void QGVMapQGView::cleanState()
 {
     changeState(QGV::MapState::Idle);
@@ -150,6 +175,7 @@ void QGVMapQGView::changeState(QGV::MapState state)
 void QGVMapQGView::cameraScale(double scale)
 {
     const QGVCameraState oldState = getCamera();
+    const QPointF oldCenter = viewRect().center();
     const double oldScale = mScale;
     const double newScale = qMax(mMinScale, qMin(mMaxScale, scale));
     if (qFuzzyCompare(oldScale, newScale)) {
@@ -158,6 +184,10 @@ void QGVMapQGView::cameraScale(double scale)
     const double deltaScale = newScale / oldScale;
     QGraphicsView::scale(deltaScale, deltaScale);
     mScale = newScale;
+    if (mHorizontalWrapEnabled) {
+        updateHorizontalWrapSceneRect(oldCenter);
+        QGraphicsView::centerOn(oldCenter);
+    }
     applyCameraUpdate(oldState);
     qgvDebug() << "cameraScale" << scale;
 }
@@ -180,11 +210,38 @@ void QGVMapQGView::cameraMove(const QPointF& projPos)
 {
     const QGVCameraState oldState = getCamera();
     const QPointF oldCenter = viewRect().center();
-    if (oldCenter != projPos) {
-        QGraphicsView::centerOn(projPos);
-        applyCameraUpdate(oldState);
-        qgvDebug() << "cameraMove" << projPos;
+    const QPointF target = projPos;
+    if (mHorizontalWrapEnabled) {
+        // Keep x continuous instead of snapping the camera back into the base
+        // world at the dateline. Tiles and overlays follow the current world
+        // copy, so a drag never swaps the scene underneath the pointer.
+        updateHorizontalWrapSceneRect(target);
     }
+    if (oldCenter != target) {
+        QGraphicsView::centerOn(target);
+        applyCameraUpdate(oldState);
+        qgvDebug() << "cameraMove" << target;
+    }
+}
+
+void QGVMapQGView::updateHorizontalWrapSceneRect(const QPointF& center)
+{
+    if (!mHorizontalWrapEnabled) {
+        return;
+    }
+    // QGraphicsView clamps centerOn() to the scene rectangle. The upstream
+    // rectangle is three worlds wide, which is still narrower than an
+    // ultrawide viewport at the whole-world zoom and makes a wrapped drag
+    // land on the clamp instead of the requested center. Keep a moving scene
+    // window around the canonical camera center: one full world of breathing
+    // room beyond each visible edge, without growing the scrollbar range at
+    // high zoom until it overflows QGraphicsView's integer scrollbars.
+    const QRectF world = mGeoMap->getProjection()->boundaryProjRect();
+    const double halfWidth = viewRect().width() * 0.5 + world.width();
+    QRectF sceneRect = scene()->sceneRect();
+    sceneRect.setLeft(center.x() - halfWidth);
+    sceneRect.setRight(center.x() + halfWidth);
+    scene()->setSceneRect(sceneRect);
 }
 
 void QGVMapQGView::blockCameraUpdate()
@@ -242,13 +299,12 @@ void QGVMapQGView::zoomByWheel(QWheelEvent* event)
 
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
     const QPoint eventPos(qRound(event->position().x()), qRound(event->position().y()));
-    int eventDelta = event->angleDelta().y();
-    if (eventDelta == 0) {
-        eventDelta = event->pixelDelta().y();
-    }
+    const int angleDelta = event->angleDelta().y();
+    const int pixelDelta = event->pixelDelta().y();
 #else
     const QPoint eventPos(event->pos().x(), event->pos().y());
-    const auto eventDelta = event->delta();
+    const int angleDelta = event->delta();
+    const int pixelDelta = 0;
 #endif
 
     if (mState != QGV::MapState::Wheel) {
@@ -268,10 +324,11 @@ void QGVMapQGView::zoomByWheel(QWheelEvent* event)
     blockCameraUpdate();
     double newScale = mScale;
 
-    if (eventDelta > 0) {
-        newScale *= qPow(wheelExponentDown, eventDelta / 120.0);
-    } else if (eventDelta < 0) {
-        newScale /= qPow(wheelExponentUp, -eventDelta / 120.0);
+    const double zoomExponent = angleDelta != 0
+        ? static_cast<double>(angleDelta) / kWheelDeltaPerDoubling
+        : static_cast<double>(pixelDelta) / kTrackpadPixelsPerDoubling;
+    if (!qFuzzyIsNull(zoomExponent)) {
+        newScale *= qPow(2.0, zoomExponent);
     }
     cameraScale(newScale);
 
@@ -586,8 +643,13 @@ void QGVMapQGView::mouseDoubleClickEvent(QMouseEvent* event)
 void QGVMapQGView::resizeEvent(QResizeEvent* event)
 {
     const QGVCameraState oldState = getCamera();
+    const QPointF oldCenter = viewRect().center();
     QGraphicsView::resizeEvent(event);
     mViewRect = viewport()->rect();
+    if (mHorizontalWrapEnabled) {
+        updateHorizontalWrapSceneRect(oldCenter);
+        QGraphicsView::centerOn(oldCenter);
+    }
     mGeoMap->anchoreWidgets();
     applyCameraUpdate(oldState);
 }

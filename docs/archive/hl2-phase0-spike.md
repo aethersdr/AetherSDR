@@ -1,10 +1,21 @@
-# HL2 backend spike (aetherd)
+# HL2 backend spike (aetherd) — archived
+
+> **Archived.** This was the Phase‑0 spike that preceded the in-tree
+> `Hl2Backend`; the backend has since shipped and superseded it. The document is
+> kept because it is the clean-room provenance record cited by
+> `THIRD_PARTY_LICENSES`, and because the corrected `CONFIG_MERCURY` diagnosis
+> below is a fact the code comments still point at.
+>
+> The spike scripts it describes now live in [`tools/hl2/`](../../tools/hl2/),
+> where they remain useful as bare-metal Metis probes independent of the app. The
+> current bring-up narrative is [`docs/HERMES.md`](../HERMES.md); the port plan is
+> [`docs/architecture/aetherd-hl2-backend-design.md`](../architecture/aetherd-hl2-backend-design.md).
 
 Throwaway Phase‑0 prototype to de-risk a **Hermes‑Lite 2** `IRadioBackend` before
-committing to an in-tree `Hl2Backend`. Lives in `prototypes/` on purpose: an
-in-tree backend is a "new radio family" and (per `AGENTS.md`) needs an approved
-design doc first. This spike proves the **data plane** — the biggest unknown —
-cheaply in Python, so the design note + C++ port are demand-driven.
+committing to an in-tree `Hl2Backend`. It lived outside the source tree on
+purpose: an in-tree backend is a "new radio family" and (per `AGENTS.md`) needs
+an approved design doc first. This spike proves the **data plane** — the biggest
+unknown — cheaply in Python, so the design note + C++ port are demand-driven.
 
 ## Why HL2 is different from Flex
 
@@ -18,7 +29,7 @@ the same normalized `IRadioBackend` signals as `FlexBackend`.
 
 HPSDR **Protocol 1 ("Metis")** over UDP:1024. Build from the spec, don't guess.
 All protocol facts are consulted **clean-room** and re-expressed in original code
-(see `../../THIRD_PARTY_LICENSES`):
+(see [`THIRD_PARTY_LICENSES`](../../THIRD_PARTY_LICENSES)):
 - openHPSDR Protocol 1 Programmer's guide (discovery, EP2/EP6 frames, C&C bytes)
 - Hermes‑Lite 2 wiki + gateware repo (board id `0x06`, register map, sample rates,
   the `0x0a` extended-range LNA gain register)
@@ -62,8 +73,8 @@ IQ sample-parse note: the ADC DC offset lives on **I only** (Q mean ≈ 0), so a
 ## Running
 
 ```bash
-python3 discover.py                      # smoke test — is the HL2 on the LAN?
-python3 discover.py --bcast 169.254.255.255   # if 255.255.255.255 is filtered
+python3 tools/hl2/discover.py                    # smoke test — is the HL2 on the LAN?
+python3 tools/hl2/discover.py --bcast 169.254.255.255   # if 255.255.255.255 is filtered
 ```
 
 Verified device (2026‑07): HL2, MAC `00:1C:C0:A2:13:DD`, board `0x06`, gateware

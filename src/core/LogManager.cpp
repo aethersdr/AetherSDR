@@ -122,6 +122,18 @@ LogManager::LogManager()
         // one control, and someone chasing transmit telemetry will tick the
         // wrong box and conclude the logging is still broken.
         {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry: TX IQ FIFO depth with underflow/overflow flags, and forward/reflected power counts. Separate toggle — ticking \"Hermes-Lite 2\" does NOT enable this (high-rate)"},
+        // ICOM — the same "declared locally, never registered" hole the HL2
+        // categories above had. All five were unreachable: applyFilterRules()'s
+        // blanket `aether.*.debug=false` switched them off and no UI toggle
+        // could switch them back on, so an Icom session logged nothing beyond
+        // its INF lines. Chasing a mode-reporting bug on a live IC-9700 that
+        // way means guessing from published state instead of reading frames.
+        {"aether.icom.session", "Icom Session",  "Icom RS-BA1 session: handshake, token/auth, capabilities, keepalive"},
+        {"aether.icom.stream",  "Icom Streams",  "Icom UDP stream lifecycle: control/serial/audio handshakes and ports"},
+        {"aether.icom.civ",     "Icom CI-V",     "Every CI-V frame in and out, decoded — command, subcommand and payload bytes. The only way to tell 'the radio never sent it' from 'we sent it and dropped the reply' (high-rate)"},
+        {"aether.icom.pan",     "Icom Scope",    "Icom spectrum scope: sweep frames, division reassembly, bounds"},
+        {"aether.icom.link",    "Icom Link",     "Icom backend link state: connect/disconnect, model resolution, capability publication"},
+        {"aether.icom.cred",    "Icom Credentials", "Icom credential storage and retrieval (no secret values are logged)"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.

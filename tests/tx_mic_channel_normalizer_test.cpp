@@ -2,9 +2,11 @@
 // Run: ./build/tx_mic_channel_normalizer_test
 
 #include "core/Resampler.h"
+#include "core/TxCaptureBuffer.h"
 #include "core/TxMicChannelNormalizer.h"
 
 #include <QByteArray>
+#include <QBuffer>
 #include <QtEndian>
 
 #include <algorithm>
@@ -23,6 +25,7 @@ using AetherSDR::TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo;
 using AetherSDR::TxMicChannelNormalizer::collapseFloat32ToInt16MonoBigEndian;
 using AetherSDR::TxMicChannelNormalizer::measureInt16StereoLevelBlock;
 using AetherSDR::TxMicChannelNormalizer::rmsFromLevelBlock;
+namespace TxCaptureBuffer = AetherSDR::TxCaptureBuffer;
 
 namespace {
 
@@ -306,6 +309,186 @@ void testDaxRadioNativeCollapseKeepsOneSidedLevel()
            diag.selectedMode == ChannelMode::Left && diag.oneSidedStereo);
 }
 
+void testCaptureReadIsBounded()
+{
+    QByteArray backlog(TxCaptureBuffer::kMaxReadBytes + 4096, 'x');
+    QBuffer device(&backlog);
+    device.open(QIODevice::ReadOnly);
+
+    const TxCaptureBuffer::BoundedRead read =
+        TxCaptureBuffer::readLatestBoundedInt16(&device, 2);
+    report("pull-mode capture reads at most one bounded block",
+           read.block.size() == TxCaptureBuffer::kMaxReadBytes);
+    report("a within-catch-up residue is left for later callbacks, not dropped",
+           device.bytesAvailable() == 4096 && read.discardedBytes == 0);
+}
+
+void testCaptureReadDropsToLatestPastCatchUpThreshold()
+{
+    // The freshest block must be the one transmitted: mark the backlog so the
+    // returned bytes can only have come from its tail.
+    const qint64 backlogBytes = TxCaptureBuffer::kCatchUpThresholdBytes + 64 * 1024;
+    QByteArray backlog(backlogBytes, 's');           // stale head
+    backlog.replace(backlogBytes - TxCaptureBuffer::kMaxReadBytes,
+                    TxCaptureBuffer::kMaxReadBytes,
+                    QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));  // fresh tail
+    QBuffer device(&backlog);
+    device.open(QIODevice::ReadOnly);
+
+    const TxCaptureBuffer::BoundedRead read =
+        TxCaptureBuffer::readLatestBoundedInt16(&device, 2);
+
+    report("catch-up returns one bounded block",
+           read.block.size() == TxCaptureBuffer::kMaxReadBytes);
+    report("catch-up transmits the newest audio, not the oldest",
+           read.block == QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));
+    report("catch-up reports the stale bytes it skipped",
+           read.discardedBytes == backlogBytes - TxCaptureBuffer::kMaxReadBytes);
+    report("catch-up leaves the device drained",
+           device.bytesAvailable() == 0);
+}
+
+void testCaptureReadAlignsToRealChannelCount()
+{
+    // 6-channel Int16 frames are 12 bytes, which 256 KiB does not divide: the
+    // read must round down so later reads stay on frame boundaries.
+    QByteArray backlog(TxCaptureBuffer::kMaxReadBytes + 4096, 'x');
+    QBuffer device(&backlog);
+    device.open(QIODevice::ReadOnly);
+
+    const TxCaptureBuffer::BoundedRead read =
+        TxCaptureBuffer::readLatestBoundedInt16(&device, 6);
+    report("bounded read is frame-aligned for the negotiated channel count",
+           read.block.size() % 12 == 0 && read.block.size() <= TxCaptureBuffer::kMaxReadBytes
+               && read.block.size() > TxCaptureBuffer::kMaxReadBytes - 12);
+}
+
+void testDumpSizedMicBlockIsRejectedBeforeDereference()
+{
+    char sentinel = 0;
+    constexpr qsizetype dumpInputBytes = 0x80007900;
+    const QByteArray dumpSized = QByteArray::fromRawData(&sentinel, dumpInputBytes);
+    Diagnostics diag;
+
+    const QByteArray out = canonicalizeInt16ToMonoStereo(
+        dumpSized,
+        2,
+        48000,
+        ChannelMode::Average,
+        nullptr,
+        &diag);
+
+    report("2 GiB dump-sized mic block is rejected without allocation",
+           out.isEmpty() && diag.inputRejected);
+    report("rejection diagnostics preserve the dump byte count",
+           diag.inputBytes == dumpInputBytes && diag.frames == 0);
+}
+
+void testMisalignedMicBlockIsTruncatedToFrameBoundary()
+{
+    // A trailing partial frame costs one sample, not the whole block: dropping
+    // the block would be an audible dropout, and a device that stays misaligned
+    // would drop every block thereafter.
+    const QByteArray malformed(6, '\0'); // stereo Int16 requires 4-byte frames
+    Diagnostics diag;
+    const QByteArray out = canonicalizeInt16ToMonoStereo(
+        malformed,
+        2,
+        48000,
+        ChannelMode::Auto,
+        nullptr,
+        &diag);
+
+    report("partial stereo Int16 frame is truncated, whole frames survive",
+           out.size() == 4 && diag.frames == 1 && !diag.inputRejected);
+    report("truncation is recorded in the diagnostics",
+           diag.partialFrameBytes == 2 && diag.inputBytes == malformed.size());
+}
+
+void testShortBlockBelowOneFrameIsDroppedQuietly()
+{
+    const QByteArray tooShort(2, '\0'); // less than one stereo Int16 frame
+    Diagnostics diag;
+    const QByteArray out = canonicalizeInt16ToMonoStereo(
+        tooShort,
+        2,
+        48000,
+        ChannelMode::Auto,
+        nullptr,
+        &diag);
+
+    report("a sub-frame block yields nothing and is not flagged a fault",
+           out.isEmpty() && diag.frames == 0 && !diag.inputRejected);
+}
+
+void testPushModeBlockIsTrimmedToLatest()
+{
+    // macOS hands over everything accumulated since the last 5 ms poll, so a
+    // stalled audio thread produces one oversized block.
+    QByteArray block(TxCaptureBuffer::kMaxReadBytes, 's');
+    block.append(QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));  // newest tail
+
+    const qint64 discarded = TxCaptureBuffer::trimToLatestBoundedInt16(block, 2);
+    report("push-mode stall is trimmed to one bounded block",
+           block.size() == TxCaptureBuffer::kMaxReadBytes
+               && discarded == TxCaptureBuffer::kMaxReadBytes);
+    report("push-mode trim keeps the newest audio",
+           block == QByteArray(TxCaptureBuffer::kMaxReadBytes, 'f'));
+
+    QByteArray small(4096, 'x');
+    report("a push-mode block that already fits is left alone",
+           TxCaptureBuffer::trimToLatestBoundedInt16(small, 2) == 0
+               && small.size() == 4096);
+
+    // A push buffer that ended mid-frame must not shift the retained tail by a
+    // sample, which would swap L/R for the rest of the block.
+    QByteArray ragged(TxCaptureBuffer::kMaxReadBytes + 4098, 'x');
+    const qint64 raggedDiscard = TxCaptureBuffer::trimToLatestBoundedInt16(ragged, 2);
+    report("a mid-frame push block is cut on a frame boundary",
+           raggedDiscard % 4 == 0 && ragged.size() <= TxCaptureBuffer::kMaxReadBytes);
+}
+
+void testLargeUpsampledDaxBlockIsAccepted()
+{
+    // A conforming 8 kHz TCI client can send a 64 KiB int16 mono frame, which
+    // expands ~12x to ~768 KiB of stereo float32 before reaching this collapse
+    // (#3306). The mic capture chunk would have rejected it outright, so the
+    // float route carries its own, larger ceiling.
+    constexpr qsizetype worstCaseTciExpansion = 768 * 1024;
+    const QByteArray large(worstCaseTciExpansion, '\0');
+    Diagnostics diag;
+    const QByteArray out = collapseFloat32ToInt16MonoBigEndian(
+        large,
+        2,
+        24000,
+        ChannelMode::Average,
+        nullptr,
+        &diag);
+
+    report("worst-case upsampled TCI block is not rejected",
+           !out.isEmpty() && !diag.inputRejected
+               && diag.frames == worstCaseTciExpansion / 8);
+}
+
+void testOversizedDaxBlockIsRejected()
+{
+    // Past its own ceiling the float route still rejects before dereference.
+    char sentinel = 0;
+    const QByteArray oversized = QByteArray::fromRawData(
+        &sentinel, AetherSDR::TxMicChannelNormalizer::kMaxRealtimeFloatBlockBytes + 8);
+    Diagnostics diag;
+    const QByteArray out = collapseFloat32ToInt16MonoBigEndian(
+        oversized,
+        2,
+        24000,
+        ChannelMode::Average,
+        nullptr,
+        &diag);
+
+    report("oversized DAX float32 block is rejected before dereference",
+           out.isEmpty() && diag.inputRejected && diag.frames == 0);
+}
+
 int main()
 {
     std::printf("TX mic channel normalizer tests\n\n");
@@ -319,6 +502,15 @@ int main()
     testPcMicMeterSeesRightOnly();
     testOpusFrameSizingAfterNormalization();
     testDaxRadioNativeCollapseKeepsOneSidedLevel();
+    testCaptureReadIsBounded();
+    testCaptureReadDropsToLatestPastCatchUpThreshold();
+    testCaptureReadAlignsToRealChannelCount();
+    testDumpSizedMicBlockIsRejectedBeforeDereference();
+    testMisalignedMicBlockIsTruncatedToFrameBoundary();
+    testShortBlockBelowOneFrameIsDroppedQuietly();
+    testPushModeBlockIsTrimmedToLatest();
+    testLargeUpsampledDaxBlockIsAccepted();
+    testOversizedDaxBlockIsRejected();
 
     std::printf("\n%s\n", g_failed == 0 ? "All tests passed." : "Some tests failed.");
     return g_failed == 0 ? 0 : 1;

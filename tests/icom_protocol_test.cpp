@@ -122,6 +122,8 @@ static void testLoginAndAuth()
     check(login.size() == kLenLogin, "login is 128 bytes");
     check(login[0x14] == 0x01, "requestreply is 0x01");
     check(login[0x15] == 0x00, "login requesttype is 0x00");
+    check(login[0x1a] == 0xef && login[0x1b] == 0xbe,
+          "login carries the caller's little-endian token-request ID");
     check(std::memcmp(login.data() + 0x60, "icom-pc", 7) == 0,
           "the client name is PLAIN TEXT while the credentials are not");
     const auto user = encodePasscode("beer");
@@ -148,14 +150,44 @@ static void testLoginAndAuth()
     auto auth = buildAuth(1, 2, 4, id, AuthKind::Renew);
     check(auth.size() == kLenToken, "auth is 64 bytes");
     check(auth[0x15] == 0x05, "renew is requesttype 0x05");
+    check(auth[0x16] == 0x00 && auth[0x17] == 0x04,
+          "the inner sequence is a big-endian u16 at 0x16");
     check(std::equal(id.begin(), id.end(), auth.begin() + 0x1a), "auth id is echoed at 0x1a");
+
+    const auto seq255 = buildAuth(1, 2, 0x00ff, id, AuthKind::Renew);
+    const auto seq256 = buildAuth(1, 2, 0x0100, id, AuthKind::Renew);
+    check(seq255[0x16] == 0x00 && seq255[0x17] == 0xff,
+          "inner sequence 255 ends the one-byte-compatible range");
+    check(seq256[0x16] == 0x01 && seq256[0x17] == 0x00 && seq256[0x18] == 0x00
+              && std::equal(id.begin(), id.end(), seq256.begin() + 0x1a),
+          "inner sequence 256 stays in its two-byte field and does not shift into auth id");
 
     auto accepted = auth;
     accepted[0x14] = 0x02;   // reply marker
-    check(isAuthAccepted(accepted), "a 0x02/0x05 reply gates the streams");
+    const AuthReply acceptedReply = parseAuthReply(accepted);
+    check(acceptedReply.result == AuthReplyResult::Accepted,
+          "a zero-response 0x02/0x05 reply gates the streams");
+    check(acceptedReply.innerSeq == 4, "the accepted reply carries its correlation sequence");
+
+    auto rejected = accepted;
+    rejected[0x30] = rejected[0x31] = rejected[0x32] = rejected[0x33] = 0xff;
+    const AuthReply rejectedReply = parseAuthReply(rejected);
+    check(rejectedReply.result == AuthReplyResult::Nonzero,
+          "0xffffffff is a nonzero reply whose meaning requires session context");
+    check(rejectedReply.response == 0xffffffffU,
+          "the rejected response word is preserved for diagnostics");
+
+    auto diagnostic = accepted;
+    diagnostic[0x30] = 0x78;
+    diagnostic[0x31] = 0x56;
+    diagnostic[0x32] = 0x34;
+    diagnostic[0x33] = 0x12;
+    check(parseAuthReply(diagnostic).response == 0x12345678U,
+          "a non-palindromic response proves the diagnostic word is little-endian");
+
     auto firstAuthReply = accepted;
     firstAuthReply[0x15] = 0x02;
-    check(!isAuthAccepted(firstAuthReply),
+    check(parseAuthReply(firstAuthReply).result == AuthReplyResult::NotRenewal,
           "the FIRST auth's reply must not be mistaken for the token grant");
 }
 

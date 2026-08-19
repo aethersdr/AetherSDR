@@ -3,8 +3,8 @@
 // ─── Audio format / sample-rate negotiation policy ───────────────────────────
 //
 // One ladder, one set of per-OS rules — the single home for "what rate and
-// sample format does this device want, and how do I get my 24 kHz canonical
-// audio onto it" (issue #3306).
+// sample format does this device want, and how do I bridge between that rate
+// and the caller's canonical device-boundary rate" (issue #3306).
 //
 // Historically each audio sink/source re-implemented this with its own
 // divergent fallback ladder and per-OS `#ifdef` branches, which is the root of
@@ -30,8 +30,11 @@
 namespace AetherSDR {
 namespace AudioFormatNegotiator {
 
-// Canonical internal rate: the radio VITA-49 narrowband audio rate. Everything
-// resamples to/from this single value (AudioEngine::DEFAULT_SAMPLE_RATE).
+// Default device-boundary rate: the radio VITA-49 narrowband audio rate and
+// the canonical rate for RX and several digital/legacy routes
+// (AudioEngine::DEFAULT_SAMPLE_RATE). This is not a universal DSP rate: normal
+// PC-mic voice is normalized to TxVoiceProcessor's fixed 48 kHz float domain,
+// then returns to 24 kHz at its current transport/backend seam.
 constexpr int kInternalRate = 24000;
 
 // Target OS is data, not an #ifdef, so every runner tests every ladder.
@@ -87,7 +90,8 @@ struct DeviceCaps {
     int  channels = 2;
 
     // macOS Bluetooth hands-free/SCO capture route: caps out at 8/16/24k and
-    // must be opened at its native low rate, NOT forced to 48k (#2615).
+    // must be opened at its native low rate (#2615). After capture, normal
+    // voice normalizes to 48k; the separate RADE route converts to 24k.
     bool isBluetoothHfp = false;
 
     // False => isFormatSupported() is not trustworthy for this backend, so the

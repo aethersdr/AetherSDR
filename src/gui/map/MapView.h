@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QTimer>
 #include <QColor>
+#include <QPointer>
 #include <QVector>
 
 #include <QGeoView/QGVGlobal.h>
@@ -98,14 +99,27 @@ private:
     void layoutOverlayButtons();
     void rebuildPaths();
     void clampMinZoomToViewport();
+    // How many world copies either side of the base one the markers and paths
+    // must be replicated into for the widest viewport this widget can reach.
+    // The world repeats horizontally, but each item can only be in one place,
+    // so a copy per visible world is what keeps spots on screen after the
+    // camera crosses the antimeridian.
+    int requiredWorldCopyRange() const;
+    // Re-create every marker and path at the current copy range. Only called
+    // when requiredWorldCopyRange() actually changes, which needs a resize.
+    void rebuildWorldCopies();
+    void rebuildHomeMarkers();
+    Marker homeMarkerData() const;
     // Instant hover tooltip driven by mouse-move (QGeoView's built-in
     // tooltip waits for the OS hover delay, which is too slow here).
     void showHoverTooltip(const QPointF& projPos);
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
-    MapMarkerItem* m_homeMarker{nullptr};
-    MapMarkerItem* m_hoverMarker{nullptr};
+    QVector<MapMarkerItem*> m_homeMarkers;
+    // QPointer, not a raw pointer: marker items are deleted from more than one
+    // path and this must never outlive the item it names.
+    QPointer<MapMarkerItem> m_hoverMarker;
     QLabel* m_hoverCard{nullptr};
     QVector<MapMarkerItem*> m_markers;
     QVector<Marker> m_markerData;
@@ -117,7 +131,9 @@ private:
     double m_homeLon{0.0};
     QString m_homeLabel;
     bool   m_hasHome{false};
+    bool   m_homeMarkerShown{false};
     bool   m_firstShow{true};
+    int    m_worldCopyRange{1};
     double m_homeSpanDeg{30.0};
 
     // Zoom / recenter overlay buttons (upper-right).

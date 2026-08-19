@@ -144,7 +144,7 @@ Read the repository guidance first:
 
 - `README.md`
 - `CONTRIBUTING.md`
-- `CLAUDE.md`
+- `docs/DEVELOPER-GUIDE.md`
 
 Those files explain the project's expectations, build flow, conventions, and architecture.
 

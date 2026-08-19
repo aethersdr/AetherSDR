@@ -64,8 +64,65 @@ struct IcomModel {
     // should decline to advertise capabilities it cannot stand behind.
     bool verified = false;
 
+    // Speaks the selected-VFO form of command 0x26 — mode, DATA state and IF
+    // filter in one 26 00 frame. The IC-705 and IC-7300MK2 guides in
+    // sources/icom-official/ document this exact form.
+    //
+    // FALSE UNTIL ATTESTED FOR EACH MODEL. Some Icoms expose a different 0x26
+    // shape, and a mode change sent in the wrong form is silently unapplied.
+    // The conservative fallback is plain 0x06 with no DATA control or claim.
+    //
+    // ATTESTED IS NOT `verified` ABOVE, deliberately. `verified` is a claim
+    // about this whole row — geometry, amplitude range, tuning limits, all
+    // confirmed against the model's own guide. The 0x26 shape is one narrow
+    // question that a measured round trip answers on its own, and the IC-9700
+    // is exactly that case: geometry still assumed, 26 00 read off the radio.
+    // Coupling the two would force either an overclaimed row or a discarded
+    // trace. So record the evidence in a comment beside the flag AND add the
+    // address to kAttestedVfoMode in icom_meters_test.cpp — that list is what
+    // stops a new row copied from the IC-705 inheriting a shape nobody checked.
+    bool hasVfoModeCommand = false;
+
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
+
+enum ModulationSource : unsigned {
+    ModSourceNone      = 0,
+    ModSourceMic       = 1U << 0,
+    ModSourceUsb       = 1U << 1,
+    ModSourceAccessory = 1U << 2,
+    ModSourceNetwork   = 1U << 3,
+};
+
+struct ModulationInputChoice {
+    std::uint8_t value = 0;
+    std::string_view label;
+    unsigned sources = ModSourceNone;
+};
+
+// Model-specific 1A 05 SET-menu map. Icom does not keep these item numbers or
+// enum values stable between radios: the IC-705 calls its network source WLAN
+// at value 03, while the IC-7300MK2 calls it LAN at value 05.
+struct ModulationProfile {
+    int usbLevelItem = -1;
+    int accessoryLevelItem = -1;
+    int networkLevelItem = -1;
+    int dataOffInputItem = -1;
+    int dataInputItem = -1;
+    std::uint8_t networkOnlyValue = 0;
+    // What PC Audio "off" falls back to when there is no captured selection to
+    // put back — the hand microphone, which every Icom has. It lives in the
+    // table rather than at the call site for the same reason networkOnlyValue
+    // does: the enum is model-specific, and a future radio whose MIC is not
+    // 0x00 must not silently inherit this one's.
+    std::uint8_t micValue = 0;
+    std::span<const ModulationInputChoice> choices;
+};
+
+// Empty when this model's own official CI-V guide has not been checked. A
+// caller must not borrow another model's SET-menu map as a fallback.
+[[nodiscard]] std::optional<ModulationProfile>
+modulationProfileFor(const IcomModel& model);
 
 // Look up by the address the radio reported. Returns nullptr for an address we
 // do not recognise — which is a real and expected outcome, not an error: Icom

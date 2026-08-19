@@ -26,6 +26,7 @@ public:
     enum class DockMode {
         PanelDocked,   // inside its parent's body layout
         Floating,      // owned by a FloatingContainerWindow
+        Canvas,        // freely placed on a WorkspaceCanvas (RFC #4887, phase 3)
     };
 
     explicit ContainerWidget(const QString& id,
@@ -80,6 +81,7 @@ public:
     DockMode dockMode() const { return m_dockMode; }
     bool isFloating() const     { return m_dockMode == DockMode::Floating; }
     bool isPanelDocked() const  { return m_dockMode == DockMode::PanelDocked; }
+    bool isOnCanvas() const     { return m_dockMode == DockMode::Canvas; }
 
     // Logical visibility — distinct from QWidget::isVisible, which
     // reflects the current layout state (a panel-docked container is
@@ -114,6 +116,12 @@ signals:
     // work; the widget itself doesn't know about FloatingContainerWindow.
     void floatRequested();
     void dockRequested();
+
+    // Live canvas move, forwarded from the title bar (RFC #4887 phase 5).
+    // The WorkspaceController routes these into the canvas gesture session.
+    void canvasDragBegan(const QPoint& globalPos);
+    void canvasDragMoved(const QPoint& globalPos);
+    void canvasDragEnded(const QPoint& globalPos);
 
     // Emitted when the user clicks the close (×) button in the
     // titlebar.  Connected code typically calls setContainerVisible(false)

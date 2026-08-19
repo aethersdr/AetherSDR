@@ -172,6 +172,16 @@ void PanadapterStack::clearFloatingRestoreMarker()
     settings.save();
 }
 
+void PanadapterStack::reclaimBandStackPanel()
+{
+    if (!m_bandStackPanel) {
+        return;
+    }
+    if (auto* hbox = qobject_cast<QHBoxLayout*>(layout())) {
+        hbox->insertWidget(0, m_bandStackPanel);
+    }
+}
+
 void PanadapterStack::setBandStackVisible(bool visible)
 {
     m_bandStackPanel->setVisible(visible);
@@ -220,6 +230,9 @@ PanadapterApplet* PanadapterStack::addPanadapter(const QString& panId)
     if (multi)
         equalizeSizes();
 
+    if (!m_inApplyLayout)
+        emit panAdded(panId);
+
     return applet;
 }
 
@@ -237,6 +250,11 @@ void PanadapterStack::removePanadapter(const QString& panId)
 
     auto* applet = m_pans.take(panId);
     if (!applet) return;
+    m_lentToCanvas.remove(panId);
+
+    // Unregistered but not yet destroyed: a canvas hosting this applet
+    // releases its entry here instead of waiting for the destroyed-watch.
+    emit panRemoved(panId);
 
     delete applet;
 
@@ -258,10 +276,13 @@ void PanadapterStack::rekey(const QString& oldId, const QString& newId)
 {
     if (auto* applet = m_pans.take(oldId)) {
         m_pans[newId] = applet;
+        if (m_lentToCanvas.remove(oldId))
+            m_lentToCanvas.insert(newId);
         m_seenPanIds.remove(oldId);
         m_seenPanIds.insert(newId);
         if (m_activePanId == oldId)
             m_activePanId = newId;
+        emit panRekeyed(oldId, newId);
     }
 }
 
@@ -389,6 +410,23 @@ QVariantMap PanadapterStack::automationRearrange(const QString& layoutId)
 
 void PanadapterStack::rearrangeLayout(const QString& layoutId)
 {
+    // Nothing to arrange while every non-floating applet is on loan to the
+    // canvas — and bail BEFORE the float-docking loop below, which used to
+    // run first: the layout dialog in canvas mode un-popped the operator's
+    // floats and then no-opped (review m4).  The canvas owns arrangement in
+    // that posture; this method arranges the stack's own splitter only.
+    {
+        bool anyOurs = false;
+        for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
+            if (!m_lentToCanvas.contains(it.key())) {
+                anyOurs = true;
+                break;
+            }
+        }
+        if (!anyOurs) {
+            return;
+        }
+    }
     // Dock any floating pans first.  m_pans always contains every applet
     // including those currently in a PanFloatingWindow (floatPanadapter
     // never removes from m_pans), so the reparent loop below would yank
@@ -433,8 +471,17 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
         saveFloatingState();
     }
 
-    // Collect applets in order
-    QList<PanadapterApplet*> applets = m_pans.values();
+    // Collect applets in order — loaned ones are the canvas's to place, not
+    // this method's (see m_lentToCanvas; the connect-time layout restore
+    // lands here with canvas mode on, and must not reclaim a thing).  A
+    // float docked by the loop above re-lends itself DURING that loop: the
+    // panDocked emission is direct, the controller detaches on the spot,
+    // and the collection below correctly skips it.
+    QList<PanadapterApplet*> applets;
+    for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
+        if (!m_lentToCanvas.contains(it.key()))
+            applets.append(it.value());
+    }
     if (applets.isEmpty()) return;
 
     // Build the new splitter first, then move applets straight into it below.
@@ -608,8 +655,12 @@ void PanadapterStack::removeAll()
     }
     m_floatingWindows.clear();
 
+    const QList<QString> ids = m_pans.keys();
+    for (const QString& id : ids)
+        emit panRemoved(id);
     qDeleteAll(m_pans);
     m_pans.clear();
+    m_lentToCanvas.clear();
     m_activePanId.clear();
 
     // Delete the old splitter and create a fresh one
@@ -624,7 +675,10 @@ void PanadapterStack::rebuildDockedSplitter()
 {
     QList<PanadapterApplet*> docked;
     for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
-        if (!m_floatingWindows.contains(it.key())) {
+        // A loaned applet is the CANVAS's to place — reparenting it here is
+        // the silent theft behind the 8600 field report (see m_lentToCanvas).
+        if (!m_floatingWindows.contains(it.key())
+            && !m_lentToCanvas.contains(it.key())) {
             docked.append(it.value());
         }
     }
@@ -725,6 +779,11 @@ void PanadapterStack::rebuildDockedSplitter()
 
 void PanadapterStack::applyLayout(const QString& layoutId, const QStringList& panIds)
 {
+    // Announce every applet this call creates exactly once, at the end —
+    // some branches go through addPanadapter(), some create inline.
+    const QList<QString> preExisting = m_pans.keys();
+    m_inApplyLayout = true;
+
     // Build structure based on layout ID.
     // Each layout adds applets to the correct splitter position.
     // panIds must have at least as many entries as the layout requires.
@@ -862,9 +921,95 @@ void PanadapterStack::applyLayout(const QString& layoutId, const QStringList& pa
         addPanadapter(panIds[2]);
         addPanadapter(panIds[3]);
     }
+
+    m_inApplyLayout = false;
+    for (auto it = m_pans.constBegin(); it != m_pans.constEnd(); ++it) {
+        if (!preExisting.contains(it.key()))
+            emit panAdded(it.key());
+    }
 }
 
 // ── Float / Dock ──────────────────────────────────────────────────────────
+
+QVariantMap PanadapterStack::automationFloatDock(const QString& action,
+                                                 const QString& panId)
+{
+    if (!m_pans.contains(panId)) {
+        return QVariantMap{
+            {QStringLiteral("error"),
+             QStringLiteral("unknown pan id: ") + panId},
+        };
+    }
+
+    const bool wantFloat = action == QLatin1String("float");
+    const bool already   = isFloating(panId) == wantFloat;
+    if (!already) {
+        // The real production paths — this is the whole point: the reparent
+        // and GPU re-init the crash lineage lives in, driven headlessly.
+        if (wantFloat) floatPanadapter(panId);
+        else           dockPanadapter(panId);
+    }
+
+    return QVariantMap{
+        {QStringLiteral("action"), action},
+        {QStringLiteral("panId"), panId},
+        {QStringLiteral("floating"), isFloating(panId)},
+        {QStringLiteral("alreadyThere"), already},
+        {QStringLiteral("floatingCount"), int(m_floatingWindows.size())},
+        {QStringLiteral("dockedCount"), int(m_pans.size() - m_floatingWindows.size())},
+    };
+}
+
+PanadapterApplet* PanadapterStack::detachForCanvas(const QString& panId)
+{
+    if (m_floatingWindows.contains(panId))
+        return nullptr;
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    if (applet) {
+        applet->setOnCanvas(true);
+        m_lentToCanvas.insert(panId);
+    }
+    return applet;
+}
+
+void PanadapterStack::preparePanForTopLevelMove(const QString& panId)
+{
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr;
+    if (!sw) return;
+    sw->hide();
+    sw->prepareForTopLevelChange();
+    sw->resetGpuResources();
+}
+
+void PanadapterStack::finishPanTopLevelMove(const QString& panId)
+{
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr;
+    if (!sw) return;
+    // Deferred like floatPanadapter(): the graphics API binds to the new
+    // native surface before the first render, never during the turn that
+    // moved it.
+    QTimer::singleShot(0, this, [this, sw]() {
+        refreshAfterReparent(sw);
+        sw->show();
+    });
+}
+
+void PanadapterStack::returnFromCanvas(const QString& panId,
+                                       PanadapterApplet* applet)
+{
+    if (!applet || m_pans.value(panId, nullptr) != applet)
+        return;
+    m_lentToCanvas.remove(panId);
+    applet->setOnCanvas(false);
+    m_splitter->addWidget(applet);
+    m_splitter->setStretchFactor(m_splitter->indexOf(applet), 1);
+    applet->show();
+    const bool multi = m_pans.size() > 1;
+    for (auto* a : m_pans)
+        a->setMultiPanMode(multi);
+}
 
 void PanadapterStack::floatPanadapter(const QString& panId)
 {
@@ -905,6 +1050,8 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     // and lifetime.
     auto* fw = new PanFloatingWindow(window());
     fw->adoptApplet(applet);
+    m_lentToCanvas.remove(panId); // the float window owns it now
+    applet->setOnCanvas(false);   // floating now; canvas releases its entry
     applet->spectrumWidget()->setFloating(true);
 
     m_floatingWindows[panId] = fw;

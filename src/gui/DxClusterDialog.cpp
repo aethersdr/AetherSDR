@@ -5,6 +5,7 @@
 // must share its cap too. Header self-guards on HAVE_WEBSOCKETS.
 #include "FreeDvReporterDialog.h"
 #include "GuardedSlider.h"
+#include "SpotAutoScroll.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
 #include "core/N1MMSpotParser.h"
@@ -712,8 +713,13 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     // FreeDV log loaded in deferred loadLogFiles() (#748)
 #endif
 
-    // Scroll spot table to show newest entries
-    m_spotTable->scrollToBottom();
+    // Scroll spot table to show newest entries. The model is prepend-based
+    // (newest spot is always source row 0), and the table is already sorted
+    // Time-descending by this point — setSortingEnabled(true) (buildSpotListTab)
+    // applies the header's default sort indicator (Qt 6: section 0, descending
+    // — the Time column, descending), which is the same order the model
+    // prepends in — so newest-first is the top, not the bottom (#4889).
+    m_spotTable->scrollToTop();
 
     // Disable autoDefault on all buttons so Enter in command inputs
     // only fires returnPressed, not random button clicks (#459)
@@ -818,7 +824,9 @@ void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbn
     if (!allSpots.isEmpty())
         m_spotModel->addSpots(allSpots);
 
-    m_spotTable->scrollToBottom();
+    // Newest-first is the top, not the bottom — same reasoning as the
+    // constructor's initial scroll (#4889).
+    m_spotTable->scrollToTop();
 }
 
 void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
@@ -2465,7 +2473,10 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     m_spotTable->setColumnWidth(SpotTableModel::ColBand, 45);
     m_spotTable->setColumnWidth(SpotTableModel::ColSource, 55);
 
-    // No default sort — insertion order is newest-first
+    // The sort indicator is hidden, but the table IS sorted: setSortingEnabled(true)
+    // above applies the header's default indicator (Qt 6: section 0 — Time —
+    // descending), which happens to match the model's newest-first insertion
+    // order. Verified on Qt 6.8.3 and 6.11.1 (#4889).
     m_spotTable->horizontalHeader()->setSortIndicatorShown(false);
 
     // Column visibility (#4157): Time/Freq/DX Call stay always-on as the
@@ -3333,17 +3344,32 @@ void DxClusterDialog::flushSpotBatch()
     }
     if (m_spotBatch.isEmpty()) return;
 
-    auto isAtBottom = [](QAbstractScrollArea* w) {
-        auto* sb = w->verticalScrollBar();
-        return sb->value() >= sb->maximum() - 2;
-    };
-    bool follow = isAtBottom(m_spotTable);
+    // The source model is prepend-based (SpotTableModel::addSpot(s) inserts
+    // at row 0, so the newest spot is always source row 0 — see the comment
+    // on that class). Which visual end that lands on depends on the current
+    // sort, so "follow the newest spot" isn't always "follow the bottom"
+    // the way it is for the append-only console panes this lambda was
+    // copied from (#4889) — see decideSpotAutoScrollTarget() for the
+    // four-branch decision, pulled out as a pure function so it's testable
+    // without this dialog's dependency graph.
+    auto* sb = m_spotTable->verticalScrollBar();
+    const SpotAutoScrollTarget target = decideSpotAutoScrollTarget(
+        m_proxyModel->sortColumn(), m_proxyModel->sortOrder(),
+        SpotTableModel::ColTime, sb->value(), sb->maximum());
 
     m_spotModel->addSpots(m_spotBatch);
     m_spotBatch.clear();
 
-    if (follow)
+    switch (target) {
+    case SpotAutoScrollTarget::Top:
+        m_spotTable->scrollToTop();
+        break;
+    case SpotAutoScrollTarget::Bottom:
         m_spotTable->scrollToBottom();
+        break;
+    case SpotAutoScrollTarget::None:
+        break;
+    }
 }
 
 void DxClusterDialog::updateStatus()

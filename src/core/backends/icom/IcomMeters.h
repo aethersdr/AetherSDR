@@ -61,6 +61,7 @@ struct CurvePoint {
 // The IC-705's published curves. Each is documented at its definition with the
 // source it came from.
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc705();   // raw -> watts
+[[nodiscard]] std::span<const CurvePoint> powerCurveIc7300Mk2(); // raw -> watts
 [[nodiscard]] std::span<const CurvePoint> swrCurve();          // raw -> SWR
 [[nodiscard]] std::span<const CurvePoint> compCurve();         // raw -> dB
 [[nodiscard]] std::span<const CurvePoint> vdCurve();           // raw -> volts
@@ -129,7 +130,8 @@ struct MeterSpec {
 
 // Convert a raw reading to the spec's unit. `s9Dbm` selects the S-meter
 // reference and is ignored by every other meter.
-[[nodiscard]] double meterValue(MeterId id, int raw, double s9Dbm);
+[[nodiscard]] double meterValue(MeterId id, int raw, double s9Dbm,
+                                std::uint8_t civAddress = 0xA4);
 
 // ---------------------------------------------------------------------------
 // The poll scheduler

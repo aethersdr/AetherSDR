@@ -16,12 +16,10 @@ namespace AetherSDR {
 //
 // Architecture
 // ────────────
-// The radio has its own iambic engine on the RF side; we feed it raw
-// paddle states via RadioModel::sendCwPaddle(dit, dah) and let the radio
-// produce the on-air signal.  This class runs an *identical* iambic
-// state machine locally for the sole purpose of driving the sidetone
-// gate with sub-5 ms latency.  Both engines see the same paddle inputs;
-// configured at the same WPM they produce identical Morse timing.
+// Paddle timing belongs here so every backend sees the same completed element
+// edges. Flex forwards those edges to NetCW; a host-modulating backend such as
+// HL2 turns them into shaped IQ. The same state machine also drives the local
+// sidetone gate with sub-5 ms latency.
 //
 // Threading
 // ─────────
@@ -37,10 +35,9 @@ namespace AetherSDR {
 //   - onKeyDownChange(bool down) — flips the sidetone gate.  Called
 //     directly from the worker thread; the receiver MUST be lock-free
 //     (e.g. CwSidetoneGenerator::setKeyDown which is std::atomic).
-//   - onPaddleEvent(bool dit, bool dah) — passes raw paddle states to
-//     the caller for forwarding to the radio.  The caller is responsible
-//     for hopping to the radio thread (Qt::QueuedConnection or
-//     QMetaObject::invokeMethod).
+//   - onPaddleEvent(bool dit, bool dah) — reports raw paddle transitions for
+//     diagnostics and any backend-specific observer. Timed RF key edges come
+//     from onKeyDownChange.
 class IambicKeyer {
 public:
     enum class Mode : int {

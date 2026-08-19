@@ -9,6 +9,8 @@
 
 #include "MainWindow.h"
 
+#include "workspace/WorkspaceController.h"
+
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistController.h"
 #include "CopyAssistPanel.h"
@@ -117,7 +119,7 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn, &m_speConn);
+                              m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     });
@@ -315,7 +317,7 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager, &m_acomConn, &m_speConn);
+                              m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)
@@ -817,12 +819,50 @@ void MainWindow::buildMenuBar()
 
     auto* viewMenu = menuBar()->addMenu("&View");
 
+    // Workspace canvas (RFC #4887 phase 3) — opt-in, reversible.  The check
+    // state persists inside the workspace document itself (Principle V), not
+    // in a settings key: wireWorkspaceCanvas() re-applies it at startup and
+    // enabledChanged keeps the action honest if enabling fails.
+    //
+    // Two postures since the edit-mode field request: Enabled turns the
+    // canvas shell on, Edit Layout arms placement (select/drag/resize/
+    // drops/nudges/dots).  Enabled-but-locked is the OPERATING posture —
+    // interacting with an applet just uses it.  Edit state is session-
+    // transient by design; wireWorkspaceCanvas() syncs both directions.
+    QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas");
+    m_workspaceCanvasAction = wsMenu->addAction("&Enabled");
+    m_workspaceCanvasAction->setCheckable(true);
+    connect(m_workspaceCanvasAction, &QAction::toggled, this,
+            [this](bool on) { toggleWorkspaceCanvas(on); });
+    m_workspaceEditAction = wsMenu->addAction("Edit &Layout");
+    m_workspaceEditAction->setCheckable(true);
+    m_workspaceEditAction->setEnabled(false);   // armed by enabledChanged
+
+    // The workspace switcher (phase 6): rebuilt on every open so the list,
+    // check states and bindings are never stale.
+    wsMenu->addSeparator();
+    QMenu* switcher = wsMenu->addMenu("&Workspaces");
+    connect(switcher, &QMenu::aboutToShow, this,
+            [this, switcher] { rebuildWorkspaceSwitcherMenu(switcher); });
+
+    // Additional canvas windows (phase 7): rebuilt on every open, same
+    // staleness rule as the switcher.
+    QMenu* canvasWindows = wsMenu->addMenu("Canvas Wi&ndows");
+    connect(canvasWindows, &QMenu::aboutToShow, this,
+            [this, canvasWindows] { rebuildCanvasWindowsMenu(canvasWindows); });
+
     // Applet-panel show/hide and pop-out are now driven entirely from the
     // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as
     // a window-scoped QShortcut so the keystroke survives the View-menu
     // entries being removed.
     auto* popOutShortcut = new QShortcut(QKeySequence("Ctrl+Shift+S"), this);
     connect(popOutShortcut, &QShortcut::activated, this, [this]() {
+        // Not in canvas mode (review m1): the panel is hidden there and its
+        // shell controls are gone — the shortcut popping an invisible panel
+        // out (and persisting the float) bypassed both.
+        if (m_workspaceController && m_workspaceController->isEnabled()) {
+            return;
+        }
         toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
     });
 

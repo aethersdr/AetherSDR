@@ -14,6 +14,7 @@
 #include "DemoApplet.h"
 #include "AcomApplet.h"
 #include "SpeApplet.h"
+#include "VkampApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -237,6 +238,12 @@ protected:
         }
         if (srcIdx < 0) return;
 
+        // No canvas-return branch here (review m10): phase 5 replaced the
+        // canvas title-bar QDrag with the live gesture stream, so a canvas
+        // item can no longer arrive as a QDrag drop — returns flow through
+        // WorkspaceCanvas::itemDraggedOut and the controller's return
+        // target instead.
+
         // Adjust drop index if moving down (after removing source)
         if (dropIdx > srcIdx) dropIdx--;
         if (dropIdx == srcIdx) return;
@@ -412,7 +419,13 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_sMeterContainer->setContent(sMeterContent);
     connect(m_sMeterContainer, &ContainerWidget::dockModeChanged,
             m_sMeter, [this](ContainerWidget::DockMode mode) {
-                m_sMeter->setFloating(mode == ContainerWidget::DockMode::Floating);
+                // Canvas takes the floating presentation (8600 field
+                // report: an item resized on the canvas kept the rail's
+                // Fixed vertical policy and refused to grow — the meter
+                // must fill the rect the operator drew, exactly as it
+                // fills a pop-out window).
+                m_sMeter->setFloating(
+                    mode != ContainerWidget::DockMode::PanelDocked);
             });
     const bool sMeterOn = AppSettings::instance()
         .value("Applet_VU", "True").toString() == "True";
@@ -609,12 +622,17 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         // button on the ContainerTitleBar) back to the tray toggle
         // and settings so everything stays in sync.
         connect(c, &ContainerWidget::visibilityChanged, this,
-                [btn, key](bool visible) {
+                [this, btn, key](bool visible) {
             if (btn) {
                 QSignalBlocker b(btn);
                 btn->setChecked(visible);
             }
-            AppSettings::instance().setValue(key, visible ? "True" : "False");
+            // Recall-driven changes are workspace state, not preference
+            // changes (red-team B2) — the button sync above still runs so
+            // the bar stays honest either way.
+            if (!m_recallInProgress) {
+                AppSettings::instance().setValue(key, visible ? "True" : "False");
+            }
         });
 
         return {id, c, c->titleBar(), btn};
@@ -706,8 +724,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             connect(container, &ContainerWidget::dockModeChanged,
                     m_crossNeedleApplet,
                     [this](ContainerWidget::DockMode mode) {
+                        // Canvas = floating presentation (see the VU
+                        // handler above).
                         m_crossNeedleApplet->setFloating(
-                            mode == ContainerWidget::DockMode::Floating);
+                            mode != ContainerWidget::DockMode::PanelDocked);
                     });
         }
         m_appletOrder.append(powerEntry);
@@ -723,7 +743,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // starts hidden (defaultOn = false).
     m_tunerApplet = new TunerApplet;
     {
-        auto entry = makeEntry("TUN", "Tuner", m_tunerApplet, false,
+        auto entry = makeEntry("TUN", "TGXL", m_tunerApplet, false,
                                m_drawer, m_drawerLayout);
         m_tuneBtn = entry.btn;
         markHardwareConditional("TUN");
@@ -732,7 +752,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_ampApplet = new AmpApplet;
     {
-        auto entry = makeEntry("AMP", "Amplifier", m_ampApplet, false,
+        auto entry = makeEntry("AMP", "PGXL", m_ampApplet, false,
                                m_drawer, m_drawerLayout);
         m_ampBtn = entry.btn;
         markHardwareConditional("AMP");
@@ -770,6 +790,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_speBtn = entry.btn;
         markHardwareConditional("SPE");
+        m_appletOrder.append(entry);
+    }
+
+    // VK3AMP amplifier — independent of both AMP (PGXL) and ACOM: a station
+    // can have a radio-relayed PGXL, a direct ACOM, and a direct VK3AMP all
+    // present at once, each fully independent hardware. See
+    // docs/architecture/vkamp-amplifier-design.md.
+    m_vkampApplet = new VkampApplet;
+    {
+        auto entry = makeEntry("VKAMP", "VK3AMP Amplifier", m_vkampApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_vkampBtn = entry.btn;
+        markHardwareConditional("VKAMP");
         m_appletOrder.append(entry);
     }
 
@@ -883,7 +916,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // marketing name for the whole TX-DSP composite.  Settings ID
     // stays TXDSP for persistence.
     {
-        auto entry = makeEntry("TXDSP", "VUDU", txDsp, false,
+        auto entry = makeEntry("TXDSP", "Channel Strip", txDsp, false,
                                m_drawer, m_drawerLayout, "VUDU");
         // Make the composite's drag MIME match its owning AppletEntry.id
         // so the drop handler's fast lookup hits directly.  Container
@@ -902,7 +935,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         if (auto* c = qobject_cast<ContainerWidget*>(catEntry.widget)) {
             connect(c, &ContainerWidget::dockModeChanged, m_catControlApplet,
                     [this](ContainerWidget::DockMode mode) {
-                        m_catControlApplet->setFloating(mode == ContainerWidget::DockMode::Floating);
+                        // Canvas = the full-table floating view (see the
+                        // VU handler above): the operator sized the rect,
+                        // so the simple rail page wastes it.
+                        m_catControlApplet->setFloating(
+                            mode != ContainerWidget::DockMode::PanelDocked);
                     });
         }
     }
@@ -917,7 +954,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_appletOrder.append(makeEntry("IQ", "DAX IQ", m_daxIqApplet, false, m_drawer, m_drawerLayout));
 
     m_meterApplet = new MeterApplet;
-    m_appletOrder.append(makeEntry("MTR", "Meters", m_meterApplet, false, m_drawer, m_drawerLayout));
+    m_appletOrder.append(makeEntry("MTR", "Radio Vitals", m_meterApplet, false, m_drawer, m_drawerLayout));
 
     m_profApplet = new ProfileSwitcherApplet;
     m_appletOrder.append(makeEntry("PROF", "Profile Switcher", m_profApplet, false, m_drawer, m_drawerLayout));
@@ -1225,13 +1262,109 @@ void AppletPanel::rebuildStackOrder()
         auto* item = m_stack->takeAt(0);
         delete item;  // deletes the layout item, NOT the widget
     }
-    // Re-add in current order (skip floating containers to avoid stealing them)
+    // Re-add in current order.  Skip containers the panel does not currently
+    // own: floating ones live in their own window, and canvas ones are
+    // children of a WorkspaceCanvas (RFC #4887 phase 3).  Adding either here
+    // would steal it back out of its placement mid-rebuild.
     for (const auto& entry : m_appletOrder) {
-        if (auto* cw = qobject_cast<ContainerWidget*>(entry.widget); cw && cw->isFloating())
+        auto* cw = qobject_cast<ContainerWidget*>(entry.widget);
+        if (cw && (cw->isFloating() || cw->isOnCanvas()))
             continue;
         m_stack->addWidget(entry.widget);
     }
     m_stack->addStretch(1);  // factor 1: absorb all surplus, pin tiles to sizeHint (#3461)
+}
+
+QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
+{
+    // THE category taxonomy — a starting point, deliberately one flat table
+    // so re-homing an applet is a one-line edit.  Order here is category
+    // FIRST-SEEN order and becomes the palette's menu order; applets within
+    // a category keep panel order.
+    static const QMap<QString, QString> kCategory = {
+        {QStringLiteral("RX"),    QStringLiteral("Receive")},
+        {QStringLiteral("MPAN"),  QStringLiteral("Receive")},
+        {QStringLiteral("KSDR"),  QStringLiteral("Receive")},
+        {QStringLiteral("DEMO"),  QStringLiteral("Receive")},
+        {QStringLiteral("TX"),    QStringLiteral("Transmit")},
+        {QStringLiteral("PHNE"),  QStringLiteral("Transmit")},
+        {QStringLiteral("P/CW"),  QStringLiteral("Transmit")},
+        {QStringLiteral("TUN"),   QStringLiteral("Transmit")},
+        {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
+        {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
+        {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
+        {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
+        {QStringLiteral("PWR"),   QStringLiteral("Metering")},
+        {QStringLiteral("MTR"),   QStringLiteral("Metering")},
+        {QStringLiteral("HLTH"),  QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("AG"),    QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("SS"),    QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("GHE"),  QStringLiteral("Antennas & Switching")},
+        {QStringLiteral("CAT"),   QStringLiteral("Integration")},
+        {QStringLiteral("DAX"),   QStringLiteral("Integration")},
+        {QStringLiteral("IQ"),    QStringLiteral("Integration")},
+        {QStringLiteral("TCI"),   QStringLiteral("Integration")},
+        {QStringLiteral("MQTT"),  QStringLiteral("Integration")},
+        {QStringLiteral("RADE"),  QStringLiteral("Integration")},
+        {QStringLiteral("CLOCK"), QStringLiteral("Station")},
+        {QStringLiteral("PROF"),  QStringLiteral("Station")},
+    };
+
+    QList<AppletCatalogEntry> out;
+    out.reserve(m_appletOrder.size() + 1);
+    // The VU/S-Meter container is created directly on the manager rather
+    // than through makeEntry (it predates the m_appletOrder plumbing), so
+    // the iteration below never sees it — the one applet that needs an
+    // explicit row (8600 field report: "where is the VU meter?").
+    if (m_sMeterContainer) {
+        out.append({QStringLiteral("VU"), m_sMeterContainer->title(),
+                    QStringLiteral("Metering")});
+    }
+    // Every applet, ALWAYS — the catalog is the recall universe (red-team
+    // B1) and the palette's taxonomy, and FILTERING here was the 8600
+    // amplifier regression: the catalog is snapshotted at construction,
+    // before any radio connects, so hardware detected later (TGXL/PGXL
+    // discovery is post-connect) stayed missing from the palette — and
+    // from workspace recall — forever.  Availability is a LIVE question,
+    // answered per menu-open through appletHardwareAvailable().
+    for (const auto& entry : m_appletOrder) {
+        AppletCatalogEntry e;
+        e.id = entry.id;
+        if (auto* c = qobject_cast<ContainerWidget*>(entry.widget)) {
+            e.title = c->title();
+        }
+        if (e.title.isEmpty()) {
+            e.title = entry.id;
+        }
+        e.category = kCategory.value(entry.id, QStringLiteral("Other"));
+        out.append(e);
+    }
+    return out;
+}
+
+bool AppletPanel::appletHardwareAvailable(const QString& id) const
+{
+    // The bar's own record — BarButton::hardwareAvailable, driven by
+    // markHardwareConditional()/updateHardwareAvailability() — read LIVE,
+    // so the palette greys exactly what the bar currently hides (review
+    // M3) and recovers the moment detection flips it.
+    for (const auto& bb : m_barButtons) {
+        if (bb.id == id) {
+            return bb.hardwareAvailable;
+        }
+    }
+    return true;   // no bar record: not hardware-conditional
+}
+
+QStringList AppletPanel::appletIds() const
+{
+    QStringList ids;
+    ids.reserve(m_appletOrder.size());
+    for (const auto& entry : m_appletOrder)
+        ids.append(entry.id);
+    return ids;
 }
 
 void AppletPanel::saveOrder()
@@ -1534,6 +1667,8 @@ void AppletPanel::setDaxStreamsVisible(bool visible)
     // persists an Applet_* preference and hides a whole tile.
     if (m_aetherClockApplet)
         m_aetherClockApplet->setDaxControlsVisible(visible);
+    if (m_phoneCwApplet)
+        m_phoneCwApplet->setDaxVisible(visible);
 }
 
 void AppletPanel::setHardwareEqVisible(bool visible)
@@ -1571,6 +1706,12 @@ void AppletPanel::setSpeVisible(bool visible)
     applyBarLayout();
 }
 
+void AppletPanel::setVkampVisible(bool visible)
+{
+    updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
 void AppletPanel::setAgVisible(bool visible)
 {
     updateHardwareAvailability("AG", "Applet_AG", visible);
@@ -1581,6 +1722,22 @@ void AppletPanel::setShackSwitchVisible(bool visible)
 {
     updateHardwareAvailability("SS", "Applet_SS", visible);
     applyBarLayout();
+}
+
+void AppletPanel::setDemoVisible(bool visible)
+{
+    // DEMO's "hardware" is the connected radio being the simulator — a
+    // live connection edge exactly like the six detected-device setters
+    // above.  Availability must ride this edge or the palette greys
+    // Demo Noise forever (#4968 red-team B1): markHardwareConditional
+    // set the bit false at construction and nothing else ever wrote it,
+    // so on the one radio the applet exists for it was refused at the
+    // door and a workspace switch could close it with no way back.
+    updateHardwareAvailability("DEMO", "Applet_DEMO", visible);
+    applyBarLayout();
+    // The tile additionally auto-opens with the demo connection and
+    // auto-closes when it drops (RFC #4288) — unchanged.
+    setAppletVisible(QStringLiteral("DEMO"), visible);
 }
 
 bool AppletPanel::controlsLocked() const

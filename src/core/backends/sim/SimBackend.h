@@ -2,12 +2,15 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QVector>
 
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/NoiseMixer.h"
+#include "core/backends/sim/SimSignalSource.h"
 
 class QThread;
 
@@ -61,18 +64,23 @@ public:
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
+    // Multi-pan demo (#4887 phase 4). Create/remove run over the synthetic
+    // wire — the SAME status-line shape the connect script claims pan 0
+    // with — so there is one path that creates a demo pane, not two.
+    bool createPanadapter() override;
+    bool removePanadapter(const QString& panId) override;
     void setKeying(bool key) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
 
     // ---- Demo noise controls (RFC #4288) ----
-    // Drive THIS backend's NoiseMixer (m_audio) — the one whose output you hear
-    // (onAudioTick → audioFrameReady). The DemoApplet's controls route here.
-    // (PanadapterStream has a SECOND, now-unused NoiseMixer from the old shim
-    // path; wiring the applet to that one is why the controls did nothing.) Same
-    // thread as the applet (SimBackend is not moved to a worker thread), so these
-    // are safe direct calls. The birdie "hz" knob is RF-anchored: it sets the
-    // carrier's offset above the VFO, matching the standalone tool's behaviour.
+    // Drive the SimSignalSource's NoiseMixer — the one whose output you hear.
+    // The DemoApplet's controls route here. (PanadapterStream has a SECOND,
+    // now-unused NoiseMixer from the old shim path; wiring the applet to that
+    // one is why the controls did nothing.) The generator lives on a worker
+    // thread (#4878), so these forward as QUEUED calls — same seam shape as
+    // every other backend's wire objects. The birdie "hz" knob is RF-anchored:
+    // it sets the carrier's offset above the VFO.
     void setDemoNoiseEnabled(const QString& channel, bool on);
     void setDemoNoiseLevel(const QString& channel, double levelDb);
     void setDemoNoiseKnob(const QString& channel, const QString& knob, double value);
@@ -109,11 +117,6 @@ public:
     RadioConnection*  connection() const { return m_connection; }
     PanadapterStream* panStream()  const { return m_panStream; }
 
-private slots:
-    // Frame tick (kFrameLen / kSampleRate, ~5.3 ms): mixes one audio frame and
-    // emits it over the seam, plus a periodic spectrum row. Muted while keyed.
-    void onAudioTick();
-
 private:
     // Emit the initial synthetic snapshot a freshly-connected radio would report:
     // the radio-global delta (model/nickname/slices) and one active slice on a
@@ -142,7 +145,6 @@ private:
     // receive path (queued to its worker thread) so AE decodes it as radio-sent.
     void pushFaultStatus(const QString& line);
 
-    bool   m_scopeStalled{false};   // stallscope: onAudioTick skips the spectrum emit
     double m_lastSwr{1.0};          // last injected SWR (clearFaults resets to nominal)
     static constexpr int kSwrMeterIndex = 90;   // synthetic meter slot for the SWR fault
     // The SWR MeterDef, in one place: injectHighSwr() and clearFaults() both have
@@ -150,28 +152,30 @@ private:
     // different meter than the fault.
     static MeterDef swrMeterDef();
 
-    // Serialize a mono float frame to the 24 kHz STEREO float32 QByteArray
-    // AudioEngine::feedAudioData() expects (each mono sample duplicated L=R).
-    static QByteArray toStereoBytes(const QVector<float>& mono);
-
-    // Phase 2b (audio) — the synthesized-RX-audio engine (white/pink/qrn/birdie/…
-    // + TNF/ANF notch). onAudioTick() calls m_audio.mixFrame() and emits it over
-    // audioFrameReady() as 24 kHz stereo float32 — the format AudioEngine::
-    // feedAudioData() consumes, so the demo audio flows straight into AE's NR
-    // chain with no DSP change. spectrum() gives the matching panadapter render.
-    // Muted while keyed (Principle VI): a demo radio never sounds live on TX.
-    NoiseMixer m_audio;
-    QTimer     m_audioTimer;         // oversampled tick; onAudioTick() paces itself
-    // Real-time frame pacing: a 5.333 ms frame is not an integer ms, so a fixed
-    // timer interval drifts (over/underproduces → sink drop/starve = wobble).
-    // onAudioTick() instead emits whole frames per REAL elapsed time, carrying the
-    // sub-frame remainder in m_audioDebtNs so the long-run rate is exactly 24 kHz.
-    QElapsedTimer m_audioClock;      // wall clock between ticks (nanoseconds)
-    qint64        m_audioDebtNs{0};  // un-emitted elapsed time carried forward
-    bool       m_keyed{false};       // muted while keyed (Principle VI — never sounds live on TX)
-    quint64    m_audioFrames{0};     // frame counter (throttles the spectrum row)
+    // Phase 2b (audio) — the synthesized-RX-audio engine, on its OWN worker
+    // thread since #4878 (it was the only RX producer in the app on the GUI
+    // thread; on software-GL machines its 3 ms precise timer plus ~200
+    // allocating emissions a second was the reported multi-second input
+    // backlog). SimSignalSource owns the NoiseMixer, the pacing timer and the
+    // audio+spectrum emission; its signals cross back queued and this class
+    // re-emits them over the IRadioBackend seam — the same producer topology
+    // as FlexBackend's wire objects (#502).
+    SimSignalSource* m_signalSource{nullptr};   // owned; lives on m_signalThread
+    QThread*         m_signalThread{nullptr};
 
     bool   m_connected{false};
+    // Live synthetic pans by WIRE id ("0x40000000"+index, lowercase), in
+    // creation order. Pan 0 is seeded when the wire script claims it at
+    // connect; the rest are minted by createPanadapter(). The set tracks
+    // pans whose wire status is injected but whose normalized geometry has
+    // not been emitted yet — geometry must land AFTER RadioModel claims the
+    // pan (see the ctor's statusReceived listener).
+    QStringList m_wirePanIds;
+    QSet<QString> m_pansAwaitingGeometry;
+    static QString wirePanIdFor(int index);
+    static QString wireWfIdFor(int index);
+    static int wirePanIndexOf(const QString& panId);
+    void pushPanIndicesToSource();
     double m_sliceFreqMhz{14.100};   // default: 20 m, a lively demo band
     QString m_sliceMode{QStringLiteral("USB")};
     int    m_filterLowHz{100};
@@ -182,17 +186,12 @@ private:
     int     m_agcThresholdDb{65};
     static constexpr int kSliceId = 0;
 
-    // Birdie-vs-VFO geometry, mirroring PanadapterStream's demo behaviour but on
-    // the AUDIBLE mixer. The carrier sits a fixed 1200 Hz above the default VFO
-    // (matching the ctor's birdie pitch), so tuning across it sweeps the audio
-    // pitch down to zero-beat and out the far side.
-    bool   m_lsb{false};              // true when the slice mode is a lower sideband
-    double m_birdieCarrierMhz{14.100 + 1200.0 / 1.0e6};
-    void   updateBirdieFromVfo();     // recompute the birdie pitch from VFO+sideband
-
 public:
-    // One waterfall row per this many audio frames (see onAudioTick).
-    static constexpr int kSpectrumRowEveryNFrames = 9;
+    // One waterfall row per this many audio frames — the source's cadence,
+    // aliased here because RadioConnection's synthetic connect and the
+    // constants below derive from it.
+    static constexpr int kSpectrumRowEveryNFrames =
+        SimSignalSource::kSpectrumRowEveryNFrames;
     // The row cadence that follows, in whole ms: 9 × 128 / 24000 s = 48 ms.
     //
     // NOTHING READS THIS, and that is the honest state of it rather than an

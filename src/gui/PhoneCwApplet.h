@@ -28,6 +28,7 @@ public:
     // microphone-peak meter at all — the face would be permanently at its floor
     // and read as a fault rather than as an absence.
     void setMicLevelMeterAvailable(bool available);
+    void setDaxVisible(bool visible);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
@@ -84,6 +85,7 @@ private:
     QComboBox* m_micProfileCombo{nullptr};
 
     QComboBox*   m_micSourceCombo{nullptr};
+    bool          m_selectableMicInputs{true};
     QSlider*     m_micLevelSlider{nullptr};
     QLabel*      m_micLevelLabel{nullptr};
     QPushButton* m_accBtn{nullptr};

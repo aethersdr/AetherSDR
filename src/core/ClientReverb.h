@@ -8,9 +8,11 @@ namespace AetherSDR {
 
 // Client-side reverb — TX DSP chain Phase 6 (Freeverb).  Eight parallel
 // lowpass-feedback comb filters in parallel summed through four series
-// allpass filters, stereo-spread by 23 samples between L and R.  A
-// pre-delay ring buffer sits in front of the reverb core.  Voice-
-// oriented knob set; no "studio" parameters.
+// allpass filters per channel.  The current implementation uses matched
+// active delay lengths for L and R; the historical 23-sample spread constant
+// is allocation headroom, not active stereo decorrelation.  A pre-delay ring
+// buffer sits in front of the reverb core.  Voice-oriented knob set; no
+// "studio" parameters.
 //
 // Thread model mirrors ClientTube / ClientGate / ClientDeEss: UI
 // thread writes atomics + bumps a version counter; the audio thread
@@ -19,8 +21,9 @@ namespace AetherSDR {
 //
 // Buffer sizes are fixed in prepare() based on sample rate — max comb
 // length + stereo-spread headroom for Size=1, plus max pre-delay of
-// 100 ms.  Typical TX path runs at 24 kHz; total buffer budget per
-// ClientReverb instance is ~12 kB of float samples.
+// 100 ms.  The TX voice strip prepares this processor at 48 kHz; its delay
+// buffers contain about 147 KiB of float storage at that rate, excluding
+// vector bookkeeping.
 class ClientReverb {
 public:
     ClientReverb();

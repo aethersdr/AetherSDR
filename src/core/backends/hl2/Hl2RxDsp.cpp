@@ -1,9 +1,12 @@
 #include "core/backends/hl2/Hl2RxDsp.h"
 
+#include <QLoggingCategory>
 #include <QMetaType>
 
 #include <algorithm>
 #include <cmath>
+
+Q_LOGGING_CATEGORY(lcHl2RxDsp, "aether.hl2.rxdsp")
 
 namespace AetherSDR::hl2 {
 
@@ -65,6 +68,12 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     wc.agcMode = config.agcMode;
     wc.maximumAgcGainDb = config.maximumAgcGainDb;
     wc.blockForOutput = config.blockForOutput;
+    // Opened WITH the operator's blanker rather than switched on afterwards, so
+    // the very first block through a rebuilt chain is already blanked and the
+    // stage is not re-armed (and therefore briefly deaf to impulses) on a rate
+    // change. m_nbOn survives configure(); Config deliberately does not carry it.
+    wc.noiseBlankerEnabled = m_nbOn;
+    wc.noiseBlankerLevel = m_nbLevel;
     // Filter length. WDSP's default of 2048 is fine for a passband edge, but it
     // also sets the NARROWEST POSSIBLE NOTCH — min_notch_width is
     // 1600 / (nc/256) Hz at 48 kHz, so 2048 taps floors a notch at 200 Hz and
@@ -119,7 +128,37 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
         addNotch(static_cast<int>(index), notch.centerHz, notch.widthHz, notch.active);
     }
     m_channel->setNotchesEnabled(m_notchesEnabled);
+    // The blanker's hold flag belongs to the channel, so a rebuild loses it.
+    // Re-assert it, or a rate change made while transmitting comes back with
+    // the blanker running on the mute path's silence.
+    m_channel->setNoiseBlankerHold(m_audioMuted);
+    // The channel was OPENED with the blanker (wc.noiseBlankerEnabled above),
+    // so a successful configure() is also the point at which the request has
+    // definitively landed.
+    m_nbAppliedOn.store(m_nbOn, std::memory_order_relaxed);
+    m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
     return true;
+}
+
+void Hl2RxDsp::setNoiseBlanker(bool on, int level)
+{
+    m_nbOn = on;
+    m_nbLevel = std::clamp(level, 0, 100);
+    if (!m_channel)
+        return;   // no chain yet; configure() opens with the request
+    // CHECKED, unlike a fire-and-forget setter, because WdspChannel refuses a
+    // control operation that races another one and returns false rather than
+    // blocking. Swallowing that would leave this object — and therefore the NB
+    // button and the bridge readback — claiming a blanker the channel is not
+    // running, which is the one failure this whole feature is built to avoid.
+    if (!m_channel->setNoiseBlanker(m_nbOn, m_nbLevel)) {
+        qCWarning(lcHl2RxDsp) << "noise blanker" << (m_nbOn ? "on" : "off") << "level"
+                         << m_nbLevel << "refused by the channel; the request is "
+                            "held and re-applied on the next configure()";
+        return;
+    }
+    m_nbAppliedOn.store(m_nbOn, std::memory_order_relaxed);
+    m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
 }
 
 void Hl2RxDsp::setMode(WdspChannel::Mode mode)
@@ -148,6 +187,14 @@ void Hl2RxDsp::setAgc(int agcMode, double maximumGainDb)
 void Hl2RxDsp::setAudioMuted(bool muted)
 {
     m_audioMuted = muted;
+    // The mute path clocks the channel with ZEROS, and the noise blanker
+    // triggers on a RATIO — magnitude against a running average magnitude — so
+    // a transmit period of silence drags that average toward zero and the first
+    // real sample afterwards looks like an enormous impulse. The blanker would
+    // then gate the start of every receive period. Holding it freezes the
+    // average instead; WdspChannel flushes it on release.
+    if (m_channel)
+        m_channel->setNoiseBlankerHold(muted);
 }
 
 void Hl2RxDsp::setSpectrumRateFps(int fps)

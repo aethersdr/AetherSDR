@@ -1,5 +1,5 @@
 // aetherd HL2 Phase 1a — MetisProtocol unit test. Pins the HPSDR Protocol 1
-// wire encoding/decoding ported from the live-validated prototypes/hl2 spike:
+// wire encoding/decoding ported from the live-validated tools/hl2 spike:
 // C&C register encoding, discovery, EP2
 // framing, and the 24-bit signed big-endian IQ decode (with sign-extension).
 // Pure protocol — no sockets, no hardware.

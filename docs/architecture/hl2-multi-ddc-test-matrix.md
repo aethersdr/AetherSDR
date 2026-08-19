@@ -152,7 +152,7 @@ Each row: change it on **one** slice, confirm the others are untouched.
 
 Rows 5.3 and 5.4 cannot be answered from the app — nothing reads the TX NCO
 back. That is exactly how the original wrong-band and wrong-sideband bugs
-survived (HERMES.md §14, §16). Confirm with a receiver or the wspr.live oracle.
+survived (`docs/HERMES.md` §14, §16). Confirm with a receiver or the wspr.live oracle.
 
 ---
 

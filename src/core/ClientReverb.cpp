@@ -38,13 +38,10 @@ void ClientReverb::prepare(double sampleRate)
 {
     m_sampleRate = sampleRate;
 
-    // Allocate comb + allpass delay buffers at max (Size=1) lengths,
-    // per channel.  Stereo-spread adds kStereoSpread samples on the
-    // right channel.
-    // Allocate both channels at the SAME max length — L's stereo-spread
-    // variant is the upper bound for both so a single cached active-
-    // length works without overrunning either buffer.  Trades ~23
-    // unused samples per comb per channel for a simpler index loop.
+    // Allocate comb + allpass delay buffers at max (Size=1) lengths. The
+    // historical Freeverb spread constant remains only as common headroom:
+    // both channels use the same maximum and active lengths. This trades about
+    // 23 unused samples per delay per channel for a simpler index loop.
     for (int i = 0; i < kNumCombs; ++i) {
         const int baseLen = scaleLenForRate(kCombTuningsL44k[i], sampleRate);
         const int maxLen  = baseLen + kStereoSpread;

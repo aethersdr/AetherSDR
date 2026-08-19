@@ -168,8 +168,9 @@ QString formatTxSource(const TxSourceSummary& summary)
                  .arg(summary.channelCount)
                  .arg(modeText(summary.channelCount),
                       sampleFormatName(summary.sampleFormat))
-          << QStringLiteral("  resampleTo24k=%1 %2")
-                 .arg(yesNo(summary.resamplingTo24k),
+          << QStringLiteral("  voiceNormalizeTo48k=%1 radeResampleTo24k=%2 %3")
+                 .arg(yesNo(summary.normalizingTo48k),
+                      yesNo(summary.radeResamplingTo24k),
                       fallbackText(summary.fallbackOccurred, summary.fallbackReason));
     return lines.join(QLatin1Char('\n'));
 }

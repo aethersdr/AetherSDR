@@ -55,6 +55,15 @@ static void testFraming()
     check(pf.has_value() && !pf->hasSub, "set-frequency has no subcommand");
     check(pf->data.size() == 5, "all five frequency bytes survive as data");
 
+    const auto rxAntOn = cmdSetRxAntenna(0xB6, true);
+    check(bytesAre(rxAntOn,
+                   {0xFE, 0xFE, 0xB6, 0xE0, 0x12, 0x00, 0x01, 0xFD}),
+          "IC-7300MK2 RX-ANT enable frame");
+    const auto parsedRxAnt = parseFrame(rxAntOn);
+    check(parsedRxAnt && parsedRxAnt->hasSub && parsedRxAnt->sub == 0x00
+              && parsedRxAnt->data == std::vector<std::uint8_t>{0x01},
+          "RX-ANT reply keeps subcommand separate from value");
+
     // FB / FA acknowledgements.
     auto ok = parseFrame(std::vector<std::uint8_t>{0xFE, 0xFE, 0xE0, 0xA4, 0xFB, 0xFD});
     check(ok.has_value() && ok->isOk(), "FB is an acknowledgement");
@@ -110,6 +119,21 @@ static void testBcd()
     check(decodeLevel(lvl).value_or(-1) == 255, "level round-trips");
     check(decodeLevel(std::array<std::uint8_t, 2>{0x01, 0x20}).value_or(-1) == 120,
           "S9 raw value 120 decodes");
+
+    // The radio displays level registers by truncating 0..255 into 0..100.
+    // Every requested percentage must therefore be encoded into the FIRST raw
+    // value in that display bucket. The old floor-write / nearest-read pair
+    // made the app one point ahead of the radio across roughly half the range.
+    for (int pct = 0; pct <= 100; ++pct) {
+        const int raw = percentToLevelRaw(pct);
+        check(raw >= 0 && raw <= 255, "percent encoding stays inside 0..255");
+        check(levelRawToPercent(raw) == pct,
+              "every displayed percentage round-trips through the Icom register");
+    }
+    check(percentToLevelRaw(10) == 26,
+          "10% selects raw 26, whose radio display is 10 (raw 25 displays 9)");
+    check(levelRawToPercent(25) == 9,
+          "raw 25 follows the radio's truncated display instead of rounding up");
 
     check(encodeBcdByte(11) == 0x11, "division 11 is BCD 0x11, not 0x0b");
     check(decodeBcdByte(0x11) == 11, "and decodes back");
@@ -185,6 +209,15 @@ static void testModes()
     // what routes audio to the WLAN modulator instead of the microphone.
     check(modeFromNeutral("DIGU", data) == CivMode::Usb && data, "DIGU is USB + data");
     check(modeFromNeutral("DIGL", data) == CivMode::Lsb && data, "DIGL is LSB + data");
+    // DFM is FM + DATA, and it was missing entirely. Selecting DFM fell through
+    // to the "no equivalent" path, so setSliceMode() re-asserted the radio's
+    // current mode and the control appeared to do nothing. The expensive half
+    // was the DATA flag: a radio already in FM-D reported back as plain FM, so
+    // the next mode write cleared the flag and the radio transmitted from the
+    // MICROPHONE rather than the WLAN modulator — a 2 m AX.25 frame keyed the
+    // rig and put room noise on the air. Found on an IC-9700, 2026-08-09.
+    check(modeFromNeutral("DFM", data) == CivMode::Fm && data, "DFM is FM + data");
+    check(modeFromNeutral("FM", data) == CivMode::Fm && !data, "plain FM has no data flag");
     check(modeFromNeutral("CW", data) == CivMode::Cw, "bare CW maps, not just CWU");
     check(modeFromNeutral("CWL", data) == CivMode::CwR, "CWL is CW-reverse");
     // No IC-705 equivalent: refuse rather than silently substituting USB.
@@ -193,6 +226,12 @@ static void testModes()
 
     check(modeToNeutral(CivMode::Usb, false) == "USB", "reverse USB");
     check(modeToNeutral(CivMode::Usb, true) == "DIGU", "reverse DIGU");
+    // The round trip has to survive too. Returning plain "FM" for a radio in
+    // FM-D made the UI show FM, and the next mode write then sent FM with the
+    // flag CLEAR — silently taking the radio out of data mode and back onto the
+    // microphone without the operator touching anything.
+    check(modeToNeutral(CivMode::Fm, false) == "FM", "reverse FM");
+    check(modeToNeutral(CivMode::Fm, true) == "DFM", "reverse DFM keeps the data flag");
     check(modeToNeutral(CivMode::Dv, false).empty(), "D-STAR has no neutral mode");
 
     // THE LADDER IS PER MODE. FIL1 is 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in
@@ -276,6 +315,12 @@ static void testCommands()
     check(bytesAre(cmdSetLevel(kIc705, level::kRfPower, 255),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0x02, 0x55, 0xFD}),
           "RF power 100% is 14 0A 0255");
+    check(bytesAre(cmdSetTuner(kIc705, 0x02),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x01, 0x02, 0xFD}),
+          "ATU start is 1C 01 02");
+    check(bytesAre(cmdSetTuner(kIc705, 0x00),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x01, 0x00, 0xFD}),
+          "ATU bypass is 1C 01 00");
 
     // BOTH scope switches exist and both are needed — enabling only the first
     // turns the scope on the radio's screen and sends us nothing.
@@ -314,6 +359,127 @@ static void testCommands()
     // Indices shifted by one when the leading fixed 0x00 was added.
     check(refClamped[9] == 0x00 && refClamped[7] == 0x20,
           "out-of-range reference clamps to +20.0 rather than wrapping");
+
+    check(bytesAre(cmdWriteSetting(0xA4, 118, 0x03),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x1A, 0x05, 0x01, 0x18, 0x03, 0xFD}),
+          "IC-705 PC Audio selects WLAN with SET 0118 value 03");
+    check(bytesAre(cmdWriteSetting(0xB6, 84, 0x05),
+                   {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x05, 0xFD}),
+          "IC-7300MK2 PC Audio selects LAN with SET 0084 value 05");
+    check(bytesAre(cmdWriteSetting(0xB6, 84, 0x00),
+                   {0xFE, 0xFE, 0xB6, 0xE0, 0x1A, 0x05, 0x00, 0x84, 0x00, 0xFD}),
+          "IC-7300MK2 PC Audio off restores MIC without touching DATA MOD 0085");
+}
+
+// DATA mode — command 26.
+//
+// The command that tells USB from USB-D. Every check here is about the fact
+// that DATA is NOT in the mode byte: commands 01/04/06 cannot carry it, and 26
+// carries it together with the mode and the filter slot so the three cannot
+// clobber each other.
+static void testDataMode()
+{
+    check(bytesAre(cmdReadVfoMode(kIc705), {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0xFD}),
+          "the mode/DATA/filter read is 26 00 with no payload");
+    check(bytesAre(cmdSetVfoMode(kIc705, CivMode::Usb, true, 2),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0x01, 0x01, 0x02, 0xFD}),
+          "USB-D on FIL2 is 26 00 01 01 02");
+    check(bytesAre(cmdSetVfoMode(kIc705, CivMode::Usb, false, 2),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0x01, 0x00, 0x02, 0xFD}),
+          "plain USB on FIL2 differs ONLY in the DATA byte — the mode byte is "
+          "the same 0x01, which is why 06 alone can never express the pair");
+    check(bytesAre(cmdSetVfoMode(kIc705, CivMode::Lsb, true, 9),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x26, 0x00, 0x00, 0x01, 0x03, 0xFD}),
+          "an out-of-range slot clamps to 1..3 rather than reaching the radio");
+
+    // Exercise the complete receive path, including parseFrame's per-command
+    // sub-address classification. Direct payload tests cannot catch a selector
+    // byte accidentally left at data[0].
+    const std::array<std::uint8_t, 10> reply{
+        0xFE, 0xFE, 0xE0, 0xA4, 0x26, 0x00, 0x01, 0x01, 0x02, 0xFD};
+    const auto parsed = parseFrame(reply);
+    check(parsed && parsed->cmd == cmd::kVfoMode && parsed->hasSub
+              && parsed->sub == vfoMode::kSelected,
+          "a full 26 00 reply parses the selected-VFO byte as a subcommand");
+    check(parsed && parsed->data.size() == 3 && parsed->data[0] == 0x01
+              && parsed->data[1] == 0x01 && parsed->data[2] == 0x02,
+          "and presents exactly mode, DATA and filter to the decoder");
+
+    // 0x06 is untouched. It is still what an unrecognised radio gets, and a
+    // builder that had started emitting 26 for it would send a command that
+    // model may not implement.
+    check(bytesAre(cmdSetMode(kIc705, CivMode::Usb, 1),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x06, 0x01, 0x01, 0xFD}),
+          "the plain mode command is still 06, unchanged");
+
+    const std::array<std::uint8_t, 3> on{0x01, 0x01, 0x02};
+    const auto dOn = decodeVfoMode(on);
+    check(dOn && dOn->mode == CivMode::Usb && dOn->dataMode && dOn->filter == 2,
+          "01 01 02 decodes as USB, DATA on, FIL2");
+
+    const std::array<std::uint8_t, 3> off{0x01, 0x00, 0x03};
+    const auto dOff = decodeVfoMode(off);
+    check(dOff && dOff->mode == CivMode::Usb && !dOff->dataMode && dOff->filter == 3,
+          "the same mode byte with DATA off decodes as plain USB");
+
+    // The slot is the only thing an out-of-range byte may cost. Returning 0 —
+    // "unspecified" — lets the caller keep the slot it already had rather than
+    // dropping the operator's IF filter out of the 1..3 the ladder is defined
+    // over, while the mode and DATA state are still adopted.
+    const std::array<std::uint8_t, 3> badSlot{0x03, 0x00, 0x09};
+    const auto dBad = decodeVfoMode(badSlot);
+    check(dBad && dBad->mode == CivMode::Cw && dBad->filter == 0,
+          "a slot outside 1..3 decodes as unspecified, not as slot 0");
+
+    check(!decodeVfoMode({}), "an empty payload decodes to nothing");
+    const std::array<std::uint8_t, 2> short2{0x01, 0x01};
+    check(!decodeVfoMode(short2), "a payload short of all three fields is refused");
+    const std::array<std::uint8_t, 4> long4{0x00, 0x01, 0x01, 0x02};
+    check(!decodeVfoMode(long4),
+          "a payload longer than the three documented fields is refused as mis-parsed");
+    const std::array<std::uint8_t, 3> bogus{0x01, 0x07, 0x02};
+    check(!decodeVfoMode(bogus),
+          "a DATA byte that is neither 00 nor 01 is refused rather than coerced "
+          "to a bool — an invented DATA state is the lie this command removes");
+}
+
+// commandHasSubcommand() is the ONE list of which commands are sub-addressed.
+// parseFrame() decodes by it and the CI-V trace labels by it, so the property
+// that matters is that the predicate and the parser cannot disagree — a drift
+// between them is what produces a confidently mislabelled frame.
+//
+// Asserting the predicate against a hand-written list would just be a third
+// copy. So this drives every one of the 256 command values through parseFrame()
+// and checks the parser's own hasSub against the predicate.
+static void testSubcommandPredicate()
+{
+    int subAddressed = 0;
+    for (int c = 0; c <= 0xFF; ++c) {
+        const auto command = static_cast<std::uint8_t>(c);
+        // Two payload bytes, so there is something for either reading to claim:
+        // if the command is sub-addressed the first is the subcommand, and if
+        // it is not, both are data.
+        const std::vector<std::uint8_t> wire{
+            0xFE, 0xFE, kControllerAddress, kIc705, command, 0x01, 0x02, kCivEom};
+        const auto parsed = parseFrame(wire);
+        if (!parsed)
+            continue;
+        const bool predicate = commandHasSubcommand(command);
+        check(parsed->hasSub == predicate,
+              "parseFrame and commandHasSubcommand agree for every command byte");
+        if (predicate) {
+            ++subAddressed;
+            check(parsed->sub == 0x01 && parsed->data.size() == 1,
+                  "a sub-addressed command takes the subcommand out of the payload");
+        } else {
+            check(parsed->data.size() == 2,
+                  "a bare command keeps both payload bytes");
+        }
+    }
+    // The eleven that carry subcommands: 12 14 15 16 18 19 1A 1C 21 26 27. A
+    // change to the list is a deliberate protocol decision, so it should have
+    // to come past this number rather than arrive as a silent side effect.
+    check(subAddressed == 11, "exactly eleven CI-V commands are sub-addressed");
 }
 
 int main()
@@ -323,6 +489,8 @@ int main()
     testReassembler();
     testModes();
     testCommands();
+    testDataMode();
+    testSubcommandPredicate();
 
     if (g_failures == 0)
         std::printf("icom_civ_test: all checks passed\n");

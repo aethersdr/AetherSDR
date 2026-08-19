@@ -738,7 +738,7 @@ void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
 // EqualizerModel emits `eq TXsc 63Hz=…` / `eq RXsc …`, which a radio with no
 // Flex command plane never receives. The equalizer those sliders are asking for
 // is ClientEq, already in both audio paths — TX through
-// AudioEngine::applyClientTxDspInt16, RX through processMixedRxAudioData.
+// TxVoiceProcessor, RX through AudioEngine::processMixedRxAudioData.
 //
 // THE OCTAVE BANDS OCCUPY ClientEq SLOTS 0..7, which are the same slots the
 // Aetherial strip's editor uses, because these are the same ClientEq objects the

@@ -55,6 +55,12 @@
 
 namespace AetherSDR {
 
+inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabilities)
+{
+    return armed && capabilities.canTransmit
+        && capabilities.takesTxAudioOverSeam;
+}
+
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -159,6 +165,15 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+    // True from the moment a connect is requested until it lands, fails, or is
+    // abandoned. isConnected() alone cannot express "still working": it is
+    // false both before an attempt starts and while one is in flight, which is
+    // why the bridge's `connect wait` could not tell a timeout worth retrying
+    // from one that never had a chance (#4912). The HL2 makes the gap wide —
+    // Hl2Backend::connectRadio() parks the request in m_queuedConnect behind
+    // the DSP open and re-drives it from finishDspSetup(), and nothing about
+    // that queue reaches this model, so no signal fires for seconds.
+    bool isConnectAttemptInFlight() const { return m_connectAttemptActive; }
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
     float paTemp()    const { return m_paTemp; }
@@ -344,6 +359,10 @@ public:
     // notch with TNFs instead and will never claim it.
     bool hasLmsNoiseFilters() const;
     bool hasManualNotch() const;
+    // Whether THIS HOST blanks impulse noise in the radio's IQ
+    // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
+    // reasoning as hasManualNotch(): it can only add the NB button.
+    bool hasHostNoiseBlanker() const;
     // The filter widths the radio declares, widest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a
@@ -542,13 +561,22 @@ public:
     // operator-issue setters so the change routes through the backend seam.
     void recallLocalMemory(int index);
     void createAudioStream();
+    // An operator CLICK on the PC Audio button. On an Icom this asks the radio
+    // to switch its voice-mode modulation input, which Principle II permits
+    // because a user action is a request. Nothing else may call it — see
+    // notePcAudioEnabled() for the connect edge.
+    void setPcAudioEnabled(bool on);
+    // The client's PC Audio state, published so the backend can ADVISE on a
+    // mismatch. Writes nothing: Principle III owns DATA OFF MOD to the radio,
+    // so a connect must never replay this client-persisted flag onto it.
+    void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
     bool prepareWsprTransmit();
     void releaseWsprTransmit();
     void restoreWsprTransmitDax();
     // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
-    // literally a `dax_tx` stream; on a host-modulating backend (HL2) there is
-    // no stream to own — the modulator is ours and the pump feeds it through
+    // literally a `dax_tx` stream; on a seam-audio backend (HL2 or Icom) there
+    // is no stream to own — the pump feeds the backend through
     // txFinalMonitorPcmReady → submitTxAudio, which needs nothing created.
     //
     // The dialog polls this every 50 ms while transmitting and aborts the frame
@@ -569,7 +597,8 @@ public:
         // teardownBackend() now clears the latch as well; this is the backstop
         // that makes a missed clear harmless rather than dangerous, which is the
         // right split for anything guarding a transmitter.
-        if (m_wsprTxHostModulated && backendCapabilities().hostModulates)
+        if (wsprSeamAudioRouteReady(m_wsprTxSeamAudioArmed,
+                                    backendCapabilities()))
             return true;
         return m_daxTxStreamId != 0 && m_daxTxActive;
     }
@@ -821,6 +850,41 @@ public:
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
+    // Retune a slice on behalf of the CAT servers (rigctld / SmartCAT) so a band
+    // change made over CAT (WSJT-X/FLDigi "change band") is recentered instead of
+    // leaving the panadapter behind. Applies the recenter policy: in-span keeps
+    // autopan=0 (no yank — external Doppler software like SatPC32 steps every few
+    // seconds); an out-of-span or cross-band target uses tuneAndRecenter. Both go
+    // through SliceModel, which updates the model and emits frequencyChanged —
+    // required to drive the client-side follow (Center Lock / Pan-Follows-VFO)
+    // that lets the radio actually move a centered slice. We issue no pan command
+    // directly; the client lock logic does, exactly as the GUI path does. Call on
+    // the GUI thread (owns SliceModel).
+    // Returns false (and issues no tune) when the target is rejected — a null
+    // slice, an implausible frequency (see isPlausibleCatTuneMhz), or a locked
+    // slice, which SliceModel refuses — so the CAT protocol layer can report the
+    // failure instead of acknowledging a tune that never happened. A retune to
+    // the frequency the slice already holds is a no-op, not a rejection, and
+    // still returns true — unless the slice is locked, since the lock is tested
+    // ahead of the no-op case and a locked slice always reports failure.
+    bool tuneSliceForCat(SliceModel* slice, double mhz);
+
+    // Is this a physically plausible CAT-tune target (MHz)? The single policy for
+    // the boundary check tuneSliceForCat applies. rigctld pre-validates with it
+    // too: its handlers answer the client synchronously and then marshal the tune
+    // through a queued call, so tuneSliceForCat's bool is unobservable to them —
+    // without this they would answer success and silently drop an out-of-range
+    // tune. Rejects non-positive, non-finite, and absurdly-high targets (an
+    // FA-5000;, a DN whose multi-step product underflows past 0, a parse that
+    // yielded NaN, a fat-fingered absurd set); the radio still enforces its real
+    // band limits — this only stops the physically impossible from being
+    // broadcast via frequencyChanged before the radio rejects it.
+    // NOT a bound on step arithmetic in the UP direction: the ceiling has to sit
+    // above the top amateur allocation, and a multi-step UP cannot reach it
+    // (2^31 steps at the usual 100 Hz is ~215 GHz), so a runaway UP is caught by
+    // the radio refusing the tune, not here.
+    static bool isPlausibleCatTuneMhz(double mhz);
+
     // Effective pan geometry: the deferred pending value if one is queued,
     // else the live model value, else NaN when the pan is unknown. Caller-side
     // no-op guards must compare against THIS, not the raw model — during the
@@ -889,6 +953,10 @@ signals:
     // Wired to AudioEngine's CwSidetoneGenerator for low-latency local
     // sidetone independent of the radio's own DAX-fed sidetone.
     void cwKeyDownChanged(bool down);
+    // Non-Flex diagnostic edge emitted only after transmit preflight, directly
+    // before IRadioBackend::setCwKeying(). Lets tests and diagnostics prove a
+    // refused key-down did not cross the radio seam.
+    void backendCwKeyingForwarded(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
     void rawSliceModeListsChanged();
@@ -948,7 +1016,7 @@ signals:
     // instance. Three features — the CW decoder, the RTTY decoder and the QSO
     // recorder's RX tap — were bound directly to the Flex stream, so on any
     // radio without one they bound to nothing: no error, no log line, the
-    // toggle worked and nothing ever decoded. See HERMES.md §18.
+    // toggle worked and nothing ever decoded. See docs/HERMES.md §18.
     //
     // Deliberately NOT the speaker path. AudioEngine::feedAudioData keeps its
     // existing per-family wiring untouched, so nothing audible changes on any
@@ -956,7 +1024,7 @@ signals:
     //
     // Named for the tap it carries. A future filter-flat, pre-AGC feed for
     // modems is a SEPARATE signal (rxWidebandAudioReady), not a mode flag on
-    // this one — see HERMES.md §18.5.
+    // this one — see docs/HERMES.md §18.5.
     void rxDemodAudioReady(const QByteArray& pcm24kStereoFloat);
     // The backend was replaced because the operator picked a radio of another
     // family. Consumers holding backend-owned objects (PanadapterStream) must
@@ -1164,8 +1232,11 @@ public:
         return m_backend != nullptr && m_flexBackend == nullptr;
     }
     // Forward processed transmit audio to a host-modulating backend. No-op when
-    // the backend modulates on the radio side.
-    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz);
+    // the backend modulates on the radio side. `clientLeveled` carries
+    // AudioEngine's source decision through: true for external TCI/DAX client
+    // audio, whose level the sender owns (#4796).
+    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
+                       bool clientLeveled);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1354,6 +1425,9 @@ private:
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend(const QString& serial);  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
+    void scheduleOperatingStateSave();
+    void captureClientOwnedCwState(RestoredRadioState& state) const;
+    void restoreClientOwnedCwState(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
@@ -1681,6 +1755,10 @@ private:
     // keying may proceed; on refusal it rolls back the optimistic transmit state
     // and notifies, so no raw-TX edge is ever published for a refused key.
     bool refuseKeyOnTransmitIncapableBackend();
+    // Apply the same capability + receive-only-pan preflight to a non-Flex CW
+    // carrier edge before it crosses the backend seam. Key-up always passes so
+    // an inhibit arriving mid-element can never strand RF on.
+    bool forwardNonFlexCwKeying(bool down);
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
@@ -1788,10 +1866,10 @@ private:
     bool        m_wsprTxReleaseWhenReady{false};
     bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed
     bool        m_wsprTxRestoreDax{false};    // beacon changed it and owes a restore
-    // The beacon armed against a host-modulating backend, so it borrowed no DAX
+    // The beacon armed against a seam-audio backend, so it borrowed no Flex DAX
     // stream and no `transmit dax`. Latched by prepareWsprTransmit() and the
     // only thing releaseWsprTransmit() has to undo on that path.
-    bool        m_wsprTxHostModulated{false};
+    bool        m_wsprTxSeamAudioArmed{false};
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
     QSet<quint32> m_deadDaxRxSeen;
@@ -1840,6 +1918,9 @@ private:
     SleepInhibitor m_sleepInhibitor;     // prevents OS idle sleep while connected
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
+    // See isConnectAttemptInFlight(). Set by the connect entry points, cleared
+    // by every way an attempt can end.
+    bool      m_connectAttemptActive{false};
     bool      m_forcedDisconnectInProgress{false};
     GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next
@@ -1938,7 +2019,7 @@ private:
     // but "does this wire have a round trip to time" is a fact about the WIRE and
     // stays true while it is down. Without the distinction a disconnected HL2
     // falls back to the Flex branch, and lastPingRtt()'s 0 renders as "< 1 ms":
-    // the exact claim HERMES.md § 21.3 exists to forbid, one state transition
+    // the exact claim docs/HERMES.md § 21.3 exists to forbid, one state transition
     // later. Latched sticky-once-true so a window that closes with no samples in
     // it cannot flip a readout mid-session, and reset in teardownBackend(),
     // because only a new backend can change the answer.

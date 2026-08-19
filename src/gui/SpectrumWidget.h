@@ -174,9 +174,8 @@ public:
     // counters after the read so successive reads measure disjoint intervals.
     Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
     Q_INVOKABLE QVariantMap renderSchedulerStatsSnapshot(bool reset);
-    // QRhiWidget surface geometry for `get rhi`: widget size, devicePixelRatio,
-    // and (on GPU builds) the pinned fixedColorBufferSize so automation can
-    // assert it stays even-aligned under a fractional QT_SCALE_FACTOR (#4091).
+    // QRhiWidget diagnostics for `get rhi`: widget size, devicePixelRatio,
+    // color-buffer sizing mode, and native-widget topology where applicable.
     Q_INVOKABLE QVariantMap automationRhiSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssReset(bool kiwiStream);
@@ -189,6 +188,11 @@ public:
     Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
                                                        int offsetRows);
     Q_INVOKABLE QVariantMap traceDebugSnapshot();
+    // Every value the Display panel owns, as one flat map keyed by the panel's
+    // own control names. Exists so "Clone to all Pans" (and any future
+    // display-preference change) is provable field-by-field over the automation
+    // bridge instead of by comparing screenshots. See `get display`.
+    Q_INVOKABLE QVariantMap automationDisplaySettingsSnapshot() const;
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void setKiwiSdrConnectionOverlay(bool visible,
                                      const QString& detail = {},
@@ -843,10 +847,6 @@ protected:
     void initialize(QRhiCommandBuffer* cb) override;
     void render(QRhiCommandBuffer* cb) override;
     void releaseResources() override;
-    // Keep the RHI color buffer at an even-aligned device-pixel size so a
-    // fractional QT_SCALE_FACTOR (UiScalePercent ≠ 100) never hands the GPU
-    // driver odd texture extents on resize (#4091).
-    void updateFixedColorBufferSize();
     QSize fullFrameTextureSize() const;
 #else
     void paintEvent(QPaintEvent* event) override;

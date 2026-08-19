@@ -6,13 +6,18 @@
 #include <QVariantMap>
 #include <QString>
 #include <QVariantList>
+#include <QElapsedTimer>
 
 #include <deque>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <vector>
 
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/icom/CivCodec.h"
+#include "core/backends/icom/IcomCivScheduler.h"
 #include "core/backends/icom/IcomMeters.h"
 #include "core/backends/icom/IcomControls.h"   // the control registry scrubDrive walks
 #include "core/backends/icom/IcomModels.h"
@@ -78,12 +83,14 @@ public:
     void setPanRfGain(const QString& panId, int gainDb) override;
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
+    void setSliceRxAntenna(int sliceId, const QString& antenna) override;
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
     void setSpeechProcessor(bool on, int level) override;
     void setMicGain(int gainPercent) override;
     void setTxAudioMonitor(bool on) override;
+    void setTxMonitor(bool on, int level) override;
     void setSliceNoiseReduction(int sliceId, bool on, int level) override;
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setSliceAutoNotch(int sliceId, bool on) override;
@@ -95,7 +102,8 @@ public:
     void setRitEnabled(bool on) override;
     void setXitEnabled(bool on) override;
     void setRitOffset(int hz) override;
-    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
+    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
+                       bool clientLeveled) override;
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg = {}) override;
 
@@ -110,9 +118,11 @@ public:
     // this session. Cheap, read-only, and safe with no radio attached.
     //
     // controlScrub() is the CHECK. For every settable control it drives the seam
-    // and looks for the frame on the wire, so "we believe this is wired" becomes
-    // "this reached the radio and it answered". `filter` narrows it to one id or
-    // one plane; empty scrubs everything safe.
+    // and verifies that the exact frame reached either the wire or the scheduler.
+    // Because the bridge request is synchronous while CI-V dispatch is not, a
+    // scheduled result is completed by waiting for `civ scheduler` to drain
+    // without a timeout. `filter` narrows it to one id or one plane; empty
+    // scrubs everything safe.
     //
     // NEITHER KEYS THE TRANSMITTER. The scrub deliberately excludes ptt, tuner
     // and power: two of them transmit and the third cannot be undone over WiFi.
@@ -156,18 +166,89 @@ private:
     // only where a radio mode has no neutral equivalent but does have its own
     // IF widths — RTTY today. See the definition.
     QString currentLadderMode() const;
+    // Publish the current mode, its passband and the filter ladder from
+    // m_mode/m_dataMode/m_filter. SHARED, because the mode arrives on two
+    // different commands — 01/04 carry mode and slot, 26 carries mode, DATA and
+    // slot — and a 26 that did not republish would decode the DATA flag into a
+    // mode indicator that never changed.
+    void publishModeState();
     void publishMeterDefs();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
+    void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
+                   IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
+    void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
+                    IcomCivScheduler::Priority priority, bool supersedes = true);
+    void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
+                                    const std::string& key);
+    void pumpCiv(qint64 nowMs);
+    // Monotonic milliseconds since construction. THE clock for this backend:
+    // every interval here (dispatch slot, reply timeout, poll period, stall
+    // threshold, trace age) is measured against it, and none of them survives
+    // a wall-clock step. See the constructor.
+    [[nodiscard]] qint64 nowMs() const;
+    [[nodiscard]] std::string semanticKey(std::span<const std::uint8_t> frame) const;
+    [[nodiscard]] std::optional<std::vector<std::uint8_t>>
+        confirmationFor(std::span<const std::uint8_t> frame) const;
+    [[nodiscard]] QVariantMap schedulerDiagnostics() const;
+    void serviceSchedulerWaiters(qint64 nowMs);
     void applyScopeStartup();
+    // The connect-edge read burst, lifted out of onSessionConnected UNCHANGED.
+    //
+    // It is a function only so the rare unknown-model path can defer it until
+    // the address is known, and so a retarget can re-issue it — those reads went
+    // to an address nobody was listening on, so they returned nothing and
+    // re-sending them is both correct and the only way to recover the session.
+    //
+    // NOT a place to re-pace or re-order anything. RFC #4983 names this burst's
+    // bunching as a suspected cause of an unrecoverable CI-V stall; restructuring
+    // it belongs to that scheduler work, not here.
+    void sendConnectReadBurst();
+    // Adopt (or refuse) the address the radio reported in its 0x19 0x00 reply.
+    void adoptReportedCivAddress(std::uint8_t reported);
     [[nodiscard]] int sliceId() const noexcept { return 0; }
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
     std::unique_ptr<IcomSession> m_session;
     const IcomModel* m_model = nullptr;
 
+    // ---- CI-V address resolution (see IcomSettings::CivSelection) ------------
+    //
+    // The operator's choice sets WHO WE TALK TO. The 0x19 0x00 reply says WHAT
+    // IT IS. Keeping those apart is what lets a typed address select a device on
+    // a shared bus while the radio stays authoritative about its own identity.
+
+    // A typed hex address: a device selection, so the wire must not retarget it.
+    // A picked model is NOT pinned — it is a shortcut for an address.
+    bool m_civAddressPinned = false;
+    // The address the session opened with, before any wire adoption. What a
+    // two-responder bus falls back TO.
+    std::uint8_t m_civSeedAddress = 0;
+    // The address adopted from a 0x19 0x00 reply this session, 0 if none yet.
+    std::uint8_t m_civReported = 0;
+    // Two DIFFERENT addresses answered. Adopt neither — on a bus fronted by
+    // Icom's own RS-BA1 server the second responder may be a rotator or an amp,
+    // and picking either at random mis-decodes the rest of the session.
+    bool m_civAmbiguous = false;
+    // Whether sendConnectReadBurst() has already run this session.
+    bool m_connectBurstSent = false;
+    // The model the RS-BA1 handshake NAMED. Kept separately from m_model because
+    // it is the third signal that separates "right radio, changed address" from
+    // "wrong radio entirely" — see adoptReportedCivAddress().
+    const IcomModel* m_modelByName = nullptr;
+    // Bounded, single-shot, never a poll: the unknown-model path waits this long
+    // for a broadcast reply before giving up and bursting at the fallback
+    // address, so a radio that answers nothing still connects.
+    QTimer* m_civDetectTimer = nullptr;
+    static constexpr int kCivDetectTimeoutMs = 1000;
+    // applyScopeStartup() now has two callers — the connect edge and a late
+    // model resolution — and the radio only needs telling once.
+    bool m_scopeStarted = false;
+
     ScopeDecoder m_scope;
     ScopeCalibration m_scopeCal;
     MeterPoller m_meters;
+    IcomCivScheduler m_civScheduler;
+    QElapsedTimer m_clock;
 
     // 48 kHz mono from the radio -> 24 kHz interleaved stereo for the engine.
     //
@@ -207,6 +288,8 @@ private:
     bool m_dataMode = false;
     bool m_connected = false;
     bool m_keyed = false;
+    std::optional<bool> m_pendingPttIntent;
+    qint64 m_pendingPttUntilMs = 0;
     bool m_overflow = false;
     double m_vdVolts = 0.0;
     double m_idAmps = 0.0;
@@ -257,6 +340,7 @@ private:
     int     m_compLevelPercent = 0;
     bool    m_compEnable = false;
     bool    m_monitorOn = false;
+    int     m_monitorLevelPercent = 0;
     QString m_agcMode = QStringLiteral("med");
     int     m_afGainPercent = 0;
     bool    m_voxOn = false;
@@ -270,6 +354,8 @@ private:
     bool    m_ritOn = false;
     bool    m_xitOn = false;
     int     m_ritOffsetHz = 0;
+    int     m_controlPollPhase = 0;
+    bool    m_rxAntennaExternal = false;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //
@@ -290,6 +376,7 @@ private:
     // being generated on a timer, so its cadence is the transmit callback's
     // cadence and it cannot drift against the stream it is riding.
     bool m_tuning = false;
+    int m_preTuneTxPowerPercent = -1;
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;
     // -6 dBFS. Loud enough for a tuner to read instantly, short of the clipping
@@ -298,6 +385,21 @@ private:
 
     int m_dataOffModInput = -1;   // SSB / CW / AM / FM
     int m_dataModInput    = -1;   // data modes (FT8 and friends)
+    int m_usbModLevelPercent = -1;
+    int m_accessoryModLevelPercent = -1;
+    int m_networkModLevelPercent = -1;
+    bool m_micGainReported = false;
+    std::optional<bool> m_pcAudioEnabled;
+    // WHAT THE OPERATOR HAD, so "off" can put it back instead of guessing.
+    //
+    // DATA OFF MOD is a four- (IC-705) or six-valued (IC-7300MK2) enum the
+    // RADIO persists; PC Audio is a two-state button. Writing a fixed MIC on
+    // "off" therefore destroys a USB / ACC / MIC+USB selection the operator
+    // set on the front panel and never gets it back. Latched from the readback
+    // the instant before this client's FIRST write of the session, so the
+    // value put back is the radio's own, not one we invented.
+    std::optional<int> m_dataOffModRestore;
+    QString m_lastModInputWarning;
     void checkModInput();
 
     std::int64_t m_scopeCentreHz = 0;
@@ -319,9 +421,10 @@ private:
     struct CivTraceEntry {
         std::int64_t atMs = 0;
         bool outbound = false;
+        bool routine = false;
         QString hex;
     };
-    void traceCiv(bool outbound, std::span<const std::uint8_t> frame);
+    void traceCiv(bool outbound, std::span<const std::uint8_t> frame, bool routine = false);
     [[nodiscard]] QVariantList civTrace(bool includeRoutine) const;
     std::deque<CivTraceEntry> m_civTrace;
     static constexpr std::size_t kCivTraceMax = 200;
@@ -331,6 +434,10 @@ private:
     // claims is wired but that has never been seen on the wire is exactly the
     // half-wired state the table exists to expose.
     QSet<QString> m_controlsSent;
+    // Exact set commands admitted by the scheduler. A scrub runs
+    // synchronously while CI-V dispatch/reply is intentionally asynchronous,
+    // so admission and physical dispatch must be reported separately.
+    QSet<QString> m_controlsScheduled;
     QSet<QString> m_controlsSeen;
     // Rows whose scrub mirror holds a REAL value — the radio answered for it,
     // or we commanded it. Deliberately NOT m_controlsSent, which controlScrub()
@@ -342,6 +449,13 @@ private:
     // Every inbound non-sweep frame, matched or not. Distinguishes a silent
     // radio from a registry that matches nothing.
     quint64 m_framesObserved = 0;
+
+    struct SchedulerWaiter {
+        quint64 requestId = 0;
+        qint64 deadlineMs = 0;
+    };
+    std::vector<SchedulerWaiter> m_schedulerWaiters;
+    quint64 m_schedulerTimeoutsReported = 0;
 
     // CI-V stall detection. The transport can be healthy while the command
     // plane is dead — see onLinkTick — so these track the command plane alone.
@@ -355,6 +469,7 @@ private:
     static constexpr qint64 kCivStallMs = 5000;
     // Note the id for a frame we are about to send or have just decoded.
     void noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
+    void noteControlScheduled(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     LinkStats m_link;
 };
