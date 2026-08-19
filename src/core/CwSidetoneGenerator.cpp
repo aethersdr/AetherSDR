@@ -381,6 +381,17 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
                 // converges within a few bursts while still costing several
                 // bursts to climb back if the stall repeats, and the floor
                 // avoids a long tail of single-sample slack.
+                // Two limits on the decay's reach: it runs only on the IDLE
+                // release of an anchor (the staleness re-anchor above frees
+                // the anchor with no decay decision either way), and
+                // kReanchorIdleMs of continuous idle is rare inside sustained
+                // sending — word gaps qualify below ~34 WPM, inter-character
+                // gaps below ~15 WPM, otherwise only the pauses between
+                // transmissions.  Under persistent sink clock drift slack
+                // cannot converge below the drift accrued per anchor
+                // lifetime: late anchors regrow what clean-anchor halvings
+                // release, and a pause-free stretch long enough to accrue the
+                // cap latches there until the next qualifying idle.
                 if (!m_anchorWentLate && m_anchorSlack > 0) {
                     m_anchorSlack /= 2;
                     if (m_anchorSlack < m_sampleRateHz / 1000)  // < 1 ms

@@ -148,6 +148,10 @@ private:
     // a 22 s hand-keyed session measured 5.5 ms of total learned slack, and
     // the deliberate 800 ms pump stall in the decay test needs only enough to
     // clear one refill.
+    // The cap also SPENDS the staleness guard's stall tolerance rather than
+    // merely staying under it: a fresh anchor starts at blockStart + slack,
+    // so at the cap a genuine pump stall has kReanchorIdleMs - 40 ms of
+    // margin left, not the full 250 ms.
 
     void applyKeyEdge(bool down) noexcept;  // state-machine transition
 
