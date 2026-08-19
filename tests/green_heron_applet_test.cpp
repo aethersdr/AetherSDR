@@ -388,6 +388,15 @@ void testSwitchChoiceAndAddressPersist()
     // one's cache. The child inherits HOME / XDG_CONFIG_HOME /
     // AETHER_SETTINGS_DIR from TestSettingsProfile through the environment, so
     // it opens THIS test's sandboxed store and no other.
+    //
+    // Two processes on one SQLite store is safe here, and not by luck. The
+    // applet's constructor can write — refreshSwitchChoices() populating the
+    // combo re-persists the remembered switch — but this process is parked in
+    // waitForFinished() for the child's whole life and issues nothing, so
+    // there is never more than one writer, which is exactly what WAL allows.
+    // The child also cannot dial anything: PeripheralSettings::autoReconnect()
+    // defaults to False, so it restores the address without opening a socket
+    // to this test's long-dead ephemeral port.
     QProcess child;
     child.setProcessChannelMode(QProcess::MergedChannels);
     child.start(QCoreApplication::applicationFilePath(),
