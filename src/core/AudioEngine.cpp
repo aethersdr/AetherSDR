@@ -4172,9 +4172,7 @@ bool AudioEngine::startSidetoneStream()
     QStringList sidetoneAttempts;
     const QString portAudioAttempt = QStringLiteral("PortAudio 48000Hz 2ch Float, native-rate fallback if needed");
     const QString qAudioSinkAttempt = QStringLiteral("QAudioSink 48000Hz/44100Hz/24000Hz 2ch Float, then Int16");
-    sidetoneAttempts << (qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0
-        ? portAudioAttempt
-        : qAudioSinkAttempt);
+    sidetoneAttempts << (sidetoneOnPortAudio ? portAudioAttempt : qAudioSinkAttempt);
     if (!m_sidetoneSink->start(startDev, 48000, m_cwSidetone.get())) {
         // Backend failed — try the other one before giving up.  Most likely
         // path: PortAudio init failed on a quirky device, fall back to Qt.

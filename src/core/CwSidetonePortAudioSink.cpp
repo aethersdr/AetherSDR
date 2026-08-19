@@ -71,8 +71,8 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
                 continue;
             const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
             candidates << QStringLiteral("\"%1\" [%2]")
-                              .arg(QString::fromLocal8Bit(info->name),
-                                   api && api->name ? QString::fromLocal8Bit(api->name)
+                              .arg(QString::fromUtf8(info->name),
+                                   api && api->name ? QString::fromUtf8(api->name)
                                                     : QStringLiteral("?"));
         }
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: no PortAudio output matches"
@@ -133,19 +133,17 @@ PaDeviceIndex defaultPortAudioOutputDevice()
     // Pa_GetDefaultOutputDevice() on Windows typically returns an MME device
     // (the first enumerated host API), which has 50–150 ms OS-level buffering.
     // Prefer WASAPI shared mode (~10 ms) to reduce CW timing jitter on fast
-    // keying. Mirrors the Linux JACK preference above. (#3193)
-    if (devIdx == paNoDevice) {
-        const PaHostApiIndex apiCount = Pa_GetHostApiCount();
-        for (PaHostApiIndex i = 0; i < apiCount; ++i) {
-            const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
-            if (!api || !api->name) continue;
-            if (qstrncmp(api->name, "Windows WASAPI", 14) == 0
-                && api->defaultOutputDevice != paNoDevice) {
-                devIdx = api->defaultOutputDevice;
-                qCInfo(lcAudio) << "CwSidetonePortAudioSink: using WASAPI host API"
-                                << "(device" << devIdx << ")";
-                break;
-            }
+    // keying. (#3193)
+    const PaHostApiIndex apiCount = Pa_GetHostApiCount();
+    for (PaHostApiIndex i = 0; i < apiCount; ++i) {
+        const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
+        if (!api || !api->name) continue;
+        if (qstrncmp(api->name, "Windows WASAPI", 14) == 0
+            && api->defaultOutputDevice != paNoDevice) {
+            devIdx = api->defaultOutputDevice;
+            qCInfo(lcAudio) << "CwSidetonePortAudioSink: using WASAPI host API"
+                            << "(device" << devIdx << ")";
+            break;
         }
     }
 #endif
