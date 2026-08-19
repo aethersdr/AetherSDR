@@ -106,6 +106,15 @@ On connect the device sends one `SWITCHADD` per switch, then streams
 indefinitely. Note `Dummy Load` contains a space — split on `US`, never on
 whitespace.
 
+**It replays unprompted on a RECONNECT too, not only on the first connect.**
+The model depends on this: `isReady()` keeps the retained panel disabled and
+refuses `SET_SWITCH` until a record arrives on the new socket, so a device that
+only spoke once would leave the tile dead forever. Measured against the
+reference hardware — connect, read, close, immediately reconnect: first bytes
+at **+105 ms** on connection 1 and **+78 ms** on connection 2, both starting
+with `SWITCHADD`, 195 B each, then 16 further records in the next 6 s. The gate
+therefore opens about a tenth of a second after the link returns.
+
 ### Client → device
 
 ```
