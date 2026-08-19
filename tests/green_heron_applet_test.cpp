@@ -23,6 +23,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QProcess>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTcpServer>
@@ -309,6 +312,40 @@ void testReconnectLeavesTheTileDeadUntilReplay()
            }));
 }
 
+// The cold-start half of testSwitchChoiceAndAddressPersist(), run in a SECOND
+// PROCESS against the same settings directory. Everything the parent can assert
+// about persistence reads back through the AppSettings singleton, which caches:
+// a value that never reached SQLite and one that did are indistinguishable from
+// inside the process that wrote it. Only a cold open can tell them apart, and
+// "the operator's switch is still there tomorrow" is a claim about the file,
+// not about a cache (review 4957410474, non-blocking finding).
+//
+// Deliberately no AppSettings::save() in the parent before it spawns: the
+// production write path is supposed to commit, and if it ever stops doing so
+// this test is the thing that should go red.
+int runRestartChild()
+{
+    // What main.cpp does at startup (main.cpp:617). AppSettings::instance() is
+    // a bare singleton — it does NOT read the database on first touch — so
+    // without this the child would be asserting against an empty cache and
+    // would pass or fail for the wrong reason.
+    AppSettings::instance().load();
+    GreenHeronApplet restored;
+    report("a cold process restores the remembered switch",
+           restored.selectedSwitch() == QLatin1String("AS-84F-3"),
+           restored.selectedSwitch().toStdString());
+    report("a cold process restores the remembered host",
+           restored.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"))->text()
+               == QLatin1String("127.0.0.1"),
+           restored.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"))
+               ->text().toStdString());
+    report("a cold process reads the peripherals object out of the store",
+           PeripheralSettings::deviceString(QStringLiteral("GreenHeron"),
+                                            QStringLiteral("Switch"))
+               == QLatin1String("AS-84F-3"));
+    return g_failed ? 1 : 0;
+}
+
 void testSwitchChoiceAndAddressPersist()
 {
     {
@@ -346,6 +383,23 @@ void testSwitchChoiceAndAddressPersist()
     report("the remembered host is restored",
            restored.findChild<QLineEdit*>(QStringLiteral("greenHeronHost"))->text()
                == QLatin1String("127.0.0.1"));
+
+    // …and the same claim made honestly, from a process that never saw this
+    // one's cache. The child inherits HOME / XDG_CONFIG_HOME /
+    // AETHER_SETTINGS_DIR from TestSettingsProfile through the environment, so
+    // it opens THIS test's sandboxed store and no other.
+    QProcess child;
+    child.setProcessChannelMode(QProcess::MergedChannels);
+    child.start(QCoreApplication::applicationFilePath(),
+                {QStringLiteral("--restart-child")});
+    const bool finished = child.waitForFinished(60000);
+    const QString childOutput = QString::fromUtf8(child.readAll()).trimmed();
+    report("the restart child ran to completion",
+           finished && child.exitStatus() == QProcess::NormalExit,
+           childOutput.toStdString());
+    report("the choice survives a real restart, not just the settings cache",
+           finished && child.exitCode() == 0,
+           childOutput.toStdString());
 }
 
 // The roster spans several TCP reads and has no terminator. An operator whose
@@ -447,8 +501,31 @@ void testConfigIsOneOwnedObject()
 
 int main(int argc, char** argv)
 {
+    // The child of testSwitchChoiceAndAddressPersist(). It must NOT build a
+    // TestSettingsProfile — that would mint a fresh temp dir and it would find
+    // an empty store. It adopts the parent's, inherited through the
+    // environment, and mirrors the two QSettings redirections the profile makes
+    // so the first-run legacy probe cannot reach the real user's settings.
+    if (argc > 1 && QLatin1String(argv[1]) == QLatin1String("--restart-child")) {
+        QStandardPaths::setTestModeEnabled(true);
+        const QString legacyRoot =
+            qEnvironmentVariable("HOME") + QStringLiteral("/legacy-settings");
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, legacyRoot);
+        QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, legacyRoot);
+        QApplication childApp(argc, argv);
+        return runRestartChild();
+    }
+
     TestSettingsProfile profile("green_heron_applet_test");
     QApplication app(argc, argv);
+
+    // main.cpp:617 does this at startup, and AppSettings::instance() does NOT
+    // do it lazily: without it the store is never opened, save() has no
+    // database to commit to, and every "persisted" assertion below is really
+    // just reading back the in-memory cache. That is exactly the hole the
+    // restart child exists to close — it found this.
+    AppSettings::instance().load();
 
     testAppletBasics();
     testShowsOnlyTheChosenSwitch();
