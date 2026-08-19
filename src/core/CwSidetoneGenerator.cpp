@@ -87,8 +87,8 @@ void CwSidetoneGenerator::setKeyDown(bool down,
     // queue with a later stamp.  The clamp preserves the schedule's exact
     // spacing whenever edges from one producer arrive back-to-back, which
     // is the #4890 case that matters.
-    // Bound worth knowing: the GUI echo (cwKeyDownChanged →
-    // MainWindow.cpp:1419 → setCwKeyDown(down)) queues a wall-clock stamp
+    // Bound worth knowing: the GUI echo (RadioModel::cwKeyDownChanged →
+    // MainWindow's connect → setCwKeyDown(down)) queues a wall-clock stamp
     // after each scheduled edge, so the floor sits at wall clock going into
     // the next one.  Scheduled stamps therefore hold only while that echo
     // round-trip stays shorter than one element (measured ~2 ms against

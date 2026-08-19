@@ -475,7 +475,7 @@ void testIdleProducesNoElements()
 // such delta lands in `longer`), which is exactly the environment-dependent
 // quantity this suite's header rules out as a gate.  It is printed instead.
 // The sample-exact rendering of scheduled stamps is pinned deterministically,
-// with no scheduler involved, by cw_sidetone_test case 12.
+// with no scheduler involved, by cw_sidetone_test case 15.
 void testScheduledStampsAreGridExact()
 {
     Recorder rec;
