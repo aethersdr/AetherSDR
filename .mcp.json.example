@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "aethersdr-automation": {
+      "command": "python3",
+      "args": ["tools/aether_mcp.py"],
+      "env": {
+        "AETHER_MCP_TOKEN": "paste-your-token-from-Radio-Setup-Network-Access-Token-here"
+      }
+    }
+  }
+}

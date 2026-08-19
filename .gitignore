@@ -45,3 +45,8 @@ third_party/sherpa-onnx-*.tar.bz2
 
 # macOS Finder metadata
 .DS_Store
+
+# Per-developer MCP config (aethersdr-automation bridge token). Copy
+# .mcp.json.example to .mcp.json and fill in the token from Radio Setup →
+# Network → Access Token; never commit the real one.
+.mcp.json
