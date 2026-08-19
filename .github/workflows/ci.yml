@@ -286,6 +286,21 @@ jobs:
       - name: Test MIDI settings and profile import/export
         run: ctest --test-dir build -R "^midi_settings_test$" --output-on-failure
 
+      # The Green Heron Everyware antenna switch. Until this step the three
+      # suites ran in no job at all — add_test() alone registers a target,
+      # it does not put it on a gate — so "CI green" meant only that they
+      # linked. That matters more here than for most tiles: these buttons
+      # close relays on a live antenna line, and the defect this gate now
+      # pins (a reconnect enabling a pre-drop roster before the device has
+      # replayed) passed every end-state assertion in the model suite while
+      # the window was wide open. Measured, not assumed: 0.00 s protocol,
+      # 2.41 s model, 1.06 s applet, against targets the Build step already
+      # linked. No hardware — the model and applet suites drive the real
+      # QTcpSocket path against a stand-in server on loopback; the applet
+      # suite runs offscreen (set on the target, not here).
+      - name: Test Green Heron antenna switch
+        run: ctest --test-dir build -R "^green_heron_(protocol|model|applet)_test$" --output-on-failure
+
       # hl2_am_dcblock_test is deliberately NOT on this gate, and re-adding it
       # needs a measurement first. #4774 added it here on the "milliseconds
       # against an already-linked target" rationale every other step above
