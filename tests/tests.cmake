@@ -928,6 +928,40 @@ add_test(NAME map_wrap_test COMMAND map_wrap_test)
 set_tests_properties(map_wrap_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# PSK Reporter map query scope and the UTC solar-position math used by the
+# optional day/night overlay. No network access is performed.
+add_executable(psk_reporter_map_behavior_test
+    tests/psk_reporter_map_behavior_test.cpp)
+target_include_directories(psk_reporter_map_behavior_test PRIVATE src)
+target_link_libraries(psk_reporter_map_behavior_test PRIVATE
+    aethercore Qt6::Core)
+add_test(NAME psk_reporter_map_behavior_test
+    COMMAND psk_reporter_map_behavior_test)
+
+# Live PSK Reporter updates must refresh the existing marker/path batches
+# atomically. Replacing them exposes the differently-scaled overview cache and
+# makes every MQTT report pulse between large/small dots and thick/thin paths.
+add_executable(map_live_update_test
+    tests/map_live_update_test.cpp
+    src/gui/map/MapMarkerBatchItem.cpp
+    src/gui/map/MapPathBatchItem.cpp
+    src/gui/map/MapTerminatorItem.cpp
+)
+target_include_directories(map_live_update_test PRIVATE src)
+target_link_libraries(map_live_update_test PRIVATE
+    aethercore
+    qgeoview
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Network
+)
+set_target_properties(map_live_update_test PROPERTIES AUTOMOC ON)
+add_test(NAME map_live_update_test COMMAND map_live_update_test)
+set_tests_properties(map_live_update_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Frameless-window geometry restore (#4328) — blob parse + the caption-free
 # re-clamp.  Windows-only in effect, but the logic is pure, so it is pinned on
 # every platform; case 4 drives a real QWidget so a future Qt changing the

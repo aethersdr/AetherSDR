@@ -47,6 +47,7 @@ private:
     void onIntervalChanged(int index);
     void onLookbackChanged(int index);
     void restartClient();
+    void applyMapCallsign();
     void updateBandConditions();
     void updateConnectionIndicator();
     void scheduleBeacon();
@@ -77,12 +78,15 @@ private:
     QComboBox*          m_bandCombo{nullptr};
     QComboBox*          m_modeCombo{nullptr};
     QComboBox*          m_lookbackCombo{nullptr};
+    QLineEdit*          m_queryCallsign{nullptr};
     QLabel*             m_statusLabel{nullptr};
     QLabel*             m_dxLabel{nullptr};
     QLabel*             m_connLabel{nullptr};
     QCheckBox*          m_pathsCheck{nullptr};
+    QCheckBox*          m_terminatorCheck{nullptr};
     QTimer*             m_emptyStateTimer{nullptr};
     QTimer*             m_lookbackDebounce{nullptr};
+    QTimer*             m_markerRefreshTimer{nullptr};
     QTimer*             m_beaconTimer{nullptr};
     QLineEdit*          m_beaconCallsign{nullptr};
     QLineEdit*          m_beaconGrid{nullptr};
@@ -121,6 +125,7 @@ private:
     bool                m_beaconTransmitting{false};
     QLabel*             m_bandCondPills[4]{};
     bool                m_started{false};
+    QString             m_appliedMapCallsign;
 };
 
 } // namespace AetherSDR

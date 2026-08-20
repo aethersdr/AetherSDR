@@ -24,6 +24,10 @@
 QGVLayerTiles::QGVLayerTiles()
 {
     mCurZoom = -1;
+    mCameraUpdateTimer.setSingleShot(true);
+    mCameraUpdateTimer.setInterval(100);
+    connect(&mCameraUpdateTimer, &QTimer::timeout,
+            this, &QGVLayerTiles::processCamera);
     sendToBack();
 }
 
@@ -102,19 +106,26 @@ void QGVLayerTiles::onCamera(const QGVCameraState& oldState, const QGVCameraStat
     }
 
     if (needUpdate) {
-        processCamera();
+        // Existing tile graphics follow the QGraphicsView transform
+        // immediately. Rebuilding the active tile set for every fractional
+        // trackpad or drag event only churns scene items on the GUI thread.
+        // Coalesce that bookkeeping until input pauses; the final camera is
+        // still processed, while interaction remains responsive.
+        mCameraUpdateTimer.start();
     }
 }
 
 void QGVLayerTiles::onUpdate()
 {
     QGVLayer::onUpdate();
+    mCameraUpdateTimer.stop();
     processCamera();
 }
 
 void QGVLayerTiles::onClean()
 {
     QGVLayer::onClean();
+    mCameraUpdateTimer.stop();
     mCurZoom = -1;
     mCurRect = {};
     mIndex.clear();

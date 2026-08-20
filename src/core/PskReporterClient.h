@@ -3,13 +3,17 @@
 #include <QDateTime>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QTimer>
 #include <QVector>
 
+class QNetworkReply;
+
 namespace AetherSDR {
 
 class MqttClient;
+class PskReporterClientTestAccess;
 
 // One reception report of our transmitted signal.
 struct PskReporterSpot {
@@ -21,6 +25,14 @@ struct PskReporterSpot {
     qint64  frequencyHz{0};
     int     snr{-999};        // dB, -999 = not reported
     qint64  flowStartSeconds{0};
+};
+
+struct PskReporterMonitor {
+    QString callsign;
+    QString locator;
+    QString mode;
+    QString decoderSoftware;
+    qint64 frequencyHz{0};
 };
 
 // Fetches reception reports of our callsign from pskreporter.info.
@@ -37,6 +49,11 @@ class PskReporterClient : public QObject {
     Q_OBJECT
 
 public:
+    enum class QueryScope {
+        Callsign,
+        Anyone
+    };
+
     static constexpr int kMinPollMs = 5 * 60 * 1000;   // PSK Reporter policy
     static constexpr int kLiveMqtt  = -1;              // sentinel interval
 
@@ -45,6 +62,7 @@ public:
 
     void setCallsign(const QString& callsign);
     QString callsign() const { return m_callsign; }
+    QueryScope queryScope() const { return m_scope; }
 
     // Lookback window (seconds): how far back spots are backfilled and
     // retained/displayed. Clamped to the PSK Reporter 24h API ceiling.
@@ -59,12 +77,19 @@ public:
 
     // Spots retained in the rolling lookback window, capped.
     const QVector<PskReporterSpot>& spots() const { return m_spots; }
+    const QVector<PskReporterMonitor>& monitors() const { return m_monitors; }
+    bool resultsLimited() const { return m_resultsLimited; }
 
     // Connection state for the UI indicator.
     bool isLive() const { return m_running && m_intervalMs == kLiveMqtt; }
     bool isMqttConnected() const;
     bool lastHttpOk() const { return m_lastHttpOk; }
     bool sawError() const { return m_sawError; }
+    bool httpRequestInFlight() const { return m_fetchInFlight; }
+    int lastHttpStatus() const { return m_lastHttpStatus; }
+    QString lastHttpError() const { return m_lastHttpError; }
+    QDateTime lastHttpRequestAt() const;
+    QDateTime nextHttpRequestAt() const;
     // "MQTT" when the live broker is connected, else "HTTP".
     QString transport() const;
 
@@ -77,6 +102,8 @@ private slots:
     void poll();
 
 private:
+    friend class PskReporterClientTestAccess;
+
     void handleQueryReply(const QByteArray& xml);
     void handleMqttMessage(const QString& topic, const QByteArray& payload);
     void appendSpot(const PskReporterSpot& spot);
@@ -85,6 +112,11 @@ private:
     void stopMqtt();
     // Begin (or keep) HTTP polling as a fallback while MQTT is unavailable.
     void startFallbackPolling();
+    void scheduleHttpPollAtAllowedTime();
+    QString httpThrottleStateFilePath() const;
+    void loadHttpThrottleState();
+    void saveHttpThrottleState() const;
+    static qint64 rateLimitBackoffMs(int consecutiveRateLimits);
 
     // Disk persistence: spots survive a client restart within the tombstone
     // window (kSpotTtlSeconds) so the map repopulates immediately on reopen
@@ -97,17 +129,28 @@ private:
     QTimer m_timer;
     QTimer m_mqttHealthTimer;
     QTimer m_saveTimer;
+    QTimer m_httpThrottleTimer;
     QString m_callsign;
+    QueryScope m_scope{QueryScope::Callsign};
     QVector<PskReporterSpot> m_spots;
+    QVector<PskReporterMonitor> m_monitors;
     qint64 m_lastSeqNo{-1};
     int    m_intervalMs{kMinPollMs};
     int    m_lookbackSec{kDefaultLookbackSec};
     int    m_fetchedLookbackSec{0};  // deepest window backfilled this session
     bool   m_running{false};
     bool   m_fetchInFlight{false};
+    QPointer<QNetworkReply> m_queryReply;
+    quint64 m_queryGeneration{0};
     bool   m_cacheDirty{false};
     bool   m_lastHttpOk{false};
     bool   m_sawError{false};
+    bool   m_resultsLimited{false};
+    int    m_lastHttpStatus{0};
+    QString m_lastHttpError;
+    qint64 m_lastHttpRequestEpochMs{0};
+    qint64 m_nextHttpAllowedEpochMs{0};
+    int m_consecutiveRateLimits{0};
     MqttClient* m_mqtt{nullptr};
 
     // MQTT feed health counters, summarized to the log periodically.
@@ -125,8 +168,11 @@ private:
     // MQTT behaves identically on every platform with no CA handling.
     static constexpr quint16 kMqttPort = 1883;
     static constexpr int kMaxSpots = 2000;
+    static constexpr int kMaxMonitors = 6000;
     // HTTP fallback poll cadence when MQTT can't connect (port blocked etc.).
     static constexpr int kFallbackPollMs = 5 * 60 * 1000;
+    static constexpr qint64 kRateLimitBaseMs = 15 * 60 * 1000;
+    static constexpr qint64 kRateLimitMaxMs = 2 * 60 * 60 * 1000;
     // PSK Reporter's retrieval API caps flowStartSeconds at 24h; the lookback
     // window can't exceed that. Default to 1 hour.
     static constexpr int kMaxLookbackSec = 24 * 60 * 60;
