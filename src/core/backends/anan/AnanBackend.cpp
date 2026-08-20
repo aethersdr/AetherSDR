@@ -1,8 +1,16 @@
 #include "core/backends/anan/AnanBackend.h"
+#include "core/backends/anan/AnanDroopCalibrator.h"
+#include "core/backends/anan/AnanSettings.h"
+#include "core/AppSettings.h"
+#include "core/RadioSettingsScope.h"
 
 #include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QTimer>
+#include <QVariantList>
+#include <QVariantMap>
 
 #include <array>
 #include <cmath>
@@ -297,8 +305,9 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.persistsMemories = false;    // default; stated explicitly
     c.clientSettingsDomains = {};  // no applyRestoredState()/currentOperatingState() yet
-    c.extensionNamespaces = {};    // no "anan" extension VERBS yet -- see below,
-                                    // this is about invokeExtension(), not this map
+    c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 CIC droop,
+                                    // corrected client-side via AnanDroopCalibrator
+    c.extensionNamespaces = {QStringLiteral("anan")};  // "droop.apply" -- see invokeExtension()
     // Genuinely discovered, not hardcoded (working plan Step 2's "Capabilities
     // from discovery" item) -- P2Client::discoveryInfoReceived() parses THIS
     // session's own Discovery reply opportunistically as it arrives (P2Client's
@@ -339,6 +348,21 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_discoveredBoardId = 0;
     m_discoveredFirmwareVer = 0;
     m_discoveredNumDdc = 0;
+
+    // Per-radio identity for RadioSettingsScope (droop calibration -- see
+    // invokeExtension()'s "droop.apply" handler). Set BEFORE the seed load
+    // just below, and before anything else in this function needs it,
+    // matching Hl2Backend's own m_radioSerial assignment ordering.
+    m_radioSerial = request.serial;
+    if (m_dsp) {
+        const auto tables = AnanDroopCalibrator::loadTables(
+            RadioSettingsScope(QStringLiteral("anan"), m_radioSerial));
+        for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
+            QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable", Qt::QueuedConnection,
+                Q_ARG(int, it.key()),
+                Q_ARG(std::vector<float>, std::vector<float>(it.value().begin(), it.value().end())));
+        }
+    }
 
     m_pendingParams.host = request.host;
     m_pendingParams.ddc0RateKsps =
@@ -879,15 +903,57 @@ void AnanBackend::setKeying(bool key)
 void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
-    Q_UNUSED(ns);
-    Q_UNUSED(verb);
-    Q_UNUSED(arg);
-    // No extension namespaces advertised (capabilities().extensionNamespaces
-    // is empty) -- matches FlexBackend/Hl2Backend's own precedent for a
-    // namespace with no encode path yet: fail the specific request rather
-    // than hang a caller waiting for a reply that will never come.
+    if (ns == QLatin1String("anan")) {
+        // Droop-correction calibration. Completes LOCALLY -- like Hl2Backend's
+        // freqcal.set, there is no device round trip to await: the tables are
+        // host-side data pushed straight to AnanRxDsp, and persistence + live
+        // application happen in exactly this one place, never duplicated
+        // between AnanDroopCalibrator's own caller (a UI tab or the
+        // `droopcal` bridge verb) and this handler.
+        if (verb == QLatin1String("droop.apply")) {
+            const QVariantMap byRate = arg.toMap();
+            QJsonObject doc;
+            for (auto it = byRate.constBegin(); it != byRate.constEnd(); ++it) {
+                bool okRate = false;
+                const int rateKsps = it.key().toInt(&okRate);
+                const QVariantList list = it.value().toList();
+                if (!okRate || list.size() != kDroopCorrectionFftSize)
+                    continue;   // malformed entry -- skip, do not corrupt the rest
+                std::vector<float> table(static_cast<std::size_t>(list.size()));
+                QJsonArray jsonArr;
+                for (int i = 0; i < list.size(); ++i) {
+                    table[static_cast<std::size_t>(i)] = list[i].toFloat();
+                    jsonArr.append(static_cast<double>(table[static_cast<std::size_t>(i)]));
+                }
+                if (m_dsp) {
+                    QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable",
+                        Qt::QueuedConnection, Q_ARG(int, rateKsps),
+                        Q_ARG(std::vector<float>, table));
+                }
+                doc.insert(it.key(), jsonArr);
+            }
+            // Never write an empty radio_id row (AGENTS.md): RadioSettingsScope
+            // falls back exact-radio -> family-wide on read, so a row written
+            // with no identity would be silently adopted by every ANAN that has
+            // none of its own -- same guard Hl2Backend::applyFreqCalPpb() uses.
+            if (m_radioSerial.isEmpty()) {
+                qWarning("AnanBackend: not persisting droop calibration -- "
+                         "no radio identity yet; applying for this session only");
+            } else if (!doc.isEmpty()) {
+                RadioSettingsScope(QStringLiteral("anan"), m_radioSerial)
+                    .setFeature(QLatin1String(AnanDroopCalibrator::kFeature),
+                               AnanDroopCalibrator::kSchemaVersion, doc);
+                AppSettings::instance().save();
+            }
+            if (requestId != 0)
+                emit extensionResult(requestId, true);
+            return;
+        }
+    }
+    // No other ANAN extension verbs; honor the async contract without hanging.
     if (requestId != 0)
-        emit extensionError(requestId, QStringLiteral("ANAN: no extension namespaces implemented"));
+        emit extensionError(requestId, QStringLiteral("ANAN: unknown extension verb '%1.%2'")
+                                           .arg(ns, verb));
 }
 
 void AnanBackend::emitSliceState()

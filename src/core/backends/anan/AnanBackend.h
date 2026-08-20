@@ -259,6 +259,19 @@ private:
     // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
     static constexpr int kSliceId = 0;
     static const QString kPanId;
+
+    // This radio's identity for per-radio settings (RadioSettingsScope,
+    // "anan" family) -- the droop-calibration table, currently the only
+    // per-radio ANAN state. Set from RadioConnectRequest::serial (populated
+    // by ConnectionPanel from AnanDiscovery::macToSerial()) at the top of
+    // connectRadio(), matching Hl2Backend's own m_radioSerial precedent.
+    // Empty before the first connect. RadioSettingsScope::isValid() only
+    // requires a non-empty FAMILY, not radioId, so a still-empty serial does
+    // not make reads/writes fail -- it silently targets the family-wide
+    // default row instead of one specific radio's, which is why droopcal's
+    // `start` action guards on settingsScope().radioId().isEmpty()
+    // explicitly, matching freqcal's own guard, rather than trusting isValid().
+    QString m_radioSerial;
 };
 
 }  // namespace AetherSDR::anan

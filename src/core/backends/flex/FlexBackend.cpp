@@ -193,6 +193,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // group on the Receive page, and it is NOT this flag. False here means "the
     // client does not apply a frequency scalar", which is correct for a Flex.
     caps.hostFrequencyCalibration = false;
+    caps.hostDroopCalibration = false;   // no known DDC edge droop on this radio
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
     caps.hasSelectableMicInputs = true;
