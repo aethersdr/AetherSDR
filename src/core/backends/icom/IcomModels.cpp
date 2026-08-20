@@ -287,7 +287,7 @@ std::span<const std::string_view> modeListFor(const IcomModel& model)
     // its compiled-in FlexRadio one, which has no WFM because a FLEX-6000 has no
     // WFM (#5040).
     static constexpr std::array<std::string_view, 10> kIc705{
-        "USB", "LSB", "CWU", "CWL", "AM", "FM", "DFM", "WFM", "DIGU", "DIGL"};
+        "USB", "LSB", "CW", "CWL", "AM", "FM", "DFM", "WFM", "DIGU", "DIGL"};
     if (model.civAddress == 0xA4)
         return kIc705;
 

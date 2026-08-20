@@ -1090,8 +1090,10 @@ int main(int argc, char** argv)
         // a mode the combo does not hold, so a radio put into WFM at the front
         // panel left the indicator showing the PREVIOUS mode. Every mode this
         // backend can report has to be reachable in the list.
-        check(modes.contains(QStringLiteral("CWU")) && modes.contains(QStringLiteral("CWL")),
+        check(modes.contains(QStringLiteral("CW")) && modes.contains(QStringLiteral("CWL")),
               "including the CW names this backend actually reports");
+        check(!modes.contains(QStringLiteral("CWU")),
+              "without publishing the Flex-oriented CWU alias for Icom");
         check(!modes.contains(QStringLiteral("SAM")),
               "and NOT the modes setSliceMode refuses - a list that offers SAM "
               "on an Icom is a control that silently reverts");
