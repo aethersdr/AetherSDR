@@ -94,6 +94,41 @@ BandStackKeyResult resolveBandStackKey(const QString& bandName,
     };
 }
 
+BandTuneAdmissibility evaluateBandTune(bool usesFlexCommandPlane,
+                                       const QString& bandName,
+                                       double targetMhz,
+                                       double tuningMinHz,
+                                       double tuningMaxHz,
+                                       const QVector<Transverter>& xvtrs,
+                                       ModelCapabilities caps)
+{
+    if (!usesFlexCommandPlane) {
+        // No band stack to preselect, so the only honest question is whether
+        // the receiver reaches the frequency at all. Wording matches the band
+        // buttons, which already refuse this way (#5041).
+        const double hz = targetMhz * 1.0e6;
+        if (tuningMaxHz > tuningMinHz && (hz < tuningMinHz || hz > tuningMaxHz)) {
+            return {false, {},
+                    QString("Band %1 is outside this radio's tuning range (%2–%3 MHz)")
+                        .arg(bandName)
+                        .arg(tuningMinHz / 1.0e6, 0, 'f', 3)
+                        .arg(tuningMaxHz / 1.0e6, 0, 'f', 3)};
+        }
+        return {true, {}, {}};
+    }
+
+    const auto stackKeyResult = resolveBandStackKey(bandName, xvtrs, caps);
+    if (stackKeyResult.isSupported())
+        return {true, stackKeyResult.key, {}};
+
+    QString reason = stackKeyResult.unsupportedReason;
+    if (targetMhz > 54.0 && xvtrs.isEmpty()) {
+        reason = QString("Band %1 requires a configured XVTR before Aether can tune it.")
+                     .arg(bandName);
+    }
+    return {false, {}, reason};
+}
+
 bool isWaterfallTileOutsidePan(double lowMhz, double highMhz, double panCenterMhz)
 {
     const double bw = tileBandwidth(lowMhz, highMhz);
