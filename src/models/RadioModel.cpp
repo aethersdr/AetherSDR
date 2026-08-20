@@ -1917,7 +1917,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
             [this](bool on) {
         if (m_backend && m_family != QLatin1String("flex")) {
-            if (on && !refuseKeyOnTransmitIncapableBackend())
+            if (on && !(refuseKeyOnTransmitIncapableBackend()
+                        && refuseKeyInReceiveOnlyMode()))
                 return;
             m_backend->setKeying(on);
             // The MOX button and the PTT coordinator key here, NOT through
@@ -1930,7 +1931,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
             [this](bool on) {
         if (m_backend && m_family != QLatin1String("flex")) {
-            if (on && !refuseKeyOnTransmitIncapableBackend()) {
+            if (on && !(refuseKeyOnTransmitIncapableBackend()
+                        && refuseKeyInReceiveOnlyMode())) {
                 // Un-latch TUNE as well. m_tune was already set optimistically
                 // (TransmitModel::startTune), and the button's toggle reads it,
                 // so leaving it set would strand TUNE "on" against a radio that
@@ -3778,10 +3780,56 @@ bool RadioModel::refuseKeyOnTransmitIncapableBackend()
     if (backendCapabilities().canTransmit)
         return true;
 
-    emitInterlockNotification(
+    return refuseKeyWithInterlock(
         tr("This radio is receive-only and cannot transmit."),
-        QStringLiteral("rx-only-tx"),
-        txSlice() ? txSlice()->panId() : QString());
+        QStringLiteral("rx-only-tx"));
+}
+
+// The second key-on reason: the radio transmits, just not in THIS mode.
+//
+// WFM on an IC-705 is the case this exists for (#5040) — the radio offers it to
+// listen to 76-108 MHz broadcast and its transmitter does not follow. The
+// backend refuses the frame as well, so nothing reaches the wire either way;
+// what only this side can do is UNDO THE OPTIMISTIC STATE. TransmitModel::setMox
+// has already set m_transmitting and startTune() has already latched m_tune by
+// the time any of this runs, and a backend cannot reach TransmitModel to put
+// either back — so a refusal made only down there leaves the TX indicator lit
+// and TUNE stuck on over a radio that never keyed, and lets the caller go on to
+// publishBackendTransmitEdge() for a transmission that did not happen (#5106
+// review).
+//
+// Keyed on the TX slice's mode, which is the slice that would actually be
+// keyed. No slice, or a backend that declares no receive-only modes — every
+// backend but Icom today — and this is inert.
+bool RadioModel::refuseKeyInReceiveOnlyMode()
+{
+    SliceModel* s = txSlice();
+    const QString mode = s ? s->mode() : QString();
+    if (!AetherSDR::modeIsReceiveOnly(backendCapabilities(), mode))
+        return true;
+
+    return refuseKeyWithInterlock(
+        tr("This radio receives only in %1 and will not transmit. "
+           "Choose a transmit mode first.").arg(mode),
+        QStringLiteral("rx-only-mode:%1").arg(mode));
+}
+
+// ONE refusal, so the two reasons cannot drift apart in what they clean up.
+//
+// setTransmitting(false) is the load-bearing half: it is what clears
+// m_transmitting — the flag the TX indicator, the audio gate, RigctlProtocol,
+// AutomationServer and the SWR sweep all read, and the one setMox() set
+// optimistically on the way in. Writing a TransmitDelta{mox=false} instead does
+// NOT do this: TransmitModel::applyChanges treats backend mox as observed radio
+// state and assigns it to m_mox, which is already false, so nothing is emitted
+// and nothing clears.
+//
+// Always returns false — "keying may not proceed" — so callers can `return
+// refuseKeyWithInterlock(...)` directly.
+bool RadioModel::refuseKeyWithInterlock(const QString& message, const QString& key)
+{
+    emitInterlockNotification(message, key,
+                              txSlice() ? txSlice()->panId() : QString());
     m_transmitModel.setTransmitting(false);
     return false;
 }
@@ -3796,6 +3844,7 @@ bool RadioModel::forwardNonFlexCwKeying(bool down)
     // (and Break-In MOX) asserted indefinitely.
     if (down
         && (!refuseKeyOnTransmitIncapableBackend()
+            || !refuseKeyInReceiveOnlyMode()
             || transmitStartBlockedByInhibit(QStringLiteral("cw-key")))) {
         return false;
     }
@@ -3818,13 +3867,15 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
         // PTT/MOX/DAX/TCI edge. Unkey (tx=false) is always allowed — it only
         // ever clears state.
         if (!backendCapabilities().canTransmit) {
-            emitInterlockNotification(
+            refuseKeyWithInterlock(
                 tr("This radio is receive-only and cannot transmit."),
-                QStringLiteral("rx-only-tx"),
-                txSlice() ? txSlice()->panId() : QString());
-            m_transmitModel.setTransmitting(false);
+                QStringLiteral("rx-only-tx"));
             return;
         }
+        // ...and the mode the TX slice is actually in. Same rule, same
+        // rollback; see refuseKeyInReceiveOnlyMode().
+        if (!refuseKeyInReceiveOnlyMode())
+            return;
         const QString message = localPttInterlockMessage(source);
         if (!message.isEmpty()) {
             const QString panId = txSlice() ? txSlice()->panId() : QString();

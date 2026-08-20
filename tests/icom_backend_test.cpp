@@ -1103,7 +1103,20 @@ int main(int argc, char** argv)
     // client-side because "the radio will say no" is not a property CI-V lets us
     // verify — an ignored key request is indistinguishable from one that worked
     // until the meters fail to move.
+    //
+    // TWO GATES, and this file can only see one of them. What the operator
+    // notices — the TX indicator going back out, TUNE un-latching, the interlock
+    // message — is RadioModel::refuseKeyInReceiveOnlyMode(), driven by the
+    // receiveOnlyModes capability asserted below; a backend cannot reach
+    // TransmitModel and so cannot clear any of it (#5106 review). What THIS gate
+    // owns is narrower and still worth its own rows: no PTT frame leaves by any
+    // path, whether or not it came through RadioModel.
     {
+        check(backend.capabilities().receiveOnlyModes
+                  == QStringList{QStringLiteral("WFM")},
+              "the backend DECLARES WFM as receive-only, which is what arms the "
+              "key guard in RadioModel");
+
         backend.setSliceMode(0, QStringLiteral("WFM"));
         check(waitSchedulerIdle(), "the radio converges on WFM");
         radio.clearCivLog();
@@ -1114,9 +1127,13 @@ int main(int argc, char** argv)
         check(std::none_of(radio.civCommands().begin(), radio.civCommands().end(),
                            movesPttOrTuner),
               "no PTT frame reaches a radio that cannot transmit in WFM");
-        check(moxPublications.size() > moxBefore && !moxPublications.back(),
-              "and the transmit indicator is put back to receive rather than "
-              "left lit over a radio that never keyed");
+        // DELIBERATELY NOT a mox publication. The backend used to emit
+        // TransmitDelta{mox=false} here and it cleared nothing: applyChanges
+        // assigns backend mox to m_mox, which is already false, so no signal
+        // reaches the indicator — which reads m_transmitting instead. Asserting
+        // that delta asserted the implementation back to itself.
+        check(moxPublications.size() == moxBefore,
+              "and the backend does not fake a transmit edge for the refusal");
 
         // TUNE composes its carrier out of the same key, and it borrows the
         // RF-power register on the way. Refusing only inside setKeying() would

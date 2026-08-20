@@ -307,6 +307,14 @@ bool modeIsReceiveOnly(const IcomModel& model, std::string_view neutralMode)
     //
     // Answered only for a model whose mode table has been read — an unfilled row
     // gets no claim in either direction, the same rule modeListFor() states above.
+    //
+    // That "no claim" is safe for the WITHDRAWN identity too, which is the one
+    // case where it looks unsafe: after the ambiguous-bus revert the combos keep
+    // offering the previous radio's WFM (they ignore an empty mode list, #891),
+    // so it looks as though keying in WFM has quietly become permitted again.
+    // It has not — kUnknown also reports hasTransmit=false, so capabilities()
+    // says canTransmit=false and RadioModel refuses to key it in ANY mode. This
+    // gate never has to answer for a radio we cannot characterise. (#5106 review)
     if (model.civAddress == 0xA4)
         return neutralMode == "WFM";
     return false;

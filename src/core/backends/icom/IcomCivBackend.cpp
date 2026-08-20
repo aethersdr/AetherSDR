@@ -126,6 +126,24 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
 
+    // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
+    // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
+    // follow (#5040). Derived from the same two functions the mode combo is
+    // built from rather than listed a third time, so a mode cannot be offered
+    // without the transmit answer for it being consistent.
+    //
+    // The key guards in RadioModel read this: only that side can roll back
+    // TransmitModel's optimistic MOX/TUNE state, which is why the refusal that
+    // the operator SEES lives there and the one below is only the wire backstop.
+    //
+    // Empty for a model whose mode table nobody has read, and for the unknown
+    // model — which also reports canTransmit=false, so keying it is refused
+    // outright and the narrower gate never has to answer for it.
+    for (const std::string_view mode : modeListFor(m))
+        if (icom::modeIsReceiveOnly(m, mode))
+            c.receiveOnlyModes << QString::fromUtf8(mode.data(),
+                                                    static_cast<int>(mode.size()));
+
     // The scope scale is OURS, not the radio's: it comes from ScopeCalibration
     // (floor/span, shifted by the radio's own reference level), and there is no
     // CI-V command to set a display dBm range — this backend has no consumer for
@@ -2682,7 +2700,8 @@ void IcomCivBackend::setRitOffset(int hz)
     sendUserCommand(cmdTuneOffsetHz(m_session ? m_session->civAddress() : 0xA4, hz));
 }
 
-// The receive-only mode gate, shared by every path that can start an emission.
+// The receive-only mode gate — the WIRE BACKSTOP, shared by every path here
+// that can start an emission.
 //
 // WFM is the case today (#5040): the IC-705 offers it to listen to FM broadcast,
 // 76-108 MHz, and its transmitter does not follow. Refused HERE rather than left
@@ -2690,6 +2709,15 @@ void IcomCivBackend::setRitOffset(int hz)
 // lets us verify — CI-V answers NG for a command it rejects, but a key request
 // that is simply IGNORED is indistinguishable from one that worked, right up
 // until the meters fail to move.
+//
+// SILENT ON PURPOSE, apart from the log line. This is the second of two gates:
+// RadioModel::refuseKeyInReceiveOnlyMode() runs first, off the receiveOnlyModes
+// capability published above, and it is the one that tells the operator and
+// rolls back the optimistic MOX/TUNE state. A backend cannot reach
+// TransmitModel, so anything it emitted here would be an indicator that never
+// cleared plus a second message for one refusal (#5106 review). What this gate
+// still buys is the guarantee no PTT frame leaves by ANY path, including one
+// that never passed through RadioModel.
 //
 // Returns true when the caller must not key.
 bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
@@ -2699,18 +2727,6 @@ bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
         return false;
 
     qCWarning(lcIcomTx) << "refusing to key: this radio receives only in" << neutral;
-
-    // SAY SO IN THE MODEL. TransmitModel has already taken the operator's MOX by
-    // the time we are called, so a bare return leaves a transmit indicator lit
-    // over a radio that is not transmitting — the same shape setSliceMode()
-    // re-asserts the actual mode for when it refuses a mode it cannot send.
-    TransmitDelta t;
-    t.mox = false;
-    emit transmitChanged(t);
-    emit configurationWarning(
-        QStringLiteral("This radio receives only in %1, so AetherSDR will not key "
-                       "it. Choose a transmit mode first.")
-            .arg(neutral));
     return true;
 }
 

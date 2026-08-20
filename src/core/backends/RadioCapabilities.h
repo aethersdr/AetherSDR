@@ -2,6 +2,7 @@
 
 #include <QFlags>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QVariantMap>
 
@@ -102,6 +103,23 @@ struct RadioCapabilities {
     // keying intent regardless of client requests.
     bool canTransmit = false;
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
+
+    // Modes this radio DEMODULATES BUT WILL NOT TRANSMIT IN, in AetherSDR's
+    // neutral vocabulary (the same strings SliceModel carries).
+    //
+    // WFM on an IC-705 is the case that named this: the radio offers it to
+    // listen to 76-108 MHz broadcast and its transmitter does not follow. That
+    // is NOT canTransmit=false — the radio keys perfectly well one mode away —
+    // so it needs its own field rather than a flag that would disable the whole
+    // transmit surface for a radio that has one.
+    //
+    // EMPTY is the honest default and what every other backend reports today: a
+    // radio that transmits in everything it receives. Read by the key-on guards
+    // in RadioModel, so a backend that fills it gets the refusal, the interlock
+    // notification and the optimistic-transmit-state rollback for free — the
+    // rollback a backend cannot perform for itself, because a backend cannot
+    // reach TransmitModel (#5106 review).
+    QStringList receiveOnlyModes;
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams
@@ -469,4 +487,18 @@ struct RadioCapabilities {
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(RadioCapabilities::ClientSettingsDomains)
 
+
+// Whether `mode` is one this radio receives but will not transmit in.
+//
+// Pure so the key guards' decision can be pinned by a test on its own, away
+// from the model plumbing that produces the capability. An EMPTY mode is not a
+// receive-only mode — no slice, no claim — which is what keeps the guard open
+// when it is asked before a slice exists.
+//
+// Case-insensitive because the automation bridge upper-cases what it is handed
+// and the neutral vocabulary is not guaranteed to be upper-case at every seam.
+inline bool modeIsReceiveOnly(const RadioCapabilities& caps, const QString& mode)
+{
+    return !mode.isEmpty() && caps.receiveOnlyModes.contains(mode, Qt::CaseInsensitive);
+}
 }  // namespace AetherSDR
