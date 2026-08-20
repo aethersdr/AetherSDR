@@ -154,6 +154,12 @@ private slots:
 
 private:
     void publishCapabilities();
+    // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
+    // from it. One call rather than two because they are the same answer — a
+    // model whose name reached the UI while its bands did not is how an IC-705
+    // ended up with a band menu that had no 2 m or 70 cm button on it (#5041).
+    // Emitted from every point that resolves m_model, so the two cannot drift.
+    void publishIdentity();
     // Publish the scope's dBm axis, derived from the SAME ScopeCalibration that
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.

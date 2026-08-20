@@ -14,6 +14,8 @@
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
+#include "models/BandDefs.h"
+#include "models/DeclaredBands.h"
 #include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
@@ -214,7 +216,92 @@ int main(int argc, char** argv)
             const icom::IcomModel* byName = icom::modelForName(m.name);
             check(byName != nullptr && byName->civAddress == m.civAddress,
                   "and its own name resolves back to it");
+
+            // ---- the declared band set (#5041) ---------------------------
+            //
+            // Two invariants, because a band declaration is the ONE row field
+            // that renders straight into a button the operator presses.
+            //
+            // (1) EVERY token survives parseDeclaredBands(). That function
+            //     silently drops anything outside BandDefs, which is the right
+            //     boundary behaviour for a hostile gateway and exactly the
+            //     wrong failure for a typo in this table: the band simply has
+            //     no button and nothing anywhere says why. Comparing the
+            //     surviving count against the tokens written turns that silence
+            //     into a red test.
+            //
+            // (2) Every declared band lies INSIDE this row's own tuning range.
+            //     The range already disables unreachable band buttons, so a
+            //     declaration reaching past it renders a button that is drawn
+            //     and then greyed out — the row contradicting itself, in the
+            //     UI. Containment keeps the two statements one statement.
+            const QString raw = QString::fromUtf8(
+                m.bands.data(), static_cast<int>(m.bands.size()));
+            const QStringList declared = parseDeclaredBands(raw);
+            const int tokens = raw.split(',', Qt::SkipEmptyParts).size();
+            check(declared.size() == tokens,
+                  "every declared band name is a real BandDefs band - a token "
+                  "dropped here is a band button that silently never appears");
+            for (const QString& name : declared) {
+                for (const auto& def : kBands) {
+                    if (name != QLatin1String(def.name))
+                        continue;
+                    check(def.lowMhz * 1e6 >= static_cast<double>(m.tuningMinHz)
+                              && def.highMhz * 1e6
+                                     <= static_cast<double>(m.tuningMaxHz),
+                          "and lies inside the tuning range the same row "
+                          "declares");
+                    break;
+                }
+            }
         }
+    }
+
+    // ---- the bands an IC-705 actually gets --------------------------------
+    //
+    // The reported bug: an IC-705 reaches 2 m and 70 cm natively, and had no
+    // band button for either, because the band menu falls back to FlexLib's
+    // ModelCapabilities table when nothing is declared and no Flex covers UHF.
+    // These pin the declaration that closes it — the whole chain from this row
+    // to a rendered button is table -> parseDeclaredBands -> band grid.
+    {
+        const icom::IcomModel* ic705 = icom::modelForName("IC-705");
+        check(ic705 != nullptr, "the IC-705 is in the table");
+        const QStringList bands = parseDeclaredBands(
+            QString::fromUtf8(ic705->bands.data(),
+                              static_cast<int>(ic705->bands.size())));
+        check(bands.contains(QStringLiteral("2m")),
+              "the IC-705 declares 2m, so the band menu offers it");
+        check(bands.contains(QStringLiteral("440")),
+              "and 440 - the band that had no entry in the built-in grid at all");
+        check(bands.contains(QStringLiteral("20m")) && bands.contains(QStringLiteral("6m")),
+              "and still every HF band plus 6m, which the declaration REPLACES "
+              "the built-in grid with rather than adding to");
+        check(!bands.contains(QStringLiteral("2200m"))
+                  && !bands.contains(QStringLiteral("630m")),
+              "but not the LF/MF utility rows, which are not declarable");
+
+        // The tri-bander, whose HF grid was entirely unpressable before.
+        const icom::IcomModel* ic9700 = icom::modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 is in the table");
+        check(parseDeclaredBands(
+                  QString::fromUtf8(ic9700->bands.data(),
+                                    static_cast<int>(ic9700->bands.size())))
+                  == QStringList({QStringLiteral("2m"), QStringLiteral("440"),
+                                  QStringLiteral("23cm")}),
+              "the IC-9700 declares exactly its three bands");
+
+        // AND THE HF-ONLY ROWS DECLARE NOTHING. Empty is a decision here, not
+        // an omission: it keeps the built-in HF grid, which is already right for
+        // them. A declaration added to one of these would REPLACE that grid, so
+        // this is the guard against a well-meant edit doing it by halves.
+        for (std::uint8_t addr : {0x98, 0x8E, 0x94, 0xB6}) {   // 7610, 785x, 7300, 7300MK2
+            const icom::IcomModel* m = icom::modelForCivAddress(addr);
+            check(m != nullptr && m->bands.empty(),
+                  "an HF-only row declares no bands and keeps the built-in grid");
+        }
+        check(icom::unknownModel().bands.empty(),
+              "and an unidentified radio declares nothing at all");
     }
 
     // ---- hasNetwork is what the Connect-by-IP chooser filters on ----------

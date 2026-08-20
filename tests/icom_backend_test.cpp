@@ -162,6 +162,18 @@ int main(int argc, char** argv)
         if (d.mox) { lastTransmitState.mox = d.mox; moxPublications.push_back(*d.mox); }
     });
 
+    // WHAT THE RADIO SAYS IT IS, and which bands follow from that. Both ride
+    // the same RadioDelta, and the band half is what puts a 2 m / 70 cm button
+    // in front of the operator (#5041) — so capture it off the seam rather than
+    // trusting the table it was read from.
+    QString publishedModel;
+    QString publishedBandsRaw;
+    QObject::connect(&backend, &IRadioBackend::radioChanged, &app,
+                     [&](const RadioDelta& d) {
+                         if (d.model) publishedModel = *d.model;
+                         if (d.bandsRaw) publishedBandsRaw = *d.bandsRaw;
+                     });
+
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
     QSignalSpy sliceSpy(&backend, &IRadioBackend::sliceChanged);
     QSignalSpy meterDefSpy(&backend, &IRadioBackend::meterDefined);
@@ -180,6 +192,24 @@ int main(int argc, char** argv)
     backend.connectRadio(req);
     check(waitFor([&] { return backend.isConnected(); }), "the backend connects");
     check(connectedSpy.count() == 1, "and emits connected() exactly once");
+
+    // The identity, published ON THE CONNECT EDGE — not later, when the
+    // 0x19 0x00 address query answers. The band menu is built there, so a
+    // declaration that arrived after it would leave the operator looking at a
+    // band panel with no 2 m or 70 cm button until something else forced a
+    // rebuild. The name is the only identity that exists this early, and it is
+    // enough (#5041).
+    check(waitFor([&] { return !publishedModel.isEmpty(); }),
+          "the backend publishes the model it resolved from the handshake name");
+    check(publishedModel == QStringLiteral("IC-705"),
+          "and it is the IC-705 the fake presents itself as");
+    check(publishedBandsRaw.contains(QStringLiteral("2m")),
+          "declaring 2m, which no FlexLib model table would have given it");
+    check(publishedBandsRaw.contains(QStringLiteral("440")),
+          "and 440 - the band the reported bug refused to tune at all");
+    check(publishedBandsRaw.contains(QStringLiteral("20m")),
+          "and HF, because the declaration REPLACES the built-in band grid "
+          "rather than adding a VHF row to it");
 
     quint64 schedulerRequestId = 9000;
     const auto waitSchedulerIdle = [&](int timeoutMs = 5000) {

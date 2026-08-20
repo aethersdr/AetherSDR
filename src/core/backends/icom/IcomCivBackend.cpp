@@ -224,6 +224,20 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
 void IcomCivBackend::publishCapabilities() { emit capabilitiesChanged(); }
 
+void IcomCivBackend::publishIdentity()
+{
+    RadioDelta r;
+    r.model = QString::fromUtf8(m_model->name.data(),
+                                static_cast<int>(m_model->name.size()));
+    // ALWAYS SET, even when the row declares nothing. bandsRaw is a present-only
+    // field, so omitting it leaves whatever the last radio declared standing —
+    // and an empty declaration is a real answer here: it means "use the built-in
+    // HF grid", which is right for every HF-only row in the table.
+    r.bandsRaw = QString::fromUtf8(m_model->bands.data(),
+                                   static_cast<int>(m_model->bands.size()));
+    emit radioChanged(r);
+}
+
 void IcomCivBackend::publishScopeDbmRange()
 {
     // kUnknown has hasScope=false, so this is a quiet no-op on a backend whose
@@ -623,10 +637,7 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
                 applyScopeStartup();
             }
             publishCapabilities();
-            RadioDelta r;
-            r.model = QString::fromUtf8(m_model->name.data(),
-                                        static_cast<int>(m_model->name.size()));
-            emit radioChanged(r);
+            publishIdentity();
         }
         return;
     }
@@ -768,8 +779,17 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // use it. The address query still runs and still wins — it is the
     // authority, this is just early enough to be useful.
     m_modelByName = modelForName(deviceName.toStdString());
-    if (m_modelByName)
+    if (m_modelByName) {
         m_model = m_modelByName;
+        // And declare the bands NOW, for the same reason the model is resolved
+        // now: the band menu is built on the connect edge, while the 0x19 0x00
+        // query that would confirm this identity still has no serial stream to
+        // run on. That query re-publishes when it answers; this is just early
+        // enough to be useful. Left inside the guard on purpose — an
+        // unidentified radio declares nothing and keeps the HF grid, rather
+        // than announcing itself as "Unknown Icom" with no bands at all.
+        publishIdentity();
+    }
 
     // WRONG DEVICE, said as early as it can be said.
     //
@@ -1233,10 +1253,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                 // known just now has not had them sent. No-op once started.
                 applyScopeStartup();
             }
-            RadioDelta r;
-            r.model = QString::fromUtf8(m_model->name.data(),
-                                        static_cast<int>(m_model->name.size()));
-            emit radioChanged(r);
+            publishIdentity();
         }
         pumpCiv(frameAtMs);
         return;

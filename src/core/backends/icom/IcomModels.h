@@ -83,6 +83,28 @@ struct IcomModel {
     // stops a new row copied from the IC-705 inheriting a shape nobody checked.
     bool hasVfoModeCommand = false;
 
+    // Amateur bands this radio covers, as canonical BandDefs names, comma
+    // separated -- the same "bands=" vocabulary a gateway declares, validated
+    // model-side by parseDeclaredBands() before anything renders it.
+    //
+    // What it buys is the band BUTTONS. With no declaration the band menu falls
+    // back to its built-in HF grid plus FlexLib's ModelCapabilities has4Meters/
+    // has2Meters flags -- and an IC-705 matches nothing in that Flex model
+    // table, so a radio that reaches 2 m and 70 cm natively had no button for
+    // either, and 70 cm has no entry in that grid at any radio (#5041).
+    //
+    // EMPTY MEANS "the built-in HF grid is already right", not "unknown". Every
+    // HF-only row below is served correctly by that grid, and tuningMaxHz
+    // already disables whatever it cannot reach. So declare only where the grid
+    // cannot express the radio -- i.e. it covers VHF/UHF -- and only within the
+    // coverage the row itself already claims in tuningMinHz/tuningMaxHz, which
+    // keeps this from becoming a second, drifting statement about the same
+    // hardware. icom_family_test pins that containment.
+    //
+    // A name outside BandDefs is dropped at the boundary (Principle VII), so a
+    // typo here costs a missing button, never a bogus one.
+    std::string_view bands;
+
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 

@@ -35,6 +35,17 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*tuningMinHz*/ 30'000ULL, /*tuningMaxHz*/ 470'000'000ULL,
         /*verified*/ true,
         /*hasVfoModeCommand*/ true,
+        // HF/50/144/430 — the amateur allocations inside the guide's own
+        // 30 kHz – 470 MHz range above. 70 cm is spelled 440 because that is
+        // what BandDefs names it.
+        //
+        // 2200m/630m are deliberately absent: they are non-declarable by
+        // #4027's non-goals and keep their own utility buttons, so naming them
+        // here would be dropped at the boundary anyway. 4 m likewise — this
+        // radio receives there and transmits nowhere in the band, and a band
+        // button is a tune-and-operate affordance rather than a coverage
+        // claim. Both stay reachable by typing the frequency.
+        /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
     },
     {
         // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),
@@ -71,6 +82,11 @@ constexpr std::array<IcomModel, 7> kModels{{
         // transmit audio on the MICROPHONE, so a 2 m AX.25 frame keyed the
         // radio and put room noise out instead of the modem's AFSK.
         /*hasVfoModeCommand*/ true,
+        // The tri-bander's three bands, exactly the 144 MHz – 1.3 GHz the row
+        // already claims. Declaring is not a nicety here: with no declaration
+        // this radio gets the HF grid, every button of which its tuning range
+        // then DISABLES — a band menu with nothing in it that can be pressed.
+        /*bands*/ "2m,440,23cm",
     },
     {
         0x98, "IC-7610", 2, 1,
@@ -137,6 +153,14 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, 10.0,
         144'000'000ULL, 10'500'000'000ULL,
         false,
+        /*hasVfoModeCommand*/ false,
+        // NO DECLARATION, on purpose. This radio's bands are not the contiguous
+        // span its 144 MHz – 10.5 GHz range suggests — it covers five discrete
+        // bands, the top one only with the CX-10G unit fitted — so the band set
+        // is a fact to read out of the model's own guide, like the rest of this
+        // unverified row, not one to infer from two numbers. Until someone does,
+        // frequency entry still reaches every one of them.
+        /*bands*/ "",
     },
 }};
 
