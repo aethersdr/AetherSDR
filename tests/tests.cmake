@@ -2410,6 +2410,16 @@ target_include_directories(cw_sidetone_test PRIVATE src)
 target_link_libraries(cw_sidetone_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 
+# #4978 — which device the CW sidetone backend is handed at start(). Pure,
+# header-only policy, so the whole truth table is a compile-time assertion; the
+# "saved device that IS the system default still takes the name-match path" row
+# pins the documented reach of the fix.
+add_executable(cw_sidetone_start_policy_test
+    tests/cw_sidetone_start_policy_test.cpp
+)
+target_include_directories(cw_sidetone_start_policy_test PRIVATE src)
+add_test(NAME cw_sidetone_start_policy_test COMMAND cw_sidetone_start_policy_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp

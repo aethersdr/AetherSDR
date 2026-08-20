@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
+#include "CwSidetoneStartPolicy.h"
 #include "TxCaptureBuffer.h"
 #include "ShutdownTrace.h"
 #include "ClientEq.h"
@@ -4148,7 +4149,8 @@ bool AudioEngine::startSidetoneStream()
             // handles follow the selected endpoint after hotplug/default churn.
             if (d.id() == m_outputDevice.id()) { dev = d; break; }
         }
-        explicitSelection = (dev.id() == m_outputDevice.id());
+        explicitSelection = isExplicitSidetoneSelection(
+            /*savedDeviceSet*/ true, /*savedDeviceEnumerable*/ dev.id() == m_outputDevice.id());
         if (!explicitSelection) {
             qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the backend's default output instead";
         }
@@ -4159,14 +4161,21 @@ bool AudioEngine::startSidetoneStream()
     // backend a null device so it resolves its own default output instead of
     // name-matching Qt's description against PortAudio's device names — on
     // Linux those come from different audio APIs (PulseAudio/PipeWire vs ALSA)
-    // and never coincide, which stranded every default-configured box on the
-    // QAudioSink fallback (#4978). The QAudioSink attempts keep the concrete
-    // device: that backend resolves a null itself but flags it as a fallback,
-    // which a deliberate default selection is not.
+    // and cannot coincide for analog/USB descriptions, which stranded boxes
+    // with no saved output selection on the QAudioSink fallback (#4978); a
+    // saved-but-unmatchable selection still falls back, pending the
+    // escape-hatch setting. The QAudioSink attempts keep the concrete device:
+    // that backend resolves a null itself but flags it as a fallback, which a
+    // deliberate default selection is not. The decision table lives in
+    // CwSidetoneStartPolicy.h, where it is pinned by
+    // tests/cw_sidetone_start_policy_test.cpp.
     const bool sidetoneOnPortAudio =
         qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0;
     const QAudioDevice startDev =
-        (sidetoneOnPortAudio && !explicitSelection) ? QAudioDevice() : dev;
+        sidetoneStartDevice(explicitSelection, sidetoneOnPortAudio)
+                == SidetoneStartDevice::BackendDefault
+            ? QAudioDevice()
+            : dev;
     bool sidetoneFallbackOccurred = false;
     QStringList sidetoneFallbackReasons;
     QStringList sidetoneAttempts;
