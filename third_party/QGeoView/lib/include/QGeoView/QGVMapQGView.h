@@ -32,6 +32,7 @@
 #include <QMimeData>
 
 class QGVMap;
+class QNativeGestureEvent;
 
 class QGV_LIB_DECL QGVMapQGView : public QGraphicsView
 {
@@ -68,6 +69,7 @@ private:
     void applyCameraUpdate(const QGVCameraState& oldState);
 
     void showTooltip(QHelpEvent* helpEvent);
+    bool zoomByNativeGesture(QNativeGestureEvent* event);
     void zoomByWheel(QWheelEvent* event);
     void startMoving(QMouseEvent* event);
     void startMovingObject(QMouseEvent* event);
@@ -86,6 +88,7 @@ private:
     void showMenu(QMouseEvent* event);
 
     bool event(QEvent* event) override final;
+    bool viewportEvent(QEvent* event) override final;
     void wheelEvent(QWheelEvent* event) override final;
     void mousePressEvent(QMouseEvent* event) override final;
     void mouseReleaseEvent(QMouseEvent* event) override final;

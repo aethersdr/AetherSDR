@@ -74,3 +74,11 @@ this list current when updating the snapshot.
    for; with patch 5 the several visible copies of one tile all resolve to the
    same canonical URL, so that would issue one identical concurrent GET per
    copy. The finished reply is now fanned out to every copy waiting on it.
+
+10. **`lib/src/QGVMapQGView.cpp` — native trackpad pinch zoom.** Qt delivers
+    macOS and Wayland trackpad pinches as incremental `ZoomNativeGesture`
+    events rather than wheel events. The view now applies every fractional
+    scale delta directly, without animation or integer zoom-level snapping,
+    and keeps the projected point beneath the pinch centroid fixed. Both the
+    view and viewport delivery paths are covered because `QGraphicsView`
+    input targeting differs by platform.

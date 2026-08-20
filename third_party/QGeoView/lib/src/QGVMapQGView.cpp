@@ -25,6 +25,7 @@
 #include "QGVWidget.h"
 
 #include <QApplication>
+#include <QNativeGestureEvent>
 #include <QParallelAnimationGroup>
 #include <QScrollBar>
 #include <QSequentialAnimationGroup>
@@ -287,6 +288,39 @@ void QGVMapQGView::showTooltip(QHelpEvent* helpEvent)
     } else {
         QToolTip::hideText();
     }
+}
+
+bool QGVMapQGView::zoomByNativeGesture(QNativeGestureEvent* event)
+{
+    if (event->gestureType() != Qt::ZoomNativeGesture
+        || !mMouseActions.testFlag(QGV::MouseAction::ZoomWheel)) {
+        return false;
+    }
+
+    event->accept();
+    const double factor = 1.0 + event->value();
+    if (!qIsFinite(factor) || factor <= 0.0 || qFuzzyCompare(factor, 1.0)) {
+        return true;
+    }
+
+    // Native gestures may target either the view or its viewport. Normalize
+    // from the stable global position, then keep the projected point beneath
+    // the pinch centroid fixed while applying every fractional scale update.
+    const QPoint eventPos =
+        viewport()->mapFromGlobal(event->globalPosition()).toPoint();
+    const QPointF projAnchor = mapToScene(eventPos);
+    const QGVCameraState oldState = getCamera();
+    blockCameraUpdate();
+    cameraScale(mScale * factor);
+
+    const QPointF projMouse = mapToScene(eventPos);
+    const QPointF delta = projMouse - projAnchor;
+    if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+        cameraMove(viewRect().center() - delta);
+    }
+    unblockCameraUpdate();
+    applyCameraUpdate(oldState);
+    return true;
 }
 
 void QGVMapQGView::zoomByWheel(QWheelEvent* event)
@@ -570,11 +604,24 @@ void QGVMapQGView::showMenu(QMouseEvent* event)
 
 bool QGVMapQGView::event(QEvent* event)
 {
+    if (event->type() == QEvent::NativeGesture
+        && zoomByNativeGesture(static_cast<QNativeGestureEvent*>(event))) {
+        return true;
+    }
     event->ignore();
     if (event->type() == QEvent::ToolTip) {
         showTooltip(static_cast<QHelpEvent*>(event));
     }
     return QGraphicsView::event(event);
+}
+
+bool QGVMapQGView::viewportEvent(QEvent* event)
+{
+    if (event->type() == QEvent::NativeGesture
+        && zoomByNativeGesture(static_cast<QNativeGestureEvent*>(event))) {
+        return true;
+    }
+    return QGraphicsView::viewportEvent(event);
 }
 
 void QGVMapQGView::wheelEvent(QWheelEvent* event)
