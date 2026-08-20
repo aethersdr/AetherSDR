@@ -3227,6 +3227,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doFreqCal(a.action, a.value);
             });
 
+        add("droopcal", {},
+            "droopcal [status|start|stop|apply] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop)",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doDroopCal(a.action, a.value);
+            });
+
         add("targettune", {},
             "targettune <mhz> — absolute tune through band-stack preselection",
             parseValueOnly,
@@ -7873,6 +7880,60 @@ QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& va
     }
 
     return err(QStringLiteral("freqcal: unknown action '%1' (get|set|from_vfo|reset)")
+                   .arg(action));
+}
+
+QJsonObject AutomationServer::doDroopCal(const QString& action, const QString& value)
+{
+    Q_UNUSED(value);
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (!m_radioModel->backendCapabilities().hostDroopCalibration) {
+        return err(QStringLiteral("droopcal: this radio has no measured DDC0 droop to correct"));
+    }
+
+    AnanDroopCalibrator& cal = m_radioModel->droopCalibrator();
+    const QString verb = action.isEmpty() ? QStringLiteral("status") : action.toLower();
+
+    // Direct, synchronous read of the LIVE calibrator -- unlike freqcal's
+    // state (which only exists inside the backend, reached through
+    // RadioSettingsScope/loadPpb), this object is directly reachable, so no
+    // invokeBackendExtension round trip is needed just to report status.
+    auto report = [&cal] {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("running"), cal.isRunning()},
+            {QStringLiteral("rateIndex"), cal.rateIndex()},
+            {QStringLiteral("totalRates"), cal.totalRates()},
+            {QStringLiteral("hasResult"), cal.hasResult()},
+        };
+    };
+
+    if (verb == QLatin1String("status"))
+        return report();
+
+    if (verb == QLatin1String("start")) {
+        // Same refusal freqcal's mutating verbs make: a write (here, the
+        // eventual Apply) with no radio identity would land on the
+        // family-wide default row and be inherited by every other radio of
+        // this family.
+        if (m_radioModel->settingsScope().radioId().isEmpty()) {
+            return err(QStringLiteral("droopcal: no radio identity yet — connect the radio "
+                                      "before calibrating"));
+        }
+        cal.start();
+        return report();
+    }
+    if (verb == QLatin1String("stop")) {
+        cal.stop();
+        return report();
+    }
+    if (verb == QLatin1String("apply")) {
+        cal.applyResult();
+        return report();
+    }
+
+    return err(QStringLiteral("droopcal: unknown action '%1' (status|start|stop|apply)")
                    .arg(action));
 }
 
