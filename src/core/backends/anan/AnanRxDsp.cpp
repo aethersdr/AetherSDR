@@ -310,8 +310,15 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             // reflects the corrected value at every step -- see
             // AnanDroopCorrection.h. inputSampleRateHz is always an exact
             // multiple of 1000 for the six valid DDC0 rates.
-            applyDroopCorrectionDb(m_bins,
-                droopTableForRate(m_config.inputSampleRateHz / 1000));
+            const DroopCorrectionTable& droopTable =
+                droopTableForRate(m_config.inputSampleRateHz / 1000);
+            applyDroopCorrectionDb(m_bins, droopTable);
+            // Cosmetic fade for the true edge -- only once a real
+            // calibration exists for this rate (the zero fallback has
+            // nothing meaningful to fade FROM). See applyEdgeFade()'s own
+            // comment for why this exists instead of a larger capDb.
+            if (&droopTable != &kDroopCorrectionZero)
+                applyEdgeFade(m_bins);
             smoothSpectrumBins(m_bins);
             emit spectrumReady(m_bins);
             m_lastSpectrumMs = m_spectrumClock.elapsed();

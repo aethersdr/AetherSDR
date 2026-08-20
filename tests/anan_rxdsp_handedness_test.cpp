@@ -472,19 +472,54 @@ int main(int argc, char** argv)
         const DroopCorrectionTable& table = syntheticTable;
         check(emitted.size() == rawBins.size() && emitted.size() == table.size(),
               "emitted/reference/table sizes all agree");
+
+        // applyEdgeFade() now runs right after applyDroopCorrectionDb() for
+        // any rate with a real (non-zero) table -- which this synthetic one
+        // is -- so the outermost kTailBins on each side no longer equal
+        // raw+table exactly; they're the fade's own deterministic curve.
+        // kTailBins mirrors applyEdgeFade()'s own default tailFraction
+        // (0.03) at this test's fftSize (1024): static_cast<size_t>(1024 *
+        // 0.03f) == 30.
+        constexpr std::size_t kTailBins = 30;
+
+        std::vector<float> rawPlusTable(rawBins.size());
+        for (std::size_t k = 0; k < rawPlusTable.size(); ++k)
+            rawPlusTable[k] = rawBins[k] + table[k];
+
         bool matched = emitted.size() == rawBins.size() && emitted.size() == table.size();
-        for (std::size_t k = 0; matched && k < emitted.size(); ++k) {
-            if (std::fabs(emitted[k] - (rawBins[k] + table[k])) > 1.0e-4f) {
+        for (std::size_t k = kTailBins; matched && k < emitted.size() - kTailBins; ++k) {
+            if (std::fabs(emitted[k] - rawPlusTable[k]) > 1.0e-4f) {
                 matched = false;
                 std::fprintf(stderr,
                     "  bin %zu: emitted=%.6f raw+correction=%.6f (raw=%.6f correction=%.6f)\n",
-                    k, emitted[k], rawBins[k] + table[k], rawBins[k], table[k]);
+                    k, emitted[k], rawPlusTable[k], rawBins[k], table[k]);
             }
         }
         check(matched,
-              "the first emitted frame equals the raw FFT bins plus the rate's droop "
-              "correction table, bin for bin -- proving the correction lands between "
-              "process() and the EMA, not before the FFT and not after smoothing");
+              "the first emitted frame's non-tail bins equal the raw FFT bins plus the "
+              "rate's droop correction table, bin for bin -- proving the correction "
+              "lands between process() and the EMA, not before the FFT and not after "
+              "smoothing");
+
+        // Tail bins: applyEdgeFade() run on a copy of raw+table, at the
+        // same defaults processIqBlock() uses, must equal what was emitted
+        // -- proving the fade is the SECOND step in the pipeline (after
+        // the per-bin correction, still before the EMA), not skipped and
+        // not applied to the raw bins directly.
+        std::vector<float> expectedTail = rawPlusTable;
+        applyEdgeFade(expectedTail);
+        bool tailMatched = expectedTail.size() == emitted.size();
+        for (std::size_t k = 0; tailMatched && k < kTailBins; ++k) {
+            if (std::fabs(emitted[k] - expectedTail[k]) > 1.0e-4f)
+                tailMatched = false;
+            const std::size_t ridx = emitted.size() - 1 - k;
+            if (std::fabs(emitted[ridx] - expectedTail[ridx]) > 1.0e-4f)
+                tailMatched = false;
+        }
+        check(tailMatched,
+              "the tail bins match applyEdgeFade() run on raw+table, bin for bin -- "
+              "the cosmetic fade is the second step, not a replacement for the real "
+              "correction and not skipped");
     }
 
     // ---- Group 6: rate change picks up the NEW rate's droop table ----
@@ -565,15 +600,20 @@ int main(int argc, char** argv)
         check(refSpectrum.process(conjugated, rawBins) == 1,
               "rate-change test: reference AnanSpectrum produces exactly one frame");
 
+        // Skip the tail bins here -- applyEdgeFade() replaces them with its
+        // own deterministic curve (see Group 5, which already covers that
+        // math in detail); this group's job is only to confirm the RIGHT
+        // rate's table drives the non-tail bins after a live rate change.
+        constexpr std::size_t kTailBins = 30;
         bool matched = emitted.size() == rawBins.size() && emitted.size() == table96.size();
-        for (std::size_t k = 0; matched && k < emitted.size(); ++k) {
+        for (std::size_t k = kTailBins; matched && k < emitted.size() - kTailBins; ++k) {
             if (std::fabs(emitted[k] - (rawBins[k] + table96[k])) > 1.0e-4f)
                 matched = false;
         }
         check(matched,
-              "after a live rate change, the emitted frame uses the NEW rate's (96 ksps) "
-              "droop table -- proving m_config.inputSampleRateHz was updated by the "
-              "rebuild, not left stale at the connect-time 48 ksps");
+              "after a live rate change, the emitted frame's non-tail bins use the NEW "
+              "rate's (96 ksps) droop table -- proving m_config.inputSampleRateHz was "
+              "updated by the rebuild, not left stale at the connect-time 48 ksps");
     }
 
     if (g_failures == 0)
