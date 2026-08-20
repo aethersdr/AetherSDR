@@ -355,8 +355,12 @@ selected at connect time by a `family` string through `makeBackend()`:
 | `icom` | `IcomCivBackend` (`src/core/backends/icom/`) | Networked Icom, shipped v26.8.2 — CI-V command plane inside the RS-BA1 UDP transport; the radio owns its own state, so `clientSettingsDomains` is empty |
 | `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
 
-The versioned protocol (step 3+) has not landed — UI code still consumes
-models directly, and that remains correct.
+Step 3 is in progress: the normative v1 envelope contract, bounded codec,
+observe-only local handshake/capability service, and a QtWidgets-free
+`aetherd` skeleton have landed. Typed model resources, subscriptions,
+authenticated non-TX control, and the desktop adapter have not; UI code still
+consumes models directly, and that remains correct. No protocol TX method is
+advertised before the step-4 arbiter exists.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
@@ -373,8 +377,9 @@ duplicate to Qt. The same shape exists on the spectrum side.
 
 | Target | Contents | May link |
 |---|---|---|
-| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. **Never `gui/`; QtWidgets only via the tracked-legacy files below, shrinking to zero** |
+| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. **Never `gui/` or QtWidgets**; the remaining EB2 warnings are source-location debt compiled only by the desktop target |
 | `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
+| `aetherd` | `src/aetherd/main.cpp` — headless service shell | `aethercore` + Qt Core/Network. **Never QtWidgets** |
 
 The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 `static-checks.yml`, `--strict`) by three ratchets:

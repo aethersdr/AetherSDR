@@ -602,6 +602,9 @@ set(AETHER_SETTINGS_SOURCES
 )
 
 set(CORE_SOURCES
+    src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
+    src/core/control/ControlService.cpp       # aetherd v1 observe-only dispatch
+    src/core/control/LocalControlServer.cpp   # current-user local transport
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
@@ -639,9 +642,6 @@ set(CORE_SOURCES
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
     src/core/OccupiedRegion.cpp
-    src/core/SettingsHelpers.cpp
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
@@ -724,7 +724,6 @@ set(CORE_SOURCES
     src/core/TciRoutingState.cpp
     src/core/RadioCertification.cpp
     src/core/TciTrxMap.cpp
-    src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
     src/core/AcomProtocol.cpp
@@ -767,7 +766,6 @@ set(CORE_SOURCES
     src/core/RADEEngine.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/ShortcutManager.cpp
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
     src/core/DeviceDiagnostics.cpp
@@ -1092,6 +1090,10 @@ set(RNNOISE_SOURCES
     ${RNNOISE_DIR}/src/rnnoise_tables.c
     ${RNNOISE_DIR}/src/parse_lpcnet_weights.c
 )
+set(RNNOISE_INCLUDE_DIRS
+    ${RNNOISE_DIR}/include
+    ${RNNOISE_DIR}/src
+)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
     list(APPEND RNNOISE_SOURCES
         ${RNNOISE_DIR}/src/x86/x86cpu.c
@@ -1099,11 +1101,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
         ${RNNOISE_DIR}/src/x86/nnet_sse4_1.c
         ${RNNOISE_DIR}/src/x86/nnet_avx2.c
     )
+    list(APPEND RNNOISE_INCLUDE_DIRS ${RNNOISE_DIR}/src/x86)
 endif()
 
 # Suppress warnings and set include paths for bundled C code
 set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
-    INCLUDE_DIRECTORIES "${RNNOISE_DIR}/include;${RNNOISE_DIR}/src;${RNNOISE_DIR}/src/x86"
+    INCLUDE_DIRECTORIES "${RNNOISE_INCLUDE_DIRS}"
 )
 # x86 RTCD (runtime CPU detection) + per-file SIMD flags
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
@@ -1256,13 +1259,40 @@ add_library(aethercore STATIC
 )
 target_link_libraries(aethercore PRIVATE aether::wdsp)
 
+# Desktop-only implementations kept out of libaethercore. Their public headers
+# remain temporarily in src/core while call sites migrate. A library keeps the
+# desktop executable and the automation test harnesses on the same linkage path
+# without pulling QtWidgets into the headless engine.
+add_library(aetherdesktop_support STATIC
+    src/core/AutomationServer.cpp
+    src/core/SettingsHelpers.cpp
+    src/core/ShortcutManager.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+)
+target_link_libraries(aetherdesktop_support PUBLIC
+    aethercore
+    Qt6::Widgets
+)
+
 add_executable(AetherSDR
     src/main.cpp
     ${GUI_SOURCES}
     ${RESOURCES}
     ${DFNR_RESOURCES}
 )
-target_link_libraries(AetherSDR PRIVATE aethercore)
+target_link_libraries(AetherSDR PRIVATE
+    aetherdesktop_support
+)
+
+add_executable(aetherd
+    src/aetherd/main.cpp
+)
+target_link_libraries(aetherd PRIVATE
+    aethercore
+    Qt6::Core
+    Qt6::Network
+)
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
 # whisper.cpp is a self-contained CMake project exposing a `whisper` target
@@ -1942,18 +1972,13 @@ target_include_directories(aethercore PUBLIC
     ${CMAKE_SOURCE_DIR}/third_party/r8brain
 )
 
-# Engine dependency surface. Qt6::Widgets is still linked into the engine
-# because five core files use QtWidgets (TxKeyingMarker.h, ThemeManager.cpp,
-# AutomationServer.cpp, ShortcutManager.cpp, SettingsHelpers.cpp). These are
-# tracked as EB2 legacy in tools/check_engine_boundary.py (per-file baseline
-# counts that may only shrink) and split out in step 3 — AutomationServer's
-# widget-facing dumpTree/grab half is the bulk of it.
+# Engine dependency surface. Desktop-only implementations are compiled by the
+# AetherSDR executable, so aethercore must not link QtWidgets.
 target_link_libraries(aethercore PUBLIC
     aether_sqlite3
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
-    Qt6::Widgets
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
@@ -2034,10 +2059,10 @@ if(Qt6DBus_FOUND)
 endif()
 
 if(AETHER_GPU_SPECTRUM)
-    # PUBLIC on the engine: src/core/AutomationServer.cpp compiles QRhiWidget
-    # grab paths under #ifdef AETHER_GPU_SPECTRUM (QRhiWidget is public
-    # QtWidgets API on Qt 6.7+, so no GuiPrivate needed engine-side).
-    target_compile_definitions(aethercore PUBLIC AETHER_GPU_SPECTRUM)
+    # Desktop-only: SpectrumWidget and AutomationServer's grab paths compile
+    # QRhiWidget code. The headless engine has no GPU-widget surface.
+    target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
+    target_compile_definitions(aetherdesktop_support PRIVATE AETHER_GPU_SPECTRUM)
 
     # Apply the manual private-include paths now that AetherSDR exists. Covers
     # Debian multi-arch and Windows/macOS aqt installs that lack the Qt6::GuiPrivate
@@ -2045,6 +2070,10 @@ if(AETHER_GPU_SPECTRUM)
     if(DEBIAN_GPU_FIX_REQUIRED)
         message(STATUS "Applying private QtGui include paths to AetherSDR (${DEBIAN_PRIVATE_INC})")
         target_include_directories(AetherSDR PRIVATE
+            "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
+            "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
+        )
+        target_include_directories(aetherdesktop_support PRIVATE
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
         )
@@ -2058,10 +2087,15 @@ if(AETHER_GPU_SPECTRUM)
             "${QT_FRAMEWORK_PRIVATE_INC}"
             "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
         )
+        target_include_directories(aetherdesktop_support PRIVATE
+            "${QT_FRAMEWORK_PRIVATE_INC}"
+            "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+        )
     endif()
 
     if(TARGET Qt6::GuiPrivate)
         target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
+        target_link_libraries(aetherdesktop_support PRIVATE Qt6::GuiPrivate)
     elseif(NOT DEBIAN_GPU_FIX_REQUIRED AND NOT QT_FRAMEWORK_PRIVATE_INC)
         # No GuiPrivate target and neither manual path applied — last resort:
         # locate the rhi/ headers within the Qt6::Gui include dirs. Qt's macOS
@@ -2077,6 +2111,7 @@ if(AETHER_GPU_SPECTRUM)
             foreach(_pd IN LISTS _priv_dirs)
                 if(EXISTS "${_pd}/rhi/qrhi.h")
                     target_include_directories(AetherSDR PRIVATE "${_pd}")
+                    target_include_directories(aetherdesktop_support PRIVATE "${_pd}")
                     message(STATUS "QRhi headers found at ${_pd}/rhi/")
                     break()
                 endif()
@@ -2700,7 +2735,7 @@ target_compile_definitions(aethercore PUBLIC
 # Compiler warnings — same flags for both first-party targets. Vendored
 # sources compiled into aethercore keep their per-source -w COMPILE_FLAGS,
 # which land after these target options and win (unchanged from monolith).
-foreach(_aether_tgt aethercore AetherSDR)
+foreach(_aether_tgt aethercore aetherdesktop_support AetherSDR aetherd)
     if(MSVC)
         target_compile_options(${_aether_tgt} PRIVATE /W3 /Zc:__cplusplus /permissive- /utf-8 /bigobj)
     else()
@@ -2714,6 +2749,21 @@ foreach(_aether_tgt aethercore AetherSDR)
         )
     endif()
 endforeach()
+
+# Stage 3's headless boundary is structural: neither the engine library nor
+# its daemon may acquire the desktop widget dependency. Keep this assertion
+# next to the completed target graph so a later conditional link is caught at
+# configure time rather than only on a release artifact.
+get_target_property(_aethercore_links aethercore LINK_LIBRARIES)
+get_target_property(_aethercore_interface_links aethercore INTERFACE_LINK_LIBRARIES)
+get_target_property(_aetherd_links aetherd LINK_LIBRARIES)
+if("${_aethercore_links};${_aethercore_interface_links};${_aetherd_links}"
+        MATCHES "Qt6::Widgets")
+    message(FATAL_ERROR "aethercore/aetherd must not link Qt6::Widgets")
+endif()
+unset(_aethercore_links)
+unset(_aethercore_interface_links)
+unset(_aetherd_links)
 
 
 # ── Unit test harnesses ──────────────────────────────────────────────────────
@@ -2788,4 +2838,3 @@ else()
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
 endif()
-
