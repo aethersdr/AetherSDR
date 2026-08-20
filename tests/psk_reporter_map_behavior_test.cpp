@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QTemporaryDir>
 #include <QTimeZone>
 
 #include <cmath>
@@ -80,6 +81,12 @@ public:
     static void discardPendingCacheWrite(PskReporterClient& client)
     {
         client.m_cacheDirty = false;
+    }
+
+    static void setCacheDirectory(PskReporterClient& client,
+                                  const QString& directory)
+    {
+        client.m_cacheDirectoryOverride = directory;
     }
 };
 
@@ -199,7 +206,7 @@ int main(int argc, char** argv)
     ok &= check(parserClient.spots().size()
                     == PskReporterClientTestAccess::maxSpots()
                     && parserClient.resultsLimited(),
-                "receptionReport parsing enforces and surfaces the spot cap");
+                "receptionReport parsing enforces and surfaces the request cap");
 
     PskReporterClient cacheClient;
     QJsonArray cachedMonitors;
@@ -222,6 +229,11 @@ int main(int argc, char** argv)
                 "reloading a cache does not duplicate active monitors");
 
     PskReporterClient liveClient;
+    QTemporaryDir cacheDirectory;
+    ok &= check(cacheDirectory.isValid(),
+                "temporary cache directory is available");
+    PskReporterClientTestAccess::setCacheDirectory(
+        liveClient, cacheDirectory.path());
     liveClient.setCallsign(QStringLiteral("K1ABC"));
     PskReporterClientTestAccess::setInterval(
         liveClient, PskReporterClient::kLiveMqtt);

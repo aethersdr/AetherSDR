@@ -163,6 +163,7 @@ private:
     int    m_intervalMs{kMinPollMs};
     int    m_lookbackSec{kDefaultLookbackSec};
     int    m_fetchedLookbackSec{0};  // deepest window backfilled this session
+    QString m_cacheDirectoryOverride;  // test isolation; empty in production
     bool   m_running{false};
     bool   m_httpPollingEnabled{true};
     bool   m_fetchInFlight{false};

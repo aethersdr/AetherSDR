@@ -606,7 +606,11 @@ void PskReporterClient::handleParsedHttpSnapshot(
         }
     }
     pruneOldSpots();
-    m_resultsLimited = snapshot.parsedReports > kMaxSpots;
+    // The request itself asks for kMaxSpots, so receiving exactly that many
+    // is already evidence that more global rows may have been truncated by
+    // the service. Surface the snapshot as capped rather than promising a
+    // complete multi-hour history at global scope.
+    m_resultsLimited = snapshot.parsedReports >= kMaxSpots;
     qCInfo(lcPskReporter) << "HTTP parsed" << added << "reception reports,"
                           << m_spots.size() << "total, lastSeqNo" << m_lastSeqNo;
     if (!snapshot.parseError.isEmpty()) {
@@ -813,8 +817,9 @@ QString PskReporterClient::cacheFilePath() const
 QString PskReporterClient::cacheFilePath(QueryScope scope,
                                          const QString& callsign) const
 {
-    const QString dir =
-        QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    const QString dir = m_cacheDirectoryOverride.isEmpty()
+        ? QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+        : m_cacheDirectoryOverride;
     const QString scopeKey = scope == QueryScope::Anyone
         ? QStringLiteral("anyone")
         : QString::fromLatin1(QCryptographicHash::hash(
