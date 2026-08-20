@@ -3,6 +3,8 @@
 
 #include "models/XvtrPolicy.h"
 
+#include <QtGlobal>
+
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -86,6 +88,26 @@ void expectBandTuneRefused(const char* label, const XvtrPolicy::BandTuneAdmissib
            QStringLiteral("supported=%1 key=%2 reason=%3")
                .arg(a.supported)
                .arg(a.bandStackKey, a.reason)
+               .toStdString());
+}
+
+// Refused BY RANGE, which is a different answer from "no band-stack mapping"
+// and has to stay distinguishable: it is the flag the GUI switches on to word
+// the refusal, and the range it carries goes into that sentence. Asserting the
+// typed fields rather than the log prose is deliberate — the prose is free to
+// be reworded, the contract is not.
+void expectRefusedByRange(const char* label, const XvtrPolicy::BandTuneAdmissibility& a,
+                          double expectedMinMhz, double expectedMaxMhz)
+{
+    report(label,
+           !a.supported && a.bandStackKey.isEmpty() && a.outsideTuningRange
+               && qFuzzyCompare(a.rangeMinMhz, expectedMinMhz)
+               && qFuzzyCompare(a.rangeMaxMhz, expectedMaxMhz),
+           QStringLiteral("supported=%1 byRange=%2 min=%3 max=%4")
+               .arg(a.supported)
+               .arg(a.outsideTuningRange)
+               .arg(a.rangeMinMhz)
+               .arg(a.rangeMaxMhz)
                .toStdString());
 }
 
@@ -220,11 +242,28 @@ void testBandTuneAdmissibilityFollowsBackendNotBandTable()
                            QString());
 
     // Outside the declared range the refusal stays honest — and says range, not
-    // XVTR, because a transverter would not help this backend.
-    expectBandTuneRefused("Icom above declared range is refused by range",
-                          XvtrPolicy::evaluateBandTune(false, "900", 902.100,
-                                                       kIc705MinHz, kIc705MaxHz, {}),
-                          "outside this radio's tuning range");
+    // XVTR, because a transverter would not help this backend. BOTH edges: the
+    // upper one is what 70 cm would have hit on an HF-only Icom, the lower one
+    // is the 30 kHz floor, and a comparison written with one `if` too few
+    // passes the first while admitting everything below the second.
+    expectRefusedByRange("Icom above declared range is refused by range",
+                         XvtrPolicy::evaluateBandTune(false, "900", 902.100,
+                                                      kIc705MinHz, kIc705MaxHz, {}),
+                         0.030, 470.000);
+    expectRefusedByRange("Icom below declared range is refused by range too",
+                         XvtrPolicy::evaluateBandTune(false, "2200m", 0.010,
+                                                      kIc705MinHz, kIc705MaxHz, {}),
+                         0.030, 470.000);
+    // And the boundaries themselves are INSIDE — an inclusive range, or the
+    // radio loses its own first and last tunable hertz.
+    expectBandTuneAdmitted("the low edge itself is admitted",
+                           XvtrPolicy::evaluateBandTune(false, "2200m", 0.030,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
+    expectBandTuneAdmitted("and so is the high edge",
+                           XvtrPolicy::evaluateBandTune(false, "900", 470.000,
+                                                        kIc705MinHz, kIc705MaxHz, {}),
+                           QString());
 
     // A backend that declares no range keeps the previous permissive behaviour.
     expectBandTuneAdmitted("backend with no declared range is not gated",

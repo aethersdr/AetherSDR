@@ -139,7 +139,8 @@ void MainWindow::tuneToNet(const NetEntry& entry)
                 backendCaps.tuningMinHz, backendCaps.tuningMaxHz, xvtrs,
                 m_radioModel.capabilities());
             if (!admissibility.supported) {
-                const QString reason = admissibility.reason;
+                const QString reason =
+                    bandTuneRefusalText(admissibility, targetBand);
                 qCWarning(lcProtocol).noquote().nospace()
                     << "MainWindow: net tune cannot preselect band stack"
                     << " source=net-tune net=" << entry.name

@@ -41,7 +41,16 @@ struct BandStackKeyResult {
 struct BandTuneAdmissibility {
     bool    supported{false};
     QString bandStackKey;  // Flex `display pan band=` key; empty off a Flex.
-    QString reason;        // Operator-facing refusal; empty when supported.
+    // Why it was refused, as a LOG line — this layer has no QObject to hang
+    // tr() on, and a log should not be translated anyway. What the operator
+    // reads is composed by bandTuneRefusalText() in MainWindowHelpers, which is
+    // the single translatable copy of that sentence and the reason the fields
+    // below are typed rather than pre-formatted: the band buttons and the typed
+    // tune must not word the same refusal two different ways.
+    QString reason;        // empty when supported
+    bool    outsideTuningRange{false};  // refused by RANGE, not by band stack
+    double  rangeMinMhz{0.0};
+    double  rangeMaxMhz{0.0};
 };
 
 struct WaterfallTileRange {

@@ -5117,19 +5117,25 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // every radio without a stack does.
         if (!m_radioModel.usesFlexCommandPlane()) {
             const RadioCapabilities caps = m_radioModel.backendCapabilities();
-            const double hz = freqMhz * 1.0e6;
             // Refuse rather than tune somewhere the receiver cannot hear. Only
             // when the backend actually reported a range — a backend that
             // reports none keeps the previous unconditional behaviour.
-            if (caps.tuningMaxHz > caps.tuningMinHz
-                && (hz < caps.tuningMinHz || hz > caps.tuningMaxHz)) {
-                const QString reason =
-                    tr("%1 is outside this radio's tuning range (%2–%3 MHz)")
-                        .arg(bandName)
-                        .arg(caps.tuningMinHz / 1.0e6, 0, 'f', 3)
-                        .arg(caps.tuningMaxHz / 1.0e6, 0, 'f', 3);
-                qCWarning(lcProtocol).noquote() << "MainWindow: " << reason;
-                statusBar()->showMessage(reason, 5000);
+            //
+            // Through evaluateBandTune() rather than an inline comparison, so
+            // this button and the typed-tune gate cannot drift apart in either
+            // the decision or the sentence the operator reads (#5041). We are
+            // inside the non-Flex branch, so the XVTR/band-stack half of that
+            // function is unreachable from here and its Flex arguments are the
+            // empty defaults.
+            const auto admissibility =
+                XvtrPolicy::evaluateBandTune(false, bandName, freqMhz,
+                                             caps.tuningMinHz, caps.tuningMaxHz,
+                                             {}, {});
+            if (!admissibility.supported) {
+                qCWarning(lcProtocol).noquote()
+                    << "MainWindow: band button refused:" << admissibility.reason;
+                statusBar()->showMessage(
+                    bandTuneRefusalText(admissibility, bandName), 5000);
                 return;
             }
 

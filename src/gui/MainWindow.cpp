@@ -7570,7 +7570,8 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
                                      backendCaps.tuningMinHz, backendCaps.tuningMaxHz,
                                      xvtrs, m_radioModel.capabilities());
     if (!admissibility.supported) {
-        const QString unsupportedReason = admissibility.reason;
+        const QString unsupportedReason =
+            bandTuneRefusalText(admissibility, targetBand);
         qCWarning(lcProtocol).noquote().nospace()
             << "MainWindow: direct tune cannot preselect band stack source="
             << (source ? source : "(unknown)")
@@ -7588,8 +7589,16 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     // `display pan set <pan> band=<key>`, a command plane an Icom or an HL2
     // does not have. The band was admissible, so let the ordinary tune-and-
     // recenter path carry it (#5041).
-    if (admissibility.bandStackKey.isEmpty())
+    if (admissibility.bandStackKey.isEmpty()) {
+        // But the band DID change, and the two things that follow from that on
+        // a radio with no stack are the same two the band buttons already do
+        // (MainWindow_Wiring.cpp). Dropping them here would have let a finished
+        // SWR plot from the old band survive a cross-band typed tune and stay
+        // on screen describing an antenna the radio is no longer pointed at.
+        clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
+        m_bandSettings.setCurrentBand(targetBand);
         return BandStackPreselectResult::NotNeeded;
+    }
 
     qCDebug(lcProtocol).noquote().nospace()
         << "MainWindow: direct tune preselecting band stack source="
