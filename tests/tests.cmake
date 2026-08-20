@@ -1868,10 +1868,10 @@ target_compile_definitions(rf_gain_presentation_test PRIVATE
     AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME rf_gain_presentation_test COMMAND rf_gain_presentation_test)
 
-# ANAN droop-correction lookup/apply -- pure C++, no Qt dependency at all,
-# tests the safety-fallback contract and correction math regardless of
-# whether real bench-measured tables (tools/anan_droop_calibration.py) have
-# landed in AnanDroopCorrectionTables.inc yet.
+# ANAN droop-correction apply math -- pure C++, no Qt dependency at all.
+# Table SELECTION/storage now lives in AnanRxDsp (a runtime map, populated
+# live by AnanDroopCalibrator or a per-radio settings load), not a compiled
+# lookup, so this only covers applyDroopCorrectionDb()/kDroopCorrectionZero.
 add_executable(anan_droop_correction_test
     tests/anan_droop_correction_test.cpp
     src/core/backends/anan/AnanDroopCorrection.cpp
@@ -2594,11 +2594,6 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
-    # ANAN droop-correction calibration script: pure-Python data processing,
-    # no bench sweep needed to exercise its logic.
-    add_test(NAME anan_droop_calibration_checks
-             COMMAND ${PYTHON3_EXECUTABLE}
-                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_anan_droop_calibration.py)
 endif()
 
 # Retired local-listener fixture. Positive behavior is covered through the live

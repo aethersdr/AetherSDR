@@ -13,20 +13,20 @@ namespace AetherSDR::anan {
 // a rendering artifact and not fixable by touching bin count or reported
 // bandwidth -- an earlier attempt at exactly that broke zoom-out (see
 // AnanBackend::emitPanState()'s own comment). This header applies a per-bin
-// dB correction, measured empirically per DDC0 rate (tools/
-// anan_droop_calibration.py), to the actual FFT magnitude before display.
+// dB correction, measured empirically per DDC0 rate by the in-app
+// AnanDroopCalibrator sweep (src/core/backends/anan/AnanDroopCalibrator.h),
+// to the actual FFT magnitude before display. AnanRxDsp holds the live
+// table set (loaded from per-radio settings at connect, or produced by a
+// fresh sweep); this header only owns the data shape and the pure apply
+// math, not table selection or storage.
 
 inline constexpr int kDroopCorrectionFftSize = 1024;
 
 using DroopCorrectionTable = std::array<float, kDroopCorrectionFftSize>;
 
-// Safe no-op fallback for an unrecognized rate -- additive zero, not a guess.
+// Safe no-op fallback for an unrecognized/uncalibrated rate -- additive
+// zero, not a guess.
 extern const DroopCorrectionTable& kDroopCorrectionZero;
-
-// Selects the measured table for a DDC0 rate in ksps (one of the six ANAN-G2
-// values: 48/96/192/384/768/1536). Returns kDroopCorrectionZero for any
-// other rate.
-[[nodiscard]] const DroopCorrectionTable& droopCorrectionTableForRateKsps(int ddc0RateKsps) noexcept;
 
 // Adds the per-bin dB correction into binsDbfs in place. Pure, no I/O, no
 // AnanRxDsp state -- unit-testable standalone. A size mismatch leaves

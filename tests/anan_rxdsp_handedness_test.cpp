@@ -401,15 +401,16 @@ int main(int argc, char** argv)
     // ---- Group 5: droop-correction insertion point ----
     // Pins that AnanDroopCorrection's per-bin dB correction lands exactly
     // between AnanSpectrum::process() and smoothSpectrumBins()'s EMA -- not
-    // applied twice, not applied after smoothing -- WITHOUT depending on the
-    // actual bench-measured correction values (AnanDroopCorrectionTables.inc
-    // may still be the all-zero placeholder). On a freshly configured
-    // AnanRxDsp, smoothSpectrumBins() takes its "nothing to blend against
-    // yet" branch on exactly the FIRST emitted frame (m_smoothedBins starts
-    // empty), which passes m_bins through untouched -- so the first frame's
-    // emitted bins must equal an independently computed raw AnanSpectrum
-    // frame plus droopCorrectionTableForRateKsps() for the configured rate,
-    // bin for bin.
+    // applied twice, not applied after smoothing. Uses a SYNTHETIC table
+    // pushed via setDroopCorrectionTable() rather than any bench-measured
+    // one, so this test is independent of whatever a real calibration sweep
+    // (AnanDroopCalibrator) or a per-radio settings load happened to
+    // produce. On a freshly configured AnanRxDsp, smoothSpectrumBins()
+    // takes its "nothing to blend against yet" branch on exactly the FIRST
+    // emitted frame (m_smoothedBins starts empty), which passes m_bins
+    // through untouched -- so the first frame's emitted bins must equal an
+    // independently computed raw AnanSpectrum frame plus the synthetic
+    // table, bin for bin.
     {
         constexpr int kFft = 1024;   // matches production (AnanBackend.cpp
                                      // always configures fftSize=1024) and
@@ -431,6 +432,14 @@ int main(int argc, char** argv)
         std::string err;
         check(dsp.configure(cfg, &err),
               err.empty() ? "droop-correction test: configure() succeeds" : err.c_str());
+
+        // Synthetic, deliberately non-zero and non-uniform so the test can't
+        // pass by accident on an all-zero table.
+        DroopCorrectionTable syntheticTable{};
+        for (std::size_t k = 0; k < syntheticTable.size(); ++k)
+            syntheticTable[k] = 3.25f + 0.01f * static_cast<float>(k % 50);
+        dsp.setDroopCorrectionTable(cfg.inputSampleRateHz / 1000,
+            std::vector<float>(syntheticTable.begin(), syntheticTable.end()));
 
         const std::vector<std::complex<float>> iq = makeTone(kFft, 37.0, /*conjugate=*/false);
 
@@ -460,8 +469,7 @@ int main(int argc, char** argv)
         check(refSpectrum.process(conjugated, rawBins) == 1,
               "reference AnanSpectrum produces exactly one frame from the same IQ");
 
-        const DroopCorrectionTable& table = droopCorrectionTableForRateKsps(
-            cfg.inputSampleRateHz / 1000);
+        const DroopCorrectionTable& table = syntheticTable;
         check(emitted.size() == rawBins.size() && emitted.size() == table.size(),
               "emitted/reference/table sizes all agree");
         bool matched = emitted.size() == rawBins.size() && emitted.size() == table.size();
@@ -477,6 +485,95 @@ int main(int argc, char** argv)
               "the first emitted frame equals the raw FFT bins plus the rate's droop "
               "correction table, bin for bin -- proving the correction lands between "
               "process() and the EMA, not before the FFT and not after smoothing");
+    }
+
+    // ---- Group 6: rate change picks up the NEW rate's droop table ----
+    // Regression for a real bug: installRebuiltChannel() swapped in the new
+    // WdspChannel/AnanSpectrum but never updated m_config.inputSampleRateHz,
+    // so droopTableForRate() (which reads m_config.inputSampleRateHz, not
+    // the rate the new channel was actually built for) kept consulting
+    // whatever rate was live at the last configure() -- forever, for every
+    // live rate change after the first. On real hardware this meant a live
+    // panadapter zoom (which snaps to a new DDC0 rate and rebuilds through
+    // exactly this path) kept applying the CONNECT-TIME rate's correction
+    // curve to a different rate's spectrum: visible as a mismatched, lumpy
+    // rolloff rather than a flat corrected trace. Configure at 48 ksps,
+    // rebuild to 96 ksps like a live rate change does, and confirm the
+    // emitted spectrum reflects the 96 ksps table -- not the 48 ksps one and
+    // not the zero fallback.
+    {
+        constexpr int kFft = 1024;
+
+        AnanRxDsp::Config cfg48;
+        cfg48.inputSampleRateHz = 48000;   // -> 48 ksps
+        cfg48.audioSampleRateHz = kAudioRate;
+        cfg48.dspBlockSize = kBlock;
+        cfg48.fftSize = kFft;
+        cfg48.mode = WdspChannel::Mode::Usb;
+        cfg48.filterLowHz = 100.0;
+        cfg48.filterHighHz = 2900.0;
+        cfg48.agcMode = 0;                 // linear: nothing else rescales the bins
+        cfg48.maximumAgcGainDb = 40.0;
+        cfg48.blockForOutput = true;
+
+        AnanRxDsp dsp;
+        std::string err;
+        check(dsp.configure(cfg48, &err),
+              err.empty() ? "rate-change test: initial 48 ksps configure() succeeds"
+                          : err.c_str());
+
+        DroopCorrectionTable table48{};
+        DroopCorrectionTable table96{};
+        for (std::size_t k = 0; k < table48.size(); ++k) {
+            table48[k] = 3.25f + 0.01f * static_cast<float>(k % 50);
+            table96[k] = 9.0f + 0.02f * static_cast<float>(k % 37);   // distinct shape
+        }
+        dsp.setDroopCorrectionTable(48, std::vector<float>(table48.begin(), table48.end()));
+        dsp.setDroopCorrectionTable(96, std::vector<float>(table96.begin(), table96.end()));
+
+        // Rebuild to 96 ksps exactly as AnanBackend::beginRateChange() does:
+        // buildChannel() off this object's own thread, then
+        // installRebuiltChannel() to swap it in.
+        AnanRxDsp::Config cfg96 = cfg48;
+        cfg96.inputSampleRateHz = 96000;   // -> 96 ksps
+        AnanRxDsp::RebuildResult result = AnanRxDsp::buildChannel(cfg96);
+        check(result.channel != nullptr,
+              result.error.empty() ? "rate-change test: 96 ksps buildChannel() succeeds"
+                                   : result.error.c_str());
+        check(dsp.installRebuiltChannel(std::move(result)),
+              "rate-change test: installRebuiltChannel() to 96 ksps succeeds");
+
+        const std::vector<std::complex<float>> iq = makeTone(kFft, 37.0, /*conjugate=*/false);
+        std::vector<float> emitted;
+        bool gotFrame = false;
+        const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
+            [&](const std::vector<float>& bins) {
+                if (!gotFrame) {
+                    emitted = bins;
+                    gotFrame = true;
+                }
+            });
+        dsp.processIqBlock(iq);
+        QObject::disconnect(conn);
+        check(gotFrame, "rate-change test: processIqBlock() emits a frame after the rebuild");
+
+        std::vector<std::complex<float>> conjugated(iq.size());
+        for (std::size_t k = 0; k < iq.size(); ++k)
+            conjugated[k] = std::conj(iq[k]);
+        AnanSpectrum refSpectrum(kFft);
+        std::vector<float> rawBins;
+        check(refSpectrum.process(conjugated, rawBins) == 1,
+              "rate-change test: reference AnanSpectrum produces exactly one frame");
+
+        bool matched = emitted.size() == rawBins.size() && emitted.size() == table96.size();
+        for (std::size_t k = 0; matched && k < emitted.size(); ++k) {
+            if (std::fabs(emitted[k] - (rawBins[k] + table96[k])) > 1.0e-4f)
+                matched = false;
+        }
+        check(matched,
+              "after a live rate change, the emitted frame uses the NEW rate's (96 ksps) "
+              "droop table -- proving m_config.inputSampleRateHz was updated by the "
+              "rebuild, not left stale at the connect-time 48 ksps");
     }
 
     if (g_failures == 0)

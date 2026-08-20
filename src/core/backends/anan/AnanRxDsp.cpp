@@ -1,7 +1,5 @@
 #include "core/backends/anan/AnanRxDsp.h"
 
-#include "core/backends/anan/AnanDroopCorrection.h"
-
 #include <QMetaType>
 
 #include <algorithm>
@@ -95,6 +93,7 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     if (!channel)
         return result;
     result.outputBlockSize = channel->outputBlockSize();
+    result.inputSampleRateHz = config.inputSampleRateHz;
     result.spectrum = std::make_unique<AnanSpectrum>(config.fftSize);
     result.channel = std::move(channel);
     return result;
@@ -122,6 +121,13 @@ bool AnanRxDsp::installRebuiltChannel(RebuildResult result)
 
 void AnanRxDsp::installChannel(RebuildResult result)
 {
+    // The only update site for this field outside configure()'s own
+    // synchronous m_config = config -- see RebuildResult::inputSampleRateHz's
+    // comment. Must land before droopTableForRate() is ever consulted again,
+    // which processIqBlock() does on every block once m_channel is swapped
+    // below.
+    m_config.inputSampleRateHz = result.inputSampleRateHz;
+
     m_iqBuffer.clear();
     m_i.assign(static_cast<std::size_t>(m_config.dspBlockSize), 0.0f);
     m_q.assign(static_cast<std::size_t>(m_config.dspBlockSize), 0.0f);
@@ -199,6 +205,26 @@ void AnanRxDsp::setSpectrumRateFps(int fps)
     // Do NOT reset the clock or the last-emit stamp -- a rate change
     // mid-stream should take effect on the next frame that comes due, not
     // grant an immediate extra one.
+}
+
+void AnanRxDsp::setDroopCorrectionTable(int rateKsps, const std::vector<float>& table)
+{
+    if (table.size() != kDroopCorrectionFftSize)
+        return;
+    bool valid = false;
+    for (const int r : {48, 96, 192, 384, 768, 1536})
+        valid |= (r == rateKsps);
+    if (!valid)
+        return;
+    DroopCorrectionTable t;
+    std::copy(table.begin(), table.end(), t.begin());
+    m_droopTables[rateKsps] = t;
+}
+
+const DroopCorrectionTable& AnanRxDsp::droopTableForRate(int rateKsps) const noexcept
+{
+    const auto it = m_droopTables.constFind(rateKsps);
+    return it != m_droopTables.constEnd() ? it.value() : kDroopCorrectionZero;
 }
 
 void AnanRxDsp::setShift(double shiftHz)
@@ -285,7 +311,7 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             // AnanDroopCorrection.h. inputSampleRateHz is always an exact
             // multiple of 1000 for the six valid DDC0 rates.
             applyDroopCorrectionDb(m_bins,
-                droopCorrectionTableForRateKsps(m_config.inputSampleRateHz / 1000));
+                droopTableForRate(m_config.inputSampleRateHz / 1000));
             smoothSpectrumBins(m_bins);
             emit spectrumReady(m_bins);
             m_lastSpectrumMs = m_spectrumClock.elapsed();
