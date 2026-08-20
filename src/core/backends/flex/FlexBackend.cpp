@@ -159,6 +159,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // in later. Sample rates and TX power range are refined as their touchpoints
     // convert (they are not part of this skeleton).
     caps.canTransmit = true;
+    // A Flex transmits in every mode it demodulates, so there is nothing for the
+    // receive-only mode guard to refuse. Stated rather than defaulted, per the
+    // "adding a field" rule in RadioCapabilities.h.
+    caps.receiveOnlyModes = {};
     caps.hasTuner = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     // The radio owns its reference and its own calibration ("radio set cal_freq",

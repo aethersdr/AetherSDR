@@ -40,6 +40,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `manufacturer` | `"FlexRadio"` | `"Hermes-Lite"` | `"AetherSDR"` | `MainWindow::refreshRadioIdentityLabels` | Status-bar make row ABOVE the model, shown only when the model string does not already carry the brand (`FLEX-8400M` does, `IC-705` does not). Display only — nothing branches on it. Icom: `"Icom"` |
 | `tuningMinHz` / `tuningMaxHz` | — (0/0) | 0.1–38.4 MHz | — (0/0) | `MainWindow_Wiring.cpp`, `applyTuningRangeToOverlayMenu` | Refuses band buttons the receiver cannot reach. 0/0 means unconstrained |
 | `canTransmit` | ✅ | `m_txAllowed` | ❌ | `RadioModel::setTransmit`, MOX/TUNE key guards | **TX safety gate.** Fail-closed: false denies any keying intent |
+| `receiveOnlyModes` | — (empty) | — (empty) | — (empty) | `RadioModel::refuseKeyInReceiveOnlyMode` (MOX / TUNE / CW-key / `setTransmit`) | Modes the radio **demodulates but will not transmit in**, in the neutral vocabulary. Empty = transmits in everything it receives. Refusing here (not in the backend) is what rolls back `TransmitModel`'s optimistic MOX/TUNE state — a backend cannot reach `TransmitModel`, so a refusal made down there leaves the TX indicator lit and TUNE latched. Icom: `["WFM"]` on the IC-705, which receives 76–108 MHz broadcast and does not transmit there (#5040) |
 | `hostModulates` | — (❌) | ✅ | — (❌) | `TciServer`, `MainWindow_Session` | Mic source collapses to PC; PC-audio lock. **Not the same question as `takesTxAudioOverSeam`** — see below |
 | `takesTxAudioOverSeam` | ❌ | ✅ | ❌ | `MainWindow_Session` (capture, TX stream, PC-audio lock), `AudioEngine::setHostModulation`, `RadioModel::ensureDaxTxStream` | Whether transmit audio leaves through `submitTxAudio` rather than a DAX/VITA-49 stream. Icom: ✅ |
 | `hasSelectableMicInputs` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneCwApplet::setSelectableMicInputs` | The MIC/BAL/LINE/ACC/PC list. False collapses it to PC and adopts that into TransmitModel. Icom: ❌ (the radio picks its own input) |
@@ -366,6 +367,11 @@ predicates the readouts ask before printing. See [`HERMES.md`](../HERMES.md)
   reported-by-backend truth; the two remain distinct concepts.
 - **Hl2Backend** reports `canTransmit` from its own TX gate (`m_txAllowed`) so a
   build with transmit disabled looks RX-only from above the seam.
+- **IcomCivBackend** derives `receiveOnlyModes` from `modeListFor()` filtered by
+  `modeIsReceiveOnly()` rather than listing it a third time, so a mode cannot be
+  offered in the combo without a consistent transmit answer for it. It also
+  keeps a wire-level backstop in `setKeying`/`setTune` — silent apart from a log
+  line, since the operator-facing refusal belongs to the guard above.
 - **SimBackend** must never look like something that can key a transmitter
   (Principle VI).
 

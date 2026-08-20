@@ -1404,6 +1404,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
+    // The HL2 modulates on this host, so it transmits in whatever mode WDSP is
+    // told to build — there is no mode it receives and cannot send. The transmit
+    // gate (m_txAllowed) is the only thing that stops it, and that is
+    // canTransmit above.
+    c.receiveOnlyModes = {};
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks

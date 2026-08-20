@@ -1764,6 +1764,14 @@ private:
     // keying may proceed; on refusal it rolls back the optimistic transmit state
     // and notifies, so no raw-TX edge is ever published for a refused key.
     bool refuseKeyOnTransmitIncapableBackend();
+    // The same guard, for the radio that transmits everywhere EXCEPT the mode
+    // it is currently in (WFM on an IC-705, #5040). True when keying may
+    // proceed. See the definition for why the refusal has to happen on this
+    // side of the seam and not in the backend.
+    bool refuseKeyInReceiveOnlyMode();
+    // The refusal both of the above perform: raise the interlock notification
+    // and roll back TransmitModel's optimistic transmit state. Always false.
+    bool refuseKeyWithInterlock(const QString& message, const QString& key);
     // Apply the same capability + receive-only-pan preflight to a non-Flex CW
     // carrier edge before it crosses the backend seam. Key-up always passes so
     // an inhibit arriving mid-element can never strand RF on.

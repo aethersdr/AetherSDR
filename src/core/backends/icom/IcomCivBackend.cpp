@@ -35,6 +35,12 @@ Q_LOGGING_CATEGORY(lcIcomScheduler, "aether.icom.scheduler")
 // meter traffic alongside it.
 Q_LOGGING_CATEGORY(lcIcomAddr, "aether.icom.address")
 
+// Why a key request did NOT reach the radio. Its own category for the same
+// reason the address has one: a refusal is silent from the operator's side —
+// PTT, and nothing happens — and the trace that names the reason is the
+// difference between a deliberate gate and a dead command plane.
+Q_LOGGING_CATEGORY(lcIcomTx, "aether.icom.tx")
+
 // EVERY CI-V FRAME, both directions, as hex.
 //
 // The in-memory ring behind `civ trace` already recorded these, but it dies
@@ -119,6 +125,24 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
+
+    // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
+    // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
+    // follow (#5040). Derived from the same two functions the mode combo is
+    // built from rather than listed a third time, so a mode cannot be offered
+    // without the transmit answer for it being consistent.
+    //
+    // The key guards in RadioModel read this: only that side can roll back
+    // TransmitModel's optimistic MOX/TUNE state, which is why the refusal that
+    // the operator SEES lives there and the one below is only the wire backstop.
+    //
+    // Empty for a model whose mode table nobody has read, and for the unknown
+    // model — which also reports canTransmit=false, so keying it is refused
+    // outright and the narrower gate never has to answer for it.
+    for (const std::string_view mode : modeListFor(m))
+        if (icom::modeIsReceiveOnly(m, mode))
+            c.receiveOnlyModes << QString::fromUtf8(mode.data(),
+                                                    static_cast<int>(mode.size()));
 
     // The scope scale is OURS, not the radio's: it comes from ScopeCalibration
     // (floor/span, shifted by the radio's own reference level), and there is no
@@ -637,6 +661,11 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
                 applyScopeStartup();
             }
             publishCapabilities();
+            // The mode vocabulary is withdrawn with the rest of the identity.
+            // modeListFor() answers empty for the unknown model, so the model
+            // stops asserting the first responder's list for a radio we have
+            // just decided we cannot identify.
+            publishModeList();
             publishIdentity();
         }
         return;
@@ -941,6 +970,12 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
         // for this session; reconnect never replays client-owned state.
     }
     emit sliceChanged(sliceId(), s);
+
+    // AFTER the slice exists, and from the name-resolved model. The address
+    // query that would correct it needs a serial stream that only just opened,
+    // so this is the earliest the vocabulary can be published — and the 0x19
+    // 0x00 reply republishes it below if it names a different radio.
+    publishModeList();
 
     publishMeterDefs();
 
@@ -1249,6 +1284,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
 
                 publishMeterDefs();
                 publishCapabilities();
+                // The mode vocabulary is a model fact too, and this is the
+                // authority: a name-resolved list published at connect is
+                // replaced here if the address names a different radio.
+                publishModeList();
                 // The scope switches are per-model, so a radio that only became
                 // known just now has not had them sent. No-op once started.
                 applyScopeStartup();
@@ -2678,10 +2717,48 @@ void IcomCivBackend::setRitOffset(int hz)
     sendUserCommand(cmdTuneOffsetHz(m_session ? m_session->civAddress() : 0xA4, hz));
 }
 
+// The receive-only mode gate — the WIRE BACKSTOP, shared by every path here
+// that can start an emission.
+//
+// WFM is the case today (#5040): the IC-705 offers it to listen to FM broadcast,
+// 76-108 MHz, and its transmitter does not follow. Refused HERE rather than left
+// to the radio because "the radio will say no" is not a property the protocol
+// lets us verify — CI-V answers NG for a command it rejects, but a key request
+// that is simply IGNORED is indistinguishable from one that worked, right up
+// until the meters fail to move.
+//
+// SILENT ON PURPOSE, apart from the log line. This is the second of two gates:
+// RadioModel::refuseKeyInReceiveOnlyMode() runs first, off the receiveOnlyModes
+// capability published above, and it is the one that tells the operator and
+// rolls back the optimistic MOX/TUNE state. A backend cannot reach
+// TransmitModel, so anything it emitted here would be an indicator that never
+// cleared plus a second message for one refusal (#5106 review). What this gate
+// still buys is the guarantee no PTT frame leaves by ANY path, including one
+// that never passed through RadioModel.
+//
+// Returns true when the caller must not key.
+bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
+{
+    const QString neutral = currentNeutralMode();
+    if (!modeIsReceiveOnly(*m_model, neutral.toStdString()))
+        return false;
+
+    qCWarning(lcIcomTx) << "refusing to key: this radio receives only in" << neutral;
+    return true;
+}
+
 void IcomCivBackend::setKeying(bool key)
 {
     if (!m_model->hasTransmit)
         return;   // an unknown radio is not advertised as transmit-capable
+
+    // A RECEIVE-ONLY MODE DOES NOT KEY, and the refusal is ONE-DIRECTIONAL:
+    // gated on the KEY edge only, so an unkey always reaches the radio whatever
+    // mode it is in. A guard that could swallow an unkey would be a stuck
+    // transmitter, which is far worse than the emission it prevents.
+    if (key && refuseKeyingInReceiveOnlyMode())
+        return;
+
     m_pendingPttIntent = key;
     m_pendingPttUntilMs = nowMs() + 1000;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
@@ -2711,6 +2788,12 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
     // implementation needs is deliberately absent here rather than half-done —
     // see the design note.
     if (on) {
+        // BEFORE anything is borrowed. The gate lives in setKeying() too, but
+        // reaching it from here would already have moved the RF-power setpoint
+        // to the tune level and latched m_tuning — leaving the operator's drive
+        // overwritten by a carrier that was then refused.
+        if (refuseKeyingInReceiveOnlyMode())
+            return;
         if (!m_tuning)
             m_preTuneTxPowerPercent = m_txPowerPercent;
         if (tunePowerPercent >= 0)
@@ -3531,6 +3614,20 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
 void IcomCivBackend::setMeterVisible(MeterId id, bool visible)
 {
     m_meters.setVisible(id, visible);
+}
+
+void IcomCivBackend::publishModeList()
+{
+    // ALWAYS ENGAGED, even when the span is empty. SliceModel change-gates the
+    // apply, so a repeat costs nothing — and the empty case has to travel, or
+    // the slice would go on holding a withdrawn radio's vocabulary after the
+    // ambiguous-bus revert gave that identity back.
+    SliceDelta d;
+    QStringList modes;
+    for (const std::string_view m : modeListFor(*m_model))
+        modes << QString::fromUtf8(m.data(), static_cast<int>(m.size()));
+    d.modeList = modes;
+    emit sliceChanged(sliceId(), d);
 }
 
 void IcomCivBackend::publishMeterDefs()

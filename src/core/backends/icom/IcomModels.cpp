@@ -284,6 +284,66 @@ std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
     return {};
 }
 
+std::span<const std::string_view> modeListFor(const IcomModel& model)
+{
+    // THE IC-705's OWN 0x06 MODE TABLE, in neutral names.
+    //
+    // The guide lists ten wire modes — LSB, USB, AM, CW, RTTY, FM, WFM, CW-R,
+    // RTTY-R and DV. Eight of them appear here; the two that do not are absent
+    // for reasons that would show up as a broken control:
+    //
+    //   RTTY / RTTY-R — modeToNeutral() collapses both onto DIGL/DIGU, which are
+    //                   already in the list. Offering "RTTY" would set the radio
+    //                   correctly and then have the confirmation read move the
+    //                   combo to DIGL, which reads as the button not working.
+    //   DV            — D-STAR is a whole waveform, not a demodulator setting,
+    //                   and modeToNeutral() returns an empty string for it. There
+    //                   is nothing honest to put in a mode combo.
+    //
+    // DFM, DIGU and DIGL are the DATA-flag forms of FM, USB and LSB; they are
+    // separate entries here because they are separate entries in the neutral
+    // vocabulary and cmdSetVfoMode carries the flag.
+    //
+    // WFM is the mode this list exists for. It has always been implemented end
+    // to end in CivCodec — wire value, both directions of the neutral mapping,
+    // its own 200 kHz filter slot and a carrier-straddling passband — and was
+    // unreachable only because nothing published a mode list, so the UI stayed on
+    // its compiled-in FlexRadio one, which has no WFM because a FLEX-6000 has no
+    // WFM (#5040).
+    static constexpr std::array<std::string_view, 10> kIc705{
+        "USB", "LSB", "CWU", "CWL", "AM", "FM", "DFM", "WFM", "DIGU", "DIGL"};
+    if (model.civAddress == 0xA4)
+        return kIc705;
+
+    // EVERY OTHER MODEL IS EMPTY, INCLUDING THE VERIFIED IC-7300MK2. The mode
+    // table is a per-model fact — the 7300 family has no WFM and no DV, the
+    // IC-9700 has DV but no HF — and this file's provenance rule (see the header)
+    // is that a row is filled only once that model's own CI-V guide has been read
+    // for it. An empty span leaves the UI exactly where it is today.
+    return {};
+}
+
+bool modeIsReceiveOnly(const IcomModel& model, std::string_view neutralMode)
+{
+    // WFM IS A BROADCAST RECEIVE MODE. The IC-705 covers 76-108 MHz in it and its
+    // transmitter does not follow: the mode exists to listen to FM broadcast, and
+    // that segment is outside every amateur allocation the radio transmits in.
+    //
+    // Answered only for a model whose mode table has been read — an unfilled row
+    // gets no claim in either direction, the same rule modeListFor() states above.
+    //
+    // That "no claim" is safe for the WITHDRAWN identity too, which is the one
+    // case where it looks unsafe: after the ambiguous-bus revert the combos keep
+    // offering the previous radio's WFM (they ignore an empty mode list, #891),
+    // so it looks as though keying in WFM has quietly become permitted again.
+    // It has not — kUnknown also reports hasTransmit=false, so capabilities()
+    // says canTransmit=false and RadioModel refuses to key it in ANY mode. This
+    // gate never has to answer for a radio we cannot characterise. (#5106 review)
+    if (model.civAddress == 0xA4)
+        return neutralMode == "WFM";
+    return false;
+}
+
 std::span<const AttenStep> attenStepsFor(const IcomModel& model)
 {
     // ONE step on the IC-705, and 20 dB is its real figure — nameable in dB
