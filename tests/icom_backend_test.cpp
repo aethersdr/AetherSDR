@@ -175,11 +175,34 @@ int main(int argc, char** argv)
     // trusting the table it was read from.
     QString publishedModel;
     QString publishedBandsRaw;
+    // Counted, not just captured. The identity is published TWICE per connect -
+    // once from the handshake name and again when the directed 0x19 0x00 answers
+    // - and the whole point of the first one is that it beats the second. A test
+    // that only looks at the final value cannot tell the two apart.
+    int identityPublications = 0;
     QObject::connect(&backend, &IRadioBackend::radioChanged, &app,
                      [&](const RadioDelta& d) {
                          if (d.model) publishedModel = *d.model;
                          if (d.bandsRaw) publishedBandsRaw = *d.bandsRaw;
+                         if (d.model || d.bandsRaw) ++identityPublications;
                      });
+
+    // THE SNAPSHOT THAT MAKES THE ORDERING ASSERTABLE.
+    //
+    // Taken synchronously inside `emit connected()` - same thread, direct
+    // connection - so it freezes what the seam had been told at the instant the
+    // connect edge fired, before any waitFor() spins an event loop and lets the
+    // 0x19 reply land. Without this the assertions below pass whether the
+    // declaration arrived at the handshake or half a second later off the wire,
+    // which is precisely the distinction the band menu depends on.
+    int identityPublicationsAtConnect = -1;
+    QString modelAtConnect;
+    QString bandsAtConnect;
+    QObject::connect(&backend, &IRadioBackend::connected, &app, [&] {
+        identityPublicationsAtConnect = identityPublications;
+        modelAtConnect = publishedModel;
+        bandsAtConnect = publishedBandsRaw;
+    });
 
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
     QSignalSpy sliceSpy(&backend, &IRadioBackend::sliceChanged);
@@ -206,17 +229,44 @@ int main(int argc, char** argv)
     // band panel with no 2 m or 70 cm button until something else forced a
     // rebuild. The name is the only identity that exists this early, and it is
     // enough (#5041).
-    check(waitFor([&] { return !publishedModel.isEmpty(); }),
-          "the backend publishes the model it resolved from the handshake name");
-    check(publishedModel == QStringLiteral("IC-705"),
+    //
+    // ASSERTED OFF THE SNAPSHOT, not off the live variables. `connected()` is
+    // emitted after publishIdentity() in onSessionConnected() and before any
+    // event loop runs again, while the directed 0x19 0x00 reply cannot arrive
+    // until a socket read is serviced — so anything the snapshot holds was
+    // published from the handshake name, and anything it does not hold was not.
+    // Remove the publishIdentity() call from onSessionConnected() and the five
+    // checks below fail (measured, along with the agreement check further down),
+    // which is the gate the timing claim needs and did not have: the live
+    // variables are re-filled identically by the 0x19 republish a moment later,
+    // so every one of these passed against code that published only late.
+    check(identityPublicationsAtConnect == 1,
+          "the identity is published exactly once BEFORE connected() is emitted "
+          "- from the handshake name, not from the 0x19 0x00 reply that cannot "
+          "have been serviced yet");
+    check(modelAtConnect == QStringLiteral("IC-705"),
           "and it is the IC-705 the fake presents itself as");
-    check(publishedBandsRaw.contains(QStringLiteral("2m")),
+    check(bandsAtConnect.contains(QStringLiteral("2m")),
           "declaring 2m, which no FlexLib model table would have given it");
-    check(publishedBandsRaw.contains(QStringLiteral("440")),
+    check(bandsAtConnect.contains(QStringLiteral("440")),
           "and 440 - the band the reported bug refused to tune at all");
-    check(publishedBandsRaw.contains(QStringLiteral("20m")),
+    check(bandsAtConnect.contains(QStringLiteral("20m")),
           "and HF, because the declaration REPLACES the built-in band grid "
           "rather than adding a VHF row to it");
+
+    // THE SECOND PUBLICATION, which is what makes the first one an ordering
+    // claim rather than a tautology. The directed 0x19 0x00 in the connect burst
+    // re-publishes the identity from the authoritative address, so the count
+    // must GROW past the snapshot — if it never did, "published at the connect
+    // edge" would be true only because nothing else ever published at all.
+    check(waitFor([&] { return identityPublications > identityPublicationsAtConnect; }),
+          "and the 0x19 0x00 reply re-publishes it afterwards - two distinct "
+          "publications, the early one first");
+    check(publishedModel == QStringLiteral("IC-705"),
+          "with the address-resolved identity agreeing with the name-resolved one");
+    check(publishedBandsRaw == bandsAtConnect,
+          "and the same declaration, so the band menu is not rebuilt from a "
+          "different answer a moment later");
 
     quint64 schedulerRequestId = 9000;
     const auto waitSchedulerIdle = [&](int timeoutMs = 5000) {

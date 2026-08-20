@@ -23,7 +23,13 @@ struct BandStackKeyResult {
     bool isSupported() const { return !key.isEmpty(); }
 };
 
-// One answer to "may this radio tune that band?", shared by every band gate.
+// One answer to "may this radio tune that band?", shared by the three
+// non-Flex band gates: typed VFO entry (with the G shortcut behind it),
+// net tunes, and the band buttons. NOT every gate in the app —
+// activateMemorySpot() still calls resolveBandStackKey() raw, and the Flex
+// branch here does not consult declaredBands(), so a #4027 gateway that
+// declares 440 gets a band button but still meets the #5041 sentence on a
+// typed frequency.
 //
 // resolveBandStackKey() below only ever answers the FLEX question — its native
 // table is FlexLib's ModelInfo.cs, which has no 440 entry because no Flex

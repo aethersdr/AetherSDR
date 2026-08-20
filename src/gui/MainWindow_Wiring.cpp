@@ -5123,7 +5123,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             //
             // Through evaluateBandTune() rather than an inline comparison, so
             // this button and the typed-tune gate cannot drift apart in either
-            // the decision or the sentence the operator reads (#5041). We are
+            // the decision or the sentence the operator reads (#5041) — above
+            // 54 MHz, which is as far as the shared answer reaches: the typed
+            // path returns before any range check when both frequencies are
+            // below that, so a 50.150 typed on an HL2 still tunes out of range
+            // silently while this button for the same band is disabled. We are
             // inside the non-Flex branch, so the XVTR/band-stack half of that
             // function is unreachable from here and its Flex arguments are the
             // empty defaults.
