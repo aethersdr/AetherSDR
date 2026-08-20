@@ -432,6 +432,14 @@ public:
     // TransmitModel, so this seam would be a second, redundant opinion.
     virtual void setCwPitch(int hz) { Q_UNUSED(hz); }
 
+    // Radio-resident text keyer. Unlike setCwKeying(), this hands printable
+    // text to a keyer in the radio; it is the neutral seam used by CWX, CAT,
+    // MIDI/controller macros and the automation bridge.
+    virtual void sendCwText(const QString& text) { Q_UNUSED(text); }
+    virtual void abortCwText() {}
+    virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
+    virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
+
     // The speech processor, as the operator sees it: an enable plus one of
     // three presets (0 = NOR, 1 = DX, 2 = DX+).
     //

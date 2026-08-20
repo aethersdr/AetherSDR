@@ -84,12 +84,10 @@ constexpr std::array kSpecs = {
                 "Only pushed while NR is enabled: the register survives the "
                 "function being switched off."},
     ControlSpec{"cw.pitch", 0x14, 0x09, true, "CW pitch",
-                Plane::Slice, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "Hz", 300, 900,
-                "", "", false,
-                "NOT WANTED. AetherSDR decodes CW itself, so the radio's pitch is not "
-                "ours to set; the CW passband we draw assumes the radio's default "
-                "and that is the correct division of labour."},
+                "setCwPitch", "cwPitchSlider", true,
+                "Shared by the Icom text keyer and the existing CW sidebar."},
     ControlSpec{"tx.power", 0x14, 0x0A, true, "RF power",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
@@ -99,11 +97,10 @@ constexpr std::array kSpecs = {
                 0, 255, "%", 0, 100,
                 "setMicGain", "phoneMicSlider", true, ""},
     ControlSpec{"cw.speed", 0x14, 0x0C, true, "Keyer speed",
-                Plane::Transmit, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "wpm", 6, 48,
-                "", "", false,
-                "NOT WANTED. The radio owns its keyer and AetherSDR has its own CW "
-                "engine — operator decision, not a gap."},
+                "setCwSpeed", "cwSpeedSlider", true,
+                "Shared by the Icom text keyer and the existing CW sidebar."},
     ControlSpec{"notch.pos", 0x14, 0x0D, true, "Manual notch position",
                 Plane::Slice, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
@@ -180,10 +177,11 @@ constexpr std::array kSpecs = {
                 "The trigger threshold. An operator slider change is pushed even "
                 "while VOX is off because the register defines the next enable."},
     ControlSpec{"break.in", 0x16, 0x47, true, "Break-in",
-                Plane::Transmit, Encoding::Enum, Wiring::Declared,
+                Plane::Transmit, Encoding::Enum, Wiring::Both,
                 0, 2, "step", 0, 2,
-                "", "", false,
-                "STUB: 00 off, 01 semi, 02 full. Declared, never used."},
+                "setCwBreakIn", "cwBreakInBtn", true,
+                "The existing boolean control selects OFF or semi break-in. "
+                "Full break-in needs a future three-state UI."},
     ControlSpec{"notch", 0x16, 0x48, true, "Manual notch",
                 Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,

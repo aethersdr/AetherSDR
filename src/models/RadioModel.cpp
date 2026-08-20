@@ -1838,8 +1838,23 @@ RadioModel::RadioModel(QObject* parent)
     // BFO on-radio.
     connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
             [this](int hz) {
-        if (m_backend && !usesFlexCommandPlane())
+        if (m_backend && backendCapabilities().hostModulates)
             m_backend->setCwPitch(hz);
+    });
+    connect(&m_transmitModel, &TransmitModel::cwPitchCommandIssued, this,
+            [this](int hz) {
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+            m_backend->setCwPitch(hz);
+    });
+    connect(&m_transmitModel, &TransmitModel::cwSpeedCommandIssued, this,
+            [this](int wpm) {
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+            m_backend->setCwSpeed(wpm);
+    });
+    connect(&m_transmitModel, &TransmitModel::cwBreakInCommandIssued, this,
+            [this](bool on) {
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+            m_backend->setCwBreakIn(on);
     });
 
     // Host-keyed radios have nowhere to retain their keyer and sidetone
@@ -1864,7 +1879,7 @@ RadioModel::RadioModel(QObject* parent)
     // disagreement would be invisible the first time either one moves.
     connect(this, &RadioModel::connectionStateChanged, this,
             [this](bool connected) {
-        if (connected && m_backend && !usesFlexCommandPlane())
+        if (connected && m_backend && backendCapabilities().hostModulates)
             m_backend->setCwPitch(m_transmitModel.cwPitch());
     });
 
@@ -2164,6 +2179,12 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->setNotchesEnabled(on);
     });
     connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
+        // Non-Flex text keyers consume the neutral transmissionRequested /
+        // transmissionCancelled signals below. Do not feed their operation
+        // through sendCmd(), whose deliberately unsupported reply would make
+        // CWX report a false send failure even when CI-V accepted the text.
+        if (!usesFlexCommandPlane())
+            return;
         // Track CWX send state so the interlock handler recognises local
         // CWX TX and doesn't force the audio gate off. (#2047, #2097)
         if (cmd.startsWith("cwx send") || cmd.startsWith("cwx macro send"))
@@ -2174,12 +2195,29 @@ RadioModel::RadioModel(QObject* parent)
         }
         sendCmd(cmd);
     });
+    connect(&m_cwxModel, &CwxModel::transmissionRequested, this,
+            [this](const QString& text, int wpm) {
+        if (!m_backend || usesFlexCommandPlane()
+            || !backendCapabilities().hasRadioSideCwKeyer) {
+            return;
+        }
+        m_backend->setCwSpeed(wpm);
+        m_backend->sendCwText(text);
+    });
+    connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
+        if (m_backend && !usesFlexCommandPlane()
+            && backendCapabilities().hasRadioSideCwKeyer) {
+            m_backend->abortCwText();
+        }
+    });
     // Final cwx send of each macro/text block goes via replyCommandReady so we
     // can capture the radio_index from the reply.  CwxModel::handleSendReply
     // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
     // This replaces the broken cwx queue= path — firmware never sends it
     // (observed on FLEX-6500 fw 4.2.20.41343; the 8600 target runs 4.2.18). (#3949)
     connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
+        if (!usesFlexCommandPlane())
+            return;
         m_cwxActive = true;
         // Arm the drain-release latch. Unlike m_cwxActive (which the interlock
         // handler clears on every TRANSMITTING→READY flicker during a macro),

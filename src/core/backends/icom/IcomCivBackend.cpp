@@ -125,6 +125,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
+    // Official CI-V guides for both network targets define command 17 text
+    // keying and 17 FF abort. Keep other model profiles dark until verified.
+    c.hasRadioSideCwKeyer = c.model == QLatin1String("IC-705")
+        || c.model == QLatin1String("IC-7300MK2");
 
     // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
     // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
@@ -1444,6 +1448,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             emit transmitChanged(t);
             return;
         }
+        case level::kCwPitch: {
+            TransmitDelta t;
+            t.cwPitch = 300 + std::lround(static_cast<double>(*raw) * 600.0 / 255.0);
+            emit transmitChanged(t);
+            return;
+        }
+        case level::kKeySpeed: {
+            TransmitDelta t;
+            t.cwSpeed = 6 + std::lround(static_cast<double>(*raw) * 42.0 / 255.0);
+            emit transmitChanged(t);
+            return;
+        }
         default:
             return;
         }
@@ -1500,6 +1516,12 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         case func::kCompressor: {
             m_compEnable = (v != 0);
             TransmitDelta t; t.speechProcEnable = (v != 0);
+            emit transmitChanged(t);
+            return;
+        }
+        case func::kBreakIn: {
+            TransmitDelta t;
+            t.cwBreakIn = v != 0;
             emit transmitChanged(t);
             return;
         }
@@ -2026,7 +2048,8 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
 void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
                                 const std::string& key,
                                 IcomCivScheduler::Priority priority,
-                                bool supersedes)
+                                bool supersedes,
+                                bool coalesce)
 {
     IcomCivScheduler::Request request;
     request.frame = frame;
@@ -2035,6 +2058,7 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
     request.expectsReply = true;
     request.acceptsGenericReply = true;
     request.supersedes = supersedes;
+    request.coalesce = coalesce;
     m_civScheduler.enqueue(std::move(request), nowMs());
 }
 
@@ -2805,6 +2829,67 @@ void IcomCivBackend::setTxPower(int percent)
     m_txPowerPercent = std::clamp(percent, 0, 100);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kRfPower, percentToLevelRaw(m_txPowerPercent)));
+}
+
+void IcomCivBackend::sendCwText(const QString& text)
+{
+    if (!m_session || !m_connected || text.isEmpty())
+        return;
+
+    QByteArray ascii;
+    ascii.reserve(text.size());
+    static constexpr std::string_view allowed =
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :";
+    for (const QChar ch : text) {
+        const char byte = ch.toLatin1();
+        ascii.append(byte != 0 && allowed.find(byte) != std::string_view::npos ? byte : ' ');
+    }
+
+    const std::uint8_t addr = m_session->civAddress();
+    for (qsizetype offset = 0; offset < ascii.size(); offset += 30) {
+        const QByteArray chunk = ascii.mid(offset, 30);
+        queueWrite(cmdSendCwMessage(
+                       addr,
+                       std::string_view(chunk.constData(),
+                                        static_cast<std::size_t>(chunk.size()))),
+                   "cw.message", IcomCivScheduler::Priority::Operator,
+                   false, false);
+    }
+    pumpCiv(nowMs());
+}
+
+void IcomCivBackend::abortCwText()
+{
+    if (!m_session || !m_connected)
+        return;
+    queueWrite(cmdAbortCwMessage(m_session->civAddress()), "cw.message",
+               IcomCivScheduler::Priority::Emergency, true, true);
+    pumpCiv(nowMs());
+}
+
+void IcomCivBackend::setCwSpeed(int wpm)
+{
+    const int clamped = std::clamp(wpm, 6, 48);
+    const int raw = std::lround(static_cast<double>(clamped - 6) * 255.0 / 42.0);
+    sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
+                                level::kKeySpeed, raw));
+}
+
+void IcomCivBackend::setCwPitch(int hz)
+{
+    const int clamped = std::clamp(hz, 300, 900);
+    const int raw = std::lround(static_cast<double>(clamped - 300) * 255.0 / 600.0);
+    sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
+                                level::kCwPitch, raw));
+}
+
+void IcomCivBackend::setCwBreakIn(bool on)
+{
+    // AetherSDR's current control is boolean. Map ON to Icom semi break-in;
+    // full break-in (02) requires an honest three-state UI rather than a
+    // hidden preference that cannot report the radio's actual selection.
+    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
+                                   func::kBreakIn, on ? 1 : 0));
 }
 
 // EVERY registry row a frame belongs to, not the first.

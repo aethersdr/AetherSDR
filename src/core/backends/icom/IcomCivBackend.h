@@ -87,6 +87,11 @@ public:
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
+    void sendCwText(const QString& text) override;
+    void abortCwText() override;
+    void setCwSpeed(int wpm) override;
+    void setCwPitch(int hz) override;
+    void setCwBreakIn(bool on) override;
     void setSpeechProcessor(bool on, int level) override;
     void setMicGain(int gainPercent) override;
     void setTxAudioMonitor(bool on) override;
@@ -190,7 +195,8 @@ private:
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
-                    IcomCivScheduler::Priority priority, bool supersedes = true);
+                    IcomCivScheduler::Priority priority, bool supersedes = true,
+                    bool coalesce = true);
     void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
                                     const std::string& key);
     void pumpCiv(qint64 nowMs);

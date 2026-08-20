@@ -687,6 +687,7 @@ void TransmitModel::setCwSpeed(int wpm)
         m_cwSpeed = wpm;
         emit phoneStateChanged();
     }
+    emit cwSpeedCommandIssued(wpm);
     emit commandReady(QString("cw wpm %1").arg(wpm));
 }
 
@@ -698,6 +699,7 @@ void TransmitModel::setCwPitch(int hz)
         emit phoneStateChanged();
         emit cwPitchChanged(hz);
     }
+    emit cwPitchCommandIssued(hz);
     emit commandReady(QString("cw pitch %1").arg(hz));
 }
 
@@ -707,6 +709,7 @@ void TransmitModel::setCwBreakIn(bool on)
         m_cwBreakIn = on;
         emit phoneStateChanged();
     }
+    emit cwBreakInCommandIssued(on);
     emit commandReady(QString("cw break_in %1").arg(on ? 1 : 0));
 }
 

@@ -7281,7 +7281,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         updateStatusBarMinimumWidth();
     }
 
-    // ── The status-bar CWX / DVK / FDX toggles ──────────────────────────────
+    // ── The status-bar CWX/CWK / DVK / FDX toggles ──────────────────────────
     //
     // HIDDEN, not disabled. Each of these three is a verb the radio's firmware
     // executes — `cwx …`, `dvk …`, `radio set full_duplex_enabled=` — and on a
@@ -7311,6 +7311,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     const bool fdx = !connected || caps.hasFullDuplex;
 
     if (m_cwxIndicator) {
+        // CWX is FlexRadio's name. Icom exposes the same shared panel through
+        // its CI-V text keyer, so call that surface CWK rather than implying
+        // that the radio implements Flex's CWX protocol.
+        m_cwxIndicator->setText(connected && caps.family == QLatin1String("icom")
+                                    ? QStringLiteral("CWK")
+                                    : QStringLiteral("CWX"));
         m_cwxIndicator->setVisible(cwx);
     }
     if (!cwx && m_cwxPanel) {

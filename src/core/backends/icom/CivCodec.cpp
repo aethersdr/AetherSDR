@@ -331,7 +331,7 @@ std::string modeToNeutral(CivMode mode, bool dataMode)
     case CivMode::Lsb:  return dataMode ? "DIGL" : "LSB";
     case CivMode::Usb:  return dataMode ? "DIGU" : "USB";
     case CivMode::Am:   return "AM";
-    case CivMode::Cw:   return "CWU";
+    case CivMode::Cw:   return "CW";
     case CivMode::CwR:  return "CWL";
     // Symmetric with Lsb/Usb above: the DATA flag is what distinguishes FM-D
     // from FM, and returning plain "FM" for both made the round trip lossy. A
@@ -537,6 +537,20 @@ std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int v
 {
     const auto bcd = encodeLevel(std::clamp(value, 0, 255));
     return buildFrameSub(to, cmd::kLevel, which, bcd);
+}
+
+std::vector<std::uint8_t> cmdSendCwMessage(std::uint8_t to, std::string_view ascii)
+{
+    const std::size_t count = std::min<std::size_t>(ascii.size(), 30);
+    const std::span<const std::uint8_t> body{
+        reinterpret_cast<const std::uint8_t*>(ascii.data()), count};
+    return buildFrame(to, cmd::kCwMessage, body);
+}
+
+std::vector<std::uint8_t> cmdAbortCwMessage(std::uint8_t to)
+{
+    const std::array<std::uint8_t, 1> body{0xFF};
+    return buildFrame(to, cmd::kCwMessage, body);
 }
 
 std::vector<std::uint8_t> cmdReadMeter(std::uint8_t to, std::uint8_t which)

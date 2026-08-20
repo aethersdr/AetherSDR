@@ -226,6 +226,7 @@ static void testModes()
 
     check(modeToNeutral(CivMode::Usb, false) == "USB", "reverse USB");
     check(modeToNeutral(CivMode::Usb, true) == "DIGU", "reverse DIGU");
+    check(modeToNeutral(CivMode::Cw, false) == "CW", "normal CW is reported as CW");
     // The round trip has to survive too. Returning plain "FM" for a radio in
     // FM-D made the UI show FM, and the next mode write then sent FM with the
     // flag CLEAR — silently taking the radio out of data mode and back onto the
@@ -315,6 +316,16 @@ static void testCommands()
     check(bytesAre(cmdSetLevel(kIc705, level::kRfPower, 255),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0x02, 0x55, 0xFD}),
           "RF power 100% is 14 0A 0255");
+    check(bytesAre(cmdSendCwMessage(kIc705, "CQ TEST"),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x17, 0x43, 0x51, 0x20,
+                    0x54, 0x45, 0x53, 0x54, 0xFD}),
+          "CW text is command 17 followed by ASCII");
+    check(bytesAre(cmdAbortCwMessage(kIc705),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x17, 0xFF, 0xFD}),
+          "CW abort is 17 FF");
+    check(bytesAre(cmdSetFunction(kIc705, func::kBreakIn, 1),
+                   {0xFE, 0xFE, 0xA4, 0xE0, 0x16, 0x47, 0x01, 0xFD}),
+          "semi break-in is 16 47 01");
     check(bytesAre(cmdSetTuner(kIc705, 0x02),
                    {0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x01, 0x02, 0xFD}),
           "ATU start is 1C 01 02");
