@@ -83,9 +83,7 @@ QJsonObject ControlService::capabilities(const ControlSessionState& session)
         {QStringLiteral("grants"), QJsonArray{QStringLiteral("observe")}},
         {QStringLiteral("capabilities"), QJsonArray{QStringLiteral("server.read")}},
         {QStringLiteral("limits"), QJsonObject{
-             {QStringLiteral("maxMessageBytes"), ProtocolLimits::kMaxMessageBytes},
-             {QStringLiteral("maxSubscriptions"), 64},
-             {QStringLiteral("maxPendingRequests"), 128}}}
+             {QStringLiteral("maxMessageBytes"), ProtocolLimits::kMaxMessageBytes}}}
     };
 }
 

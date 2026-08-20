@@ -155,7 +155,11 @@ VENDOR_INCLUDE_RE = re.compile(
 # include OR a lateral swap that keeps the count flat) fails --strict. Decouple
 # a file by routing its radio access through IRadioBackend, then delete the
 # dropped stem(s) from its row; delete the row when it empties. NEVER add a stem
-# or a row to make a build pass.
+# or a row merely to make a build pass. The only permitted re-baseline is an
+# intentional vendor-vocabulary classification change: every added include
+# must be proven to predate the classification against the merge base, the
+# change must document that evidence, and it requires explicit maintainer
+# review. After classification, the expanded set is shrink-only again.
 #
 # Re-baselined for the previously untagged HL2/Sim/Icom backend surfaces. These
 # entries freeze coupling that predates classification; they are burndown

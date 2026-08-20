@@ -2750,22 +2750,6 @@ foreach(_aether_tgt aethercore aetherdesktop_support AetherSDR aetherd)
     endif()
 endforeach()
 
-# Stage 3's headless boundary is structural: neither the engine library nor
-# its daemon may acquire the desktop widget dependency. Keep this assertion
-# next to the completed target graph so a later conditional link is caught at
-# configure time rather than only on a release artifact.
-get_target_property(_aethercore_links aethercore LINK_LIBRARIES)
-get_target_property(_aethercore_interface_links aethercore INTERFACE_LINK_LIBRARIES)
-get_target_property(_aetherd_links aetherd LINK_LIBRARIES)
-if("${_aethercore_links};${_aethercore_interface_links};${_aetherd_links}"
-        MATCHES "Qt6::Widgets")
-    message(FATAL_ERROR "aethercore/aetherd must not link Qt6::Widgets")
-endif()
-unset(_aethercore_links)
-unset(_aethercore_interface_links)
-unset(_aetherd_links)
-
-
 # ── Unit test harnesses ──────────────────────────────────────────────────────
 # MOVED: every test target is now declared in tests/tests.cmake, which cut this
 # file roughly in half. Do NOT declare a test target here — tests/tests.cmake
@@ -2838,3 +2822,18 @@ else()
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
 endif()
+
+# Stage 3's headless boundary is structural: neither the engine library nor
+# its daemon may acquire the desktop widget dependency. Keep this assertion at
+# the end of the completed target graph so every later conditional link is
+# caught at configure time rather than only on a release artifact.
+get_target_property(_aethercore_links aethercore LINK_LIBRARIES)
+get_target_property(_aethercore_interface_links aethercore INTERFACE_LINK_LIBRARIES)
+get_target_property(_aetherd_links aetherd LINK_LIBRARIES)
+if("${_aethercore_links};${_aethercore_interface_links};${_aetherd_links}"
+        MATCHES "Qt6::Widgets")
+    message(FATAL_ERROR "aethercore/aetherd must not link Qt6::Widgets")
+endif()
+unset(_aethercore_links)
+unset(_aethercore_interface_links)
+unset(_aetherd_links)

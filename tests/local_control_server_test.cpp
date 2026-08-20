@@ -21,6 +21,7 @@
 #include <functional>
 
 using AetherSDR::control::LocalControlServer;
+using AetherSDR::control::ProtocolLimits;
 
 namespace {
 
@@ -144,6 +145,7 @@ bool runProtocolTest()
     const QString sessionId = welcome.value(QStringLiteral("sessionId")).toString();
     const QJsonArray grants = welcome.value(QStringLiteral("grants")).toArray();
     const QJsonArray capabilities = welcome.value(QStringLiteral("capabilities")).toArray();
+    const QJsonObject limits = welcome.value(QStringLiteral("limits")).toObject();
     if (!check(!sessionId.isEmpty(), "hello must create a sessionId")
         || !check(grants.size() == 1 && contains(grants, QStringLiteral("observe")),
                   "server must grant observe only")
@@ -152,7 +154,11 @@ bool runProtocolTest()
                   "server must advertise server.read only")
         || !check(!contains(capabilities, QStringLiteral("transmit"))
                       && !contains(capabilities, QStringLiteral("control")),
-                  "server must not advertise control or transmit")) {
+                  "server must not advertise control or transmit")
+        || !check(limits.size() == 1
+                      && limits.value(QStringLiteral("maxMessageBytes")).toInteger()
+                          == ProtocolLimits::kMaxMessageBytes,
+                  "server must advertise only its currently enforced protocol limit")) {
         return false;
     }
 
@@ -269,6 +275,26 @@ bool runHandshakeTimeoutTest()
         && check(waitUntil([&socket] {
             return socket.state() == QLocalSocket::UnconnectedState;
         }), "idle client must be disconnected after handshake timeout");
+}
+
+bool runHandshakeTimeoutBackpressureTest()
+{
+    LocalControlServer::Limits limits;
+    limits.handshakeTimeoutMs = 25;
+    limits.maxQueuedOutputBytes = 1;
+    LocalControlServer server(nullptr, limits);
+    if (!check(server.listen(uniqueName(QStringLiteral("aetherd-timeout-pressure-"))),
+               "timeout/backpressure server must listen")) {
+        return false;
+    }
+    QLocalSocket socket;
+    if (!check(connectSocket(&socket, server),
+               "timeout/backpressure client must connect")) {
+        return false;
+    }
+    return check(waitUntil([&socket] {
+        return socket.state() == QLocalSocket::UnconnectedState;
+    }), "handshake timeout output overflow must defer client destruction safely");
 }
 
 bool runClientLimitTest()
@@ -408,6 +434,7 @@ int main(int argc, char* argv[])
     return runProtocolTest()
         && runHelloValidationTest()
         && runHandshakeTimeoutTest()
+        && runHandshakeTimeoutBackpressureTest()
         && runClientLimitTest()
         && runBackpressureTest()
         && runStaleEndpointTest()

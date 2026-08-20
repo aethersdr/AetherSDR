@@ -90,6 +90,122 @@ bool testJsonSafetyFailures()
                  "message byte limit must be checked before parsing");
 }
 
+QByteArray requestWithParams(const QByteArray& params, const QByteArray& id = "x",
+                             const QByteArray& method = "hello",
+                             const QByteArray& sessionField = {})
+{
+    return QByteArrayLiteral("{\"v\":1,\"id\":\"") + id
+        + QByteArrayLiteral("\",") + sessionField
+        + QByteArrayLiteral("\"method\":\"") + method
+        + QByteArrayLiteral("\",\"params\":") + params + QByteArrayLiteral("}");
+}
+
+bool testStructuralBoundaries()
+{
+    const QByteArray maxString(ProtocolLimits::kMaxStringChars, 'a');
+    const ParseResult maxStringResult = ControlProtocolCodec::parseRequest(
+        requestWithParams(QByteArrayLiteral("{\"value\":\"") + maxString
+                          + QByteArrayLiteral("\"}")));
+    if (!check(maxStringResult.ok(), "a string at the character limit must parse")) {
+        return false;
+    }
+    const ParseResult oversizedString = ControlProtocolCodec::parseRequest(
+        requestWithParams(QByteArrayLiteral("{\"value\":\"") + maxString + 'a'
+                          + QByteArrayLiteral("\"}")));
+    if (!check(hasError(oversizedString, QStringLiteral("transport.limit_exceeded")),
+               "a string over the character limit must fail")) {
+        return false;
+    }
+
+    QByteArray maxArray = QByteArrayLiteral("{\"values\":[");
+    for (qsizetype index = 0; index < ProtocolLimits::kMaxArrayEntries; ++index) {
+        if (index != 0) {
+            maxArray.append(',');
+        }
+        maxArray.append('0');
+    }
+    maxArray.append(QByteArrayLiteral("]}"));
+    if (!check(ControlProtocolCodec::parseRequest(requestWithParams(maxArray)).ok(),
+               "an array at the entry limit must parse")) {
+        return false;
+    }
+    maxArray.insert(maxArray.size() - 2, QByteArrayLiteral(",0"));
+    if (!check(hasError(ControlProtocolCodec::parseRequest(requestWithParams(maxArray)),
+                        QStringLiteral("protocol.invalid_json")),
+               "an array over the entry limit must fail")) {
+        return false;
+    }
+
+    QByteArray maxDepth = QByteArrayLiteral("{\"nested\":");
+    maxDepth.append(ProtocolLimits::kMaxNesting - 2, '[');
+    maxDepth.append(ProtocolLimits::kMaxNesting - 2, ']');
+    maxDepth.append('}');
+    if (!check(ControlProtocolCodec::parseRequest(requestWithParams(maxDepth)).ok(),
+               "JSON at the nesting limit must parse")) {
+        return false;
+    }
+    maxDepth.insert(QByteArrayLiteral("{\"nested\":").size(), '[');
+    maxDepth.insert(maxDepth.size() - 1, ']');
+    if (!check(hasError(ControlProtocolCodec::parseRequest(requestWithParams(maxDepth)),
+                        QStringLiteral("protocol.invalid_json")),
+               "JSON over the nesting limit must fail")) {
+        return false;
+    }
+
+    const ParseResult nonFinite = ControlProtocolCodec::parseRequest(
+        requestWithParams(QByteArrayLiteral("{\"value\":1e9999}")));
+    const ParseResult trailing = ControlProtocolCodec::parseRequest(
+        requestWithParams(QByteArrayLiteral("{}")) + QByteArrayLiteral(" true"));
+    return check(hasError(nonFinite, QStringLiteral("protocol.invalid_json")),
+                 "a non-finite JSON number must fail")
+        && check(hasError(trailing, QStringLiteral("protocol.invalid_json")),
+                 "trailing data after the request must fail");
+}
+
+bool testIdentifierAndMethodBoundaries()
+{
+    const QByteArray maxId(ProtocolLimits::kMaxRequestIdChars, 'a');
+    if (!check(ControlProtocolCodec::parseRequest(
+                   requestWithParams(QByteArrayLiteral("{\"versions\":[1]}"), maxId)).ok(),
+               "a request id at the length limit must parse")) {
+        return false;
+    }
+    const ParseResult oversizedId = ControlProtocolCodec::parseRequest(
+        requestWithParams(QByteArrayLiteral("{\"versions\":[1]}"), maxId + 'a'));
+    if (!check(hasError(oversizedId, QStringLiteral("protocol.invalid_envelope"))
+                   && oversizedId.requestId.isEmpty(),
+               "an oversized request id must fail without being reflected")) {
+        return false;
+    }
+    const ParseResult controlId = ControlProtocolCodec::parseRequest(
+        QByteArrayLiteral("{\"v\":1,\"id\":\"\\u0000\",\"method\":\"hello\","
+                          "\"params\":{\"versions\":[1]}}"));
+    if (!check(hasError(controlId, QStringLiteral("protocol.invalid_envelope"))
+                   && controlId.requestId.isEmpty(),
+               "a non-printable request id must fail without being reflected")) {
+        return false;
+    }
+
+    const QByteArray maxMethod(ProtocolLimits::kMaxMethodChars, 'a');
+    const QByteArray session = QByteArrayLiteral("\"sessionId\":\"session-1\",");
+    if (!check(ControlProtocolCodec::parseRequest(
+                   requestWithParams(QByteArrayLiteral("{}"), QByteArrayLiteral("x"),
+                                     maxMethod, session)).ok(),
+               "a method at the length limit must parse")) {
+        return false;
+    }
+    const ParseResult oversizedMethod = ControlProtocolCodec::parseRequest(
+        requestWithParams(QByteArrayLiteral("{}"), QByteArrayLiteral("x"),
+                          maxMethod + 'a', session));
+    const ParseResult invalidMethod = ControlProtocolCodec::parseRequest(
+        requestWithParams(QByteArrayLiteral("{}"), QByteArrayLiteral("x"),
+                          QByteArrayLiteral("slice..get"), session));
+    return check(hasError(oversizedMethod, QStringLiteral("protocol.invalid_envelope")),
+                 "a method over the length limit must fail")
+        && check(hasError(invalidMethod, QStringLiteral("protocol.invalid_envelope")),
+                 "a method with an empty segment must fail");
+}
+
 bool testResponseShapes()
 {
     const QJsonObject success = ControlProtocolCodec::successResponse(
@@ -121,5 +237,7 @@ int main()
         && testValidSessionRequest()
         && testEnvelopeFailures()
         && testJsonSafetyFailures()
+        && testStructuralBoundaries()
+        && testIdentifierAndMethodBoundaries()
         && testResponseShapes() ? 0 : 1;
 }

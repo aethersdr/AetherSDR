@@ -337,8 +337,9 @@ ParseResult ControlProtocolCodec::parseRequest(const QByteArray& bytes)
     }
 
     const QJsonObject object = document.object();
-    if (object.value(QStringLiteral("id")).isString()) {
-        out.requestId = object.value(QStringLiteral("id")).toString();
+    const QJsonValue rawIdValue = object.value(QStringLiteral("id"));
+    if (rawIdValue.isString() && validRequestId(rawIdValue.toString())) {
+        out.requestId = rawIdValue.toString();
     }
 
     QString limitError;

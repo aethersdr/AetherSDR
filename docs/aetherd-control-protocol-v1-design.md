@@ -14,6 +14,8 @@ local or remote transports by `aetherd`.
 It is not:
 
 - the existing `AutomationServer`, which remains a desktop GUI test bridge;
+- an installed, packaged, or auto-started daemon in this slice; `aetherd` is a
+  build/test skeleton until the later service-lifecycle and packaging work;
 - a QObject reflection API, widget tree, arbitrary method invocation surface,
   or pass-through for SmartSDR/CI-V/Metis command strings;
 - a promise that every current GUI→engine header becomes a v1 resource;
@@ -83,9 +85,7 @@ The server answers with either an ordinary error or:
     "grants": ["observe", "control"],
     "capabilities": ["radio.sessions", "slice.read", "slice.control"],
     "limits": {
-      "maxMessageBytes": 262144,
-      "maxSubscriptions": 64,
-      "maxPendingRequests": 128
+      "maxMessageBytes": 262144
     }
   }
 }
@@ -278,7 +278,14 @@ without recording credentials or transmitted content.
 
 ## 8. Limits and backpressure
 
-Defaults are part of the v1 contract and may only be tightened at runtime:
+The table below defines the complete v1 target defaults. A server advertises
+only limits that apply to capabilities it currently exposes; clients must not
+infer an unadvertised limit or capability. The initial observe-only slice
+advertises `maxMessageBytes` and enforces the handshake, structural JSON,
+client-count, and queued-output limits. Subscription, pending-request, and
+request-rate limits become live and advertised only with those protocol
+surfaces. Once advertised, a default is part of the v1 contract and may only
+be tightened at runtime:
 
 | Limit | Default |
 |---|---:|
