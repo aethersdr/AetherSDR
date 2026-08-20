@@ -3230,12 +3230,20 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     // case, so a stop request can't arrive for an env-forced bridge.
     connect(dlg, &RadioSetupDialog::automationBridgeToggled, this, [this](bool on) {
         if (on) {
-            if (!startAutomationBridge())
-                qWarning() << "automation bridge failed to start (socket in use?)";
+            // startAutomationBridge() only reports that the start was
+            // *initiated* — the bind happens later, in the async token-read
+            // callback — so the outcome comes back over
+            // automationBridgeStartResult below, not from this return value.
+            startAutomationBridge();
         } else {
             stopAutomationBridge();
         }
     });
+    // Reconcile the Network-tab toggle (and the persisted opt-in) with what
+    // the socket actually did (#4181). `dlg` is the context object, so this
+    // auto-disconnects when the modeless dialog is destroyed.
+    connect(this, &MainWindow::automationBridgeStartResult, dlg,
+            [dlg](bool ok) { dlg->reportAutomationBridgeStartResult(ok); });
     connect(dlg, &RadioSetupDialog::automationBridgeTokenRotated, this,
             [this](const QString& tok) { setAutomationBridgeToken(tok); });
     connect(dlg, &RadioSetupDialog::automationBridgeTxAllowedChanged, this,

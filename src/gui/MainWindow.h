@@ -287,6 +287,13 @@ signals:
     // restore. wirePanadapter() owns the pending dBm handshake state, while the
     // restore can originate in several MainWindow translation units.
     void bandStackRestoreStarting(const QString& panId);
+    // Outcome of an automation-bridge start (#4181). startAutomationBridge()
+    // returns as soon as the start is *initiated* — the socket only binds
+    // later, inside the async token-read callback — so this is the only
+    // signal that says whether the bridge is actually listening. Emitted from
+    // both branches of that callback; RadioSetupDialog uses it to reconcile
+    // the Network-tab toggle and the persisted opt-in.
+    void automationBridgeStartResult(bool ok);
 
 protected:
     void showEvent(QShowEvent* event) override;

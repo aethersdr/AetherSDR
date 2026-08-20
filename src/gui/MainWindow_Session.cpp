@@ -2572,6 +2572,13 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         if (!guard->start(startName)) {
             qWarning() << "Automation bridge failed to start (socket in use?)";
             m_automation.reset();
+            // Nothing is listening, so the persisted opt-in must not survive —
+            // otherwise every launch silently re-attempts the doomed start and
+            // the operator is never told (#4181). The env-var force-enable is
+            // not an opt-in we own, so leave the setting alone in that case.
+            if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION"))
+                AutomationBridgeSettings::setEnabled(false);
+            emit automationBridgeStartResult(false);
             return;
         }
         // TX-automation gate — set AFTER start(), which reads
@@ -2590,7 +2597,13 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         guard->setReadOnly(
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY")
             || AutomationBridgeSettings::readOnly());
+        // The socket is listening for real — only now is the toggle honest and
+        // the opt-in worth persisting (RadioSetupDialog does the persist so an
+        // env-forced start doesn't write an opt-in the operator never made).
+        emit automationBridgeStartResult(true);
     });
+    // The bridge is NOT listening yet — the socket binds inside the callback
+    // above. Callers wanting the outcome must watch automationBridgeStartResult.
     return true;  // start initiated; the socket begins listening once the token resolves
 }
 
