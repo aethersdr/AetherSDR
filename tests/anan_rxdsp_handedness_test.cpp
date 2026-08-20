@@ -34,6 +34,7 @@
 // a WDSP fact, not a Hermes-Lite fact, and this class reuses the identical
 // DcBlocker code, so it is tested with full confidence, no hedging.
 
+#include "core/backends/anan/AnanDroopCorrection.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSpectrum.h"
 
@@ -395,6 +396,87 @@ int main(int argc, char** argv)
         check(installed->config().agcMode == 2
               && installed->config().maximumAgcGainDb == 25.0,
               "installRebuiltChannel() re-applies the operator's CURRENT AGC setting");
+    }
+
+    // ---- Group 5: droop-correction insertion point ----
+    // Pins that AnanDroopCorrection's per-bin dB correction lands exactly
+    // between AnanSpectrum::process() and smoothSpectrumBins()'s EMA -- not
+    // applied twice, not applied after smoothing -- WITHOUT depending on the
+    // actual bench-measured correction values (AnanDroopCorrectionTables.inc
+    // may still be the all-zero placeholder). On a freshly configured
+    // AnanRxDsp, smoothSpectrumBins() takes its "nothing to blend against
+    // yet" branch on exactly the FIRST emitted frame (m_smoothedBins starts
+    // empty), which passes m_bins through untouched -- so the first frame's
+    // emitted bins must equal an independently computed raw AnanSpectrum
+    // frame plus droopCorrectionTableForRateKsps() for the configured rate,
+    // bin for bin.
+    {
+        constexpr int kFft = 1024;   // matches production (AnanBackend.cpp
+                                     // always configures fftSize=1024) and
+                                     // the fixed size of every droop table.
+
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = 48000;   // -> 48 ksps, a recognized droop rate
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.fftSize = kFft;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.filterLowHz = 100.0;
+        cfg.filterHighHz = 2900.0;
+        cfg.agcMode = 0;                 // linear: nothing else rescales the bins
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;
+
+        AnanRxDsp dsp;
+        std::string err;
+        check(dsp.configure(cfg, &err),
+              err.empty() ? "droop-correction test: configure() succeeds" : err.c_str());
+
+        const std::vector<std::complex<float>> iq = makeTone(kFft, 37.0, /*conjugate=*/false);
+
+        std::vector<float> emitted;
+        bool gotFrame = false;
+        const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
+            [&](const std::vector<float>& bins) {
+                if (!gotFrame) {   // keep the FIRST frame only
+                    emitted = bins;
+                    gotFrame = true;
+                }
+            });
+        dsp.processIqBlock(iq);
+        QObject::disconnect(conn);
+        check(gotFrame, "the first processIqBlock() call emits one spectrum frame");
+
+        // Independently computed reference: the SAME conjugation convention
+        // processIqBlock() applies (raw IQ conjugated once, before the FFT --
+        // see processIqBlock()'s own comment on why the spectrum path
+        // conjugates), fed to a standalone AnanSpectrum with no AnanRxDsp
+        // involved at all.
+        std::vector<std::complex<float>> conjugated(iq.size());
+        for (std::size_t k = 0; k < iq.size(); ++k)
+            conjugated[k] = std::conj(iq[k]);
+        AnanSpectrum refSpectrum(kFft);
+        std::vector<float> rawBins;
+        check(refSpectrum.process(conjugated, rawBins) == 1,
+              "reference AnanSpectrum produces exactly one frame from the same IQ");
+
+        const DroopCorrectionTable& table = droopCorrectionTableForRateKsps(
+            cfg.inputSampleRateHz / 1000);
+        check(emitted.size() == rawBins.size() && emitted.size() == table.size(),
+              "emitted/reference/table sizes all agree");
+        bool matched = emitted.size() == rawBins.size() && emitted.size() == table.size();
+        for (std::size_t k = 0; matched && k < emitted.size(); ++k) {
+            if (std::fabs(emitted[k] - (rawBins[k] + table[k])) > 1.0e-4f) {
+                matched = false;
+                std::fprintf(stderr,
+                    "  bin %zu: emitted=%.6f raw+correction=%.6f (raw=%.6f correction=%.6f)\n",
+                    k, emitted[k], rawBins[k] + table[k], rawBins[k], table[k]);
+            }
+        }
+        check(matched,
+              "the first emitted frame equals the raw FFT bins plus the rate's droop "
+              "correction table, bin for bin -- proving the correction lands between "
+              "process() and the EMA, not before the FFT and not after smoothing");
     }
 
     if (g_failures == 0)

@@ -1,5 +1,7 @@
 #include "core/backends/anan/AnanRxDsp.h"
 
+#include "core/backends/anan/AnanDroopCorrection.h"
+
 #include <QMetaType>
 
 #include <algorithm>
@@ -277,6 +279,13 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     // displayed frame.
     if (spectrumFrameDue()) {
         if (m_spectrum->process(m_conjugated, m_bins) > 0) {
+            // Real DDC0 CIC/decimation droop, corrected on the actual FFT
+            // magnitude BEFORE the EMA below so the smoothed/emitted trace
+            // reflects the corrected value at every step -- see
+            // AnanDroopCorrection.h. inputSampleRateHz is always an exact
+            // multiple of 1000 for the six valid DDC0 rates.
+            applyDroopCorrectionDb(m_bins,
+                droopCorrectionTableForRateKsps(m_config.inputSampleRateHz / 1000));
             smoothSpectrumBins(m_bins);
             emit spectrumReady(m_bins);
             m_lastSpectrumMs = m_spectrumClock.elapsed();

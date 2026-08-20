@@ -66,7 +66,11 @@ public:
     // meters have been validated. Where a stage does use a meter, it labels the
     // conclusion meterDependent so a failure can be attributed to the right
     // subsystem instead of the nearest one.
-    enum class Phase { Tune, Rx, Tx, Meters, All };
+    // Spectrum is deliberately NOT folded into All: it is a data-capture tool
+    // for offline calibration work (e.g. tools/anan_droop_calibration.py),
+    // not a bring-up verdict stage, and dumping a multi-KB bin array into
+    // every routine `radiocert all` report would serve nobody.
+    enum class Phase { Tune, Rx, Tx, Meters, Spectrum, All };
 
     struct Options {
         Phase phase = Phase::All;
@@ -140,6 +144,12 @@ private:
     // ---- control-plane stages (no DSP, no meters) ----
     void stageModeMap();
     void stageTuning(const Options& o);
+
+    // ---- calibration-capture stage (no verdict, no key) ----
+    //
+    // Captures one live spectrum frame for offline tooling. NOT a receive
+    // handedness/bring-up stage -- see the Phase::Spectrum comment above.
+    void stageSpectrum(const Options& o);
 
     // ---- meter stages, LAST ----
     void stageMeterInventory();
