@@ -1373,8 +1373,48 @@ void test_continuous_common_mode_agc_recovery()
     }
     report("continuous_agc: delayed gradual smaller common-mode rise is bounded",
            worstSmallRiseDb < 2.5);
-    report("continuous_agc: all NPE methods suppress the delayed 6 dB rise",
+    report("continuous_agc: OSMS and MMSE suppress the delayed 6 dB rise",
            worstLargeRiseDb < 3.0);
+}
+
+void test_residual_reference_ignores_user_smoothing()
+{
+    // Gain smoothing controls the audible mask trajectory, not calibration of
+    // the pre-AGC residual target. At the maximum setting, using that same EMA
+    // for startup calibration leaves nearly all of reset-time unity behind.
+    constexpr int sampleRate = 24000;
+    constexpr int fftSize = 1024;
+    constexpr int totalSamples = 11 * sampleRate;
+    constexpr int agcRise = 7 * sampleRate;
+    std::vector<float> input(totalSamples);
+    std::uint32_t randomState = 0x736d6f6fu;
+    for (int i = 0; i < totalSamples; ++i) {
+        randomState = 1664525u * randomState + 1013904223u;
+        const double white =
+            2.0 * static_cast<double>(randomState) / 4294967295.0 - 1.0;
+        input[i] = static_cast<float>((i < agcRise ? 0.025 : 0.050) * white);
+    }
+
+    for (const int npeMethod : {0, 1}) {
+        const std::vector<float> defaultOutput = processWithGeometry(
+            input, fftSize, 4, 73, 0.10f, true, 2, 0.85f,
+            npeMethod, false, 0.35f);
+        const std::vector<float> maximumOutput = processWithGeometry(
+            input, fftSize, 4, 73, 0.10f, true, 2, 0.9999f,
+            npeMethod, false, 0.35f);
+        const double defaultDbfs = outputRmsDbfs(
+            defaultOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double maximumDbfs = outputRmsDbfs(
+            maximumOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
+        const double excess = maximumDbfs - defaultDbfs;
+        const char* methodName = npeMethod == 0 ? "OSMS" : "MMSE";
+        std::printf(" smoothing independence %s: default %.2f dBFS, "
+                    "maximum %.2f dBFS, excess %+.2f dB\n",
+                    methodName, defaultDbfs, maximumDbfs, excess);
+        const std::string testName = std::string("gain_smoothing: ")
+            + methodName + " maximum smoothing does not bypass residual cap";
+        report(testName.c_str(), excess < 0.50);
+    }
 }
 
 void test_residual_reference_uses_live_gain_controls()
@@ -1433,8 +1473,7 @@ void test_residual_reference_uses_live_gain_controls()
         const double changedDbfs = outputRmsDbfs(
             changedOutput, 9 * sampleRate, 10 * sampleRate, fftSize);
         const double difference = std::abs(changedDbfs - presetDbfs);
-        const char* methodName = npeMethod == 0 ? "OSMS"
-            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        const char* methodName = npeMethod == 0 ? "OSMS" : "MMSE";
         std::printf(" live controls %s: preset %.2f dBFS, changed %.2f dBFS, "
                     "delta %.2f dB\n",
                     methodName, presetDbfs, changedDbfs, difference);
@@ -2560,6 +2599,9 @@ int main()
 
     std::printf("\n-- NR2 live gain-control order independence --\n");
     test_residual_reference_uses_live_gain_controls();
+
+    std::printf("\n-- NR2 residual-reference smoothing independence --\n");
+    test_residual_reference_ignores_user_smoothing();
 
     std::printf("\n-- NR2 subtle common-mode AGC invariance --\n");
     test_subtle_common_mode_agc_invariance();

@@ -230,6 +230,7 @@ private:
     std::vector<std::uint8_t> m_commonNoiseLike;
     double m_commonReferenceAlpha{0.0};
     double m_commonScaleAlpha{0.0};
+    double m_residualReferenceAlpha{0.0};
     double m_commonLevelReferencePower{0.0};
     double m_commonScaleLog{0.0};
     double m_commonAppliedScale{1.0};

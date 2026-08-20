@@ -356,6 +356,15 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
     m_gainDecreaseSmooth = hopScaledSmoothing(
         0.5, m_hopSize, sampleRate);
     m_rampFrames = std::max(1, static_cast<int>(std::lround(framesPerSec)));
+    // Residual-target calibration is an estimator concern, not an audible
+    // gain-smoothing preference. Preserve the established 1024/4 default
+    // convergence (0.85^93.75) at every supported FFT geometry.
+    constexpr double kReferenceGainSmoothing = 0.85;
+    constexpr double kReferenceFramesPerSecond = 24000.0 / (1024.0 / 4.0);
+    const double residualReferenceInitialWeight = std::pow(
+        kReferenceGainSmoothing, kReferenceFramesPerSecond);
+    m_residualReferenceAlpha = std::exp(
+        std::log(residualReferenceInitialWeight) / m_rampFrames);
     m_commonReferenceAlpha = std::exp(
         -static_cast<double>(m_hopSize) / (2.0 * sampleRate));
     m_commonScaleAlpha = std::exp(
@@ -1721,10 +1730,9 @@ void SpectralNR::updateResidualReference(double gainMax, bool afterCap)
             if (lateSeed) {
                 m_residualReferenceGainRatio[k] = gainRatio;
             } else {
-                const double smoothing = m_gainSmooth.load();
-                m_residualReferenceGainRatio[k] = smoothing
+                m_residualReferenceGainRatio[k] = m_residualReferenceAlpha
                         * m_residualReferenceGainRatio[k]
-                    + (1.0 - smoothing) * gainRatio;
+                    + (1.0 - m_residualReferenceAlpha) * gainRatio;
             }
             // Keep the estimator-level noise PSD separate from gain. The live
             // user floor/cap is deliberately not baked into either value.
