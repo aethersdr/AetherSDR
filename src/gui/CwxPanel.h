@@ -63,6 +63,8 @@ public:
     explicit CwxPanel(CwxModel* model, QWidget* parent = nullptr);
 
     void setModel(CwxModel* model);
+    void setDisplayName(const QString& name);
+    QString displayName() const;
 
     // Optional providers used to guard the global F1-F12 / ESC shortcuts
     // so they don't fire in modes/states where they'd be surprising (#1552).
@@ -109,6 +111,7 @@ private:
     void onKeyPress(const QString& text);
 
     CwxModel*       m_model{nullptr};
+    QLabel*         m_titleLabel{nullptr};
 
     QStackedWidget* m_stack{nullptr};
 

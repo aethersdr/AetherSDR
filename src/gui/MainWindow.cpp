@@ -7310,14 +7310,18 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     const bool dvk = !connected || caps.hasVoiceKeyer;
     const bool fdx = !connected || caps.hasFullDuplex;
 
+    const QString cwKeyerName = connected && caps.family == QLatin1String("icom")
+                                    ? QStringLiteral("CWK")
+                                    : QStringLiteral("CWX");
     if (m_cwxIndicator) {
         // CWX is FlexRadio's name. Icom exposes the same shared panel through
         // its CI-V text keyer, so call that surface CWK rather than implying
         // that the radio implements Flex's CWX protocol.
-        m_cwxIndicator->setText(connected && caps.family == QLatin1String("icom")
-                                    ? QStringLiteral("CWK")
-                                    : QStringLiteral("CWX"));
+        m_cwxIndicator->setText(cwKeyerName);
         m_cwxIndicator->setVisible(cwx);
+    }
+    if (m_cwxPanel) {
+        m_cwxPanel->setDisplayName(cwKeyerName);
     }
     if (!cwx && m_cwxPanel) {
         m_cwxPanel->hide();

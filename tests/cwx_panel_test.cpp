@@ -109,6 +109,16 @@ void testLiveButtonTogglesOff()
            !f.model.isLive() && !live->isChecked());
 }
 
+void testDisplayNameCanFollowTheRadioFamily()
+{
+    Fixture f;
+    report("shared keyer panel defaults to the Flex CWX name",
+           f.panel.displayName() == QLatin1String("CWX"));
+    f.panel.setDisplayName(QStringLiteral("CWK"));
+    report("Icom can relabel the shared keyer panel as CWK",
+           f.panel.displayName() == QLatin1String("CWK"));
+}
+
 void testSendButtonSendsWhenLiveOff()
 {
     Fixture f;
@@ -239,6 +249,7 @@ int main(int argc, char** argv)
     std::printf("CWX panel behavior test harness\n\n");
 
     testLiveButtonTogglesOff();
+    testDisplayNameCanFollowTheRadioFamily();
     testSendButtonSendsWhenLiveOff();
     testEnterStillSendsWhenLiveOff();
     testSendButtonTurnsLiveOffWithoutDuplicateSend();
