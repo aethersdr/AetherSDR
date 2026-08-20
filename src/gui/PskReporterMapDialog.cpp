@@ -22,7 +22,9 @@
 #include <QCursor>
 #include <QDateTime>
 #include <QDoubleSpinBox>
+#include <QFrame>
 #include <QGroupBox>
+#include <QHash>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSet>
@@ -232,34 +234,59 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     , m_audioEngine(audioEngine)
     , m_radioModel(radioModel)
     , m_client(new PskReporterClient(this))
+    , m_globalClient(new PskReporterClient(this))
     , m_propForecast(propForecast)
 {
+    // The callsign layer is MQTT-only. The independent all-stations client
+    // owns the shared HTTP cadence and its reusable global cache.
+    m_client->setHttpPollingEnabled(false);
     setMinimumSize(720, 480);
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(6, 6, 6, 6);
     root->setSpacing(6);
 
-    auto* filtersBar = new QHBoxLayout();
+    auto* reportsBox = new QGroupBox(tr("Reports"), bodyWidget());
+    reportsBox->setAccessibleName(tr("PSK Reporter filters and map layers"));
+    auto* reportsLayout = new QVBoxLayout(reportsBox);
+    reportsLayout->setContentsMargins(6, 4, 6, 4);
+    reportsLayout->setSpacing(4);
 
-    filtersBar->addWidget(new QLabel(tr("Call:"), bodyWidget()));
-    m_queryCallsign = new QLineEdit(bodyWidget());
+    auto* filtersBar = new QHBoxLayout();
+    filtersBar->setSpacing(6);
+
+    filtersBar->addWidget(new QLabel(tr("Call:"), reportsBox));
+    m_queryCallsign = new QLineEdit(reportsBox);
     m_queryCallsign->setMaxLength(32);
     m_queryCallsign->setFixedWidth(100);
     m_queryCallsign->setObjectName(QStringLiteral("pskReporterCallsign"));
     m_queryCallsign->setAccessibleName(tr("PSK Reporter map callsign"));
     m_queryCallsign->setAccessibleDescription(
-        tr("Enter a callsign to show reports sent or received by it; clear "
-           "the field to show reports and active monitors for anyone"));
+        tr("Enter a callsign to add its live sent and received reports"));
     m_queryCallsign->setToolTip(
-        tr("Blank shows all callsigns in the selected timeframe"));
-    // The public map is the default view. A callsign is an explicit filter,
-    // not a mirror of the station setting.
-    m_queryCallsign->clear();
+        tr("A callsign receives immediate live MQTT updates. Clear the field "
+           "to hide the live callsign layer; All Callsigns is independent."));
+    // Seed the map-only filter from the station identity. Subsequent edits do
+    // not write back to the radio, and clearing it explicitly selects the
+    // all-stations view.
+    m_queryCallsign->setText(
+        m_radioModel != nullptr
+            ? m_radioModel->callsign().trimmed().toUpper().left(32)
+            : QString());
     filtersBar->addWidget(m_queryCallsign);
 
-    filtersBar->addWidget(new QLabel(tr("Band:"), bodyWidget()));
-    m_bandCombo = new QComboBox(bodyWidget());
+    m_allCallsignsCheck = new QCheckBox(tr("All Callsigns"), reportsBox);
+    m_allCallsignsCheck->setObjectName(
+        QStringLiteral("pskReporterAllCallsigns"));
+    m_allCallsignsCheck->setAccessibleName(
+        tr("Show all PSK Reporter callsigns"));
+    m_allCallsignsCheck->setToolTip(
+        tr("Show the cached global HTTP snapshot and refresh it no more than "
+           "once every five minutes"));
+    m_allCallsignsCheck->setChecked(
+        pskSettings().value("showAllCallsigns").toBool(false));
+    filtersBar->addWidget(new QLabel(tr("Band:"), reportsBox));
+    m_bandCombo = new QComboBox(reportsBox);
     m_bandCombo->addItem(tr("All"));
     for (const char* b : { "160m", "80m", "60m", "40m", "30m", "20m",
                            "17m", "15m", "12m", "10m", "6m", "VHF+" }) {
@@ -267,8 +294,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     }
     filtersBar->addWidget(m_bandCombo);
 
-    filtersBar->addWidget(new QLabel(tr("Mode:"), bodyWidget()));
-    m_modeCombo = new QComboBox(bodyWidget());
+    filtersBar->addWidget(new QLabel(tr("Mode:"), reportsBox));
+    m_modeCombo = new QComboBox(reportsBox);
     m_modeCombo->addItem(tr("All"));
     for (const char* m : { "FT8", "FT4", "WSPR", "JS8", "CW", "PSK",
                            "RTTY", "SSB", "Other" }) {
@@ -276,8 +303,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     }
     filtersBar->addWidget(m_modeCombo);
 
-    filtersBar->addWidget(new QLabel(tr("Lookback:"), bodyWidget()));
-    m_lookbackCombo = new QComboBox(bodyWidget());
+    filtersBar->addWidget(new QLabel(tr("Lookback:"), reportsBox));
+    m_lookbackCombo = new QComboBox(reportsBox);
     m_lookbackCombo->addItem(tr("15 min"), 15 * 60);
     m_lookbackCombo->addItem(tr("30 min"), 30 * 60);
     m_lookbackCombo->addItem(tr("1 hour"), 60 * 60);
@@ -286,42 +313,56 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_lookbackCombo->addItem(tr("8 hours"), 8 * 60 * 60);
     filtersBar->addWidget(m_lookbackCombo);
     filtersBar->addStretch(1);
-    root->addLayout(filtersBar);
+
+    // Persistent reception stats share the filter row and remain pinned to
+    // the panel's top-right corner, matching the report controls they
+    // summarize.
+    m_dxLabel = new QLabel(reportsBox);
+    m_dxLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    filtersBar->addWidget(m_dxLabel);
+    reportsLayout->addLayout(filtersBar);
 
     auto* topBar = new QHBoxLayout();
-    topBar->addWidget(new QLabel(tr("Update every:"), bodyWidget()));
+    topBar->setSpacing(6);
+    topBar->addWidget(new QLabel(tr("Data:"), reportsBox));
+    topBar->addWidget(m_allCallsignsCheck);
 
-    m_intervalCombo = new QComboBox(bodyWidget());
-    // PSK Reporter policy floors HTTP polling at 5 minutes; "Live" uses
-    // their sanctioned MQTT feed instead of fast polling.
-    m_intervalCombo->addItem(tr("Live (MQTT)"), PskReporterClient::kLiveMqtt);
-    m_intervalCombo->addItem(tr("5 minutes"), 5 * 60 * 1000);
-    m_intervalCombo->addItem(tr("10 minutes"), 10 * 60 * 1000);
-    m_intervalCombo->addItem(tr("15 minutes"), 15 * 60 * 1000);
-    m_intervalCombo->addItem(tr("30 minutes"), 30 * 60 * 1000);
-    m_intervalCombo->addItem(tr("1 hour"), 60 * 60 * 1000);
-    topBar->addWidget(m_intervalCombo);
+    m_activeMonitorsCheck = new QCheckBox(tr("Active monitors"), reportsBox);
+    m_activeMonitorsCheck->setObjectName(
+        QStringLiteral("pskReporterActiveMonitors"));
+    m_activeMonitorsCheck->setAccessibleName(
+        tr("Show active PSK Reporter monitors"));
+    m_activeMonitorsCheck->setToolTip(
+        tr("Show stations that report themselves as listening; these records "
+           "do not contain a transmitting endpoint, so they have no paths"));
+    m_activeMonitorsCheck->setChecked(
+        pskSettings().value("showActiveMonitors").toBool(true));
+    topBar->addWidget(m_activeMonitorsCheck);
 
-    m_pathsCheck = new QCheckBox(tr("Paths"), bodyWidget());
+    auto* dataMapDivider = new QFrame(reportsBox);
+    dataMapDivider->setFrameShape(QFrame::VLine);
+    dataMapDivider->setFrameShadow(QFrame::Sunken);
+    topBar->addSpacing(6);
+    topBar->addWidget(dataMapDivider);
+    topBar->addSpacing(6);
+    topBar->addWidget(new QLabel(tr("Map:"), reportsBox));
+
+    m_pathsCheck = new QCheckBox(tr("Paths"), reportsBox);
     m_pathsCheck->setObjectName(QStringLiteral("pskReporterPaths"));
     m_pathsCheck->setToolTip(
         tr("Draw great-circle report paths between transmitting and receiving stations"));
     m_pathsCheck->setChecked(pskSettings().value("showPaths").toBool(false));
     topBar->addWidget(m_pathsCheck);
 
-    m_terminatorCheck = new QCheckBox(tr("Day/night"), bodyWidget());
+    m_terminatorCheck = new QCheckBox(tr("Day/night"), reportsBox);
     m_terminatorCheck->setToolTip(tr("Show the current night shadow on the map"));
     m_terminatorCheck->setAccessibleName(tr("Show day and night terminator"));
     m_terminatorCheck->setChecked(
         pskSettings().value("showTerminator").toBool(true));
     topBar->addWidget(m_terminatorCheck);
-
-    // Persistent reception stats, pinned to the top-right corner.
     topBar->addStretch(1);
-    m_dxLabel = new QLabel(bodyWidget());
-    m_dxLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    topBar->addWidget(m_dxLabel);
-    root->addLayout(topBar);
+    reportsLayout->addLayout(topBar);
+    root->addWidget(reportsBox);
 
     auto* beaconBox = new QGroupBox(tr("WSPR beacon"), bodyWidget());
     beaconBox->setAccessibleName(tr("WSPR beacon transmitter"));
@@ -475,6 +516,29 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         writePskSetting("showPaths", on);
         m_mapView->setPathsVisible(on);
     });
+    connect(m_allCallsignsCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showAllCallsigns", on);
+        m_activeMonitorsCheck->setEnabled(on);
+        if (m_started) {
+            // The global client is prefetched for the entire dialog lifetime,
+            // so this toggle is a cache-only display operation.
+            if (!m_globalClient->isRunning()) {
+                restartGlobalClient();
+            }
+            // start() may restore the cached snapshot and emit spotsUpdated(),
+            // which arms the normal 250 ms burst-coalescing timer. We are
+            // rendering that same snapshot synchronously below, so leaving
+            // the timer armed only cancels the first expensive marker image
+            // and starts it over just as it is about to appear.
+            m_markerRefreshTimer->stop();
+            rebuildMarkers();
+        }
+    });
+    connect(m_activeMonitorsCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showActiveMonitors", on);
+        m_markerRefreshTimer->stop();
+        rebuildMarkers();
+    });
     connect(m_terminatorCheck, &QCheckBox::toggled, this, [this](bool on) {
         writePskSetting("showTerminator", on);
         m_mapView->setDayNightTerminatorVisible(on);
@@ -483,6 +547,9 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
             this, &PskReporterMapDialog::applyMapCallsign);
     connect(m_queryCallsign, &QLineEdit::returnPressed,
             this, &PskReporterMapDialog::applyMapCallsign);
+    connect(m_queryCallsign, &QLineEdit::textEdited, this, [this] {
+        m_mapCallsignUserEdited = true;
+    });
     connect(m_mapView, &MapView::markerClicked, this,
             [](const MapView::Marker& marker) {
                 if (!marker.clickInfo.isEmpty()) {
@@ -527,6 +594,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
 
     connect(m_client, &PskReporterClient::connectionStateChanged,
             this, &PskReporterMapDialog::updateConnectionIndicator);
+    connect(m_globalClient, &PskReporterClient::connectionStateChanged,
+            this, &PskReporterMapDialog::updateConnectionIndicator);
     updateConnectionIndicator();
 
     if (m_propForecast != nullptr) {
@@ -539,22 +608,35 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_emptyStateTimer->setSingleShot(true);
     m_emptyStateTimer->setInterval(2 * 60 * 1000);
     connect(m_emptyStateTimer, &QTimer::timeout, this, [this] {
-        if (m_client->spots().isEmpty()) {
-            m_statusLabel->setText(
-                tr("No reports yet — transmit (e.g. FT8) and reports "
-                   "typically appear within 1–2 minutes."));
+        const bool visibleMonitorsEmpty = !m_activeMonitorsCheck->isChecked()
+                                       || m_globalClient->monitors().isEmpty();
+        const bool globalEmpty = !m_allCallsignsCheck->isChecked()
+            || (m_globalClient->spots().isEmpty() && visibleMonitorsEmpty);
+        if (globalEmpty && m_client->spots().isEmpty()) {
+            if (!m_appliedMapCallsign.isEmpty()) {
+                m_statusLabel->setText(
+                    tr("No live reports yet for %1 — reports typically appear "
+                       "within 1–2 minutes after transmitting.")
+                        .arg(m_appliedMapCallsign));
+            } else if (m_allCallsignsCheck->isChecked()) {
+                m_statusLabel->setText(
+                    tr("No reports or active monitors were returned for the "
+                       "selected timeframe."));
+            } else {
+                m_statusLabel->setText(
+                    tr("Enter a callsign or enable All Callsigns."));
+            }
         }
     });
 
-    const int savedInterval =
-        pskSettings().value("updateIntervalMs").toInt(PskReporterClient::kLiveMqtt);
-    const int idx = m_intervalCombo->findData(savedInterval);
-    m_intervalCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    m_activeMonitorsCheck->setEnabled(m_allCallsignsCheck->isChecked());
 
     const int savedLookback = pskSettings().value("lookbackSec").toInt(60 * 60);
     const int lbIdx = m_lookbackCombo->findData(savedLookback);
     m_lookbackCombo->setCurrentIndex(lbIdx >= 0 ? lbIdx : 2);  // default 1h
     m_client->setLookbackSeconds(m_lookbackCombo->currentData().toInt());
+    m_globalClient->setLookbackSeconds(
+        m_lookbackCombo->currentData().toInt());
 
     // Debounce rapid Lookback changes into a single deep HTTP query, so
     // spinning through options doesn't hammer PSK Reporter (which 503s).
@@ -563,10 +645,10 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_lookbackDebounce->setInterval(750);
     connect(m_lookbackDebounce, &QTimer::timeout, this, [this] {
         m_client->setLookbackSeconds(m_lookbackCombo->currentData().toInt());
+        m_globalClient->setLookbackSeconds(
+            m_lookbackCombo->currentData().toInt());
     });
 
-    connect(m_intervalCombo, &QComboBox::currentIndexChanged,
-            this, &PskReporterMapDialog::onIntervalChanged);
     connect(m_lookbackCombo, &QComboBox::currentIndexChanged,
             this, &PskReporterMapDialog::onLookbackChanged);
     connect(m_bandCombo, &QComboBox::currentIndexChanged,
@@ -587,8 +669,20 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
             m_markerRefreshTimer->start();
         }
     });
+    connect(m_globalClient, &PskReporterClient::spotsUpdated, this, [this] {
+        if (!m_markerRefreshTimer->isActive()) {
+            m_markerRefreshTimer->start();
+        }
+    });
     connect(m_client, &PskReporterClient::statusChanged,
-            m_statusLabel, &QLabel::setText);
+            this, [this](const QString& status) {
+                m_statusLabel->setText(
+                    tr("Live %1: %2").arg(m_appliedMapCallsign, status));
+            });
+    connect(m_globalClient, &PskReporterClient::statusChanged,
+            this, [this](const QString& status) {
+                m_statusLabel->setText(tr("All Callsigns: %1").arg(status));
+            });
     connect(m_beaconButton, &QPushButton::clicked,
             this, &PskReporterMapDialog::scheduleBeacon);
     connect(m_beaconPower, &QComboBox::currentIndexChanged, this, [this] {
@@ -701,10 +795,21 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     if (m_radioModel != nullptr) {
         connect(m_radioModel, &RadioModel::gpsStatusChanged,
                 this, [this] { updateHomeFromRadio(); });
-        // A late station callsign updates station-owned features only. The map
-        // query stays empty until the operator explicitly enters a filter.
         connect(m_radioModel, &RadioModel::callsignChanged, this,
                 [this] {
+                    // Follow a late-arriving station identity only until the
+                    // operator explicitly edits the map-local filter.
+                    if (!m_mapCallsignUserEdited) {
+                        const QString stationCall =
+                            m_radioModel->callsign().trimmed().toUpper().left(32);
+                        if (stationCall != m_queryCallsign->text()) {
+                            m_queryCallsign->setText(stationCall);
+                            if (m_started) {
+                                m_appliedMapCallsign = stationCall;
+                                restartCallsignClient();
+                            }
+                        }
+                    }
                     updateHomeFromRadio();
                     updateBeaconDefaults();
                 });
@@ -723,7 +828,14 @@ void PskReporterMapDialog::updateBeaconDefaults()
     if (m_radioModel == nullptr || m_beaconArmed) {
         return;
     }
-    m_beaconCallsign->setText(m_radioModel->callsign().trimmed().toUpper());
+    const QString stationCall =
+        m_radioModel->callsign().trimmed().toUpper();
+    // A radio status update must not erase or replace an operator's
+    // in-progress edit. An empty station identity is likewise not an erase
+    // command for this TX field.
+    if (!stationCall.isEmpty() && !m_beaconCallsign->isModified()) {
+        m_beaconCallsign->setText(stationCall);
+    }
     if (m_beaconGrid->text().trimmed().isEmpty()) {
         // A GPSDO-derived locator is worth keeping: it seeds the field on a
         // radio that has one, and then persists so a later session on a radio
@@ -1295,13 +1407,6 @@ void PskReporterMapDialog::updateHomeFromRadio()
     m_mapView->setHomePosition(lat, lon, label);
 }
 
-void PskReporterMapDialog::onIntervalChanged(int index)
-{
-    const int intervalMs = m_intervalCombo->itemData(index).toInt();
-    writePskSetting("updateIntervalMs", intervalMs);
-    restartClient();
-}
-
 void PskReporterMapDialog::onLookbackChanged(int index)
 {
     // Persist immediately; defer the (networked) client update so rapid
@@ -1310,13 +1415,38 @@ void PskReporterMapDialog::onLookbackChanged(int index)
     m_lookbackDebounce->start();
 }
 
-void PskReporterMapDialog::restartClient()
+void PskReporterMapDialog::restartClients()
 {
     m_appliedMapCallsign = m_queryCallsign->text().trimmed().toUpper();
+    // Claim the one shared HTTP retrieval slot for the reusable global
+    // snapshot as soon as the map opens. Its cached rows also seed the
+    // prepopulated callsign while MQTT supplies new reports in parallel.
+    restartGlobalClient();
+    restartCallsignClient();
+    m_emptyStateTimer->start();
+}
+
+void PskReporterMapDialog::restartCallsignClient()
+{
+    m_client->stop();
     m_client->setCallsign(m_appliedMapCallsign);
     m_client->setLookbackSeconds(m_lookbackCombo->currentData().toInt());
-    m_client->start(m_intervalCombo->currentData().toInt());
-    m_emptyStateTimer->start();
+    if (!m_appliedMapCallsign.isEmpty()) {
+        m_client->start(PskReporterClient::kLiveMqtt);
+    }
+}
+
+void PskReporterMapDialog::restartGlobalClient()
+{
+    m_globalClient->stop();
+    m_globalClient->setCallsign(QString());
+    m_globalClient->setLookbackSeconds(
+        m_lookbackCombo->currentData().toInt());
+    // Keep this client warm even while its layer is hidden. One global query
+    // can seed the callsign history and makes a later All Callsigns toggle
+    // immediate; subsequent refreshes retain PSK Reporter's five-minute floor.
+    m_globalClient->start(PskReporterClient::kMinPollMs);
+    updateConnectionIndicator();
 }
 
 void PskReporterMapDialog::applyMapCallsign()
@@ -1325,65 +1455,88 @@ void PskReporterMapDialog::applyMapCallsign()
         m_queryCallsign->text().trimmed().toUpper().left(32);
     m_queryCallsign->setText(normalized);
     if (m_started && normalized != m_appliedMapCallsign) {
-        restartClient();
+        m_appliedMapCallsign = normalized;
+        restartCallsignClient();
+        rebuildMarkers();
+        m_emptyStateTimer->start();
     }
 }
 
 void PskReporterMapDialog::updateConnectionIndicator()
 {
-    // Three-state bullet next to the transport label (MQTT/HTTP):
-    //   green  = connected and showing data
-    //   yellow = connected but no spots yet
-    //   red    = no good connection
-    const bool up = m_client->isMqttConnected() || m_client->lastHttpOk();
-    const bool hasData = !m_client->spots().isEmpty()
-                      || !m_client->monitors().isEmpty();
+    const bool globalEnabled = m_allCallsignsCheck->isChecked();
+    const bool globalRunning = m_globalClient->isRunning();
+    const bool callsignEnabled = !m_appliedMapCallsign.isEmpty();
+    const bool up = (globalRunning && m_globalClient->lastHttpOk())
+                 || (callsignEnabled && m_client->isMqttConnected());
+    const bool hasData = (globalRunning
+                          && (!m_globalClient->spots().isEmpty()
+                              || !m_globalClient->monitors().isEmpty()))
+                      || (callsignEnabled && !m_client->spots().isEmpty());
+    const bool sawError = (globalRunning && m_globalClient->sawError())
+                       || (callsignEnabled && m_client->sawError());
     QString color;
     if (!up) {
-        color = m_client->sawError() ? QStringLiteral("#e74c3c")    // red
-                                     : QStringLiteral("#f4c20d");   // connecting
+        color = sawError ? QStringLiteral("#e74c3c")
+                         : QStringLiteral("#f4c20d");
     } else {
-        color = hasData ? QStringLiteral("#2ecc71")                 // green
-                        : QStringLiteral("#f4c20d");                // yellow
+        color = hasData ? QStringLiteral("#2ecc71")
+                        : QStringLiteral("#f4c20d");
     }
-    // Transport word in the normal label color (white in dark themes);
-    // only the bullet carries the status color.
+
+    QStringList transports;
+    if (globalRunning) {
+        transports.append(QStringLiteral("HTTP"));
+    }
+    if (callsignEnabled) {
+        transports.append(QStringLiteral("MQTT"));
+    }
+    if (transports.isEmpty()) {
+        transports.append(tr("Off"));
+    }
     m_connLabel->setText(
         QStringLiteral("%1 <span style='color:%2;'>&#9679;</span>")
-            .arg(m_client->transport(), color));
+            .arg(transports.join(QStringLiteral(" + ")), color));
 
     QStringList diagnostics;
-    diagnostics.append(tr("Transport: %1").arg(m_client->transport()));
-    diagnostics.append(tr("Scope: %1").arg(
-        m_client->queryScope() == PskReporterClient::QueryScope::Anyone
-            ? tr("all stations")
-            : m_client->callsign()));
-    diagnostics.append(tr("Cached data: %1 report(s), %2 active monitor(s)")
-                           .arg(m_client->spots().size())
-                           .arg(m_client->monitors().size()));
-    if (m_client->httpRequestInFlight()) {
-        diagnostics.append(tr("HTTP request: in progress"));
+    diagnostics.append(globalRunning
+        ? tr("Global HTTP cache%1: %2 report(s), %3 active monitor(s)")
+              .arg(globalEnabled ? QString() : tr(" (layer hidden)"))
+              .arg(m_globalClient->spots().size())
+              .arg(m_globalClient->monitors().size())
+        : tr("Global HTTP cache: disabled"));
+    if (globalRunning) {
+        if (m_globalClient->httpRequestInFlight()) {
+            diagnostics.append(tr("Global HTTP request: in progress"));
+        }
+        if (m_globalClient->lastHttpRequestAt().isValid()) {
+            diagnostics.append(tr("Last global HTTP request: %1")
+                .arg(m_globalClient->lastHttpRequestAt().toLocalTime().toString(
+                    QStringLiteral("yyyy-MM-dd hh:mm:ss"))));
+        }
+        if (m_globalClient->lastHttpStatus() > 0) {
+            diagnostics.append(tr("Last global HTTP status: %1")
+                                   .arg(m_globalClient->lastHttpStatus()));
+        }
+        if (!m_globalClient->lastHttpError().isEmpty()) {
+            diagnostics.append(tr("Global HTTP error: %1")
+                                   .arg(m_globalClient->lastHttpError()));
+        }
+        const QDateTime nextRequest = m_globalClient->nextHttpRequestAt();
+        if (nextRequest.isValid()
+            && nextRequest > QDateTime::currentDateTime()) {
+            diagnostics.append(tr("Next global HTTP request allowed: %1")
+                .arg(nextRequest.toLocalTime().toString(
+                    QStringLiteral("yyyy-MM-dd hh:mm:ss"))));
+        }
     }
-    if (m_client->lastHttpRequestAt().isValid()) {
-        diagnostics.append(tr("Last HTTP request: %1")
-            .arg(m_client->lastHttpRequestAt().toLocalTime().toString(
-                QStringLiteral("yyyy-MM-dd hh:mm:ss"))));
-    }
-    if (m_client->lastHttpStatus() > 0) {
-        diagnostics.append(tr("Last HTTP status: %1")
-                               .arg(m_client->lastHttpStatus()));
-    }
-    if (!m_client->lastHttpError().isEmpty()) {
-        diagnostics.append(tr("Last error: %1")
-                               .arg(m_client->lastHttpError()));
-    }
-    const QDateTime nextRequest = m_client->nextHttpRequestAt();
-    if (nextRequest.isValid()
-        && nextRequest > QDateTime::currentDateTime()) {
-        diagnostics.append(tr("Next HTTP request allowed: %1")
-            .arg(nextRequest.toLocalTime().toString(
-                QStringLiteral("yyyy-MM-dd hh:mm:ss"))));
-    }
+    diagnostics.append(callsignEnabled
+        ? tr("Live %1 MQTT: %2 (%3 cached report(s))")
+              .arg(m_appliedMapCallsign,
+                   m_client->isMqttConnected() ? tr("connected")
+                                               : tr("connecting"))
+              .arg(m_client->spots().size())
+        : tr("Live callsign MQTT: disabled"));
     const QString tooltip = diagnostics.join(QLatin1Char('\n'));
     m_connLabel->setToolTip(tooltip);
     m_connLabel->setAccessibleDescription(tooltip);
@@ -1391,10 +1544,69 @@ void PskReporterMapDialog::updateConnectionIndicator()
 
 void PskReporterMapDialog::rebuildMarkers()
 {
+    struct DisplaySpot {
+        const PskReporterSpot* spot{nullptr};
+        bool callsignSpecific{false};
+    };
+
+    QVector<DisplaySpot> displaySpots;
+    QHash<QString, int> spotIndexes;
+    const auto mergeSpot = [&displaySpots, &spotIndexes](
+                               const PskReporterSpot& spot,
+                               bool callsignSpecific) {
+        const QString key = spot.senderCallsign.toUpper()
+                          + QLatin1Char('|')
+                          + spot.receiverCallsign.toUpper()
+                          + QLatin1Char('|')
+                          + QString::number(spot.frequencyHz)
+                          + QLatin1Char('|') + spot.mode.toUpper();
+        const auto existing = spotIndexes.constFind(key);
+        if (existing == spotIndexes.cend()) {
+            spotIndexes.insert(key, displaySpots.size());
+            displaySpots.append({&spot, callsignSpecific});
+            return;
+        }
+        DisplaySpot& current = displaySpots[*existing];
+        if (spot.flowStartSeconds >= current.spot->flowStartSeconds) {
+            current.spot = &spot;
+        }
+        // Preserve live-layer identity even when the five-minute global
+        // snapshot has the newer copy of this same report.
+        current.callsignSpecific = current.callsignSpecific
+                                 || callsignSpecific;
+    };
+    const auto mergeSpots = [&mergeSpot](
+                                const QVector<PskReporterSpot>& spots,
+                                bool callsignSpecific) {
+        for (const PskReporterSpot& spot : spots) {
+            mergeSpot(spot, callsignSpecific);
+        }
+    };
+
+    const bool globalEnabled = m_allCallsignsCheck->isChecked();
+    if (globalEnabled) {
+        mergeSpots(m_globalClient->spots(), false);
+    } else if (!m_appliedMapCallsign.isEmpty()) {
+        // MQTT has no history. Reuse matching rows from the prefetched global
+        // snapshot as callsign-specific data without spending a second HTTP
+        // request slot.
+        for (const PskReporterSpot& spot : m_globalClient->spots()) {
+            if (spot.senderCallsign.compare(
+                    m_appliedMapCallsign, Qt::CaseInsensitive) == 0
+                || spot.receiverCallsign.compare(
+                       m_appliedMapCallsign, Qt::CaseInsensitive) == 0) {
+                mergeSpot(spot, true);
+            }
+        }
+    }
+    if (!m_appliedMapCallsign.isEmpty()) {
+        // Merge the live layer second so an equal-timestamp report is rendered
+        // with callsign-specific labeling and hover behavior.
+        mergeSpots(m_client->spots(), true);
+    }
+
     QVector<MapView::Marker> markers;
     constexpr int kMaxRenderedMonitors = 3000;
-    const bool anyone = m_client->queryScope()
-                     == PskReporterClient::QueryScope::Anyone;
 
     // GPS and the saved beacon grid are the preferred station-location
     // sources. If neither exists, PSK Reporter itself can still tell us the
@@ -1404,7 +1616,8 @@ void PskReporterMapDialog::rebuildMarkers()
     if (!m_mapView->hasHomePosition() && m_radioModel != nullptr) {
         const QString stationCall = m_radioModel->callsign().trimmed();
         if (!stationCall.isEmpty()) {
-            for (const PskReporterSpot& spot : m_client->spots()) {
+            for (const DisplaySpot& displaySpot : displaySpots) {
+                const PskReporterSpot& spot = *displaySpot.spot;
                 QString locator;
                 if (spot.senderCallsign.compare(
                         stationCall, Qt::CaseInsensitive) == 0) {
@@ -1424,8 +1637,11 @@ void PskReporterMapDialog::rebuildMarkers()
             }
         }
     }
-    markers.reserve(m_client->spots().size()
-                    + qMin(m_client->monitors().size(), kMaxRenderedMonitors));
+    markers.reserve(displaySpots.size()
+                    + (globalEnabled
+                           ? qMin(m_globalClient->monitors().size(),
+                                  kMaxRenderedMonitors)
+                           : 0));
     const QString bandFilter = m_bandCombo->currentIndex() > 0
                                    ? m_bandCombo->currentText()
                                    : QString();
@@ -1441,10 +1657,13 @@ void PskReporterMapDialog::rebuildMarkers()
     QSet<QString> bandsHeard;
     double bestKm = -1.0;
     QString farthestCall;
+    MapView::Marker selectedCallsignMarker;
+    qint64 selectedCallsignMarkerTime = -1;
+    bool hasSelectedCallsignMarker = false;
 
     int renderedMonitors = 0;
-    if (anyone) {
-        for (const PskReporterMonitor& monitor : m_client->monitors()) {
+    if (globalEnabled && m_activeMonitorsCheck->isChecked()) {
+        for (const PskReporterMonitor& monitor : m_globalClient->monitors()) {
             if (renderedMonitors >= kMaxRenderedMonitors) {
                 break;
             }
@@ -1486,7 +1705,19 @@ void PskReporterMapDialog::rebuildMarkers()
         }
     }
 
-    for (const PskReporterSpot& spot : m_client->spots()) {
+    int renderedLiveReports = 0;
+    for (const DisplaySpot& displaySpot : displaySpots) {
+        const PskReporterSpot& spot = *displaySpot.spot;
+        const QString queryCall = m_appliedMapCallsign;
+        const bool selectedCallReport = !queryCall.isEmpty()
+            && (spot.senderCallsign.compare(queryCall, Qt::CaseInsensitive) == 0
+                || spot.receiverCallsign.compare(
+                       queryCall, Qt::CaseInsensitive) == 0);
+        // A matching global report belongs to the selected callsign's hover
+        // group too. This matters immediately after enabling All Callsigns,
+        // before MQTT has repeated every report in the HTTP snapshot.
+        const bool callsignSpecific = displaySpot.callsignSpecific
+                                   || selectedCallReport;
         if (spot.flowStartSeconds < cutoff) {
             continue;
         }
@@ -1496,15 +1727,34 @@ void PskReporterMapDialog::rebuildMarkers()
         if (!modeFilter.isEmpty() && modeGroup(spot.mode) != modeFilter) {
             continue;
         }
-        const QString queryCall = m_client->callsign();
-        const bool queryIsReceiver = !anyone
+        const bool queryIsReceiver = callsignSpecific
             && spot.receiverCallsign.compare(queryCall, Qt::CaseInsensitive) == 0;
+        const QString queryLocator = queryIsReceiver ? spot.receiverLocator
+                                                     : spot.senderLocator;
         const QString markerCall = queryIsReceiver ? spot.senderCallsign
                                                    : spot.receiverCallsign;
         const QString markerLocator = queryIsReceiver ? spot.senderLocator
                                                       : spot.receiverLocator;
         const QString originLocator = queryIsReceiver ? spot.receiverLocator
                                                       : spot.senderLocator;
+        double queryLat = 0.0;
+        double queryLon = 0.0;
+        if (callsignSpecific
+            && spot.flowStartSeconds >= selectedCallsignMarkerTime
+            && MaidenheadLocator::toLatLon(queryLocator, queryLat, queryLon)) {
+            selectedCallsignMarker.lat = queryLat;
+            selectedCallsignMarker.lon = queryLon;
+            selectedCallsignMarker.label = queryCall;
+            selectedCallsignMarker.color = modeColor(spot.mode);
+            selectedCallsignMarker.pathEnabled = false;
+            selectedCallsignMarker.pathGroup = queryCall.toUpper();
+            selectedCallsignMarker.hoverShowsPathGroup = true;
+            selectedCallsignMarker.tooltip = buildSpotCard(
+                spot, false, 0.0, 0.0, queryLat, queryLon);
+            selectedCallsignMarker.clickInfo = selectedCallsignMarker.tooltip;
+            selectedCallsignMarkerTime = spot.flowStartSeconds;
+            hasSelectedCallsignMarker = true;
+        }
         double lat = 0.0;
         double lon = 0.0;
         if (!MaidenheadLocator::toLatLon(markerLocator, lat, lon)) {
@@ -1513,8 +1763,9 @@ void PskReporterMapDialog::rebuildMarkers()
         MapView::Marker m;
         m.lat = lat;
         m.lon = lon;
-        m.label = anyone ? QString() : markerCall;
+        m.label = callsignSpecific ? markerCall : QString();
         m.color = modeColor(spot.mode);
+        m.pathGroup = callsignSpecific ? queryCall.toUpper() : QString();
         double originLat = 0.0;
         double originLon = 0.0;
         if (MaidenheadLocator::toLatLon(originLocator, originLat, originLon)) {
@@ -1524,7 +1775,8 @@ void PskReporterMapDialog::rebuildMarkers()
         }
         const bool queryIsStation = m_radioModel != nullptr
             && queryCall.compare(m_radioModel->callsign(), Qt::CaseInsensitive) == 0;
-        m.pathEnabled = m.hasPathOrigin || (!anyone && queryIsStation);
+        m.pathEnabled = m.hasPathOrigin
+                     || (callsignSpecific && queryIsStation);
         // Same compact card for hover and click.
         const QString card = buildSpotCard(
             spot, m.hasPathOrigin || hasHome,
@@ -1534,6 +1786,9 @@ void PskReporterMapDialog::rebuildMarkers()
         m.tooltip = card;
         m.clickInfo = card;
         markers.append(m);
+        if (displaySpot.callsignSpecific) {
+            ++renderedLiveReports;
+        }
 
         bandsHeard.insert(bandName(spot.frequencyHz));
         if (m.hasPathOrigin || hasHome) {
@@ -1546,16 +1801,37 @@ void PskReporterMapDialog::rebuildMarkers()
             }
         }
     }
+    const bool queryIsHomeStation = m_radioModel != nullptr
+        && m_appliedMapCallsign.compare(
+               m_radioModel->callsign(), Qt::CaseInsensitive) == 0;
+    if (hasSelectedCallsignMarker && !(queryIsHomeStation && hasHome)) {
+        // A callsign-specific report renders its opposite endpoint above. Keep
+        // one marker for the queried station too, using its newest valid
+        // advertised locator. The real station's existing home marker remains
+        // authoritative when available, so it is never duplicated or moved by
+        // an arbitrary map query.
+        markers.append(selectedCallsignMarker);
+    }
     m_mapView->setMarkers(markers);
 
     // Reception stats (top-right): count · bands · farthest.
     QStringList parts;
-    const int reportMarkers = markers.size() - renderedMonitors;
-    if (anyone) {
+    const int selectedMarkerCount = hasSelectedCallsignMarker
+                                 && !(queryIsHomeStation && hasHome) ? 1 : 0;
+    const int reportMarkers = markers.size() - renderedMonitors
+                            - selectedMarkerCount;
+    if (globalEnabled) {
         parts << tr("%n report(s)", nullptr, reportMarkers);
-        parts << tr("%n active monitor(s)", nullptr, renderedMonitors);
-        if (m_client->resultsLimited()
-            || m_client->monitors().size() > kMaxRenderedMonitors) {
+        if (m_activeMonitorsCheck->isChecked()) {
+            parts << tr("%n active monitor(s)", nullptr, renderedMonitors);
+        }
+        if (renderedLiveReports > 0) {
+            parts << tr("%1 live: %2")
+                         .arg(m_appliedMapCallsign)
+                         .arg(renderedLiveReports);
+        }
+        if (m_globalClient->resultsLimited()
+            || m_globalClient->monitors().size() > kMaxRenderedMonitors) {
             parts << tr("display capped");
         }
     } else if (!markers.isEmpty()) {
@@ -1609,7 +1885,7 @@ void PskReporterMapDialog::showEvent(QShowEvent* event)
     }
     if (!m_started) {
         m_started = true;
-        restartClient();
+        restartClients();
     }
 }
 
@@ -1620,6 +1896,7 @@ void PskReporterMapDialog::closeEvent(QCloseEvent* event)
     }
     // Stop hitting the network while the window is closed.
     m_client->stop();
+    m_globalClient->stop();
     m_started = false;
     PersistentDialog::closeEvent(event);
 }

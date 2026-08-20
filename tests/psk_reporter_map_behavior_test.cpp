@@ -3,6 +3,8 @@
 #include "gui/map/SolarTerminator.h"
 
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QTimeZone>
 
 #include <cmath>
@@ -35,6 +37,50 @@ public:
     {
         return PskReporterClient::rateLimitBackoffMs(count);
     }
+
+    static void handleQueryReply(PskReporterClient& client,
+                                 const QByteArray& xml,
+                                 PskReporterClient::QueryScope responseScope)
+    {
+        client.handleQueryReply(xml, responseScope);
+    }
+
+    static void setInterval(PskReporterClient& client, int intervalMs)
+    {
+        client.m_intervalMs = intervalMs;
+    }
+
+    static PskReporterClient::QueryScope httpQueryScope(
+        const PskReporterClient& client)
+    {
+        return client.httpQueryScope();
+    }
+
+    static void loadCache(PskReporterClient& client)
+    {
+        client.loadCache();
+    }
+
+    static int maxSpots()
+    {
+        return PskReporterClient::kMaxSpots;
+    }
+
+    static int maxMonitors()
+    {
+        return PskReporterClient::kMaxMonitors;
+    }
+
+    static void restoreCachedMonitors(PskReporterClient& client,
+                                      const QJsonArray& monitors)
+    {
+        client.restoreCachedMonitors(monitors);
+    }
+
+    static void discardPendingCacheWrite(PskReporterClient& client)
+    {
+        client.m_cacheDirty = false;
+    }
 };
 
 } // namespace AetherSDR
@@ -54,6 +100,10 @@ bool check(bool condition, const char* message)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(
+        QStringLiteral("AetherSDR-tests"));
+    QCoreApplication::setApplicationName(
+        QStringLiteral("psk-reporter-map-behavior-test"));
     bool ok = true;
 
     PskReporterClient client;
@@ -104,6 +154,103 @@ int main(int argc, char** argv)
     ok &= check(PskReporterClientTestAccess::rateLimitBackoffMs(20)
                     == 2LL * 60 * 60 * 1000,
                 "rate-limit backoff is capped at two hours");
+
+    PskReporterClient parserClient;
+    parserClient.setCallsign(QString());
+    QByteArray xml("<receptionReports>");
+    xml += "<activeReceiver callsign=' k1abc ' locator=' fn42 ' "
+           "mode='FT8' decoderSoftware='Decoder 1' frequency='14074000'/>";
+    xml += "<activeReceiver callsign='K1ABC' locator='FN42' mode='FT4'/>";
+    xml += "<activeReceiver callsign='INVALID'/>";
+    for (int i = 0; i < PskReporterClientTestAccess::maxMonitors() + 10; ++i) {
+        xml += QStringLiteral(
+            "<activeReceiver callsign='M%1' locator='L%1' mode='FT8'/>")
+                   .arg(i).toUtf8();
+    }
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    for (int i = 0; i < PskReporterClientTestAccess::maxSpots() + 1; ++i) {
+        xml += QStringLiteral(
+            "<receptionReport receiverCallsign='R%1' receiverLocator='FN42' "
+            "senderCallsign='S%1' senderLocator='CN85' mode='FT8' "
+            "frequency='14074000' flowStartSeconds='%2'/>")
+                   .arg(i).arg(now).toUtf8();
+    }
+    xml += "</receptionReports>";
+    PskReporterClientTestAccess::handleQueryReply(
+        parserClient, xml, PskReporterClient::QueryScope::Anyone);
+    ok &= check(parserClient.monitors().size()
+                    == PskReporterClientTestAccess::maxMonitors(),
+                "activeReceiver parsing enforces the monitor cap");
+    ok &= check(parserClient.monitors().first().callsign
+                    == QStringLiteral("K1ABC")
+                    && parserClient.monitors().first().locator
+                           == QStringLiteral("FN42")
+                    && parserClient.monitors().first().frequencyHz == 14074000,
+                "activeReceiver fields are normalized and parsed");
+    int normalizedMonitorCount = 0;
+    for (const PskReporterMonitor& monitor : parserClient.monitors()) {
+        if (monitor.callsign == QStringLiteral("K1ABC")
+            && monitor.locator == QStringLiteral("FN42")) {
+            ++normalizedMonitorCount;
+        }
+    }
+    ok &= check(normalizedMonitorCount == 1,
+                "activeReceiver parsing deduplicates callsign and locator");
+    ok &= check(parserClient.spots().size()
+                    == PskReporterClientTestAccess::maxSpots()
+                    && parserClient.resultsLimited(),
+                "receptionReport parsing enforces and surfaces the spot cap");
+
+    PskReporterClient cacheClient;
+    QJsonArray cachedMonitors;
+    cachedMonitors.append(QJsonObject{
+        {QStringLiteral("c"), QStringLiteral("K1ABC")},
+        {QStringLiteral("l"), QStringLiteral("FN42")}});
+    cachedMonitors.append(QJsonObject{
+        {QStringLiteral("c"), QStringLiteral("W1AW")},
+        {QStringLiteral("l"), QStringLiteral("FN31")}});
+    cachedMonitors.append(QJsonObject{
+        {QStringLiteral("c"), QStringLiteral("K1ABC")},
+        {QStringLiteral("l"), QStringLiteral("FN42")}});
+    PskReporterClientTestAccess::restoreCachedMonitors(
+        cacheClient, cachedMonitors);
+    const int cachedMonitorCount = cacheClient.monitors().size();
+    PskReporterClientTestAccess::restoreCachedMonitors(
+        cacheClient, cachedMonitors);
+    ok &= check(cachedMonitorCount == 2
+                    && cacheClient.monitors().size() == cachedMonitorCount,
+                "reloading a cache does not duplicate active monitors");
+
+    PskReporterClient liveClient;
+    liveClient.setCallsign(QStringLiteral("K1ABC"));
+    PskReporterClientTestAccess::setInterval(
+        liveClient, PskReporterClient::kLiveMqtt);
+    ok &= check(PskReporterClientTestAccess::httpQueryScope(liveClient)
+                    == PskReporterClient::QueryScope::Anyone,
+                "live callsign mode reserves HTTP for the global snapshot");
+    QByteArray globalXml("<receptionReports>");
+    globalXml += QStringLiteral(
+        "<activeReceiver callsign='W1AW' locator='FN31' mode='FT8'/>"
+        "<receptionReport receiverCallsign='R1' receiverLocator='FN42' "
+        "senderCallsign='K1ABC' senderLocator='CN85' mode='FT8' "
+        "frequency='14074000' flowStartSeconds='%1'/>"
+        "<receptionReport receiverCallsign='R2' receiverLocator='EM10' "
+        "senderCallsign='W1AW' senderLocator='FN31' mode='FT8' "
+        "frequency='14074000' flowStartSeconds='%1'/>"
+        "</receptionReports>").arg(now).toUtf8();
+    PskReporterClientTestAccess::handleQueryReply(
+        liveClient, globalXml, PskReporterClient::QueryScope::Anyone);
+    ok &= check(liveClient.spots().size() == 1
+                    && liveClient.spots().first().senderCallsign
+                           == QStringLiteral("K1ABC"),
+                "global HTTP backfill seeds only the selected live callsign");
+    liveClient.setCallsign(QString());
+    PskReporterClientTestAccess::loadCache(liveClient);
+    ok &= check(liveClient.spots().size() == 2
+                    && liveClient.monitors().size() == 1,
+                "clearing a live callsign immediately restores the cached "
+                "global snapshot");
+    PskReporterClientTestAccess::discardPendingCacheWrite(parserClient);
 
     constexpr double worldWidth = 360.0;
     ok &= check(std::abs(MapPathGeometry::unwrapX(

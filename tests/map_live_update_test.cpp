@@ -1,3 +1,4 @@
+#include "gui/map/MapHoverPathSelection.h"
 #include "gui/map/MapMarkerBatchItem.h"
 #include "gui/map/MapPathBatchItem.h"
 #include "gui/map/MapTerminatorItem.h"
@@ -34,6 +35,17 @@ public:
         return item.m_overviewRefreshTimer.isActive();
     }
 
+    static std::shared_ptr<std::atomic_bool> cacheCancellation(
+        const MapMarkerBatchItem& item)
+    {
+        return item.m_cacheCancelled;
+    }
+
+    static void rebuildDetailCache(MapMarkerBatchItem& item)
+    {
+        item.rebuildCache();
+    }
+
     static quint64 cacheKey(const MapPathBatchItem& item)
     {
         return item.m_cache.cacheKey();
@@ -52,6 +64,17 @@ public:
     static int projectedPathCount(const MapPathBatchItem& item)
     {
         return item.m_paths.size();
+    }
+
+    static std::shared_ptr<std::atomic_bool> cacheCancellation(
+        const MapPathBatchItem& item)
+    {
+        return item.m_cacheCancelled;
+    }
+
+    static void rebuildDetailCache(MapPathBatchItem& item)
+    {
+        item.rebuildCache();
     }
 
     static quint64 imageKey(const MapTerminatorItem& item)
@@ -194,6 +217,50 @@ int main(int argc, char** argv)
     ok &= expect(MapBatchItemTestAccess::projectedPathCount(*pathBatch)
                      == markers.size(),
                  "replacement path geometry contains every marker");
+
+    QVector<MapView::Marker> groupedMarkers;
+    MapView::Marker firstReceiver = marker(51.5, -0.1, Qt::red);
+    firstReceiver.pathGroup = QStringLiteral("VE2AO");
+    groupedMarkers.append(firstReceiver);
+    MapView::Marker secondReceiver = marker(40.7, -74.0, Qt::yellow);
+    secondReceiver.pathGroup = QStringLiteral("VE2AO");
+    groupedMarkers.append(secondReceiver);
+    MapView::Marker unrelated = marker(-33.9, 151.2, Qt::cyan);
+    unrelated.pathGroup = QStringLiteral("OTHER");
+    groupedMarkers.append(unrelated);
+    MapView::Marker selectedStation;
+    selectedStation.pathEnabled = false;
+    selectedStation.pathGroup = QStringLiteral("VE2AO");
+    selectedStation.hoverShowsPathGroup = true;
+    groupedMarkers.append(selectedStation);
+    ok &= expect(MapHoverPathSelection::pathsForMarker(
+                     groupedMarkers, groupedMarkers.size() - 1).size() == 2,
+                 "selected callsign hover includes every grouped path");
+    ok &= expect(MapHoverPathSelection::pathsForMarker(
+                     groupedMarkers, 0).size() == 1,
+                 "receiver hover includes only its own path");
+    MapView::Marker noHoverPath;
+    noHoverPath.pathEnabled = false;
+    groupedMarkers.append(noHoverPath);
+    ok &= expect(MapHoverPathSelection::pathsForMarker(
+                     groupedMarkers, groupedMarkers.size() - 1).isEmpty(),
+                 "marker without a path does not create a hover batch");
+
+    MapBatchItemTestAccess::rebuildDetailCache(*markerBatch);
+    const std::shared_ptr<std::atomic_bool> supersededMarkerRender =
+        MapBatchItemTestAccess::cacheCancellation(*markerBatch);
+    MapBatchItemTestAccess::rebuildDetailCache(*markerBatch);
+    ok &= expect(supersededMarkerRender != nullptr
+                     && supersededMarkerRender->load(std::memory_order_relaxed),
+                 "starting a marker detail render cancels its predecessor");
+
+    MapBatchItemTestAccess::rebuildDetailCache(*pathBatch);
+    const std::shared_ptr<std::atomic_bool> supersededPathRender =
+        MapBatchItemTestAccess::cacheCancellation(*pathBatch);
+    MapBatchItemTestAccess::rebuildDetailCache(*pathBatch);
+    ok &= expect(supersededPathRender != nullptr
+                     && supersededPathRender->load(std::memory_order_relaxed),
+                 "starting a path detail render cancels its predecessor");
 
     return ok ? 0 : 1;
 }

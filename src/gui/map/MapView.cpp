@@ -1,6 +1,7 @@
 #include "MapView.h"
 #include "MapMarkerBatchItem.h"
 #include "MapMarkerItem.h"
+#include "MapHoverPathSelection.h"
 #include "MapPathBatchItem.h"
 #include "MapTerminatorItem.h"
 #include "core/ThemeManager.h"
@@ -354,19 +355,19 @@ void MapView::updateHoverPath(int markerIndex)
         clearHoverPath();
         return;
     }
-    const Marker& marker = m_markerData.at(markerIndex);
-    if (!marker.pathEnabled) {
-        clearHoverPath();
-        return;
-    }
     if (m_hoverPathBatch != nullptr
         && m_hoverPathMarkerIndex == markerIndex) {
         return;
     }
     clearHoverPath();
     m_hoverPathMarkerIndex = markerIndex;
+    const QVector<Marker> hoverMarkers =
+        MapHoverPathSelection::pathsForMarker(m_markerData, markerIndex);
+    if (hoverMarkers.isEmpty()) {
+        return;
+    }
     m_hoverPathBatch = new MapPathBatchItem(
-        QVector<Marker>{marker}, m_hasHome, m_homeLat, m_homeLon);
+        hoverMarkers, m_hasHome, m_homeLat, m_homeLon);
     m_markerLayer->addItem(m_hoverPathBatch);
 }
 

@@ -9,6 +9,7 @@
 #include <QVector>
 
 class QNetworkReply;
+class QJsonArray;
 
 namespace AetherSDR {
 
@@ -35,7 +36,7 @@ struct PskReporterMonitor {
     qint64 frequencyHz{0};
 };
 
-// Fetches reception reports of our callsign from pskreporter.info.
+// Fetches reception reports for the selected map scope from pskreporter.info.
 //
 // Two transports:
 //   * HTTP polling of https://retrieve.pskreporter.info/query — XML
@@ -44,7 +45,8 @@ struct PskReporterMonitor {
 //     minutes and `lastseqno` is used so repeat polls are incremental.
 //     There is deliberately NO manual-refresh path.
 //   * Live MQTT (mqtt.pskreporter.info, TLS) — the officially sanctioned
-//     real-time feed; used when intervalMs == kLiveMqtt.
+//     real-time callsign feed; used when intervalMs == kLiveMqtt. The map's
+//     separate global client owns the reusable all-stations snapshot.
 class PskReporterClient : public QObject {
     Q_OBJECT
 
@@ -63,6 +65,10 @@ public:
     void setCallsign(const QString& callsign);
     QString callsign() const { return m_callsign; }
     QueryScope queryScope() const { return m_scope; }
+
+    // A dedicated MQTT layer can disable its HTTP seed/fallback when a
+    // separate all-stations client already owns the shared HTTP cadence.
+    void setHttpPollingEnabled(bool enabled) { m_httpPollingEnabled = enabled; }
 
     // Lookback window (seconds): how far back spots are backfilled and
     // retained/displayed. Clamped to the PSK Reporter 24h API ceiling.
@@ -104,9 +110,19 @@ private slots:
 private:
     friend class PskReporterClientTestAccess;
 
-    void handleQueryReply(const QByteArray& xml);
+    struct ParsedHttpSnapshot {
+        QVector<PskReporterSpot> spots;
+        QVector<PskReporterMonitor> monitors;
+        qint64 lastSeqNo{-1};
+        int parsedReports{0};
+        QString parseError;
+    };
+
+    void handleQueryReply(const QByteArray& xml, QueryScope responseScope);
     void handleMqttMessage(const QString& topic, const QByteArray& payload);
     void appendSpot(const PskReporterSpot& spot);
+    static bool appendSpot(QVector<PskReporterSpot>& spots,
+                           const PskReporterSpot& spot);
     void pruneOldSpots();
     void startMqtt();
     void stopMqtt();
@@ -117,13 +133,22 @@ private:
     void loadHttpThrottleState();
     void saveHttpThrottleState() const;
     static qint64 rateLimitBackoffMs(int consecutiveRateLimits);
+    QueryScope httpQueryScope() const;
+    static ParsedHttpSnapshot parseHttpSnapshot(const QByteArray& xml);
+    void handleParsedHttpSnapshot(ParsedHttpSnapshot snapshot,
+                                  QueryScope responseScope);
 
     // Disk persistence: spots survive a client restart within the tombstone
     // window (kSpotTtlSeconds) so the map repopulates immediately on reopen
     // over the course of a day, rather than waiting for fresh reports.
     QString cacheFilePath() const;
+    QString cacheFilePath(QueryScope scope, const QString& callsign) const;
     void loadCache();
     void saveCache();
+    void saveCacheSnapshot(QueryScope scope, const QString& callsign,
+                           const QVector<PskReporterSpot>& spots,
+                           const QVector<PskReporterMonitor>& monitors) const;
+    void restoreCachedMonitors(const QJsonArray& monitorArray);
 
     QNetworkAccessManager m_nam;
     QTimer m_timer;
@@ -139,6 +164,7 @@ private:
     int    m_lookbackSec{kDefaultLookbackSec};
     int    m_fetchedLookbackSec{0};  // deepest window backfilled this session
     bool   m_running{false};
+    bool   m_httpPollingEnabled{true};
     bool   m_fetchInFlight{false};
     QPointer<QNetworkReply> m_queryReply;
     quint64 m_queryGeneration{0};

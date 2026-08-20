@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -19,6 +20,7 @@
 #include <QStandardPaths>
 #include <QUrlQuery>
 #include <QXmlStreamReader>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <QLoggingCategory>
 
@@ -116,7 +118,8 @@ void PskReporterClient::setLookbackSeconds(int seconds)
     // covered — is just a display change (the dialog filters spots() by the
     // current lookback), so it costs nothing and won't trip PSK Reporter's
     // rate limiter.
-    if (m_running && clamped > m_fetchedLookbackSec) {
+    if (m_running && m_httpPollingEnabled
+        && clamped > m_fetchedLookbackSec) {
         m_lastSeqNo = -1;  // force a deep backfill at the new depth
         poll();
     }
@@ -237,10 +240,16 @@ void PskReporterClient::poll()
             const int cachedStations = m_spots.size() + m_monitors.size();
             const QString nextTime = nextHttpRequestAt().toLocalTime().toString(
                 QStringLiteral("hh:mm:ss"));
+            const QString queryLabel =
+                m_scope == QueryScope::Anyone ? tr("all stations")
+                                              : m_callsign;
             emit statusChanged(cachedStations > 0
-                ? tr("Showing %1 cached station(s) — HTTP refresh throttled until %2")
-                      .arg(cachedStations).arg(nextTime)
-                : tr("HTTP refresh throttled until %1").arg(nextTime));
+                ? tr("Showing %1 cached station(s) for %2 — refresh queued "
+                     "until %3 by PSK Reporter's five-minute limit")
+                      .arg(cachedStations).arg(queryLabel, nextTime)
+                : tr("%1 filter queued until %2 by PSK Reporter's "
+                     "five-minute retrieval limit")
+                      .arg(queryLabel, nextTime));
             emit connectionStateChanged();
             return;
         }
@@ -253,8 +262,9 @@ void PskReporterClient::poll()
     m_lastHttpStatus = 0;
     m_lastHttpError.clear();
 
+    const QueryScope requestScope = httpQueryScope();
     QUrlQuery query;
-    if (m_scope == QueryScope::Callsign) {
+    if (requestScope == QueryScope::Callsign) {
         // Generic callsign matches both sent-by and received-by reports, as
         // the public PSK Reporter map does.
         query.addQueryItem(QStringLiteral("callsign"), m_callsign);
@@ -292,7 +302,8 @@ void PskReporterClient::poll()
     qCInfo(lcPskReporter) << "HTTP query"
                           << (initial ? "(initial)" : "(incremental)")
                           << "scope"
-                          << (m_scope == QueryScope::Anyone ? "anyone" : "callsign")
+                          << (requestScope == QueryScope::Anyone
+                                  ? "anyone" : "callsign")
                           << m_callsign
                           << "url" << url.toString(QUrl::RemoveQuery);
     emit statusChanged(tr("Updating…"));
@@ -301,7 +312,7 @@ void PskReporterClient::poll()
     m_queryReply = reply;
     const quint64 generation = m_queryGeneration;
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, initial, fetchDepth, generation] {
+            [this, reply, initial, fetchDepth, generation, requestScope] {
         m_fetchInFlight = false;
         if (m_queryReply == reply) {
             m_queryReply = nullptr;
@@ -382,8 +393,32 @@ void PskReporterClient::poll()
         emit connectionStateChanged();
         const QByteArray body = reply->readAll();
         qCInfo(lcPskReporter) << "HTTP reply" << body.size() << "bytes";
-        handleQueryReply(body);
+        // A global reply can contain thousands of reception reports and
+        // active receivers. Parse it away from the GUI thread so the map and
+        // unrelated waterfall remain responsive while the snapshot arrives.
+        auto* watcher = new QFutureWatcher<ParsedHttpSnapshot>(this);
+        connect(watcher, &QFutureWatcher<ParsedHttpSnapshot>::finished, this,
+                [this, watcher, generation, requestScope] {
+                    ParsedHttpSnapshot snapshot = watcher->result();
+                    watcher->deleteLater();
+                    if (generation != m_queryGeneration) {
+                        return;
+                    }
+                    handleParsedHttpSnapshot(std::move(snapshot),
+                                             requestScope);
+                });
+        watcher->setFuture(QtConcurrent::run(
+            &PskReporterClient::parseHttpSnapshot, body));
     });
+}
+
+PskReporterClient::QueryScope PskReporterClient::httpQueryScope() const
+{
+    // MQTT already supplies the selected callsign in real time. Use its one
+    // HTTP backfill slot for the reusable all-stations snapshot so clearing
+    // the map filter never has to wait another five minutes for global data.
+    return m_intervalMs == kLiveMqtt && m_scope == QueryScope::Callsign
+        ? QueryScope::Anyone : m_scope;
 }
 
 void PskReporterClient::scheduleHttpPollAtAllowedTime()
@@ -452,12 +487,11 @@ void PskReporterClient::saveHttpThrottleState() const
     }
 }
 
-void PskReporterClient::handleQueryReply(const QByteArray& xml)
+PskReporterClient::ParsedHttpSnapshot
+PskReporterClient::parseHttpSnapshot(const QByteArray& xml)
 {
+    ParsedHttpSnapshot snapshot;
     QXmlStreamReader reader(xml);
-    int added = 0;
-    int parsedReports = 0;
-    QVector<PskReporterMonitor> monitors;
     QSet<QString> monitorKeys;
     while (!reader.atEnd()) {
         reader.readNext();
@@ -466,7 +500,8 @@ void PskReporterClient::handleQueryReply(const QByteArray& xml)
         }
         const auto& attrs = reader.attributes();
         if (reader.name() == QLatin1String("lastSequenceNumber")) {
-            m_lastSeqNo = attrs.value(QLatin1String("value")).toLongLong();
+            snapshot.lastSeqNo =
+                attrs.value(QLatin1String("value")).toLongLong();
             continue;
         }
         if (reader.name() == QLatin1String("activeReceiver")) {
@@ -486,17 +521,17 @@ void PskReporterClient::handleQueryReply(const QByteArray& xml)
                               + monitor.locator;
             if (!monitor.callsign.isEmpty() && !monitor.locator.isEmpty()
                 && !monitorKeys.contains(key)
-                && monitors.size() < kMaxMonitors) {
+                && snapshot.monitors.size() < kMaxMonitors) {
                 monitorKeys.insert(key);
-                monitors.append(monitor);
+                snapshot.monitors.append(monitor);
             }
             continue;
         }
         if (reader.name() != QLatin1String("receptionReport")) {
             continue;
         }
-        ++parsedReports;
-        if (parsedReports > kMaxSpots) {
+        ++snapshot.parsedReports;
+        if (snapshot.parsedReports > kMaxSpots) {
             continue;
         }
         PskReporterSpot spot;
@@ -517,22 +552,69 @@ void PskReporterClient::handleQueryReply(const QByteArray& xml)
         spot.flowStartSeconds =
             attrs.value(QLatin1String("flowStartSeconds")).toLongLong();
         if (!spot.receiverCallsign.isEmpty()) {
+            appendSpot(snapshot.spots, spot);
+        }
+    }
+    if (reader.hasError()) {
+        snapshot.parseError = reader.errorString();
+    }
+    return snapshot;
+}
+
+void PskReporterClient::handleQueryReply(const QByteArray& xml,
+                                         QueryScope responseScope)
+{
+    handleParsedHttpSnapshot(parseHttpSnapshot(xml), responseScope);
+}
+
+void PskReporterClient::handleParsedHttpSnapshot(
+    ParsedHttpSnapshot snapshot, QueryScope responseScope)
+{
+    const bool globalBackfillForLiveCall = responseScope == QueryScope::Anyone
+        && m_scope == QueryScope::Callsign && m_intervalMs == kLiveMqtt;
+    int added = 0;
+
+    if (globalBackfillForLiveCall) {
+        // Persist immediately: the user may clear the callsign before the
+        // periodic cache writer runs. The matching rows also seed the current
+        // callsign view until MQTT supplies newer reports.
+        if (snapshot.parseError.isEmpty()) {
+            saveCacheSnapshot(QueryScope::Anyone, QString(), snapshot.spots,
+                              snapshot.monitors);
+        }
+        for (const PskReporterSpot& spot : snapshot.spots) {
+            if (spot.receiverCallsign.compare(
+                    m_callsign, Qt::CaseInsensitive) == 0
+                || spot.senderCallsign.compare(
+                       m_callsign, Qt::CaseInsensitive) == 0) {
+                appendSpot(spot);
+                ++added;
+            }
+        }
+        // A later HTTP fallback must request another complete global
+        // snapshot; an incremental response alone cannot replace the cache.
+        m_lastSeqNo = -1;
+    } else {
+        m_lastSeqNo = snapshot.lastSeqNo;
+        for (const PskReporterSpot& spot : snapshot.spots) {
             appendSpot(spot);
             ++added;
         }
+        if (m_scope == QueryScope::Anyone) {
+            m_monitors = snapshot.monitors;
+            m_cacheDirty = true;
+        }
     }
     pruneOldSpots();
-    if (m_scope == QueryScope::Anyone) {
-        m_monitors = monitors;
-        m_cacheDirty = true;
-    }
-    m_resultsLimited = parsedReports > kMaxSpots;
+    m_resultsLimited = snapshot.parsedReports > kMaxSpots;
     qCInfo(lcPskReporter) << "HTTP parsed" << added << "reception reports,"
                           << m_spots.size() << "total, lastSeqNo" << m_lastSeqNo;
-    if (reader.hasError()) {
-        qCWarning(lcPskReporter) << "XML parse error:" << reader.errorString();
+    if (!snapshot.parseError.isEmpty()) {
+        qCWarning(lcPskReporter) << "XML parse error:" << snapshot.parseError;
     }
-    emit statusChanged(m_scope == QueryScope::Anyone
+    emit statusChanged(globalBackfillForLiveCall
+                           ? tr("Live (MQTT) — global snapshot cached")
+                           : m_scope == QueryScope::Anyone
                            ? tr("Updated %1 (%2 reports, %3 active monitors)%4")
                                  .arg(QDateTime::currentDateTime()
                                           .toString(QStringLiteral("hh:mm")))
@@ -565,23 +647,36 @@ void PskReporterClient::startMqtt()
             emit statusChanged(tr("Live (MQTT) — connected"));
         });
         connect(m_mqtt, &MqttClient::disconnected, this, [this] {
+            if (!m_running) {
+                return;
+            }
             qCWarning(lcPskReporter) << "MQTT disconnected from" << kMqttHost;
             startFallbackPolling();
             emit connectionStateChanged();
-            emit statusChanged(tr("Live — reconnecting (polling meanwhile)…"));
+            emit statusChanged(m_httpPollingEnabled
+                ? tr("Live — reconnecting (polling meanwhile)…")
+                : tr("Live — reconnecting…"));
         });
         connect(m_mqtt, &MqttClient::connectionError, this,
                 [this](const QString& err) {
-                    qCWarning(lcPskReporter) << "MQTT error:" << err
-                                             << "— falling back to HTTP polling";
+                    if (!m_running) {
+                        return;
+                    }
+                    qCWarning(lcPskReporter) << "MQTT error:" << err;
                     m_sawError = true;
                     startFallbackPolling();
                     emit connectionStateChanged();
-                    emit statusChanged(tr("Live unavailable — polling every 5 min"));
+                    emit statusChanged(m_httpPollingEnabled
+                        ? tr("Live unavailable — polling every 5 min")
+                        : tr("Live unavailable — reconnecting…"));
                 });
     }
-    // Live feed has no backfill; seed the window with one HTTP query.
-    poll();
+    // Live feed has no backfill. A standalone client seeds the window with
+    // HTTP; the map's dual-layer mode delegates that cadence to its dedicated
+    // all-stations client instead.
+    if (m_httpPollingEnabled) {
+        poll();
+    }
     m_mqtt->setSubscriptions({
         QStringLiteral("pskr/filter/v2/+/+/%1/#").arg(m_callsign),
         QStringLiteral("pskr/filter/v2/+/+/+/%1/#").arg(m_callsign)
@@ -604,7 +699,8 @@ void PskReporterClient::startFallbackPolling()
 {
     // Only meaningful in Live mode; the explicit poll tiers manage m_timer
     // themselves. Don't double-start.
-    if (m_intervalMs != kLiveMqtt || m_timer.isActive()) {
+    if (!m_running || !m_httpPollingEnabled || m_intervalMs != kLiveMqtt
+        || m_timer.isActive()) {
         return;
     }
     m_timer.start(kFallbackPollMs);
@@ -654,23 +750,31 @@ void PskReporterClient::handleMqttMessage(const QString& topic,
 
 void PskReporterClient::appendSpot(const PskReporterSpot& spot)
 {
+    if (appendSpot(m_spots, spot)) {
+        m_cacheDirty = true;
+    }
+}
+
+bool PskReporterClient::appendSpot(QVector<PskReporterSpot>& spots,
+                                   const PskReporterSpot& spot)
+{
     // Retain one latest report for each sender/receiver pair.  Generic
     // callsign queries can return reports in either direction, and the
     // anyone view needs distinct paths rather than one receiver-only record.
-    auto it = std::find_if(m_spots.begin(), m_spots.end(),
+    auto it = std::find_if(spots.begin(), spots.end(),
                            [&spot](const PskReporterSpot& s) {
                                return s.receiverCallsign == spot.receiverCallsign
                                    && s.senderCallsign == spot.senderCallsign;
                            });
-    if (it != m_spots.end()) {
+    if (it != spots.end()) {
         if (spot.flowStartSeconds >= it->flowStartSeconds) {
             *it = spot;
-            m_cacheDirty = true;
+            return true;
         }
-        return;
+        return false;
     }
-    m_spots.append(spot);
-    m_cacheDirty = true;
+    spots.append(spot);
+    return true;
 }
 
 void PskReporterClient::pruneOldSpots()
@@ -703,12 +807,18 @@ void PskReporterClient::pruneOldSpots()
 
 QString PskReporterClient::cacheFilePath() const
 {
+    return cacheFilePath(m_scope, m_callsign);
+}
+
+QString PskReporterClient::cacheFilePath(QueryScope scope,
+                                         const QString& callsign) const
+{
     const QString dir =
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
-    const QString scopeKey = m_scope == QueryScope::Anyone
+    const QString scopeKey = scope == QueryScope::Anyone
         ? QStringLiteral("anyone")
         : QString::fromLatin1(QCryptographicHash::hash(
-              m_callsign.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
+              callsign.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
     return dir + QDir::separator()
          + QStringLiteral("psk-reporter-spots-%1.json").arg(scopeKey);
 }
@@ -765,23 +875,8 @@ void PskReporterClient::loadCache()
         && savedAt >= QDateTime::currentSecsSinceEpoch()
                          - (2 * kMinPollMs / 1000);
     if (m_scope == QueryScope::Anyone && monitorSnapshotFresh) {
-        const QJsonArray monitorArray =
-            root.value(QLatin1String("monitors")).toArray();
-        for (const QJsonValue& value : monitorArray) {
-            const QJsonObject o = value.toObject();
-            PskReporterMonitor monitor;
-            monitor.callsign = o.value(QLatin1String("c")).toString();
-            monitor.locator = o.value(QLatin1String("l")).toString();
-            monitor.mode = o.value(QLatin1String("m")).toString();
-            monitor.decoderSoftware =
-                o.value(QLatin1String("s")).toString();
-            monitor.frequencyHz = static_cast<qint64>(
-                o.value(QLatin1String("f")).toDouble());
-            if (!monitor.callsign.isEmpty() && !monitor.locator.isEmpty()
-                && m_monitors.size() < kMaxMonitors) {
-                m_monitors.append(monitor);
-            }
-        }
+        restoreCachedMonitors(
+            root.value(QLatin1String("monitors")).toArray());
     }
     m_cacheDirty = legacyCache;
     qCInfo(lcPskReporter) << "loaded" << loaded << "cached spots for"
@@ -792,10 +887,45 @@ void PskReporterClient::loadCache()
     }
 }
 
+void PskReporterClient::restoreCachedMonitors(
+    const QJsonArray& monitorArray)
+{
+    m_monitors.clear();
+    QSet<QString> monitorKeys;
+    for (const QJsonValue& value : monitorArray) {
+        const QJsonObject o = value.toObject();
+        PskReporterMonitor monitor;
+        monitor.callsign = o.value(QLatin1String("c")).toString();
+        monitor.locator = o.value(QLatin1String("l")).toString();
+        monitor.mode = o.value(QLatin1String("m")).toString();
+        monitor.decoderSoftware =
+            o.value(QLatin1String("s")).toString();
+        monitor.frequencyHz = static_cast<qint64>(
+            o.value(QLatin1String("f")).toDouble());
+        const QString key = monitor.callsign + QLatin1Char('|')
+                          + monitor.locator;
+        if (!monitor.callsign.isEmpty() && !monitor.locator.isEmpty()
+            && !monitorKeys.contains(key)
+            && m_monitors.size() < kMaxMonitors) {
+            monitorKeys.insert(key);
+            m_monitors.append(monitor);
+        }
+    }
+}
+
 void PskReporterClient::saveCache()
 {
+    saveCacheSnapshot(m_scope, m_callsign, m_spots, m_monitors);
+    m_cacheDirty = false;
+}
+
+void PskReporterClient::saveCacheSnapshot(
+    QueryScope scope, const QString& callsign,
+    const QVector<PskReporterSpot>& spots,
+    const QVector<PskReporterMonitor>& monitors) const
+{
     QJsonArray arr;
-    for (const PskReporterSpot& s : std::as_const(m_spots)) {
+    for (const PskReporterSpot& s : spots) {
         QJsonObject o;
         o[QLatin1String("rc")] = s.receiverCallsign;
         o[QLatin1String("rl")] = s.receiverLocator;
@@ -808,13 +938,13 @@ void PskReporterClient::saveCache()
         arr.append(o);
     }
     QJsonObject root;
-    root[QLatin1String("callsign")] = m_callsign;
+    root[QLatin1String("callsign")] = callsign;
     root[QLatin1String("saved")] =
         static_cast<double>(QDateTime::currentSecsSinceEpoch());
     root[QLatin1String("spots")] = arr;
-    if (m_scope == QueryScope::Anyone) {
+    if (scope == QueryScope::Anyone) {
         QJsonArray monitorArray;
-        for (const PskReporterMonitor& monitor : std::as_const(m_monitors)) {
+        for (const PskReporterMonitor& monitor : monitors) {
             QJsonObject o;
             o[QLatin1String("c")] = monitor.callsign;
             o[QLatin1String("l")] = monitor.locator;
@@ -826,7 +956,7 @@ void PskReporterClient::saveCache()
         root[QLatin1String("monitors")] = monitorArray;
     }
 
-    const QString path = cacheFilePath();
+    const QString path = cacheFilePath(scope, callsign);
     QDir().mkpath(QFileInfo(path).absolutePath());
     QSaveFile f(path);
     if (!f.open(QIODevice::WriteOnly)) {
@@ -834,8 +964,9 @@ void PskReporterClient::saveCache()
         return;
     }
     f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
-    f.commit();
-    m_cacheDirty = false;
+    if (!f.commit()) {
+        qCWarning(lcPskReporter) << "could not commit spot cache:" << path;
+    }
 }
 
 } // namespace AetherSDR

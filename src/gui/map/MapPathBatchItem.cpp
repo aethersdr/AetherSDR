@@ -322,6 +322,9 @@ void MapPathBatchItem::rebuildCache()
         static_cast<double>(kMaxCacheDimension) / cacheRect.width(),
         static_cast<double>(kMaxCacheDimension) / cacheRect.height()));
     const quint64 generation = ++m_cacheGeneration;
+    if (m_cacheCancelled) {
+        m_cacheCancelled->store(true, std::memory_order_relaxed);
+    }
     m_cacheCancelled = std::make_shared<std::atomic_bool>(false);
     const std::shared_ptr<std::atomic_bool> cancelled = m_cacheCancelled;
     auto* watcher = new QFutureWatcher<CacheResult>(this);

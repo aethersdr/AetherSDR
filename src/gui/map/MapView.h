@@ -49,6 +49,8 @@ public:
         bool    hasPathOrigin{false};
         double  pathFromLat{0.0};
         double  pathFromLon{0.0};
+        QString pathGroup;       // non-empty groups related hover paths
+        bool    hoverShowsPathGroup{false};
         QString clickInfo;      // rich text shown on click (empty = none)
     };
 

@@ -12,6 +12,7 @@
 #include <QGraphicsScene>
 #include <QPainter>
 #include <QtConcurrent/QtConcurrentRun>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>

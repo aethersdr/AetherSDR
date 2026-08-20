@@ -124,7 +124,11 @@ void MapMarkerBatchItem::onProjection(QGVMap* geoMap)
     const QGVProjection* projection = geoMap->getProjection();
     m_worldRect = projection->boundaryProjRect();
     projectMarkers(projection);
-    rebuildOverviewCache();
+    // The current-camera detail is the first useful frame. Rendering the
+    // whole-world gesture fallback at the same time makes two large images
+    // compete for the thread pool and delays initial marker visibility.
+    // Build the overview after this first detail image completes; until then
+    // the detail cache remains visible.
     rebuildCache();
     resetBoundary();
     refresh();
@@ -181,6 +185,9 @@ void MapMarkerBatchItem::rebuildCache()
         static_cast<double>(kMaxCacheDimension) / cacheRect.height()));
 
     const quint64 generation = ++m_cacheGeneration;
+    if (m_cacheCancelled) {
+        m_cacheCancelled->store(true, std::memory_order_relaxed);
+    }
     m_cacheCancelled = std::make_shared<std::atomic_bool>(false);
     const std::shared_ptr<std::atomic_bool> cancelled = m_cacheCancelled;
     auto* watcher = new QFutureWatcher<CacheResult>(this);
@@ -195,6 +202,10 @@ void MapMarkerBatchItem::rebuildCache()
                 m_cacheScale = result.scale;
                 m_cache = result.image;
                 repaint();
+                if (m_overviewCache.isNull()) {
+                    m_overviewRefreshTimer.stop();
+                    rebuildOverviewCache();
+                }
             });
     watcher->setFuture(QtConcurrent::run(
         &MapMarkerBatchItem::renderCache, m_markers, m_projected, m_worldRect,
@@ -258,8 +269,7 @@ MapMarkerBatchItem::CacheResult MapMarkerBatchItem::renderCache(
     struct ShapeGroup {
         QColor color;
         bool monitor{false};
-        QPainterPath dots;
-        QPainterPath centers;
+        QVector<QPointF> points;
     };
     struct Label {
         int markerIndex{-1};
@@ -287,7 +297,6 @@ MapMarkerBatchItem::CacheResult MapMarkerBatchItem::renderCache(
             const QPointF point(
                 (projected.x() - cacheRect.left()) * cacheScale,
                 (projected.y() - cacheRect.top()) * cacheScale);
-            const double radius = radiusFor(marker);
             const quint64 key = (static_cast<quint64>(marker.color.rgba()) << 1)
                               | (marker.isMonitor ? 1ULL : 0ULL);
             int groupIndex = groupIndexes.value(key, -1);
@@ -300,10 +309,7 @@ MapMarkerBatchItem::CacheResult MapMarkerBatchItem::renderCache(
                 shapeGroups.append(group);
             }
             ShapeGroup& group = shapeGroups[groupIndex];
-            group.dots.addEllipse(point, radius, radius);
-            if (marker.isMonitor) {
-                group.centers.addEllipse(point, 2.0, 2.0);
-            }
+            group.points.append(point);
             if (renderLabels && !marker.label.isEmpty()) {
                 labels.append({i, point});
             }
@@ -313,15 +319,24 @@ MapMarkerBatchItem::CacheResult MapMarkerBatchItem::renderCache(
     for (const ShapeGroup& group : std::as_const(shapeGroups)) {
         QColor outline = group.color.darker(220);
         outline.setAlpha(180);
-        cachePainter.setPen(QPen(outline, group.monitor ? 1.5 : 1.0));
-        cachePainter.setBrush(group.color);
-        cachePainter.drawPath(group.dots);
+        const double radius = group.monitor ? kMonitorRadius : kDotRadius;
+        // A single compound QPainterPath containing thousands of ellipses is
+        // expensive for Qt to tessellate, especially when the whole world is
+        // visible. Round-cap point batches produce the same circular markers
+        // without that nonlinear path-fill cost.
+        cachePainter.setPen(QPen(outline, radius * 2.0 + 2.0,
+                                 Qt::SolidLine, Qt::RoundCap));
+        cachePainter.drawPoints(group.points.constData(), group.points.size());
+        cachePainter.setPen(QPen(group.color, radius * 2.0,
+                                 Qt::SolidLine, Qt::RoundCap));
+        cachePainter.drawPoints(group.points.constData(), group.points.size());
         if (group.monitor) {
             QColor center = group.color.lighter(250);
             center.setAlpha(210);
-            cachePainter.setPen(Qt::NoPen);
-            cachePainter.setBrush(center);
-            cachePainter.drawPath(group.centers);
+            cachePainter.setPen(QPen(center, 4.0, Qt::SolidLine,
+                                     Qt::RoundCap));
+            cachePainter.drawPoints(group.points.constData(),
+                                    group.points.size());
         }
     }
     const QFontMetricsF metrics(cachePainter.font());

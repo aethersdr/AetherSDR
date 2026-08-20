@@ -44,9 +44,10 @@ protected:
 private:
     void rebuildMarkers();
     void updateHomeFromRadio();
-    void onIntervalChanged(int index);
     void onLookbackChanged(int index);
-    void restartClient();
+    void restartClients();
+    void restartGlobalClient();
+    void restartCallsignClient();
     void applyMapCallsign();
     void updateBandConditions();
     void updateConnectionIndicator();
@@ -72,9 +73,9 @@ private:
     AudioEngine*         m_audioEngine{nullptr};
     RadioModel*         m_radioModel{nullptr};
     PskReporterClient*  m_client{nullptr};
+    PskReporterClient*  m_globalClient{nullptr};
     PropForecastClient* m_propForecast{nullptr};
     MapView*            m_mapView{nullptr};
-    QComboBox*          m_intervalCombo{nullptr};
     QComboBox*          m_bandCombo{nullptr};
     QComboBox*          m_modeCombo{nullptr};
     QComboBox*          m_lookbackCombo{nullptr};
@@ -83,6 +84,8 @@ private:
     QLabel*             m_dxLabel{nullptr};
     QLabel*             m_connLabel{nullptr};
     QCheckBox*          m_pathsCheck{nullptr};
+    QCheckBox*          m_allCallsignsCheck{nullptr};
+    QCheckBox*          m_activeMonitorsCheck{nullptr};
     QCheckBox*          m_terminatorCheck{nullptr};
     QTimer*             m_emptyStateTimer{nullptr};
     QTimer*             m_lookbackDebounce{nullptr};
@@ -125,6 +128,7 @@ private:
     bool                m_beaconTransmitting{false};
     QLabel*             m_bandCondPills[4]{};
     bool                m_started{false};
+    bool                m_mapCallsignUserEdited{false};
     QString             m_appliedMapCallsign;
 };
 
