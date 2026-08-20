@@ -1360,8 +1360,7 @@ void test_continuous_common_mode_agc_recovery()
         const double inputRiseDb = outputRmsDbfs(
             input, 10 * sampleRate, 21 * sampleRate / 2, 0)
             - outputRmsDbfs(input, 2 * sampleRate, 5 * sampleRate / 2, 0);
-        const char* methodName = npeMethod == 0 ? "OSMS"
-            : npeMethod == 1 ? "MMSE" : "NSTAT";
+        const char* methodName = npeMethod == 0 ? "OSMS" : "MMSE";
         std::printf(" continuous AGC %s: input rise %+.2f dB, small residual "
                     "%+.2f dB, large residual %+.2f dB\n",
                     methodName, inputRiseDb, smallRiseDbfs - baselineDbfs,
