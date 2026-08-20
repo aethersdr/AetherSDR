@@ -182,6 +182,26 @@ modulationProfileFor(const IcomModel& model);
 // lies, so an empty span means the operator simply does not get the button.
 [[nodiscard]] std::span<const std::string_view> preampLabelsFor(const IcomModel& model);
 
+// The demodulator modes this model offers, in AetherSDR's NEUTRAL vocabulary —
+// the same strings SliceModel carries and the mode combo displays.
+//
+// EMPTY means we have no verified mode table for this model, and the caller must
+// publish NOTHING rather than borrow another radio's — the rule powerCurveFor
+// and preampLabelsFor already state, for the same reason. An empty list leaves
+// the UI on its compiled-in FlexRadio default, which is today's behaviour.
+//
+// NEUTRAL, not wire values, and every entry must ROUND-TRIP through
+// modeFromNeutral/modeToNeutral. A name the radio can be put into but never
+// reports back (RTTY, which comes home as DIGL) would make the combo jump on the
+// confirmation read; a name modeFromNeutral refuses (SAM) would silently revert.
+// Both read as a broken control, which is what this list exists to stop.
+[[nodiscard]] std::span<const std::string_view> modeListFor(const IcomModel& model);
+
+// True when this model's `mode` is RECEIVE-ONLY — the radio will not transmit in
+// it whatever the client asks. Keyed on the neutral name, so it answers the same
+// question the mode combo poses.
+[[nodiscard]] bool modeIsReceiveOnly(const IcomModel& model, std::string_view neutralMode);
+
 // Attenuator positions. The label is what the operator reads; the dB is what
 // goes on the wire (BCD — see cmdSetAttenuator), so the two must not drift.
 struct AttenStep {

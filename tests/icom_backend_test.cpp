@@ -120,6 +120,11 @@ int main(int argc, char** argv)
     SliceDelta lastSliceState;
     TransmitDelta lastTransmitState;
     std::vector<QString> publishedModes;
+    // Every mode LIST the backend published, in order — the vocabulary the mode
+    // combo is built from (#5040). Accumulated rather than last-wins because the
+    // list is republished when the identity changes, and an empty one is a real
+    // answer (an identity withdrawn), not an absent field.
+    std::vector<QStringList> publishedModeLists;
     // Every mox edge in order. The PTT confirmation window is defined by which
     // transitions it lets through, so the SEQUENCE is the assertion, not the
     // final value — a suppressed-then-corrected state and a never-suppressed
@@ -146,6 +151,8 @@ int main(int argc, char** argv)
                          mergeSlice(d);
                          if (d.mode)
                              publishedModes.push_back(*d.mode);
+                         if (d.modeList)
+                             publishedModeLists.push_back(*d.modeList);
                      });
     QObject::connect(&backend, &IRadioBackend::transmitChanged, &app,
                      [&](const TransmitDelta& d) {
@@ -1063,6 +1070,84 @@ int main(int argc, char** argv)
               "and the correction arrives on the next event-loop turn, naming the "
               "mode the radio is really in");
         QObject::disconnect(conn);
+    }
+
+    // ---- the mode combo is filled from the RADIO's vocabulary (#5040) -------
+    //
+    // WFM has been implemented end to end in CivCodec from the start — wire
+    // value, both directions of the neutral mapping, its own 200 kHz filter slot
+    // and a carrier-straddling passband. It was unreachable because nothing ever
+    // published a modeList, so RxApplet and VfoWidget both fell through to their
+    // compiled-in FlexRadio list, which has no WFM because a FLEX-6000 has no
+    // WFM. The list is the whole fix; the combos already rebuild from it.
+    {
+        check(!publishedModeLists.empty(),
+              "the backend publishes a mode list for the radio it identified");
+        const QStringList& modes = publishedModeLists.back();
+        check(modes.contains(QStringLiteral("WFM")),
+              "and WFM is in it, so the IC-705 operator gets the button");
+        // The stale-indicator half of the same defect: findText() returns -1 for
+        // a mode the combo does not hold, so a radio put into WFM at the front
+        // panel left the indicator showing the PREVIOUS mode. Every mode this
+        // backend can report has to be reachable in the list.
+        check(modes.contains(QStringLiteral("CWU")) && modes.contains(QStringLiteral("CWL")),
+              "including the CW names this backend actually reports");
+        check(!modes.contains(QStringLiteral("SAM")),
+              "and NOT the modes setSliceMode refuses - a list that offers SAM "
+              "on an Icom is a control that silently reverts");
+    }
+
+    // ---- WFM RECEIVES ONLY, and the client refuses to key in it -------------
+    //
+    // 76-108 MHz broadcast; the transmitter does not follow. The refusal lives
+    // client-side because "the radio will say no" is not a property CI-V lets us
+    // verify — an ignored key request is indistinguishable from one that worked
+    // until the meters fail to move.
+    {
+        backend.setSliceMode(0, QStringLiteral("WFM"));
+        check(waitSchedulerIdle(), "the radio converges on WFM");
+        radio.clearCivLog();
+        const std::size_t moxBefore = moxPublications.size();
+
+        backend.setKeying(true);
+        QTest::qWait(200);
+        check(std::none_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           movesPttOrTuner),
+              "no PTT frame reaches a radio that cannot transmit in WFM");
+        check(moxPublications.size() > moxBefore && !moxPublications.back(),
+              "and the transmit indicator is put back to receive rather than "
+              "left lit over a radio that never keyed");
+
+        // TUNE composes its carrier out of the same key, and it borrows the
+        // RF-power register on the way. Refusing only inside setKeying() would
+        // overwrite the operator's drive for a carrier that never happened.
+        backend.setTxPower(37);
+        check(waitSchedulerIdle(), "ordinary RF power converges before the refused TUNE");
+        radio.clearCivLog();
+        backend.setTune(true, 10);
+        QTest::qWait(200);
+        check(std::none_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           movesPttOrTuner),
+              "TUNE does not key in WFM either");
+        bool powerTouched = false;
+        for (const CivFrame& f : radio.civCommands())
+            if (f.cmd == cmd::kLevel && f.hasSub && f.sub == level::kRfPower)
+                powerTouched = true;
+        check(!powerTouched,
+              "and the refused TUNE leaves the operator's RF power alone");
+
+        // UNKEY IS NEVER GATED. A guard that could swallow an unkey is a stuck
+        // transmitter, which is worse than the emission it prevents.
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        check(waitSchedulerIdle(), "back to a transmit mode");
+        backend.setKeying(true);
+        check(waitFor([&] {
+                  return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                                     movesPttOrTuner);
+              }, 1000),
+              "keying works again once the radio is in a transmit mode");
+        backend.setKeying(false);
+        check(waitSchedulerIdle(), "and the unkey converges");
     }
 
     // ---- the CI-V trace tag decodes the RIGHT byte in BOTH directions -------
