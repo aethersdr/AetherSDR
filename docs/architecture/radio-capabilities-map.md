@@ -327,9 +327,29 @@ automation, so it is **deliberately deferred to its own PR.**
 | Field | Flex | HL2 | Sim | Note |
 |---|:--:|:--:|:--:|---|
 | `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists |
-| `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Flex omits it despite transmitting. Wrong, but inert while unread |
+| `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |
 | `extensions` | — | — | — | The namespaced vendor bag; never populated |
+
+`txPowerBands` is the consumed exception to this section: `RadioModel` reads it
+to update `TransmitModel::maxPowerLevel` when the transmit slice crosses into a
+range with a different PA rating. Flex, HL2 and Sim explicitly leave it empty;
+the IC-9700 declares 144–148 MHz at 100 W, 430–450 MHz at 75 W and 1240–1300
+MHz at 10 W. An empty list preserves the prior global/radio-reported behaviour.
+
+On the Icom side these ratings are not written into `capabilities()` by hand.
+They are read from `bandsFor()` in `IcomModels.cpp` — the same table the tune
+guard (`supportsFrequency` / `nearestSupportedFrequency`) uses to refuse the
+two holes in the IC-9700's envelope, because the ceilings and the tunable
+ranges describe the same three RF decks and must not be able to disagree. An
+empty table is also the predicate the tune path keys on, so a model with one
+continuous range keeps its untouched command path.
+
+What `maxPowerLevel` actually drives on an Icom is the **meter and gauge full
+scale** (`MainWindow_Wiring.cpp`, `VfoWidget::txPowerFullScaleW`). RF power
+itself is a 0–100 % CI-V level, so the radio's own PA governs the watts. This
+field makes a 10 W 23 cm transmission read against a 10 W scale instead of a
+100 W one; it does not clamp the request.
 
 These are the ones to check first when something "should have worked". Note the
 pattern in the Flex column: five fields across this table and the one above are

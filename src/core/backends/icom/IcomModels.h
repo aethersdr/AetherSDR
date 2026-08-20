@@ -152,6 +152,41 @@ modulationProfileFor(const IcomModel& model);
 // still tune and listen.
 [[nodiscard]] const IcomModel& unknownModel();
 
+// One RF deck: a range this model can tune, and the PA rating inside it.
+//
+// A model needs this only when its tunable range is NOT the single continuous
+// interval [tuningMinHz, tuningMaxHz] — which, today, means the IC-9700 alone.
+struct IcomBand {
+    std::uint64_t lowHz = 0;
+    std::uint64_t highHz = 0;
+    double maxWatts = 0.0;
+};
+
+// This model's discontinuous band table, or an EMPTY span when its tuning
+// range is the one continuous tuningMinHz..tuningMaxHz interval.
+//
+// THE SINGLE SOURCE OF TRUTH for both halves of a banded model: the tune
+// guard (supportsFrequency/nearestSupportedFrequency) and the capability
+// ceilings (IcomCivBackend::capabilities) both read this one table, so a
+// corrected edge or PA rating lands in every consumer at once. Two hand-kept
+// copies would have let the guard and the power scale disagree silently —
+// exactly the shape of drift that only shows up on the air.
+//
+// Emptiness is also the predicate the tune path keys on: no table means no
+// holes to refuse, so continuous models keep their untouched command path.
+[[nodiscard]] std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept;
+
+// True when hz lies in a band this model can tune. Unknown models remain
+// permissive because they have no verified range to enforce.
+[[nodiscard]] bool supportsFrequency(const IcomModel& model,
+                                     std::uint64_t hz) noexcept;
+
+// Resolve an arbitrary request to the nearest frequency this model supports.
+// Continuous-range and unknown models preserve their existing min/max policy;
+// the IC-9700 snaps across the two holes between its three RF decks.
+[[nodiscard]] std::uint64_t nearestSupportedFrequency(const IcomModel& model,
+                                                      std::uint64_t hz) noexcept;
+
 // Decode the reply to CI-V 0x19 0x00. Returns the reported address, or nullopt
 // if this is not that reply.
 [[nodiscard]] std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame);

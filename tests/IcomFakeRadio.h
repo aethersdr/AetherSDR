@@ -281,6 +281,17 @@ public:
             m_name.resize(kMaxNameBytes);
     }
 
+    void frontPanelFrequency(std::uint64_t hz)
+    {
+        m_frequencyHz = hz;
+        std::vector<std::uint8_t> frame{0xFE, 0xFE, kControllerAddress, m_addr,
+                                        cmd::kSetFreqTrx};
+        const std::vector<std::uint8_t> bcd = encodeFreq(hz);
+        frame.insert(frame.end(), bcd.begin(), bcd.end());
+        frame.push_back(kCivEom);
+        pushCiv(frame);
+    }
+
     // A SECOND DEVICE ON THE BUS. Icom's own RS-BA1 server can front a serial
     // CI-V bus carrying another radio, a rotator or an amplifier, and all of
     // them answer a broadcast. Set this and the broadcast draws two replies with
@@ -540,9 +551,9 @@ private:
         // Answer a read-frequency with the radio's frequency, addressed BACK to
         // the controller.
         if (frame->cmd == cmd::kReadFreq) {
-            std::vector<std::uint8_t> reply{0xFE, 0xFE, kControllerAddress, kIc705Addr,
+            std::vector<std::uint8_t> reply{0xFE, 0xFE, kControllerAddress, m_addr,
                                             cmd::kReadFreq};
-            const auto bcd = encodeFreq(kRadioFrequencyHz);
+            const auto bcd = encodeFreq(m_frequencyHz);
             reply.insert(reply.end(), bcd.begin(), bcd.end());
             reply.push_back(kCivEom);
             pushCiv(reply);
@@ -821,6 +832,7 @@ private:
     std::uint16_t m_audioInner = 1;
     // WHICH Icom this is. Defaults to the IC-705 the suite was written against.
     std::uint8_t  m_addr = kIc705Addr;
+    std::uint64_t m_frequencyHz = kRadioFrequencyHz;
     std::uint8_t  m_secondAddr = 0;
     bool          m_civEcho = false;
     std::string   m_name = "IC-705";

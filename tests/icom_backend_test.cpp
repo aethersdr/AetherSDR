@@ -1335,6 +1335,7 @@ int main(int argc, char** argv)
         FakeIc705 radio;
         IcomCivBackend backend;
         double frequencyMHz = 0.0;
+        int frequencyPublications = 0;
         QStringList warnings;
 
         CivCase(std::uint8_t addr, const char* name, bool echo = true)
@@ -1344,7 +1345,10 @@ int main(int argc, char** argv)
             radio.setCivEcho(echo);
             QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
                              [this](int, const SliceDelta& d) {
-                                 if (d.frequency) frequencyMHz = *d.frequency;
+                                 if (d.frequency) {
+                                     frequencyMHz = *d.frequency;
+                                     ++frequencyPublications;
+                                 }
                              });
             QObject::connect(&backend, &IRadioBackend::configurationWarning, &backend,
                              [this](const QString& m) { warnings << m; });
@@ -1417,6 +1421,40 @@ int main(int argc, char** argv)
               "auto: and the radio ANSWERS - a frequency arrives, where the "
               "0xA4-hardcoded path produced a permanently blank session");
         check(c.backend.model().civAddress == 0xA2, "auto: resolved as the IC-9700");
+        const RadioCapabilities caps = c.backend.capabilities();
+        check(caps.txPowerBands.size() == 3
+                  && caps.txPowerMaxWattsAt(146'000'000.0) == 100.0
+                  && caps.txPowerMaxWattsAt(432'000'000.0) == 75.0
+                  && caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
+              "auto: IC-9700 capabilities carry all three PA ceilings");
+
+        // cmd::kSetFreq (0x05), NOT cmd::kSetFreqTrx (0x00). 0x00 is the
+        // TRANSCEIVE frame a radio sends the controller when its own VFO
+        // moved; AetherSDR never emits it, so counting it made this assertion
+        // 0 == 0 whether or not the gate existed. Verified by neutering the
+        // gate: with 0x00 the check still passed while a real set-frequency
+        // went out on the wire. cmdSetFrequency() builds 0x05 — CivCodec.cpp.
+        const int tuneCommandsBefore = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return frame.cmd == cmd::kSetFreq;
+            }));
+        const int frequencyPublicationsBefore = c.frequencyPublications;
+        const double actualFrequencyBefore = c.frequencyMHz;
+        c.backend.setSliceFrequency(0, 500'000'000.0);
+        check(waitFor([&] {
+                  return c.frequencyPublications > frequencyPublicationsBefore;
+              }),
+              "auto: a rejected IC-9700 gap tune still produces a publication");
+        const int tuneCommandsAfter = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return frame.cmd == cmd::kSetFreq;
+            }));
+        check(tuneCommandsAfter == tuneCommandsBefore,
+              "auto: an IC-9700 gap frequency sends no CI-V tune command");
+        check(c.warnedAbout("outside its supported bands"),
+              "auto: an IC-9700 gap frequency explains why it was rejected");
+        check(c.frequencyMHz == actualFrequencyBefore,
+              "auto: the corrective frequency is radio state, not the refused request");
 
         // ONE broadcast per connect. Never polled, never retried on a timer:
         // RFC #4983 attributes an unrecoverable CI-V stall to request volume,
@@ -1424,6 +1462,47 @@ int main(int argc, char** argv)
         const int broadcasts = c.sentTo(kBroadcastAddress);
         check(broadcasts == 1,
               "auto: exactly one broadcast 0x19 0x00 is sent for the whole connect");
+    }
+
+    // ---- THE GATE IS IC-9700-ONLY, PROVEN ON THE WIRE ---------------------
+    //
+    // #5116's non-goals name IC-705 and IC-7300MK2 explicitly: neither may
+    // change tuning behaviour. The gate above keys on `bandsFor()` being
+    // non-empty, which today is the IC-9700 alone — but "the predicate reads
+    // right" is not evidence, and the assertion that WAS meant to carry this
+    // was counting a command AetherSDR never sends.
+    //
+    // So ask it of the wire instead: 500 MHz is above the IC-705's 470 MHz
+    // ceiling AND far above the IC-7300MK2's 74.8 MHz, so a gate that ever
+    // generalised to model.tuningMinHz/tuningMaxHz would silence both. The
+    // discriminating outcome is that the set-frequency still goes out, and no
+    // band warning is raised.
+    for (const auto& [addr, label] :
+         std::array<std::pair<std::uint8_t, const char*>, 2>{{{0xA4, "IC-705"},
+                                                             {0xB6, "IC-7300MK2"}}}) {
+        CivCase c(addr, label);
+        c.backend.connectRadio(c.request());
+        check(waitFor([&] { return c.backend.isConnected(); }),
+              "continuous model: the session comes up");
+        check(waitFor([&] { return c.backend.model().civAddress == addr; }),
+              "continuous model: it resolved to the address under test");
+        check(bandsFor(c.backend.model()).empty(),
+              "continuous model: it declares no discontinuous band table, so "
+              "the IC-9700 gate cannot apply to it");
+
+        const auto setFrequencyCount = [&c] {
+            return static_cast<int>(std::ranges::count_if(
+                c.radio.civCommands(),
+                [](const CivFrame& f) { return f.cmd == cmd::kSetFreq; }));
+        };
+        const int before = setFrequencyCount();
+        const int warningsBefore = static_cast<int>(c.warnings.size());
+        c.backend.setSliceFrequency(0, 500'000'000.0);
+        check(waitFor([&] { return setFrequencyCount() > before; }),
+              "continuous model: a frequency outside its own declared range is "
+              "still sent unchanged — the gate did not leak");
+        check(static_cast<int>(c.warnings.size()) == warningsBefore,
+              "continuous model: and it raises no band warning");
     }
 
     // ---- A DELIBERATELY WRONG TYPED ADDRESS MUST STILL FAIL ----------------

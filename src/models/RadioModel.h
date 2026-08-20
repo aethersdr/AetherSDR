@@ -1446,6 +1446,9 @@ private:
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
     void publishCapabilities(bool connected);
+    // Apply a backend's band-dependent PA ceiling to TransmitModel. Backends
+    // without per-band data leave the existing radio-reported limit alone.
+    void refreshTxPowerLimit();
     // Bind the one producer for rxDemodAudioReady. Idempotent; call after
     // m_backend and m_panStream are both settled for the new family.
     void wireRxDemodAudioBus();
@@ -1459,6 +1462,9 @@ private:
     // decide whether a connect needs a different backend.
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    QVector<TxPowerBand> m_txPowerBands;
+    double m_activeTxPowerBandLowHz = 0.0;
+    double m_activeTxPowerBandHighHz = 0.0;
     // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
     // simulator) instead of a FlexBackend. Selected per-connection from the target
     // — see connectToRadio(). Also generalizes to future non-Flex backends (HL2).

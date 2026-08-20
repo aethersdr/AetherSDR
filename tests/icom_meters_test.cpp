@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -295,6 +296,38 @@ static void testModelTable()
     check(modelForCivAddress(0x01) == nullptr,
           "an unrecognised address resolves to nothing — a normal outcome, not an error");
     check(!knownModels().empty(), "the table is populated");
+    if (ic9700) {
+        // ONE TABLE, TWO CONSUMERS. The tune guard and the published PA
+        // ceilings describe the same three RF decks, so they are read from the
+        // same rows — and this is the assertion that keeps them that way. A
+        // future edit that widened a range for power but not for tuning (or
+        // the reverse) used to be invisible; now it fails here.
+        const std::span<const IcomBand> bands = bandsFor(*ic9700);
+        check(bands.size() == 3, "the IC-9700 declares three RF decks");
+        for (const IcomBand& band : bands) {
+            check(supportsFrequency(*ic9700, band.lowHz)
+                      && supportsFrequency(*ic9700, band.highHz),
+                  "every declared IC-9700 power band is tunable end to end");
+            check(band.maxWatts > 0.0,
+                  "every declared IC-9700 band carries a PA rating");
+        }
+        // The other half of the same claim: a continuous model has no table,
+        // and that emptiness is what keeps its tune path untouched. #5116
+        // names both of these as non-goals.
+        for (const std::uint8_t addr : {std::uint8_t(0xA4), std::uint8_t(0xB6)}) {
+            const IcomModel* m = modelForCivAddress(addr);
+            check(m && bandsFor(*m).empty(),
+                  "a continuous model (IC-705, IC-7300MK2) declares no band "
+                  "table, so the IC-9700 gate cannot reach it");
+        }
+        check(nearestSupportedFrequency(*ic9700, 149'000'000ULL) == 148'000'000ULL,
+              "an IC-9700 drag above 2 m clamps to the 148 MHz edge");
+        check(nearestSupportedFrequency(*ic9700, 500'000'000ULL) == 450'000'000ULL,
+              "an IC-9700 drag in the upper gap clamps to the nearest edge");
+        check(nearestSupportedFrequency(*ic9700, 1'296'000'000ULL)
+                  == 1'296'000'000ULL,
+              "an in-band IC-9700 drag remains unchanged");
+    }
     // NO MODEL INHERITS THE 26 00 SHAPE BY ASSUMPTION.
     //
     // This started life as `m.verified || !m.hasVfoModeCommand`, which read the

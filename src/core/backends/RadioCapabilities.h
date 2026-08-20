@@ -8,6 +8,12 @@
 
 namespace AetherSDR {
 
+struct TxPowerBand {
+    double lowHz = 0.0;
+    double highHz = 0.0;
+    double maxWatts = 0.0;
+};
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is
@@ -103,6 +109,21 @@ struct RadioCapabilities {
     // keying intent regardless of client requests.
     bool canTransmit = false;
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
+
+    // Optional per-frequency ceilings for radios whose PA rating changes by
+    // band. Empty means txPowerMaxWatts applies everywhere. The ranges are
+    // inclusive and expressed in Hz, matching the tuning fields above.
+    QVector<TxPowerBand> txPowerBands;
+
+    [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const noexcept
+    {
+        for (const TxPowerBand& band : txPowerBands) {
+            if (frequencyHz >= band.lowHz && frequencyHz <= band.highHz) {
+                return band.maxWatts;
+            }
+        }
+        return txPowerMaxWatts;
+    }
 
     // Modes this radio DEMODULATES BUT WILL NOT TRANSMIT IN, in AetherSDR's
     // neutral vocabulary (the same strings SliceModel carries).
