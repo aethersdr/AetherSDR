@@ -134,6 +134,8 @@ private:
     void saveHttpThrottleState() const;
     static qint64 rateLimitBackoffMs(int consecutiveRateLimits);
     QueryScope httpQueryScope() const;
+    static bool appendHttpResponseChunk(QByteArray& response,
+                                        const QByteArray& chunk);
     static ParsedHttpSnapshot parseHttpSnapshot(const QByteArray& xml);
     void handleParsedHttpSnapshot(ParsedHttpSnapshot snapshot,
                                   QueryScope responseScope);
@@ -196,6 +198,10 @@ private:
     static constexpr quint16 kMqttPort = 1883;
     static constexpr int kMaxSpots = 2000;
     static constexpr int kMaxMonitors = 6000;
+    // Bound the decompressed XML body, including activeReceiver rows whose
+    // count is not limited by the PSK Reporter retrieval API.
+    static constexpr qint64 kMaxHttpResponseBytes = 16 * 1024 * 1024;
+    static constexpr qint64 kHttpReadBufferBytes = 64 * 1024;
     // HTTP fallback poll cadence when MQTT can't connect (port blocked etc.).
     static constexpr int kFallbackPollMs = 5 * 60 * 1000;
     static constexpr qint64 kRateLimitBaseMs = 15 * 60 * 1000;

@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 Q_LOGGING_CATEGORY(lcPskReporter, "aether.pskreporter")
 
@@ -309,10 +310,46 @@ void PskReporterClient::poll()
     emit statusChanged(tr("Updating…"));
     emit connectionStateChanged();
     QNetworkReply* reply = m_nam.get(req);
+    // Drain incrementally so Qt never accumulates the entire decompressed XML
+    // body inside QNetworkReply before finished(). The read buffer is a second
+    // bound around the data waiting to be drained; Qt documents it as a
+    // throttle rather than an exact ceiling, so the accumulator enforces the
+    // authoritative limit below.
+    reply->setReadBufferSize(kHttpReadBufferBytes);
+    auto responseBody = std::make_shared<QByteArray>();
+    auto responseTooLarge = std::make_shared<bool>(false);
+    const auto drainReply = [reply, responseBody, responseTooLarge] {
+        while (!*responseTooLarge && reply->bytesAvailable() > 0) {
+            const qint64 remaining = kMaxHttpResponseBytes
+                - static_cast<qint64>(responseBody->size());
+            const qint64 readSize = qMin(kHttpReadBufferBytes, remaining + 1);
+            const QByteArray chunk = reply->read(readSize);
+            if (chunk.isEmpty()) {
+                break;
+            }
+            if (!appendHttpResponseChunk(*responseBody, chunk)) {
+                *responseTooLarge = true;
+                reply->abort();
+            }
+        }
+    };
+    connect(reply, &QNetworkReply::metaDataChanged, this,
+            [reply, responseTooLarge] {
+        const QVariant contentLength = reply->header(
+            QNetworkRequest::ContentLengthHeader);
+        if (contentLength.isValid()
+            && contentLength.toLongLong() > kMaxHttpResponseBytes) {
+            *responseTooLarge = true;
+            reply->abort();
+        }
+    });
+    connect(reply, &QIODevice::readyRead, this, drainReply);
     m_queryReply = reply;
     const quint64 generation = m_queryGeneration;
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, initial, fetchDepth, generation, requestScope] {
+            [this, reply, initial, fetchDepth, generation, requestScope,
+             responseBody, responseTooLarge, drainReply] {
+        drainReply();
         m_fetchInFlight = false;
         if (m_queryReply == reply) {
             m_queryReply = nullptr;
@@ -322,6 +359,19 @@ void PskReporterClient::poll()
             if (m_running) {
                 QTimer::singleShot(0, this, &PskReporterClient::poll);
             }
+            return;
+        }
+        if (*responseTooLarge) {
+            m_lastHttpStatus = reply->attribute(
+                QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            m_lastHttpError = tr("Response exceeded the %1 MiB safety limit")
+                                  .arg(kMaxHttpResponseBytes / (1024 * 1024));
+            qCWarning(lcPskReporter) << m_lastHttpError;
+            m_lastHttpOk = false;
+            m_sawError = true;
+            emit connectionStateChanged();
+            emit statusChanged(tr("PSK Reporter error: %1")
+                                   .arg(m_lastHttpError));
             return;
         }
         if (reply->error() != QNetworkReply::NoError) {
@@ -391,7 +441,7 @@ void PskReporterClient::poll()
         m_lastHttpOk = true;
         m_sawError = false;
         emit connectionStateChanged();
-        const QByteArray body = reply->readAll();
+        QByteArray body = std::move(*responseBody);
         qCInfo(lcPskReporter) << "HTTP reply" << body.size() << "bytes";
         // A global reply can contain thousands of reception reports and
         // active receivers. Parse it away from the GUI thread so the map and
@@ -410,6 +460,19 @@ void PskReporterClient::poll()
         watcher->setFuture(QtConcurrent::run(
             &PskReporterClient::parseHttpSnapshot, body));
     });
+}
+
+bool PskReporterClient::appendHttpResponseChunk(QByteArray& response,
+                                                const QByteArray& chunk)
+{
+    const qint64 responseSize = static_cast<qint64>(response.size());
+    const qint64 chunkSize = static_cast<qint64>(chunk.size());
+    if (responseSize > kMaxHttpResponseBytes
+        || chunkSize > kMaxHttpResponseBytes - responseSize) {
+        return false;
+    }
+    response.append(chunk);
+    return true;
 }
 
 PskReporterClient::QueryScope PskReporterClient::httpQueryScope() const

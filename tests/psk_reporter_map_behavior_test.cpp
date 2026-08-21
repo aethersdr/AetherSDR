@@ -72,6 +72,17 @@ public:
         return PskReporterClient::kMaxMonitors;
     }
 
+    static qint64 maxHttpResponseBytes()
+    {
+        return PskReporterClient::kMaxHttpResponseBytes;
+    }
+
+    static bool appendHttpResponseChunk(QByteArray& response,
+                                        const QByteArray& chunk)
+    {
+        return PskReporterClient::appendHttpResponseChunk(response, chunk);
+    }
+
     static void restoreCachedMonitors(PskReporterClient& client,
                                       const QJsonArray& monitors)
     {
@@ -161,6 +172,19 @@ int main(int argc, char** argv)
     ok &= check(PskReporterClientTestAccess::rateLimitBackoffMs(20)
                     == 2LL * 60 * 60 * 1000,
                 "rate-limit backoff is capped at two hours");
+
+    QByteArray boundedResponse(
+        PskReporterClientTestAccess::maxHttpResponseBytes() - 1, 'x');
+    ok &= check(PskReporterClientTestAccess::appendHttpResponseChunk(
+                    boundedResponse, QByteArray(1, 'x'))
+                    && boundedResponse.size()
+                           == PskReporterClientTestAccess::maxHttpResponseBytes(),
+                "HTTP response accepts bytes through the safety limit");
+    ok &= check(!PskReporterClientTestAccess::appendHttpResponseChunk(
+                    boundedResponse, QByteArray(1, 'x'))
+                    && boundedResponse.size()
+                           == PskReporterClientTestAccess::maxHttpResponseBytes(),
+                "HTTP response rejects bytes beyond the safety limit");
 
     PskReporterClient parserClient;
     parserClient.setCallsign(QString());
