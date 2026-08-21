@@ -2073,9 +2073,22 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         }
     }
 
+    // #5121: a backend with no measured watts curve for the connected model
+    // (an IC-9700, today) publishes forward power as PERCENT, not watts —
+    // fwdPowerIsRelative() says so. `null` here, not a numeric 0.0: a
+    // fixed-watts consumer (tools/tx_meter_test.py's --max-watts safety
+    // ceiling among them) must be able to tell "this backend can't answer
+    // in watts" apart from "0 W, not transmitting", which a synthesized
+    // zero would erase. fwdPowerIsRelative below is what a caller who DOES
+    // understand relative power should key off before trusting either
+    // reading as a percentage.
+    const bool fwdRelative = m->fwdPowerIsRelative();
     return QJsonObject{
-        {QStringLiteral("fwdPower"),        m->fwdPower()},           // Watts (smoothed)
-        {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // Watts (peak)
+        {QStringLiteral("fwdPower"),
+         fwdRelative ? QJsonValue() : QJsonValue(m->fwdPower())},        // Watts (smoothed); null if relative
+        {QStringLiteral("fwdPowerInstant"),
+         fwdRelative ? QJsonValue() : QJsonValue(m->fwdPowerInstant())}, // Watts (peak); null if relative
+        {QStringLiteral("fwdPowerIsRelative"), fwdRelative},
         {QStringLiteral("fwdPowerAgeMs"),   age(m->fwdPowerUpdatedAtMs())},
         {QStringLiteral("reflectedPower"),  m->reflectedPower()},
         {QStringLiteral("reflectedPowerAgeMs"),

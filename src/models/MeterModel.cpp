@@ -703,10 +703,24 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             //
             // dBm remains the default for a backend that declares nothing,
             // because that is what every backend predating this field meant.
+            //
+            // #5121: a THIRD case, missed when this was first fixed. A
+            // backend with no measured watts curve for the connected model
+            // (an IC-9700, today) declares Percent, not Watts — and Percent
+            // through the dBm formula is worse than the original bug: a 50%
+            // reading becomes 10^(50/10)/1000 = exactly 100 W, a plausible
+            // rated output that would never draw a second look, unlike the
+            // symptom it replaces. `v` is already the correctly-scaled
+            // 0..100 relative figure (IcomMeters::meterValue()'s Power
+            // case), so it passes straight through here —
+            // fwdPowerIsRelative() is what tells a caller this float means
+            // percent, not watts.
             const bool alreadyWatts =
                 m_fwdPwrUnit.compare(QLatin1String("Watts"), Qt::CaseInsensitive) == 0
                 || m_fwdPwrUnit.compare(QLatin1String("W"), Qt::CaseInsensitive) == 0;
-            float watts = alreadyWatts ? v : std::pow(10.0f, v / 10.0f) / 1000.0f;
+            const bool relative = fwdPowerIsRelative();
+            float watts = (alreadyWatts || relative)
+                ? v : std::pow(10.0f, v / 10.0f) / 1000.0f;
             m_fwdPowerInstant = watts;
             fwdInstantChanged = true;
             directionalChanged = true;

@@ -124,11 +124,19 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5):
             if link_alive is False:
                 stop_reason = "radio link is not alive"
             fwd_age = m.get("fwdPowerAgeMs", 1e9)
-            fwd_val = m.get("fwdPower", 0)
-            if 0 <= fwd_age < FRESH_MS and fwd_val > 0.3:
+            # fwdPower is null when the connected backend has no measured
+            # watts curve for this model (#5121 -- an unverified Icom model
+            # reports relative/percent power instead of watts) -- same
+            # "null means no data" contract as swr below, not a real 0 W
+            # reading. m.get("fwdPower", 0) would silently substitute 0 only
+            # when the KEY is missing, not when its value is null, so a
+            # relative reading would otherwise reach the `> 0.3`/`> max_watts`
+            # comparisons below as None and crash with a TypeError.
+            fwd_val = m.get("fwdPower")
+            if fwd_val is not None and 0 <= fwd_age < FRESH_MS and fwd_val > 0.3:
                 fwd.append(fwd_val)
-            if (max_watts is not None and 0 <= fwd_age < SAFETY_FRESH_MS
-                    and fwd_val > max_watts):
+            if (fwd_val is not None and max_watts is not None
+                    and 0 <= fwd_age < SAFETY_FRESH_MS and fwd_val > max_watts):
                 stop_reason = (f"measured forward power {fwd_val:.1f} W exceeds "
                                f"{max_watts:.1f} W ceiling")
             # swr is null when no live sample exists, and swrAgeMs is -1

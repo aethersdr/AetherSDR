@@ -98,6 +98,29 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Power, 213, kS9DbmHf, 0xB6), 100.0),
           "IC-7300MK2 raw 213 is its rated 100 W");
 
+    // #5121: the live bug. Before this fix, an unverified model (the
+    // IC-9700, 0xA2 — no measured watts curve exists, powerCurveFor()
+    // correctly returns empty) still got a VALUE off the IC-705's watts
+    // curve, because meterValue() picked between exactly two named curves
+    // and defaulted to the IC-705's for everything else. Full-scale key-down
+    // read as "12" against a definition that claims Percent, 0..100 — wrong
+    // unit AND wrong magnitude from one missing branch. The fix routes
+    // through the SAME powerCurveFor() the definition side already uses, so
+    // an unverified model gets percent-of-the-raw-byte instead of a
+    // borrowed watts figure.
+    check(near(meterValue(MeterId::Power, 0, kS9DbmHf, 0xA2), 0.0),
+          "IC-9700 raw 0 is 0% (no measured curve)");
+    check(near(meterValue(MeterId::Power, 128, kS9DbmHf, 0xA2), 50.2, 0.5),
+          "IC-9700 raw 128 is ~half scale as a PERCENT, not a borrowed watt figure");
+    check(near(meterValue(MeterId::Power, 255, kS9DbmHf, 0xA2), 100.0),
+          "IC-9700 full-scale key-down reads 100%, not 12 (the pre-fix "
+          "IC-705 watts ceiling)");
+    // Same fallback for any other unnamed/future model — not an IC-9700
+    // special case.
+    check(near(meterValue(MeterId::Power, 255, kS9DbmHf, 0x00), 100.0),
+          "an unrecognised CI-V address also falls back to percent, not a "
+          "borrowed watts curve");
+
     check(near(meterValue(MeterId::Swr, 0, 0), 1.0), "SWR 1.0 at zero");
     check(near(meterValue(MeterId::Swr, 48, 0), 1.5), "SWR 1.5");
     check(near(meterValue(MeterId::Swr, 120, 0), 3.0), "SWR 3.0");

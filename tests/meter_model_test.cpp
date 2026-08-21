@@ -306,6 +306,32 @@ void testForwardPowerHonoursItsDeclaredUnit()
         report("an undeclared unit is treated as dBm, as it always was",
                nearlyEqual(model.fwdPowerInstant(), 100.0f));
     }
+    // #5121: Percent is a THIRD declared unit, not just Watts-vs-dBm. An
+    // unverified Icom model (no measured watts curve for the connected
+    // model — see IcomModels::powerCurveFor()) reports relative power this
+    // way. Missing this case is worse than the original bug it's adjacent
+    // to: a 50% reading through the dBm formula becomes 10^(50/10)/1000 =
+    // exactly 100 W — a plausible-looking rated output for a real radio,
+    // not an obviously-broken number a reader would think to question.
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "Percent"));
+        model.updateValues({8}, {50});
+        report("a FWDPWR meter declared in Percent is NOT converted from dBm",
+               nearlyEqual(model.fwdPowerInstant(), 50.0f));
+        report("and MeterModel flags this reading as relative, not watts",
+               model.fwdPowerIsRelative());
+        // The old behaviour, pinned so the fix cannot silently regress.
+        report("and the pre-fix dBm reading really was ~100 W",
+               nearlyEqual(std::pow(10.0f, 50.0f / 10.0f) / 1000.0f, 100.0f));
+    }
+    {
+        MeterModel model;
+        model.defineMeter(txMeter(8, "FWDPWR", "Watts"));
+        model.updateValues({8}, {5});
+        report("a Watts-declaring FWDPWR meter is not flagged relative",
+               !model.fwdPowerIsRelative());
+    }
 }
 
 // REFPWR was missed when FWDPWR and ALC were fixed, and MeterSurfaces.h already

@@ -1385,11 +1385,31 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
     }
 
     if (level == "RFPOWER_METER_WATTS") {
+        // #5121: fwdPower() is a relative 0..100 PERCENT reading, not watts,
+        // when the connected model has no measured PA curve (an IC-9700,
+        // today) — advertising it here would claim a measured value that
+        // doesn't exist, and it would be a materially worse wrong number
+        // than before this fix (a plausible-looking 0..100 instead of a
+        // borrowed IC-705 curve's 0..12). 0.0 matches this file's existing
+        // "no valid reading" convention for a numeric rig level (see SWR
+        // above) — there is no null in the Hamlib text protocol.
+        if (m_model->meterModel().fwdPowerIsRelative())
+            return makeResponse(formatRigLevelValue(0.0f));
         const float watts = txMetersFresh ? qMax(0.0f, m_model->meterModel().fwdPower()) : 0.0f;
         return makeResponse(formatRigLevelValue(watts));
     }
 
     if (level == "RFPOWER_METER") {
+        // #5121: a relative reading is already a percent of full scale, so
+        // normalize it directly — dividing by maxPowerLevel() (a watts
+        // figure) would apply a scale that has nothing to do with a percent
+        // reading. This is the case the review explicitly allows: rigctl
+        // MAY expose normalized RFPOWER_METER for relative power, unlike
+        // RFPOWER_METER_WATTS just above.
+        if (m_model->meterModel().fwdPowerIsRelative()) {
+            const float pct = txMetersFresh ? qMax(0.0f, m_model->meterModel().fwdPower()) : 0.0f;
+            return makeResponse(formatRigLevelValue(qBound(0.0f, pct / 100.0f, 1.0f)));
+        }
         const float watts = txMetersFresh ? qMax(0.0f, m_model->meterModel().fwdPower()) : 0.0f;
         const int maxPower = qMax(1, txModel.maxPowerLevel());
         float ratio = watts / static_cast<float>(maxPower);

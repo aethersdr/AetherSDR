@@ -1,4 +1,5 @@
 #include "core/backends/icom/IcomMeters.h"
+#include "core/backends/icom/IcomModels.h"
 
 #include <algorithm>
 #include <array>
@@ -180,9 +181,33 @@ double meterValue(MeterId id, int raw, double s9Dbm, std::uint8_t civAddress)
 {
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
-    case MeterId::Power:    return interpolateCurve(
-                                civAddress == 0xB6 ? powerCurveIc7300Mk2()
-                                                   : powerCurveIc705(), raw);
+    case MeterId::Power: {
+        // #5121: this used to pick between the IC-705 and IC-7300MK2 watts
+        // curves unconditionally, borrowing the IC-705's for every OTHER
+        // model too (including the IC-9700) — a live bug: the Po meter is
+        // then DEFINED as Percent (publishMeterDefs() -> powerCurveFor(),
+        // below) but its VALUE came out as a borrowed watts figure that
+        // saturates at 12. Routing through the same powerCurveFor() the
+        // definition side already uses makes them structurally unable to
+        // disagree, which is the actual fix — not a new number, a single
+        // source of truth for both.
+        const IcomModel* model = modelForCivAddress(civAddress);
+        const auto curve = model ? powerCurveFor(*model)
+                                  : std::span<const CurvePoint>{};
+        if (!curve.empty())
+            return interpolateCurve(curve, raw);
+        // No measured watts curve for this model. The raw Po meter field is
+        // a full byte (0..255) on every Icom model per the CI-V wire
+        // format, independent of PA rating -- only the WATTS interpretation
+        // of that byte is model-specific, not the byte's own range. So
+        // percent-of-raw-scale is a fact about the protocol, not a number
+        // borrowed from a different radio's PA -- matching the "Percent"
+        // unit and 100.0 high already published for this case.
+        static constexpr std::array<CurvePoint, 2> kGenericPercent{{
+            {0, 0.0}, {255, 100.0},
+        }};
+        return interpolateCurve(kGenericPercent, raw);
+    }
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
     case MeterId::Comp:     return interpolateCurve(kComp, raw);

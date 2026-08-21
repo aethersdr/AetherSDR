@@ -100,9 +100,23 @@ public:
     // Convenience: S-meter (slice LEVEL meter) in dBm.
     float sLevel() const { return m_sLevel; }
 
-    // Convenience: forward power in watts.
+    // Convenience: forward power. Watts, UNLESS fwdPowerIsRelative() is
+    // true — a backend can decline to publish a watts curve for a model it
+    // has no measured PA data for (#5121; see IcomModels::powerCurveFor()),
+    // in which case this is percent of the meter's own full scale instead.
+    // A caller that assumes watts unconditionally (any fixed-unit consumer
+    // — a gauge labelled "W", a safety ceiling, rigctl's *_METER_WATTS)
+    // must check the flag first and treat a relative reading as
+    // unavailable for its purpose, not render/compare it as a wrong watts
+    // figure that merely looks plausible.
     float fwdPower() const { return m_fwdPower; }
     float fwdPowerInstant() const { return m_fwdPowerInstant; }
+    // True when fwdPower()/fwdPowerInstant() are percent of full scale
+    // rather than watts — the backend declared MeterDef::unit == "Percent"
+    // for the forward-power meter.
+    bool fwdPowerIsRelative() const {
+        return m_fwdPwrUnit.compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0;
+    }
     float reflectedPower() const { return m_reflectedPower; }
     float tgxlFwdPower() const { return m_tgxlFwdPwr; }
 

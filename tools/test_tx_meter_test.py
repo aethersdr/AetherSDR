@@ -81,6 +81,48 @@ def test_missing_power_unkeys():
     check(fake.stop_calls and fake.unkey_calls, "missing-meter path did not unkey")
 
 
+def test_relative_power_is_excluded_not_crashed():
+    """#5121: fwdPower is null (not a numeric 0) when the connected backend
+    has no measured watts curve for this model and reports relative/percent
+    power instead -- an unverified Icom model, today. m.get("fwdPower", 0)
+    only substitutes a default when the KEY is absent, not when its value
+    is null, so this used to reach `fwd_val > 0.3` / `fwd_val > max_watts`
+    as None and crash with a TypeError. Must not crash, and a reading we
+    can't compare against a watts ceiling must be excluded from both the
+    average and the ceiling check, not silently treated as 0 W (which
+    would read as "not transmitting") or compared as if it were watts.
+
+    Known gap, not resolved by this test: the meter still carries
+    has_value=True in `all` (a real percent reading did arrive), so the
+    separate "no fresh calibrated FWDPWR sample" deadline fallback
+    (see test_missing_power_unkeys) does NOT fire either -- this run
+    completes with no stopReason at all, having never verified transmit
+    power against any ceiling. Whether a relative-power backend should
+    hard-fail this safety script outright is a policy call for whoever
+    owns tx_meter_test.py's RF-safety contract, not something to decide
+    silently in a client-side unit fix.
+    """
+    snapshot = {
+        "fwdPower": None,
+        "fwdPowerAgeMs": 0,
+        "fwdPowerIsRelative": True,
+        "swr": 1.1,
+        "swrAgeMs": 0,
+        "all": [{
+            "name": "FWDPWR", "has_value": True,
+            "value": 42.0, "age_ms": 0,
+        }],
+    }
+    fake = FakeTx(snapshot)
+    result = run_once(fake, max_watts=10.0)
+    check(result["stopReason"] is None,
+          "a relative-power reading must not be evaluated against a watts "
+          "ceiling -- it is neither over nor under a limit it cannot be "
+          "compared to")
+    check(fake.unkey_calls == 0,
+          "must not unkey over a comparison that could not be made")
+
+
 def test_link_loss_unkeys():
     fake = FakeTx(meter_snapshot(), link_alive=False)
     result = run_once(fake, max_watts=10.0)
@@ -129,6 +171,7 @@ if __name__ == "__main__":
     test_over_watt_unkeys()
     test_high_swr_unkeys()
     test_missing_power_unkeys()
+    test_relative_power_is_excluded_not_crashed()
     test_link_loss_unkeys()
     test_antenna_discovery_is_exact()
     test_unkey_uses_semantic_always_allowed_verb()

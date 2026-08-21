@@ -5952,15 +5952,25 @@ void MainWindow::wireMeters()
             this, [this](float fwd, float swr, bool swrValid) {
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
             return;
+        // #5121: these widgets are watts-typed with no way to render a
+        // relative reading honestly (a bare "%" needle where every other
+        // radio shows watts). fwdPowerIsRelative() means the connected
+        // model has no measured PA curve (an IC-9700, today) — park at the
+        // rest position rather than let a correctly-computed percent
+        // number flow into a gauge labelled W, or into #ifdef HAVE_HIDAPI's
+        // physical controller display below. Same "unavailable, not a
+        // wrong number" principle the SWR fallback just below already uses.
+        const bool relative = m_radioModel.meterModel().fwdPowerIsRelative();
         // Absent SWR is forwarded as 1.0: RadioSwrValidityFilter downstream
         // reads <1.0 WITH forward power as the radio's over-range sentinel
         // and would peg the S-meter full-scale on a matched antenna (#4536
         // review, blocker 2). 1.0 is the meter's rest position.
         m_appletPanel->setStandardRadioMeterTxValues(
-            fwd, m_radioModel.meterModel().fwdPowerInstant(),
+            relative ? 0.0f : fwd,
+            relative ? 0.0f : m_radioModel.meterModel().fwdPowerInstant(),
             swrValid ? swr : 1.0f);
 #ifdef HAVE_HIDAPI
-        m_tmate2TxWatts = fwd;
+        m_tmate2TxWatts = relative ? 0.0f : fwd;
         if (m_radioModel.transmitModel().isTransmitting()) {
             updateTMate2Display();
             updateTMate2Indicators();
@@ -5973,6 +5983,14 @@ void MainWindow::wireMeters()
                          bool swrValid, bool reflectedPowerMeasured) {
         if (m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate()) {
+            return;
+        }
+        // #5121: same relative-power guard as txMetersChanged above — the
+        // cross-needle's reflected-power math (CrossNeedleMeterGeometry::
+        // reflectedPowerWatts()) assumes fwd is watts and would compute a
+        // fabricated reflected-watts figure from a percent input.
+        if (m_radioModel.meterModel().fwdPowerIsRelative()) {
+            m_appletPanel->setCrossNeedleDirectionalValues(0.0f, 0.0f, 1.0f, false);
             return;
         }
         // The cross-needle already clamps sub-1.0 values to 1.0 (its rest
