@@ -88,6 +88,11 @@ public:
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
+    QString sendCwText(const QString& text) override;
+    void abortCwText() override;
+    void setCwSpeed(int wpm) override;
+    void setCwPitch(int hz) override;
+    void setCwBreakIn(bool on) override;
     void setSpeechProcessor(bool on, int level) override;
     void setMicGain(int gainPercent) override;
     void setTxAudioMonitor(bool on) override;
@@ -230,7 +235,8 @@ private:
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
-                    IcomCivScheduler::Priority priority, bool supersedes = true);
+                    IcomCivScheduler::Priority priority, bool supersedes = true,
+                    bool coalesce = true);
     void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
                                     const std::string& key);
     void pumpCiv(qint64 nowMs);
@@ -475,6 +481,10 @@ private:
     // being generated on a timer, so its cadence is the transmit callback's
     // cadence and it cannot drift against the stream it is riding.
     bool m_tuning = false;
+    // Last non-off value reported by 16 47. The shared UI is still boolean,
+    // so remembering 01 vs 02 is what lets OFF -> ON restore Full rather than
+    // silently demoting it to Semi.
+    int m_cwBreakInMode = 1;
     int m_preTuneTxPowerPercent = -1;
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;

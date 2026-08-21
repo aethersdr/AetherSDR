@@ -425,6 +425,10 @@ static void testModeList()
     check(!modes.empty(), "the IC-705 publishes a mode list");
     check(std::find(modes.begin(), modes.end(), std::string_view{"WFM"}) != modes.end(),
           "and WFM is in it - the whole point of #5040");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"CW"}) != modes.end(),
+          "normal Icom CW is published under the neutral CW name");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"CWU"}) == modes.end(),
+          "the Flex-oriented CWU alias is not published for Icom");
 
     // EVERY ENTRY MUST ROUND-TRIP. A name the radio can be put into but never
     // reports back (RTTY, which comes home as DIGL) makes the combo jump on the

@@ -137,10 +137,16 @@ void MainWindow::wireSpotSubsystem()
                               << "radio has no radio-side CW keyer";
             return;
         }
+        const QString rejection = m_radioModel.cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcMqtt) << "cw/transmit ignored:" << rejection;
+            return;
+        }
         auto& tx = m_radioModel.transmitModel();
         const int wpm = obj.value(QStringLiteral("speed_wpm")).toInt(0);
         const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);
-        const bool changeWpm = (wpm >= 5 && wpm <= 100);
+        const bool changeWpm = (wpm >= m_radioModel.cwTextMinWpm()
+                                && wpm <= m_radioModel.cwTextMaxWpm());
         const bool changeHz  = (hz >= 100 && hz <= 6000);
         if (!m_cwxTransmitting) {
             m_cwxSavedWpm = changeWpm ? m_radioModel.cwxModel().speed() : 0;

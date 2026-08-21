@@ -395,6 +395,11 @@ public:
     // still transmits CW from a key, a paddle or the host keying path; what it
     // lacks is a text buffer.
     bool hasRadioSideCwKeyer() const;
+    bool hasCwTextProgress() const;
+    bool hasCwTextStoredMacros() const;
+    int cwTextMinWpm() const;
+    int cwTextMaxWpm() const;
+    QString cwTextValidationError(const QString& text) const;
     bool hasVoiceKeyer() const;
     // Whether this radio has DAX audio/IQ channels. Same permissive
     // disconnected rule as hasRadioSideDsp(): with nothing attached there is

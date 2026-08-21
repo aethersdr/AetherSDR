@@ -2649,6 +2649,9 @@ target_include_directories(cwx_panel_test PRIVATE src)
 target_link_libraries(cwx_panel_test PRIVATE
     Qt6::Core Qt6::Widgets
 )
+add_test(NAME cwx_panel_test COMMAND cwx_panel_test)
+set_tests_properties(cwx_panel_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(meter_model_test
     tests/meter_model_test.cpp

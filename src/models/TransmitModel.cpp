@@ -67,6 +67,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool phoneChanged = false;
     bool filterCutoffChanged = false;
     bool cwPitchChanged_ = false;
+    bool cwSpeedChanged_ = false;
 
     // ── Core transmit ──
     // rf_power / tune_power emit inline (like max_power_level below): the
@@ -119,7 +120,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.txFilterHigh, m_txFilterHigh)) { phoneChanged = true; filterCutoffChanged = true; }
 
     // ── CW ──
-    phoneChanged |= assign(d.cwSpeed, m_cwSpeed);
+    if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
     phoneChanged |= assign(d.cwDelay, m_cwDelay);
@@ -154,6 +155,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
+    if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 
     // ── ATU (own emit; model owns the enum parse) ──
     {
@@ -686,7 +688,9 @@ void TransmitModel::setCwSpeed(int wpm)
     if (m_cwSpeed != wpm) {
         m_cwSpeed = wpm;
         emit phoneStateChanged();
+        emit cwSpeedChanged(m_cwSpeed);
     }
+    emit cwSpeedCommandIssued(wpm);
     emit commandReady(QString("cw wpm %1").arg(wpm));
 }
 
@@ -698,6 +702,7 @@ void TransmitModel::setCwPitch(int hz)
         emit phoneStateChanged();
         emit cwPitchChanged(hz);
     }
+    emit cwPitchCommandIssued(hz);
     emit commandReady(QString("cw pitch %1").arg(hz));
 }
 
@@ -707,6 +712,7 @@ void TransmitModel::setCwBreakIn(bool on)
         m_cwBreakIn = on;
         emit phoneStateChanged();
     }
+    emit cwBreakInCommandIssued(on);
     emit commandReady(QString("cw break_in %1").arg(on ? 1 : 0));
 }
 

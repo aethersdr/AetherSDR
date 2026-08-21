@@ -188,6 +188,7 @@ inline constexpr std::uint8_t kSetMode      = 0x06;
 inline constexpr std::uint8_t kLevel        = 0x14;   // sub-addressed levels
 inline constexpr std::uint8_t kMeter        = 0x15;   // sub-addressed meters
 inline constexpr std::uint8_t kFunction     = 0x16;   // sub-addressed on/off functions
+inline constexpr std::uint8_t kCwMessage    = 0x17;   // up to 30 ASCII characters; FF aborts
 inline constexpr std::uint8_t kPower        = 0x18;   // 00 off, 01 on
 inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceiver ID
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
@@ -218,6 +219,10 @@ inline constexpr std::uint8_t kTuneOffset   = 0x21;
 // radio applies or refuses as a unit.
 inline constexpr std::uint8_t kVfoMode      = 0x26;
 }  // namespace cmd
+
+[[nodiscard]] std::vector<std::uint8_t> cmdSendCwMessage(
+    std::uint8_t to, std::string_view ascii);
+[[nodiscard]] std::vector<std::uint8_t> cmdAbortCwMessage(std::uint8_t to);
 
 // The subcommand of 0x26 is the VFO it addresses.
 //

@@ -1286,6 +1286,9 @@ void RadioModel::setupBackend(const QString& family)
                 if (delta.mox)
                     publishBackendTransmitEdge(*delta.mox);
                 m_transmitModel.applyChanges(delta);
+                if (delta.cwSpeed && !usesFlexCommandPlane()) {
+                    m_cwxModel.adoptSpeed(*delta.cwSpeed);
+                }
             });
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
@@ -1842,8 +1845,23 @@ RadioModel::RadioModel(QObject* parent)
     // BFO on-radio.
     connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
             [this](int hz) {
-        if (m_backend && !usesFlexCommandPlane())
+        if (m_backend && backendCapabilities().hostModulates)
             m_backend->setCwPitch(hz);
+    });
+    connect(&m_transmitModel, &TransmitModel::cwPitchCommandIssued, this,
+            [this](int hz) {
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+            m_backend->setCwPitch(hz);
+    });
+    connect(&m_transmitModel, &TransmitModel::cwSpeedCommandIssued, this,
+            [this](int wpm) {
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+            m_backend->setCwSpeed(wpm);
+    });
+    connect(&m_transmitModel, &TransmitModel::cwBreakInCommandIssued, this,
+            [this](bool on) {
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+            m_backend->setCwBreakIn(on);
     });
 
     // Host-keyed radios have nowhere to retain their keyer and sidetone
@@ -1868,7 +1886,7 @@ RadioModel::RadioModel(QObject* parent)
     // disagreement would be invisible the first time either one moves.
     connect(this, &RadioModel::connectionStateChanged, this,
             [this](bool connected) {
-        if (connected && m_backend && !usesFlexCommandPlane())
+        if (connected && m_backend && backendCapabilities().hostModulates)
             m_backend->setCwPitch(m_transmitModel.cwPitch());
     });
 
@@ -2168,6 +2186,12 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->setNotchesEnabled(on);
     });
     connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
+        // Non-Flex text keyers consume the neutral transmissionRequested /
+        // transmissionCancelled signals below. Do not feed their operation
+        // through sendCmd(), whose deliberately unsupported reply would make
+        // CWX report a false send failure even when CI-V accepted the text.
+        if (!usesFlexCommandPlane())
+            return;
         // Track CWX send state so the interlock handler recognises local
         // CWX TX and doesn't force the audio gate off. (#2047, #2097)
         if (cmd.startsWith("cwx send") || cmd.startsWith("cwx macro send"))
@@ -2178,12 +2202,39 @@ RadioModel::RadioModel(QObject* parent)
         }
         sendCmd(cmd);
     });
+    connect(&m_cwxModel, &CwxModel::speedCommandIssued, this, [this](int wpm) {
+        if (!usesFlexCommandPlane()) {
+            m_transmitModel.setCwSpeed(wpm);
+        }
+    });
+    connect(&m_cwxModel, &CwxModel::transmissionRequested, this,
+            [this](const QString& text, int wpm) {
+        if (!m_backend || usesFlexCommandPlane()
+            || !backendCapabilities().hasRadioSideCwKeyer) {
+            return;
+        }
+        Q_UNUSED(wpm);
+        const QString rejection = m_backend->sendCwText(text);
+        if (!rejection.isEmpty()) {
+            emit radioMessageReceived(
+                tr("CW text not sent: %1").arg(rejection),
+                MessageSeverity::Warning);
+        }
+    });
+    connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
+        if (m_backend && !usesFlexCommandPlane()
+            && backendCapabilities().hasRadioSideCwKeyer) {
+            m_backend->abortCwText();
+        }
+    });
     // Final cwx send of each macro/text block goes via replyCommandReady so we
     // can capture the radio_index from the reply.  CwxModel::handleSendReply
     // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
     // This replaces the broken cwx queue= path — firmware never sends it
     // (observed on FLEX-6500 fw 4.2.20.41343; the 8600 target runs 4.2.18). (#3949)
     connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
+        if (!usesFlexCommandPlane())
+            return;
         m_cwxActive = true;
         // Arm the drain-release latch. Unlike m_cwxActive (which the interlock
         // handler clears on every TRANSMITTING→READY flicker during a macro),
@@ -3715,6 +3766,56 @@ bool RadioModel::hasRadioSideCwKeyer() const
     return backendCapabilities().hasRadioSideCwKeyer;
 }
 
+bool RadioModel::hasCwTextProgress() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().cwTextHasProgress;
+}
+
+bool RadioModel::hasCwTextStoredMacros() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().cwTextHasStoredMacros;
+}
+
+int RadioModel::cwTextMinWpm() const
+{
+    return (!m_backend || !isConnected()) ? 5 : backendCapabilities().cwTextMinWpm;
+}
+
+int RadioModel::cwTextMaxWpm() const
+{
+    return (!m_backend || !isConnected()) ? 100 : backendCapabilities().cwTextMaxWpm;
+}
+
+QString RadioModel::cwTextValidationError(const QString& text) const
+{
+    if (text.isEmpty()) {
+        return QStringLiteral("message is empty");
+    }
+    if (!m_backend || !isConnected()) {
+        return {};
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    if (caps.cwTextMaxMessageChars > 0
+        && text.size() > caps.cwTextMaxMessageChars) {
+        return QStringLiteral("message is limited to %1 characters")
+            .arg(caps.cwTextMaxMessageChars);
+    }
+    if (!caps.cwTextAllowedCharacters.isEmpty()) {
+        for (qsizetype i = 0; i < text.size(); ++i) {
+            if (!caps.cwTextAllowedCharacters.contains(text.at(i))) {
+                return QStringLiteral("unsupported character at position %1").arg(i + 1);
+            }
+        }
+    }
+    return {};
+}
+
 bool RadioModel::hasVoiceKeyer() const
 {
     if (!m_backend || !isConnected()) {
@@ -3741,6 +3842,8 @@ bool RadioModel::hasDaxStreams() const
 void RadioModel::publishCapabilities(bool connected)
 {
     const RadioCapabilities caps = backendCapabilities();
+    m_cwxModel.setSpeedModifiersEnabled(!connected
+                                        || caps.cwTextSupportsSpeedModifiers);
     m_txPowerBands = connected ? caps.txPowerBands : QVector<TxPowerBand>{};
     m_activeTxPowerBandLowHz = 0.0;
     m_activeTxPowerBandHighHz = 0.0;

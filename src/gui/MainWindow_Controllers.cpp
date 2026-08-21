@@ -511,9 +511,10 @@ void MainWindow::handleFlexControlButton(int button, int action)
         // `cwx send` into a backend with no such verb is the "silently does
         // nothing" report, not a working control. The action stays assignable —
         // the binding is operator-scoped and outlives any one radio.
-        if (!m_radioModel.hasRadioSideCwKeyer()) {
+        if (!m_radioModel.hasRadioSideCwKeyer()
+            || !m_radioModel.hasCwTextStoredMacros()) {
             qCDebug(lcCw) << "CWX macro action" << actionName
-                          << "ignored: radio has no radio-side CW keyer";
+                          << "ignored: radio has no stored text-keyer macros";
         } else {
             bool ok = false;
             const int idx = actionName.mid(4).toInt(&ok);

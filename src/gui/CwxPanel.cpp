@@ -196,10 +196,10 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     vbox->setSpacing(0);
 
     // Title
-    auto* title = new QLabel("CWX");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
+    m_titleLabel = new QLabel("CWX");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
                          "padding: 6px 8px; background: {{color.background.0}}; }");
-    vbox->addWidget(title);
+    vbox->addWidget(m_titleLabel);
 
     // Stacked widget for Send/Live vs Setup
     m_stack = new QStackedWidget;
@@ -240,6 +240,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     barLayout->addWidget(speedLabel);
 
     m_speedSpin = new QSpinBox;
+    m_speedSpin->setObjectName(QStringLiteral("cwxSpeedSpin"));
     m_speedSpin->setRange(5, 100);
     m_speedSpin->setValue(20);
     m_speedSpin->setFixedWidth(50);
@@ -333,6 +334,45 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     });
 
     if (m_model) setModel(m_model);
+}
+
+void CwxPanel::setDisplayName(const QString& name)
+{
+    if (m_titleLabel)
+        m_titleLabel->setText(name);
+}
+
+QString CwxPanel::displayName() const
+{
+    return m_titleLabel ? m_titleLabel->text() : QString{};
+}
+
+void CwxPanel::configureTextKeyer(const QString& name, int minWpm, int maxWpm,
+                                  bool supportsLive, bool supportsStoredMacros)
+{
+    setDisplayName(name);
+    if (m_speedSpin) {
+        const QSignalBlocker blocker(m_speedSpin);
+        m_speedSpin->setRange(minWpm, maxWpm);
+        m_speedSpin->setValue(qBound(minWpm, m_model ? m_model->speed() : 20,
+                                     maxWpm));
+    }
+    if (m_liveBtn) {
+        m_liveBtn->setVisible(supportsLive);
+        if (!supportsLive) {
+            m_liveBtn->setChecked(false);
+            if (m_model) {
+                m_model->setLive(false);
+            }
+        }
+    }
+    if (m_setupBtn) {
+        m_setupBtn->setVisible(supportsStoredMacros);
+        if (!supportsStoredMacros) {
+            m_setupBtn->setChecked(false);
+            showSendView();
+        }
+    }
 }
 
 void CwxPanel::setModel(CwxModel* model)

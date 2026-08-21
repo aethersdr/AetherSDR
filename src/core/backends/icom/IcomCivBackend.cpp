@@ -127,6 +127,21 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
+    // Official CI-V guides for both network targets define command 17 text
+    // keying and 17 FF abort. Keep other model profiles dark until verified.
+    c.hasRadioSideCwKeyer = m.civAddress == 0xA4    // IC-705
+        || m.civAddress == 0xB6;                    // IC-7300MK2
+    c.cwTextKeyerName = QStringLiteral("CWK");
+    c.cwTextMinWpm = 6;
+    c.cwTextMaxWpm = 48;
+    c.cwTextMaxMessageChars = 30;
+    c.cwTextAllowedCharacters =
+        QStringLiteral("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :");
+    c.cwTextHasProgress = false;
+    c.cwTextHasStoredMacros = false;
+    c.cwTextSupportsLive = false;
+    c.cwTextSupportsSpeedModifiers = false;
+
     // Published from the model's own band table rather than a second hand-kept
     // list, so the ceilings and the tune guard can never describe different
     // hardware. An empty table (every model but the IC-9700) leaves the vector
@@ -553,10 +568,12 @@ void IcomCivBackend::disconnectRadio()
     // Teardown is not allowed to wait for an ordinary outstanding read.  Drop
     // all background work, fail-safe unkey on every connected disconnect, and
     // restore the operator's RF-power setpoint if TUNE had borrowed it.  These
-    // are response-free emergency dispatches so both datagrams reach the
+    // are response-free emergency dispatches so every datagram reaches the
     // session before its sockets close; no state is optimistically adopted.
     if (m_session && m_connected) {
         m_civScheduler.reset();
+        queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
+                                   "cw.message");
         queueEmergencyWriteNoReply(cmdSetPtt(m_session->civAddress(), false), "ptt");
         if (m_tuning && m_preTuneTxPowerPercent >= 0) {
             queueEmergencyWriteNoReply(
@@ -565,6 +582,7 @@ void IcomCivBackend::disconnectRadio()
                 "level.rfPower");
         }
         const qint64 now = nowMs();
+        pumpCiv(now);
         pumpCiv(now);
         pumpCiv(now);
     }
@@ -613,6 +631,7 @@ void IcomCivBackend::disconnectRadio()
     m_modelByName = nullptr;
     m_scopeStarted = false;
     m_tuning = false;
+    m_cwBreakInMode = 1;
     m_preTuneTxPowerPercent = -1;
     if (m_connected) {
         m_connected = false;
@@ -696,7 +715,8 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t which : {level::kRfPower, level::kAf, level::kSquelch,
                                level::kMicGain, level::kCompLevel, level::kMonitor,
                                level::kNrLevel, level::kNbLevel,
-                               level::kNotchPos, level::kRf, level::kVoxGain})
+                               level::kNotchPos, level::kRf, level::kVoxGain,
+                               level::kCwPitch, level::kKeySpeed})
         queueStartupRead(cmdReadLevel(m_session->civAddress(), which));
 
     // ...and the switches, which have the same problem: the applet toggles all
@@ -704,7 +724,8 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t fn : {func::kPreamp, func::kAgc, func::kNoiseReduce,
                             func::kNoiseBlanker, func::kAutoNotch,
                             func::kManualNotch,
-                            func::kCompressor, func::kMonitorFn, func::kVox})
+                            func::kCompressor, func::kMonitorFn, func::kVox,
+                            func::kBreakIn})
         queueStartupRead(cmdReadFunction(m_session->civAddress(), fn));
 
     // THE PASSBAND ITSELF, not just the slot that holds it: the width the
@@ -1639,6 +1660,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             emit transmitChanged(t);
             return;
         }
+        case level::kCwPitch: {
+            TransmitDelta t;
+            t.cwPitch = 300 + std::lround(static_cast<double>(*raw) * 600.0 / 255.0);
+            emit transmitChanged(t);
+            return;
+        }
+        case level::kKeySpeed: {
+            TransmitDelta t;
+            t.cwSpeed = 6 + std::lround(static_cast<double>(*raw) * 42.0 / 255.0);
+            emit transmitChanged(t);
+            return;
+        }
         default:
             return;
         }
@@ -1712,6 +1745,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         case func::kCompressor: {
             m_compEnable = (v != 0);
             TransmitDelta t; t.speechProcEnable = (v != 0);
+            emit transmitChanged(t);
+            return;
+        }
+        case func::kBreakIn: {
+            if (v == 1 || v == 2) {
+                m_cwBreakInMode = v;
+            }
+            TransmitDelta t;
+            t.cwBreakIn = v != 0;
             emit transmitChanged(t);
             return;
         }
@@ -2329,7 +2371,8 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
 void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
                                 const std::string& key,
                                 IcomCivScheduler::Priority priority,
-                                bool supersedes)
+                                bool supersedes,
+                                bool coalesce)
 {
     IcomCivScheduler::Request request;
     request.frame = frame;
@@ -2338,6 +2381,7 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
     request.expectsReply = true;
     request.acceptsGenericReply = true;
     request.supersedes = supersedes;
+    request.coalesce = coalesce;
     m_civScheduler.enqueue(std::move(request), nowMs());
 }
 
@@ -3276,6 +3320,77 @@ void IcomCivBackend::setTxPower(int percent)
     m_txPowerPercent = std::clamp(percent, 0, 100);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kRfPower, percentToLevelRaw(m_txPowerPercent)));
+}
+
+QString IcomCivBackend::sendCwText(const QString& text)
+{
+    if (!m_session || !m_connected) {
+        return QStringLiteral("radio is not connected");
+    }
+    if (text.isEmpty()) {
+        return QStringLiteral("message is empty");
+    }
+    if (text.size() > 30) {
+        return QStringLiteral("CI-V text keyer messages are limited to 30 characters");
+    }
+
+    QByteArray ascii;
+    ascii.reserve(text.size());
+    static constexpr std::string_view allowed =
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :";
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        const char byte = ch.toLatin1();
+        if (byte == 0 || allowed.find(byte) == std::string_view::npos) {
+            return QStringLiteral("unsupported character at position %1").arg(i + 1);
+        }
+        ascii.append(byte);
+    }
+
+    const std::uint8_t addr = m_session->civAddress();
+    queueWrite(cmdSendCwMessage(
+                   addr,
+                   std::string_view(ascii.constData(),
+                                    static_cast<std::size_t>(ascii.size()))),
+               "cw.message", IcomCivScheduler::Priority::Operator,
+               false, false);
+    pumpCiv(nowMs());
+    return {};
+}
+
+void IcomCivBackend::abortCwText()
+{
+    if (!m_session || !m_connected) {
+        return;
+    }
+    queueWrite(cmdAbortCwMessage(m_session->civAddress()), "cw.message",
+               IcomCivScheduler::Priority::Emergency, true, true);
+    pumpCiv(nowMs());
+}
+
+void IcomCivBackend::setCwSpeed(int wpm)
+{
+    const int clamped = std::clamp(wpm, 6, 48);
+    const int raw = std::lround(static_cast<double>(clamped - 6) * 255.0 / 42.0);
+    sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
+                                level::kKeySpeed, raw));
+}
+
+void IcomCivBackend::setCwPitch(int hz)
+{
+    const int clamped = std::clamp(hz, 300, 900);
+    const int raw = std::lround(static_cast<double>(clamped - 300) * 255.0 / 600.0);
+    sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
+                                level::kCwPitch, raw));
+}
+
+void IcomCivBackend::setCwBreakIn(bool on)
+{
+    // The shared control is boolean, but the Icom register is Off/Semi/Full.
+    // Preserve the last radio-reported active value so an OFF -> ON round trip
+    // restores Full instead of silently demoting it to Semi.
+    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
+                                   func::kBreakIn, on ? m_cwBreakInMode : 0));
 }
 
 // EVERY registry row a frame belongs to, not the first.

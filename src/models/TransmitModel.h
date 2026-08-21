@@ -368,6 +368,12 @@ signals:
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
     void cwPitchChanged(int hz);
+    void cwSpeedChanged(int wpm);
+    // Operator intent only. Radio status applied through applyStatus() never
+    // emits these, so a CI-V readback cannot loop straight back into a write.
+    void cwPitchCommandIssued(int hz);
+    void cwSpeedCommandIssued(int wpm);
+    void cwBreakInCommandIssued(bool on);
     void apdStateChanged();
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();

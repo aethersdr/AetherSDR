@@ -101,6 +101,10 @@ int main(int argc, char** argv)
     qRegisterMetaType<AetherSDR::MeterDef>("MeterDef");
 
     FakeIc705 radio;
+    // Same model under a harmless presentation variant. modelForName()
+    // canonicalises it, while capability code that compares the display text
+    // literally loses CWK.
+    radio.setDeviceName("IC 705");
     IcomCivBackend backend;
 
     int sliceAudioBuffers = 0;
@@ -163,6 +167,9 @@ int main(int argc, char** argv)
         if (d.sbMonitor) lastTransmitState.sbMonitor = d.sbMonitor;
         if (d.voxEnable) lastTransmitState.voxEnable = d.voxEnable;
         if (d.voxLevel) lastTransmitState.voxLevel = d.voxLevel;
+        if (d.cwPitch) lastTransmitState.cwPitch = d.cwPitch;
+        if (d.cwSpeed) lastTransmitState.cwSpeed = d.cwSpeed;
+        if (d.cwBreakIn) lastTransmitState.cwBreakIn = d.cwBreakIn;
         if (d.transmitFreq) lastTransmitState.transmitFreq = d.transmitFreq;
         if (d.txFilterLow) lastTransmitState.txFilterLow = d.txFilterLow;
         if (d.txFilterHigh) lastTransmitState.txFilterHigh = d.txFilterHigh;
@@ -247,7 +254,7 @@ int main(int argc, char** argv)
           "- from the handshake name, not from the 0x19 0x00 reply that cannot "
           "have been serviced yet");
     check(modelAtConnect == QStringLiteral("IC-705"),
-          "and it is the IC-705 the fake presents itself as");
+          "and publishes the canonical model name at connect");
     check(bandsAtConnect.contains(QStringLiteral("2m")),
           "declaring 2m, which no FlexLib model table would have given it");
     check(bandsAtConnect.contains(QStringLiteral("440")),
@@ -304,6 +311,12 @@ int main(int argc, char** argv)
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "the radio remembers its own state, so the client restores NOTHING");
     check(caps.hasRadioSideDsp, "NR/NB/notch run in the radio's firmware");
+    check(caps.hasRadioSideCwKeyer && caps.cwTextKeyerName == QLatin1String("CWK"),
+          "CWK capability follows the resolved CI-V model, not its display string");
+    check(caps.cwTextMinWpm == 6 && caps.cwTextMaxWpm == 48
+              && caps.cwTextMaxMessageChars == 30
+              && !caps.cwTextHasProgress && !caps.cwTextHasStoredMacros,
+          "CWK publishes its honest range, message, progress and macro limits");
     check(!caps.canReboot, "power-off over WiFi is a one-way trip, so no reboot is offered");
 
     // ---- a slice exists, which TCI routing depends on ---------------------
@@ -332,6 +345,59 @@ int main(int argc, char** argv)
     check(backend.model().verified, "whose capability numbers are tier-1 verified");
     check(waitSchedulerIdle(),
           "connect-time radio-authoritative state converges through the scheduler");
+    check(lastTransmitState.cwSpeed.value_or(-1) == 28,
+          "connect reads and adopts the radio's 28 WPM key speed");
+    check(lastTransmitState.cwPitch.value_or(-1) == 601,
+          "connect reads and adopts the radio's CW pitch");
+    check(lastTransmitState.cwBreakIn.value_or(false),
+          "connect reads and adopts the radio's full break-in as active");
+    const auto sawConnectRead = [&](std::uint8_t command, std::uint8_t sub) {
+        return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           [=](const CivFrame& frame) {
+            return frame.cmd == command && frame.hasSub && frame.sub == sub
+                && frame.data.empty();
+        });
+    };
+    check(sawConnectRead(cmd::kLevel, level::kCwPitch)
+              && sawConnectRead(cmd::kLevel, level::kKeySpeed)
+              && sawConnectRead(cmd::kFunction, func::kBreakIn),
+          "the connect burst explicitly requests pitch, speed and break-in");
+
+    // One CI-V command 17 message is one bounded, exact transaction. Text the
+    // radio cannot preserve is rejected before a frame enters the scheduler.
+    radio.clearCivLog();
+    check(!backend.sendCwText(QStringLiteral("CQ \u2665 TEST")).isEmpty(),
+          "unsupported CW text is rejected instead of rewritten");
+    check(!backend.sendCwText(QString(31, QLatin1Char('A'))).isEmpty(),
+          "messages beyond the documented 30-character frame are rejected");
+    check(radio.civCommands().empty(),
+          "a rejected CW message emits no CI-V frame");
+    const QString exactLimit(30, QLatin1Char('A'));
+    check(backend.sendCwText(exactLimit).isEmpty(),
+          "a valid 30-character CW message is accepted");
+    check(waitSchedulerIdle(), "the accepted CW message drains through the scheduler");
+    check(std::count_if(radio.civCommands().begin(), radio.civCommands().end(),
+                        [](const CivFrame& frame) {
+              return frame.cmd == cmd::kCwMessage && frame.data.size() == 30;
+          }) == 1,
+          "the accepted message is exactly one bounded command 17 frame");
+
+    // The UI is boolean but the register is Off/Semi/Full. After adopting
+    // Full, toggling off and back on must restore 02 rather than demote to 01.
+    radio.clearCivLog();
+    backend.setCwBreakIn(false);
+    check(waitSchedulerIdle(), "full break-in can be turned off");
+    backend.setCwBreakIn(true);
+    check(waitSchedulerIdle(), "break-in can be restored");
+    std::vector<int> breakInWrites;
+    for (const CivFrame& frame : radio.civCommands()) {
+        if (frame.cmd == cmd::kFunction && frame.hasSub
+            && frame.sub == func::kBreakIn && !frame.data.empty()) {
+            breakInWrites.push_back(frame.data.front());
+        }
+    }
+    check(breakInWrites == std::vector<int>({0, 2}),
+          "Off -> On restores the radio's full-break-in mode without loss");
     const SliceDelta connectedSliceState = lastSliceState;
     const TransmitDelta connectedTransmitState = lastTransmitState;
 
@@ -1360,8 +1426,10 @@ int main(int argc, char** argv)
         // a mode the combo does not hold, so a radio put into WFM at the front
         // panel left the indicator showing the PREVIOUS mode. Every mode this
         // backend can report has to be reachable in the list.
-        check(modes.contains(QStringLiteral("CWU")) && modes.contains(QStringLiteral("CWL")),
+        check(modes.contains(QStringLiteral("CW")) && modes.contains(QStringLiteral("CWL")),
               "including the CW names this backend actually reports");
+        check(!modes.contains(QStringLiteral("CWU")),
+              "without publishing the Flex-oriented CWU alias for Icom");
         check(!modes.contains(QStringLiteral("SAM")),
               "and NOT the modes setSliceMode refuses - a list that offers SAM "
               "on an Icom is a control that silently reverts");
@@ -1586,6 +1654,12 @@ int main(int argc, char** argv)
         });
     check(restoreOnDisconnect != radio.civCommands().end(),
           "disconnect during TUNE restores ordinary RF power before teardown");
+    check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                      [](const CivFrame& frame) {
+              return frame.cmd == cmd::kCwMessage && frame.data.size() == 1
+                  && frame.data.front() == 0xFF;
+          }),
+          "disconnect aborts radio-buffered CW with 17 FF before teardown");
     check(!backend.isConnected(), "the backend disconnects cleanly");
 
 
