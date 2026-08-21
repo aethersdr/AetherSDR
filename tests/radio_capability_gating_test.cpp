@@ -469,9 +469,21 @@ int main(int argc, char** argv)
             check(forwardedSpy.count() == 3
                       && forwardedSpy.last().value(0).toBool(),
                   "the same uninhibited down crosses the backend seam");
-            check(keyEdgeSpy.count() == 1,
-                  "an accepted down publishes one key-active edge");
+            // The iambic keyer drives the sidetone gate itself with the
+            // element's scheduled instant; sendCwKeyEdge must not echo it
+            // through cwKeyDownChanged (#4976).
+            check(keyEdgeSpy.count() == 0,
+                  "an accepted iambic down does not publish a key-active echo");
             model.sendCwKeyEdge(false);
+            check(keyEdgeSpy.count() == 0,
+                  "an accepted iambic up does not publish a key-active echo");
+            // Straight-key sources still publish: a following sendCwKey down
+            // emits even though the keyer edges touched the shared state.
+            model.sendCwKey(true);
+            check(keyEdgeSpy.count() == 1
+                      && keyEdgeSpy.last().value(0).toBool(),
+                  "a straight-key down after keyer edges still publishes");
+            model.sendCwKey(false);
         }
     }
 

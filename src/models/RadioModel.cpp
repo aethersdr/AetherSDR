@@ -4334,10 +4334,16 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
         sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
                          debugSource, debugTraceId, debugSourceMs, scheduledAt);
     }
-    const bool prev = m_cwKeyActive;
+    // Deliberately no cwKeyDownChanged here.  This is the local iambic
+    // keyer's path, and its producer already drove the sidetone gate at the
+    // element's own scheduled instant (MainWindow_Session.cpp, #4890/#4942).
+    // Echoing would queue a second, wall-clock-stamped edge for the same
+    // element, raising CwSidetoneGenerator's monotonic floor to wake time
+    // and re-timing the following element to the GUI thread's rhythm — or,
+    // when the queued hop lands after the element ended, re-keying the gate
+    // for a spurious blip (#4976).  m_cwKeyActive is still tracked: it feeds
+    // the TX-ownership interlock alongside m_cwxActive.
     m_cwKeyActive = down;
-    if (prev != down)
-        emit cwKeyDownChanged(down);
 }
 
 // ── NetCW stream — VITA-49 UDP delivery with redundant sends ────────────────

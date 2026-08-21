@@ -1427,10 +1427,15 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // Local CW sidetone — every key source (serial, MIDI, TCI, CWX, HID)
-    // funnels through RadioModel::sendCwKey/sendCwPaddle, which emits
-    // cwKeyDownChanged.  Auto-queued connection so the audio thread sees
-    // the state change via atomic without any blocking.
+    // Local CW sidetone catch-all for the key sources that funnel through
+    // RadioModel::sendCwKey/sendCwPaddle — TCI (TciProtocol), MIDI/HID/serial
+    // straight keying (MainWindow_Controllers), Space-PTT and the straight
+    // key (MainWindow) — which emit cwKeyDownChanged.  Deliberately NOT
+    // sendCwKeyEdge: the iambic keyer drives the gate itself with the
+    // element's scheduled instant, so an echo here would re-time it (#4976).
+    // The CWX local keyer likewise drives the gate directly and never
+    // routes through RadioModel.  Auto-queued connection so the audio
+    // thread sees the state change via atomic without any blocking.
     connect(&m_radioModel, &RadioModel::cwKeyDownChanged,
             this, [this](bool down) {
         if (m_audio)

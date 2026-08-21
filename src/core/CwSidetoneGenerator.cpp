@@ -73,9 +73,9 @@ void CwSidetoneGenerator::setKeyDown(bool down,
                                      std::chrono::steady_clock::time_point when) noexcept
 {
     // Several threads legitimately produce edges — the iambic and CWX
-    // workers call in directly, and the GUI thread echoes every
-    // radio-bound edge via RadioModel::cwKeyDownChanged — so slot write
-    // and head publish must be exclusive among producers.  A short spin
+    // workers call in directly, and the GUI thread delivers straight-key
+    // sources via RadioModel::cwKeyDownChanged — so slot write and head
+    // publish must be exclusive among producers.  A short spin
     // is cheaper than any blocking primitive at tens of edges per
     // second; process() only consumes the tail and never takes this
     // lock, so the audio thread stays wait-free.  The stamp is resolved
@@ -86,17 +86,10 @@ void CwSidetoneGenerator::setKeyDown(bool down,
     // wall-clock edge from another producer could sit ahead of it in the
     // queue with a later stamp.  The clamp preserves the schedule's exact
     // spacing whenever edges from one producer arrive back-to-back, which
-    // is the #4890 case that matters.
-    // Bound worth knowing: the GUI echo (RadioModel::cwKeyDownChanged →
-    // MainWindow's connect → setCwKeyDown(down)) queues a wall-clock stamp
-    // after each scheduled edge, so the floor sits at wall clock going into
-    // the next one.  Scheduled stamps therefore hold only while that echo
-    // round-trip stays shorter than one element (measured ~2 ms against
-    // 48 ms at 25 WPM).  Should an echo ever land after the following grid
-    // instant, that edge clamps to the echo's stamp and the sidetone
-    // reverts to wall-clock rhythm — the pre-#4890 behaviour, not
-    // corruption.  Removing the coupling means suppressing the echo for
-    // producers that already drove the gate directly.
+    // is the #4890 case that matters.  Keyer edges reach here exactly once
+    // since #4976 (the GUI cwKeyDownChanged echo no longer fires for
+    // RadioModel::sendCwKeyEdge), so the floor between two scheduled
+    // edges is the previous scheduled edge, not a wall-clock echo.
     // Worst case among producers: the GUI thread descheduled inside the
     // section leaves a keying worker spinning until the holder resumes.
     // The section is ~20 instructions, so the window is vanishingly
@@ -151,8 +144,9 @@ void CwSidetoneGenerator::reset() noexcept
     // would be a data race.  Retaining it is also correct: queue ordering
     // is enforced by the max() clamp in setKeyDown(), not by steady_clock's
     // monotonicity — a scheduled instant lies a few ms in the past, so an
-    // edge CAN carry a stamp below a floor a wall-clock echo raised (see
-    // the echo note in setKeyDown()).  The cost of the retained floor is
+    // edge CAN carry a stamp below a floor that a wall-clock edge from
+    // another producer (straight key, stop/abort key-up) raised.  The cost
+    // of the retained floor is
     // bounded and one-sided: the first edge queued after this drain clamps
     // up to it rather than to its own scheduled instant, then the grid
     // re-establishes itself within an element or two.

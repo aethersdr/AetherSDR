@@ -39,8 +39,9 @@ public:
     int  sampleRateHz() const noexcept { return m_sampleRateHz; }
 
     // Key state — called from any thread, and concurrently from several
-    // in practice (iambic worker, CWX worker, GUI-thread handlers of
-    // RadioModel::cwKeyDownChanged); producers serialize on a short
+    // in practice (iambic worker, CWX worker, the GUI-thread handler of
+    // RadioModel::cwKeyDownChanged for straight-key sources); producers
+    // serialize on a short
     // spinlock the audio thread never touches.  Each call is timestamped
     // inside the lock and queued; process() applies the transition at
     // the exact sample offset the timestamp maps to, so key edges are no
@@ -103,10 +104,11 @@ private:
     // One timestamped key transition from setKeyDown().  The queue is a
     // fixed-size MPSC ring: producers = the keying threads (head,
     // serialized by m_edgeLock), consumer = the audio thread (tail).
-    // Size 64 is ~16 elements of headroom: 2 slots per element (down + up),
-    // doubled again because every element arrives twice (worker-direct plus
-    // the GUI cwKeyDownChanged echo).  Still far beyond what fits in one
-    // audio block even at 60 WPM.
+    // Size 64 is ~32 elements of headroom at 2 slots per element (down +
+    // up).  It was sized for every element arriving twice (worker-direct
+    // plus a GUI cwKeyDownChanged echo); #4976 removed that echo for keyer
+    // edges, so the doubling is now pure headroom — still far beyond what
+    // fits in one audio block even at 60 WPM.
     struct KeyEdge {
         std::chrono::steady_clock::time_point t;
         bool down;
