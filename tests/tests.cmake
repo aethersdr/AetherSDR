@@ -2454,6 +2454,14 @@ add_executable(cw_sidetone_start_policy_test
 target_include_directories(cw_sidetone_start_policy_test PRIVATE src)
 add_test(NAME cw_sidetone_start_policy_test COMMAND cw_sidetone_start_policy_test)
 
+# The explicit-selection name rule (#5123): pure QString predicate, no
+# PortAudio, so the captured Linux/Windows device names are checked on every
+# runner regardless of which audio backends it has.
+add_executable(cw_sidetone_device_match_test tests/cw_sidetone_device_match_test.cpp)
+target_include_directories(cw_sidetone_device_match_test PRIVATE src)
+target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
