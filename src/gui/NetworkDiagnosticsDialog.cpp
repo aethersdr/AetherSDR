@@ -1897,8 +1897,18 @@ void NetworkDiagnosticsDialog::refreshTciClientTable()
             "Your own label for this client (saved locally, keyed by IP)"));
         m_tciClientTable->setItem(r, 0, nameItem);
 
-        m_tciClientTable->setItem(r, 1, readOnly(
-            c.peerAddress + QStringLiteral(":") + QString::number(c.peerPort)));
+        // Endpoint, plus the owning local process when the OS could name it
+        // (#5087): "127.0.0.1:51234 (wsjtx)", exe path + version in the tip.
+        QString endpoint = c.peerAddress + QStringLiteral(":") + QString::number(c.peerPort);
+        if (!c.processName.isEmpty())
+            endpoint += QStringLiteral(" (%1)").arg(c.processName);
+        auto* endpointItem = readOnly(endpoint);
+        if (!c.processExe.isEmpty()) {
+            endpointItem->setToolTip(c.processVersion.isEmpty()
+                ? c.processExe
+                : QStringLiteral("%1 — version %2").arg(c.processExe, c.processVersion));
+        }
+        m_tciClientTable->setItem(r, 1, endpointItem);
         m_tciClientTable->setItem(r, 2, readOnly(tciRoleHint(c)));
         const QString audio = c.audio
             ? (c.audioReceiver < 0

@@ -33,10 +33,15 @@ class Resampler;
 // Read-only snapshot of one connected TCI client, surfaced to the Radio
 // Setup → TCI tab. TCI has no client-identity handshake, so a client is
 // only ever known by its network endpoint plus the stream subscriptions
-// it has requested.
+// it has requested — plus, for a same-machine client, the OS's answer to
+// "which local process owns that socket" (#5087), resolved best-effort
+// after connect and empty until/unless it lands.
 struct TciClientInfo {
     QString peerAddress;
     quint16 peerPort{0};
+    QString processName;      // empty when unresolved or remote
+    QString processExe;
+    QString processVersion;   // empty when not discoverable
     bool    audio{false};
     int     audioReceiver{-1};   // -1 = all receivers
     bool    iq{false};
@@ -230,6 +235,9 @@ private:
     struct ClientState {
         QWebSocket*  socket{nullptr};
         TciProtocol* protocol{nullptr};
+        QString      processName;        // #5087 — see TciClientInfo
+        QString      processExe;
+        QString      processVersion;
         bool         audioEnabled{false};   // client sent AUDIO_START
         int          audioReceiver{-1};     // -1 = all receivers, otherwise TCI TRX
         int          audioSampleRate{48000}; // requested output rate (48kHz for WSJT-X compat)
@@ -260,6 +268,7 @@ private:
     // for acceptable latency in digital modes.
     static constexpr int kAccumMinFrames = 512;
 
+    void resolvePeerProcess(QWebSocket* ws);   // #5087, off-thread lookup
     void ensureDaxForTci();
     void releaseDaxForTci();
     void scheduleDaxRelease();   // debounced releaseDaxForTci — cancel on reconnect

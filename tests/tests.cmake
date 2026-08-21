@@ -459,6 +459,11 @@ add_test(NAME icom_session_test COMMAND icom_session_test)
 
 # IcomCIV backend seam test — the IRadioBackend implementor against the fake
 # IC-705, with the TCI/WSJT-X audio contract as the load-bearing assertion.
+add_executable(tci_peer_process_test tests/tci_peer_process_test.cpp)
+target_include_directories(tci_peer_process_test PRIVATE src)
+target_link_libraries(tci_peer_process_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_peer_process_test COMMAND tci_peer_process_test)
+
 add_executable(icom_backend_test tests/icom_backend_test.cpp)
 target_include_directories(icom_backend_test PRIVATE src tests)
 target_link_libraries(icom_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

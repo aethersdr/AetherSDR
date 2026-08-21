@@ -6,6 +6,7 @@
 #include "AppSettings.h"
 #include "Resampler.h"
 #include "LogManager.h"
+#include "TciPeerProcess.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
@@ -21,6 +22,8 @@
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
@@ -721,11 +724,54 @@ void TciServer::onNewConnection()
 
         qCInfo(lcCat) << "TciServer: client connected from"
                       << ws->peerAddress().toString();
+        resolvePeerProcess(ws);
         emit clientCountChanged(m_clients.size());
         emit clientsChanged();
 
         sendInitBurst(ws);
     }
+}
+
+void TciServer::resolvePeerProcess(QWebSocket* ws)
+{
+    // Best-effort identity of the local program that connected (#5087).
+    // TCI carries no client-id message and the WebSocket handshake is a
+    // bare upgrade, so the OS socket→pid map is the only source.  Resolved
+    // off-thread: the per-process descriptor sweep is unbounded and must
+    // not delay sendInitBurst().  A remote peer stays anonymous — say so
+    // once so the missing field is self-explaining in a support bundle.
+    const QHostAddress peerAddr = ws->peerAddress();
+    const quint16      peerPort = ws->peerPort();
+    if (!peerAddr.isLoopback()) {
+        qCDebug(lcCat) << "TciServer: peer" << peerAddr.toString()
+                       << "is not loopback, process identity unavailable";
+        return;
+    }
+    QPointer<QWebSocket> guard(ws);
+    auto* watcher = new QFutureWatcher<TciPeerProcessInfo>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this,
+            [this, watcher, guard, peerAddr, peerPort] {
+        const TciPeerProcessInfo info = watcher->result();
+        watcher->deleteLater();
+        if (!guard || !info.resolved) return;   // decoration, never a gate
+        for (auto& cs : m_clients) {
+            if (cs.socket != guard) continue;   // socket may have gone
+            cs.processName    = info.name;
+            cs.processExe     = info.exePath;
+            cs.processVersion = info.version;
+            qCInfo(lcCat).noquote().nospace()
+                << "TciServer: client " << peerAddr.toString() << ':' << peerPort
+                << " process=\"" << info.name << "\""
+                << " exe=\"" << info.exePath << "\""
+                << (info.version.isEmpty()
+                        ? QString()
+                        : QStringLiteral(" version=\"%1\"").arg(info.version));
+            emit clientsChanged();
+            return;
+        }
+    });
+    watcher->setFuture(QtConcurrent::run(resolveLoopbackPeerProcess,
+                                         peerAddr, peerPort));
 }
 
 void TciServer::onClientDisconnected()
@@ -820,6 +866,9 @@ QVector<TciClientInfo> TciServer::connectedClients() const
             ha = QHostAddress(QHostAddress::LocalHost);
         info.peerAddress  = ha.toString();
         info.peerPort     = cs.socket->peerPort();
+        info.processName  = cs.processName;
+        info.processExe   = cs.processExe;
+        info.processVersion = cs.processVersion;
         info.audio        = cs.audioEnabled;
         info.audioReceiver= cs.audioReceiver;
         info.iq           = cs.iqEnabled;
