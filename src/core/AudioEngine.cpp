@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
+#include "CwSidetoneStartPolicy.h"
 #include "TxCaptureBuffer.h"
 #include "ShutdownTrace.h"
 #include "ClientEq.h"
@@ -4140,6 +4141,7 @@ bool AudioEngine::startSidetoneStream()
     if (!m_cwSidetone) return false;
 
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    bool explicitSelection = false;
     if (!m_outputDevice.isNull()) {
         const auto outputs = QMediaDevices::audioOutputs();
         for (const auto& d : outputs) {
@@ -4147,26 +4149,45 @@ bool AudioEngine::startSidetoneStream()
             // handles follow the selected endpoint after hotplug/default churn.
             if (d.id() == m_outputDevice.id()) { dev = d; break; }
         }
-        if (dev.id() != m_outputDevice.id()) {
-            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the system default output instead";
+        explicitSelection = isExplicitSidetoneSelection(
+            /*savedDeviceSet*/ true, /*savedDeviceEnumerable*/ dev.id() == m_outputDevice.id());
+        if (!explicitSelection) {
+            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the backend's default output instead";
         }
     }
 
     m_sidetoneSink = makeSidetoneBackend(this);
+    // When the effective selection is the system default, hand the PortAudio
+    // backend a null device so it resolves its own default output instead of
+    // name-matching Qt's description against PortAudio's device names — on
+    // Linux those come from different audio APIs (PulseAudio/PipeWire vs ALSA)
+    // and cannot coincide for analog/USB descriptions, which stranded boxes
+    // with no saved output selection on the QAudioSink fallback (#4978); a
+    // saved-but-unmatchable selection still falls back, pending the
+    // escape-hatch setting. The QAudioSink attempts keep the concrete device:
+    // that backend resolves a null itself but flags it as a fallback, which a
+    // deliberate default selection is not. The decision table lives in
+    // CwSidetoneStartPolicy.h, where it is pinned by
+    // tests/cw_sidetone_start_policy_test.cpp.
+    const bool sidetoneOnPortAudio =
+        qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0;
+    const QAudioDevice startDev =
+        sidetoneStartDevice(explicitSelection, sidetoneOnPortAudio)
+                == SidetoneStartDevice::BackendDefault
+            ? QAudioDevice()
+            : dev;
     bool sidetoneFallbackOccurred = false;
     QStringList sidetoneFallbackReasons;
     QStringList sidetoneAttempts;
     const QString portAudioAttempt = QStringLiteral("PortAudio 48000Hz 2ch Float, native-rate fallback if needed");
     const QString qAudioSinkAttempt = QStringLiteral("QAudioSink 48000Hz/44100Hz/24000Hz 2ch Float, then Int16");
-    sidetoneAttempts << (qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0
-        ? portAudioAttempt
-        : qAudioSinkAttempt);
-    if (!m_sidetoneSink->start(dev, 48000, m_cwSidetone.get())) {
+    sidetoneAttempts << (sidetoneOnPortAudio ? portAudioAttempt : qAudioSinkAttempt);
+    if (!m_sidetoneSink->start(startDev, 48000, m_cwSidetone.get())) {
         // Backend failed — try the other one before giving up.  Most likely
         // path: PortAudio init failed on a quirky device, fall back to Qt.
 #ifdef HAVE_PORTAUDIO
-        if (qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0) {
-            qCWarning(lcAudio) << "AudioEngine: PortAudio sidetone failed, falling back to QAudioSink";
+        if (sidetoneOnPortAudio) {
+            qCWarning(lcAudio) << "AudioEngine: PortAudio sidetone failed, falling back to QAudioSink — sidetone will run on the push-model timing path";
             sidetoneFallbackOccurred = true;
             sidetoneFallbackReasons << QStringLiteral("PortAudio failed -> QAudioSink");
             m_sidetoneSink.reset(new CwSidetoneQAudioSink(this));
@@ -4215,6 +4236,12 @@ bool AudioEngine::startSidetoneStream()
     summary.backend = QString::fromLatin1(m_sidetoneSink->name());
     summary.deviceDescription = m_sidetoneSink->deviceDescription();
     summary.sampleRate = m_sidetoneSink->actualRateHz();
+    // Name the timing consequence, not just the backend: pull = the audio
+    // system drains the generator on demand (PortAudio callback), push = the
+    // 2 ms-timer block writer QAudioSink uses (#4890's timing-race host).
+    summary.timingPath = qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0
+        ? QStringLiteral("pull")
+        : QStringLiteral("push");
     summary.fallbackOccurred = sidetoneFallbackOccurred;
     summary.fallbackReason = sidetoneFallbackReasons.join(QStringLiteral("; "));
     AudioSummaryLogger::logCwSidetone(summary);

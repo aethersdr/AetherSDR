@@ -1,5 +1,6 @@
 #include "core/backends/icom/IcomModels.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <string>
@@ -35,6 +36,17 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*tuningMinHz*/ 30'000ULL, /*tuningMaxHz*/ 470'000'000ULL,
         /*verified*/ true,
         /*hasVfoModeCommand*/ true,
+        // HF/50/144/430 — the amateur allocations inside the guide's own
+        // 30 kHz – 470 MHz range above. 70 cm is spelled 440 because that is
+        // what BandDefs names it.
+        //
+        // 2200m/630m are deliberately absent: they are non-declarable by
+        // #4027's non-goals and keep their own utility buttons, so naming them
+        // here would be dropped at the boundary anyway. 4 m likewise — this
+        // radio receives there and transmits nowhere in the band, and a band
+        // button is a tune-and-operate affordance rather than a coverage
+        // claim. Both stay reachable by typing the frequency.
+        /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
     },
     {
         // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),
@@ -71,6 +83,11 @@ constexpr std::array<IcomModel, 7> kModels{{
         // transmit audio on the MICROPHONE, so a 2 m AX.25 frame keyed the
         // radio and put room noise out instead of the modem's AFSK.
         /*hasVfoModeCommand*/ true,
+        // The tri-bander's three bands, exactly the 144 MHz – 1.3 GHz the row
+        // already claims. Declaring is not a nicety here: with no declaration
+        // this radio gets the HF grid, every button of which its tuning range
+        // then DISABLES — a band menu with nothing in it that can be pressed.
+        /*bands*/ "2m,440,23cm",
     },
     {
         0x98, "IC-7610", 2, 1,
@@ -137,6 +154,14 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, 10.0,
         144'000'000ULL, 10'500'000'000ULL,
         false,
+        /*hasVfoModeCommand*/ false,
+        // NO DECLARATION, on purpose. This radio's bands are not the contiguous
+        // span its 144 MHz – 10.5 GHz range suggests — it covers five discrete
+        // bands, the top one only with the CX-10G unit fitted — so the band set
+        // is a fact to read out of the model's own guide, like the rest of this
+        // unverified row, not one to infer from two numbers. Until someone does,
+        // frequency entry still reaches every one of them.
+        /*bands*/ "",
     },
 }};
 
@@ -155,6 +180,27 @@ constexpr IcomModel kUnknown{
     // every Icom has had for decades and no DATA control.
     /*hasVfoModeCommand*/ false,
 };
+
+// THE IC-9700's THREE RF DECKS — the one place these numbers live.
+//
+// This radio is not a continuous 144-1300 MHz receiver with a wide tuning
+// range; it is three separate RF decks with two large holes between them, and
+// each deck has its own PA rating. Both facts have to agree, because they
+// describe the same hardware: the tune guard refuses the holes, and
+// IcomCivBackend::capabilities() publishes the ratings as txPowerBands. When
+// those two lists were kept separately, nothing stopped an edge correction
+// landing in one and not the other — a radio that would tune 430-450 while the
+// power scale still described 430-440, or the reverse.
+//
+// Ranges are the US/A version's published coverage. A region whose radio is
+// narrower (the EU 9700 stops at 146 and 440) is REFUSED BY THE RADIO, which
+// is the safe direction to be wrong in: we offer a frequency it declines,
+// rather than silently withholding one it supports.
+constexpr std::array<IcomBand, 3> kIc9700Bands{{
+    {  144'000'000ULL,   148'000'000ULL, 100.0},   // 2 m
+    {  430'000'000ULL,   450'000'000ULL,  75.0},   // 70 cm
+    {1'240'000'000ULL, 1'300'000'000ULL,  10.0},   // 23 cm
+}};
 
 constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
     {0x00, "MIC",     ModSourceMic},
@@ -209,6 +255,56 @@ const IcomModel* modelForName(std::string_view name)
 std::span<const IcomModel> knownModels() { return kModels; }
 
 const IcomModel& unknownModel() { return kUnknown; }
+
+std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept
+{
+    // The IC-9700 is the only row whose min/max envelope contains holes. Every
+    // other model — including the unknown fallback — returns an empty span, and
+    // that emptiness is what keeps their tune path exactly as it was.
+    if (model.civAddress == 0xA2) {
+        return kIc9700Bands;
+    }
+    return {};
+}
+
+bool supportsFrequency(const IcomModel& model, std::uint64_t hz) noexcept
+{
+    if (const std::span<const IcomBand> bands = bandsFor(model); !bands.empty()) {
+        return std::ranges::any_of(bands, [hz](const IcomBand& band) {
+            return hz >= band.lowHz && hz <= band.highHz;
+        });
+    }
+    if (model.tuningMinHz == 0 || model.tuningMaxHz == 0) {
+        return true;
+    }
+    return hz >= model.tuningMinHz && hz <= model.tuningMaxHz;
+}
+
+std::uint64_t nearestSupportedFrequency(const IcomModel& model,
+                                        std::uint64_t hz) noexcept
+{
+    if (supportsFrequency(model, hz)) {
+        return hz;
+    }
+    if (const std::span<const IcomBand> bands = bandsFor(model); !bands.empty()) {
+        std::uint64_t nearest = bands.front().lowHz;
+        std::uint64_t distance = hz > nearest ? hz - nearest : nearest - hz;
+        for (const IcomBand& band : bands) {
+            for (const std::uint64_t edge : {band.lowHz, band.highHz}) {
+                const std::uint64_t edgeDistance = hz > edge ? hz - edge : edge - hz;
+                if (edgeDistance < distance) {
+                    nearest = edge;
+                    distance = edgeDistance;
+                }
+            }
+        }
+        return nearest;
+    }
+    if (model.tuningMinHz == 0 || model.tuningMaxHz == 0) {
+        return hz;
+    }
+    return std::clamp(hz, model.tuningMinHz, model.tuningMaxHz);
+}
 
 std::optional<ModulationProfile> modulationProfileFor(const IcomModel& model)
 {

@@ -7310,9 +7310,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     const bool dvk = !connected || caps.hasVoiceKeyer;
     const bool fdx = !connected || caps.hasFullDuplex;
 
-    const QString cwKeyerName = connected && caps.family == QLatin1String("icom")
-                                    ? QStringLiteral("CWK")
-                                    : QStringLiteral("CWX");
+    const QString cwKeyerName = connected ? caps.cwTextKeyerName
+                                          : QStringLiteral("CWX");
     if (m_cwxIndicator) {
         // CWX is FlexRadio's name. Icom exposes the same shared panel through
         // its CI-V text keyer, so call that surface CWK rather than implying
@@ -7321,7 +7320,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_cwxIndicator->setVisible(cwx);
     }
     if (m_cwxPanel) {
-        m_cwxPanel->setDisplayName(cwKeyerName);
+        m_cwxPanel->configureTextKeyer(
+            cwKeyerName,
+            connected ? caps.cwTextMinWpm : 5,
+            connected ? caps.cwTextMaxWpm : 100,
+            !connected || caps.cwTextSupportsLive,
+            !connected || caps.cwTextHasStoredMacros);
     }
     if (!cwx && m_cwxPanel) {
         m_cwxPanel->hide();
@@ -7574,15 +7578,14 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
         return BandStackPreselectResult::NotNeeded;
 
     const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-    const auto stackKeyResult =
-        XvtrPolicy::resolveBandStackKey(targetBand, xvtrs, m_radioModel.capabilities());
-    if (!stackKeyResult.isSupported()) {
-        QString unsupportedReason = stackKeyResult.unsupportedReason;
-        if (mhz > 54.0 && xvtrs.isEmpty()) {
-            unsupportedReason =
-                QString("Band %1 requires a configured XVTR before Aether can tune it.")
-                    .arg(targetBand);
-        }
+    const RadioCapabilities backendCaps = m_radioModel.backendCapabilities();
+    const auto admissibility =
+        XvtrPolicy::evaluateBandTune(m_radioModel.usesFlexCommandPlane(), targetBand, mhz,
+                                     backendCaps.tuningMinHz, backendCaps.tuningMaxHz,
+                                     xvtrs, m_radioModel.capabilities());
+    if (!admissibility.supported) {
+        const QString unsupportedReason =
+            bandTuneRefusalText(admissibility, targetBand);
         qCWarning(lcProtocol).noquote().nospace()
             << "MainWindow: direct tune cannot preselect band stack source="
             << (source ? source : "(unknown)")
@@ -7596,13 +7599,28 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
         return BandStackPreselectResult::Unsupported;
     }
 
+    // Everything below is Flex band-stack machinery — it ends in
+    // `display pan set <pan> band=<key>`, a command plane an Icom or an HL2
+    // does not have. The band was admissible, so let the ordinary tune-and-
+    // recenter path carry it (#5041).
+    if (admissibility.bandStackKey.isEmpty()) {
+        // But the band DID change, and the two things that follow from that on
+        // a radio with no stack are the same two the band buttons already do
+        // (MainWindow_Wiring.cpp). Dropping them here would have let a finished
+        // SWR plot from the old band survive a cross-band typed tune and stay
+        // on screen describing an antenna the radio is no longer pointed at.
+        clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
+        m_bandSettings.setCurrentBand(targetBand);
+        return BandStackPreselectResult::NotNeeded;
+    }
+
     qCDebug(lcProtocol).noquote().nospace()
         << "MainWindow: direct tune preselecting band stack source="
         << (source ? source : "(unknown)")
         << " pan=" << slice->panId()
         << " from_band=" << currentBand
         << " to_band=" << targetBand
-        << " key=" << stackKeyResult.key;
+        << " key=" << admissibility.bandStackKey;
     emit bandStackRestoreStarting(slice->panId());
     clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
     m_bandSettings.setCurrentBand(targetBand);
@@ -7611,7 +7629,7 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     // band= write is silently destroyed, so the slice lands outside the pan.
     // requestPanBand defers the band-stack swap and replays it band-first; the
     // dispatch signal starts the reconstruction guard at replay.
-    m_radioModel.requestPanBand(slice->panId(), stackKeyResult.key);
+    m_radioModel.requestPanBand(slice->panId(), admissibility.bandStackKey);
     QTimer::singleShot(300, this, [this, panId = slice->panId()]() {
         reassertUnmutedSliceAudioForPan(panId);
     });
@@ -9558,7 +9576,10 @@ void MainWindow::updateKeyerAvailability()
                               && (dvkBlocker == DvkIndicatorBlocker::None);
     const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
 
-    if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(txIsCw);
+    if (m_cwxPanel) {
+        m_cwxPanel->setShortcutsEnabled(txIsCw
+                                        && m_radioModel.hasCwTextStoredMacros());
+    }
     if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable);
 
     // Only auto-hide an open panel when a TX slice *exists* and is in the wrong

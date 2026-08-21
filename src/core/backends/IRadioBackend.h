@@ -435,7 +435,14 @@ public:
     // Radio-resident text keyer. Unlike setCwKeying(), this hands printable
     // text to a keyer in the radio; it is the neutral seam used by CWX, CAT,
     // MIDI/controller macros and the automation bridge.
-    virtual void sendCwText(const QString& text) { Q_UNUSED(text); }
+    // Empty return means accepted for delivery. A non-empty string is an
+    // operator-facing rejection reason; callers must not report success when
+    // the backend could not preserve the requested text.
+    virtual QString sendCwText(const QString& text)
+    {
+        Q_UNUSED(text);
+        return QStringLiteral("radio has no text keyer");
+    }
     virtual void abortCwText() {}
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
     virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }

@@ -258,6 +258,18 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "^map_wrap_test$" --output-on-failure
 
+      # PSK Reporter query scope, parser bounds, rate-limit backoff, path
+      # unwrapping, and solar-position math. Pure Core test with no network.
+      - name: Test PSK Reporter map behavior
+        run: ctest --test-dir build -R "^psk_reporter_map_behavior_test$" --output-on-failure
+
+      # Async marker/path/terminator cache replacement must retain visible
+      # content and cancel superseded work. Offscreen GUI test, no network.
+      - name: Test PSK Reporter map live updates
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "^map_live_update_test$" --output-on-failure
+
       # The demo RX engine's worker-thread contract (#4878): affinity, 24 kHz
       # pacing on a coarse timer, keyed-mute, stallscope. This is the fix for
       # the demo making the GUI thread carry a 333 Hz precise timer plus the

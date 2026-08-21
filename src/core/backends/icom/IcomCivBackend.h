@@ -87,7 +87,7 @@ public:
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
-    void sendCwText(const QString& text) override;
+    QString sendCwText(const QString& text) override;
     void abortCwText() override;
     void setCwSpeed(int wpm) override;
     void setCwPitch(int hz) override;
@@ -159,6 +159,12 @@ private slots:
 
 private:
     void publishCapabilities();
+    // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
+    // from it. One call rather than two because they are the same answer — a
+    // model whose name reached the UI while its bands did not is how an IC-705
+    // ended up with a band menu that had no 2 m or 70 cm button on it (#5041).
+    // Emitted from every point that resolves m_model, so the two cannot drift.
+    void publishIdentity();
     // Publish the scope's dBm axis, derived from the SAME ScopeCalibration that
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.
@@ -395,6 +401,10 @@ private:
     // being generated on a timer, so its cadence is the transmit callback's
     // cadence and it cannot drift against the stream it is riding.
     bool m_tuning = false;
+    // Last non-off value reported by 16 47. The shared UI is still boolean,
+    // so remembering 01 vs 02 is what lets OFF -> ON restore Full rather than
+    // silently demoting it to Semi.
+    int m_cwBreakInMode = 1;
     int m_preTuneTxPowerPercent = -1;
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;

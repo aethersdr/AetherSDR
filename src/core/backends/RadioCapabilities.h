@@ -8,6 +8,12 @@
 
 namespace AetherSDR {
 
+struct TxPowerBand {
+    double lowHz = 0.0;
+    double highHz = 0.0;
+    double maxWatts = 0.0;
+};
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is
@@ -103,6 +109,21 @@ struct RadioCapabilities {
     // keying intent regardless of client requests.
     bool canTransmit = false;
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
+
+    // Optional per-frequency ceilings for radios whose PA rating changes by
+    // band. Empty means txPowerMaxWatts applies everywhere. The ranges are
+    // inclusive and expressed in Hz, matching the tuning fields above.
+    QVector<TxPowerBand> txPowerBands;
+
+    [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const noexcept
+    {
+        for (const TxPowerBand& band : txPowerBands) {
+            if (frequencyHz >= band.lowHz && frequencyHz <= band.highHz) {
+                return band.maxWatts;
+            }
+        }
+        return txPowerMaxWatts;
+    }
 
     // Modes this radio DEMODULATES BUT WILL NOT TRANSMIT IN, in AetherSDR's
     // neutral vocabulary (the same strings SliceModel carries).
@@ -430,6 +451,24 @@ struct RadioCapabilities {
     // from a key, a paddle or the host's own keying path; what it lacks is a
     // place to put the text.
     bool hasRadioSideCwKeyer = false;
+
+    // Shape of that text keyer. These fields keep shared callers honest when
+    // two radios both accept text but expose different surrounding contracts:
+    // Flex CWX has a progress counter, stored F-key macros, live typing and
+    // per-word speed changes; the verified Icom CI-V command 17 path has none
+    // of those and accepts one documented 30-character message at a time.
+    QString cwTextKeyerName{QStringLiteral("CWX")};
+    int cwTextMinWpm = 5;
+    int cwTextMaxWpm = 100;
+    int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit
+    // Empty means the backend accepts its existing command-plane character
+    // contract. Non-empty lets protocol adapters reject text synchronously
+    // instead of reporting success for a message the radio will alter/refuse.
+    QString cwTextAllowedCharacters;
+    bool cwTextHasProgress = true;
+    bool cwTextHasStoredMacros = true;
+    bool cwTextSupportsLive = true;
+    bool cwTextSupportsSpeedModifiers = true;
 
     // The RADIO records and plays back voice-keyer messages from its own store
     // (`dvk` verbs). True for a Flex; false for a backend with no recorder.

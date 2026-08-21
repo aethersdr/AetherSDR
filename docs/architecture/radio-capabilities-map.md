@@ -55,7 +55,8 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasManualNotch` | ❌ | ❌ | ❌ | `RadioModel::hasManualNotch()` → `VfoWidget::setHasManualNotch` | The MN button and the shared level slider re-targeted to notch POSITION. Icom: ✅ (`16 48` enable, `14 0D` position, `16 57` width). **Not** permissive on disconnect — a new button must not appear on a radio that has not claimed it. Distinct from the TNFs, which are pinned to absolute frequencies, and from the auto notch, which finds its own tone |
 | `hasHostNoiseBlanker` | ❌ | ✅ | ❌ | `RadioModel::hasHostNoiseBlanker()` → `VfoWidget::setHasHostNoiseBlanker` | **THIS HOST** blanks impulse noise in the radio's IQ (WDSP ANB, ahead of the demodulator). OR'd with `hasRadioSideDsp` at the NB button, so a direct-sampling radio gets NB without claiming firmware DSP it does not have — the same exception the manual notch makes. Requires an IQ path this host demodulates: a backend fed finished audio has nothing to blank. Icom: ❌ (the radio's own blanker, under `hasRadioSideDsp`). **Not** permissive on disconnect — it can only ADD the button |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
-| `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar CWX indicator, the CWX panel and its F1-F12 arming, plus every other `cwx` entry point — see below |
+| `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar text-keyer indicator and every text-send entry point. Icom: ✅ only for the verified IC-705 / IC-7300MK2 command-17 profiles |
+| `cwTextKeyerName`, ranges and support flags | CWX, 5–100 WPM, progress/macros/live/modifiers | defaults (unused) | defaults (unused) | `MainWindow::applyCapabilitiesToUi`, CAT/TCI/rigctl/automation adapters | Shapes the shared surface without a family branch. Icom: CWK, 6–48 WPM, 30 chars, no progress/stored macros/live typing/speed modifiers; unsupported text is rejected rather than rewritten |
 | `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
@@ -327,9 +328,29 @@ automation, so it is **deliberately deferred to its own PR.**
 | Field | Flex | HL2 | Sim | Note |
 |---|:--:|:--:|:--:|---|
 | `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists |
-| `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Flex omits it despite transmitting. Wrong, but inert while unread |
+| `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |
 | `extensions` | — | — | — | The namespaced vendor bag; never populated |
+
+`txPowerBands` is the consumed exception to this section: `RadioModel` reads it
+to update `TransmitModel::maxPowerLevel` when the transmit slice crosses into a
+range with a different PA rating. Flex, HL2 and Sim explicitly leave it empty;
+the IC-9700 declares 144–148 MHz at 100 W, 430–450 MHz at 75 W and 1240–1300
+MHz at 10 W. An empty list preserves the prior global/radio-reported behaviour.
+
+On the Icom side these ratings are not written into `capabilities()` by hand.
+They are read from `bandsFor()` in `IcomModels.cpp` — the same table the tune
+guard (`supportsFrequency` / `nearestSupportedFrequency`) uses to refuse the
+two holes in the IC-9700's envelope, because the ceilings and the tunable
+ranges describe the same three RF decks and must not be able to disagree. An
+empty table is also the predicate the tune path keys on, so a model with one
+continuous range keeps its untouched command path.
+
+What `maxPowerLevel` actually drives on an Icom is the **meter and gauge full
+scale** (`MainWindow_Wiring.cpp`, `VfoWidget::txPowerFullScaleW`). RF power
+itself is a 0–100 % CI-V level, so the radio's own PA governs the watts. This
+field makes a 10 W 23 cm transmission read against a 10 W scale instead of a
+100 W one; it does not clamp the request.
 
 These are the ones to check first when something "should have worked". Note the
 pattern in the Flex column: five fields across this table and the one above are

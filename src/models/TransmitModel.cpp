@@ -67,6 +67,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool phoneChanged = false;
     bool filterCutoffChanged = false;
     bool cwPitchChanged_ = false;
+    bool cwSpeedChanged_ = false;
 
     // ── Core transmit ──
     // rf_power / tune_power emit inline (like max_power_level below): the
@@ -119,7 +120,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.txFilterHigh, m_txFilterHigh)) { phoneChanged = true; filterCutoffChanged = true; }
 
     // ── CW ──
-    phoneChanged |= assign(d.cwSpeed, m_cwSpeed);
+    if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
     phoneChanged |= assign(d.cwDelay, m_cwDelay);
@@ -154,6 +155,7 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
+    if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 
     // ── ATU (own emit; model owns the enum parse) ──
     {
@@ -655,18 +657,18 @@ void TransmitModel::setDexpLevel(int level)
 // command (Principle II).
 void TransmitModel::setTxFilterLow(int hz)
 {
-    setTxFilter(qBound(0, hz, 10000), m_txFilterHigh);
+    setTxFilter(qBound(kTxFilterMinHz, hz, kTxFilterMaxHz), m_txFilterHigh);
 }
 
 void TransmitModel::setTxFilterHigh(int hz)
 {
-    setTxFilter(m_txFilterLow, qBound(0, hz, 10000));
+    setTxFilter(m_txFilterLow, qBound(kTxFilterMinHz, hz, kTxFilterMaxHz));
 }
 
 void TransmitModel::setTxFilter(int lowHz, int highHz)
 {
-    lowHz = qBound(0, lowHz, 9950);
-    highHz = qBound(lowHz + 50, highHz, 10000);
+    lowHz  = qBound(kTxFilterMinHz, lowHz, kTxFilterMaxHz - kTxFilterMinWidthHz);
+    highHz = qBound(lowHz + kTxFilterMinWidthHz, highHz, kTxFilterMaxHz);
     if (m_txFilterLow != lowHz || m_txFilterHigh != highHz) {
         m_txFilterLow = lowHz;
         m_txFilterHigh = highHz;
@@ -686,6 +688,7 @@ void TransmitModel::setCwSpeed(int wpm)
     if (m_cwSpeed != wpm) {
         m_cwSpeed = wpm;
         emit phoneStateChanged();
+        emit cwSpeedChanged(m_cwSpeed);
     }
     emit cwSpeedCommandIssued(wpm);
     emit commandReady(QString("cw wpm %1").arg(wpm));

@@ -65,6 +65,8 @@ public:
     void setModel(CwxModel* model);
     void setDisplayName(const QString& name);
     QString displayName() const;
+    void configureTextKeyer(const QString& name, int minWpm, int maxWpm,
+                            bool supportsLive, bool supportsStoredMacros);
 
     // Optional providers used to guard the global F1-F12 / ESC shortcuts
     // so they don't fire in modes/states where they'd be surprising (#1552).

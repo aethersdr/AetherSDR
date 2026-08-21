@@ -9,7 +9,9 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <optional>
+#include <span>
 
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomSettings.h"
@@ -127,8 +129,32 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.txPowerMaxWatts = m.txPowerMaxWatts;
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
-    c.hasRadioSideCwKeyer = c.model == QLatin1String("IC-705")
-        || c.model == QLatin1String("IC-7300MK2");
+    c.hasRadioSideCwKeyer = m.civAddress == 0xA4    // IC-705
+        || m.civAddress == 0xB6;                    // IC-7300MK2
+    c.cwTextKeyerName = QStringLiteral("CWK");
+    c.cwTextMinWpm = 6;
+    c.cwTextMaxWpm = 48;
+    c.cwTextMaxMessageChars = 30;
+    c.cwTextAllowedCharacters =
+        QStringLiteral("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :");
+    c.cwTextHasProgress = false;
+    c.cwTextHasStoredMacros = false;
+    c.cwTextSupportsLive = false;
+    c.cwTextSupportsSpeedModifiers = false;
+
+    // Published from the model's own band table rather than a second hand-kept
+    // list, so the ceilings and the tune guard can never describe different
+    // hardware. An empty table (every model but the IC-9700) leaves the vector
+    // empty, which is what RadioModel reads as "txPowerMaxWatts applies
+    // everywhere" — the prior behaviour, unchanged.
+    c.txPowerBands = {};
+    const std::span<const IcomBand> bands = bandsFor(m);
+    c.txPowerBands.reserve(static_cast<int>(bands.size()));
+    for (const IcomBand& band : bands) {
+        c.txPowerBands.append(TxPowerBand{static_cast<double>(band.lowHz),
+                                          static_cast<double>(band.highHz),
+                                          band.maxWatts});
+    }
 
     // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
     // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
@@ -251,6 +277,20 @@ RadioCapabilities IcomCivBackend::capabilities() const
 }
 
 void IcomCivBackend::publishCapabilities() { emit capabilitiesChanged(); }
+
+void IcomCivBackend::publishIdentity()
+{
+    RadioDelta r;
+    r.model = QString::fromUtf8(m_model->name.data(),
+                                static_cast<int>(m_model->name.size()));
+    // ALWAYS SET, even when the row declares nothing. bandsRaw is a present-only
+    // field, so omitting it leaves whatever the last radio declared standing —
+    // and an empty declaration is a real answer here: it means "use the built-in
+    // HF grid", which is right for every HF-only row in the table.
+    r.bandsRaw = QString::fromUtf8(m_model->bands.data(),
+                                   static_cast<int>(m_model->bands.size()));
+    emit radioChanged(r);
+}
 
 void IcomCivBackend::publishScopeDbmRange()
 {
@@ -403,10 +443,12 @@ void IcomCivBackend::disconnectRadio()
     // Teardown is not allowed to wait for an ordinary outstanding read.  Drop
     // all background work, fail-safe unkey on every connected disconnect, and
     // restore the operator's RF-power setpoint if TUNE had borrowed it.  These
-    // are response-free emergency dispatches so both datagrams reach the
+    // are response-free emergency dispatches so every datagram reaches the
     // session before its sockets close; no state is optimistically adopted.
     if (m_session && m_connected) {
         m_civScheduler.reset();
+        queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
+                                   "cw.message");
         queueEmergencyWriteNoReply(cmdSetPtt(m_session->civAddress(), false), "ptt");
         if (m_tuning && m_preTuneTxPowerPercent >= 0) {
             queueEmergencyWriteNoReply(
@@ -415,6 +457,7 @@ void IcomCivBackend::disconnectRadio()
                 "level.rfPower");
         }
         const qint64 now = nowMs();
+        pumpCiv(now);
         pumpCiv(now);
         pumpCiv(now);
     }
@@ -463,6 +506,7 @@ void IcomCivBackend::disconnectRadio()
     m_modelByName = nullptr;
     m_scopeStarted = false;
     m_tuning = false;
+    m_cwBreakInMode = 1;
     m_preTuneTxPowerPercent = -1;
     if (m_connected) {
         m_connected = false;
@@ -546,7 +590,8 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t which : {level::kRfPower, level::kAf, level::kSquelch,
                                level::kMicGain, level::kCompLevel, level::kMonitor,
                                level::kNrLevel, level::kNbLevel,
-                               level::kNotchPos, level::kRf, level::kVoxGain})
+                               level::kNotchPos, level::kRf, level::kVoxGain,
+                               level::kCwPitch, level::kKeySpeed})
         queueStartupRead(cmdReadLevel(m_session->civAddress(), which));
 
     // ...and the switches, which have the same problem: the applet toggles all
@@ -554,7 +599,8 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t fn : {func::kPreamp, func::kAgc, func::kNoiseReduce,
                             func::kNoiseBlanker, func::kAutoNotch,
                             func::kManualNotch,
-                            func::kCompressor, func::kMonitorFn, func::kVox})
+                            func::kCompressor, func::kMonitorFn, func::kVox,
+                            func::kBreakIn})
         queueStartupRead(cmdReadFunction(m_session->civAddress(), fn));
 
     // The attenuator is NOT sub-addressed, so it needs its own read rather than
@@ -656,10 +702,7 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
             // stops asserting the first responder's list for a radio we have
             // just decided we cannot identify.
             publishModeList();
-            RadioDelta r;
-            r.model = QString::fromUtf8(m_model->name.data(),
-                                        static_cast<int>(m_model->name.size()));
-            emit radioChanged(r);
+            publishIdentity();
         }
         return;
     }
@@ -801,8 +844,17 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // use it. The address query still runs and still wins — it is the
     // authority, this is just early enough to be useful.
     m_modelByName = modelForName(deviceName.toStdString());
-    if (m_modelByName)
+    if (m_modelByName) {
         m_model = m_modelByName;
+        // And declare the bands NOW, for the same reason the model is resolved
+        // now: the band menu is built on the connect edge, while the 0x19 0x00
+        // query that would confirm this identity still has no serial stream to
+        // run on. That query re-publishes when it answers; this is just early
+        // enough to be useful. Left inside the guard on purpose — an
+        // unidentified radio declares nothing and keeps the HF grid, rather
+        // than announcing itself as "Unknown Icom" with no bands at all.
+        publishIdentity();
+    }
 
     // WRONG DEVICE, said as early as it can be said.
     //
@@ -1276,10 +1328,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                 // known just now has not had them sent. No-op once started.
                 applyScopeStartup();
             }
-            RadioDelta r;
-            r.model = QString::fromUtf8(m_model->name.data(),
-                                        static_cast<int>(m_model->name.size()));
-            emit radioChanged(r);
+            publishIdentity();
         }
         pumpCiv(frameAtMs);
         return;
@@ -1520,6 +1569,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         }
         case func::kBreakIn: {
+            if (v == 1 || v == 2) {
+                m_cwBreakInMode = v;
+            }
             TransmitDelta t;
             t.cwBreakIn = v != 0;
             emit transmitChanged(t);
@@ -2190,10 +2242,42 @@ void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
 
 void IcomCivBackend::setSliceFrequency(int, double hz)
 {
-    if (hz <= 0.0)
+    if (!std::isfinite(hz) || hz <= 0.0
+        || hz > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
         return;
+    }
+    const std::uint64_t roundedHz = static_cast<std::uint64_t>(std::llround(hz));
+    // Only a model that DECLARES discontinuous bands gets this gate. Every
+    // other Icom keeps its existing command path — an empty table is the
+    // predicate, so the day another model's holes are documented, this site
+    // and setPanCenter() below light up together rather than one at a time.
+    if (!bandsFor(*m_model).empty() && !supportsFrequency(*m_model, roundedHz)) {
+        emit configurationWarning(
+            tr("%1 cannot tune %2 MHz; the request is outside its supported bands")
+                .arg(QString::fromUtf8(m_model->name.data(),
+                                       static_cast<int>(m_model->name.size())))
+                .arg(hz / 1.0e6, 0, 'f', 6));
+        // There is no radio-authoritative value to restore until the first
+        // frequency reply arrives. Refuse the command, but do not replace the
+        // optimistic display with the construction default of 0 MHz.
+        if (m_frequencyHz == 0) {
+            return;
+        }
+        // SliceModel has already accepted and announced the operator's request
+        // by the time this seam verb runs. Re-assert the radio's actual VFO on
+        // the next event-loop turn, after that optimistic announcement, so a
+        // refused gap tune cannot leave the display claiming a frequency the
+        // radio never entered. Same ordering contract as setSliceMode().
+        const double actualMhz = static_cast<double>(m_frequencyHz) / 1.0e6;
+        QTimer::singleShot(0, this, [this, actualMhz] {
+            SliceDelta delta;
+            delta.frequency = actualMhz;
+            emit sliceChanged(sliceId(), delta);
+        });
+        return;
+    }
     sendUserCommand(cmdSetFrequency(m_session ? m_session->civAddress() : 0xA4,
-                                    static_cast<std::uint64_t>(std::llround(hz))));
+                                    roundedHz));
 }
 
 void IcomCivBackend::setSliceMode(int, const QString& mode)
@@ -2424,9 +2508,17 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
         return;
     }
 
+    double tuneHz = requestedHz;
+    if (!bandsFor(*m_model).empty() && std::isfinite(requestedHz)
+        && requestedHz > 0.0
+        && requestedHz <= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+        const std::uint64_t roundedHz = static_cast<std::uint64_t>(std::llround(requestedHz));
+        tuneHz = static_cast<double>(nearestSupportedFrequency(*m_model, roundedHz));
+    }
     qCDebug(lcIcomPan) << "pan drag retunes:" << m_scopeCentreHz << "Hz ->"
-                       << requestedHz << "Hz (delta" << deltaHz << ")";
-    setSliceFrequency(sliceId(), requestedHz);
+                       << tuneHz << "Hz (asked" << requestedHz << "Hz, delta"
+                       << deltaHz << ")";
+    setSliceFrequency(sliceId(), tuneHz);
 }
 
 void IcomCivBackend::setPanBandwidth(const QString&, double hz)
@@ -2831,37 +2923,47 @@ void IcomCivBackend::setTxPower(int percent)
                                 level::kRfPower, percentToLevelRaw(m_txPowerPercent)));
 }
 
-void IcomCivBackend::sendCwText(const QString& text)
+QString IcomCivBackend::sendCwText(const QString& text)
 {
-    if (!m_session || !m_connected || text.isEmpty())
-        return;
+    if (!m_session || !m_connected) {
+        return QStringLiteral("radio is not connected");
+    }
+    if (text.isEmpty()) {
+        return QStringLiteral("message is empty");
+    }
+    if (text.size() > 30) {
+        return QStringLiteral("CI-V text keyer messages are limited to 30 characters");
+    }
 
     QByteArray ascii;
     ascii.reserve(text.size());
     static constexpr std::string_view allowed =
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :";
-    for (const QChar ch : text) {
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
         const char byte = ch.toLatin1();
-        ascii.append(byte != 0 && allowed.find(byte) != std::string_view::npos ? byte : ' ');
+        if (byte == 0 || allowed.find(byte) == std::string_view::npos) {
+            return QStringLiteral("unsupported character at position %1").arg(i + 1);
+        }
+        ascii.append(byte);
     }
 
     const std::uint8_t addr = m_session->civAddress();
-    for (qsizetype offset = 0; offset < ascii.size(); offset += 30) {
-        const QByteArray chunk = ascii.mid(offset, 30);
-        queueWrite(cmdSendCwMessage(
-                       addr,
-                       std::string_view(chunk.constData(),
-                                        static_cast<std::size_t>(chunk.size()))),
-                   "cw.message", IcomCivScheduler::Priority::Operator,
-                   false, false);
-    }
+    queueWrite(cmdSendCwMessage(
+                   addr,
+                   std::string_view(ascii.constData(),
+                                    static_cast<std::size_t>(ascii.size()))),
+               "cw.message", IcomCivScheduler::Priority::Operator,
+               false, false);
     pumpCiv(nowMs());
+    return {};
 }
 
 void IcomCivBackend::abortCwText()
 {
-    if (!m_session || !m_connected)
+    if (!m_session || !m_connected) {
         return;
+    }
     queueWrite(cmdAbortCwMessage(m_session->civAddress()), "cw.message",
                IcomCivScheduler::Priority::Emergency, true, true);
     pumpCiv(nowMs());
@@ -2885,11 +2987,11 @@ void IcomCivBackend::setCwPitch(int hz)
 
 void IcomCivBackend::setCwBreakIn(bool on)
 {
-    // AetherSDR's current control is boolean. Map ON to Icom semi break-in;
-    // full break-in (02) requires an honest three-state UI rather than a
-    // hidden preference that cannot report the radio's actual selection.
+    // The shared control is boolean, but the Icom register is Off/Semi/Full.
+    // Preserve the last radio-reported active value so an OFF -> ON round trip
+    // restores Full instead of silently demoting it to Semi.
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
-                                   func::kBreakIn, on ? 1 : 0));
+                                   func::kBreakIn, on ? m_cwBreakInMode : 0));
 }
 
 // EVERY registry row a frame belongs to, not the first.

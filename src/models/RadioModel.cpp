@@ -1245,6 +1245,7 @@ void RadioModel::setupBackend(const QString& family)
             m_slices.append(s);
             s->applyChanges(mapped);
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            refreshTxPowerLimit();
             emit sliceAdded(s);
             return;
         }
@@ -1266,6 +1267,9 @@ void RadioModel::setupBackend(const QString& family)
             // can also move because a slice was REMOVED, which carries no delta
             // at all.
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            if (mapped.frequency.has_value() || mapped.txSlice.has_value()) {
+                refreshTxPowerLimit();
+            }
         }
     });
 
@@ -1282,6 +1286,9 @@ void RadioModel::setupBackend(const QString& family)
                 if (delta.mox)
                     publishBackendTransmitEdge(*delta.mox);
                 m_transmitModel.applyChanges(delta);
+                if (delta.cwSpeed && !usesFlexCommandPlane()) {
+                    m_cwxModel.adoptSpeed(*delta.cwSpeed);
+                }
             });
 
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
@@ -2195,14 +2202,24 @@ RadioModel::RadioModel(QObject* parent)
         }
         sendCmd(cmd);
     });
+    connect(&m_cwxModel, &CwxModel::speedCommandIssued, this, [this](int wpm) {
+        if (!usesFlexCommandPlane()) {
+            m_transmitModel.setCwSpeed(wpm);
+        }
+    });
     connect(&m_cwxModel, &CwxModel::transmissionRequested, this,
             [this](const QString& text, int wpm) {
         if (!m_backend || usesFlexCommandPlane()
             || !backendCapabilities().hasRadioSideCwKeyer) {
             return;
         }
-        m_backend->setCwSpeed(wpm);
-        m_backend->sendCwText(text);
+        Q_UNUSED(wpm);
+        const QString rejection = m_backend->sendCwText(text);
+        if (!rejection.isEmpty()) {
+            emit radioMessageReceived(
+                tr("CW text not sent: %1").arg(rejection),
+                MessageSeverity::Warning);
+        }
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
         if (m_backend && !usesFlexCommandPlane()
@@ -3749,6 +3766,56 @@ bool RadioModel::hasRadioSideCwKeyer() const
     return backendCapabilities().hasRadioSideCwKeyer;
 }
 
+bool RadioModel::hasCwTextProgress() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().cwTextHasProgress;
+}
+
+bool RadioModel::hasCwTextStoredMacros() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;
+    }
+    return backendCapabilities().cwTextHasStoredMacros;
+}
+
+int RadioModel::cwTextMinWpm() const
+{
+    return (!m_backend || !isConnected()) ? 5 : backendCapabilities().cwTextMinWpm;
+}
+
+int RadioModel::cwTextMaxWpm() const
+{
+    return (!m_backend || !isConnected()) ? 100 : backendCapabilities().cwTextMaxWpm;
+}
+
+QString RadioModel::cwTextValidationError(const QString& text) const
+{
+    if (text.isEmpty()) {
+        return QStringLiteral("message is empty");
+    }
+    if (!m_backend || !isConnected()) {
+        return {};
+    }
+    const RadioCapabilities caps = backendCapabilities();
+    if (caps.cwTextMaxMessageChars > 0
+        && text.size() > caps.cwTextMaxMessageChars) {
+        return QStringLiteral("message is limited to %1 characters")
+            .arg(caps.cwTextMaxMessageChars);
+    }
+    if (!caps.cwTextAllowedCharacters.isEmpty()) {
+        for (qsizetype i = 0; i < text.size(); ++i) {
+            if (!caps.cwTextAllowedCharacters.contains(text.at(i))) {
+                return QStringLiteral("unsupported character at position %1").arg(i + 1);
+            }
+        }
+    }
+    return {};
+}
+
 bool RadioModel::hasVoiceKeyer() const
 {
     if (!m_backend || !isConnected()) {
@@ -3775,6 +3842,11 @@ bool RadioModel::hasDaxStreams() const
 void RadioModel::publishCapabilities(bool connected)
 {
     const RadioCapabilities caps = backendCapabilities();
+    m_cwxModel.setSpeedModifiersEnabled(!connected
+                                        || caps.cwTextSupportsSpeedModifiers);
+    m_txPowerBands = connected ? caps.txPowerBands : QVector<TxPowerBand>{};
+    m_activeTxPowerBandLowHz = 0.0;
+    m_activeTxPowerBandHighHz = 0.0;
 
     // Capability-driven, not family()!="flex": only a backend that both
     // host-modulates and may transmit collapses the mic source to PC. (#4449)
@@ -3789,8 +3861,46 @@ void RadioModel::publishCapabilities(bool connected)
     // greyed out after unplugging an HL2 would look like a fault. Every
     // capability below follows the same `!connected || caps.x` shape.
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
+    refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);
+}
+
+void RadioModel::refreshTxPowerLimit()
+{
+    if (!m_backend || !isConnected()) {
+        return;
+    }
+    if (m_txPowerBands.isEmpty()) {
+        return;
+    }
+
+    const SliceModel* tx = txSlice();
+    if (!tx || tx->frequency() <= 0.0) {
+        return;
+    }
+
+    const double frequencyHz = tx->frequency() * 1.0e6;
+    // The common drag-rate path remains entirely below the capability lookup
+    // and TransmitModel setter while the TX VFO stays inside the same RF deck.
+    if (frequencyHz >= m_activeTxPowerBandLowHz
+        && frequencyHz <= m_activeTxPowerBandHighHz) {
+        return;
+    }
+
+    // The capability ranges are cached at the connect edge, so crossing an RF
+    // deck still performs no backend capability rebuild or QString allocation.
+    for (const TxPowerBand& band : m_txPowerBands) {
+        if (frequencyHz >= band.lowHz && frequencyHz <= band.highHz) {
+            m_activeTxPowerBandLowHz = band.lowHz;
+            m_activeTxPowerBandHighHz = band.highHz;
+            const int maxWatts = qRound(band.maxWatts);
+            if (maxWatts > 0) {
+                m_transmitModel.setMaxPowerLevel(maxWatts);
+            }
+            return;
+        }
+    }
 }
 
 IRadioBackend::HealthSnapshot RadioModel::backendHealthSnapshot() const

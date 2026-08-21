@@ -928,6 +928,40 @@ add_test(NAME map_wrap_test COMMAND map_wrap_test)
 set_tests_properties(map_wrap_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# PSK Reporter map query scope and the UTC solar-position math used by the
+# optional day/night overlay. No network access is performed.
+add_executable(psk_reporter_map_behavior_test
+    tests/psk_reporter_map_behavior_test.cpp)
+target_include_directories(psk_reporter_map_behavior_test PRIVATE src)
+target_link_libraries(psk_reporter_map_behavior_test PRIVATE
+    aethercore Qt6::Core)
+add_test(NAME psk_reporter_map_behavior_test
+    COMMAND psk_reporter_map_behavior_test)
+
+# Live PSK Reporter updates must refresh the existing marker/path batches
+# atomically. Replacing them exposes the differently-scaled overview cache and
+# makes every MQTT report pulse between large/small dots and thick/thin paths.
+add_executable(map_live_update_test
+    tests/map_live_update_test.cpp
+    src/gui/map/MapMarkerBatchItem.cpp
+    src/gui/map/MapPathBatchItem.cpp
+    src/gui/map/MapTerminatorItem.cpp
+)
+target_include_directories(map_live_update_test PRIVATE src)
+target_link_libraries(map_live_update_test PRIVATE
+    aethercore
+    qgeoview
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Network
+)
+set_target_properties(map_live_update_test PROPERTIES AUTOMOC ON)
+add_test(NAME map_live_update_test COMMAND map_live_update_test)
+set_tests_properties(map_live_update_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Frameless-window geometry restore (#4328) — blob parse + the caption-free
 # re-clamp.  Windows-only in effect, but the logic is pure, so it is pinned on
 # every platform; case 4 drives a real QWidget so a future Qt changing the
@@ -2410,6 +2444,16 @@ target_include_directories(cw_sidetone_test PRIVATE src)
 target_link_libraries(cw_sidetone_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 
+# #4978 — which device the CW sidetone backend is handed at start(). Pure,
+# header-only policy, so the whole truth table is a compile-time assertion; the
+# "saved device that IS the system default still takes the name-match path" row
+# pins the documented reach of the fix.
+add_executable(cw_sidetone_start_policy_test
+    tests/cw_sidetone_start_policy_test.cpp
+)
+target_include_directories(cw_sidetone_start_policy_test PRIVATE src)
+add_test(NAME cw_sidetone_start_policy_test COMMAND cw_sidetone_start_policy_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
@@ -2605,6 +2649,9 @@ target_include_directories(cwx_panel_test PRIVATE src)
 target_link_libraries(cwx_panel_test PRIVATE
     Qt6::Core Qt6::Widgets
 )
+add_test(NAME cwx_panel_test COMMAND cwx_panel_test)
+set_tests_properties(cwx_panel_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(meter_model_test
     tests/meter_model_test.cpp
@@ -3650,6 +3697,22 @@ add_test(NAME tx_applet_power_reconciliation_test
 set_tests_properties(tx_applet_power_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(phone_tx_filter_numeric_entry_test
+    tests/phone_tx_filter_numeric_entry_test.cpp
+    src/gui/PhoneApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
+)
+target_include_directories(phone_tx_filter_numeric_entry_test PRIVATE src)
+target_link_libraries(phone_tx_filter_numeric_entry_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_tx_filter_numeric_entry_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_tx_filter_numeric_entry_test
+         COMMAND phone_tx_filter_numeric_entry_test)
+set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp
@@ -3788,6 +3851,7 @@ set(AETHER_SETTINGS_CONSUMERS
     log_manager_filter_rules_test
     bandplan_voice_labels_test
     vkamp_connection_test
+    radio_capability_gating_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
@@ -3850,6 +3914,23 @@ set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
 # progress, so the total still scales with the number of distinct plans.
 set(AETHER_TEST_FFTW_TIMELIMIT "0.001" CACHE STRING
     "Seconds FFTW may spend measuring each plan under test (empty = unbounded)")
+
+# Startup hardware inventory (#4986): pins the baseline-comparison contracts
+# that arm the "CPU below the speech-engine baseline" warning, plus host
+# self-consistency of the detection. Compiled with the same baseline define as
+# aethercore so the host check exercises the real compiled value.
+add_executable(system_inventory_test
+    tests/system_inventory_test.cpp
+    src/core/SystemInventory.cpp
+)
+target_include_directories(system_inventory_test PRIVATE src)
+target_link_libraries(system_inventory_test PRIVATE Qt6::Core)
+if (NOT _aether_ggml_baseline_str STREQUAL "")
+    target_compile_definitions(system_inventory_test PRIVATE
+        AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
+endif()
+add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
 
 # The isolation TU, compiled once and linked into every test target below. An
 # OBJECT library rather than STATIC on purpose: its only content is a

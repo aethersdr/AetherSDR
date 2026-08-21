@@ -7905,8 +7905,12 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
 
     if (a == QLatin1String("speed") || a == QLatin1String("wpm")) {
         bool ok = false; const int wpm = arg.trimmed().toInt(&ok);
-        if (!ok || wpm < 5 || wpm > 100)
-            return err(QStringLiteral("cwx speed requires wpm in 5..100"));
+        if (!ok || wpm < m_radioModel->cwTextMinWpm()
+            || wpm > m_radioModel->cwTextMaxWpm()) {
+            return err(QStringLiteral("cwx speed requires wpm in %1..%2")
+                           .arg(m_radioModel->cwTextMinWpm())
+                           .arg(m_radioModel->cwTextMaxWpm()));
+        }
         cwx.setSpeed(wpm);
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("speed")},
                            {QStringLiteral("wpm"), wpm}};
@@ -7919,11 +7923,17 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
     }
     if (a == QLatin1String("send")) {
         const QString text = arg.trimmed();
-        if (text.isEmpty())
+        if (text.isEmpty()) {
             return err(QStringLiteral("cwx send requires text"));
-        if (!m_txAllowed)
+        }
+        const QString rejection = m_radioModel->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            return err(QStringLiteral("cwx send rejected: ") + rejection);
+        }
+        if (!m_txAllowed) {
             return err(QStringLiteral("blocked: cwx send keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        }
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog
         m_txBridgeInitiated = true;   // cwx keys the transmitter — the watchdog must police it
         cwx.send(text);

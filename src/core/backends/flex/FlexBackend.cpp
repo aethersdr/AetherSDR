@@ -131,6 +131,7 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.txPowerBands = {};
     caps.family = QStringLiteral("flex");
     caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();
@@ -201,6 +202,14 @@ RadioCapabilities FlexBackend::capabilities() const
     // voice keyer; whether this operator is licensed for it is the separate
     // SmartSDR+ entitlement gate.
     caps.hasRadioSideCwKeyer = true;
+    caps.cwTextKeyerName = QStringLiteral("CWX");
+    caps.cwTextMinWpm = 5;
+    caps.cwTextMaxWpm = 100;
+    caps.cwTextMaxMessageChars = 0;
+    caps.cwTextHasProgress = true;
+    caps.cwTextHasStoredMacros = true;
+    caps.cwTextSupportsLive = true;
+    caps.cwTextSupportsSpeedModifiers = true;
     caps.hasVoiceKeyer = true;
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms

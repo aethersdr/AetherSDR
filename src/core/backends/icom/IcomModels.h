@@ -83,6 +83,28 @@ struct IcomModel {
     // stops a new row copied from the IC-705 inheriting a shape nobody checked.
     bool hasVfoModeCommand = false;
 
+    // Amateur bands this radio covers, as canonical BandDefs names, comma
+    // separated -- the same "bands=" vocabulary a gateway declares, validated
+    // model-side by parseDeclaredBands() before anything renders it.
+    //
+    // What it buys is the band BUTTONS. With no declaration the band menu falls
+    // back to its built-in HF grid plus FlexLib's ModelCapabilities has4Meters/
+    // has2Meters flags -- and an IC-705 matches nothing in that Flex model
+    // table, so a radio that reaches 2 m and 70 cm natively had no button for
+    // either, and 70 cm has no entry in that grid at any radio (#5041).
+    //
+    // EMPTY MEANS "the built-in HF grid is already right", not "unknown". Every
+    // HF-only row below is served correctly by that grid, and tuningMaxHz
+    // already disables whatever it cannot reach. So declare only where the grid
+    // cannot express the radio -- i.e. it covers VHF/UHF -- and only within the
+    // coverage the row itself already claims in tuningMinHz/tuningMaxHz, which
+    // keeps this from becoming a second, drifting statement about the same
+    // hardware. icom_family_test pins that containment.
+    //
+    // A name outside BandDefs is dropped at the boundary (Principle VII), so a
+    // typo here costs a missing button, never a bogus one.
+    std::string_view bands;
+
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 
@@ -151,6 +173,41 @@ modulationProfileFor(const IcomModel& model);
 // characterise. Both are worse than a reduced feature set, and the operator can
 // still tune and listen.
 [[nodiscard]] const IcomModel& unknownModel();
+
+// One RF deck: a range this model can tune, and the PA rating inside it.
+//
+// A model needs this only when its tunable range is NOT the single continuous
+// interval [tuningMinHz, tuningMaxHz] — which, today, means the IC-9700 alone.
+struct IcomBand {
+    std::uint64_t lowHz = 0;
+    std::uint64_t highHz = 0;
+    double maxWatts = 0.0;
+};
+
+// This model's discontinuous band table, or an EMPTY span when its tuning
+// range is the one continuous tuningMinHz..tuningMaxHz interval.
+//
+// THE SINGLE SOURCE OF TRUTH for both halves of a banded model: the tune
+// guard (supportsFrequency/nearestSupportedFrequency) and the capability
+// ceilings (IcomCivBackend::capabilities) both read this one table, so a
+// corrected edge or PA rating lands in every consumer at once. Two hand-kept
+// copies would have let the guard and the power scale disagree silently —
+// exactly the shape of drift that only shows up on the air.
+//
+// Emptiness is also the predicate the tune path keys on: no table means no
+// holes to refuse, so continuous models keep their untouched command path.
+[[nodiscard]] std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept;
+
+// True when hz lies in a band this model can tune. Unknown models remain
+// permissive because they have no verified range to enforce.
+[[nodiscard]] bool supportsFrequency(const IcomModel& model,
+                                     std::uint64_t hz) noexcept;
+
+// Resolve an arbitrary request to the nearest frequency this model supports.
+// Continuous-range and unknown models preserve their existing min/max policy;
+// the IC-9700 snaps across the two holes between its three RF decks.
+[[nodiscard]] std::uint64_t nearestSupportedFrequency(const IcomModel& model,
+                                                      std::uint64_t hz) noexcept;
 
 // Decode the reply to CI-V 0x19 0x00. Returns the reported address, or nullopt
 // if this is not that reply.

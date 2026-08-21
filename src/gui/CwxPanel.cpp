@@ -240,6 +240,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     barLayout->addWidget(speedLabel);
 
     m_speedSpin = new QSpinBox;
+    m_speedSpin->setObjectName(QStringLiteral("cwxSpeedSpin"));
     m_speedSpin->setRange(5, 100);
     m_speedSpin->setValue(20);
     m_speedSpin->setFixedWidth(50);
@@ -344,6 +345,34 @@ void CwxPanel::setDisplayName(const QString& name)
 QString CwxPanel::displayName() const
 {
     return m_titleLabel ? m_titleLabel->text() : QString{};
+}
+
+void CwxPanel::configureTextKeyer(const QString& name, int minWpm, int maxWpm,
+                                  bool supportsLive, bool supportsStoredMacros)
+{
+    setDisplayName(name);
+    if (m_speedSpin) {
+        const QSignalBlocker blocker(m_speedSpin);
+        m_speedSpin->setRange(minWpm, maxWpm);
+        m_speedSpin->setValue(qBound(minWpm, m_model ? m_model->speed() : 20,
+                                     maxWpm));
+    }
+    if (m_liveBtn) {
+        m_liveBtn->setVisible(supportsLive);
+        if (!supportsLive) {
+            m_liveBtn->setChecked(false);
+            if (m_model) {
+                m_model->setLive(false);
+            }
+        }
+    }
+    if (m_setupBtn) {
+        m_setupBtn->setVisible(supportsStoredMacros);
+        if (!supportsStoredMacros) {
+            m_setupBtn->setChecked(false);
+            showSendView();
+        }
+    }
 }
 
 void CwxPanel::setModel(CwxModel* model)

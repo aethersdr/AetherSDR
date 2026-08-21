@@ -60,8 +60,26 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
         }
     }
 
-    if (partials.isEmpty())
+    if (partials.isEmpty()) {
+        // Name every output-capable candidate so field reports show what was
+        // available to match, not just that nothing did (#4978). Failure-path
+        // only — the second enumeration costs nothing on a successful match.
+        QStringList candidates;
+        for (PaDeviceIndex i = 0; i < count; ++i) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+            if (!info || info->maxOutputChannels <= 0 || !info->name)
+                continue;
+            const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+            candidates << QStringLiteral("\"%1\" [%2]")
+                              .arg(QString::fromUtf8(info->name),
+                                   api && api->name ? QString::fromUtf8(api->name)
+                                                    : QStringLiteral("?"));
+        }
+        qCWarning(lcAudio) << "CwSidetonePortAudioSink: no PortAudio output matches"
+                           << device.description()
+                           << "- candidates:" << qUtf8Printable(candidates.join(QStringLiteral(", ")));
         return paNoDevice;
+    }
 
     if (partials.size() == 1) {
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
@@ -91,48 +109,41 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
     }
 #endif
 
+    QStringList matchedNames;
+    for (const Candidate& c : partials)
+        matchedNames << QStringLiteral("\"%1\"").arg(c.rawName);
     qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                        << device.description()
-                       << "matched multiple PortAudio outputs";
+                       << "matched multiple PortAudio outputs:"
+                       << qUtf8Printable(matchedNames.join(QStringLiteral(", ")));
     return paNoDevice;
 }
 
 PaDeviceIndex defaultPortAudioOutputDevice()
 {
+    // No JACK preference here: a default selection must land on the same
+    // output the rest of the app's audio uses (Pa_GetDefaultOutputDevice —
+    // the ALSA `default` route on Linux, which follows the system mixer).
+    // Preferring a reachable JACK server's device would silently split the
+    // sidetone from RX audio; routing INTO a JACK graph should be an
+    // explicit selection (see #4978's escape-hatch follow-up), not a
+    // side effect of leaving the device unset.
     PaDeviceIndex devIdx = paNoDevice;
-#ifdef Q_OS_LINUX
-    {
-        const PaHostApiIndex apiCount = Pa_GetHostApiCount();
-        for (PaHostApiIndex i = 0; i < apiCount; ++i) {
-            const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
-            if (!api || !api->name) continue;
-            if (qstrncmp(api->name, "JACK", 4) == 0
-                && api->defaultOutputDevice != paNoDevice) {
-                devIdx = api->defaultOutputDevice;
-                qCInfo(lcAudio) << "CwSidetonePortAudioSink: using JACK host API"
-                                << "(device" << devIdx << ")";
-                break;
-            }
-        }
-    }
-#endif
 #ifdef Q_OS_WIN
     // Pa_GetDefaultOutputDevice() on Windows typically returns an MME device
     // (the first enumerated host API), which has 50–150 ms OS-level buffering.
     // Prefer WASAPI shared mode (~10 ms) to reduce CW timing jitter on fast
-    // keying. Mirrors the Linux JACK preference above. (#3193)
-    if (devIdx == paNoDevice) {
-        const PaHostApiIndex apiCount = Pa_GetHostApiCount();
-        for (PaHostApiIndex i = 0; i < apiCount; ++i) {
-            const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
-            if (!api || !api->name) continue;
-            if (qstrncmp(api->name, "Windows WASAPI", 14) == 0
-                && api->defaultOutputDevice != paNoDevice) {
-                devIdx = api->defaultOutputDevice;
-                qCInfo(lcAudio) << "CwSidetonePortAudioSink: using WASAPI host API"
-                                << "(device" << devIdx << ")";
-                break;
-            }
+    // keying. (#3193)
+    const PaHostApiIndex apiCount = Pa_GetHostApiCount();
+    for (PaHostApiIndex i = 0; i < apiCount; ++i) {
+        const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
+        if (!api || !api->name) continue;
+        if (qstrncmp(api->name, "Windows WASAPI", 14) == 0
+            && api->defaultOutputDevice != paNoDevice) {
+            devIdx = api->defaultOutputDevice;
+            qCInfo(lcAudio) << "CwSidetonePortAudioSink: using WASAPI host API"
+                            << "(device" << devIdx << ")";
+            break;
         }
     }
 #endif
@@ -217,18 +228,6 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
                            << "to PortAudio output" << devInfo->name;
     }
     m_deviceDescription = QString::fromLocal8Bit(devInfo->name ? devInfo->name : "");
-
-    // Detect JACK-host-API selection from defaultPortAudioOutputDevice() so the
-    // summary logger sees it as a backend-substituted fallback. (The selection
-    // itself happens inside the namespace-scope helper, which can't touch
-    // member state directly.)
-    if (device.isNull()) {
-        const PaHostApiInfo* api = Pa_GetHostApiInfo(devInfo->hostApi);
-        if (api && api->name && qstrncmp(api->name, "JACK", 4) == 0) {
-            m_fallbackOccurred = true;
-            m_fallbackReason = QStringLiteral("backend selected JACK default output");
-        }
-    }
 
     // Prefer 48 kHz; fall back to the device's native rate only if the
     // device explicitly rejects 48 kHz.

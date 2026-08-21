@@ -11,6 +11,7 @@
 #include <QKeyEvent>
 #include <QMap>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QStringList>
 #include <QTextEdit>
 #include <cstdio>
@@ -117,6 +118,34 @@ void testDisplayNameCanFollowTheRadioFamily()
     f.panel.setDisplayName(QStringLiteral("CWK"));
     report("Icom can relabel the shared keyer panel as CWK",
            f.panel.displayName() == QLatin1String("CWK"));
+
+    QPushButton* live = buttonByText(f.panel, "Live");
+    QPushButton* setup = buttonByText(f.panel, "Setup");
+    QSpinBox* speed = f.panel.findChild<QSpinBox*>(QStringLiteral("cwxSpeedSpin"));
+    f.panel.configureTextKeyer(QStringLiteral("CWK"), 6, 48, false, false);
+    report("Icom CWK hides unsupported Live and stored-macro setup",
+           live && setup && live->isHidden() && setup->isHidden());
+    report("Icom CWK exposes the radio's honest 6..48 WPM range",
+           speed && speed->minimum() == 6 && speed->maximum() == 48);
+
+    f.panel.configureTextKeyer(QStringLiteral("CWX"), 5, 100, true, true);
+    report("Flex CWX restores Live, Setup and the 5..100 WPM range",
+           live && setup && !live->isHidden() && !setup->isHidden()
+               && speed && speed->minimum() == 5 && speed->maximum() == 100);
+}
+
+void testSimpleKeyerDoesNotExpandSpeedModifiers()
+{
+    CwxModel model;
+    QVector<CwxModel::SpeedSegment> sends;
+    QObject::connect(&model, &CwxModel::transmissionRequested,
+                     [&sends](const QString& text, int wpm) {
+        sends.push_back({text, wpm});
+    });
+    model.setSpeedModifiersEnabled(false);
+    model.send(QStringLiteral("+CQ TEST"));
+    report("a keyer without progress receives one bounded unmodified message",
+           sends == QVector<CwxModel::SpeedSegment>{{QStringLiteral("+CQ TEST"), 20}});
 }
 
 void testSendButtonSendsWhenLiveOff()
@@ -250,6 +279,7 @@ int main(int argc, char** argv)
 
     testLiveButtonTogglesOff();
     testDisplayNameCanFollowTheRadioFamily();
+    testSimpleKeyerDoesNotExpandSpeedModifiers();
     testSendButtonSendsWhenLiveOff();
     testEnterStillSendsWhenLiveOff();
     testSendButtonTurnsLiveOffWithoutDuplicateSend();
