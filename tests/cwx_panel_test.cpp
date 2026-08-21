@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QFontMetrics>
 #include <QKeyEvent>
 #include <QMap>
@@ -66,6 +67,22 @@ QTextEdit* macroEdit(CwxPanel& panel, int fKey /* 1..12 */)
     for (auto* edit : edits) {
         if (edit->placeholderText() == placeholder)
             return edit;
+    }
+    return nullptr;
+}
+
+// The macro grid's QScrollArea specifically, walked up from a macro edit's
+// own parent chain. CwxPanel has TWO QScrollAreas — m_historyScroll (send
+// page, built first in the constructor) and the macro grid's (setup page,
+// built second) — so an unqualified panel.findChild<QScrollArea*>() finds
+// m_historyScroll first and silently passes even with the #4945 fix fully
+// reverted (caught in review on #5125, credit aethersdr-agent). Anchoring
+// the search at a widget actually inside the scroll area we mean is the fix.
+QScrollArea* macroScrollAreaAncestor(QTextEdit* macroRow)
+{
+    for (QWidget* w = macroRow ? macroRow->parentWidget() : nullptr; w; w = w->parentWidget()) {
+        if (auto* sa = qobject_cast<QScrollArea*>(w))
+            return sa;
     }
     return nullptr;
 }
@@ -340,7 +357,8 @@ void testSetupPageUnaffectedAtNormalWindowHeight()
     if (setup) setup->click();
     QCoreApplication::processEvents();
 
-    QScrollArea* macroScroll = f.panel.findChild<QScrollArea*>();
+    QTextEdit* f1 = macroEdit(f.panel, 1);
+    QScrollArea* macroScroll = macroScrollAreaAncestor(f1);
     report("a QScrollArea exists for the macro grid", macroScroll != nullptr);
     if (macroScroll) {
         const bool scrollbarNeeded = macroScroll->verticalScrollBar()
@@ -349,7 +367,6 @@ void testSetupPageUnaffectedAtNormalWindowHeight()
                !scrollbarNeeded);
     }
 
-    QTextEdit* f1 = macroEdit(f.panel, 1);
     if (f1) {
         std::printf("(normal height) F1 macro row height()=%d\n", f1->height());
         report("rows are NOT capped at the #4945 minimum-height floor when "
@@ -413,12 +430,7 @@ void reproduceIssue4945MinimizedHeight()
     // reading but still looked squeezed in the saved screenshot). So this
     // pins the wiring directly: an ancestor of the macro edits must be a
     // QScrollArea, not just "some row happens to measure tall enough".
-    QScrollArea* macroScroll = nullptr;
-    if (f1) {
-        for (QWidget* w = f1->parentWidget(); w; w = w->parentWidget()) {
-            if (auto* sa = qobject_cast<QScrollArea*>(w)) { macroScroll = sa; break; }
-        }
-    }
+    QScrollArea* macroScroll = macroScrollAreaAncestor(f1);
     report("the macro grid is wrapped in a QScrollArea", macroScroll != nullptr);
 
     // Check every row, not just F1 — the earlier single-row check on this
@@ -437,7 +449,7 @@ void reproduceIssue4945MinimizedHeight()
     // reporter's actual screenshot so a human can eyeball the match rather
     // than trust the height arithmetic alone.
     const QPixmap grabbed = f.panel.grab();
-    const QString outPath = QStringLiteral("/tmp/cwx_4945_repro_setup_page.png");
+    const QString outPath = QDir(QDir::tempPath()).filePath("cwx_4945_repro_setup_page.png");
     if (grabbed.save(outPath))
         std::printf("saved repro screenshot to %s (%dx%d)\n",
                     qPrintable(outPath), grabbed.width(), grabbed.height());

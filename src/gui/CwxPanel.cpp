@@ -6,6 +6,8 @@
 
 #include <QContextMenuEvent>
 #include <QDateTime>
+#include <QFont>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -561,7 +563,17 @@ void CwxPanel::buildSetupView()
         // scroll area still passed). Kept anyway as an explicit floor --
         // readability shouldn't depend on QTextEdit's incidental natural
         // size hint staying above one line across Qt versions/themes.
-        m_macroEdits[i]->setMinimumHeight(34);
+        //
+        // Derived from font metrics, not a bare pixel count (review on
+        // #5125) -- the widget's own .font() isn't reliable here (styled
+        // while still unpolished/unshown, the same timing trap #4869
+        // documents for Qt::WA_Hover), so this constructs an explicit QFont
+        // matching the "font-size: 11px" set on the stylesheet two lines up
+        // rather than trusting .font() to already reflect it.
+        QFont macroFont = m_macroEdits[i]->font();
+        macroFont.setPixelSize(11);
+        const int oneLine = QFontMetrics(macroFont).height();
+        m_macroEdits[i]->setMinimumHeight(oneLine * 2 + 8); // ~2 lines + the 2px padding on both edges
         m_macroEdits[i]->setPlaceholderText(QString("F%1 macro...").arg(i + 1));
         m_macroEdits[i]->setAcceptRichText(false);
         m_macroEdits[i]->setLineWrapMode(QTextEdit::WidgetWidth);
