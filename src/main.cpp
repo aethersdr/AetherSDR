@@ -699,9 +699,9 @@ int main(int argc, char* argv[])
     // aether.sysinfo filter rules are live, and before the main window exists
     // so no ggml code can have run yet (Copy Assist is built lazily on first
     // panel open — on a CPU below the speech engine's ISA baseline, entering
-    // ggml is the crash this block diagnoses). Flushed immediately so the
-    // inventory survives a hard kill later in the session: the async writer
-    // otherwise force-flushes only on fatal messages.
+    // ggml is the crash this block diagnoses). Flushed explicitly so the block
+    // is on disk before anything else in startup runs, rather than on the
+    // async writer's next periodic flush.
     AetherSDR::SystemInventory::logSystemInventory();
     AetherSDR::LogManager::instance().flushLog();
 

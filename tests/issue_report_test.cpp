@@ -28,6 +28,7 @@ SupportBundle::SystemInfo sampleSys()
     sys.buildDate     = "Jan 1 2026";
     sys.cpu           = "Test CPU 9000 (x86_64; SSE42 AVX AVX2)";
     sys.ram           = "16384 MB";
+    sys.gpu           = "Test GPU (auto)";
     return sys;
 }
 
@@ -124,6 +125,8 @@ void testBundleSystemInfoJsonCarriesHardwareFacts()
            obj.value("arch").toString() == "x86_64");
     report("json carries total RAM",
            obj.value("ram").toString() == "16384 MB");
+    report("json carries the render GPU decision",
+           obj.value("gpu").toString() == "Test GPU (auto)");
     report("json keeps the pre-existing os/kernel/version fields",
            obj.value("os").toString() == "Test OS"
            && obj.value("kernel").toString() == "1.2.3"

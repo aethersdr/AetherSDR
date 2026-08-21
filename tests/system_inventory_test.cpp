@@ -5,8 +5,10 @@
 // host: the baseline-comparison logic that decides the "this binary cannot
 // run on this CPU" warning (the #4509 class), and the self-consistency of
 // detection on the running host (present features never contradict the
-// feature flags; a host below the compiled baseline could not be running
-// this test binary, so its own baseline check must come back clean).
+// feature flags). The host is deliberately NOT checked against the compiled
+// baseline: this test links no ggml objects and carries no ISA flags, so it
+// runs fine on a below-baseline CPU where that check would fail for the lab,
+// not the code.
 
 #include "core/SystemInventory.h"
 
@@ -118,14 +120,10 @@ int main()
               "presentFeatures lists all six when all are set");
     }
 
-    // Host self-consistency: this binary is running, so the host cannot be
-    // missing any feature of the baseline it was compiled with.
+    // Host self-consistency of detection (not of the baseline — see header).
     {
         const SystemInventory::CpuInfo host = SystemInventory::detectCpu();
         CHECK(!host.arch.isEmpty(), "host arch detected");
-        CHECK(SystemInventory::missingCpuFeatures(
-                  host, SystemInventory::compiledGgmlBaseline()).isEmpty(),
-              "running host satisfies its own compiled baseline");
         // presentFeatures agrees with the individual flags on the real host.
         const QStringList present = SystemInventory::presentFeatures(host);
         CHECK(present.contains(QStringLiteral("AVX2")) == host.avx2,

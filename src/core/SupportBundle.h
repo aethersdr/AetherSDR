@@ -22,6 +22,7 @@ public:
         QString buildDate;
         QString cpu;  // model + arch + SIMD features (SystemInventory::cpuSummary)
         QString ram;  // total physical RAM (SystemInventory::ramSummary)
+        QString gpu;  // render GPU decision (GpuSelector::appliedSummary)
     };
 
     struct RadioInfo {
@@ -55,6 +56,7 @@ public:
         obj["cpu"]           = sys.cpu;
         obj["arch"]          = sys.cpuArch;
         obj["ram"]           = sys.ram;
+        obj["gpu"]           = sys.gpu;
         obj["buildDate"]     = sys.buildDate;
         return obj;
     }

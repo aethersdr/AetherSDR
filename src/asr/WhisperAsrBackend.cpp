@@ -570,14 +570,14 @@ std::vector<AsrGpuDevice> asrGpuDevices()
                         asrMarkGpuDeviceFailed(d.index);
                         qCWarning(lcAsrWhisper)
                             << "GPU device" << d.index << d.name
-                            << "failed the capability probe:" << e.what()
+                            << "threw during the memory query or capability probe:" << e.what()
                             << "- not offered, and not retried this session";
                     } catch (...) {
                         d.usable = false;
                         asrMarkGpuDeviceFailed(d.index);
                         qCWarning(lcAsrWhisper)
                             << "GPU device" << d.index << d.name
-                            << "failed the capability probe (unknown exception)"
+                            << "threw during the memory query or capability probe (unknown exception)"
                             << "- not offered, and not retried this session";
                     }
                 }

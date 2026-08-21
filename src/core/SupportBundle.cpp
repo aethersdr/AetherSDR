@@ -4,6 +4,7 @@
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
 #include "SystemInventory.h"
+#include "GpuSelector.h"
 #include "ZipArchive.h"
 #include "models/RadioModel.h"
 
@@ -71,7 +72,8 @@ SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
         QSysInfo::currentCpuArchitecture(),
         QString::fromLatin1(__DATE__),
         SystemInventory::cpuSummary(),
-        SystemInventory::ramSummary()
+        SystemInventory::ramSummary(),
+        GpuSelector::appliedSummary()
     };
 }
 
@@ -246,6 +248,7 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
     body += QString("OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
     body += QString("CPU: %1\n").arg(sys.cpu);
     body += QString("RAM: %1\n").arg(sys.ram);
+    body += QString("GPU: %1\n").arg(sys.gpu);
     body += QString("Build: %1\n").arg(sys.buildDate);
 
     if (radio.connected) {

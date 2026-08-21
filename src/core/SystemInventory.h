@@ -51,7 +51,7 @@ public:
 
     // Emit the one-per-launch inventory block under aether.sysinfo, plus a
     // warning naming any baseline features the CPU lacks. Caller flushes the
-    // log afterwards (the async writer only force-flushes on fatal).
+    // log afterwards so the block is on disk before startup continues.
     static void logSystemInventory();
 
     // One-line summaries for SupportBundle / IssueReport.

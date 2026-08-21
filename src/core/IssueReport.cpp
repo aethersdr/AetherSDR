@@ -57,6 +57,7 @@ QString buildIssueReport(const SupportBundle::SystemInfo& sys,
     // decide GPU/ISA crash reports (#4986) — not sensitive, unlike serial/IP.
     body += QString("- CPU: %1\n").arg(sys.cpu);
     body += QString("- RAM: %1\n").arg(sys.ram);
+    body += QString("- GPU: %1\n").arg(sys.gpu);
     body += QString("- Build: %1\n\n").arg(sys.buildDate);
 
     body += "### Recent log\n";

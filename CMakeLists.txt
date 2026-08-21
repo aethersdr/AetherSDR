@@ -2723,6 +2723,10 @@ elseif (DEFINED _aether_prebuilt_ggml_baseline)
     # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
     # the baseline comes from the pack's recorded build settings above.
     set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")
+elseif (USE_SYSTEM_LIBWHISPER)
+    # Distro libwhisper: its ISA baseline is the packager's choice and not
+    # knowable here. Explicit, not implied by GGML_* being unset — those are
+    # cache entries and survive a reconfigure from the vendored engine.
 elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
     # x86 targets only: ggml defines these options unguarded on every
     # architecture (INS_ENB defaults them ON whenever GGML_NATIVE is forced
