@@ -293,6 +293,27 @@ public:
         pushCiv(frame);
     }
 
+    // Front-panel repeater edits are deliberately silent here. CI-V
+    // Transceive does not reliably announce these fields, so the backend's
+    // bounded control reconciliation must discover them on the next link tick.
+    void frontPanelRepeater(RepeaterOffsetDirection direction, int offsetHz,
+                            bool toneOn, double toneHz)
+    {
+        m_repeaterOffsetDirection = direction;
+        m_repeaterOffsetHz = offsetHz;
+        m_functions[func::kRepeaterTone] = toneOn ? 1 : 0;
+        m_repeaterToneHz = toneHz;
+    }
+
+    // Silent like a short front-panel hold can be when CI-V Transceive is off;
+    // the client's bounded poll must still discover both edges.
+    void frontPanelTransmitFrequencyCheck(bool on) { m_transmitFrequencyCheck = on; }
+
+    void setClearRepeaterToneOnFrequencyWrite(bool on)
+    {
+        m_clearRepeaterToneOnFrequencyWrite = on;
+    }
+
     // A SECOND DEVICE ON THE BUS. Icom's own RS-BA1 server can front a serial
     // CI-V bus carrying another radio, a rotator or an amplifier, and all of
     // them answer a broadcast. Set this and the broadcast draws two replies with
@@ -560,6 +581,22 @@ private:
             pushCiv(reply);
             return;
         }
+        if (frame->cmd == cmd::kSetFreq) {
+            const std::optional<std::uint64_t> hz = decodeFreq(frame->data);
+            if (!hz) {
+                return;
+            }
+            m_frequencyHz = *hz;
+            if (m_clearRepeaterToneOnFrequencyWrite) {
+                // IC-705 firmware behavior documented by Hamlib: a frequency
+                // change can clear repeater tone. A recall test must therefore
+                // prove the enable is written after tuning, not merely inspect
+                // the order of frames that a permissive fake would accept.
+                m_functions[func::kRepeaterTone] = 0;
+            }
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
         // ---- READS ANSWERED FROM PERSISTED STATE ------------------------
         //
         // A real Icom remembers its own settings across power cycles and reports
@@ -603,6 +640,54 @@ private:
         if (frame->cmd == cmd::kFunction && frame->hasSub && !frame->data.empty()) {
             m_functions[frame->sub] = frame->data.front();
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kDuplex) {
+            if (frame->data.empty()) {
+                pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kDuplex,
+                         static_cast<std::uint8_t>(m_repeaterOffsetDirection), kCivEom});
+                return;
+            }
+            const std::optional<RepeaterOffsetDirection> direction =
+                decodeRepeaterOffsetDirection(frame->data);
+            if (!direction) {
+                return;
+            }
+            m_repeaterOffsetDirection = *direction;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kReadRepeaterOffset) {
+            std::vector<std::uint8_t> reply =
+                cmdSetRepeaterOffset(kControllerAddress, m_repeaterOffsetHz);
+            reply[3] = m_addr;
+            reply[4] = cmd::kReadRepeaterOffset;
+            pushCiv(reply);
+            return;
+        }
+        if (frame->cmd == cmd::kSetRepeaterOffset) {
+            const std::optional<int> offsetHz = decodeRepeaterOffsetHz(frame->data);
+            if (!offsetHz) {
+                return;
+            }
+            m_repeaterOffsetHz = *offsetHz;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
+        if (frame->cmd == cmd::kTone && frame->hasSub && frame->sub == 0x00) {
+            if (frame->data.empty()) {
+                std::vector<std::uint8_t> reply =
+                    cmdSetRepeaterTone(kControllerAddress, m_repeaterToneHz);
+                reply[3] = m_addr;
+                pushCiv(reply);
+                return;
+            }
+            const std::optional<double> toneHz = decodeRepeaterToneHz(frame->data);
+            if (!toneHz) {
+                return;
+            }
+            m_repeaterToneHz = *toneHz;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
             return;
         }
         // ---- 1A 03 IF FILTER WIDTH ---------------------------------------
@@ -747,6 +832,19 @@ private:
             pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
             return;
         }
+        if (frame->cmd == cmd::kControl && frame->hasSub
+            && frame->sub == control::kXfc) {
+            if (frame->data.empty()) {
+                pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, cmd::kControl,
+                         control::kXfc,
+                         static_cast<std::uint8_t>(m_transmitFrequencyCheck ? 1 : 0),
+                         kCivEom});
+                return;
+            }
+            m_transmitFrequencyCheck = frame->data.front() != 0;
+            pushCiv({0xFE, 0xFE, kControllerAddress, m_addr, kCivOk, kCivEom});
+            return;
+        }
 
         // Everything else is acknowledged.
         pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr, kCivOk, kCivEom});
@@ -769,6 +867,7 @@ public:
         {func::kBreakIn, 2},         // full break-in
         {func::kPreamp, 2},          // P.AMP2
         {func::kAgc, 3},             // SLOW
+        {func::kRepeaterTone, 1},    // CTCSS TX ON
         // SSB TX bandwidth slot: MID. Deliberately NOT WIDE, so a client that
         // routes the edge read/write to slot 0 by default reads the wrong SET
         // item here rather than being accidentally right.
@@ -842,6 +941,9 @@ public:
     std::uint8_t m_filter = 2;
     bool m_dataOn = true;
     bool m_refuseDataMode = false;
+    RepeaterOffsetDirection m_repeaterOffsetDirection = RepeaterOffsetDirection::Down;
+    int m_repeaterOffsetHz = 600'000;
+    double m_repeaterToneHz = 88.5;
 
     // Simulate the operator turning the MODE knob: the radio pushes an
     // unsolicited 01 (which cannot carry DATA) and nothing else. Following the
@@ -860,6 +962,7 @@ public:
     bool m_xitOn = false;
     std::uint8_t m_tunerState = 0x01;   // matched
     bool m_ptt = false;
+    bool m_transmitFrequencyCheck = false;
     // Force what 1C 00 REPORTS, regardless of what it is told. While set, PTT
     // writes are still acknowledged but do not move m_ptt — the radio insists
     // on this state. Clear it (std::nullopt) to go back to an obedient radio.
@@ -899,6 +1002,7 @@ private:
     std::uint64_t m_frequencyHz = kRadioFrequencyHz;
     std::uint8_t  m_secondAddr = 0;
     bool          m_civEcho = false;
+    bool          m_clearRepeaterToneOnFrequencyWrite = false;
     std::string   m_name = "IC-705";
     std::uint8_t  m_civSeq = 0;
     std::vector<CivFrame> m_civLog;

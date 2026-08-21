@@ -726,13 +726,18 @@ The monitor button therefore opens at OUR default on a radio that may have the
 monitor on; VOX cannot be set at all, so its read is pure cost. Two decode cases
 and, for VOX, a seam verb that does not exist yet.
 
-**Seven constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
-speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, `1C 02`
-XFC, `27 1E` scope fixed edges. Not all of them should be wired: the notch width
+**Six constants have no code path at all** — `14 09` CW pitch, `14 0C` keyer
+speed, `16 47` break-in, `16 50` dial lock, `16 57` manual-notch width, and
+`27 1E` scope fixed edges. Not all of them should be wired: the notch width
 is deliberately left to the operator's own choice, and the fixed edges are three
 saved presets per band that a pan drag must never overwrite. CW pitch is the one
 that costs something today — it decides where a CW filter sits, so the passband
 drawn in CW assumes the radio's default rather than reading it.
+
+`1C 02` XFC is no longer in that list. The IC-705 and IC-9700 expose it as a
+momentary transmit-frequency check, so both repeater-control surfaces send ON
+while held and OFF on release, follow radio readback, and poll the state when
+CI-V Transceive does not announce a front-panel edge.
 
 **RIT and XIT are send-only.** `21 00/01/02` are written and never read, so the
 controls open at our defaults rather than the radio's. Unlike the above this is

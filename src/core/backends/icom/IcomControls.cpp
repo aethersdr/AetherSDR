@@ -95,6 +95,27 @@ constexpr std::array kSpecs = {
                 "both to the SAME code, because 1A 03 has already set the width and "
                 "separating them would subtract from a window that is already the "
                 "right size."},
+    ControlSpec{"repeater.shift", 0x0F, 0, false, "Repeater shift direction",
+                Plane::Slice, Encoding::Enum, Wiring::Both,
+                0x10, 0x12, "enum", 0, 2,
+                "setSliceRepeaterOffsetDir", "vfoFmDuplexContainer", true,
+                "10 simplex, 11 DUP-, 12 DUP+. Polled because CI-V Transceive "
+                "does not reliably announce every front-panel change.",
+                IcomFeature::FmRepeaterBasic},
+    ControlSpec{"repeater.offset", 0x0D, 0, false, "Repeater offset",
+                Plane::Slice, Encoding::Bcd6, Wiring::Both,
+                0, 999999, "Hz", 0, 99999900,
+                "setSliceFmRepeaterOffset", "vfoFmDuplexContainer", true,
+                "Read with 0x0C and written with 0x0D. Three little-endian BCD "
+                "bytes in 100 Hz units.", IcomFeature::FmRepeaterBasic},
+    ControlSpec{"repeater.tone.frequency", 0x1B, 0x00, true,
+                "Repeater CTCSS frequency",
+                Plane::Slice, Encoding::Bcd6, Wiring::Both,
+                0, 2999, "Hz", 0, 299,
+                "setSliceFmToneValue", "vfoFmToneContainer", true,
+                "Three big-endian BCD bytes in tenths of a hertz. This is the "
+                "tone parameter; 16 42 is the independent enable.",
+                IcomFeature::FmRepeaterBasic},
 
     // ---- Levels (0x14) --------------------------------------------------
     ControlSpec{"af.gain", 0x14, 0x01, true, "AF gain",
@@ -192,6 +213,13 @@ constexpr std::array kSpecs = {
                 "setSliceAutoNotch", "dspANFBtn", true,
                 "A REAL Icom feature, not a Flex one — it finds its own tone, "
                 "unlike the manual notch."},
+    ControlSpec{"repeater.tone", 0x16, 0x42, true, "Repeater tone enable",
+                Plane::Slice, Encoding::OnOff, Wiring::Both,
+                0, 1, "on/off", 0, 1,
+                "setSliceFmToneMode", "vfoFmToneContainer", true,
+                "CTCSS transmit tone only. Written last during memory recall "
+                "because an IC-705 frequency change can clear the enable.",
+                IcomFeature::FmRepeaterBasic},
     ControlSpec{"comp", 0x16, 0x44, true, "Speech compressor",
                 Plane::Transmit, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -274,10 +302,15 @@ constexpr std::array kSpecs = {
                 "button is honest about the OUTCOME (00 none / 01 matched / 02 "
                 "tuning) rather than about the hardware."},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
-                Plane::Radio, Encoding::OnOff, Wiring::Declared,
+                Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "STUB: declared, never used.",
-                IcomFeature::TxFrequencyCheck},
+                "setTransmitFrequencyCheck",
+                "vfoFmReverseButton / rxFmReverseButton", false,
+                "Momentary press-and-hold, not persistent REV. The active model "
+                "profile attests 1C 02 01 while held and 00 on release; "
+                "polled so front-panel XFC updates both repeater-control surfaces. "
+                "Excluded from scrub because asserting it changes the receive "
+                "frequency during the check.", IcomFeature::TxFrequencyCheck},
 
     // ---- RIT / XIT (0x21) ------------------------------------------------
     ControlSpec{"rit.offset", 0x21, 0x00, true, "RIT / XIT offset",
@@ -421,6 +454,7 @@ std::string_view encodingName(Encoding e)
     case Encoding::BcdFreq:    return "bcd-freq";
     case Encoding::ModeFilter: return "mode+filter";
     case Encoding::Bcd4:       return "bcd4";
+    case Encoding::Bcd6:       return "bcd6";
     }
     return "?";
 }

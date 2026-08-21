@@ -103,6 +103,11 @@ public:
     void setSliceManualNotch(int sliceId, bool on, int position) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
+    void setSliceFmToneMode(int sliceId, const QString& mode) override;
+    void setSliceFmToneValue(int sliceId, double hz) override;
+    void setSliceRepeaterOffsetDir(int sliceId, const QString& direction) override;
+    void setSliceFmRepeaterOffset(int sliceId, double hz) override;
+    void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start) override;
     void setRitEnabled(bool on) override;
@@ -348,6 +353,7 @@ private:
     bool m_dataMode = false;
     bool m_connected = false;
     bool m_keyed = false;
+    bool m_transmitFrequencyCheck = false;
     std::optional<bool> m_pendingPttIntent;
     qint64 m_pendingPttUntilMs = 0;
     bool m_overflow = false;
@@ -460,6 +466,10 @@ private:
     bool    m_ritOn = false;
     bool    m_xitOn = false;
     int     m_ritOffsetHz = 0;
+    std::optional<bool> m_repeaterToneOn;
+    std::optional<double> m_repeaterToneHz;
+    std::optional<icom::RepeaterOffsetDirection> m_repeaterOffsetDirection;
+    std::optional<int> m_repeaterOffsetHz;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
 

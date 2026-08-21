@@ -255,6 +255,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
     caps.hasManualNotch = false;
+    caps.hasTransmitFrequencyCheck = false;
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;

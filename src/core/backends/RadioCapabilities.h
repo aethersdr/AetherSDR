@@ -283,6 +283,13 @@ struct RadioCapabilities {
     // tone. A radio can have either, both or neither.
     bool hasManualNotch = false;
 
+    // The radio can temporarily monitor the transmit frequency while the
+    // operator holds a control. This is Icom's XFC (CI-V 1C 02), not a
+    // persistent repeater-reverse setting: releasing it returns reception to
+    // the normal frequency. The UI therefore renders a momentary button and
+    // follows the radio's reported state in both directions.
+    bool hasTransmitFrequencyCheck = false;
+
     // The radio reports the PA supply-voltage rail as telemetry — the value the
     // status bar renders directly under the PA temperature. A radio that never
     // reports the rail declares false and that readout goes away, instead of

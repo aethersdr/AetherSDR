@@ -151,6 +151,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // A Flex notches with TNFs, which are pinned to absolute frequencies and
     // are a different instrument. No single in-passband manual notch.
     caps.hasManualNotch = false;
+    caps.hasTransmitFrequencyCheck = false;
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.

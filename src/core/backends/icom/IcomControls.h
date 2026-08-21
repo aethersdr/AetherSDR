@@ -46,6 +46,7 @@ enum class Encoding : std::uint8_t {
     BcdFreq,     // five BCD bytes, little-endian, Hz
     ModeFilter,  // mode byte + filter slot byte
     Bcd4,        // four BCD digits (a scope span, a SET-menu item)
+    Bcd6,        // six BCD digits (repeater offset / CTCSS frequency)
 };
 
 // Which model the value belongs to once it is across the seam. Says where to
