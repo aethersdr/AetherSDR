@@ -757,6 +757,31 @@ int main(int argc, char** argv)
                      && rDotsName.profileName.startsWith("Imported profile"),
                  "import: a refused derived name falls back to the default");
 
+    // ── Profile store: the write reports its outcome (#5077) ────────────────
+
+    ok &= expect(settings.saveProfile("Outcome", saved),
+                 "profile store: a successful save returns true");
+    ok &= expect(settings.saveProfile("Outcome", saved),
+                 "profile store: overwriting an existing profile returns true");
+    ok &= expect(!settings.saveProfile("a/b", saved),
+                 "profile store: a refused name returns false");
+    settings.deleteProfile("Outcome");
+    // Block the store directory with a plain file so mkpath and open both
+    // fail: the failure must reach the caller instead of being swallowed.
+    QDir(appConfigDir + "/midi").removeRecursively();
+    {
+        QFile blocker(appConfigDir + "/midi");
+        if (blocker.open(QIODevice::WriteOnly)) {
+            blocker.write("not a directory");
+            blocker.close();
+        }
+    }
+    ok &= expect(!settings.saveProfile("Blocked", saved),
+                 "profile store: an unwritable store returns false");
+    ok &= expect(!QFile::exists(appConfigDir + "/midi/Blocked.xml"),
+                 "profile store: the failed save left no file");
+    QFile::remove(appConfigDir + "/midi");
+
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();
 

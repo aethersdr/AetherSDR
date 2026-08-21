@@ -485,7 +485,7 @@ QString MidiSettings::settingsFilePath() const
            + "/AetherSDR/midi.settings";
 }
 
-QString MidiSettings::profileDir() const
+QString MidiSettings::profileDir()
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
            + "/AetherSDR/midi";
@@ -599,15 +599,19 @@ QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
     return result;
 }
 
-void MidiSettings::writeBindingsToXml(const QString& filePath,
-                                       const QVector<MidiBinding>& bindings)
+bool MidiSettings::writeBindingsToXml(const QString& filePath,
+                                      const QVector<MidiBinding>& bindings)
 {
     QDir().mkpath(QFileInfo(filePath).absolutePath());
     QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
 
     QXmlStreamWriter xml(&file);
     writeProfileDocument(xml, bindings);
+    // close() flushes the stream: a write that fails after open() (full disk,
+    // revoked permission) surfaces here, not in the open() check. (#5077)
+    file.close();
+    return file.error() == QFileDevice::NoError;
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────
@@ -656,13 +660,13 @@ QStringList MidiSettings::availableProfiles() const
     return result;
 }
 
-void MidiSettings::saveProfile(const QString& name,
+bool MidiSettings::saveProfile(const QString& name,
                                 const QVector<MidiBinding>& bindings)
 {
     if (!isValidProfileName(name)) {
-        return;
+        return false;
     }
-    writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
+    return writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
 }
 
 QVector<MidiBinding> MidiSettings::loadProfile(const QString& name) const
@@ -793,11 +797,9 @@ MidiImportResult MidiSettings::importProfile(
     for (int n = 2; taken(unique); ++n)
         unique = name + QStringLiteral(" (%1)").arg(n);
 
-    saveProfile(unique, bindings);
-
-    // The write path returns void, so prove the store took it before
-    // reporting success.
-    if (loadProfile(unique).size() != bindings.size()) {
+    // The write reports failure itself (#5077); the read-back additionally
+    // proves the stored document carries every binding before reporting success.
+    if (!saveProfile(unique, bindings) || loadProfile(unique).size() != bindings.size()) {
         result.errors << QStringLiteral("Couldn't write the profile into %1.")
                              .arg(QDir::toNativeSeparators(profileDir()));
         result.importedCount = 0;
