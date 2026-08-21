@@ -47,6 +47,8 @@ constexpr std::array<IcomModel, 7> kModels{{
         // button is a tune-and-operate affordance rather than a coverage
         // claim. Both stay reachable by typing the frequency.
         /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
+        /*hasGpsPosition*/ true,
+        /*hasGpsTimeConfiguration*/ true,
     },
     {
         // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),

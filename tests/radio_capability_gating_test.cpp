@@ -243,6 +243,12 @@ int main(int argc, char** argv)
               "Flex declares hasMultiClientSessions (multiFLEX)");
         check(caps.hasGpsLocation,
               "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
+        check(caps.hasGpsSatelliteTelemetry,
+              "Flex declares hasGpsSatelliteTelemetry (tracked satellites and visibility)");
+        check(caps.hasGpsFrequencyReference,
+              "Flex declares hasGpsFrequencyReference (GPSDO 10 MHz discipline)");
+        check(!caps.hasGpsTimeConfiguration,
+              "Flex declares hasGpsTimeConfiguration=false (no CI-V-style NTP client controls)");
         // The one this field exists to protect: the struct default is false, so
         // adding the field without touching FlexBackend would silently delete a
         // readout that ships and works today.
@@ -367,6 +373,12 @@ int main(int argc, char** argv)
               "HL2 declares hasMultiClientSessions=false (one client owns it)");
         check(!caps.hasGpsLocation,
               "HL2 declares hasGpsLocation=false (no GNSS receiver on the board)");
+        check(!caps.hasGpsSatelliteTelemetry,
+              "HL2 declares hasGpsSatelliteTelemetry=false");
+        check(!caps.hasGpsFrequencyReference,
+              "HL2 declares hasGpsFrequencyReference=false");
+        check(!caps.hasGpsTimeConfiguration,
+              "HL2 declares hasGpsTimeConfiguration=false");
         // PATEMP yes, "+13.8A" no. The temperature above the volts row is a
         // genuine HL2 reading and must keep working — this flag hides one label,
         // not the stack.
@@ -567,6 +579,12 @@ int main(int argc, char** argv)
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
+        check(!caps.hasGpsSatelliteTelemetry,
+              "Sim declares hasGpsSatelliteTelemetry=false");
+        check(!caps.hasGpsFrequencyReference,
+              "Sim declares hasGpsFrequencyReference=false");
+        check(!caps.hasGpsTimeConfiguration,
+              "Sim declares hasGpsTimeConfiguration=false");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
         check(!caps.hasRadioSideCwKeyer,

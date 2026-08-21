@@ -15,6 +15,7 @@
 
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomSettings.h"
+#include "core/aprs/AprsPacket.h"
 #include "core/Resampler.h"
 
 namespace AetherSDR::icom {
@@ -78,6 +79,34 @@ QByteArray floatBytes(const std::vector<float>& v)
 {
     return {reinterpret_cast<const char*>(v.data()),
             static_cast<qsizetype>(v.size() * sizeof(float))};
+}
+
+QString gpsCoordinateText(double value, bool longitude)
+{
+    const QChar hemisphere = longitude
+        ? (value < 0.0 ? QLatin1Char('W') : QLatin1Char('E'))
+        : (value < 0.0 ? QLatin1Char('S') : QLatin1Char('N'));
+    const double absolute = std::abs(value);
+    const int degrees = static_cast<int>(absolute);
+    const double minutes = (absolute - degrees) * 60.0;
+    return QStringLiteral("%1 %2 %3")
+        .arg(hemisphere)
+        .arg(degrees)
+        .arg(minutes, 0, 'f', 3);
+}
+
+bool validNtpServer(const QString& address)
+{
+    if (address.isEmpty() || address.size() > 64) {
+        return false;
+    }
+    for (const QChar ch : address) {
+        if (!(ch.isLetterOrNumber() && ch.unicode() < 128)
+            && ch != QLatin1Char('.') && ch != QLatin1Char('-')) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -213,8 +242,14 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;
 
-    // The radio HAS a GPS and the protocol will not carry its data.
-    c.hasGpsLocation = false;
+    // Model-specific and source-backed. The IC-705 exposes its current
+    // position/time through 23 00, but no satellite count or GPSDO/reference
+    // lock. Do not lend this claim to another Icom row until its own guide has
+    // been checked.
+    c.hasGpsLocation = m_model->hasGpsPosition;
+    c.hasGpsSatelliteTelemetry = false;
+    c.hasGpsFrequencyReference = false;
+    c.hasGpsTimeConfiguration = m_model->hasGpsTimeConfiguration;
 
     c.hasSupplyVoltageTelemetry =
         profile.meters.calibration != MeterCalibration::Uncalibrated;
@@ -707,6 +742,18 @@ void IcomCivBackend::sendConnectReadBurst()
                 queueStartupRead(cmdReadSetting(m_session->civAddress(), item));
             }
         }
+    }
+
+    if (m_model->hasGpsPosition) {
+        queueStartupRead(cmdReadGpsSource(m_session->civAddress()));
+        queueStartupRead(cmdReadGpsPosition(m_session->civAddress()));
+    }
+    if (m_model->hasGpsTimeConfiguration) {
+        for (int item : {setting::kNtpEnabled, setting::kNtpServer,
+                         setting::kGpsTimeCorrect}) {
+            queueStartupRead(cmdReadSetting(m_session->civAddress(), item));
+        }
+        queueStartupRead(cmdReadNtpAccessResult(m_session->civAddress()));
     }
 
     // ADOPT THE RADIO'S OWN LEVELS. Constitution II/III says an Icom is
@@ -1278,6 +1325,8 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
     m_pcAudioEnabled.reset();
     m_dataOffModRestore.reset();
     m_lastModInputWarning.clear();
+    m_gpsSource = -1;
+    m_ntpAccessInProgress = false;
 
     if (was)
         emit disconnected();
@@ -1881,6 +1930,86 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         return;
     }
 
+    case cmd::kGps: {
+        if (!frame.hasSub || !m_model->hasGpsPosition) {
+            return;
+        }
+        if (frame.sub == gps::kSource) {
+            if (frame.data.size() != 1
+                || (frame.data[0] != 0x00 && frame.data[0] != 0x01
+                    && frame.data[0] != 0x03)) {
+                return;
+            }
+            m_gpsSource = frame.data[0];
+            GpsDelta d;
+            d.source = m_gpsSource == 0x00 ? QStringLiteral("Off")
+                : m_gpsSource == 0x03 ? QStringLiteral("Manual")
+                                      : QStringLiteral("Internal GPS");
+            d.status = m_gpsSource == 0x00 ? QStringLiteral("GPS off")
+                : m_gpsSource == 0x03 ? QStringLiteral("Manual position")
+                                      : QStringLiteral("Waiting for position");
+            if (m_gpsSource == 0x00) {
+                d.positionValid = false;
+                d.grid = QString();
+                d.altitude = QString();
+                d.lat = QString();
+                d.lon = QString();
+                d.time = QString();
+                d.date = QString();
+                d.speed = QString();
+                d.track = QString();
+            }
+            emit gpsChanged(d);
+            return;
+        }
+        if (frame.sub != gps::kPosition) {
+            return;
+        }
+        const std::optional<GpsPosition> position = decodeGpsPosition(frame.data);
+        if (!position) {
+            GpsDelta d;
+            d.positionValid = false;
+            d.status = m_gpsSource == 0x00 ? QStringLiteral("GPS off")
+                                           : QStringLiteral("No position data");
+            d.grid = QString();
+            d.altitude = QString();
+            d.lat = QString();
+            d.lon = QString();
+            d.time = QString();
+            d.date = QString();
+            d.speed = QString();
+            d.track = QString();
+            emit gpsChanged(d);
+            return;
+        }
+        GpsDelta d;
+        d.positionValid = true;
+        d.status = m_gpsSource == 0x03 ? QStringLiteral("Manual position")
+                                       : QStringLiteral("Position reported");
+        d.lat = gpsCoordinateText(position->latitude, false);
+        d.lon = gpsCoordinateText(position->longitude, true);
+        d.grid = aprs::gridSquare(position->latitude, position->longitude);
+        d.altitude = position->altitudeMetres
+            ? QStringLiteral("%1 m").arg(*position->altitudeMetres, 0, 'f', 1)
+            : QString();
+        d.speed = position->speedKmh
+            ? QStringLiteral("%1 km/h").arg(*position->speedKmh, 0, 'f', 1)
+            : QString();
+        d.track = position->courseDegrees
+            ? QStringLiteral("%1 deg").arg(*position->courseDegrees)
+            : QString();
+        if (position->utcIso8601) {
+            const QString utc = QString::fromStdString(*position->utcIso8601);
+            d.date = utc.left(10);
+            d.time = utc.mid(11, 8) + QLatin1Char('Z');
+        } else {
+            d.date = QString();
+            d.time = QString();
+        }
+        emit gpsChanged(d);
+        return;
+    }
+
     case cmd::kSetting: {
         if (!frame.hasSub)
             return;
@@ -1910,10 +2039,55 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             publishPassband();
             return;
         }
+        if (frame.sub == settingSub::kNtpResult) {
+            if (!m_model->hasGpsTimeConfiguration || frame.data.size() != 1
+                || frame.data[0] > 0x02) {
+                return;
+            }
+            GpsDelta d;
+            if (frame.data[0] == 0x00) {
+                d.ntpSyncStatus = m_ntpAccessInProgress
+                    ? QStringLiteral("Accessing") : QStringLiteral("Not accessed");
+            } else if (frame.data[0] == 0x01) {
+                d.ntpSyncStatus = QStringLiteral("Succeeded");
+                m_ntpAccessInProgress = false;
+            } else {
+                d.ntpSyncStatus = QStringLiteral("Failed");
+                m_ntpAccessInProgress = false;
+            }
+            emit gpsChanged(d);
+            return;
+        }
         // 1A 05 <item hi> <item lo> <value>
         if (frame.sub != settingSub::kMenu || frame.data.size() < 3)
             return;
         const int item = decodeBcdByte(frame.data[0]) * 100 + decodeBcdByte(frame.data[1]);
+
+        if (m_model->hasGpsTimeConfiguration) {
+            GpsDelta d;
+            if (item == setting::kNtpEnabled && frame.data.size() == 3
+                && frame.data[2] <= 0x01) {
+                d.ntpEnabled = frame.data[2] == 0x01;
+                emit gpsChanged(d);
+                return;
+            }
+            if (item == setting::kGpsTimeCorrect && frame.data.size() == 3
+                && frame.data[2] <= 0x01) {
+                d.gpsTimeCorrectionEnabled = frame.data[2] == 0x01;
+                emit gpsChanged(d);
+                return;
+            }
+            if (item == setting::kNtpServer) {
+                const QByteArray raw(reinterpret_cast<const char*>(frame.data.data() + 2),
+                                     static_cast<qsizetype>(frame.data.size() - 2));
+                const QString server = QString::fromLatin1(raw);
+                if (server.isEmpty() || validNtpServer(server)) {
+                    d.ntpServer = server;
+                    emit gpsChanged(d);
+                }
+                return;
+            }
+        }
 
         // TRANSMIT PASSBAND EDGES, which are a different shape from every other
         // SET item: one packed BCD byte whose high digit indexes this model's
@@ -2344,6 +2518,9 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         }
         break;
     case cmd::kSetting:
+        if (parsed->hasSub && parsed->sub == settingSub::kNtpAccess) {
+            return cmdReadNtpAccessResult(addr);
+        }
         if (parsed->hasSub && parsed->sub == settingSub::kMenu && parsed->data.size() >= 3) {
             const int item = decodeBcdByte(parsed->data[0]) * 100
                 + decodeBcdByte(parsed->data[1]);
@@ -4095,6 +4272,61 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionError(requestId, QStringLiteral("unknown namespace %1").arg(ns));
         return;
     }
+    if (verb.startsWith(QLatin1String("gps."))) {
+        if (!m_connected || !m_session) {
+            if (requestId != 0) {
+                emit extensionError(requestId, QStringLiteral("Icom radio is not connected"));
+            }
+            return;
+        }
+        if (!m_model->hasGpsTimeConfiguration) {
+            if (requestId != 0) {
+                emit extensionError(requestId,
+                                    QStringLiteral("GPS clock controls are not supported by %1")
+                                        .arg(QString::fromUtf8(m_model->name.data(),
+                                                               static_cast<int>(m_model->name.size()))));
+            }
+            return;
+        }
+        const std::uint8_t addr = m_session->civAddress();
+        if (verb == QLatin1String("gps.ntp.enabled")) {
+            sendUserCommand(cmdWriteSetting(addr, setting::kNtpEnabled,
+                                            arg.toBool() ? 0x01 : 0x00));
+        } else if (verb == QLatin1String("gps.time-correction")) {
+            sendUserCommand(cmdWriteSetting(addr, setting::kGpsTimeCorrect,
+                                            arg.toBool() ? 0x01 : 0x00));
+        } else if (verb == QLatin1String("gps.ntp.server")) {
+            const QString address = arg.toString().trimmed();
+            if (!validNtpServer(address)) {
+                if (requestId != 0) {
+                    emit extensionError(requestId,
+                                        QStringLiteral("NTP server must be 1-64 ASCII letters, digits, dots, or hyphens"));
+                }
+                return;
+            }
+            const QByteArray ascii = address.toLatin1();
+            const std::span<const std::uint8_t> bytes(
+                reinterpret_cast<const std::uint8_t*>(ascii.constData()),
+                static_cast<std::size_t>(ascii.size()));
+            sendUserCommand(cmdWriteSettingData(addr, setting::kNtpServer, bytes));
+        } else if (verb == QLatin1String("gps.ntp.sync")) {
+            m_ntpAccessInProgress = true;
+            GpsDelta d;
+            d.ntpSyncStatus = QStringLiteral("Accessing");
+            emit gpsChanged(d);
+            sendUserCommand(cmdNtpAccess(addr, true));
+        } else {
+            if (requestId != 0) {
+                emit extensionError(requestId,
+                                    QStringLiteral("unknown Icom GPS verb %1").arg(verb));
+            }
+            return;
+        }
+        if (requestId != 0) {
+            emit extensionResult(requestId, true);
+        }
+        return;
+    }
     if (verb == QLatin1String("tuner.start")) {
         // The ATU cycle — explicitly NOT setTune(). Exposed as an extension so
         // an operator with an AH-705 can reach it without the TUNE button
@@ -4431,6 +4663,15 @@ void IcomCivBackend::onLinkTick()
     };
     const int phase = ++m_controlPollPhase;
 
+    if (m_model->hasGpsPosition) {
+        queueRead(cmdReadGpsPosition(addr), semanticKey(cmdReadGpsPosition(addr)),
+                  IcomCivScheduler::Priority::Maintenance);
+    }
+    if (m_ntpAccessInProgress) {
+        queueRead(cmdReadNtpAccessResult(addr), semanticKey(cmdReadNtpAccessResult(addr)),
+                  IcomCivScheduler::Priority::Maintenance);
+    }
+
     // Switches whose front-panel state must feel live. NR/NB were the measured
     // failure: Transceive sometimes announced them and sometimes did not.
     for (std::uint8_t fn : {func::kAutoNotch, func::kManualNotch,
@@ -4477,6 +4718,15 @@ void IcomCivBackend::onLinkTick()
                 if (item >= 0) {
                     queueControl(cmdReadSetting(addr, item));
                 }
+            }
+        }
+        if (m_model->hasGpsPosition) {
+            queueControl(cmdReadGpsSource(addr));
+        }
+        if (m_model->hasGpsTimeConfiguration) {
+            for (int item : {setting::kNtpEnabled, setting::kNtpServer,
+                             setting::kGpsTimeCorrect}) {
+                queueControl(cmdReadSetting(addr, item));
             }
         }
     }

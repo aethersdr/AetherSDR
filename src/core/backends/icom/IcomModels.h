@@ -86,6 +86,11 @@ struct IcomModel {
     // typo here costs a missing button, never a bogus one.
     std::string_view bands;
 
+    // Verified per model from that model's own CI-V guide. Defaults are
+    // deliberately false so another row cannot inherit IC-705 GPS commands.
+    bool hasGpsPosition = false;
+    bool hasGpsTimeConfiguration = false;
+
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 

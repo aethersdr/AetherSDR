@@ -462,6 +462,11 @@ private:
     int     m_ritOffsetHz = 0;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
+    // IC-705 GPS state. Source is 00 off, 01 internal receiver, 03 manual;
+    // -1 means the radio has not answered yet. NTP access is a short-lived
+    // operation polled until the radio reports success or failure.
+    int     m_gpsSource = -1;
+    bool    m_ntpAccessInProgress = false;
 
     // The radio's MOD Input selection, as last reported (-1 = not yet read).
     //

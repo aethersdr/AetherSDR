@@ -311,6 +311,10 @@ int main(int argc, char** argv)
     {
         const icom::IcomModel* ic705 = icom::modelForName("IC-705");
         check(ic705 != nullptr, "the IC-705 is in the table");
+        check(ic705->hasGpsPosition,
+              "the IC-705 alone declares its verified CI-V GPS position surface");
+        check(ic705->hasGpsTimeConfiguration,
+              "the IC-705 alone declares its verified NTP/GPS clock settings");
         const QStringList bands = parseDeclaredBands(
             QString::fromUtf8(ic705->bands.data(),
                               static_cast<int>(ic705->bands.size())));
@@ -328,6 +332,8 @@ int main(int argc, char** argv)
         // The tri-bander, whose HF grid was entirely unpressable before.
         const icom::IcomModel* ic9700 = icom::modelForName("IC-9700");
         check(ic9700 != nullptr, "the IC-9700 is in the table");
+        check(!ic9700->hasGpsPosition && !ic9700->hasGpsTimeConfiguration,
+              "another Icom does not inherit IC-705 GPS commands by table position");
         check(parseDeclaredBands(
                   QString::fromUtf8(ic9700->bands.data(),
                                     static_cast<int>(ic9700->bands.size())))

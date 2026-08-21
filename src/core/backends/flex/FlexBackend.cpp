@@ -248,6 +248,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // MainWindow therefore combines this family declaration with
     // RadioModel::hasGpsHardware() while connected.
     caps.hasGpsLocation = true;
+    caps.hasGpsSatelliteTelemetry = true;
+    caps.hasGpsFrequencyReference = true;
+    caps.hasGpsTimeConfiguration = false;
     // The radio owns the memory slots and re-dumps them on every connect, so
     // the client must NOT keep a local bank for a Flex — two stores that both
     // believe they are authoritative would fight over slot indices.
@@ -1085,6 +1088,19 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 
     GpsDelta d;
     carry(kvs, "status", d.status);
+    if (kvs.contains(QStringLiteral("status"))) {
+        const QString status = kvs.value(QStringLiteral("status")).trimmed().toLower();
+        const bool saysLock = status.contains(QLatin1String("lock"));
+        const bool saysNoLock = status.contains(QLatin1String("unlock"))
+            || status.contains(QLatin1String("no lock"))
+            || status.contains(QLatin1String("not lock"))
+            || status.contains(QLatin1String("lost"))
+            || status.contains(QLatin1String("loss"));
+        d.positionValid = saysLock && !saysNoLock
+            && !kvs.value(QStringLiteral("lat")).trimmed().isEmpty()
+            && !kvs.value(QStringLiteral("lon")).trimmed().isEmpty();
+        d.source = QStringLiteral("GPSDO");
+    }
     carry(kvs, "tracked", d.tracked);
     carry(kvs, "visible", d.visible);
     carry(kvs, "grid", d.grid);
