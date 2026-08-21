@@ -72,6 +72,13 @@ public:
     // in a failed-write message. (#5077)
     static QString profileDir();
 
+    // Whether a profile of this name is already on disk — answered by the
+    // filesystem, not by a string compare, so it agrees with what saveProfile()
+    // is about to do on every platform (case-insensitive APFS/NTFS overwrite
+    // "foo" when asked for "Foo"; case-sensitive ext4 creates a second file).
+    // Refused names are never "existing". (#5077)
+    static bool profileExists(const QString& name);
+
     // Import a profile file into the store. Accepts the native <MidiProfile>
     // XML or a SmartSDR iOS/Mac ".map" (auto-detected by content). The store
     // name derives from the file name; an existing name gets a " (2)" style

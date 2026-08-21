@@ -603,15 +603,22 @@ bool MidiSettings::writeBindingsToXml(const QString& filePath,
                                       const QVector<MidiBinding>& bindings)
 {
     QDir().mkpath(QFileInfo(filePath).absolutePath());
-    QFile file(filePath);
+    // QSaveFile writes beside the target and renames over it on commit(), so
+    // a failure (unwritable store, full disk) leaves the previous profile
+    // intact instead of a truncated file — the outcome the caller then
+    // reports is true of the disk (Principle XIV). commit() flushes and
+    // returns false on a write error; hasError() covers a failure the stream
+    // writer saw earlier in the document. (#5077)
+    QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
 
     QXmlStreamWriter xml(&file);
     writeProfileDocument(xml, bindings);
-    // close() flushes the stream: a write that fails after open() (full disk,
-    // revoked permission) surfaces here, not in the open() check. (#5077)
-    file.close();
-    return file.error() == QFileDevice::NoError;
+    if (xml.hasError()) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────
@@ -658,6 +665,14 @@ QStringList MidiSettings::availableProfiles() const
         }
     }
     return result;
+}
+
+bool MidiSettings::profileExists(const QString& name)
+{
+    if (!isValidProfileName(name)) {
+        return false;
+    }
+    return QFile::exists(profileDir() + "/" + name + ".xml");
 }
 
 bool MidiSettings::saveProfile(const QString& name,

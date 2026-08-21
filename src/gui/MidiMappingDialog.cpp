@@ -328,9 +328,9 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
             }
             // Sampled before the write so the result can say which success
             // happened — an overwrite is otherwise invisible, because the list
-            // refresh changes nothing. (#5077)
-            const bool existed =
-                MidiSettings::instance().availableProfiles().contains(name);
+            // refresh changes nothing. Asked of the filesystem, so it matches
+            // what the write does on case-insensitive volumes too. (#5077)
+            const bool existed = MidiSettings::profileExists(name);
             const int count = m_manager->bindings().size();
             if (!MidiSettings::instance().saveProfile(name, m_manager->bindings())) {
                 FramelessMessageBox::warning(

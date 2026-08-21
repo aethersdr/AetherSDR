@@ -9,6 +9,10 @@
 
 #include <iostream>
 
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
+
 using namespace AetherSDR;
 
 namespace {
@@ -765,7 +769,19 @@ int main(int argc, char** argv)
                  "profile store: overwriting an existing profile returns true");
     ok &= expect(!settings.saveProfile("a/b", saved),
                  "profile store: a refused name returns false");
+    // Existence is the filesystem's answer: on a case-insensitive volume
+    // "outcome" names the same file as "Outcome", on a case-sensitive one it
+    // does not — either way it must agree with the path the store writes.
+    ok &= expect(MidiSettings::profileExists("Outcome"),
+                 "profile store: a saved profile exists");
+    ok &= expect(MidiSettings::profileExists("outcome")
+                     == QFile::exists(appConfigDir + "/midi/outcome.xml"),
+                 "profile store: existence check agrees with the filesystem on case");
+    ok &= expect(!MidiSettings::profileExists("a/b"),
+                 "profile store: a refused name never exists");
     settings.deleteProfile("Outcome");
+    ok &= expect(!MidiSettings::profileExists("Outcome"),
+                 "profile store: a deleted profile no longer exists");
     // Block the store directory with a plain file so mkpath and open both
     // fail: the failure must reach the caller instead of being swallowed.
     QDir(appConfigDir + "/midi").removeRecursively();
@@ -778,9 +794,30 @@ int main(int argc, char** argv)
     }
     ok &= expect(!settings.saveProfile("Blocked", saved),
                  "profile store: an unwritable store returns false");
-    ok &= expect(!QFile::exists(appConfigDir + "/midi/Blocked.xml"),
-                 "profile store: the failed save left no file");
     QFile::remove(appConfigDir + "/midi");
+    // A failed overwrite leaves the previous profile intact: write one, make
+    // the store read-only, try to overwrite it, and read the original back.
+#ifndef Q_OS_WIN
+    // Directory permissions do not bind root (CI containers may run as root)
+    // and are not honoured the same way on Windows, so this arm is POSIX
+    // non-root only; the bool contract itself is covered above on every OS.
+    if (::geteuid() != 0) {
+    ok &= expect(settings.saveProfile("Keep", saved), "profile store: original written");
+    QFile::setPermissions(appConfigDir + "/midi",
+                          QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    QVector<MidiBinding> bigger = saved;
+    bigger.append(saved.first());
+    const bool overwriteFailed = !settings.saveProfile("Keep", bigger);
+    QFile::setPermissions(appConfigDir + "/midi",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    ok &= expect(overwriteFailed, "profile store: overwrite into a read-only store returns false");
+    ok &= expect(settings.loadProfile("Keep").size() == saved.size(),
+                 "profile store: the failed overwrite left the original profile intact");
+    settings.deleteProfile("Keep");
+    } else {
+        std::cout << "[SKIP] profile store: read-only store arm (running as root)\n";
+    }
+#endif
 
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();
