@@ -549,6 +549,19 @@ void CwxPanel::buildSetupView()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_macroEdits[i], "QTextEdit { background: {{color.text.primary}}; color: {{color.background.spectrum}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 2px; padding: 2px; font-size: 11px; }");
         m_macroEdits[i]->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        // #4945: with 12 of these Expanding rows in one grid, a short window
+        // (the app's own 400px minimum height leaves this panel ~330px)
+        // squeezed every row well below one line of text -- Qt's layout
+        // protects FIXED-size siblings like m_textEdit under a deficit, but
+        // has nowhere else to take the shortfall from an Expanding one, so
+        // it shrunk the widget itself and clipped the glyph tops rather
+        // than just hiding overflow text. buildSetupView() now puts this
+        // grid in a QScrollArea, which is what actually stops the squeeze
+        // (verified: removing just this setMinimumHeight while keeping the
+        // scroll area still passed). Kept anyway as an explicit floor --
+        // readability shouldn't depend on QTextEdit's incidental natural
+        // size hint staying above one line across Qt versions/themes.
+        m_macroEdits[i]->setMinimumHeight(34);
         m_macroEdits[i]->setPlaceholderText(QString("F%1 macro...").arg(i + 1));
         m_macroEdits[i]->setAcceptRichText(false);
         m_macroEdits[i]->setLineWrapMode(QTextEdit::WidgetWidth);
@@ -571,7 +584,17 @@ void CwxPanel::buildSetupView()
         });
     }
 
-    vbox->addWidget(macroWidget, 1);
+    // #4945: scroll the grid instead of letting the outer layout squeeze
+    // every row's height when the panel is shorter than 12 readable rows
+    // need. setWidgetResizable(true) lets macroWidget still grow to fill
+    // available width/height when there's room, matching the pre-fix look
+    // at a normal window size.
+    auto* macroScroll = new QScrollArea;
+    macroScroll->setWidget(macroWidget);
+    macroScroll->setWidgetResizable(true);
+    macroScroll->setFrameShape(QFrame::NoFrame);
+    macroScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    vbox->addWidget(macroScroll, 1);
 
     // Prosign + speed-modifier legend
     auto* legend = new QLabel(

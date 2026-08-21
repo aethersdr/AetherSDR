@@ -8,10 +8,16 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QFontMetrics>
 #include <QKeyEvent>
 #include <QMap>
+#include <QPixmap>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSpinBox>
+#include <QSplitter>
+#include <QStackedWidget>
 #include <QStringList>
 #include <QTextEdit>
 #include <cstdio>
@@ -48,6 +54,17 @@ QTextEdit* inputEdit(CwxPanel& panel)
     const auto edits = panel.findChildren<QTextEdit*>();
     for (auto* edit : edits) {
         if (edit->placeholderText() == QLatin1String("Type CW message..."))
+            return edit;
+    }
+    return nullptr;
+}
+
+QTextEdit* macroEdit(CwxPanel& panel, int fKey /* 1..12 */)
+{
+    const QString placeholder = QString("F%1 macro...").arg(fKey);
+    const auto edits = panel.findChildren<QTextEdit*>();
+    for (auto* edit : edits) {
+        if (edit->placeholderText() == placeholder)
             return edit;
     }
     return nullptr;
@@ -267,6 +284,173 @@ void testResendPreservesSpeedModifiers()
            emitsWpmChange(f.commands));
 }
 
+// #4945 fix: confirms the new QScrollArea parent between CwxPanel and the
+// macro rows doesn't break the F-key edit/save/send wiring. Signal/slot
+// connections aren't parent-chain-dependent in Qt, so this isn't expected
+// to catch anything the layout checks above wouldn't -- but it's the one
+// path this fix touches that isn't pure geometry, so it earns a direct check.
+void testMacroEditAndFKeyClickStillWorkThroughScrollArea()
+{
+    Fixture f;
+    QPushButton* setup = buttonByText(f.panel, "Setup");
+    if (setup) setup->click();
+
+    QTextEdit* f1 = macroEdit(f.panel, 1);
+    QPushButton* f1Button = buttonByText(f.panel, "F1");
+    const bool ok = f1 && f1Button;
+    report("F1 macro row and its F-key button are both reachable through the scroll area", ok);
+    if (!ok) return;
+
+    // No spaces — emitExpandedSend() wire-encodes them as 0x7f (matching
+    // sendCommand() above), which would make a literal-text contains()
+    // check fail for reasons that have nothing to do with this fix.
+    f1->setPlainText("TESTDEOH6NEQ");
+    QCoreApplication::processEvents();
+    report("typing into the macro row still saves to the model",
+           f.model.macro(0) == QLatin1String("TESTDEOH6NEQ"));
+
+    f.commands.clear();
+    f1Button->click();
+    const bool sent = std::any_of(f.commands.begin(), f.commands.end(),
+        [](const QString& c) { return c.contains(QLatin1String("TESTDEOH6NEQ")); });
+    report("clicking the F1 button still sends the saved macro text", sent);
+}
+
+// #4945 fix, zero-visual-change check: the QScrollArea wrap must not
+// introduce a scrollbar or otherwise change the Setup page's look when the
+// panel actually has room, which is the common case away from the app's
+// minimum window height. Uses the same embedding as the minimized-height
+// repro below but at a generous height.
+void testSetupPageUnaffectedAtNormalWindowHeight()
+{
+    Fixture f;
+    auto* host = new QWidget;
+    auto* splitter = new QSplitter(Qt::Horizontal, host);
+    splitter->addWidget(&f.panel);
+    auto* filler = new QWidget;
+    splitter->addWidget(filler);
+    splitter->setParent(host);
+    host->resize(1024, 900); // a generously tall window, not the 400px minimum
+    splitter->setGeometry(host->rect());
+    host->show();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    QPushButton* setup = buttonByText(f.panel, "Setup");
+    if (setup) setup->click();
+    QCoreApplication::processEvents();
+
+    QScrollArea* macroScroll = f.panel.findChild<QScrollArea*>();
+    report("a QScrollArea exists for the macro grid", macroScroll != nullptr);
+    if (macroScroll) {
+        const bool scrollbarNeeded = macroScroll->verticalScrollBar()
+            && macroScroll->verticalScrollBar()->isVisible();
+        report("no scrollbar appears when the panel has plenty of room",
+               !scrollbarNeeded);
+    }
+
+    QTextEdit* f1 = macroEdit(f.panel, 1);
+    if (f1) {
+        std::printf("(normal height) F1 macro row height()=%d\n", f1->height());
+        report("rows are NOT capped at the #4945 minimum-height floor when "
+               "there's room to be taller",
+               f1->height() > 34);
+    }
+
+    f.panel.setParent(nullptr);
+    delete host;
+}
+
+// #4945 reproduction — NOT yet a fix verification. Mirrors the real embedding
+// (MainWindow.cpp:4766: CwxPanel added straight into the main horizontal
+// QSplitter) and squeezes it to the app's actual minimum window height
+// (MainWindow.cpp:1126: setMinimumSize(1024, 400)), minus a rough allowance
+// for the title bar and status bar the splitter doesn't own.
+//
+// The reporter's actual screenshot (fetched directly from the issue, which
+// the bot's triage said it couldn't do) shows the SETUP page — F1/F2 macro
+// row TEXT with the tops of glyphs clipped off — not the send-page input
+// box the bot's item 3 focused on. That distinction matters mechanically:
+// m_textEdit (the send box) is setFixedHeight(60), which Qt's layout engine
+// protects; m_macroEdits[i] are QSizePolicy::Expanding, which is what
+// actually absorbs a squeeze. First pass of this repro (measuring the send
+// page) found m_textEdit stayed at its full 60px under this same squeeze —
+// consistent with that distinction, and a real gap in the bot's diagnosis.
+void reproduceIssue4945MinimizedHeight()
+{
+    std::printf("\n--- #4945 repro: CWX Setup page at the app's minimum window height ---\n");
+
+    Fixture f;
+    auto* host = new QWidget;
+    auto* splitter = new QSplitter(Qt::Horizontal, host);
+    splitter->addWidget(&f.panel);
+    auto* filler = new QWidget; // stands in for the panadapter stack + RX applet column
+    splitter->addWidget(filler);
+    splitter->setParent(host);
+    host->resize(1024, 330); // 400 min height minus an estimated title/status bar allowance
+    splitter->setGeometry(host->rect());
+    host->show();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    QPushButton* setup = buttonByText(f.panel, "Setup");
+    QTextEdit* f1 = macroEdit(f.panel, 1);
+    if (f1)
+        f1->setPlainText("KN7K"); // match the reporter's screenshot content
+    if (setup)
+        setup->click();
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+
+    std::printf("panel height()=%d\n", f.panel.height());
+
+    // Structural check, not just a height reading: a mutation pass on this
+    // fix found that setMinimumHeight() alone can report a passing height()
+    // on ONE queried row while the panel still renders visibly squeezed —
+    // the QScrollArea is what actually does the work (verified by removing
+    // each half independently: scroll-area-alone passed both this check and
+    // a visual grab; setMinimumHeight-alone passed a single row's height()
+    // reading but still looked squeezed in the saved screenshot). So this
+    // pins the wiring directly: an ancestor of the macro edits must be a
+    // QScrollArea, not just "some row happens to measure tall enough".
+    QScrollArea* macroScroll = nullptr;
+    if (f1) {
+        for (QWidget* w = f1->parentWidget(); w; w = w->parentWidget()) {
+            if (auto* sa = qobject_cast<QScrollArea*>(w)) { macroScroll = sa; break; }
+        }
+    }
+    report("the macro grid is wrapped in a QScrollArea", macroScroll != nullptr);
+
+    // Check every row, not just F1 — the earlier single-row check on this
+    // repro passed on a mutation that still looked broken overall.
+    const int oneLine = QFontMetrics(f1 ? f1->font() : f.panel.font()).height() + 4;
+    int shortRows = 0;
+    for (int i = 1; i <= 12; ++i) {
+        QTextEdit* row = macroEdit(f.panel, i);
+        if (!row || row->height() < oneLine) ++shortRows;
+    }
+    std::printf("rows below one readable line (%dpx): %d/12\n", oneLine, shortRows);
+    report("every macro row stays tall enough for one readable line at min window height",
+           shortRows == 0);
+
+    // Visual side-by-side: render the live Setup page next to the
+    // reporter's actual screenshot so a human can eyeball the match rather
+    // than trust the height arithmetic alone.
+    const QPixmap grabbed = f.panel.grab();
+    const QString outPath = QStringLiteral("/tmp/cwx_4945_repro_setup_page.png");
+    if (grabbed.save(outPath))
+        std::printf("saved repro screenshot to %s (%dx%d)\n",
+                    qPrintable(outPath), grabbed.width(), grabbed.height());
+    else
+        std::printf("failed to save repro screenshot to %s\n", qPrintable(outPath));
+
+    // f.panel is a stack member of Fixture, not heap-owned — detach it from
+    // the splitter before host's children get destroyed, or Qt tries to
+    // `delete` a non-heap pointer when the splitter is torn down.
+    f.panel.setParent(nullptr);
+    delete host;
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-cwx-panel-test"));
@@ -285,6 +469,9 @@ int main(int argc, char** argv)
     testSendButtonTurnsLiveOffWithoutDuplicateSend();
     testSetupTurnsLiveOff();
     testResendPreservesSpeedModifiers();
+    testSetupPageUnaffectedAtNormalWindowHeight();
+    testMacroEditAndFKeyClickStillWorkThroughScrollArea();
+    reproduceIssue4945MinimizedHeight();
 
     std::printf("\n%s\n",
                 g_failed == 0
