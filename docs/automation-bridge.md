@@ -3537,7 +3537,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 67 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 68 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3545,6 +3545,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
 | `floors` | — | per-pan measured noise + display floor (dBm) |
+| `text` | `getText` | text <target> — full plain text of a QTextEdit/QPlainTextEdit view |
 | `grab` | — | grab <target\|pan\|pan-visible [index]> [path] — PNG capture |
 | `close` | — | close <target> — close the target's top-level window |
 | `hover` | — | hover <target> [leave] — synthetic mouse hover |

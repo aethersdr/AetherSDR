@@ -31,6 +31,8 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QTabBar>
+#include <QTextEdit>
+#include <QPlainTextEdit>
 #include <QEnterEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -255,6 +257,27 @@ QString widgetValue(const QWidget* w)
         if (le->echoMode() != QLineEdit::Normal)
             return le->text().isEmpty() ? QString() : QStringLiteral("<hidden>");
         return le->text();
+    }
+    // Text views (transcripts, decode logs, terminals) are documents, not
+    // scalars, so the tree carries a bounded prefix: enough for an assertion
+    // without turning a 5k-line AX.25 log into the snapshot. The `text` verb
+    // returns the full document. No echo-mode concern here — these views have
+    // none — and this sits below the QLineEdit guard so #3646 is untouched.
+    // QTextBrowser inherits QTextEdit and is covered. An empty-but-present
+    // view serializes as "" (not null): "the transcript is empty" is a real
+    // assertion. (#5078)
+    {
+        constexpr int kTextViewValueCap = 2048;
+        QString doc;
+        if (auto* te = qobject_cast<const QTextEdit*>(w))
+            doc = te->toPlainText();
+        else if (auto* pe = qobject_cast<const QPlainTextEdit*>(w))
+            doc = pe->toPlainText();
+        if (!doc.isNull()) {
+            return doc.size() > kTextViewValueCap
+                       ? doc.left(kTextViewValueCap) + QStringLiteral("…<truncated>")
+                       : doc;
+        }
     }
     if (auto* sb = qobject_cast<const QSpinBox*>(w))
         return QString::number(sb->value());
@@ -2557,6 +2580,7 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
         QStringLiteral("ping"),     QStringLiteral("verbs"),
         QStringLiteral("whoami"),   QStringLiteral("dumpTree"),
         QStringLiteral("grab"),     QStringLiteral("get"),
+        QStringLiteral("text"),
         QStringLiteral("floors"),   QStringLiteral("hitTest"),
         // Reads backend telemetry; keys nothing and sets nothing.
         QStringLiteral("health"),
@@ -2742,6 +2766,15 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("floors", {}, "per-pan measured noise + display floor (dBm)",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doFloors(); });
+
+        add("text", {QStringLiteral("getText")},
+            "text <target> — full plain text of a QTextEdit/QPlainTextEdit view",
+            parseTargetOnly,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.target.isEmpty())
+                    return err(QStringLiteral("text requires a target widget"));
+                return s.doGetText(a.target);
+            });
 
         add("grab", {}, "grab <target|pan|pan-visible [index]> [path] — PNG capture",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
@@ -3714,6 +3747,32 @@ QJsonObject AutomationServer::doGrab(const QString& target, const QString& path)
                             QStringLiteral("widget not found: ") + target}};
     }
     return saveWidgetGrab(w, target, path);
+}
+
+// Full document for one resolved text view. dumpTree carries only a capped
+// prefix (see widgetValue); this is the full-fidelity read a transcript
+// assertion needs. Read-only: nothing is set and nothing is keyed. (#5078)
+QJsonObject AutomationServer::doGetText(const QString& target) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget not found: ") + target);
+
+    QString doc;
+    if (auto* te = qobject_cast<QTextEdit*>(w))
+        doc = te->toPlainText();
+    else if (auto* pe = qobject_cast<QPlainTextEdit*>(w))
+        doc = pe->toPlainText();
+    else
+        return err(QStringLiteral("not a text view: ") + target
+                   + QStringLiteral(" (") + shortClassName(w) + QLatin1Char(')'));
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("target"), target},
+                       {QStringLiteral("class"), shortClassName(w)},
+                       {QStringLiteral("length"), doc.size()},
+                       {QStringLiteral("lines"), doc.isEmpty() ? 0 : doc.count(QLatin1Char('\n')) + 1},
+                       {QStringLiteral("text"), doc}};
 }
 
 // Capture a specific pan's spectrum surface by SpectrumWidget::panIndex, so a
