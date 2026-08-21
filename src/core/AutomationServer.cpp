@@ -31,8 +31,6 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QTabBar>
-#include <QTextEdit>
-#include <QPlainTextEdit>
 #include <QEnterEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -263,17 +261,17 @@ QString widgetValue(const QWidget* w)
     // without turning a 5k-line AX.25 log into the snapshot. The `text` verb
     // returns the full document. No echo-mode concern here — these views have
     // none — and this sits below the QLineEdit guard so #3646 is untouched.
-    // QTextBrowser inherits QTextEdit and is covered. An empty-but-present
-    // view serializes as "" (not null): "the transcript is empty" is a real
-    // assertion. (#5078)
+    // Read through the meta-object: QTextEdit and QPlainTextEdit both export
+    // Q_PROPERTY(QString plainText ...), so no QtWidgets include is needed
+    // (engine-boundary rule EB2 — this file's QtWidgets count may only
+    // shrink). QTextBrowser inherits QTextEdit and is covered. A present
+    // view yields a valid QVariant even when empty, so "the transcript is
+    // empty" serializes as "" and is a real assertion. (#5078)
     {
         constexpr int kTextViewValueCap = 2048;
-        QString doc;
-        if (auto* te = qobject_cast<const QTextEdit*>(w))
-            doc = te->toPlainText();
-        else if (auto* pe = qobject_cast<const QPlainTextEdit*>(w))
-            doc = pe->toPlainText();
-        if (!doc.isNull()) {
+        const QVariant plain = w->property("plainText");
+        if (plain.isValid()) {
+            const QString doc = plain.toString();
             return doc.size() > kTextViewValueCap
                        ? doc.left(kTextViewValueCap) + QStringLiteral("…<truncated>")
                        : doc;
@@ -3758,14 +3756,14 @@ QJsonObject AutomationServer::doGetText(const QString& target) const
     if (!w)
         return err(QStringLiteral("widget not found: ") + target);
 
-    QString doc;
-    if (auto* te = qobject_cast<QTextEdit*>(w))
-        doc = te->toPlainText();
-    else if (auto* pe = qobject_cast<QPlainTextEdit*>(w))
-        doc = pe->toPlainText();
-    else
+    // Same meta-object read as widgetValue(): the plainText property exists
+    // only on QTextEdit/QPlainTextEdit (and subclasses), so validity is the
+    // text-view test and no QtWidgets include is needed (EB2).
+    const QVariant plain = w->property("plainText");
+    if (!plain.isValid())
         return err(QStringLiteral("not a text view: ") + target
                    + QStringLiteral(" (") + shortClassName(w) + QLatin1Char(')'));
+    const QString doc = plain.toString();
 
     return QJsonObject{{QStringLiteral("ok"), true},
                        {QStringLiteral("target"), target},
