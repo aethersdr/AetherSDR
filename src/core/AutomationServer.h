@@ -684,6 +684,10 @@ private:
     // for actions with no key sequence and no menu entry (Band Zoom, Segment
     // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
     QJsonObject doShortcut(const QString& id);
+    // keyevent <press|release> <action-id|key-seq>: a real key edge through the
+    // app event filter for the momentary shortcut family (#5079). Press is
+    // TX-gated like shortcut; a release is never blocked.
+    QJsonObject doKeyEvent(const QString& action, const QString& spec);
     // Inject a learned VFO Tune Knob MIDI CC value through the controller
     // decoder. Automation-only, RX-only, and never persists a binding.
     QJsonObject doMidi(const QString& action, const QString& value) const;

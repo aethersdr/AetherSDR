@@ -15,6 +15,9 @@
 
 #include "MainWindow.h"
 
+#include <QApplication>
+#include <QKeyEvent>
+
 #include "MainWindowHelpers.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "AppletPanel.h"
@@ -1293,6 +1296,50 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
     }
     a->handler();
     return a->keysTx ? ShortcutFireTxOk : ShortcutFireOk;
+}
+
+int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx)
+{
+    // Resolve an action id to its CURRENT binding first, so a rebind moves the
+    // injected key with it (#3879); fall back to a literal sequence such as
+    // "Ctrl+T" so a test can drive the modifier-tolerant release branch on
+    // purpose. (#5079)
+    QKeySequence seq;
+    const ShortcutManager::Action* a = m_shortcutManager.action(spec);
+    if (a && !a->currentKey.isEmpty()) {
+        seq = a->currentKey;
+    } else {
+        seq = QKeySequence::fromString(spec, QKeySequence::PortableText);
+        // fromString() parses unrecognised text into a non-empty sequence whose
+        // key is Qt::Key_unknown, so isEmpty() alone would let garbage through.
+        if (seq.isEmpty() || seq[0].key() == Qt::Key_unknown)
+            return KeyInjectUnknownKey;
+        a = m_shortcutManager.actionForKey(seq);
+    }
+
+    // TX gate on the PRESS only. Blocking a release would leave the transmitter
+    // keyed with no way to drop it — the failure failSafeMomentaryKeyingToRx
+    // exists to prevent. A release is always safe to deliver.
+    const bool keysTx = a && a->keysTx;
+    if (press && keysTx && !allowTx)
+        return KeyInjectTxBlocked;
+
+    const QKeyCombination kc = seq[0];
+    QKeyEvent ev(press ? QEvent::KeyPress : QEvent::KeyRelease,
+                 kc.key(), kc.keyboardModifiers(), QString(), /*autorep=*/false);
+
+    // Send (not post) to the focus widget: filters installed on qApp run for
+    // events delivered to any object, so this walks the same eventFilter path
+    // a real key takes — synchronously, so isAccepted() is meaningful on
+    // return. Nothing goes through the window manager, so focus-stealing
+    // prevention cannot defeat it.
+    QWidget* recv = QApplication::focusWidget();
+    if (!recv)
+        recv = this;
+    QApplication::sendEvent(recv, &ev);
+    if (!ev.isAccepted())
+        return KeyInjectNotConsumed;
+    return (press && keysTx) ? KeyInjectTxOk : KeyInjectOk;
 }
 
 void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
