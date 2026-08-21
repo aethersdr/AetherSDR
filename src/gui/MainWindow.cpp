@@ -2304,12 +2304,15 @@ MainWindow::MainWindow(QWidget* parent)
         QString statusLabel;
         if (caps.hasGpsLocation && !caps.hasGpsFrequencyReference) {
             // A position receiver is not a frequency reference. Keep the
-            // compact status-bar identity stable while the live grid and
-            // source remain available in the tooltip and GPS dashboard.
+            // compact status-bar identity and fix state privacy-safe while
+            // the live grid and source remain available in the tooltip and
+            // GPS dashboard.
             sourceLabel = QStringLiteral("Int. GPS");
-            statusLabel = QStringLiteral("[%1]").arg(
-                m_radioModel.gpsStatus().isEmpty()
-                    ? QStringLiteral("Waiting") : m_radioModel.gpsStatus());
+            const QString positionStatus = m_radioModel.gpsPositionValid()
+                ? QStringLiteral("Locked")
+                : (m_radioModel.gpsStatus().isEmpty()
+                       ? QStringLiteral("Waiting") : m_radioModel.gpsStatus());
+            statusLabel = QStringLiteral("[%1]").arg(positionStatus);
         } else if (state.isEmpty()) {
             sourceLabel = QStringLiteral("Ref: --");
             statusLabel = QStringLiteral("[Waiting]");
