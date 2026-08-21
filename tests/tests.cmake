@@ -2611,6 +2611,10 @@ add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 # header-only policy, so the whole truth table is a compile-time assertion; the
 # "saved device that IS the system default still takes the name-match path" row
 # pins the documented reach of the fix.
+add_executable(rtty_decoder_sensitivity_test tests/rtty_decoder_sensitivity_test.cpp)
+target_include_directories(rtty_decoder_sensitivity_test PRIVATE src)
+add_test(NAME rtty_decoder_sensitivity_test COMMAND rtty_decoder_sensitivity_test)
+
 add_executable(cw_sidetone_start_policy_test
     tests/cw_sidetone_start_policy_test.cpp
 )
