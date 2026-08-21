@@ -18,13 +18,17 @@
 #include "core/backends/icom/IcomCivBackend.h"
 
 #include <QCoreApplication>
+#include <QLoggingCategory>
 #include <QSignalSpy>
+#include <QStringList>
 #include <QTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <span>
 #include <cstdio>
+#include <cstring>
 
 using namespace AetherSDR;
 using namespace AetherSDR::icom;
@@ -62,6 +66,34 @@ static bool movesPttOrTuner(const CivFrame& f)
         && !f.data.empty();
 }
 
+// ---------------------------------------------------------------------------
+// CI-V trace capture
+//
+// traceCiv writes the decoded `cmd=`/`sub=` tag ONLY to qCDebug — the in-memory
+// ring stores raw hex. So the tag can only be asserted by capturing log output,
+// which is why this needs a message handler rather than a getter.
+// ---------------------------------------------------------------------------
+static QStringList g_civLines;
+static bool g_capturing = false;
+static QtMessageHandler g_prevHandler = nullptr;
+
+static void civCapture(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
+{
+    if (g_capturing && ctx.category && std::strcmp(ctx.category, "aether.icom.civ") == 0)
+        g_civLines << msg;
+    if (g_prevHandler)
+        g_prevHandler(type, ctx, msg);
+}
+
+// The most recent captured line beginning with `prefix`, or a null string.
+static QString lastLineStartingWith(const QString& prefix)
+{
+    for (auto it = g_civLines.crbegin(); it != g_civLines.crend(); ++it)
+        if (it->startsWith(prefix))
+            return *it;
+    return {};
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -69,6 +101,10 @@ int main(int argc, char** argv)
     qRegisterMetaType<AetherSDR::MeterDef>("MeterDef");
 
     FakeIc705 radio;
+    // Same model under a harmless presentation variant. modelForName()
+    // canonicalises it, while capability code that compares the display text
+    // literally loses CWK.
+    radio.setDeviceName("IC 705");
     IcomCivBackend backend;
 
     int sliceAudioBuffers = 0;
@@ -88,6 +124,11 @@ int main(int argc, char** argv)
     SliceDelta lastSliceState;
     TransmitDelta lastTransmitState;
     std::vector<QString> publishedModes;
+    // Every mode LIST the backend published, in order — the vocabulary the mode
+    // combo is built from (#5040). Accumulated rather than last-wins because the
+    // list is republished when the identity changes, and an empty one is a real
+    // answer (an identity withdrawn), not an absent field.
+    std::vector<QStringList> publishedModeLists;
     // Every mox edge in order. The PTT confirmation window is defined by which
     // transitions it lets through, so the SEQUENCE is the assertion, not the
     // final value — a suppressed-then-corrected state and a never-suppressed
@@ -114,6 +155,8 @@ int main(int argc, char** argv)
                          mergeSlice(d);
                          if (d.mode)
                              publishedModes.push_back(*d.mode);
+                         if (d.modeList)
+                             publishedModeLists.push_back(*d.modeList);
                      });
     QObject::connect(&backend, &IRadioBackend::transmitChanged, &app,
                      [&](const TransmitDelta& d) {
@@ -124,10 +167,50 @@ int main(int argc, char** argv)
         if (d.sbMonitor) lastTransmitState.sbMonitor = d.sbMonitor;
         if (d.voxEnable) lastTransmitState.voxEnable = d.voxEnable;
         if (d.voxLevel) lastTransmitState.voxLevel = d.voxLevel;
+        if (d.cwPitch) lastTransmitState.cwPitch = d.cwPitch;
+        if (d.cwSpeed) lastTransmitState.cwSpeed = d.cwSpeed;
+        if (d.cwBreakIn) lastTransmitState.cwBreakIn = d.cwBreakIn;
         if (d.transmitFreq) lastTransmitState.transmitFreq = d.transmitFreq;
+        if (d.txFilterLow) lastTransmitState.txFilterLow = d.txFilterLow;
+        if (d.txFilterHigh) lastTransmitState.txFilterHigh = d.txFilterHigh;
         if (d.atuEnabled) lastTransmitState.atuEnabled = d.atuEnabled;
         if (d.atuStatusRaw) lastTransmitState.atuStatusRaw = d.atuStatusRaw;
         if (d.mox) { lastTransmitState.mox = d.mox; moxPublications.push_back(*d.mox); }
+    });
+
+    // WHAT THE RADIO SAYS IT IS, and which bands follow from that. Both ride
+    // the same RadioDelta, and the band half is what puts a 2 m / 70 cm button
+    // in front of the operator (#5041) — so capture it off the seam rather than
+    // trusting the table it was read from.
+    QString publishedModel;
+    QString publishedBandsRaw;
+    // Counted, not just captured. The identity is published TWICE per connect -
+    // once from the handshake name and again when the directed 0x19 0x00 answers
+    // - and the whole point of the first one is that it beats the second. A test
+    // that only looks at the final value cannot tell the two apart.
+    int identityPublications = 0;
+    QObject::connect(&backend, &IRadioBackend::radioChanged, &app,
+                     [&](const RadioDelta& d) {
+                         if (d.model) publishedModel = *d.model;
+                         if (d.bandsRaw) publishedBandsRaw = *d.bandsRaw;
+                         if (d.model || d.bandsRaw) ++identityPublications;
+                     });
+
+    // THE SNAPSHOT THAT MAKES THE ORDERING ASSERTABLE.
+    //
+    // Taken synchronously inside `emit connected()` - same thread, direct
+    // connection - so it freezes what the seam had been told at the instant the
+    // connect edge fired, before any waitFor() spins an event loop and lets the
+    // 0x19 reply land. Without this the assertions below pass whether the
+    // declaration arrived at the handshake or half a second later off the wire,
+    // which is precisely the distinction the band menu depends on.
+    int identityPublicationsAtConnect = -1;
+    QString modelAtConnect;
+    QString bandsAtConnect;
+    QObject::connect(&backend, &IRadioBackend::connected, &app, [&] {
+        identityPublicationsAtConnect = identityPublications;
+        modelAtConnect = publishedModel;
+        bandsAtConnect = publishedBandsRaw;
     });
 
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
@@ -148,6 +231,51 @@ int main(int argc, char** argv)
     backend.connectRadio(req);
     check(waitFor([&] { return backend.isConnected(); }), "the backend connects");
     check(connectedSpy.count() == 1, "and emits connected() exactly once");
+
+    // The identity, published ON THE CONNECT EDGE — not later, when the
+    // 0x19 0x00 address query answers. The band menu is built there, so a
+    // declaration that arrived after it would leave the operator looking at a
+    // band panel with no 2 m or 70 cm button until something else forced a
+    // rebuild. The name is the only identity that exists this early, and it is
+    // enough (#5041).
+    //
+    // ASSERTED OFF THE SNAPSHOT, not off the live variables. `connected()` is
+    // emitted after publishIdentity() in onSessionConnected() and before any
+    // event loop runs again, while the directed 0x19 0x00 reply cannot arrive
+    // until a socket read is serviced — so anything the snapshot holds was
+    // published from the handshake name, and anything it does not hold was not.
+    // Remove the publishIdentity() call from onSessionConnected() and the five
+    // checks below fail (measured, along with the agreement check further down),
+    // which is the gate the timing claim needs and did not have: the live
+    // variables are re-filled identically by the 0x19 republish a moment later,
+    // so every one of these passed against code that published only late.
+    check(identityPublicationsAtConnect == 1,
+          "the identity is published exactly once BEFORE connected() is emitted "
+          "- from the handshake name, not from the 0x19 0x00 reply that cannot "
+          "have been serviced yet");
+    check(modelAtConnect == QStringLiteral("IC-705"),
+          "and publishes the canonical model name at connect");
+    check(bandsAtConnect.contains(QStringLiteral("2m")),
+          "declaring 2m, which no FlexLib model table would have given it");
+    check(bandsAtConnect.contains(QStringLiteral("440")),
+          "and 440 - the band the reported bug refused to tune at all");
+    check(bandsAtConnect.contains(QStringLiteral("20m")),
+          "and HF, because the declaration REPLACES the built-in band grid "
+          "rather than adding a VHF row to it");
+
+    // THE SECOND PUBLICATION, which is what makes the first one an ordering
+    // claim rather than a tautology. The directed 0x19 0x00 in the connect burst
+    // re-publishes the identity from the authoritative address, so the count
+    // must GROW past the snapshot — if it never did, "published at the connect
+    // edge" would be true only because nothing else ever published at all.
+    check(waitFor([&] { return identityPublications > identityPublicationsAtConnect; }),
+          "and the 0x19 0x00 reply re-publishes it afterwards - two distinct "
+          "publications, the early one first");
+    check(publishedModel == QStringLiteral("IC-705"),
+          "with the address-resolved identity agreeing with the name-resolved one");
+    check(publishedBandsRaw == bandsAtConnect,
+          "and the same declaration, so the band menu is not rebuilt from a "
+          "different answer a moment later");
 
     quint64 schedulerRequestId = 9000;
     const auto waitSchedulerIdle = [&](int timeoutMs = 5000) {
@@ -183,6 +311,12 @@ int main(int argc, char** argv)
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "the radio remembers its own state, so the client restores NOTHING");
     check(caps.hasRadioSideDsp, "NR/NB/notch run in the radio's firmware");
+    check(caps.hasRadioSideCwKeyer && caps.cwTextKeyerName == QLatin1String("CWK"),
+          "CWK capability follows the resolved CI-V model, not its display string");
+    check(caps.cwTextMinWpm == 6 && caps.cwTextMaxWpm == 48
+              && caps.cwTextMaxMessageChars == 30
+              && !caps.cwTextHasProgress && !caps.cwTextHasStoredMacros,
+          "CWK publishes its honest range, message, progress and macro limits");
     check(!caps.canReboot, "power-off over WiFi is a one-way trip, so no reboot is offered");
 
     // ---- a slice exists, which TCI routing depends on ---------------------
@@ -211,6 +345,59 @@ int main(int argc, char** argv)
     check(backend.model().verified, "whose capability numbers are tier-1 verified");
     check(waitSchedulerIdle(),
           "connect-time radio-authoritative state converges through the scheduler");
+    check(lastTransmitState.cwSpeed.value_or(-1) == 28,
+          "connect reads and adopts the radio's 28 WPM key speed");
+    check(lastTransmitState.cwPitch.value_or(-1) == 601,
+          "connect reads and adopts the radio's CW pitch");
+    check(lastTransmitState.cwBreakIn.value_or(false),
+          "connect reads and adopts the radio's full break-in as active");
+    const auto sawConnectRead = [&](std::uint8_t command, std::uint8_t sub) {
+        return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           [=](const CivFrame& frame) {
+            return frame.cmd == command && frame.hasSub && frame.sub == sub
+                && frame.data.empty();
+        });
+    };
+    check(sawConnectRead(cmd::kLevel, level::kCwPitch)
+              && sawConnectRead(cmd::kLevel, level::kKeySpeed)
+              && sawConnectRead(cmd::kFunction, func::kBreakIn),
+          "the connect burst explicitly requests pitch, speed and break-in");
+
+    // One CI-V command 17 message is one bounded, exact transaction. Text the
+    // radio cannot preserve is rejected before a frame enters the scheduler.
+    radio.clearCivLog();
+    check(!backend.sendCwText(QStringLiteral("CQ \u2665 TEST")).isEmpty(),
+          "unsupported CW text is rejected instead of rewritten");
+    check(!backend.sendCwText(QString(31, QLatin1Char('A'))).isEmpty(),
+          "messages beyond the documented 30-character frame are rejected");
+    check(radio.civCommands().empty(),
+          "a rejected CW message emits no CI-V frame");
+    const QString exactLimit(30, QLatin1Char('A'));
+    check(backend.sendCwText(exactLimit).isEmpty(),
+          "a valid 30-character CW message is accepted");
+    check(waitSchedulerIdle(), "the accepted CW message drains through the scheduler");
+    check(std::count_if(radio.civCommands().begin(), radio.civCommands().end(),
+                        [](const CivFrame& frame) {
+              return frame.cmd == cmd::kCwMessage && frame.data.size() == 30;
+          }) == 1,
+          "the accepted message is exactly one bounded command 17 frame");
+
+    // The UI is boolean but the register is Off/Semi/Full. After adopting
+    // Full, toggling off and back on must restore 02 rather than demote to 01.
+    radio.clearCivLog();
+    backend.setCwBreakIn(false);
+    check(waitSchedulerIdle(), "full break-in can be turned off");
+    backend.setCwBreakIn(true);
+    check(waitSchedulerIdle(), "break-in can be restored");
+    std::vector<int> breakInWrites;
+    for (const CivFrame& frame : radio.civCommands()) {
+        if (frame.cmd == cmd::kFunction && frame.hasSub
+            && frame.sub == func::kBreakIn && !frame.data.empty()) {
+            breakInWrites.push_back(frame.data.front());
+        }
+    }
+    check(breakInWrites == std::vector<int>({0, 2}),
+          "Off -> On restores the radio's full-break-in mode without loss");
     const SliceDelta connectedSliceState = lastSliceState;
     const TransmitDelta connectedTransmitState = lastTransmitState;
 
@@ -724,6 +911,194 @@ int main(int argc, char** argv)
         radio.m_refuseDataMode = false;
     }
 
+    // ---- the passband: slot vs width vs PBT -------------------------------
+    //
+    // THE THREE THINGS THIS PHASE EXISTS TO SEPARATE. Before it, the backend
+    // read the SLOT and looked its width up in a table of factory defaults, so
+    // an operator who had redefined a slot got a passband drawn from a number
+    // nobody had ever asked the radio for.
+    {
+        check(waitSchedulerIdle(), "the connect burst drains before the passband checks");
+
+        // 1. THE WIDTH COMES FROM THE RADIO. The fake holds code 0x34 — 3.0 kHz
+        //    in SSB — and the client is in USB, so the drawn window must be
+        //    3.0 kHz centred at 1500 Hz, i.e. 0..3000.
+        check(lastSliceState.filterLow.value_or(-1) == 0
+                  && lastSliceState.filterHigh.value_or(-1) == 3000,
+              "the connect snapshot draws the radio's OWN 3.0 kHz width, centred");
+
+        // 2. A DRAG IS A WIDTH CHANGE, not a slot change. 600..2600 is 2.0 kHz
+        //    centred on 1600 — not one of the three published ladder widths, so
+        //    it must go out as 1A 03 plus a PBT pair and must NOT send 0x26.
+        radio.clearCivLog();
+        backend.setSliceFilter(0, 600, 2600);
+        check(waitSchedulerIdle(), "the width write and its confirmation converge");
+
+        const auto sentFrame = [&](std::uint8_t command, std::uint8_t sub) {
+            return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                               [=](const CivFrame& f) {
+                return f.cmd == command && f.hasSub && f.sub == sub && !f.data.empty();
+            });
+        };
+        check(sentFrame(cmd::kSetting, settingSub::kFilterWidth),
+              "dragging an edge writes the IF width (1A 03)");
+        check(sentFrame(cmd::kLevel, level::kPbtInner)
+                  && sentFrame(cmd::kLevel, level::kPbtOuter),
+              "and moves BOTH Twin PBTs, which is what slides without narrowing");
+        check(!std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           [](const CivFrame& f) {
+                               return f.cmd == cmd::kVfoMode && !f.data.empty();
+                           }),
+              "a drag must NOT change the filter slot — the slots are the "
+              "operator's own three presets");
+        check(lastSliceState.filterHigh.value_or(0) - lastSliceState.filterLow.value_or(0)
+                  == 2000,
+              "and the published passband is the 2.0 kHz that was drawn");
+        const QList<int> actualLabels = backend.capabilities().rxFilterWidthsHz;
+        check(actualLabels == QList<int>({1800, 2000, 2400}),
+              "the selected RX filter label uses its actual 1A 03 width, not 3.0k");
+
+        // 3. A LADDER WIDTH IS A SLOT PICK. 1800 Hz is one of the three widths
+        //    this backend published for SSB, so it must select FIL3 with 0x26
+        //    and must not redefine the slot it is leaving.
+        radio.clearCivLog();
+        backend.setSliceFilter(0, 300, 2100);   // 1800 Hz — on the ladder
+        check(waitSchedulerIdle(), "the slot write and its confirmation converge");
+        check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                          [](const CivFrame& f) {
+                              return f.cmd == cmd::kVfoMode && f.data.size() == 3;
+                          }),
+              "a published ladder width selects a SLOT with 0x26");
+        check(!sentFrame(cmd::kSetting, settingSub::kFilterWidth),
+              "and does NOT redefine the slot's stored width");
+
+        // 4. A MODE CHANGE RE-READS THE WIDTH — the regression this whole
+        //    context-stamping design exists for, and the one that shipped past
+        //    an earlier version of this test.
+        //
+        //    setSliceMode() advances m_mode OPTIMISTICALLY before the write
+        //    goes out, so by the time the radio's 26 confirmation arrives, a
+        //    "did the mode change?" test compares the new mode against itself
+        //    and says no. The re-read never fired, nothing zeroed the width,
+        //    and every mode inherited the one read at connect. On a real
+        //    IC-7300MK2 that painted AM's 9 kHz window over every SSB filter.
+        //
+        //    The fake holds a DIFFERENT width per (mode, DATA, slot), which is
+        //    what makes carrying one across visible here instead of plausible.
+        //    Pin the slot first: step 3 above left the radio on FIL3, and the
+        //    fixture defines its per-mode widths on FIL1. Selecting the SSB
+        //    ladder's widest entry is a slot pick, so this moves the slot
+        //    without redefining anything.
+        backend.setSliceFilter(0, 300, 3300);   // 3000 Hz — ladder, so FIL1
+        check(waitSchedulerIdle(), "the slot returns to FIL1");
+
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("AM"));
+        check(waitFor([&] {
+                  return lastSliceState.filterLow.value_or(0) == -4500
+                      && lastSliceState.filterHigh.value_or(0) == 4500;
+              }, 4000),
+              "a mode change adopts THAT mode's width (AM 9 kHz), not the one "
+              "the previous mode was read at");
+        check(waitFor([&] {
+                  return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                                     [](const CivFrame& f) {
+                                         return f.cmd == cmd::kSetting && f.hasSub
+                                             && f.sub == settingSub::kFilterWidth
+                                             && f.data.empty();
+                                     });
+              }, 3000),
+              "and it got there by ASKING (1A 03), not by keeping the old value");
+
+        // 5. THE DATA FLAG IS PART OF THE CONTEXT. USB and USB-D are different
+        //    filter contexts on the radio and hold different widths — proven
+        //    live, where plain USB read 3.0 kHz and USB-D read 3.6 kHz.
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        check(waitFor([&] {
+                  return lastSliceState.filterHigh.value_or(0)
+                             - lastSliceState.filterLow.value_or(0) == 3000;
+              }, 4000),
+              "plain USB reads its own 3.0 kHz");
+        radio.clearCivLog();
+        backend.setSliceMode(0, QStringLiteral("DIGU"));
+        check(waitFor([&] {
+                  return lastSliceState.filterHigh.value_or(0)
+                             - lastSliceState.filterLow.value_or(0) == 3600;
+              }, 4000),
+              "and USB-D reads its own 3.6 kHz — the DATA flag selects a "
+              "different stored width, so it must re-read across it");
+
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        check(waitSchedulerIdle(), "settle back into USB");
+
+        // 6. THE WIDTH IS RE-READ AFTER A SLOT CHANGE, because the radio holds a
+        //    different one per slot and announces none of them.
+        check(waitFor([&] {
+                  return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                                     [](const CivFrame& f) {
+                                         return f.cmd == cmd::kSetting && f.hasSub
+                                             && f.sub == settingSub::kFilterWidth
+                                             && f.data.empty();
+                                     });
+              }, 3000),
+              "changing slot re-reads the new slot's actual width");
+    }
+
+    // ---- TX bandwidth: a short list, not a slider -------------------------
+    {
+        check(waitSchedulerIdle(), "the TX bandwidth reads settle");
+
+        // WHICH SLOT IS LIVE decides which SET item holds the passband. The
+        // fake reports MID (16 58 = 01), whose stored pair is 300..2700.
+        check(lastTransmitState.txFilterLow.value_or(-1) == 300
+                  && lastTransmitState.txFilterHigh.value_or(-1) == 2700,
+              "the TX passband is read from the slot 16 58 actually names");
+
+        // A REQUEST SNAPS, and what the operator sees is the read-back. 150 Hz
+        // does not exist on an IC-705 (it has 100/200/300/500), and 3200 Hz is
+        // past the 2900 Hz ceiling.
+        radio.clearCivLog();
+        backend.setTxFilter(150, 3200);
+        check(waitSchedulerIdle(), "the TX bandwidth write and read-back converge");
+        // 150 Hz is exactly between the IC-705's 100 and 200, and a tie takes the
+        // LOWER edge — the wider passband, which is the conservative direction
+        // for a transmitter. THE SAME REQUEST ON AN IC-7300MK2 WOULD GIVE 150
+        // EXACTLY, because the MK2 has that edge and the IC-705 does not: the
+        // per-model tables in icom_family_test are what make the two differ.
+        check(lastTransmitState.txFilterLow.value_or(-1) == 100,
+              "150 Hz has no IC-705 equivalent and snaps to the wider 100 Hz");
+        check(lastTransmitState.txFilterHigh.value_or(-1) == 2900,
+              "and 3200 Hz clamps to the 2900 Hz ceiling — the applet shows the "
+              "passband the transmitter has, not the one that was asked for");
+
+        // IT MUST RESHAPE THE LIVE SLOT AND ONLY THAT ONE. Writing WIDE while
+        // the radio is running MID changes a passband nobody is transmitting
+        // through and leaves the real one untouched.
+        const bool wroteMidItem = std::any_of(
+            radio.civCommands().begin(), radio.civCommands().end(),
+            [](const CivFrame& f) {
+                return f.cmd == cmd::kSetting && f.hasSub && f.sub == settingSub::kMenu
+                    && f.data.size() >= 3
+                    && decodeBcdByte(f.data[0]) * 100 + decodeBcdByte(f.data[1]) == 20;
+            });
+        check(wroteMidItem, "the write lands in SET 0020 — the MID slot, which is live");
+
+        // The slot named by 16 58 depends on COMP state. Toggling the speech
+        // processor therefore invalidates more than 16 44 itself: without this
+        // second read, the next TX edge write can reshape the old slot while
+        // the UI continues to display its stale pair.
+        radio.clearCivLog();
+        backend.setSpeechProcessor(false, 0);
+        check(waitSchedulerIdle(), "the compressor toggle and dependent TX bandwidth read settle");
+        check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                          [](const CivFrame& f) {
+                              return f.cmd == cmd::kFunction && f.hasSub
+                                  && f.sub == func::kTxBandwidth && f.data.empty();
+                          }),
+              "a compressor change re-reads 16 58 because it can change the active slot");
+    }
+
     // ---- shared 0..255 percentage write buckets --------------------------
     // RF power, mic gain and monitor level were the three visible reports, but
     // they all use the same Icom register scale. Prove the real setter frames
@@ -1033,6 +1408,188 @@ int main(int argc, char** argv)
         QObject::disconnect(conn);
     }
 
+    // ---- the mode combo is filled from the RADIO's vocabulary (#5040) -------
+    //
+    // WFM has been implemented end to end in CivCodec from the start — wire
+    // value, both directions of the neutral mapping, its own 200 kHz filter slot
+    // and a carrier-straddling passband. It was unreachable because nothing ever
+    // published a modeList, so RxApplet and VfoWidget both fell through to their
+    // compiled-in FlexRadio list, which has no WFM because a FLEX-6000 has no
+    // WFM. The list is the whole fix; the combos already rebuild from it.
+    {
+        check(!publishedModeLists.empty(),
+              "the backend publishes a mode list for the radio it identified");
+        const QStringList& modes = publishedModeLists.back();
+        check(modes.contains(QStringLiteral("WFM")),
+              "and WFM is in it, so the IC-705 operator gets the button");
+        // The stale-indicator half of the same defect: findText() returns -1 for
+        // a mode the combo does not hold, so a radio put into WFM at the front
+        // panel left the indicator showing the PREVIOUS mode. Every mode this
+        // backend can report has to be reachable in the list.
+        check(modes.contains(QStringLiteral("CW")) && modes.contains(QStringLiteral("CWL")),
+              "including the CW names this backend actually reports");
+        check(!modes.contains(QStringLiteral("CWU")),
+              "without publishing the Flex-oriented CWU alias for Icom");
+        check(!modes.contains(QStringLiteral("SAM")),
+              "and NOT the modes setSliceMode refuses - a list that offers SAM "
+              "on an Icom is a control that silently reverts");
+    }
+
+    // ---- WFM RECEIVES ONLY, and the client refuses to key in it -------------
+    //
+    // 76-108 MHz broadcast; the transmitter does not follow. The refusal lives
+    // client-side because "the radio will say no" is not a property CI-V lets us
+    // verify — an ignored key request is indistinguishable from one that worked
+    // until the meters fail to move.
+    //
+    // TWO GATES, and this file can only see one of them. What the operator
+    // notices — the TX indicator going back out, TUNE un-latching, the interlock
+    // message — is RadioModel::refuseKeyInReceiveOnlyMode(), driven by the
+    // receiveOnlyModes capability asserted below; a backend cannot reach
+    // TransmitModel and so cannot clear any of it (#5106 review). What THIS gate
+    // owns is narrower and still worth its own rows: no PTT frame leaves by any
+    // path, whether or not it came through RadioModel.
+    {
+        check(backend.capabilities().receiveOnlyModes
+                  == QStringList{QStringLiteral("WFM")},
+              "the backend DECLARES WFM as receive-only, which is what arms the "
+              "key guard in RadioModel");
+
+        backend.setSliceMode(0, QStringLiteral("WFM"));
+        check(waitSchedulerIdle(), "the radio converges on WFM");
+        radio.clearCivLog();
+        const std::size_t moxBefore = moxPublications.size();
+
+        backend.setKeying(true);
+        QTest::qWait(200);
+        check(std::none_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           movesPttOrTuner),
+              "no PTT frame reaches a radio that cannot transmit in WFM");
+        // DELIBERATELY NOT a mox publication. The backend used to emit
+        // TransmitDelta{mox=false} here and it cleared nothing: applyChanges
+        // assigns backend mox to m_mox, which is already false, so no signal
+        // reaches the indicator — which reads m_transmitting instead. Asserting
+        // that delta asserted the implementation back to itself.
+        check(moxPublications.size() == moxBefore,
+              "and the backend does not fake a transmit edge for the refusal");
+
+        // TUNE composes its carrier out of the same key, and it borrows the
+        // RF-power register on the way. Refusing only inside setKeying() would
+        // overwrite the operator's drive for a carrier that never happened.
+        backend.setTxPower(37);
+        check(waitSchedulerIdle(), "ordinary RF power converges before the refused TUNE");
+        radio.clearCivLog();
+        backend.setTune(true, 10);
+        QTest::qWait(200);
+        check(std::none_of(radio.civCommands().begin(), radio.civCommands().end(),
+                           movesPttOrTuner),
+              "TUNE does not key in WFM either");
+        bool powerTouched = false;
+        for (const CivFrame& f : radio.civCommands())
+            if (f.cmd == cmd::kLevel && f.hasSub && f.sub == level::kRfPower)
+                powerTouched = true;
+        check(!powerTouched,
+              "and the refused TUNE leaves the operator's RF power alone");
+
+        // UNKEY IS NEVER GATED. A guard that could swallow an unkey is a stuck
+        // transmitter, which is worse than the emission it prevents.
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        check(waitSchedulerIdle(), "back to a transmit mode");
+        backend.setKeying(true);
+        check(waitFor([&] {
+                  return std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                                     movesPttOrTuner);
+              }, 1000),
+              "keying works again once the radio is in a transmit mode");
+        backend.setKeying(false);
+        check(waitSchedulerIdle(), "and the unkey converges");
+    }
+
+    // ---- the CI-V trace tag decodes the RIGHT byte in BOTH directions -------
+    //
+    // The two call sites hand traceCiv DIFFERENT layouts, and the tag decoder
+    // has to follow:
+    //
+    //   TX (sendUserCommand) — the raw wire frame from buildFrame:
+    //       FE FE <to> <from> <cmd> [<sub>] <data…> FD    -> cmd at index 4
+    //   RX (onCivFrame)      — re-serialised, envelope deliberately dropped:
+    //       <cmd> [<sub>] <data…>                         -> cmd at index 0
+    //
+    // Reading index 4 for both is the defect this guards: on RX it printed a
+    // PAYLOAD byte as the command, and printed nothing at all for frames
+    // shorter than five bytes — which is most of them.
+    //
+    // These assertions are falsifiable by construction: restore the old
+    // `frame[4]` / `size() >= 5` form and the RX cases below fail, because
+    // 1A 06 01 01 is four bytes (no tag at all) and a frequency reply puts a
+    // BCD digit pair where the command was assumed to be.
+    {
+        QLoggingCategory::setFilterRules(QStringLiteral("aether.icom.civ.debug=true"));
+        g_prevHandler = qInstallMessageHandler(civCapture);
+        g_capturing = true;
+
+        // RX, SHORT FRAME — the 1A 06 DATA-flag reply. Four bytes once the
+        // envelope is stripped, so the old `size() >= 5` guard skipped it
+        // silently. This is the exact reply the category was added to make
+        // visible (the radio never volunteers it), so "no tag" is the whole
+        // failure rather than a cosmetic one.
+        g_civLines.clear();
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr,
+                       cmd::kSetting, 0x06, 0x01, 0x01, kCivEom});
+        QTest::qWait(120);
+        {
+            const QString line = lastLineStartingWith(QStringLiteral("RX <- 1a 06"));
+            check(!line.isNull(), "the 1A 06 DATA-flag reply reaches the CI-V trace");
+            check(line.contains(QStringLiteral("cmd=1a")),
+                  "and a four-byte RX frame is TAGGED — the old size()>=5 guard "
+                  "dropped the tag on the very reply this category exists for");
+            check(line.contains(QStringLiteral("sub=06")),
+                  "with the subcommand read from index 1, not index 5");
+        }
+
+        // RX, LONG FRAME — a frequency report. Six bytes, so the old guard
+        // PASSED and produced a confidently wrong label: for 14.074 MHz the
+        // BCD payload puts 0x14 at index 4, which is cmd::kLevel, so a
+        // frequency reply was printed as "cmd=14 sub=00" — a level command.
+        // Plausible, wrong, and aimed at someone who switched this on because
+        // they no longer trust their reading of the code.
+        g_civLines.clear();
+        radio.pushCiv({0xFE, 0xFE, kControllerAddress, kIc705Addr,
+                       cmd::kReadFreq, 0x00, 0x40, 0x07, 0x14, 0x00, kCivEom});
+        QTest::qWait(120);
+        {
+            const QString line = lastLineStartingWith(QStringLiteral("RX <- 03"));
+            check(!line.isNull(), "the frequency report reaches the CI-V trace");
+            check(line.contains(QStringLiteral("cmd=03")),
+                  "a frequency reply is tagged as READ-FREQUENCY, not as the "
+                  "level command its BCD payload happens to spell at index 4");
+            check(!line.contains(QStringLiteral("sub=")),
+                  "and read-frequency carries no subcommand, so none is invented");
+        }
+
+        // TX — unchanged behaviour, asserted so the RX fix cannot silently
+        // break the direction that was already right. The raw wire frame keeps
+        // its envelope, so the command really is at index 4 here. AF gain is
+        // command 14 SUB 01, which is a subcommand-bearing frame — the case
+        // where a wrong index would show.
+        g_civLines.clear();
+        backend.setSliceAudioGain(0, 42);
+        QTest::qWait(120);
+        {
+            // The scheduler keeps draining unrelated commands during the wait,
+            // so select the AF-gain frame rather than whichever TX happened last.
+            const QString line =
+                lastLineStartingWith(QStringLiteral("TX -> fe fe a4 e0 14 01"));
+            check(!line.isNull(), "the outbound frame reaches the CI-V trace");
+            check(line.contains(QStringLiteral("cmd=14")) && line.contains(QStringLiteral("sub=01")),
+                  "a TX frame still decodes from index 4/5, past the envelope");
+        }
+
+        g_capturing = false;
+        qInstallMessageHandler(g_prevHandler);
+        QLoggingCategory::setFilterRules(QString());
+    }
+
     // ---- health -----------------------------------------------------------
     {
         const auto h = backend.healthSnapshot();
@@ -1097,6 +1654,12 @@ int main(int argc, char** argv)
         });
     check(restoreOnDisconnect != radio.civCommands().end(),
           "disconnect during TUNE restores ordinary RF power before teardown");
+    check(std::any_of(radio.civCommands().begin(), radio.civCommands().end(),
+                      [](const CivFrame& frame) {
+              return frame.cmd == cmd::kCwMessage && frame.data.size() == 1
+                  && frame.data.front() == 0xFF;
+          }),
+          "disconnect aborts radio-buffered CW with 17 FF before teardown");
     check(!backend.isConnected(), "the backend disconnects cleanly");
 
 
@@ -1116,6 +1679,7 @@ int main(int argc, char** argv)
         FakeIc705 radio;
         IcomCivBackend backend;
         double frequencyMHz = 0.0;
+        int frequencyPublications = 0;
         QStringList warnings;
 
         CivCase(std::uint8_t addr, const char* name, bool echo = true)
@@ -1125,7 +1689,10 @@ int main(int argc, char** argv)
             radio.setCivEcho(echo);
             QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
                              [this](int, const SliceDelta& d) {
-                                 if (d.frequency) frequencyMHz = *d.frequency;
+                                 if (d.frequency) {
+                                     frequencyMHz = *d.frequency;
+                                     ++frequencyPublications;
+                                 }
                              });
             QObject::connect(&backend, &IRadioBackend::configurationWarning, &backend,
                              [this](const QString& m) { warnings << m; });
@@ -1198,6 +1765,40 @@ int main(int argc, char** argv)
               "auto: and the radio ANSWERS - a frequency arrives, where the "
               "0xA4-hardcoded path produced a permanently blank session");
         check(c.backend.model().civAddress == 0xA2, "auto: resolved as the IC-9700");
+        const RadioCapabilities caps = c.backend.capabilities();
+        check(caps.txPowerBands.size() == 3
+                  && caps.txPowerMaxWattsAt(146'000'000.0) == 100.0
+                  && caps.txPowerMaxWattsAt(432'000'000.0) == 75.0
+                  && caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
+              "auto: IC-9700 capabilities carry all three PA ceilings");
+
+        // cmd::kSetFreq (0x05), NOT cmd::kSetFreqTrx (0x00). 0x00 is the
+        // TRANSCEIVE frame a radio sends the controller when its own VFO
+        // moved; AetherSDR never emits it, so counting it made this assertion
+        // 0 == 0 whether or not the gate existed. Verified by neutering the
+        // gate: with 0x00 the check still passed while a real set-frequency
+        // went out on the wire. cmdSetFrequency() builds 0x05 — CivCodec.cpp.
+        const int tuneCommandsBefore = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return frame.cmd == cmd::kSetFreq;
+            }));
+        const int frequencyPublicationsBefore = c.frequencyPublications;
+        const double actualFrequencyBefore = c.frequencyMHz;
+        c.backend.setSliceFrequency(0, 500'000'000.0);
+        check(waitFor([&] {
+                  return c.frequencyPublications > frequencyPublicationsBefore;
+              }),
+              "auto: a rejected IC-9700 gap tune still produces a publication");
+        const int tuneCommandsAfter = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& frame) {
+                return frame.cmd == cmd::kSetFreq;
+            }));
+        check(tuneCommandsAfter == tuneCommandsBefore,
+              "auto: an IC-9700 gap frequency sends no CI-V tune command");
+        check(c.warnedAbout("outside its supported bands"),
+              "auto: an IC-9700 gap frequency explains why it was rejected");
+        check(c.frequencyMHz == actualFrequencyBefore,
+              "auto: the corrective frequency is radio state, not the refused request");
 
         // ONE broadcast per connect. Never polled, never retried on a timer:
         // RFC #4983 attributes an unrecoverable CI-V stall to request volume,
@@ -1205,6 +1806,47 @@ int main(int argc, char** argv)
         const int broadcasts = c.sentTo(kBroadcastAddress);
         check(broadcasts == 1,
               "auto: exactly one broadcast 0x19 0x00 is sent for the whole connect");
+    }
+
+    // ---- THE GATE IS IC-9700-ONLY, PROVEN ON THE WIRE ---------------------
+    //
+    // #5116's non-goals name IC-705 and IC-7300MK2 explicitly: neither may
+    // change tuning behaviour. The gate above keys on `bandsFor()` being
+    // non-empty, which today is the IC-9700 alone — but "the predicate reads
+    // right" is not evidence, and the assertion that WAS meant to carry this
+    // was counting a command AetherSDR never sends.
+    //
+    // So ask it of the wire instead: 500 MHz is above the IC-705's 470 MHz
+    // ceiling AND far above the IC-7300MK2's 74.8 MHz, so a gate that ever
+    // generalised to model.tuningMinHz/tuningMaxHz would silence both. The
+    // discriminating outcome is that the set-frequency still goes out, and no
+    // band warning is raised.
+    for (const auto& [addr, label] :
+         std::array<std::pair<std::uint8_t, const char*>, 2>{{{0xA4, "IC-705"},
+                                                             {0xB6, "IC-7300MK2"}}}) {
+        CivCase c(addr, label);
+        c.backend.connectRadio(c.request());
+        check(waitFor([&] { return c.backend.isConnected(); }),
+              "continuous model: the session comes up");
+        check(waitFor([&] { return c.backend.model().civAddress == addr; }),
+              "continuous model: it resolved to the address under test");
+        check(bandsFor(c.backend.model()).empty(),
+              "continuous model: it declares no discontinuous band table, so "
+              "the IC-9700 gate cannot apply to it");
+
+        const auto setFrequencyCount = [&c] {
+            return static_cast<int>(std::ranges::count_if(
+                c.radio.civCommands(),
+                [](const CivFrame& f) { return f.cmd == cmd::kSetFreq; }));
+        };
+        const int before = setFrequencyCount();
+        const int warningsBefore = static_cast<int>(c.warnings.size());
+        c.backend.setSliceFrequency(0, 500'000'000.0);
+        check(waitFor([&] { return setFrequencyCount() > before; }),
+              "continuous model: a frequency outside its own declared range is "
+              "still sent unchanged — the gate did not leak");
+        check(static_cast<int>(c.warnings.size()) == warningsBefore,
+              "continuous model: and it raises no band warning");
     }
 
     // ---- A DELIBERATELY WRONG TYPED ADDRESS MUST STILL FAIL ----------------

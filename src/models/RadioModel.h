@@ -17,6 +17,7 @@
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
+#include <chrono>
 #include <optional>
 #include "SliceModel.h"
 #include "MeterModel.h"
@@ -363,7 +364,7 @@ public:
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
     // reasoning as hasManualNotch(): it can only add the NB button.
     bool hasHostNoiseBlanker() const;
-    // The filter widths the radio declares, widest first, or an EMPTY list
+    // The filter widths the radio declares, narrowest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a
     // fixed IF ladder wants and what a disconnected app should show.
@@ -394,6 +395,11 @@ public:
     // still transmits CW from a key, a paddle or the host keying path; what it
     // lacks is a text buffer.
     bool hasRadioSideCwKeyer() const;
+    bool hasCwTextProgress() const;
+    bool hasCwTextStoredMacros() const;
+    int cwTextMinWpm() const;
+    int cwTextMaxWpm() const;
+    QString cwTextValidationError(const QString& text) const;
     bool hasVoiceKeyer() const;
     // Whether this radio has DAX audio/IQ channels. Same permissive
     // disconnected rule as hasRadioSideDsp(): with nothing attached there is
@@ -765,8 +771,15 @@ public:
     // squeeze while key transitions on each element boundary.
     void sendCwPtt(bool on, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+    // `scheduledAt` (#4890): the edge's scheduled instant on the producer's
+    // element grid, when one exists.  The netcw `time=` field is derived
+    // from it instead of the send wall-clock, so the radio's timing
+    // reconstruction input carries the intended rhythm rather than
+    // worker-wake plus queued-hop jitter.  Default (epoch zero) = no
+    // schedule; send-time stamping is unchanged.
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
-                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
+                       std::chrono::steady_clock::time_point scheduledAt = {});
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
     void addSlice();           // Create a new slice on the active panadapter
@@ -953,6 +966,10 @@ signals:
     // Wired to AudioEngine's CwSidetoneGenerator for low-latency local
     // sidetone independent of the radio's own DAX-fed sidetone.
     void cwKeyDownChanged(bool down);
+    // Non-Flex diagnostic edge emitted only after transmit preflight, directly
+    // before IRadioBackend::setCwKeying(). Lets tests and diagnostics prove a
+    // refused key-down did not cross the radio seam.
+    void backendCwKeyingForwarded(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
     void rawSliceModeListsChanged();
@@ -1012,7 +1029,7 @@ signals:
     // instance. Three features — the CW decoder, the RTTY decoder and the QSO
     // recorder's RX tap — were bound directly to the Flex stream, so on any
     // radio without one they bound to nothing: no error, no log line, the
-    // toggle worked and nothing ever decoded. See HERMES.md §18.
+    // toggle worked and nothing ever decoded. See docs/HERMES.md §18.
     //
     // Deliberately NOT the speaker path. AudioEngine::feedAudioData keeps its
     // existing per-family wiring untouched, so nothing audible changes on any
@@ -1020,7 +1037,7 @@ signals:
     //
     // Named for the tap it carries. A future filter-flat, pre-AGC feed for
     // modems is a SEPARATE signal (rxWidebandAudioReady), not a mode flag on
-    // this one — see HERMES.md §18.5.
+    // this one — see docs/HERMES.md §18.5.
     void rxDemodAudioReady(const QByteArray& pcm24kStereoFloat);
     // The backend was replaced because the operator picked a radio of another
     // family. Consumers holding backend-owned objects (PanadapterStream) must
@@ -1421,6 +1438,9 @@ private:
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend(const QString& serial);  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
+    void scheduleOperatingStateSave();
+    void captureClientOwnedCwState(RestoredRadioState& state) const;
+    void restoreClientOwnedCwState(const RestoredRadioState& state);
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
@@ -1431,6 +1451,9 @@ private:
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
     void publishCapabilities(bool connected);
+    // Apply a backend's band-dependent PA ceiling to TransmitModel. Backends
+    // without per-band data leave the existing radio-reported limit alone.
+    void refreshTxPowerLimit();
     // Bind the one producer for rxDemodAudioReady. Idempotent; call after
     // m_backend and m_panStream are both settled for the new family.
     void wireRxDemodAudioBus();
@@ -1444,6 +1467,9 @@ private:
     // decide whether a connect needs a different backend.
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    QVector<TxPowerBand> m_txPowerBands;
+    double m_activeTxPowerBandLowHz = 0.0;
+    double m_activeTxPowerBandHighHz = 0.0;
     // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
     // simulator) instead of a FlexBackend. Selected per-connection from the target
     // — see connectToRadio(). Also generalizes to future non-Flex backends (HL2).
@@ -1567,7 +1593,8 @@ private:
     QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
     qint64   m_netCwLastSendMs{-1};
     void sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
-                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
+                          std::chrono::steady_clock::time_point scheduledAt = {});
     QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
@@ -1748,6 +1775,18 @@ private:
     // keying may proceed; on refusal it rolls back the optimistic transmit state
     // and notifies, so no raw-TX edge is ever published for a refused key.
     bool refuseKeyOnTransmitIncapableBackend();
+    // The same guard, for the radio that transmits everywhere EXCEPT the mode
+    // it is currently in (WFM on an IC-705, #5040). True when keying may
+    // proceed. See the definition for why the refusal has to happen on this
+    // side of the seam and not in the backend.
+    bool refuseKeyInReceiveOnlyMode();
+    // The refusal both of the above perform: raise the interlock notification
+    // and roll back TransmitModel's optimistic transmit state. Always false.
+    bool refuseKeyWithInterlock(const QString& message, const QString& key);
+    // Apply the same capability + receive-only-pan preflight to a non-Flex CW
+    // carrier edge before it crosses the backend seam. Key-up always passes so
+    // an inhibit arriving mid-element can never strand RF on.
+    bool forwardNonFlexCwKeying(bool down);
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
@@ -2008,7 +2047,7 @@ private:
     // but "does this wire have a round trip to time" is a fact about the WIRE and
     // stays true while it is down. Without the distinction a disconnected HL2
     // falls back to the Flex branch, and lastPingRtt()'s 0 renders as "< 1 ms":
-    // the exact claim HERMES.md § 21.3 exists to forbid, one state transition
+    // the exact claim docs/HERMES.md § 21.3 exists to forbid, one state transition
     // later. Latched sticky-once-true so a window that closes with no samples in
     // it cannot flip a readout mid-session, and reset in teardownBackend(),
     // because only a new backend can change the answer.

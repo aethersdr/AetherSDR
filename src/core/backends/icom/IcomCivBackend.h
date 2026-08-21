@@ -76,6 +76,7 @@ public:
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
+    void setTxFilter(int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz,
                       PanCenterIntent intent) override;
@@ -87,6 +88,11 @@ public:
     void setKeying(bool key) override;
     void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxPower(int percent) override;
+    QString sendCwText(const QString& text) override;
+    void abortCwText() override;
+    void setCwSpeed(int wpm) override;
+    void setCwPitch(int hz) override;
+    void setCwBreakIn(bool on) override;
     void setSpeechProcessor(bool on, int level) override;
     void setMicGain(int gainPercent) override;
     void setTxAudioMonitor(bool on) override;
@@ -154,6 +160,12 @@ private slots:
 
 private:
     void publishCapabilities();
+    // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
+    // from it. One call rather than two because they are the same answer — a
+    // model whose name reached the UI while its bands did not is how an IC-705
+    // ended up with a band menu that had no 2 m or 70 cm button on it (#5041).
+    // Emitted from every point that resolves m_model, so the two cannot drift.
+    void publishIdentity();
     // Publish the scope's dBm axis, derived from the SAME ScopeCalibration that
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.
@@ -166,18 +178,65 @@ private:
     // only where a radio mode has no neutral equivalent but does have its own
     // IF widths — RTTY today. See the definition.
     QString currentLadderMode() const;
+    // Re-read the three things that define the passband — the IF width
+    // (1A 03) and both Twin PBT positions (14 07 / 14 08).
+    //
+    // AFTER EVERY MODE AND SLOT CHANGE, not once at connect. All three are
+    // stored PER MODE AND PER SLOT in the radio: FIL2 in CW and FIL2 in USB are
+    // different widths with different PBT positions, and the radio swaps the
+    // lot when the mode changes without announcing any of it. A width read once
+    // at connect is correct until the operator's first mode change and silently
+    // stale for the rest of the session.
+    void requestPassbandState();
+
+    // The passband to draw right now: the radio's own IF width and PBT pair
+    // where it has reported them, and the slot ladder's factory default until
+    // it has. Signed in SliceModel's convention.
+    [[nodiscard]] std::pair<int, int> currentPassbandHz() const;
+
+    // Is the width we hold an answer about the mode/DATA/slot we are in NOW?
+    // False means m_ifWidthHz belongs to a context the operator has left, and
+    // must not be drawn or trusted until 1A 03 answers again.
+    [[nodiscard]] bool passbandWidthIsCurrent() const;
+
+    // Emit ONLY the passband. See the definition — a width or PBT reply has
+    // nothing to say about the mode, and saying it anyway republishes a stale
+    // one during a front-panel mode change.
+    void publishPassband();
+
+    // Which 1A 05 item holds the transmit passband that is actually in circuit:
+    // the SSB-DATA slot in a data mode, otherwise whichever of WIDE/MID/NAR
+    // 16 58 last reported. Negative when the model has no TBW profile or the
+    // radio has not told us which slot is live yet — the caller must then
+    // decline the write rather than guess a slot and reshape the wrong one.
+    [[nodiscard]] int activeTxBandwidthItem() const;
+
     // Publish the current mode, its passband and the filter ladder from
     // m_mode/m_dataMode/m_filter. SHARED, because the mode arrives on two
     // different commands — 01/04 carry mode and slot, 26 carries mode, DATA and
     // slot — and a 26 that did not republish would decode the DATA flag into a
     // mode indicator that never changed.
     void publishModeState();
+    // Publish THIS MODEL's mode vocabulary onto the slice, so the mode combo
+    // offers what the radio actually has instead of the compiled-in FlexRadio
+    // list. Emitted on every model resolution, including the one that WITHDRAWS
+    // an identity (the ambiguous-bus revert): an empty list is this backend's
+    // honest answer for a radio it cannot characterise, and SliceModel carries
+    // it. (What the combos do with an empty list is theirs to decide — they keep
+    // their last one, #891 — but the model must not go on asserting a vocabulary
+    // we have just stopped standing behind.)
+    void publishModeList();
     void publishMeterDefs();
+    // The receive-only mode gate. True when the radio will not transmit in the
+    // mode it is currently in, in which case the caller must NOT key. Warns and
+    // puts the transmit indicator back where the radio is. See the definition.
+    bool refuseKeyingInReceiveOnlyMode();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
-                    IcomCivScheduler::Priority priority, bool supersedes = true);
+                    IcomCivScheduler::Priority priority, bool supersedes = true,
+                    bool coalesce = true);
     void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
                                     const std::string& key);
     void pumpCiv(qint64 nowMs);
@@ -324,6 +383,52 @@ private:
     // visiting another mode does not silently reset a narrow filter.
     int m_filter = 1;
 
+    // THE WIDTH THAT SLOT ACTUALLY HOLDS, in Hz, from 1A 03 — not the factory
+    // default the slot number used to be turned into.
+    //
+    // ZERO MEANS UNKNOWN, and that distinction is the whole point. An operator
+    // who redefined FIL1 to 2.8 kHz in the SET menu got a passband drawn at
+    // 3.0 kHz and a button labelled 3.0k, with nothing anywhere saying the
+    // number was a guess. Where this is zero the backend falls back to the slot
+    // ladder exactly as before; where it is set, it is the radio's own answer
+    // and it wins. FM/DV/WFM have no settable width at all and stay zero
+    // forever, which is correct rather than missing.
+    int m_ifWidthHz = 0;
+
+    // WHICH CONTEXT THAT WIDTH WAS READ FOR — the mode, DATA flag and slot in
+    // force when 1A 03 answered.
+    //
+    // THE RADIO HOLDS A SEPARATE WIDTH FOR EVERY COMBINATION, so a width read
+    // in AM says nothing about USB. Deciding staleness by watching for a
+    // CHANGE instead does not work, and failed live: every setter here moves
+    // m_mode/m_filter optimistically before the write goes out, so by the time
+    // the radio's confirmation arrives the "did it move?" test compares the new
+    // value against itself and says no. The symptom was every mode drawing AM's
+    // 9 kHz window — a 9 kHz passband over a 3 kHz SSB filter — because the
+    // connect-time read was never superseded.
+    //
+    // Recording the context the answer BELONGS TO instead is not fooled by an
+    // optimistic write, because it is stamped only where the reply is decoded.
+    CivMode m_ifWidthMode = CivMode::Usb;
+    bool    m_ifWidthData = false;
+    int     m_ifWidthSlot = 0;
+
+    // Twin PBT, 0..255 with 128 centred. Together they slide the passband;
+    // apart they narrow it from the inside. Defaulting to centre means a radio
+    // that has not answered yet draws an unshifted window rather than a window
+    // shoved to one end.
+    int m_pbtInner = kPbtCentreCode;
+    int m_pbtOuter = kPbtCentreCode;
+
+    // TRANSMIT passband. m_txBandwidthSlot is what 16 58 reported — 0 WIDE,
+    // 1 MID, 2 NAR, -1 not yet known — and decides WHICH stored slot a
+    // setTxFilter() write reshapes. The Hz pair is the last one READ BACK from
+    // the radio, so what the Phone applet shows is the passband the transmitter
+    // has rather than the one that was asked for.
+    int m_txBandwidthSlot = -1;
+    int m_txFilterLowHz = 0;
+    int m_txFilterHighHz = 0;
+
     // LAST INTENT PER CONTROL — what we most recently asked the radio for, in
     // the seam's own units. Not a cache of the radio's state: it is what
     // `controls.scrub` re-asserts, so a linkage check can drive every control
@@ -376,6 +481,10 @@ private:
     // being generated on a timer, so its cadence is the transmit callback's
     // cadence and it cannot drift against the stream it is riding.
     bool m_tuning = false;
+    // Last non-off value reported by 16 47. The shared UI is still boolean,
+    // so remembering 01 vs 02 is what lets OFF -> ON restore Full rather than
+    // silently demoting it to Semi.
+    int m_cwBreakInMode = 1;
     int m_preTuneTxPowerPercent = -1;
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;

@@ -69,6 +69,7 @@ public:
 
 private:
     int processingChannels() const;
+    void processStereoFrames(const float* interleavedStereo, int stereoFrames);
 
     std::array<DenoiseState*, 2> m_states{nullptr, nullptr};
     std::array<std::unique_ptr<Resampler>, 2> m_up;    // 24kHz → 48kHz per channel

@@ -29,7 +29,7 @@ class AudioEngine;
 //
 // WHAT IT IS BUILT FROM. Every stage exists because something in the
 // Hermes-Lite 2 bring-up failed silently at exactly that point. The stage list
-// is a transcription of HERMES.md section 14, and each result carries the
+// is a transcription of docs/HERMES.md section 14, and each result carries the
 // reference so a future agent lands on the write-up rather than re-deriving it:
 //
 //   - four separate defects each produced a correct-looking keyed transmission
@@ -123,7 +123,7 @@ private:
     // `concern` is the closest thing to a verdict: it is set when a value falls
     // outside what this radio has previously been observed to do, and it names
     // the suspicion rather than declaring failure. `reference` points at the
-    // HERMES.md section that explains the failure mode, so the next agent gets
+    // docs/HERMES.md section that explains the failure mode, so the next agent gets
     // the history rather than a bare number.
     //
     // `meterDependent` marks a conclusion that was drawn from meterSnapshot(),
@@ -150,7 +150,7 @@ private:
     //
     // These run FIRST when both phases are selected, and not by accident: the
     // wire's handedness is one fact that transmit and receive both consume, and
-    // transmit cannot be reasoned about until it is settled (HERMES.md 15.6).
+    // transmit cannot be reasoned about until it is settled (docs/HERMES.md 15.6).
     void stageConsumerAgreement(const Options& o);
     void stageZeroShift(const Options& o);
     void stageRxSidebands(const Options& o);
@@ -169,7 +169,7 @@ private:
     //
     // The automation bridge drives RadioModel and the MOX button drives
     // TransmitModel, and three separate bugs reached the operator through that
-    // gap (HERMES.md 14.5). A transmit diagnostic that keyed the way only the
+    // gap (docs/HERMES.md 14.5). A transmit diagnostic that keyed the way only the
     // bridge can would inherit exactly the blindness it exists to remove.
     //
     // Returns whether the radio reached the requested state. Keying can be

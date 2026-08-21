@@ -2,10 +2,17 @@
 
 #include <QFlags>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QVariantMap>
 
 namespace AetherSDR {
+
+struct TxPowerBand {
+    double lowHz = 0.0;
+    double highHz = 0.0;
+    double maxWatts = 0.0;
+};
 
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
@@ -103,6 +110,38 @@ struct RadioCapabilities {
     bool canTransmit = false;
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
 
+    // Optional per-frequency ceilings for radios whose PA rating changes by
+    // band. Empty means txPowerMaxWatts applies everywhere. The ranges are
+    // inclusive and expressed in Hz, matching the tuning fields above.
+    QVector<TxPowerBand> txPowerBands;
+
+    [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const noexcept
+    {
+        for (const TxPowerBand& band : txPowerBands) {
+            if (frequencyHz >= band.lowHz && frequencyHz <= band.highHz) {
+                return band.maxWatts;
+            }
+        }
+        return txPowerMaxWatts;
+    }
+
+    // Modes this radio DEMODULATES BUT WILL NOT TRANSMIT IN, in AetherSDR's
+    // neutral vocabulary (the same strings SliceModel carries).
+    //
+    // WFM on an IC-705 is the case that named this: the radio offers it to
+    // listen to 76-108 MHz broadcast and its transmitter does not follow. That
+    // is NOT canTransmit=false — the radio keys perfectly well one mode away —
+    // so it needs its own field rather than a flag that would disable the whole
+    // transmit surface for a radio that has one.
+    //
+    // EMPTY is the honest default and what every other backend reports today: a
+    // radio that transmits in everything it receives. Read by the key-on guards
+    // in RadioModel, so a backend that fills it gets the refusal, the interlock
+    // notification and the optimistic-transmit-state rollback for free — the
+    // rollback a backend cannot perform for itself, because a backend cannot
+    // reach TransmitModel (#5106 review).
+    QStringList receiveOnlyModes;
+
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams
     // baseband to the radio; false for a Flex, which modulates on-radio from its
@@ -169,6 +208,7 @@ struct RadioCapabilities {
         TxSetpoints = 1u << 4,  // TX drive setpoints (per band); never keying
         Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
+        Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
@@ -310,6 +350,22 @@ struct RadioCapabilities {
     // control sweep over hardware that cannot follow it.
     QList<int> rxFilterWidthsHz;
 
+    // The TRANSMIT passband edges this radio can actually reach, in Hz,
+    // ASCENDING. Empty means continuous — the Phone applet's low/high cut
+    // steppers keep their own 50 Hz granularity and every value they show is a
+    // value the transmitter has.
+    //
+    // NON-EMPTY IS A HARD LIST, NOT A HINT. An Icom does not have continuous TX
+    // cut at all: it stores a handful of low edges and a handful of high edges
+    // and nothing between them exists. Left continuous, the steppers walked
+    // 50 Hz at a time through values the radio silently rounded away — twelve
+    // clicks to move the low cut from 100 to 200 Hz, eleven of which changed
+    // the label and nothing else. The two lists are independent because the
+    // radios treat them independently: an IC-7300MK2 has six low edges and four
+    // high ones.
+    QList<int> txFilterLowEdgesHz;
+    QList<int> txFilterHighEdgesHz;
+
     // The RADIO stores named configuration profiles (global / TX / mic) that a
     // client can list, load and save. The seam already carries ProfileDelta and
     // profileChanged in both directions; this is the flag that says whether the
@@ -412,6 +468,24 @@ struct RadioCapabilities {
     // place to put the text.
     bool hasRadioSideCwKeyer = false;
 
+    // Shape of that text keyer. These fields keep shared callers honest when
+    // two radios both accept text but expose different surrounding contracts:
+    // Flex CWX has a progress counter, stored F-key macros, live typing and
+    // per-word speed changes; the verified Icom CI-V command 17 path has none
+    // of those and accepts one documented 30-character message at a time.
+    QString cwTextKeyerName{QStringLiteral("CWX")};
+    int cwTextMinWpm = 5;
+    int cwTextMaxWpm = 100;
+    int cwTextMaxMessageChars = 0;  // 0 = backend has no fixed whole-message limit
+    // Empty means the backend accepts its existing command-plane character
+    // contract. Non-empty lets protocol adapters reject text synchronously
+    // instead of reporting success for a message the radio will alter/refuse.
+    QString cwTextAllowedCharacters;
+    bool cwTextHasProgress = true;
+    bool cwTextHasStoredMacros = true;
+    bool cwTextSupportsLive = true;
+    bool cwTextSupportsSpeedModifiers = true;
+
     // The RADIO records and plays back voice-keyer messages from its own store
     // (`dvk` verbs). True for a Flex; false for a backend with no recorder.
     //
@@ -468,4 +542,18 @@ struct RadioCapabilities {
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(RadioCapabilities::ClientSettingsDomains)
 
+
+// Whether `mode` is one this radio receives but will not transmit in.
+//
+// Pure so the key guards' decision can be pinned by a test on its own, away
+// from the model plumbing that produces the capability. An EMPTY mode is not a
+// receive-only mode — no slice, no claim — which is what keeps the guard open
+// when it is asked before a slice exists.
+//
+// Case-insensitive because the automation bridge upper-cases what it is handed
+// and the neutral vocabulary is not guaranteed to be upper-case at every seam.
+inline bool modeIsReceiveOnly(const RadioCapabilities& caps, const QString& mode)
+{
+    return !mode.isEmpty() && caps.receiveOnlyModes.contains(mode, Qt::CaseInsensitive);
+}
 }  // namespace AetherSDR

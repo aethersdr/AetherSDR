@@ -10,7 +10,7 @@
 
 // HPSDR Protocol 1 ("Metis") wire primitives for the Hermes-Lite 2 backend.
 //
-// Direct C++ port of the live-validated prototypes/hl2/hpsdr.py spike (aetherd
+// Direct C++ port of the live-validated tools/hl2/hpsdr.py spike (aetherd
 // HL2 Phase 1a). Protocol facts (register map, EP2/EP6 framing, LNA gain
 // register) are grounded clean-room in openHPSDR Protocol 1, the Hermes-Lite 2
 // wiki/gateware, and the pihpsdr reference client (Principle I; see

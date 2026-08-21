@@ -611,7 +611,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
     src/core/backends/hl2/Hl2EmergencyStop.cpp # release the radio from a signal handler
-    src/core/backends/hl2/Hl2Receivers.cpp   # per-receiver index-space map (HERMES.md §12.5)
+    src/core/backends/hl2/Hl2Receivers.cpp   # per-receiver index-space map (docs/HERMES.md §12.5)
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
@@ -770,6 +770,7 @@ set(CORE_SOURCES
     src/core/ShortcutManager.cpp
     src/core/SupportBundle.cpp
     src/core/IssueReport.cpp
+    src/core/SystemInventory.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
     src/core/FlexControlManager.cpp
@@ -884,8 +885,10 @@ set(GUI_SOURCES
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/MapView.cpp
+    src/gui/map/MapMarkerBatchItem.cpp
     src/gui/map/MapMarkerItem.cpp
-    src/gui/map/MapPathItem.cpp
+    src/gui/map/MapPathBatchItem.cpp
+    src/gui/map/MapTerminatorItem.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
@@ -1553,6 +1556,13 @@ if (ENABLE_ASR)
             set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
             set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
             message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+            # The pack is produced by a stock in-tree build (GGML_NATIVE=OFF →
+            # ggml's fixed x86-64 feature set; MSVC /arch:AVX2 additionally
+            # implies FMA+F16C). Recorded here for the startup inventory
+            # (#4986) because the GGML_* options that would say so only exist
+            # when ggml's own CMake runs — which this branch skips. Re-derive
+            # if the pack is ever rebuilt with different ISA settings.
+            set(_aether_prebuilt_ggml_baseline "SSE42,AVX,AVX2,FMA,F16C,BMI2")
         else()
             # Build whisper/ggml as static objects, not .so's.
             set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
@@ -2697,6 +2707,50 @@ target_compile_definitions(aethercore PUBLIC
     AETHERSDR_VERSION="${PROJECT_VERSION}"
 )
 
+# Expose the vendored ggml CPU ISA baseline to code (#4986) so the startup
+# inventory can compare it against the running CPU: GGML_NATIVE is forced OFF
+# above, which in ggml's build system enables this fixed feature set on
+# x86-64 (third_party/whisper.cpp/ggml/CMakeLists.txt, INS_ENB). On MSVC,
+# FMA/F16C have no separate options — /arch:AVX2 implies both — so the list
+# names only the options that exist. Left undefined on system-libwhisper
+# builds (their baseline is the distro's choice and unknowable here) and on
+# non-x86 hosts (all options default OFF there), which the code reports as
+# "unknown"/skips.
+set(_aether_ggml_baseline_str "")
+if (NOT ENABLE_ASR)
+    # No speech engine in this binary — never record a baseline, even if a
+    # stale cache still carries GGML_* entries from an earlier ASR configure
+    # (which would otherwise arm an ASR warning in an ASR-less build).
+elseif (DEFINED _aether_prebuilt_ggml_baseline)
+    # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
+    # the baseline comes from the pack's recorded build settings above.
+    set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")
+elseif (USE_SYSTEM_LIBWHISPER)
+    # Distro libwhisper: its ISA baseline is the packager's choice and not
+    # knowable here. Explicit, not implied by GGML_* being unset — those are
+    # cache entries and survive a reconfigure from the vendored engine.
+elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
+    # x86 targets only: ggml defines these options unguarded on every
+    # architecture (INS_ENB defaults them ON whenever GGML_NATIVE is forced
+    # OFF on a native build), so on ARM they sit ON in the cache while the
+    # compile ignores them — scanning them there would stamp an x86 baseline
+    # into an ARM binary.
+    set(_aether_ggml_baseline "")
+    foreach(_aether_isa SSE42 AVX AVX2 FMA F16C BMI2)
+        if (DEFINED GGML_${_aether_isa} AND GGML_${_aether_isa})
+            list(APPEND _aether_ggml_baseline ${_aether_isa})
+        endif()
+    endforeach()
+    list(JOIN _aether_ggml_baseline "," _aether_ggml_baseline_str)
+else()
+    set(_aether_ggml_baseline_str "")
+endif()
+if (NOT _aether_ggml_baseline_str STREQUAL "")
+    target_compile_definitions(aethercore PUBLIC
+        AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}"
+    )
+endif()
+
 # Compiler warnings — same flags for both first-party targets. Vendored
 # sources compiled into aethercore keep their per-source -w COMPILE_FLAGS,
 # which land after these target options and win (unchanged from monolith).
@@ -2788,4 +2842,3 @@ else()
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
 endif()
-

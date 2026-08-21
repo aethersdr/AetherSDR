@@ -73,7 +73,6 @@ signals:
     void nr2GainMethodChanged(int method);
     void nr2NpeMethodChanged(int method);
     void nr2AeFilterChanged(bool on);
-    void nr2UseOriginalGeometryChanged(bool useOriginal);
     // MNR parameter changes
     void mnrStrengthChanged(float value);
     // DFNR parameter changes
@@ -139,7 +138,6 @@ private:
     QButtonGroup* m_nr2GainGroup{nullptr};
     QButtonGroup* m_nr2NpeGroup{nullptr};
     QCheckBox*    m_nr2AeCheck{nullptr};
-    QCheckBox*    m_nr2OriginalGeometryCheck{nullptr};
     QSlider*      m_nr2GainMaxSlider{nullptr};
     QLabel*       m_nr2GainMaxLabel{nullptr};
     QSlider*      m_nr2GainFloorSlider{nullptr};

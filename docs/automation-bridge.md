@@ -145,8 +145,8 @@ connection — `connect` / `disconnect`; audio — `capture_audio`; and
 
 The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
-`contextMenu`, `rightClick`, `hitTest`, `clickAt` — `invoke`/`grab`
-cover the common cases), the transmit-keying verbs (`key`, `txtest`,
+`contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
+`doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
 `atu`, `cwx`, `testtone`, `txwaterfall` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
@@ -317,6 +317,8 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
 | | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
 | | [`clickAt [<target>] <x> <y>`](#clickat) | Click at a global (or target-local) point — fallback when name matching is ambiguous (TX-guarded). |
+| | [`doubleClick <target> [x y]`](#doubleclick) | Double-click a widget (its centre by default) — the only way to raise `mouseDoubleClickEvent`. |
+| | [`doubleClickAt [<target>] <x> <y>`](#doubleclickat) | Double-click at a global (or target-local) point (TX-guarded, same guards as `clickAt`). |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
@@ -691,7 +693,7 @@ connects).
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
 | `gps` | — | GPS status, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time, frequency error, and oscillator-reference state |
-| `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
+| `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/break-in/delay/sidetone/iambic mode/paddle swap/CWL/monitor gain+pan), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. |
@@ -1782,6 +1784,50 @@ Recipe — close a **specific** side-panel tile (not just the first `containerCl
 read the target tile's `containerClose` rect from `dumpTree`, compute its centre in
 global coordinates, and `clickAt` that point.
 
+### `doubleClick`
+Double-click a **named** widget. Two `clickAt` calls are not a substitute: Qt does
+not promote a pair of synthetic press/release sequences into a double-click, so a
+widget that overrides `mouseDoubleClickEvent` — the VFO DIG offset inline editor,
+the TX filter cut readouts — never hears one. The delivered sequence is Qt's own
+(`Press` → `Release` → `DblClick` → `Release`; the window system sends the
+`DblClick` *instead of* the second press).
+
+`x y` are **local** to `<target>` and optional — omitted, the widget's rect centre
+is used, which is the point a person would hit. Guards, TX refusals and deferred
+delivery are inherited wholesale from [`clickAt`](#clickat), which does the actual
+delivery.
+
+```json
+→ {"cmd":"doubleClick","target":"txFilterHighCut"}          // centre of the widget
+← {"ok":true,"clicked":{"class":"ScrollableLabel",…},"deferred":true}
+
+→ {"cmd":"doubleClick","target":"txFilterHighCut","x":10,"y":12}   // target-local point
+← {"ok":true,"clicked":{"class":"ScrollableLabel",…},"deferred":true}
+```
+
+Aliases: `doubleclick`, `dblClick`.
+
+### `doubleClickAt`
+The double-click twin of [`clickAt`](#clickat), with the same two forms and the
+same overload rule (a numeric first token means the global form):
+
+- **`doubleClickAt <x> <y>`** — `x y` are **global** screen coordinates.
+- **`doubleClickAt <target> <x> <y>`** — `x y` are **local** to `<target>`.
+
+```json
+→ {"cmd":"doubleClickAt","x":1420,"y":210}                        // global point
+→ {"cmd":"doubleClickAt","target":"AppletPanel","x":12,"y":34}    // target-local point
+→ {"cmd":"doubleClickAt","target":"AppletPanel","value":"12 34"}  // equivalent
+```
+
+As with `clickAt`, the JSON `x`/`y` fields must both be present and JSON-numeric;
+a missing or string-typed coordinate is rejected rather than coerced to 0. An
+explicit `value` wins over `x`/`y`. The same normalization applies to every alias
+spelling (`doubleclickat`, `dblClickAt`) and to `doubleClick`'s optional
+coordinates, so `bridge_command` reaches all three request forms identically.
+
+Aliases: `doubleclickat`, `dblClickAt`.
+
 ### `menu`
 Enumerate or pop a **menu-bar** menu. On macOS the native menu bar reparents its
 menus to top-level `QMenu`s, so `dumpTree` finds them but `menuBar()->actions()`
@@ -2601,6 +2647,83 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### RN2 deterministic stereo probe
+
+`audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof
+surface for RN2. It creates a deterministic three-second stereo float32 signal
+inside `AudioEngine`; it neither connects to a radio nor changes RX routing,
+playback, TX permission, or TX state. It may take up to 120 seconds through the
+automation bridge because it deliberately runs a selected filter and a fresh,
+aligned reference filter.
+
+The two temporary filters use `probeDryMix=1.0`, reported in the response. That
+keeps the proof independent of a user's RN2 strength and of whether RNNoise
+classifies the synthetic tones as speech: RNNoise still executes its frame,
+resampler, accumulator, channel-mode, and FIFO paths, while this probe measures
+those transport contracts rather than denoising quality. Production RX/TX RN2
+settings and DSP behavior are untouched.
+
+The legacy no-option form remains unchanged, including its 24 kHz / 960-frame
+RX-compatible defaults. `probeNr2Stereo` is the older SpectralNR/`NR2` alias;
+it is not an RN2 spelling and still takes no RN2 options.
+
+```text
+# Legacy RX-compatible run with an irregular cyclic partition sequence.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 blocks=73,211,17,604,91
+
+# Native 48 kHz, stereo-preserving RN2.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=PreserveRxStereo blocks=73,211,17,604,91
+
+# Native 48 kHz, intentional mono/downmix path duplicated to L/R.
+python tools/automation_probe.py audioCapture probeDspStereo RN2 rate=Native48k output=ProcessedMono blocks=73,211,17,604,91
+```
+
+The same request is available through JSON; the CLI driver preserves all
+key/value tokens in `value`:
+
+```json
+→ {"cmd":"audioCapture","action":"probeDspStereo",
+   "value":"RN2 rate=Native48k output=ProcessedMono blocks=480,960"}
+```
+
+Only `probeDspStereo RN2` accepts case-insensitive `rate`, `output`, and
+`blocks` tokens. `rate` is `Legacy24k` (default) or `Native48k`; `output` is
+`PreserveRxStereo` (default) or `ProcessedMono`; `blocks` is a bounded,
+positive comma-separated cyclic list of input-frame counts (default `960`).
+Unknown, repeated, non-positive, oversized, or excessive-count options fail
+before running a filter. These options are rejected for `all` and every
+non-RN2 mode. The legacy comma form `RN2,strict` remains valid.
+
+Every RN2 response retains the established `frames`, `discardFrames`, RMS
+`input`/`output`, `ratioError`, level-ratio, `audible`, and `preserved` fields.
+It additionally reports canonical `rateDomain`, `sampleRate`, `outputMode`,
+and `blockPartitions`; input/output frame and byte totals; `inputCoverage`,
+`outputCoverage`, per-block `blockOutput`, and `outputSizeExact`; and the
+selected/reference `firstAudibleFrame` and millisecond positions. No fixed
+latency limit is asserted: those positions are evidence for the caller to
+inspect. `startupLatencyDeltaFrames`/`Ms` and `startupLatencyEquivalent` make
+partition-dependent leading silence explicit. `sequenceComparisonFrames`,
+`sequenceMaxError`, `sequenceEquivalent`, and `sequenceOrder` compare a
+substantial first-audible-aligned deterministic window against the fresh
+reference run. `fifoOrderPreserved` means that aligned payload stayed in
+reference order; `fifoSequenceEquivalent` is stricter and is true only when
+both that payload and its startup position match the reference.
+`firstOutputSizeMismatchBlock` and `sequenceFirstMismatchFrame`/`Channel` are
+`-1` on a clean run and identify the first failing location otherwise.
+
+For `PreserveRxStereo`, `ratioPreserved` is the explicit ratio-preservation
+result (and `preserved` keeps its historical meaning). For `ProcessedMono`,
+`leftRightMaxDelta` and `duplicated` prove that the intentional mono result was
+copied to both output channels; `ok` requires audibility, exact output sizing,
+duplication, and sequence equivalence. In preserve mode, `ok` also requires
+the legacy stereo-ratio check.
+
+This probe cannot expose RN2's internal one-time resampler divergence warning
+latch: it is not surfaced by the public filter API, and two matched resamplers
+cannot be induced to diverge through public inputs without invasive fault
+injection. The output-size and aligned-reference evidence above therefore
+proves the public contract, not that hidden warning-latch path.
+
 ### `floors`
 Per-pan **measured FFT noise floor** and the **display floor** (dBm), read off the
 live spectrum without a screenshot — the numeric way to assert post-TX floor
@@ -3414,7 +3537,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 65 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 67 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3435,6 +3558,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `contextMenu` | — | contextMenu <target> [x y] — Qt context-menu path |
 | `rightClick` | — | rightClick <target> [x y] — mousePressEvent menu path |
 | `hitTest` | `hittest` | hitTest <target> [x y] — read-only widget-owner probe |
+| `doubleClick` | `doubleclick`, `dblClick` | doubleClick <target> [x y] — double-click a widget (centre by default) |
+| `doubleClickAt` | `doubleclickat`, `dblClickAt` | doubleClickAt <x> <y> \| doubleClickAt <target> <x> <y> — coordinate double-click |
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
@@ -3465,7 +3590,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
-| `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
+| `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k\|Native48k output=PreserveRxStereo\|ProcessedMono blocks=<frames,...> |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `liveness` | — | liveness — per-class data ages and the producer->consumer meter join |
 | `civ` | — | civ <send <hex>\|trace [all]\|session\|scheduler> — CI-V inject, frame trace, RS-BA1 lease health, or command-scheduler health (Icom; send is TX-gated) |

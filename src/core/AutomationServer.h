@@ -484,7 +484,15 @@ private:
     // "containerClose" and only the first is reachable by invoke). TX-gated on the
     // whole ancestor chain; disabled widgets and (with the power ceiling armed)
     // the RF/Tune power sliders are refused.
-    QJsonObject doClickAt(const QString& target, const QString& value);
+    // A coordinate click, optionally a double-click. Double sends the full Qt
+    // sequence (Press, Release, DblClick, Release) — Qt does NOT promote two
+    // synthetic press/release pairs into a double-click, so a caller cannot
+    // build one out of two clickAt calls. (#5068)
+    enum class ClickKind { Single, Double };
+    QJsonObject doClickAt(const QString& target, const QString& value,
+                          ClickKind kind = ClickKind::Single);
+    // doubleClick <target> [x y] — same guards as clickAt, centre by default.
+    QJsonObject doDoubleClick(const QString& target, const QString& value);
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
     // (the FlexLib-correct pair) so a panafall-created pan closes too. The

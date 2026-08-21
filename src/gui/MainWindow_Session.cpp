@@ -1091,6 +1091,7 @@ void MainWindow::wireRadioModel()
                                        ? IambicKeyer::Mode::IambicA
                                        : IambicKeyer::Mode::IambicB);
             m_iambicKeyer->setWpm(tx.cwSpeed());
+            m_iambicKeyer->setSwapPaddles(tx.cwSwapPaddles());
             if (wantOn && !m_iambicKeyer->isRunning()) {
                 m_iambicKeyer->start();
             } else if (!wantOn && m_iambicKeyer->isRunning()) {
@@ -1130,6 +1131,11 @@ void MainWindow::wireRadioModel()
         m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
             // Lock-free atomic gate; safe to call directly from the keyer
             // thread, matching the iambic keyer's gate path below.
+            // CWX: same fix pending (#4890).  This keyer runs the same
+            // absolute-grid schedule (#3644) and knows each edge's instant
+            // (m_epoch + m_nextEdgeMs), but still takes the 1-arg callback,
+            // so its sidetone renders wake rhythm while the iambic path
+            // below renders scheduled rhythm.
             if (m_audio)
                 m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
         });
@@ -1142,21 +1148,23 @@ void MainWindow::wireRadioModel()
             if (m_cwxLocalKeyer) m_cwxLocalKeyer->stop();
         });
 
-        // Local iambic keyer — when the radio's iambic mode is on, this
-        // state machine runs in parallel and drives the local sidetone gate
-        // at sub-5 ms latency (the radio's keyed-back signal carries 50–200
-        // ms of round-trip jitter that's painful for paddle ops).  The radio
-        // still produces the on-air signal; we forward paddle states to it,
-        // and both engines run at the same WPM to stay phase-aligned.
+        // Local iambic keyer — when iambic mode is on, this state machine drives
+        // the local sidetone gate and produces the completed element edges.
+        // Flex forwards those edges over NetCW; a host-modulating backend such
+        // as HL2 turns them into shaped IQ. Keeping the timing here avoids
+        // radio-round-trip jitter in both the sidetone and the RF pattern.
         m_iambicKeyer = std::make_unique<IambicKeyer>();
-        m_iambicKeyer->setOnKeyDownChange([this](bool down) {
+        m_iambicKeyer->setOnKeyDownChange([this](bool down,
+                                                 std::chrono::steady_clock::time_point when) {
             // Drive the local sidetone gate (lock-free atomic on the audio
             // thread) and the radio's per-element key edge in parallel.
-            // The radio sees `cw key 1` / `cw key 0` matching our element
-            // timing — same RF pattern the radio's own iambic engine
-            // would have produced from a hardware paddle.
+            // The backend sees key-down/key-up matching our element timing.
+            // `when` is the edge's scheduled grid instant (#4890): the
+            // sidetone renders to it, and the trace logs it as schedMs so
+            // scheduled rhythm and thread-wake latency (t − schedMs) are
+            // separately observable in one line.
             if (m_audio)
-                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
+                m_audio->setCwKeyDown(down, when);   // keys audible + recorder sidetone
             const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
             const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
             if (lcCw().isDebugEnabled()) {
@@ -1165,13 +1173,14 @@ void MainWindow::wireRadioModel()
                     << "CW iambic key-edge trace=" << traceId
                     << " t=" << now << "ms"
                     << " sinceSourceMs=" << (sourceMs ? static_cast<qint64>(now - sourceMs) : -1)
-                    << " down=" << down;
+                    << " down=" << down
+                    << " schedMs=" << cwTraceMsAt(when);
             }
-            QMetaObject::invokeMethod(this, [this, down]() {
+            QMetaObject::invokeMethod(this, [this, down, when]() {
                 const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
                 const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
                 m_radioModel.sendCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                           traceId, sourceMs);
+                                           traceId, sourceMs, when);
             }, Qt::QueuedConnection);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {

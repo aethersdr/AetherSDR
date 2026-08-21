@@ -305,6 +305,16 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         connect(saveProfileBtn, &QPushButton::clicked, this, [this] {
             QString name = m_profileCombo->currentText().trimmed();
             if (name.isEmpty()) return;
+            if (!MidiSettings::isValidProfileName(name)) {
+                // The store refuses these names silently; say why here so the
+                // operator isn't left with a Save that does nothing. (#4975)
+                FramelessMessageBox::warning(
+                    this, QStringLiteral("Save Profile"),
+                    QStringLiteral("\"%1\" isn't a valid profile name — a name "
+                                   "can't contain / or \\ or start with \".\".")
+                        .arg(name));
+                return;
+            }
             MidiSettings::instance().saveProfile(name, m_manager->bindings());
             refreshProfileList();
         });

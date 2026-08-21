@@ -103,6 +103,7 @@ int main(int argc, char** argv)
 
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<TransmitDelta>();
     // QSignalSpy stores a notchChanged argument by metatype, so the notch
     // session-scope case below reads an empty QVariant without this.
     qRegisterMetaType<NotchDelta>();
@@ -276,10 +277,37 @@ int main(int argc, char** argv)
     // ---- keying does not disturb the link ----
     // Whether this actually keys depends on the transmit gate above; what
     // matters here is that asking does not upset the connection either way.
+    QSignalSpy keyStateSpy(&backend, &IRadioBackend::transmitChanged);
     backend.setKeying(true);
     check(backend.isConnected(), "setKeying(true) does not disrupt the link");
+    check(!keyStateSpy.isEmpty()
+              && keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(false),
+          "key-down publishes observed MOX for backend-owned CW break-in");
+    keyStateSpy.clear();
     backend.setKeying(false);
     check(backend.isConnected(), "setKeying(false) does not disrupt the link");
+    check(!keyStateSpy.isEmpty()
+              && !keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(true),
+          "key-up publishes observed MOX for backend-owned CW break-in");
+
+    // ---- manual MOX takes ownership from the Break-In hang ----
+    // A completed element leaves MOX up for the configured hang. If the
+    // operator asserts manual PTT during that window, the old timer must not
+    // later drop the still-held manual transmission.
+    backend.setSliceMode(0, QStringLiteral("CW"));
+    keyStateSpy.clear();
+    backend.setCwKeying(true, true, 30);
+    backend.setCwKeying(false, true, 30);
+    backend.setKeying(true);  // manual takeover while the hang is pending
+    keyStateSpy.clear();
+    spin(60);                 // past the stale hang deadline
+    check(keyStateSpy.isEmpty(),
+          "manual MOX takeover cancels the pending CW hang unkey");
+    backend.setKeying(false);
+    check(!keyStateSpy.isEmpty()
+              && !keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(true),
+          "manual release unkeys after taking ownership from CW Break-In");
+    backend.setSliceMode(0, QStringLiteral("LSB"));
 
     // ---- invokeExtension honors the async contract ----
     backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("noop"), 42, {});

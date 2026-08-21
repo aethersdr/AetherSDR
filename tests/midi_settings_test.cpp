@@ -155,7 +155,7 @@ int main(int argc, char** argv)
     const auto r1 = settings.importProfile(mapPath, validator);
     ok &= expect(r1.ok(), "map import succeeds");
     ok &= expect(r1.importedCount == 6, "map import count (freq, cwspeed, paddles, nr, ptt)");
-    ok &= expect(r1.profileName == "CTR2-Test_v1_0", "map import names profile from file name");
+    ok &= expect(r1.profileName == "CTR2-Test_v1.0", "map import names profile from file name");
     ok &= expect(r1.skippedUnknownParam.contains("bwset")
                      && r1.skippedUnknownParam.contains("openft8"),
                  "unknown map functions are skipped by name");
@@ -177,7 +177,7 @@ int main(int argc, char** argv)
     }
 
     const auto r2 = settings.importProfile(mapPath, validator);
-    ok &= expect(r2.ok() && r2.profileName == "CTR2-Test_v1_0 (2)",
+    ok &= expect(r2.ok() && r2.profileName == "CTR2-Test_v1.0 (2)",
                  "a name collision gets a suffix, never an overwrite");
 
     // Sections we never bind from carry the vendor's own key dialect. Judging
@@ -262,15 +262,76 @@ int main(int argc, char** argv)
     {
         // Native XML round trip: the profile the map import just stored.
         const auto r4 = settings.importProfile(
-            configRoot + "/AetherSDR/midi/CTR2-Test_v1_0.xml", validator);
+            configRoot + "/AetherSDR/midi/CTR2-Test_v1.0.xml", validator);
         ok &= expect(r4.ok() && r4.importedCount == 6, "native XML profile re-imports");
-        ok &= expect(r4.profileName == "CTR2-Test_v1_0 (3)", "XML re-import takes the next suffix");
+        ok &= expect(r4.profileName == "CTR2-Test_v1.0 (3)", "XML re-import takes the next suffix");
         const auto again = settings.loadProfile(r4.profileName);
-        const auto first = settings.loadProfile("CTR2-Test_v1_0");
+        const auto first = settings.loadProfile("CTR2-Test_v1.0");
         bool same = again.size() == first.size();
         for (int i = 0; same && i < again.size(); ++i)
             same = sameBinding(again[i], first[i]);
         ok &= expect(same, "XML round trip preserves every binding field");
+    }
+
+    // ── Direct band/mode select vocabulary (#5027) ──────────────────────────
+    // The CTR2-Quad and CTR2-Max maps carry one row per band and per mode —
+    // the full set measured from the vendor's published packages. Every
+    // target param is registered by MainWindow's controller table, so these
+    // rows are vocabulary only.
+    {
+        QSet<QString> bandModeRegistry = {
+            "global.band160m", "global.band80m", "global.band60m",
+            "global.band40m",  "global.band30m", "global.band20m",
+            "global.band17m",  "global.band15m", "global.band12m",
+            "global.band10m",  "global.band6m",
+            "global.modeCW",   "global.modeLSB", "global.modeUSB",
+            "global.modeAM",   "global.modeFM",  "global.modeRTTY",
+            "global.modeDIGL", "global.modeDIGU", "global.modeSAM",
+        };
+        const auto bandModeValidator = [&bandModeRegistry](const QString& id) {
+            return bandModeRegistry.contains(id);
+        };
+        const auto rBandMode = settings.importProfile(
+            writeImportFile("bandmode.map",
+                            "# Buttons\n"
+                            "B37=band160\n"
+                            "B38=band80\n"
+                            "B39=band60\n"
+                            "B40=band40\n"
+                            "B41=band30\n"
+                            "B42=band20\n"
+                            "B43=band17\n"
+                            "B44=band15\n"
+                            "B45=band12\n"
+                            "B46=band10\n"
+                            "B47=band6\n"
+                            "B25=modecw\n"
+                            "B26=modelsb\n"
+                            "B27=modeusb\n"
+                            "B28=modeam\n"
+                            "B29=modefm\n"
+                            "B30=modertty\n"
+                            "B31=modedigl\n"
+                            "B32=modedigu\n"
+                            "B33=modesam\n"),
+            bandModeValidator);
+        ok &= expect(rBandMode.ok() && rBandMode.importedCount == 20,
+                     "all 11 band + 9 mode select rows import");
+        ok &= expect(rBandMode.skippedUnknownParam.isEmpty()
+                         && rBandMode.duplicates.isEmpty(),
+                     "band/mode vocabulary leaves no named skips");
+        const auto stored = settings.loadProfile(rBandMode.profileName);
+        bool found160 = false;
+        bool foundCw = false;
+        for (const auto& b : stored) {
+            if (b.paramId == "global.band160m")
+                found160 = b.msgType == MidiBinding::NoteOn && b.number == 37
+                           && !b.relative && b.channel == -1;
+            if (b.paramId == "global.modeCW")
+                foundCw = b.msgType == MidiBinding::NoteOn && b.number == 25;
+        }
+        ok &= expect(found160, "band160 row becomes a NoteOn 37 global.band160m binding");
+        ok &= expect(foundCw, "modecw row becomes a NoteOn 25 global.modeCW binding");
     }
 
     const auto r5 = settings.importProfile(configRoot + "/AetherSDR/midi.settings", validator);
@@ -358,14 +419,14 @@ int main(int argc, char** argv)
 
     // Export → Import round trip through the user-facing export path.
     const auto exported = settings.exportProfile(
-        fakeHome.path() + "/exported.xml", settings.loadProfile("CTR2-Test_v1_0"));
+        fakeHome.path() + "/exported.xml", settings.loadProfile("CTR2-Test_v1.0"));
     ok &= expect(exported.ok() && exported.exportedCount == 6,
                  "export writes the current profile");
     const auto r8 = settings.importProfile(fakeHome.path() + "/exported.xml", validator);
     ok &= expect(r8.ok() && r8.importedCount == 6, "exported file re-imports cleanly");
     const auto exportFail = settings.exportProfile(
         fakeHome.path() + "/no-such-dir/out.xml",
-        settings.loadProfile("CTR2-Test_v1_0"));
+        settings.loadProfile("CTR2-Test_v1.0"));
     ok &= expect(!exportFail.ok(), "export to an unwritable path reports an error");
 
     // An empty set must not report success: it serializes to a childless
@@ -375,6 +436,61 @@ int main(int argc, char** argv)
         settings.exportProfile(fakeHome.path() + "/empty.xml", QVector<MidiBinding>{});
     ok &= expect(!exportEmpty.ok() && exportEmpty.exportedCount == 0,
                  "exporting an empty binding set is refused, not written as a stub");
+
+    // Pitch Bend round trip (#5024): Learn and manual entry store number = -1
+    // (the PB message carries no controller number) and the writer exports it
+    // verbatim, so the app's own export must come back as a binding, not a
+    // "bad values" skip.
+    {
+        MidiBinding pb;
+        pb.paramId = "rx.afGain";
+        pb.channel = 2;
+        pb.msgType = MidiBinding::PitchBend;
+        pb.number = -1;
+        const auto pbExported = settings.exportProfile(
+            fakeHome.path() + "/pb.xml", QVector<MidiBinding>{pb});
+        ok &= expect(pbExported.ok() && pbExported.exportedCount == 1,
+                     "a learned Pitch Bend binding exports");
+        const auto rPb = settings.importProfile(fakeHome.path() + "/pb.xml", validator);
+        ok &= expect(rPb.ok() && rPb.importedCount == 1
+                         && rPb.skippedBadType.isEmpty(),
+                     "the app's own Pitch Bend export re-imports as a binding");
+        const auto pbStored = settings.loadProfile(rPb.profileName);
+        ok &= expect(pbStored.size() == 1
+                         && pbStored.first().msgType == MidiBinding::PitchBend
+                         && pbStored.first().number == -1
+                         && pbStored.first().channel == 2,
+                     "the round-tripped Pitch Bend keeps number -1 and its channel");
+
+        // A hand-written PB row may omit the meaningless number entirely —
+        // normalize to -1 rather than the other attributes' default of 0.
+        const auto rPbAbsent = settings.importProfile(
+            writeImportFile("pb-absent.xml",
+                            "<MidiProfile>"
+                            "<Binding param=\"rx.afGain\" channel=\"0\" type=\"3\"/>"
+                            "</MidiProfile>\n"),
+            validator);
+        ok &= expect(rPbAbsent.ok() && rPbAbsent.importedCount == 1,
+                     "a Pitch Bend row without a number imports");
+        const auto pbAbsentStored = settings.loadProfile(rPbAbsent.profileName);
+        ok &= expect(pbAbsentStored.size() == 1 && pbAbsentStored.first().number == -1,
+                     "an absent Pitch Bend number normalizes to -1");
+
+        // An in-range number on a hand-written PB row stays accepted (it
+        // always was), but the stored binding normalizes to -1 so the store
+        // can never re-export a number no PB message carries.
+        const auto rPbInRange = settings.importProfile(
+            writeImportFile("pb-inrange.xml",
+                            "<MidiProfile>"
+                            "<Binding param=\"rx.afGain\" channel=\"0\" type=\"3\" number=\"64\"/>"
+                            "</MidiProfile>\n"),
+            validator);
+        ok &= expect(rPbInRange.ok() && rPbInRange.importedCount == 1,
+                     "an in-range Pitch Bend number still imports");
+        const auto pbInRangeStored = settings.loadProfile(rPbInRange.profileName);
+        ok &= expect(pbInRangeStored.size() == 1 && pbInRangeStored.first().number == -1,
+                     "an accepted Pitch Bend row stores number -1, not the file's value");
+    }
 
     // ── Non-regular files: the size cap cannot see them ─────────────────────
     //
@@ -545,6 +661,101 @@ int main(int argc, char** argv)
     ok &= expect(rPitch.skippedBadType.size() == 1
                      && rPitch.skippedBadType.first().contains("number"),
                  "XML: the out-of-range Pitch Bend row is named");
+
+    // ── Profile store: dotted names list + round-trip (#4974) ───────────────
+
+    settings.saveProfile("CTR2 v1.0", saved);
+    ok &= expect(settings.availableProfiles().contains("CTR2 v1.0"),
+                 "profile store: dotted name lists untruncated");
+    ok &= expect(settings.loadProfile("CTR2 v1.0").size() == saved.size(),
+                 "profile store: dotted name loads what was saved");
+    settings.deleteProfile("CTR2 v1.0");
+    ok &= expect(!settings.availableProfiles().contains("CTR2 v1.0"),
+                 "profile store: dotted name deletes its own file");
+
+    // ── Profile store: names are names, not paths (#4975) ───────────────────
+
+    ok &= expect(MidiSettings::isValidProfileName("CTR2 v1.0"),
+                 "name guard: ordinary dotted name accepted");
+    ok &= expect(MidiSettings::isValidProfileName("Tenerife contest ÉÑ"),
+                 "name guard: non-ASCII name accepted");
+    ok &= expect(!MidiSettings::isValidProfileName("a/b"),
+                 "name guard: forward separator rejected");
+    ok &= expect(!MidiSettings::isValidProfileName("a\\b"),
+                 "name guard: backslash separator rejected");
+    ok &= expect(!MidiSettings::isValidProfileName("."),
+                 "name guard: '.' rejected");
+    ok &= expect(!MidiSettings::isValidProfileName(".."),
+                 "name guard: '..' rejected");
+    ok &= expect(!MidiSettings::isValidProfileName(".hidden"),
+                 "name guard: leading-dot (hidden-file) name rejected");
+    ok &= expect(!MidiSettings::isValidProfileName("   "),
+                 "name guard: whitespace-only rejected");
+
+    // The guards hold at the filesystem, not only in the predicate.
+    const QString appConfigDir = configRoot + "/AetherSDR";
+    settings.saveProfile("../escape", saved);
+    ok &= expect(!QFile::exists(appConfigDir + "/escape.xml"),
+                 "profile store: save with ../ writes nothing outside the store");
+    settings.saveProfile("a/b", saved);
+    ok &= expect(!QDir(appConfigDir + "/midi/a").exists(),
+                 "profile store: save with a separator creates no directory chain");
+    // A leading dot is the Unix hidden-file convention: the listing's
+    // QDir::Files scan omits ".hidden.xml", so an accepted save would
+    // succeed and then vanish from availableProfiles() (#5083 review).
+    // The guard refuses the name before a file exists to hide.
+    settings.saveProfile(".hidden", saved);
+    ok &= expect(!QFile::exists(appConfigDir + "/midi/.hidden.xml"),
+                 "profile store: leading-dot name writes no hidden file");
+    ok &= expect(settings.loadProfile(".hidden").isEmpty(),
+                 "profile store: leading-dot name loads nothing");
+
+    {
+        QFile planted(appConfigDir + "/planted.xml");
+        if (planted.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            planted.write("<MidiProfile version=\"1\">"
+                          "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\""
+                          " number=\"7\" inverted=\"False\"/></MidiProfile>\n");
+            planted.close();
+        }
+    }
+    ok &= expect(settings.loadProfile("../planted").isEmpty(),
+                 "profile store: load with ../ reads nothing outside the store");
+    settings.deleteProfile("../planted");
+    ok &= expect(QFile::exists(appConfigDir + "/planted.xml"),
+                 "profile store: delete with ../ removes nothing outside the store");
+    QFile::remove(appConfigDir + "/planted.xml");
+
+    // A legacy file whose name the guard refuses (backslash is a legal Unix
+    // filename character, and the pre-guard GUI could create it) must not
+    // list: the list may only hand out names load/delete will serve. The
+    // file itself stays on disk.
+#ifndef Q_OS_WIN
+    {
+        QFile legacy(appConfigDir + "/midi/back\\slash.xml");
+        QDir().mkpath(appConfigDir + "/midi");
+        if (legacy.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            legacy.write("<MidiProfile version=\"1\">"
+                         "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\""
+                         " number=\"7\" inverted=\"False\"/></MidiProfile>\n");
+            legacy.close();
+        }
+    }
+    ok &= expect(!settings.availableProfiles().contains("back\\slash"),
+                 "profile store: a legacy separator-named file does not list");
+    ok &= expect(QFile::exists(appConfigDir + "/midi/back\\slash.xml"),
+                 "profile store: the unlisted legacy file stays on disk");
+    QFile::remove(appConfigDir + "/midi/back\\slash.xml");
+#endif
+
+    // An import whose file name derives a refused store name ("...map" ->
+    // "..") falls back to the default name instead of surfacing a
+    // misleading write error.
+    const auto rDotsName = settings.importProfile(
+        writeImportFile("...map", mapContent), validator);
+    ok &= expect(rDotsName.ok()
+                     && rDotsName.profileName.startsWith("Imported profile"),
+                 "import: a refused derived name falls back to the default");
 
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();

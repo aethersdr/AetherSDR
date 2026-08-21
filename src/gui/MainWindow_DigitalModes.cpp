@@ -283,7 +283,7 @@ void MainWindow::activateRADE(int sliceId)
     // panStream() null for every other family. The connect() further down
     // dereferenced it bare, so selecting RADE on a Hermes-Lite 2 was a SEGFAULT,
     // not a decline. Same shape as the null-deref that crashed every HL2 connect
-    // three seconds in (HERMES.md §6 gap 1) and as the startDax() guard, which
+    // three seconds in (docs/HERMES.md §6 gap 1) and as the startDax() guard, which
     // this deliberately mirrors.
     //
     // Checked HERE rather than at the connect: everything between this point and
@@ -670,7 +670,7 @@ void MainWindow::deactivateRADE()
 
     m_audio->setRadeMode(false);
     m_radioModel.setDigitalVoiceTxSlice(-1);
-    m_audio->clearTxAccumulators();  // flush stale RADE modem data
+    m_audio->clearTxAccumulators();  // flush stale RADE modem data (self-marshals)
     m_appletPanel->phoneCwApplet()->setRadeActive(false);
 
     if (auto* applet = m_appletPanel->radeApplet()) {
@@ -1169,7 +1169,7 @@ void MainWindow::stopDax()
     if (!m_daxBridge) return;
 
     m_audio->setDaxTxMode(false);
-    m_audio->clearTxAccumulators();
+    m_audio->clearTxAccumulators();  // self-marshals
 
     // #2895: drop the per-slice daxChannelChanged / sliceAdded reactions wired
     // in startDax() so they don't fire against a torn-down bridge.

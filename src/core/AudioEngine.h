@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QVector>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <QBuffer>
@@ -213,7 +214,8 @@ public:
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
     void setRadioTransmitting(bool tx);  // raw interlock state (regardless of TX ownership)
-    void clearTxAccumulators() { m_txAccumulator.clear(); m_txFloatAccumulator.clear(); m_daxPreTxBuffer.clear(); }
+    // Self-marshals onto the AudioEngine thread; safe from any caller.
+    Q_INVOKABLE void clearTxAccumulators();
     Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
@@ -233,15 +235,10 @@ public:
     void setNr2AeFilter(bool on);
     QJsonObject nr2RuntimeDiagnostics() const;
     QJsonObject opusTxPacingDiagnostics() const;
-    Q_INVOKABLE void setNr2UseOriginalGeometry(bool useOriginal);
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
     // filter uses the original 256/2 geometry the demo's tiny frames need. Rebuilds
     // the active main NR2 filter if enabled so the change takes effect immediately.
     Q_INVOKABLE void setMainSourceLegacyNr2(bool legacy);
-    bool nr2UseOriginalGeometry() const
-    {
-        return m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
-    }
     // Client-side RN2 (RNNoise neural noise suppression)
     Q_INVOKABLE void setRn2Enabled(bool on);
     bool rn2Enabled() const { return m_rn2Enabled.load(); }
@@ -549,7 +546,19 @@ public:
     // call so every local CW source (manual keyer, CWX macros, iambic paddle)
     // drives them in lockstep. The recorder copy is what lets a Client-Side QSO
     // recording capture the operator's own sent CW/CWX side-tone (#2539).
-    void setCwKeyDown(bool down);
+    // `when` is the edge's scheduled instant on the producer's element grid
+    // (#4890): keying sources with an exact schedule (iambic keyer) pass their
+    // grid deadline so the sidetone renders intended rhythm, not thread-wake
+    // rhythm; sources without one take the wall-clock default.
+    // Note the deliberate asymmetry with RadioModel::sendCwKeyEdge, whose
+    // `scheduledAt` uses a default-constructed (epoch) time_point as an
+    // explicit "no schedule" sentinel it tests for.  Here the sidetone needs a
+    // usable instant on every call, so "no schedule" is spelled now() and
+    // there is nothing to test for — passing {} would stamp the epoch rather
+    // than mean "unscheduled".
+    void setCwKeyDown(bool down,
+                      std::chrono::steady_clock::time_point when =
+                          std::chrono::steady_clock::now());
 
     // Start the CW-sidetone record pump (#2539). CW has no mic-driven
     // onTxAudioReady, so a free-running timer on the audio thread feeds the
@@ -1027,11 +1036,10 @@ private:
     std::unique_ptr<SpectralNR> m_nr2;
     std::unique_ptr<SpectralNR> m_kiwiSdrNr2;
     std::atomic<bool> m_nr2Enabled{false};
-    std::atomic<bool> m_nr2UseOriginalGeometry{false};
     // Set true while the connected MAIN source is the demo (SimBackend), whose
     // 128-sample frames need the original 256/2 NR2 geometry (see createNr2Filter).
-    // Independent of the user-facing m_nr2UseOriginalGeometry setting, and scoped
-    // to the main filter only — real radios and Kiwi keep the 1024/4 geometry.
+    // This is scoped to the main filter only — real radios and Kiwi keep the
+    // 1024/4 geometry.
     std::atomic<bool> m_mainSourceLegacyNr2{false};
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH

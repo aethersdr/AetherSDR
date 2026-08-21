@@ -7,7 +7,7 @@
 //
 // Offline and synthetic on purpose. The same question measured against
 // hpsdrsim was inconclusive because the simulator carries a strong DC offset on
-// I (documented in prototypes/hl2/README.md) which the shift translates to the
+// I (documented in docs/archive/hl2-phase0-spike.md) which the shift translates to the
 // offset frequency, where it can be mistaken for the signal. A generated tone
 // with no DC component removes that confound, along with the radio, the network
 // and the sample-rate plumbing.

@@ -55,7 +55,7 @@ discovery, the EP2/EP6 IQ frame layout, and the Command & Control register map
 (sample-rate/receiver config, RX NCO frequency, and the AD9866 LNA gain
 register). These wire-protocol
 facts were consulted clean-room and are expressed in original AetherSDR code
-(prototypes/hl2/ and, subsequently, the in-tree Hl2Backend). No openHPSDR,
+(tools/hl2/ and, subsequently, the in-tree Hl2Backend). No openHPSDR,
 Hermes-Lite 2, or pihpsdr code is incorporated, vendored, translated, or linked
 into AetherSDR; the referenced sources are consulted only to verify protocol
 facts. The consulted facts are:

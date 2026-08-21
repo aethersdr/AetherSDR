@@ -36,7 +36,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
 - **Broad hardware control** — rigctld + virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
-- **Workspace canvas (experimental)** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several canvas windows if you want them; named workspaces recall which applets are open as well as where they sit, and can be bound to radio profiles. Off by default; the Classic shell is unchanged until you enable it
+- **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several canvas windows if you want them; named workspaces recall which applets are open as well as where they sit, and can be bound to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **Built-in demo mode** — a synthetic backend that generates its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
 ---

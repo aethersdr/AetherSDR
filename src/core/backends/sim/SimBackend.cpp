@@ -231,6 +231,7 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.txPowerBands = {};
     caps.family = familyName();
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
@@ -245,6 +246,10 @@ RadioCapabilities SimBackend::capabilities() const
     // (Principle VI). TX stays off in the skeleton.
     caps.canTransmit = false;
     caps.txPowerMaxWatts = 0.0;
+    // Moot on a backend that cannot key at all — canTransmit=false refuses every
+    // mode already. Empty, not "all of them", because this field means "the
+    // exceptions", and a simulator has none.
+    caps.receiveOnlyModes = {};
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;

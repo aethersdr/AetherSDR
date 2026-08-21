@@ -394,6 +394,16 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_txDsp->moveToThread(m_ioThread);
     m_ioThread->start();
 
+    m_cwHangTimer = new QTimer(this);
+    m_cwHangTimer->setSingleShot(true);
+    connect(m_cwHangTimer, &QTimer::timeout, this, [this] {
+        if (!m_cwAutoKeyed) {
+            return;
+        }
+        m_cwAutoKeyed = false;
+        setKeying(false);
+    });
+
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
     // rather than one per receiver, because the demux has already happened at
     // the wire: blocks[i] is DDC i. Fanning out here keeps the sample path a
@@ -1337,7 +1347,7 @@ Hl2Backend::~Hl2Backend()
         // three-phase split does NOT remove, and splitting the connect is what
         // made it reachable: the operator can now use the UI while the chains
         // open, and reaching for a different radio is the obvious thing to do
-        // while waiting. HERMES.md §22.4. It is also what keeps the QPointer in
+        // while waiting. docs/HERMES.md §22.4. It is also what keeps the QPointer in
         // beginDspSetup() sound, so a fix here has to deal with that too.
         if (m_metis)
             QMetaObject::invokeMethod(m_metis, "stop", Qt::BlockingQueuedConnection);
@@ -1362,6 +1372,7 @@ Hl2Backend::~Hl2Backend()
 RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
+    c.txPowerBands = {};
     c.family = QStringLiteral("hl2");
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
@@ -1394,6 +1405,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
+    // The HL2 modulates on this host, so it transmits in whatever mode WDSP is
+    // told to build — there is no mode it receives and cannot send. The transmit
+    // gate (m_txAllowed) is the only thing that stops it, and that is
+    // canTransmit above.
+    c.receiveOnlyModes = {};
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
@@ -1493,6 +1509,11 @@ RadioCapabilities Hl2Backend::capabilities() const
                             // reopened on Config's defaults every launch and
                             // the setting reverted to med/65 (#4909).
                             | RadioCapabilities::ClientSettingsDomain::Agc
+                            // CW timing and sidetone are also host-owned. A
+                            // Flex persists these in radio firmware; HL2 has no
+                            // corresponding readable state, so RadioModel keeps
+                            // the complete CW surface per radio.
+                            | RadioCapabilities::ClientSettingsDomain::Cw
                             // Memories: the client owns them (persistsMemories
                             // is false above). NOTE the bank itself engages on
                             // persistsMemories and keeps its own SHARED
@@ -1739,7 +1760,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     //
     // Opening a WDSP channel is slow -- ~19 s on the FIRST open this machine
     // ever does, generating FFTW wisdom, and 40-175 ms for every open after
-    // that, at any rate (HERMES.md §10 and §22.3) -- and it runs ON THE I/O
+    // that, at any rate (docs/HERMES.md §10 and §22.3) -- and it runs ON THE I/O
     // THREAD, which is the thread that paces EP2. Configuring after start()
     // therefore stalls the pacer for the whole of that, and the gateware
     // watchdog halts the stream when EP2 stops arriving. It also stalls the EP6
@@ -1913,7 +1934,7 @@ void Hl2Backend::beginDspSetup()
     // nothing is racing to clear. QPointer is reentrant, NOT thread-safe — the day
     // teardown stops blocking, a check-then-use here becomes a real race and this
     // needs a different mechanism. That blocking teardown has its own cost; see
-    // the note in ~Hl2Backend() and HERMES.md §22.4.
+    // the note in ~Hl2Backend() and docs/HERMES.md §22.4.
     QPointer<Hl2Backend> self(this);
 
     QMetaObject::invokeMethod(chains.empty() ? static_cast<QObject*>(txDsp)
@@ -2856,7 +2877,7 @@ void Hl2Backend::applyPanBandwidth(double hz)
     // that flushes under WDSP's 100 ms timeout, and it runs for every receiver
     // because the rate register is radio-wide — roughly 0.6-1.1 s of frozen UI
     // per rate-boundary crossing with four panadapters open. That is the
-    // "chunky zoom" operators report. HERMES.md §22.4 has the measurements.
+    // "chunky zoom" operators report. docs/HERMES.md §22.4 has the measurements.
     //
     // Not fixed here on purpose: unlike the connect, this has ordering
     // constraints that survive a partial failure — the DSP must expect the new
@@ -2994,6 +3015,19 @@ void Hl2Backend::setKeying(bool key)
                           "without AETHER_AUTOMATION_ALLOW_TX";
         return;
     }
+    // A manual PTT/MOX asserted while Break-In owns the current key transfers
+    // that ownership to the operator. The backend is already keyed, so without
+    // this explicit handoff the pending CW hang timer would later unkey a PTT
+    // that is still being held.
+    //
+    // The automatic CW path sets m_cwAutoKeyed only AFTER its own setKeying(true)
+    // call below, so that internal key-up cannot be mistaken for manual intent.
+    if (key && m_keyed && m_cwAutoKeyed) {
+        if (m_cwHangTimer) {
+            m_cwHangTimer->stop();
+        }
+        m_cwAutoKeyed = false;
+    }
     // THE ALC'S HOLD THRESHOLD IS A SILENT CLIFF, so say when an operator has
     // fallen off it.
     //
@@ -3036,7 +3070,18 @@ void Hl2Backend::setKeying(bool key)
         m_fwdPeakWatts = 0.0;
     }
 
+    const bool keyChanged = m_keyed != key;
     m_keyed = key;
+    if (keyChanged) {
+        // Manual PTT is already mirrored optimistically by RadioModel, but CW
+        // break-in keys inside this backend. Publish that edge so the TX
+        // indicator, TCI clients and receive-side TX gates see the real state.
+        // TransmitDelta::mox is observed state, not client intent, so this does
+        // not start microphone capture or feed a second key command back down.
+        TransmitDelta delta;
+        delta.mox = key;
+        emit transmitChanged(delta);
+    }
     // MUTE RECEIVE AUDIO WHILE TRANSMITTING.
     //
     // The HL2 keeps receiving while it transmits, and what it receives is our
@@ -3088,6 +3133,10 @@ void Hl2Backend::setKeying(bool key)
     if (key && !m_tuning && m_toneFromTune)
         setTxTestTone(0.0, 0.0);
     if (!key) {
+        if (m_cwHangTimer) {
+            m_cwHangTimer->stop();
+        }
+        m_cwAutoKeyed = false;
         // An unkey ends tune too, however it was started — so the drive register
         // has to come back HERE, not in setTune()'s release branch.
         //
@@ -3132,10 +3181,73 @@ void Hl2Backend::setKeying(bool key)
         // on hardware — a key with no audio at all still produced ~1000 counts
         // of forward power for a moment, which was the previous transmission's
         // last half second going out on the air.
-        if (m_txDsp)
+        if (m_txDsp) {
             QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
-        if (m_metis)
+        }
+        if (m_metis) {
             QMetaObject::invokeMethod(m_metis, "flushTxIq", Qt::QueuedConnection);
+        }
+        if (m_metis) {
+            QMetaObject::invokeMethod(m_metis, "clearCwKeying", Qt::QueuedConnection);
+        }
+    }
+}
+
+void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs)
+{
+    if (!m_txAllowed) {
+        if (down) {
+            qWarning() << "Hl2Backend: CW key refused — automation bridge is active "
+                          "without AETHER_AUTOMATION_ALLOW_TX";
+        }
+        return;
+    }
+
+    const Receiver* txReceiver = rx(m_txDdc);
+    const QString mode = txReceiver ? txReceiver->mode.toUpper() : QString();
+    if (mode != QLatin1String("CW") && mode != QLatin1String("CWU")
+        && mode != QLatin1String("CWL")) {
+        // A key binding pressed in SSB must not become an unmodulated carrier.
+        // Release still clears a previously-held edge during a mode change.
+        if (down) {
+            qCWarning(lcHl2) << "HL2 CW key ignored outside CW mode:" << mode;
+            return;
+        }
+    }
+
+    if (m_cwHangTimer) {
+        m_cwHangTimer->stop();
+    }
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, "setCwKeyDown", Qt::QueuedConnection,
+            Q_ARG(bool, down));
+    }
+
+    if (down) {
+        // Full break-in raises MOX on the first element and keeps it through
+        // the configured inter-element hang. With break-in off, CW only rides
+        // an MOX/PTT the operator already asserted — matching Flex behavior and
+        // piHPSDR's software-keyer path.
+        if (breakIn && !m_keyed) {
+            setKeying(true);
+            m_cwAutoKeyed = true;
+        }
+        return;
+    }
+
+    if (m_cwAutoKeyed && m_cwHangTimer) {
+        // Preserve the complete five-millisecond fall even when the sidebar is
+        // set to zero delay; otherwise MOX could fall before the shaped tail is
+        // emitted. The configured delay remains the dominant hang at normal
+        // operating values.
+        constexpr int kCwEnvelopeReleaseMs = 6;
+        m_cwHangTimer->start(std::max(kCwEnvelopeReleaseMs,
+                                      std::clamp(breakInDelayMs, 0, 2000)));
+    } else if (!m_keyed && m_metis) {
+        // A break-in-off key press without manual PTT produced no RF. Do not
+        // leave CW owning the IQ stream after its release, or a later voice MOX
+        // would correctly key but transmit only silence.
+        QMetaObject::invokeMethod(m_metis, "clearCwKeying", Qt::QueuedConnection);
     }
 }
 
@@ -4415,7 +4527,7 @@ void Hl2Backend::pushInitialState()
     // The defaults (150..3000) correspond to no mode at all — they happen to
     // equal the unmapped-mode fallback — so a fresh connect in the default USB
     // left the radio with DIGU's passband while the mode indicator read USB. Same
-    // category as the mode-change stickiness in HERMES.md 15.7: mode and passband
+    // category as the mode-change stickiness in docs/HERMES.md 15.7: mode and passband
     // must agree, and CONNECT is a place they can disagree just as easily as a
     // mode change. (#4484)
     //

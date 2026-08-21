@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QWidget>
 
 class QPushButton;
@@ -28,6 +29,17 @@ public:
     explicit PhoneApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
+
+    // The TX passband edges the connected radio can actually reach, ascending
+    // (RadioCapabilities::txFilterLowEdgesHz / txFilterHighEdgesHz). Empty
+    // restores the continuous 50 Hz behaviour.
+    //
+    // WHY THE STEPPERS NEED THIS. An Icom stores four to six low edges and four
+    // high ones and has nothing in between. Stepping 50 Hz at a time through
+    // that meant the label moved on every click and the transmitter moved on
+    // roughly one in ten — a control that looked fine and was mostly inert.
+    // With the list, one click is one reachable edge.
+    void setTxFilterEdges(const QList<int>& lowEdgesHz, const QList<int>& highEdgesHz);
 
 private:
     void buildUI();
@@ -63,6 +75,14 @@ private:
     ScrollableLabel* m_highCutLabel{nullptr};
     QPushButton* m_highCutDown{nullptr};
     QPushButton* m_highCutUp{nullptr};
+
+    // Empty = the radio takes a continuous passband, or nothing is connected.
+    QList<int> m_txLowEdgesHz;
+    QList<int> m_txHighEdgesHz;
+
+    // One click of a stepper. Walks `edges` when it has any, and falls back to
+    // the 50 Hz snap otherwise. `dir` is -1 down, +1 up.
+    [[nodiscard]] static int steppedEdgeHz(const QList<int>& edges, int currentHz, int dir);
 
     bool m_updatingFromModel{false};
 };

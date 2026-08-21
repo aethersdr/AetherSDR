@@ -5,6 +5,7 @@
 // synthetic clock, which is the only practical way to prove the in-flight and
 // user-guard rules.
 
+#include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomMeters.h"
 #include "core/backends/icom/IcomModels.h"
 
@@ -12,6 +13,9 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <span>
+#include <string>
+#include <string_view>
 
 using namespace AetherSDR::icom;
 
@@ -292,6 +296,38 @@ static void testModelTable()
     check(modelForCivAddress(0x01) == nullptr,
           "an unrecognised address resolves to nothing — a normal outcome, not an error");
     check(!knownModels().empty(), "the table is populated");
+    if (ic9700) {
+        // ONE TABLE, TWO CONSUMERS. The tune guard and the published PA
+        // ceilings describe the same three RF decks, so they are read from the
+        // same rows — and this is the assertion that keeps them that way. A
+        // future edit that widened a range for power but not for tuning (or
+        // the reverse) used to be invisible; now it fails here.
+        const std::span<const IcomBand> bands = bandsFor(*ic9700);
+        check(bands.size() == 3, "the IC-9700 declares three RF decks");
+        for (const IcomBand& band : bands) {
+            check(supportsFrequency(*ic9700, band.lowHz)
+                      && supportsFrequency(*ic9700, band.highHz),
+                  "every declared IC-9700 power band is tunable end to end");
+            check(band.maxWatts > 0.0,
+                  "every declared IC-9700 band carries a PA rating");
+        }
+        // The other half of the same claim: a continuous model has no table,
+        // and that emptiness is what keeps its tune path untouched. #5116
+        // names both of these as non-goals.
+        for (const std::uint8_t addr : {std::uint8_t(0xA4), std::uint8_t(0xB6)}) {
+            const IcomModel* m = modelForCivAddress(addr);
+            check(m && bandsFor(*m).empty(),
+                  "a continuous model (IC-705, IC-7300MK2) declares no band "
+                  "table, so the IC-9700 gate cannot reach it");
+        }
+        check(nearestSupportedFrequency(*ic9700, 149'000'000ULL) == 148'000'000ULL,
+              "an IC-9700 drag above 2 m clamps to the 148 MHz edge");
+        check(nearestSupportedFrequency(*ic9700, 500'000'000ULL) == 450'000'000ULL,
+              "an IC-9700 drag in the upper gap clamps to the nearest edge");
+        check(nearestSupportedFrequency(*ic9700, 1'296'000'000ULL)
+                  == 1'296'000'000ULL,
+              "an in-band IC-9700 drag remains unchanged");
+    }
     // NO MODEL INHERITS THE 26 00 SHAPE BY ASSUMPTION.
     //
     // This started life as `m.verified || !m.hasVfoModeCommand`, which read the
@@ -373,6 +409,63 @@ static void testPowerCurveIsNotShared()
     check(powerCurveFor(unknownModel()).empty(), "and nor does an unknown radio");
 }
 
+// The mode vocabulary this backend publishes onto the slice (#5040).
+//
+// WFM was implemented end to end in CivCodec from the start and was unreachable
+// only because nothing published a mode list, so the UI stayed on its
+// compiled-in FlexRadio one — which has no WFM because a FLEX-6000 has no WFM.
+static void testModeList()
+{
+    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    check(ic705 != nullptr, "the IC-705 is in the table");
+    if (!ic705)
+        return;
+
+    const auto modes = modeListFor(*ic705);
+    check(!modes.empty(), "the IC-705 publishes a mode list");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"WFM"}) != modes.end(),
+          "and WFM is in it - the whole point of #5040");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"CW"}) != modes.end(),
+          "normal Icom CW is published under the neutral CW name");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"CWU"}) == modes.end(),
+          "the Flex-oriented CWU alias is not published for Icom");
+
+    // EVERY ENTRY MUST ROUND-TRIP. A name the radio can be put into but never
+    // reports back (RTTY, which comes home as DIGL) makes the combo jump on the
+    // confirmation read; a name modeFromNeutral refuses (SAM) silently reverts.
+    // Both read as a broken control.
+    for (const std::string_view m : modes) {
+        bool data = false;
+        const auto civ = modeFromNeutral(std::string(m), data);
+        check(civ.has_value(), "every published mode is one the radio accepts");
+        if (!civ)
+            continue;
+        check(modeToNeutral(*civ, data) == std::string(m),
+              "and one the radio reports back under the same name");
+        check(std::count(modes.begin(), modes.end(), m) == 1, "listed exactly once");
+    }
+
+    // The same provenance rule powerCurveFor states: a row nobody has read that
+    // model's own guide for gets NOTHING, not the IC-705's list.
+    const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* mk2 = modelForCivAddress(0xB6);
+    check(ic9700 && modeListFor(*ic9700).empty(), "another model gets no borrowed list");
+    check(mk2 && modeListFor(*mk2).empty(), "including the verified IC-7300MK2");
+    check(modeListFor(unknownModel()).empty(), "and nor does an unknown radio");
+}
+
+// WFM receives 76-108 MHz broadcast; the transmitter does not follow.
+static void testWfmIsReceiveOnly()
+{
+    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    check(ic705 && modeIsReceiveOnly(*ic705, "WFM"), "the IC-705 does not transmit in WFM");
+    check(ic705 && !modeIsReceiveOnly(*ic705, "FM"), "but FM keys normally");
+    check(ic705 && !modeIsReceiveOnly(*ic705, "USB"), "and so does USB");
+    // No claim in EITHER direction for a model whose modes we have not read.
+    check(!modeIsReceiveOnly(unknownModel(), "WFM"),
+          "an unknown radio is not second-guessed");
+}
+
 int main()
 {
     testInterpolation();
@@ -388,6 +481,8 @@ int main()
     testUnknownModelIsConservative();
     testModelDiscovery();
     testPowerCurveIsNotShared();
+    testModeList();
+    testWfmIsReceiveOnly();
 
     if (g_failures == 0)
         std::printf("icom_meters_test: all checks passed\n");

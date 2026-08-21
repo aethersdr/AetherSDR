@@ -28,7 +28,7 @@ Two rules that fall out of that, both of which have already caused bugs:
    With no radio attached there is nothing to be honest about, and a control
    that stays hidden after unplugging reads as a fault.
 
-See [`HERMES.md`](../../HERMES.md) §18 for the worked narrative, including the
+See [`HERMES.md`](../HERMES.md) §18 for the worked narrative, including the
 traps and why the DAX crash guard is deliberately *not* the DAX capability.
 
 ## Wired and consumed
@@ -40,10 +40,12 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `manufacturer` | `"FlexRadio"` | `"Hermes-Lite"` | `"AetherSDR"` | `MainWindow::refreshRadioIdentityLabels` | Status-bar make row ABOVE the model, shown only when the model string does not already carry the brand (`FLEX-8400M` does, `IC-705` does not). Display only — nothing branches on it. Icom: `"Icom"` |
 | `tuningMinHz` / `tuningMaxHz` | — (0/0) | 0.1–38.4 MHz | — (0/0) | `MainWindow_Wiring.cpp`, `applyTuningRangeToOverlayMenu` | Refuses band buttons the receiver cannot reach. 0/0 means unconstrained |
 | `canTransmit` | ✅ | `m_txAllowed` | ❌ | `RadioModel::setTransmit`, MOX/TUNE key guards | **TX safety gate.** Fail-closed: false denies any keying intent |
+| `receiveOnlyModes` | — (empty) | — (empty) | — (empty) | `RadioModel::refuseKeyInReceiveOnlyMode` (MOX / TUNE / CW-key / `setTransmit`) | Modes the radio **demodulates but will not transmit in**, in the neutral vocabulary. Empty = transmits in everything it receives. Refusing here (not in the backend) is what rolls back `TransmitModel`'s optimistic MOX/TUNE state — a backend cannot reach `TransmitModel`, so a refusal made down there leaves the TX indicator lit and TUNE latched. Icom: `["WFM"]` on the IC-705, which receives 76–108 MHz broadcast and does not transmit there (#5040) |
 | `hostModulates` | — (❌) | ✅ | — (❌) | `TciServer`, `MainWindow_Session` | Mic source collapses to PC; PC-audio lock. **Not the same question as `takesTxAudioOverSeam`** — see below |
 | `takesTxAudioOverSeam` | ❌ | ✅ | ❌ | `MainWindow_Session` (capture, TX stream, PC-audio lock), `AudioEngine::setHostModulation`, `RadioModel::ensureDaxTxStream` | Whether transmit audio leaves through `submitTxAudio` rather than a DAX/VITA-49 stream. Icom: ✅ |
 | `hasSelectableMicInputs` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` → `PhoneCwApplet::setSelectableMicInputs` | The MIC/BAL/LINE/ACC/PC list. False collapses it to PC and adopts that into TransmitModel. Icom: ❌ (the radio picks its own input) |
-| `rxFilterWidthsHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `RxApplet::setRadioFilterWidths` **and** `VfoWidget::setRadioFilterWidths` | The RX filter widths a radio can actually reach, **widest first**. **Empty = continuous or unknown**, and the operator's configurable list stays in force. Icom: three fixed IF filters whose widths **change with the mode** (SSB 3.0/2.4/1.8k, CW 1.2k/500/250, AM+SAM 9/6/3k, FM 15/10/7k, WFM one filter), so `IcomCivBackend` republishes capabilities on every mode change. Both filter surfaces read it — the VFO grid did not, which is how the two disagreed about what the radio could do |
+| `rxFilterWidthsHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `RxApplet::setRadioFilterWidths` **and** `VfoWidget::setRadioFilterWidths` | The RX filter widths a radio can actually reach, **narrowest first**. **Empty = continuous or unknown**, and the operator's configurable list stays in force. Icom publishes the selected slot's actual 1A 03 width plus factory defaults for the two unselected slots that CI-V cannot read, and republishes on mode, slot, or width changes. Both filter surfaces read it — the VFO grid did not, which is how the two disagreed about what the radio could do |
+| `txFilterLowEdgesHz` / `txFilterHighEdgesHz` | empty | empty | empty | `MainWindow::applyCapabilitiesToUi` → `PhoneApplet::setTxFilterEdges` | The discrete TX passband edges a radio can actually reach, ascending. **Empty = continuous or unknown**. Icom publishes per-model tables only where the model's own CI-V guide defines the WIDE/MID/NAR/SSB-D settings; the Phone applet steps through those values and rejects an exact typed value outside the list |
 | `canReboot` | ✅ | ❌ | — (❌) | `RadioSetupDialog` | Enables the Reboot button |
 | `hasTuner` | ✅ | ❌ | ❌ | `TransmitModel::setHasTuner` → `TxApplet` | ATU / MEM dimming |
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
@@ -54,7 +56,8 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasManualNotch` | ❌ | ❌ | ❌ | `RadioModel::hasManualNotch()` → `VfoWidget::setHasManualNotch` | The MN button and the shared level slider re-targeted to notch POSITION. Icom: ✅ (`16 48` enable, `14 0D` position, `16 57` width). **Not** permissive on disconnect — a new button must not appear on a radio that has not claimed it. Distinct from the TNFs, which are pinned to absolute frequencies, and from the auto notch, which finds its own tone |
 | `hasHostNoiseBlanker` | ❌ | ✅ | ❌ | `RadioModel::hasHostNoiseBlanker()` → `VfoWidget::setHasHostNoiseBlanker` | **THIS HOST** blanks impulse noise in the radio's IQ (WDSP ANB, ahead of the demodulator). OR'd with `hasRadioSideDsp` at the NB button, so a direct-sampling radio gets NB without claiming firmware DSP it does not have — the same exception the manual notch makes. Requires an IQ path this host demodulates: a backend fed finished audio has nothing to blank. Icom: ❌ (the radio's own blanker, under `hasRadioSideDsp`). **Not** permissive on disconnect — it can only ADD the button |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
-| `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar CWX indicator, the CWX panel and its F1-F12 arming, plus every other `cwx` entry point — see below |
+| `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar text-keyer indicator and every text-send entry point. Icom: ✅ only for the verified IC-705 / IC-7300MK2 command-17 profiles |
+| `cwTextKeyerName`, ranges and support flags | CWX, 5–100 WPM, progress/macros/live/modifiers | defaults (unused) | defaults (unused) | `MainWindow::applyCapabilitiesToUi`, CAT/TCI/rigctl/automation adapters | Shapes the shared surface without a family branch. Icom: CWK, 6–48 WPM, 30 chars, no progress/stored macros/live typing/speed modifiers; unsupported text is rejected rather than rewritten |
 | `hasVoiceKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasVoiceKeyer()` | Status-bar DVK indicator, the DVK panel, and its F1-F12 arming. ANDed *ahead of* the SmartSDR+ entitlement gate — see below |
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
@@ -326,9 +329,29 @@ automation, so it is **deliberately deferred to its own PR.**
 | Field | Flex | HL2 | Sim | Note |
 |---|:--:|:--:|:--:|---|
 | `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists |
-| `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Flex omits it despite transmitting. Wrong, but inert while unread |
+| `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |
 | `extensions` | — | — | — | The namespaced vendor bag; never populated |
+
+`txPowerBands` is the consumed exception to this section: `RadioModel` reads it
+to update `TransmitModel::maxPowerLevel` when the transmit slice crosses into a
+range with a different PA rating. Flex, HL2 and Sim explicitly leave it empty;
+the IC-9700 declares 144–148 MHz at 100 W, 430–450 MHz at 75 W and 1240–1300
+MHz at 10 W. An empty list preserves the prior global/radio-reported behaviour.
+
+On the Icom side these ratings are not written into `capabilities()` by hand.
+They are read from `bandsFor()` in `IcomModels.cpp` — the same table the tune
+guard (`supportsFrequency` / `nearestSupportedFrequency`) uses to refuse the
+two holes in the IC-9700's envelope, because the ceilings and the tunable
+ranges describe the same three RF decks and must not be able to disagree. An
+empty table is also the predicate the tune path keys on, so a model with one
+continuous range keeps its untouched command path.
+
+What `maxPowerLevel` actually drives on an Icom is the **meter and gauge full
+scale** (`MainWindow_Wiring.cpp`, `VfoWidget::txPowerFullScaleW`). RF power
+itself is a 0–100 % CI-V level, so the radio's own PA governs the watts. This
+field makes a 10 W 23 cm transmission read against a 10 W scale instead of a
+100 W one; it does not clamp the request.
 
 These are the ones to check first when something "should have worked". Note the
 pattern in the Flex column: five fields across this table and the one above are
@@ -355,7 +378,7 @@ reporting 0 kbps.
 
 Within the struct, individual figures a transport cannot measure are `-1`, not
 `0` — `RadioModel::hasLinkRtt()` and `hasStreamCategoryStats()` are the
-predicates the readouts ask before printing. See [`HERMES.md`](../../HERMES.md)
+predicates the readouts ask before printing. See [`HERMES.md`](../HERMES.md)
 §21.3 for why a zero there is a claim the app cannot support.
 
 ## Where the values come from
@@ -366,6 +389,11 @@ predicates the readouts ask before printing. See [`HERMES.md`](../../HERMES.md)
   reported-by-backend truth; the two remain distinct concepts.
 - **Hl2Backend** reports `canTransmit` from its own TX gate (`m_txAllowed`) so a
   build with transmit disabled looks RX-only from above the seam.
+- **IcomCivBackend** derives `receiveOnlyModes` from `modeListFor()` filtered by
+  `modeIsReceiveOnly()` rather than listing it a third time, so a mode cannot be
+  offered in the combo without a consistent transmit answer for it. It also
+  keeps a wire-level backstop in `setKeying`/`setTune` — silent apart from a log
+  line, since the operator-facing refusal belongs to the guard above.
 - **SimBackend** must never look like something that can key a transmitter
   (Principle VI).
 
