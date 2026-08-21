@@ -47,6 +47,40 @@ std::vector<std::uint8_t> buildFrameSub(std::uint8_t to, std::uint8_t cmd, std::
     return buildFrame(to, cmd, body);
 }
 
+// Which commands carry a subcommand is a per-command fact, not a positional
+// one. Treating every second byte as a subcommand would turn command 0x05's
+// first frequency digit into a "subcommand"; treating none of them as one
+// would collapse every 0x27 scope reply into a single undifferentiated blob.
+// So the set is enumerated — ONCE, here, because a second copy of it can drift
+// silently and a drift produces exactly the wrong-but-plausible decode this
+// enumeration exists to prevent. parseFrame() and the CI-V trace both read it.
+bool commandHasSubcommand(std::uint8_t command)
+{
+    switch (command) {
+    case cmd::kLevel:
+    case cmd::kMeter:
+    case cmd::kFunction:
+    case cmd::kPower:
+    case cmd::kReadId:
+    case cmd::kSetting:
+    case cmd::kControl:
+    case cmd::kScope:
+    // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
+    // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
+    // reply parsed with the subcommand sitting in the payload, so the decode
+    // could not tell an enable from an offset and dropped all three.
+    case cmd::kTuneOffset:
+    case cmd::kRxAntenna:
+    // 0x26 is sub-addressed by VFO: 26 00 is the selected VFO, 26 01 the
+    // unselected one. Without this the selector stays in the payload and every
+    // mode/DATA/filter field is decoded one byte off.
+    case cmd::kVfoMode:
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
 {
     // FE FE <to> <from> <cmd> ... <FD>  — the shortest legal frame is 6 bytes
@@ -69,32 +103,14 @@ std::optional<CivFrame> parseFrame(std::span<const std::uint8_t> frame)
     if (bodyEnd <= bodyBegin)
         return f;   // bare command or FB/FA with no data
 
-    // Which commands carry a subcommand is a per-command fact, not a positional
-    // one. Treating every second byte as a subcommand would turn command 0x05's
-    // first frequency digit into a "subcommand"; treating none of them as one
-    // would collapse every 0x27 scope reply into a single undifferentiated
-    // blob. So the set is enumerated.
-    switch (f.cmd) {
-    case cmd::kLevel:
-    case cmd::kMeter:
-    case cmd::kFunction:
-    case cmd::kPower:
-    case cmd::kReadId:
-    case cmd::kSetting:
-    case cmd::kControl:
-    case cmd::kScope:
-    // 0x21 WAS MISSING, and it is sub-addressed like the rest: 21 00 is the
-    // offset, 21 01 the RIT enable, 21 02 the dTX enable. Without it every RIT
-    // reply parsed with the subcommand sitting in the payload, so the decode
-    // could not tell an enable from an offset and dropped all three.
-    case cmd::kTuneOffset:
+    // See commandHasSubcommand() above for why this is an enumeration and not a
+    // positional rule.
+    if (commandHasSubcommand(f.cmd)) {
         f.hasSub = true;
         f.sub    = frame[bodyBegin];
         f.data.assign(frame.begin() + bodyBegin + 1, frame.begin() + bodyEnd);
-        break;
-    default:
+    } else {
         f.data.assign(frame.begin() + bodyBegin, frame.begin() + bodyEnd);
-        break;
     }
     return f;
 }
@@ -253,6 +269,17 @@ std::optional<int> decodeLevel(std::span<const std::uint8_t> bcd)
     return t * 1000 + h * 100 + d * 10 + u;
 }
 
+int percentToLevelRaw(int percent)
+{
+    const int pct = std::clamp(percent, 0, 100);
+    return (pct * 255 + 99) / 100; // ceil(pct * 255 / 100)
+}
+
+int levelRawToPercent(int raw)
+{
+    return std::clamp(raw, 0, 255) * 100 / 255;
+}
+
 // ---------------------------------------------------------------------------
 // Modes
 // ---------------------------------------------------------------------------
@@ -275,6 +302,21 @@ std::optional<CivMode> modeFromNeutral(const std::string& neutral, bool& dataMod
     // microphone while the operator is running FT8.
     if (u == "DIGU") { dataModeOut = true; return CivMode::Usb; }
     if (u == "DIGL") { dataModeOut = true; return CivMode::Lsb; }
+    // DFM is FM with the same DATA flag, and it was missing here. Two costs,
+    // and the second is the expensive one:
+    //
+    //   1. DFM fell through to nullopt, so setSliceMode() took the "no
+    //      equivalent" path and re-asserted the radio's current mode. Selecting
+    //      DFM in the UI simply reverted — indistinguishable from the control
+    //      being ignored.
+    //   2. Worse, a radio the operator had put into FM-D from the front panel
+    //      reported back as plain FM (modeToNeutral was lossy the same way), so
+    //      the next mode write cleared the DATA flag and transmit audio came
+    //      from the MICROPHONE rather than the WLAN modulator — exactly the
+    //      failure the DIGU/DIGL comment above describes, but for packet
+    //      instead of FT8. A 2 m AX.25 frame keyed the radio and put room noise
+    //      on the air.
+    if (u == "DFM")  { dataModeOut = true; return CivMode::Fm; }
     if (u == "RTTY") return CivMode::Rtty;
 
     // DSB, SAM and DRM have no IC-705 equivalent. Returning nullopt rather than
@@ -289,9 +331,14 @@ std::string modeToNeutral(CivMode mode, bool dataMode)
     case CivMode::Lsb:  return dataMode ? "DIGL" : "LSB";
     case CivMode::Usb:  return dataMode ? "DIGU" : "USB";
     case CivMode::Am:   return "AM";
-    case CivMode::Cw:   return "CWU";
+    case CivMode::Cw:   return "CW";
     case CivMode::CwR:  return "CWL";
-    case CivMode::Fm:   return "FM";
+    // Symmetric with Lsb/Usb above: the DATA flag is what distinguishes FM-D
+    // from FM, and returning plain "FM" for both made the round trip lossy. A
+    // radio sitting in FM-D reported as FM, so the UI showed FM, and the next
+    // mode write sent FM with the flag clear — silently taking the radio OUT of
+    // data mode and back onto the microphone.
+    case CivMode::Fm:   return dataMode ? "DFM" : "FM";
     case CivMode::Wfm:  return "WFM";
     // AetherSDR has no RTTY neutral mode. Mapping to the data mode on the
     // matching sideband is LOSSY IN NAME but correct in the two things that
@@ -426,6 +473,154 @@ std::pair<int, int> passbandForModeAndFilter(const std::string& mode, int filter
 }
 
 // ---------------------------------------------------------------------------
+// IF filter width (1A 03), Twin PBT (14 07 / 14 08)
+// ---------------------------------------------------------------------------
+
+WidthClass widthClassFor(const std::string& mode) noexcept
+{
+    const std::string u = upperMode(mode);
+    // FM AND ITS RELATIVES HAVE NO SETTABLE WIDTH. 1A 03 simply does not apply
+    // there — the three FM slots are fixed at 15/10/7 kHz in the radio, and
+    // sending a width code in FM either does nothing or lands in whatever mode
+    // the radio was in last. Offering a resize control for FM would be a slider
+    // wired to nothing, which is exactly what this whole change is removing.
+    if (u == "FM" || u == "NFM" || u == "DFM" || u == "WFM" || u == "DV" || u == "DSTAR")
+        return WidthClass::Fixed;
+    if (u == "AM" || u == "SAM")
+        return WidthClass::Am;
+    if (u == "RTTY" || u == "RTTYR")
+        return WidthClass::Rtty;
+    return WidthClass::Ssb;   // LSB/USB/DIGL/DIGU/CW/CWU/CWL
+}
+
+std::optional<int> filterWidthHzFromCode(const std::string& mode, std::uint8_t code) noexcept
+{
+    switch (widthClassFor(mode)) {
+    case WidthClass::Fixed:
+        return std::nullopt;
+    case WidthClass::Am:
+        if (code > 49)
+            return std::nullopt;
+        return 200 + static_cast<int>(code) * 200;
+    case WidthClass::Rtty:
+        if (code <= 9)
+            return 50 + static_cast<int>(code) * 50;
+        if (code <= 31)
+            return 600 + (static_cast<int>(code) - 10) * 100;
+        return std::nullopt;
+    case WidthClass::Ssb:
+        if (code <= 9)
+            return 50 + static_cast<int>(code) * 50;
+        if (code <= 40)
+            return 600 + (static_cast<int>(code) - 10) * 100;
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint8_t> filterWidthCodeFor(const std::string& mode, int hz) noexcept
+{
+    if (widthClassFor(mode) == WidthClass::Fixed)
+        return std::nullopt;
+    // SEARCH THE DECODER, do not invert it. Two arithmetic branches that must
+    // agree across a discontinuity (the 500 Hz -> 600 Hz gap) is precisely the
+    // shape wfview got wrong, and the table is 50 entries. Nearest wins; a tie
+    // takes the WIDER code, because the request that lands exactly between two
+    // widths came from a drag and losing audio is more noticeable than keeping
+    // 50 Hz of it.
+    std::optional<std::uint8_t> best;
+    int bestDelta = 0;
+    for (int code = 0; code <= 49; ++code) {
+        const auto w = filterWidthHzFromCode(mode, static_cast<std::uint8_t>(code));
+        if (!w)
+            continue;
+        const int delta = std::abs(*w - hz);
+        if (!best || delta <= bestDelta) {
+            best = static_cast<std::uint8_t>(code);
+            bestDelta = delta;
+        }
+    }
+    return best;
+}
+
+FilterWidthLimits filterWidthLimitsFor(const std::string& mode) noexcept
+{
+    switch (widthClassFor(mode)) {
+    case WidthClass::Fixed: return {0, 0, 0};
+    case WidthClass::Am:    return {200, 10000, 200};
+    case WidthClass::Rtty:  return {50, 2700, 100};
+    case WidthClass::Ssb:   return {50, 3600, 100};
+    }
+    return {0, 0, 0};
+}
+
+std::vector<std::uint8_t> cmdReadFilterWidth(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kSetting, settingSub::kFilterWidth);
+}
+
+std::vector<std::uint8_t> cmdSetFilterWidth(std::uint8_t to, std::uint8_t code)
+{
+    // ONE BCD BYTE carrying the code as its own decimal value: code 40 goes on
+    // the wire as 0x40, not 0x28. Sending the binary value instead reaches a
+    // different, valid width and the radio accepts it without complaint.
+    const std::array<std::uint8_t, 1> body{encodeBcdByte(std::clamp<int>(code, 0, 49))};
+    return buildFrameSub(to, cmd::kSetting, settingSub::kFilterWidth, body);
+}
+
+int pbtShiftHz(int code, int widthHz) noexcept
+{
+    if (widthHz <= 0)
+        return 0;
+    const int offset = std::clamp(code, 0, 255) - kPbtCentreCode;
+    return static_cast<int>(std::lround(static_cast<double>(offset) * widthHz
+                                        / static_cast<double>(kPbtSpanCodes)));
+}
+
+int pbtCodeForShiftHz(int shiftHz, int widthHz) noexcept
+{
+    if (widthHz <= 0)
+        return kPbtCentreCode;
+    const double steps = static_cast<double>(shiftHz) * kPbtSpanCodes
+                       / static_cast<double>(widthHz);
+    return std::clamp(kPbtCentreCode + static_cast<int>(std::lround(steps)), 0, 255);
+}
+
+PassbandEdges passbandFromWidthAndPbt(int centreHz, int widthHz, int innerCode,
+                                       int outerCode) noexcept
+{
+    if (widthHz <= 0)
+        return {centreHz, centreHz};
+    const int inner = pbtShiftHz(innerCode, widthHz);
+    const int outer = pbtShiftHz(outerCode, widthHz);
+    // TOGETHER SLIDES, APART NARROWS. The mean is where the window ended up;
+    // the separation is how much of it the two edges have eaten from inside.
+    const int shift = (inner + outer) / 2;
+    const int effective = std::max(0, widthHz - std::abs(inner - outer));
+    const int centre = centreHz + shift;
+    return {centre - effective / 2, centre + effective / 2};
+}
+
+int passbandCentreHz(const std::string& mode, int widthHz) noexcept
+{
+    const std::string u = upperMode(mode);
+    // CW's slice frequency IS the tone (see passbandForModeAndFilter), so the
+    // passband is centred on it and the offset here is zero.
+    if (u == "CW" || u == "CWU" || u == "CWL")
+        return 0;
+    if (!isSingleSideband(mode))
+        return 0;   // AM, SAM, FM, WFM straddle the carrier
+    // The RTTY mark frequency is configurable (SET 0050: 1275/1615/2125 Hz)
+    // and has not been read into this model. Preserve the previous conservative
+    // geometry with its carrier-side edge at 150 Hz; 1000 Hz is not a valid
+    // mark value and would present an invented passband as radio truth.
+    const int centre = (u == "RTTY" || u == "RTTYR")
+        ? 150 + std::max(0, widthHz) / 2
+        : 1500;
+    return isLowerSideband(mode) ? -centre : centre;
+}
+
+// ---------------------------------------------------------------------------
 // Command builders
 // ---------------------------------------------------------------------------
 
@@ -452,10 +647,58 @@ std::vector<std::uint8_t> cmdReadMode(std::uint8_t to)
     return buildFrame(to, cmd::kReadMode);
 }
 
+std::vector<std::uint8_t> cmdReadVfoMode(std::uint8_t to)
+{
+    return buildFrameSub(to, cmd::kVfoMode, vfoMode::kSelected);
+}
+
+std::vector<std::uint8_t> cmdSetVfoMode(std::uint8_t to, CivMode mode, bool dataMode,
+                                        int filter)
+{
+    const std::array<std::uint8_t, 3> body{
+        static_cast<std::uint8_t>(mode),
+        static_cast<std::uint8_t>(dataMode ? 0x01 : 0x00),
+        static_cast<std::uint8_t>(std::clamp(filter, 1, 3)),
+    };
+    return buildFrameSub(to, cmd::kVfoMode, vfoMode::kSelected, body);
+}
+
+std::optional<VfoModeState> decodeVfoMode(std::span<const std::uint8_t> payload)
+{
+    if (payload.size() != 3)
+        return std::nullopt;
+    // The DATA byte is a two-valued flag. Anything else is a frame we have
+    // mis-parsed — a resync artefact, or a model whose payload is not this
+    // shape — and guessing "on" from it would put the radio's modulation source
+    // somewhere the operator did not ask for.
+    if (payload[1] > 0x01)
+        return std::nullopt;
+    VfoModeState s;
+    s.mode = static_cast<CivMode>(payload[0]);
+    s.dataMode = payload[1] != 0;
+    if (payload[2] >= 1 && payload[2] <= 3)
+        s.filter = payload[2];
+    return s;
+}
+
 std::vector<std::uint8_t> cmdSetLevel(std::uint8_t to, std::uint8_t which, int value)
 {
     const auto bcd = encodeLevel(std::clamp(value, 0, 255));
     return buildFrameSub(to, cmd::kLevel, which, bcd);
+}
+
+std::vector<std::uint8_t> cmdSendCwMessage(std::uint8_t to, std::string_view ascii)
+{
+    const std::size_t count = std::min<std::size_t>(ascii.size(), 30);
+    const std::span<const std::uint8_t> body{
+        reinterpret_cast<const std::uint8_t*>(ascii.data()), count};
+    return buildFrame(to, cmd::kCwMessage, body);
+}
+
+std::vector<std::uint8_t> cmdAbortCwMessage(std::uint8_t to)
+{
+    const std::array<std::uint8_t, 1> body{0xFF};
+    return buildFrame(to, cmd::kCwMessage, body);
 }
 
 std::vector<std::uint8_t> cmdReadMeter(std::uint8_t to, std::uint8_t which)
@@ -482,6 +725,13 @@ std::vector<std::uint8_t> cmdSetAttenuator(std::uint8_t to, int db)
 std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to)
 {
     return buildFrame(to, cmd::kAttenuator);
+}
+
+std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
+{
+    const std::array<std::uint8_t, 1> body{
+        static_cast<std::uint8_t>(rxAntenna ? 1 : 0)};
+    return buildFrameSub(to, cmd::kRxAntenna, 0x00, body);
 }
 
 std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub)

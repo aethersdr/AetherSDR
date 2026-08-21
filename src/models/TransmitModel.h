@@ -73,6 +73,20 @@ public:
     int     amCarrierLevel() const { return m_amCarrierLevel; }
     bool    dexpOn()         const { return m_dexpOn; }
     int     dexpLevel()      const { return m_dexpLevel; }
+    // TX filter bounds.  ACCESSORS, not bare constants, deliberately: every
+    // backend shares this range today, but a radio that declares its own
+    // passband limits should be able to narrow it without any caller
+    // changing — the GUI already asks rather than assumes.
+    //
+    // FlexBackend clamps to the same range on the wire, which is where a
+    // radio-specific limit properly belongs; this is the client-side mirror.
+    static constexpr int kTxFilterMinHz      = 0;
+    static constexpr int kTxFilterMaxHz      = 10000;
+    static constexpr int kTxFilterMinWidthHz = 50;
+    int txFilterMinHz()      const { return kTxFilterMinHz; }
+    int txFilterMaxHz()      const { return kTxFilterMaxHz; }
+    int txFilterMinWidthHz() const { return kTxFilterMinWidthHz; }
+
     int     txFilterLow()    const { return m_txFilterLow; }
     int     txFilterHigh()   const { return m_txFilterHigh; }
 
@@ -347,11 +361,19 @@ signals:
     // the set* / atu* methods only, never from applyStatus() — echoing a status
     // back at the radio as a command is how a control starts fighting itself.
     void voxCommandIssued(bool on, int level, int delayMs);
+    void monitorCommandIssued(bool on, int level);
+    void rfPowerCommandIssued(int percent);
     void atuCommandIssued(bool start);
     // Fires only when cwPitch actually changes. Use this instead of
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
     void cwPitchChanged(int hz);
+    void cwSpeedChanged(int wpm);
+    // Operator intent only. Radio status applied through applyStatus() never
+    // emits these, so a CI-V readback cannot loop straight back into a write.
+    void cwPitchCommandIssued(int hz);
+    void cwSpeedCommandIssued(int wpm);
+    void cwBreakInCommandIssued(bool on);
     void apdStateChanged();
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();

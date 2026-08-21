@@ -246,6 +246,11 @@ signals:
     void backgroundOpacityChanged(int pct);
     void backgroundFillColorChanged(const QColor& color);
     void displaySettingsReset();
+    // "Clone to all Pans": push every Display-panel setting on THIS pan onto
+    // every other open panadapter, so a tuned-in look is set once instead of
+    // per pan. MainWindow owns the fan-out (it is the only object that can see
+    // the other pans and the radio).
+    void displaySettingsCloneRequested();
 
 private:
     QString m_panId;
@@ -434,6 +439,7 @@ private:
     QSlider*     m_floorSlider{nullptr};
     QLabel*      m_floorLabel{nullptr};
     QPushButton* m_floorEnableBtn{nullptr};
+    QPushButton* m_cloneToAllPansBtn{nullptr};
 
     QComboBox*   m_freqGridSpacingCmb{nullptr};
     QComboBox*   m_freqScaleFontCmb{nullptr};

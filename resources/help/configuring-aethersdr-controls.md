@@ -23,7 +23,7 @@ AetherSDR currently supports these control paths:
 - **Built-in keyboard shortcuts** for tuning, audio, transmit, and other common actions.
 - **Custom keyboard bindings** through the shortcut editor.
 - **FlexControl USB tuning knob** through the serial-control path.
-- **MIDI controllers** with learn mode, manual mapping entry, profiles, and relative-encoder support.
+- **MIDI controllers** with learn mode, manual mapping entry, profiles you can import and export, and relative-encoder support.
 - **USB HID encoder devices** including:
   - Icom RC-28
   - Griffin PowerMate
@@ -396,6 +396,8 @@ The MIDI dialog lets you:
 - Edit any existing binding with the **✎** button on its row
 - Save named profiles
 - Load saved profiles
+- Use **Import…** to bring in a profile file, including a mapping supplied by your controller's vendor
+- Use **Export…** to write the current bindings out as a file you can keep or share
 - Clear all bindings if you want to start over
 
 ### What kinds of parameters you can control
@@ -492,6 +494,37 @@ Profiles are useful when you want one controller for different jobs. For example
 - A CW profile
 
 Save the profile after you finish a layout so you can return to it quickly later.
+
+### Importing and exporting profiles
+
+Profiles are ordinary files, so a finished mapping can move between machines —
+or come ready-made from the people who built your controller.
+
+**Import…** reads a profile file and stores it under the file's name. Two kinds
+of file are accepted, and AetherSDR works out which one it is by looking inside:
+
+- An **AetherSDR profile** written by **Export…** on this or another machine.
+- A **SmartSDR ".map" file**, the mapping format the SmartSDR iOS and Mac apps
+  use. Controller vendors publish these for their own devices, so a supported
+  controller can be set up by importing the vendor's file instead of binding
+  every control by hand.
+
+Importing never overwrites a profile you already have: a name that is already
+taken gets a numbered suffix. Importing also does not change your current
+bindings — the imported profile is stored and selected in the list, and you
+click **Load** to actually apply it.
+
+A vendor file usually describes more controls than AetherSDR has parameters
+for. Nothing is dropped quietly: the summary after an import tells you how many
+bindings came in, and lists by name every control that was skipped — controls
+with no AetherSDR equivalent, rows with values out of range, and duplicates
+where two controls asked for the same parameter. Expand the details to see the
+individual names.
+
+**Export…** writes your current bindings to a file you choose. That file
+imports back into AetherSDR unchanged, which makes it a convenient backup
+before you rework a layout, and an easy way to hand a working setup to someone
+running the same controller.
 
 ## Stream Deck integration
 

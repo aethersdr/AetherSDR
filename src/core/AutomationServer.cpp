@@ -347,6 +347,19 @@ QJsonObject describeWidget(const QWidget* w)
     // restore / minimize without screenshotting, and prove the `window` verb
     // (resize only ever set explicit geometry, so an un-maximize was previously
     // unverifiable). (#3918)
+    // A QStatusBar's showMessage() text is otherwise unobservable from the
+    // tree — operator notices (e.g. the #4863 float-restore warning, or the
+    // canvas-unavailable message) could only be verified by screenshot
+    // (#4864, second gap).  Read through the dynamic property MainWindow
+    // mirrors on the widget, NOT the QStatusBar type: core/ must not grow
+    // QtWidgets knowledge (engine-boundary EB2, aetherd RFC §10) — the gui
+    // side owns the widget, this side reads generic object data.
+    {
+        const QVariant msg = w->property("currentMessage");
+        if (msg.isValid() && !msg.toString().isEmpty())
+            o[QStringLiteral("statusMessage")] = msg.toString();
+    }
+
     if (w->isWindow()) {
         const Qt::WindowStates st = w->windowState();
         const char* ws = "normal";
@@ -1311,6 +1324,14 @@ QJsonObject connectionRadioToJson(const RadioInfo& radio)
     QJsonObject o{
         {QStringLiteral("name"), radio.name},
         {QStringLiteral("model"), radio.model},
+        // The wire-protocol discriminator (#4912). Without it `connect list`
+        // describes a Hermes-Lite 2 in prose only — "Hermes-Lite 2" lives in
+        // model, which is a display string — so a caller could not read the
+        // family back and pass it to `connect ip`, and could not work around a
+        // mis-resolved family either. RadioInfo has carried it since the
+        // aetherd Gap B backend split; only the serialisation was missing.
+        {QStringLiteral("family"),
+         radio.family.isEmpty() ? QStringLiteral("flex") : radio.family.toLower()},
         {QStringLiteral("serial"), radio.serial},
         {QStringLiteral("version"), radio.version},
         {QStringLiteral("nickname"), radio.nickname},
@@ -1820,6 +1841,9 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         {QStringLiteral("cwDelay"),         t->cwDelay()},
         {QStringLiteral("cwSidetone"),      t->cwSidetone()},
         {QStringLiteral("cwIambic"),        t->cwIambic()},
+        {QStringLiteral("cwIambicMode"),    t->cwIambicMode()},
+        {QStringLiteral("cwSwapPaddles"),   t->cwSwapPaddles()},
+        {QStringLiteral("cwlEnabled"),      t->cwlEnabled()},
         {QStringLiteral("monGainCw"),       t->monGainCw()},
         {QStringLiteral("monPanCw"),        t->monPanCw()},
         // ATU / APD
@@ -2568,6 +2592,11 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
         return normalizedAction == QLatin1String("status")
             || normalizedAction == QLatin1String("routes");
     }
+    if (name == QLatin1String("civ")) {
+        return normalizedAction == QLatin1String("trace")
+            || normalizedAction == QLatin1String("session")
+            || normalizedAction == QLatin1String("scheduler");
+    }
     return false;
 }
 
@@ -2597,6 +2626,7 @@ const QStringList& getModelNames()
         QStringLiteral("gps"),        QStringLiteral("clock"),
         QStringLiteral("renderstats"),
         QStringLiteral("eqstats"),    QStringLiteral("tracedebug"),
+        QStringLiteral("display"),
         QStringLiteral("waveforms"),
         QStringLiteral("kiwi"),
     };
@@ -2871,6 +2901,32 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doHitTest(a.target, a.value);
             });
 
+        add("doubleClick", {QStringLiteral("doubleclick"), QStringLiteral("dblClick")},
+            "doubleClick <target> [x y] — double-click a widget (centre by default)",
+            parseTargetXY,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doDoubleClick(a.target, a.value);
+            });
+
+        add("doubleClickAt", {QStringLiteral("doubleclickat"), QStringLiteral("dblClickAt")},
+            "doubleClickAt <x> <y> | doubleClickAt <target> <x> <y> — coordinate double-click",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                // Same overload rule as clickAt: a numeric first token means
+                // the global form, anything else names a target.
+                bool firstIsNumber = false;
+                vtok(p, 1).toInt(&firstIsNumber);
+                if (firstIsNumber) {
+                    a.value = vtok(p, 1) + QLatin1Char(' ') + vtok(p, 2);
+                } else {
+                    a.target = vtok(p, 1);
+                    a.value = vtok(p, 2) + QLatin1Char(' ') + vtok(p, 3);
+                }
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doClickAt(a.target, a.value, ClickKind::Double);
+            });
+
         add("clickAt", {QStringLiteral("clickat")},
             "clickAt <x> <y> | clickAt <target> <x> <y> — TX-guarded coordinate click",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
@@ -3063,13 +3119,45 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         // was dropped and the two-argument form could never work — doPan()'s
         // rfgain branch already splits the joined value and handles both shapes,
         // so the handler was right and only the parser choice was wrong.
-        add("pan", {}, "pan <create|add|remove|close|center|rfgain> [value]",
+        add("pan", {},
+            "pan <create|add|remove|close|center|rfgain|float|dock> [value] — "
+            "float/dock drive PanadapterStack's real reparent path (#4864)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "pan requires an action (create|add|remove|close|center|rfgain)"));
+                        "pan requires an action (create|add|remove|close|center|rfgain|float|dock)"));
                 return s.doPan(a.action, a.value);
+            });
+
+        add("workspace", {},
+            "workspace <status|enable|disable|edit|place|list|switch|create|"
+            "bind|import-floats|palette|window|move|add> — the canvas, its "
+            "workspaces and its extra windows as data; arg shapes in "
+            "docs/automation-bridge.md (#4887 ph4/ph6/ph7)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                Q_UNUSED(s);
+                if (a.action.isEmpty())
+                    return err(QStringLiteral(
+                        "workspace requires an action (status|enable|disable|place)"));
+                QWidget* mw = primaryTopLevelWindow();
+                if (!mw)
+                    return err(QStringLiteral("no main window"));
+                QVariantMap snap;
+                if (!QMetaObject::invokeMethod(mw, "automationWorkspace",
+                                               Qt::DirectConnection,
+                                               Q_RETURN_ARG(QVariantMap, snap),
+                                               Q_ARG(QString, a.action),
+                                               Q_ARG(QString, a.value))) {
+                    return err(QStringLiteral(
+                        "MainWindow::automationWorkspace failed"));
+                }
+                if (snap.contains(QStringLiteral("error")))
+                    return err(snap.value(QStringLiteral("error")).toString());
+                QJsonObject out = QJsonObject::fromVariantMap(snap);
+                out[QStringLiteral("ok")] = true;
+                return out;
             });
 
         add("layout", {}, "layout <rearrange <id>|get> — splitter layout exerciser",
@@ -3190,7 +3278,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("audioCapture", {},
-            "audioCapture <start|stop|status|read|probeNr2Stereo|probeDspStereo> [args]",
+            "audioCapture <start|stop|status|read|probeNr2Stereo|probeDspStereo> [args] — RN2 probe accepts rate=Legacy24k|Native48k output=PreserveRxStereo|ProcessedMono blocks=<frames,...>",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doAudioCapture(a.action.isEmpty() ? QStringLiteral("status")
@@ -3231,7 +3319,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("civ", {},
-            "civ <send <hex>|trace [all]> — raw CI-V inject and frame trace (Icom; send is TX-gated)",
+            "civ <send <hex>|trace [all]|session|scheduler> — CI-V inject, frame "
+            "trace, RS-BA1 lease health, or command-scheduler health (Icom; send "
+            "is TX-gated)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 return s.doCiv(a.action, a.value);
@@ -3453,21 +3543,43 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                 }
             }
         }
-        // clickAt accepts numeric x/y fields directly (dumpTree geometry is
-        // global), folded into `value` as "x y" so both request forms share one
-        // code path. Explicit `value` still wins if supplied. Fold ONLY when
-        // both fields are present and JSON-numeric: toInt() coerces a missing
-        // field or a string-typed number to 0, which would turn a malformed
-        // request into a real click at the screen edge (or (0,0)) instead of
-        // an error — leave value empty so doClickAt rejects it. Match both
-        // alias spellings, like the registry does.
-        if ((cmd == QLatin1String("clickAt") || cmd == QLatin1String("clickat"))
-            && a.value.isEmpty()
-            && obj.value(QStringLiteral("x")).isDouble()
-            && obj.value(QStringLiteral("y")).isDouble()) {
-            a.value = QString::number(obj.value(QStringLiteral("x")).toInt())
-                      + QLatin1Char(' ')
-                      + QString::number(obj.value(QStringLiteral("y")).toInt());
+        // The coordinate-bearing click verbs accept numeric x/y fields
+        // directly (dumpTree geometry is global), folded into `value` as "x y"
+        // so both request forms share one code path. Explicit `value` still
+        // wins if supplied. Once either coordinate key is present, require both
+        // fields to be JSON-numeric: toInt() coerces a missing field or a
+        // string-typed number to 0, which would turn malformed input into a
+        // real click. This must be rejected here because doubleClick treats no
+        // coordinates as an intentional request for the widget centre.
+        //
+        // Resolve the CANONICAL verb through the registry rather than matching
+        // the request string (#5069 review). Spelling out `clickAt || clickat`
+        // duplicated the alias table, and it silently excluded every verb added
+        // afterwards: `doubleClickAt` was rejected with "clickAt needs both x
+        // and y", its `doubleclickat` / `dblClickAt` aliases with it, and
+        // `doubleClick` ignored the fields and clicked the widget centre. MCP's
+        // `bridge_command` forwards this JSON unchanged, so for those verbs that
+        // was the entire coordinate surface.
+        const VerbSpec* coordinateSpec = findVerb(cmd);
+        const bool coordinateVerb =
+            coordinateSpec
+            && (coordinateSpec->name == QLatin1String("clickAt")
+                || coordinateSpec->name == QLatin1String("doubleClickAt")
+                || coordinateSpec->name == QLatin1String("doubleClick"));
+        if (coordinateVerb && a.value.isEmpty()) {
+            const bool hasX = obj.contains(QStringLiteral("x"));
+            const bool hasY = obj.contains(QStringLiteral("y"));
+            if (hasX || hasY) {
+                const QJsonValue x = obj.value(QStringLiteral("x"));
+                const QJsonValue y = obj.value(QStringLiteral("y"));
+                if (!x.isDouble() || !y.isDouble()) {
+                    return err(QStringLiteral("%1 JSON coordinates require numeric x and y")
+                                   .arg(coordinateSpec->name));
+                }
+                a.value = QString::number(x.toInt())
+                          + QLatin1Char(' ')
+                          + QString::number(y.toInt());
+            }
         }
     } else {
         // Bare line: positional tokens, parsed by the verb's registry entry
@@ -4255,8 +4367,6 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             {QStringLiteral("gainMethod"), nr2.gainMethod},
             {QStringLiteral("npeMethod"), nr2.npeMethod},
             {QStringLiteral("aeFilter"), nr2.aeFilter},
-            {QStringLiteral("legacyGeometryAndGainMapping"),
-                nr2.legacyGeometryAndGainMapping},
         };
         tuning[QStringLiteral("nr4")] = QJsonObject{
             {QStringLiteral("reductionDb"),  s.value("NR4ReductionAmount", "100").toFloat()},
@@ -4285,6 +4395,76 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},
                            {QStringLiteral("dsp"), data}};
+    }
+    if (model == QLatin1String("hostnb")) {
+        // The HOST-SIDE noise blanker, read from the BACKEND rather than from
+        // the slice model.
+        //
+        // It needs its own model because `get slice` already reports nb/nbLevel
+        // and those come from SliceModel — set the instant the operator clicks,
+        // and therefore true whether or not the intent survived the seam. On a
+        // radio whose blanker is a WDSP stage with no wire traffic to capture,
+        // that is the difference between proving the feature and proving the
+        // button: a backend that ignored setSliceNoiseBlanker entirely would
+        // report nb=true from `get slice` and look correct.
+        RadioModel* radio = m_radioModel;
+        if (!radio)
+            return err(QStringLiteral("no radio model available"));
+        if (!radio->backendCapabilities().hasHostNoiseBlanker) {
+            // Refused rather than answered empty, for the reason doFreqCal
+            // refuses on a self-calibrating radio: an empty success is a test
+            // that passes against a radio where the question is meaningless.
+            return err(QStringLiteral(
+                "hostnb: this radio does not run a host-side noise blanker "
+                "(its blanker, if any, is the radio's own — see get slice nb)"));
+        }
+        IRadioBackend* backend = radio->backend();
+        if (!backend)
+            return err(QStringLiteral("no backend attached"));
+        // Same synchronous-extension contract doCiv documents: the HL2 answers
+        // inside invokeExtension, so a direct connection lands before the call
+        // returns, and anything that does not answer is reported as unsupported
+        // rather than as an empty success.
+        bool answered = false;
+        bool failed = false;
+        QVariant payload;
+        QString failure;
+        const quint64 rid = ++m_extensionRequestId;
+        auto okConn = connect(backend, &IRadioBackend::extensionResult, this,
+                              [&](quint64 id, const QVariant& v) {
+            if (id != rid) return;
+            answered = true;
+            payload = v;
+        }, Qt::DirectConnection);
+        auto errConn = connect(backend, &IRadioBackend::extensionError, this,
+                               [&](quint64 id, const QString& msg) {
+            if (id != rid) return;
+            answered = true;
+            failed = true;
+            failure = msg;
+        }, Qt::DirectConnection);
+        backend->invokeExtension(QStringLiteral("hl2"), QStringLiteral("nb.get"),
+                                 rid, QVariant());
+        disconnect(okConn);
+        disconnect(errConn);
+        if (!answered)
+            return err(QStringLiteral("this backend does not implement nb.get"));
+        if (failed)
+            return err(failure);
+        const QJsonObject data =
+            QJsonValue::fromVariant(payload).toObject();
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for hostnb"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("hostnb"), data}};
     }
     if (model == QLatin1String("clients")) {
         // #3977: the multi-session forensics snapshot — who is connected to
@@ -4993,6 +5173,72 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         }
         return out;
     }
+    if (model == QLatin1String("display")) {
+        // Per-panadapter Display-panel settings, so a preference change can be
+        // asserted field-by-field instead of eyeballed. "Clone to all Pans"
+        // proves itself by reading this twice and diffing the pans.
+        // GUI-header-free: snapshotted via meta-call, same as panstats.
+        bool selectorIsIndex = false;
+        const int wantIndex = selector.toInt(&selectorIsIndex);
+        // Collect first, emit second: an unknown property must be rejected
+        // once, up front, rather than after entries for the earlier pans have
+        // already been built — that is how the other models read.
+        QVector<QVariantMap> snaps;
+        // A floated container is reachable from two top-level roots, so the
+        // class walk can yield the same widget twice — dedupe by pointer.
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            if (!selector.isEmpty() && !selectorIsIndex
+                && w->objectName() != selector) {
+                continue;
+            }
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(
+                    w, "automationDisplaySettingsSnapshot", Qt::DirectConnection,
+                    Q_RETURN_ARG(QVariantMap, snap))) {
+                continue;
+            }
+            if (!selector.isEmpty() && selectorIsIndex
+                && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
+                continue;
+            }
+            snaps.append(snap);
+        }
+        // Every pan carries the same field set, so the first is enough to
+        // validate against. With no pan matched there is nothing to check the
+        // name against, so an empty `pans` is the honest answer.
+        if (!property.isEmpty() && !snaps.isEmpty()
+            && !snaps.first().contains(property)) {
+            return err(QStringLiteral("unknown property '") + property
+                       + QStringLiteral("' for display"));
+        }
+        QJsonArray pans;
+        for (const QVariantMap& snap : snaps) {
+            if (property.isEmpty()) {
+                pans.append(QJsonObject::fromVariantMap(snap));
+                continue;
+            }
+            pans.append(QJsonObject{
+                {QStringLiteral("panIndex"),
+                 snap.value(QStringLiteral("panIndex")).toInt()},
+                {QStringLiteral("objectName"),
+                 snap.value(QStringLiteral("objectName")).toString()},
+                {property, QJsonValue::fromVariant(snap.value(property))}});
+        }
+        QJsonObject out{{QStringLiteral("ok"), true},
+                        {QStringLiteral("model"), model},
+                        {QStringLiteral("pans"), pans}};
+        if (!property.isEmpty()) {
+            out[QStringLiteral("property")] = property;
+        }
+        return out;
+    }
     if (model == QLatin1String("tracedebug")) {
         // Per-panadapter trace/floor state from SpectrumWidget. This keeps the
         // bridge GUI-header-free while exposing enough state to compare Flex
@@ -5030,12 +5276,10 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("pans"), pans}};
     }
     if (model == QLatin1String("rhi")) {
-        // Per-panadapter QRhiWidget surface geometry from every SpectrumWidget,
-        // so automation can assert the swapchain/color-buffer sizing that the
-        // #4091 fix controls (fixedColorBufferSize kept even-aligned vs a
-        // fractional QT_SCALE_FACTOR). selector filters by pan index or
-        // objectName. GUI-header-free: found by class name, snapshotted via
-        // meta-call. Reports gpu:false per pan on non-GPU builds.
+        // Per-panadapter QRhiWidget surface geometry, color-buffer sizing mode,
+        // and native-widget topology from every SpectrumWidget. selector filters
+        // by pan index or objectName. GUI-header-free: found by class name,
+        // snapshotted via meta-call. Reports gpu:false per pan on non-GPU builds.
         bool selectorIsIndex = false;
         const int wantIndex = selector.toInt(&selectorIsIndex);
         QJsonArray pans;
@@ -5280,7 +5524,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|clients|kiwi|wavestats|clock)"));
+                   + QStringLiteral(" (use audio|dsp|hostnb|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|eqstats|tracedebug|display|clients|kiwi|wavestats|clock)"));
     }
 
     if (!property.isEmpty()) {
@@ -5398,6 +5642,57 @@ QJsonObject AutomationServer::doWaveform(const QString& action,
                + action + QStringLiteral("'"));
 }
 
+// Record a connect/disconnect failure that happened AFTER the verb replied.
+//
+// Every connect verb schedules its real work onto the GUI event loop and
+// answers {ok:true, deferred:true} immediately, so until now a failure existed
+// only as a qCWarning — the client that asked could not see it, and the only
+// symptom was a `connect wait` that ran its whole timeout and then reported the
+// generic "timed out waiting for radio connection" (#4912).
+//
+// Two things happen here: the message is kept for the next `connect wait` to
+// report, and any wait already in flight is answered NOW, because it is waiting
+// on precisely the thing that just failed.
+// A landed connect retires the last deferred failure (#4918 review). Without
+// this, one failure rode along on every later non-connected `connect wait` for
+// the life of the process — and the field's mere presence reads as "something
+// went wrong with THIS attempt", which is the opposite of what it then meant.
+void AutomationServer::clearLastConnectError()
+{
+    m_lastConnectError.clear();
+    m_lastConnectErrorMs = -1;
+}
+
+void AutomationServer::noteConnectFailure(const QString& what,
+                                          const QString& error,
+                                          bool answerPendingWaits)
+{
+    const QString detail = error.trimmed();
+    m_lastConnectError = detail.isEmpty() ? what + QStringLiteral(" failed")
+                                          : what + QStringLiteral(": ") + detail;
+    m_lastConnectErrorMs = QDateTime::currentMSecsSinceEpoch();
+    qCWarning(lcAutomation).noquote()
+        << what << "failed after scheduling:" << error;
+
+    // Only a failed CONNECT answers an outstanding `connect wait` (#4918 review).
+    // A failed disconnect is recorded the same way — it is still a deferred
+    // failure a caller should be able to see — but completing the wait with it
+    // would hand a legitimately-in-flight connect somebody else's error text.
+    if (!answerPendingWaits) {
+        return;
+    }
+
+    // finishConnectWait() erases from m_connectWaits, so iterate a copy.
+    const std::vector<std::shared_ptr<ConnectWait>> pending = m_connectWaits;
+    for (const std::shared_ptr<ConnectWait>& wait : pending) {
+        if (!wait || wait->complete) {
+            continue;
+        }
+        wait->error = m_lastConnectError;
+        finishConnectWait(wait, false);
+    }
+}
+
 QJsonObject AutomationServer::doConnect(const QString& action,
                                         const QString& arg,
                                         QLocalSocket* sock)
@@ -5443,6 +5738,12 @@ QJsonObject AutomationServer::doConnect(const QString& action,
         return err(QStringLiteral("already connected to a radio"));
     }
 
+    // Everything below schedules a fresh attempt, and `lastError` is meant to
+    // describe THIS one — so retire the previous failure here as well as on a
+    // successful connect. A caller that wants the older failure has already had
+    // it reported once.
+    clearLastConnectError();
+
     if (a == QLatin1String("local")) {
         const QList<RadioInfo> radios = conn->automationLocalRadios();
         if (radios.isEmpty()) {
@@ -5459,14 +5760,14 @@ QJsonObject AutomationServer::doConnect(const QString& action,
             }
 
             QPointer<QObject> guard(conn->asQObject());
-            QTimer::singleShot(0, qApp, [guard, conn, selectedSerial] {
+            QPointer<AutomationServer> self(this);
+            QTimer::singleShot(0, qApp, [guard, self, conn, selectedSerial] {
                 if (!guard) {
                     return;
                 }
                 QString error;
-                if (!conn->automationConnectLocalSerial(selectedSerial, &error)) {
-                    qCWarning(lcAutomation).noquote()
-                        << "connect local first failed after scheduling:" << error;
+                if (!conn->automationConnectLocalSerial(selectedSerial, &error) && self) {
+                    self->noteConnectFailure(QStringLiteral("connect local first"), error);
                 }
             });
             return QJsonObject{
@@ -5489,14 +5790,15 @@ QJsonObject AutomationServer::doConnect(const QString& action,
                 }
 
                 QPointer<QObject> guard(conn->asQObject());
-                QTimer::singleShot(0, qApp, [guard, conn, serial] {
+                QPointer<AutomationServer> self(this);
+                QTimer::singleShot(0, qApp, [guard, self, conn, serial] {
                     if (!guard) {
                         return;
                     }
                     QString error;
-                    if (!conn->automationConnectLocalSerial(serial, &error)) {
-                        qCWarning(lcAutomation).noquote()
-                            << "connect local serial failed after scheduling:" << error;
+                    if (!conn->automationConnectLocalSerial(serial, &error) && self) {
+                        self->noteConnectFailure(QStringLiteral("connect local serial"),
+                                                 error);
                     }
                 });
                 return QJsonObject{
@@ -5517,10 +5819,23 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     if (a == QLatin1String("ip")) {
-        // connect ip <host-or-ip> [flex|hl2]
-        // The optional family picks which wire protocol to probe. Omitted keeps
-        // whatever the connect dialog's radio-type selector is set to, so every
-        // pre-existing `connect ip <addr>` script keeps working.
+        // connect ip <host-or-ip> [flex|hl2|icom]
+        //
+        // The optional family picks which wire protocol to probe. When it is
+        // omitted, DISCOVERY decides (#4912): an address the radio list already
+        // advertises is probed with that entry's family, so
+        // `connect ip 192.0.2.10` reaches a Hermes-Lite 2 without the caller
+        // having to know it is one. Before this, an omitted family fell through
+        // to whatever the connect dialog's radio-type selector happened to hold
+        // — Flex on a fresh instance — and the resulting failure surfaced only
+        // as a qCWarning while the reply still said ok/deferred.
+        //
+        // The dialog fallback is kept for an address nothing has advertised
+        // (a routed/off-subnet radio the caller knows about and discovery does
+        // not), so pre-existing scripts that lean on the selector still work.
+        // `familySource` in the reply says which of the three decided, because
+        // "family: flex" alone cannot distinguish a resolved answer from a
+        // default.
         static const QRegularExpression ipTokenSep(QStringLiteral("\\s+"));
         const QStringList ipTokens = arg.trimmed().split(ipTokenSep,
                                                          Qt::SkipEmptyParts);
@@ -5542,25 +5857,72 @@ QJsonObject AutomationServer::doConnect(const QString& action,
             return err(QStringLiteral("connect ip takes at most <host-or-ip> [flex|hl2|icom]"));
         }
 
+        // Match on the textual address the list itself publishes, so a caller
+        // can round-trip `connect list` → `connect ip` without reformatting.
+        QString discoveredFamily;
+        for (const RadioInfo& radio : conn->automationLocalRadios()) {
+            if (radio.address.toString().compare(target, Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+            discoveredFamily = radio.family.isEmpty() ? QStringLiteral("flex")
+                                                      : radio.family.toLower();
+            break;
+        }
+
+        QString familySource;
+        if (!family.isEmpty()) {
+            // THE ARGUMENT WINS, even against discovery — it is the caller saying
+            // "I know what is at this address" (#4918 review). An earlier revision
+            // refused the contradiction, which inverted the point of the argument:
+            // it made the explicit form WEAKER than the inferred one, changed the
+            // behaviour of the already-documented `connect ip <addr> flex`, and
+            // closed the escape hatch this commit's `family` field exists to open
+            // — exactly when discovery is the thing that is wrong (stale entry, a
+            // recycled DHCP lease, a mis-parsed reply).
+            //
+            // The disagreement is still worth seeing, so it is returned as data
+            // rather than as a refusal: a strict caller compares `family` against
+            // `discoveryFamily` itself and decides.
+            if (!discoveredFamily.isEmpty() && discoveredFamily != family) {
+                qCWarning(lcAutomation).noquote()
+                    << "connect ip" << target << "requested family" << family
+                    << "but discovery reports" << discoveredFamily
+                    << "— honouring the argument";
+            }
+            familySource = QStringLiteral("argument");
+        } else if (!discoveredFamily.isEmpty()) {
+            family = discoveredFamily;
+            familySource = QStringLiteral("discovery");
+        } else {
+            familySource = QStringLiteral("dialog");
+        }
+
         QPointer<QObject> guard(conn->asQObject());
-        QTimer::singleShot(0, qApp, [guard, conn, target, family] {
+        QPointer<AutomationServer> self(this);
+        QTimer::singleShot(0, qApp, [guard, self, conn, target, family] {
             if (!guard) {
                 return;
             }
             QString error;
-            if (!conn->automationConnectByIp(target, family, &error)) {
-                qCWarning(lcAutomation).noquote()
-                    << "connect ip failed after scheduling:" << error;
+            if (!conn->automationConnectByIp(target, family, &error) && self) {
+                self->noteConnectFailure(QStringLiteral("connect ip ") + target, error);
             }
         });
-        return QJsonObject{
+        QJsonObject reply{
             {QStringLiteral("ok"), true},
             {QStringLiteral("connect"), QStringLiteral("ip")},
             {QStringLiteral("target"), target},
             {QStringLiteral("family"), family.isEmpty() ? QStringLiteral("dialog") : family},
+            {QStringLiteral("familySource"), familySource},
             {QStringLiteral("requested"), true},
             {QStringLiteral("deferred"), true},
         };
+        // What discovery believed, whenever it had an opinion — so a caller that
+        // passed an explicit family can tell whether it overrode anything.
+        if (!discoveredFamily.isEmpty()) {
+            reply[QStringLiteral("discoveryFamily")] = discoveredFamily;
+        }
+        return reply;
     }
 
     return err(QStringLiteral("unknown connect action: ") + action
@@ -5621,14 +5983,15 @@ QJsonObject AutomationServer::doDisconnect()
     }
 
     QPointer<QObject> guard(conn->asQObject());
-    QTimer::singleShot(0, qApp, [guard, conn] {
+    QPointer<AutomationServer> self(this);
+    QTimer::singleShot(0, qApp, [guard, self, conn] {
         if (!guard) {
             return;
         }
         QString error;
-        if (!conn->automationDisconnect(&error)) {
-            qCWarning(lcAutomation).noquote()
-                << "disconnect failed after scheduling:" << error;
+        if (!conn->automationDisconnect(&error) && self) {
+            self->noteConnectFailure(QStringLiteral("disconnect"), error,
+                                     /*answerPendingWaits=*/false);
         }
     });
 
@@ -5784,6 +6147,7 @@ QJsonObject AutomationServer::doConnectWait(int timeoutMs, QLocalSocket* sock)
         return err(QStringLiteral("no radio model available"));
     }
     if (m_radioModel->isConnected()) {
+        clearLastConnectError();   // connected is connected — nothing is outstanding
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("connected"), true},
@@ -5809,6 +6173,17 @@ QJsonObject AutomationServer::doConnectWait(int timeoutMs, QLocalSocket* sock)
             finishConnectWait(wait, false);
         }
     });
+    // A connect that FAILS emits connectionError and never emits
+    // connectionStateChanged, so without this edge the wait had no way to hear
+    // about it and sat out the full timeout before reporting the generic
+    // "timed out" — the wrong diagnosis for a connect that already died (#4912).
+    wait->errorConnection = connect(m_radioModel, &RadioModel::connectionError,
+                                    this, [this, wait](const QString& msg) {
+        wait->error = msg.trimmed().isEmpty()
+            ? QStringLiteral("radio connection failed")
+            : msg.trimmed();
+        finishConnectWait(wait, false);
+    });
     connect(wait->timer, &QTimer::timeout, this, [this, wait] {
         finishConnectWait(wait, true);
     });
@@ -5832,6 +6207,7 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
         wait->timer = nullptr;
     }
     QObject::disconnect(wait->connection);
+    QObject::disconnect(wait->errorConnection);
 
     const auto newEnd = std::remove(m_connectWaits.begin(), m_connectWaits.end(), wait);
     m_connectWaits.erase(newEnd, m_connectWaits.end());
@@ -5845,6 +6221,9 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
     }
 
     const bool connected = m_radioModel && m_radioModel->isConnected();
+    if (connected) {
+        clearLastConnectError();
+    }
     QJsonObject response{
         {QStringLiteral("ok"), connected},
         {QStringLiteral("connected"), connected},
@@ -5853,13 +6232,42 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
     };
     if (connected) {
         response[QStringLiteral("radio")] = radioSnapshot(m_radioModel);
-    } else if (timedOut) {
-        response[QStringLiteral("timeout")] = true;
-        response[QStringLiteral("error")] =
-            QStringLiteral("timed out waiting for radio connection");
     } else {
-        response[QStringLiteral("error")] =
-            QStringLiteral("radio connection did not complete");
+        // WHAT THE CALLER ACTUALLY NEEDS TO KNOW IS "IS IT STILL WORKING?" —
+        // and until now the reply could not say (#4912). A timeout meant both
+        // "this connect died" and "this connect is still coming", and the HL2
+        // makes the second case ordinary: Hl2Backend::connectRadio() parks the
+        // request behind the DSP open and re-drives it later, emitting nothing
+        // in between, so a wait can expire mid-queue on a connect that then
+        // succeeds. Polling `get radio` was the only way to tell.
+        //
+        // `phase` splits them: "connecting" means an attempt is genuinely in
+        // flight and waiting again is the right move; "idle" means nothing is
+        // pending and waiting again will time out identically.
+        const bool inFlight = m_radioModel && m_radioModel->isConnectAttemptInFlight();
+        response[QStringLiteral("phase")] = inFlight ? QStringLiteral("connecting")
+                                                     : QStringLiteral("idle");
+        if (timedOut) {
+            response[QStringLiteral("timeout")] = true;
+            response[QStringLiteral("error")] =
+                QStringLiteral("timed out waiting for radio connection");
+        } else if (!wait->error.isEmpty()) {
+            response[QStringLiteral("error")] = wait->error;
+        } else {
+            response[QStringLiteral("error")] =
+                QStringLiteral("radio connection did not complete");
+        }
+        // The last deferred connect failure, whenever it happened. A verb that
+        // replied {ok:true, deferred:true} and then failed is otherwise
+        // unobservable from the client side; the age is what lets a caller tell
+        // this attempt's failure from a stale one.
+        if (!m_lastConnectError.isEmpty()) {
+            response[QStringLiteral("lastError")] = m_lastConnectError;
+            if (m_lastConnectErrorMs >= 0) {
+                response[QStringLiteral("lastErrorAgeMs")] = static_cast<int>(
+                    QDateTime::currentMSecsSinceEpoch() - m_lastConnectErrorMs);
+            }
+        }
     }
 
     writeJsonResponse(socket, response);
@@ -7024,17 +7432,10 @@ QJsonObject AutomationServer::doLiveness()
         const QString accepted = QString::fromLatin1(surf.acceptedUnits);
         // SET MEMBERSHIP, not equality — the consumer may legitimately handle
         // several units, and asking "are these the same string" reported a
-        // healthy meter as broken forever. See MeterSurfaces.h.
-        const QStringList acceptedList =
-            accepted.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        bool understood = acceptedList.isEmpty();
-        for (const QString& u : acceptedList) {
-            if (declared.compare(u.trimmed(), Qt::CaseInsensitive) == 0) {
-                understood = true;
-                break;
-            }
-        }
-        const bool disagrees = def && !declared.isEmpty() && !understood;
+        // healthy meter as broken forever. Through the shared predicate in
+        // MeterSurfaces.h, because a private copy of it here is how the
+        // `radiocert` table went on emitting the old answer (§1.38).
+        const bool disagrees = def && !meterUnitAccepted(accepted, declared);
         if (disagrees) {
             unitDisagreements
                 << QStringLiteral("%1 (backend declares %2; the consumer handles only %3)")
@@ -7061,7 +7462,7 @@ QJsonObject AutomationServer::doLiveness()
         if (!def)
             continue;
         const QString key = def->source + QLatin1Char(':') + def->name;
-        if (meterSurfaceFor(QLatin1String(key.toLatin1().constData())))
+        if (meterSurfaceFor(key))
             continue;
         publishedNowhere << key;
     }
@@ -7179,19 +7580,22 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
         return err(QStringLiteral("no backend available"));
 
     const QString a = action.trimmed().toLower();
-    if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")))
-        return err(QStringLiteral("civ requires an action (send|trace)"));
+    if (a.isEmpty() || (a != QLatin1String("send") && a != QLatin1String("trace")
+                        && a != QLatin1String("session")
+                        && a != QLatin1String("scheduler"))) {
+        return err(QStringLiteral("civ requires an action (send|trace|session|scheduler)"));
+    }
     if (a == QLatin1String("send") && !m_txAllowed) {
         return err(QStringLiteral(
             "civ send is TX-gated: raw CI-V can key the transmitter and retune the "
             "radio. Relaunch with AETHER_AUTOMATION_ALLOW_TX=1"));
     }
 
-    // The Icom backend answers both verbs synchronously inside invokeExtension,
-    // so a direct connection lands before the call returns. Anything that does
-    // not answer leaves `answered` false and is reported as unsupported rather
-    // than as success — a fire-and-forget reply here would make an unrecognised
-    // namespace look like a working inject.
+    // The Icom backend answers these diagnostic verbs synchronously inside
+    // invokeExtension, so a direct connection lands before the call returns.
+    // Anything that does not answer leaves `answered` false and is reported as
+    // unsupported rather than as success — a fire-and-forget reply here would
+    // make an unrecognised namespace look like a working inject.
     bool answered = false;
     bool failed = false;
     QVariant payload;
@@ -7211,19 +7615,22 @@ QJsonObject AutomationServer::doCiv(const QString& action, const QString& arg)
         failure = msg;
     }, Qt::DirectConnection);
 
-    backend->invokeExtension(QStringLiteral("icom"),
-                             a == QLatin1String("send") ? QStringLiteral("civ.send")
-                                                        : QStringLiteral("civ.trace"),
-                             rid, arg.trimmed());
+    const QString verb = a == QLatin1String("send") ? QStringLiteral("civ.send")
+                       : a == QLatin1String("trace") ? QStringLiteral("civ.trace")
+                       : a == QLatin1String("scheduler")
+                           ? QStringLiteral("civ.scheduler.status")
+                                                     : QStringLiteral("civ.session");
+    backend->invokeExtension(QStringLiteral("icom"), verb, rid, arg.trimmed());
     disconnect(okConn);
     disconnect(errConn);
 
     if (!answered) {
         return err(QStringLiteral(
-            "this backend does not implement raw CI-V (it is an Icom-only verb)"));
+            "this backend does not implement CI-V diagnostics (it is an Icom-only verb)"));
     }
-    if (failed)
+    if (failed) {
         return err(failure);
+    }
 
     QJsonObject out{{QStringLiteral("ok"), true}, {QStringLiteral("civ"), a}};
     out.insert(QStringLiteral("result"),
@@ -7496,8 +7903,12 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
 
     if (a == QLatin1String("speed") || a == QLatin1String("wpm")) {
         bool ok = false; const int wpm = arg.trimmed().toInt(&ok);
-        if (!ok || wpm < 5 || wpm > 100)
-            return err(QStringLiteral("cwx speed requires wpm in 5..100"));
+        if (!ok || wpm < m_radioModel->cwTextMinWpm()
+            || wpm > m_radioModel->cwTextMaxWpm()) {
+            return err(QStringLiteral("cwx speed requires wpm in %1..%2")
+                           .arg(m_radioModel->cwTextMinWpm())
+                           .arg(m_radioModel->cwTextMaxWpm()));
+        }
         cwx.setSpeed(wpm);
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("speed")},
                            {QStringLiteral("wpm"), wpm}};
@@ -7510,11 +7921,17 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
     }
     if (a == QLatin1String("send")) {
         const QString text = arg.trimmed();
-        if (text.isEmpty())
+        if (text.isEmpty()) {
             return err(QStringLiteral("cwx send requires text"));
-        if (!m_txAllowed)
+        }
+        const QString rejection = m_radioModel->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            return err(QStringLiteral("cwx send rejected: ") + rejection);
+        }
+        if (!m_txAllowed) {
             return err(QStringLiteral("blocked: cwx send keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        }
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog
         m_txBridgeInitiated = true;   // cwx keys the transmitter — the watchdog must police it
         cwx.send(text);
@@ -8840,6 +9257,30 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
 // panadapter menu is position-sensitive and lives behind a real right-button
 // press, so QContextMenuEvent does not reach it. Post a right-button press onto
 // the GUI loop and leave the menu's nested event loop to dumpTree/invoke.
+QJsonObject AutomationServer::doDoubleClick(const QString& target,
+                                           const QString& value)
+{
+    if (target.isEmpty())
+        return err(QStringLiteral("doubleClick requires a target widget"));
+
+    // Coordinates are optional here (unlike clickAt, whose contract requires
+    // them): a double-click is aimed at a control, and its centre is the
+    // point a person would hit. Resolve it so the shared clickAt path still
+    // receives explicit coordinates and applies every guard it normally does.
+    QString coords = value.trimmed();
+    if (coords.isEmpty()) {
+        QWidget* w = resolveWidget(target);
+        if (!w)
+            return err(QStringLiteral("widget not found: ") + target);
+        if (!w->isVisible())
+            return err(QStringLiteral("refused: '") + target
+                       + QStringLiteral("' is not visible"));
+        const QPoint c = w->rect().center();
+        coords = QString::number(c.x()) + QLatin1Char(' ') + QString::number(c.y());
+    }
+    return doClickAt(target, coords, ClickKind::Double);
+}
+
 QJsonObject AutomationServer::doRightClick(const QString& target,
                                            const QString& value) const
 {
@@ -8928,7 +9369,8 @@ QJsonObject AutomationServer::doHitTest(const QString& target,
 // menu/dialog the click raises runs on a normal stack, mirroring the invoke()
 // re-entrancy fix.
 QJsonObject AutomationServer::doClickAt(const QString& target,
-                                        const QString& value)
+                                        const QString& value,
+                                        ClickKind kind)
 {
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (parts.size() < 2)
@@ -9042,7 +9484,8 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     if (transmitControl) {
         markTxBridgeInitiated();
     }
-    QTimer::singleShot(0, qApp, [wp, win, local, global]() {
+    const bool wantDouble = (kind == ClickKind::Double);
+    QTimer::singleShot(0, qApp, [wp, win, local, global, wantDouble]() {
         if (!wp)
             return;
         raiseWindowForPopup(win);  // valid active window for any popup it raises
@@ -9056,6 +9499,21 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
         QMouseEvent release(QEvent::MouseButtonRelease, lf, lf, gf,
                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QCoreApplication::sendEvent(wp, &release);
+        if (!wantDouble || !wp)
+            return;
+        // The second half of a real double-click. Qt's own sequence is
+        // Press, Release, DblClick, Release — the window system sends the
+        // DblClick INSTEAD of a second Press, and a widget that overrides
+        // mouseDoubleClickEvent only ever sees that type. Sending another
+        // Press here would drive the single-click path twice instead.
+        QMouseEvent dbl(QEvent::MouseButtonDblClick, lf, lf, gf,
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &dbl);
+        if (!wp)
+            return;
+        QMouseEvent release2(QEvent::MouseButtonRelease, lf, lf, gf,
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &release2);
     });
 
     return QJsonObject{
@@ -9137,6 +9595,50 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("rfgain")},
                            {QStringLiteral("panId"), target},
                            {QStringLiteral("gain"), gain}, {QStringLiteral("requested"), true}};
+    }
+
+    if (action == QLatin1String("float") || action == QLatin1String("dock")) {
+        // `pan float <panId|index|active>` / `pan dock …` — the reparent +
+        // GPU re-initialize path (#2495/#4319/#4617) made drivable headlessly
+        // (#4864). The UI affordances are unreachable from the bridge: the
+        // per-pan float button hides in single-pan mode and the context-menu
+        // pop-out is a transient QMenu.
+        const QString a = arg.trimmed();
+        QString panId;
+        if (a.isEmpty() || a.compare(QLatin1String("active"), Qt::CaseInsensitive) == 0) {
+            if (const PanadapterModel* p = radio->activePanadapter())
+                panId = p->panId();
+        } else if (a.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+            panId = a;
+        } else {
+            bool okIdx = false;
+            const int idx = a.toInt(&okIdx);
+            if (okIdx && idx >= 0 && idx < radio->panadapters().size())
+                panId = radio->panadapters().at(idx)->panId();
+        }
+        if (panId.isEmpty())
+            return err(QStringLiteral("pan %1: no panadapter to address (want "
+                                      "<panId|index|active>)").arg(action));
+
+        const QList<QWidget*> stacks =
+            findWidgetsByClass(QStringLiteral("PanadapterStack"));
+        if (stacks.isEmpty())
+            return err(QStringLiteral("no PanadapterStack found"));
+
+        QVariantMap snap;
+        if (!QMetaObject::invokeMethod(stacks.first(), "automationFloatDock",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, snap),
+                                       Q_ARG(QString, action),
+                                       Q_ARG(QString, panId))) {
+            return err(QStringLiteral("PanadapterStack::automationFloatDock failed"));
+        }
+        if (snap.contains(QStringLiteral("error")))
+            return err(snap.value(QStringLiteral("error")).toString());
+
+        QJsonObject out = QJsonObject::fromVariantMap(snap);
+        out[QStringLiteral("ok")] = true;
+        return out;
     }
 
     if (action == QLatin1String("close") || action == QLatin1String("remove")) {

@@ -27,19 +27,24 @@ struct DaxShmBlock {
 };
 
 // Bridge between AetherSDR and the HAL plugin via POSIX shared memory.
-// Creates 4 RX shared memory segments (/aethersdr-dax-1 through /aethersdr-dax-4)
+// Creates 8 RX shared memory segments (/aethersdr-dax-1 through /aethersdr-dax-8)
 // for DAX audio from radio to apps, plus 1 TX segment (/aethersdr-dax-tx)
 // for audio from apps to radio.
 class VirtualAudioBridge : public QObject {
     Q_OBJECT
 
 public:
-    static constexpr int NUM_CHANNELS = 4;
+    static constexpr int NUM_CHANNELS = 8;
 
     explicit VirtualAudioBridge(QObject* parent = nullptr);
     ~VirtualAudioBridge() override;
 
-    bool open();
+    // activeChannels = how many RX shm segments to actually open (the radio's
+    // slice capacity, RadioModel::maxSlices()). Clamped to [1, NUM_CHANNELS].
+    // NUM_CHANNELS stays the compile-time array bound; this only bounds the
+    // open loop so the device list follows the radio (#4854). Dynamic resize
+    // after connect is a follow-up (issue #4935).
+    bool open(int activeChannels = NUM_CHANNELS);
     void close();
     bool isOpen() const { return m_open.load(std::memory_order_acquire); }
 
@@ -59,7 +64,7 @@ public:
     QByteArray readTxAudio(int maxFrames = 480);
 
 public slots:
-    // Feed decoded DAX audio for a channel (1-4).
+    // Feed decoded DAX audio for a channel (1-8).
     // pcm format: int16 stereo, 24 kHz, little-endian.
     void feedDaxAudio(int channel, const QByteArray& pcm);
 
@@ -87,12 +92,16 @@ private:
     // DaxApplet slider).  std::atomic gives the formal happens-before guarantee
     // that plain bool/float load/store would lack on weakly-ordered archs.
     std::atomic_bool m_open{false};
+    // How many RX shm segments open() actually opened (bounded by maxSlices()).
+    // Teardown loops still walk the full NUM_CHANNELS bound — closing an
+    // unopened slot is a no-op. (#4854)
+    int m_activeChannels{NUM_CHANNELS};
     float m_gain{0.5f};  // -6 dB default — GUI-only
-    std::atomic<float> m_channelGain[NUM_CHANNELS]{0.5f, 0.5f, 0.5f, 0.5f};
+    std::atomic<float> m_channelGain[NUM_CHANNELS]{0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
     float m_txGain{0.5f};
 
     // RX channels (radio → apps)
-    int  m_shmFds[NUM_CHANNELS]{-1, -1, -1, -1};
+    int  m_shmFds[NUM_CHANNELS]{-1, -1, -1, -1, -1, -1, -1, -1};
     DaxShmBlock* m_blocks[NUM_CHANNELS]{};
 
     // TX channel (apps → radio)

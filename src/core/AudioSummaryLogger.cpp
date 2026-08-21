@@ -168,8 +168,9 @@ QString formatTxSource(const TxSourceSummary& summary)
                  .arg(summary.channelCount)
                  .arg(modeText(summary.channelCount),
                       sampleFormatName(summary.sampleFormat))
-          << QStringLiteral("  resampleTo24k=%1 %2")
-                 .arg(yesNo(summary.resamplingTo24k),
+          << QStringLiteral("  voiceNormalizeTo48k=%1 radeResampleTo24k=%2 %3")
+                 .arg(yesNo(summary.normalizingTo48k),
+                      yesNo(summary.radeResamplingTo24k),
                       fallbackText(summary.fallbackOccurred, summary.fallbackReason));
     return lines.join(QLatin1Char('\n'));
 }
@@ -178,10 +179,11 @@ QString formatCwSidetone(const CwSidetoneSummary& summary)
 {
     QStringList lines;
     lines << QStringLiteral("Audio CW sidetone summary:")
-          << QStringLiteral("  backend=\"%1\" %2 rate=%3Hz")
+          << QStringLiteral("  backend=\"%1\" %2 rate=%3Hz path=%4")
                  .arg(valueOrUnknown(summary.backend),
                       field(QStringLiteral("device"), summary.deviceDescription))
                  .arg(summary.sampleRate)
+                 .arg(valueOrUnknown(summary.timingPath))
           << QStringLiteral("  %1").arg(fallbackText(summary.fallbackOccurred,
                                                      summary.fallbackReason));
     return lines.join(QLatin1Char('\n'));

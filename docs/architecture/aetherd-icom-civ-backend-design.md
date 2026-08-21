@@ -1,7 +1,8 @@
 # Icom CI-V Backend — Design Note
 
 Bring-up plan for `IcomCivBackend`, an `IRadioBackend` implementor for Icom
-networked radios. First target: **IC-705 over WiFi**.
+networked radios. First targets: **IC-705 over WiFi** and **IC-7300MK2 over
+Ethernet**.
 
 The protocol reference is the oracle at `~/oracles/icom/icom-oracle.md`, with
 primary sources under `~/oracles/icom/sources/`. This note does not restate the
@@ -85,14 +86,19 @@ and it is the cleanest part of that codebase.
 | `setSliceAgc` | CI-V `16 12` — FAST/MID/SLOW only; **no threshold**, ignore `thresholdDb` |
 | `setPanCenter` | CI-V `05` in Center mode; `27 1E` edges in Fixed mode |
 | `setPanBandwidth` | CI-V `27 15` — **snaps to one of eight spans**; report what was taken |
-| `setPanRfGain` | CI-V `16 02` preamp — **three positions**, see §5 |
+| `setPanRfGain` | CI-V `14 02`, continuous 0000–0255 BCD |
+| `setPanPreamp` | CI-V `16 02`, OFF/P.AMP1/P.AMP2 where the model supports them |
+| `setPanAttenuator` | CI-V `11`, OFF/20 dB on IC-705 and IC-7300MK2 |
+| `setSliceRxAntenna` | CI-V `12 00`, IC-7300MK2 only; ANT1/RX-ANT |
 | `setPanFrameRate` | CI-V `27 1A` sweep speed 0/1/2 — mapping to Hz is unmeasured |
 | `setKeying` | CI-V `1C 00` (00=RX, 01=TX) |
 | `setTune` | **no direct command** — see below |
 | `setTxPower` | CI-V `14 0A`, 0000–0255 BCD |
+| `setMicGain` | CI-V `14 0B`, 0000–0255 BCD |
+| `setTxMonitor` | CI-V `16 45` enable plus `14 15` level |
 | `setTxFilter` | CI-V `1A 05 0020/0021/0022` — **discrete WIDE/MID/NAR**, not Hz |
-| `submitTxAudio` | audio stream, codec 4 — **requires DATA MOD = WLAN** |
-| `setSliceAudioGain` | CI-V `14 02` (AF level) |
+| `submitTxAudio` | audio stream, codec 4 — **requires the model's network source** (WLAN on IC-705, LAN on IC-7300MK2) in `DATA MOD` for data modes and `DATA OFF MOD` for voice |
+| `setSliceAudioGain` | CI-V `14 01` (AF level) |
 | `createPanadapter` | `false` — one receiver, one scope |
 
 Three of these do not fit the seam cleanly, and all three fit the same pattern:
@@ -134,6 +140,36 @@ something unexpected on one with an AH-705.
 | `radioChanged` | `19 00` model, firmware, connection state |
 | `linkStatsUpdated` | per-stream counters + `0x07` ping RTT |
 | `healthSnapshot` | OVF (`15 07`), Vd, Id, retransmit and loss counters |
+
+CI-V transceive does not announce every front-panel change. The backend rotates
+read requests for RF/power/mic/MON/VOX/notch/preamp/attenuator/tuner state on
+the link timer. These are state observations, never a reason to replay a saved
+client value: both Icom models declare an empty `clientSettingsDomains`, so the
+radio remains authoritative across reconnects.
+
+The IC-7300MK2 RX-ANT switch is the measured exception. Its official guide says
+`12 00` with no data reads the selection, but the live B6 radio returned only a
+bare `FB` acknowledgement. The backend therefore does not poll that ambiguous
+form or claim a subscription. An explicit AetherSDR ANT1/RX-ANT choice is sent
+and shown optimistically for that session only. Reconnect advertises both
+choices without claiming either one and never replays client state. This keeps
+the radio authoritative and does not affect IC-705, Flex, or HL2.
+
+### Seam additions made for the second-model bring-up
+
+Two operator intents were absent from `IRadioBackend` and had to cross the
+neutral seam:
+
+- `setTxMonitor(bool, int)` separates the radio's MON switch/level from
+  `setTxAudioMonitor`, which is the diagnostic receive-during-TX audio gate.
+- `setSliceRxAntenna(int, QString)` carries a receive-antenna selection without
+  encoding Icom's `12 00` command in GUI code.
+
+Both additions have conservative default implementations, so Flex and HL2 do
+not gain a new required override. `TransmitModel` and `SliceModel` also emit
+operator-only command signals for these paths. Backend state deltas update the
+models without being reflected back down as commands; this is the same
+state-versus-intent separation used for RF power in this bring-up.
 
 `sliceAudioFrameReady` and `audioFrameReady` carrying the same buffer is correct
 here and worth a comment in the code — with one receiver there is nothing to
@@ -195,37 +231,201 @@ path that reports what the radio actually did.
 
 ## 5. The structural gaps Icom forces
 
-### Gap A — RF gain has no continuous range
+### Gap A — RF gain, preamp, and attenuation are three controls
 
-`setPanRfGain(panId, gainDb)` assumes a dB register. The IC-705 has a
-three-position preamp (`16 02`: OFF / P.AMP1 / P.AMP2, and only OFF/ON on
-144/430) and no continuous gain.
+The original IC-705 bring-up treated RF gain as the three-position preamp. The
+model-specific guide and the IC-7300MK2 bench pass showed the actual split:
 
-The seam already has the escape hatch: `panRfGainInfoChanged(panId, low, high,
-step)`. Emit `(0, 2, 1)` and let the existing slider snap to three detents. That
-is precisely what that signal was added for — the HL2 case in its comment is the
-same shape (a Flex-derived range that did not match the hardware), and reusing it
-avoids a per-family special case in the UI.
+- `14 02` is continuous RF gain, encoded as a 0000–0255 level and displayed by
+  the radio as 0–100 percent;
+- `16 02` is the discrete preamp selection; and
+- `11` is the discrete attenuator.
 
-**Do not advertise a fabricated dB range.** A slider that moves smoothly over a
-control with three positions is the "the control moves, the audio is unchanged"
-failure the capability comments keep warning about.
+They must remain separate through the neutral seam. A smooth RF Gain slider
+that sends `16 02`, or a P.AMP button that merely changes `14 02`, moves in the
+UI while controlling the wrong RF stage. `setPanRfGain`, `setPanPreamp`, and
+`setPanAttenuator` are therefore independent intents; model capability data
+decides which preamp positions exist.
+
+The seam parameter still calls RF gain `gainDb`, but Icom publishes no dB
+mapping for `14 02`. On this backend the value is explicitly a percentage. Do
+not invent a dB scale from the raw register.
 
 ### Gap B — metering is a scheduler, not a subscription
 
-This is new. Flex streams meters; the HL2 embeds them. Icom needs a **poll
-scheduler** that:
+Flex streams meters; the HL2 embeds them. Icom uses one CI-V command plane for
+meters, startup snapshots, periodic controls and PTT. `IcomCivScheduler` is the
+single writer above `IcomSession::sendCiv()` and:
 
 - polls only meters currently visible in the UI;
-- runs S-meter at ~10 Hz and everything else at ~5 Hz;
+- paces dispatches into 25 ms slots and permits one ordinary command/reply
+  transaction at a time;
 - stops TX meters entirely while receiving, and RX meters while transmitting;
-- yields to user-initiated commands, so tuning never queues behind metering;
+- puts operator writes and their radio-authoritative readbacks ahead of polls;
+- coalesces duplicate reads and rapid writes by semantic register, preserving
+  the newest write generation;
+- expires a lost reply after 350 ms and ages background work so PTT or S-meter
+  traffic cannot starve slower controls;
+- lets fail-safe unkey bypass pacing and the outstanding reply slot; and
 - filters its own request/response traffic out of anything re-exported (CAT
   pass-through, TCI) — kappanhang does exactly this and it matters.
 
-wfview's per-rig `Periodic\N\Command` list with priorities is the proven shape.
-This should be a named component (`IcomMeters`) with its own test, not a timer
-sprinkled through the backend.
+The semantic key is deliberately **coarser than the register**: `04`, `06`,
+`26` and the transceive forms all key on `mode`, which is what makes an
+operator mode write supersede an in-flight mode read of any form. Coalescing
+does *not* inherit that coarseness — two reads collapse only when they ask the
+same register the same way. `04` (mode) and `26` (mode + DATA + filter) are
+both issued at connect on purpose, because `26` is what corrects `04` when the
+two disagree.
+
+Aging tops out at the **visible-meter** band, one step below the PTT fallback
+poll, not at the poll itself. Dispatch breaks an equal-priority tie in favour
+of the older entry, so work that aged all the way to `Ptt` would be dispatched
+*ahead* of the keyed-state poll rather than merely tying with it. Stopping one
+band short still beats fresh meter traffic on that tie — which is all
+anti-starvation needs — while leaving PTT an edge no amount of waiting erodes.
+
+Writes consume the reply slot too: their `FB`/`FA` acknowledgement must be
+retired before a later read is sent, or that ACK can be mistaken for the read's
+answer. An unsupported read may itself finish with `FB`/`FA`; that releases the
+slot but is never decoded as state.
+
+A transaction that outlives its 350 ms timeout, or that a fail-safe unkey
+displaces, stays **recognisable for a further two seconds**. The timeout means
+"stop waiting", not "this can never arrive": without that memory the identical
+frame is rejected as stale at 349 ms and adopted as fresh radio truth at
+351 ms, which is enough to put an obsolete reading back over a newer operator
+write on every register.
+
+PTT additionally carries an intent generation and a one-second confirmation
+window — one second because it must comfortably cover a lost reply (350 ms)
+plus the 250 ms fallback poll that follows it, and still expire well inside the
+time an operator would take to notice a wrong transmit indicator.
+
+**The window is one-directional, and that asymmetry is the point.** While a
+key-*on* intent is pending, a contradictory `RX` report is the delayed pre-key
+poll answer and is suppressed: this is RFC #4983's captured FT8 failure, where
+treating it as current state tore down transmit audio on a radio that then
+keyed normally. While a key-*off* intent is pending, a contradictory `TX`
+report is never suppressed — a lost, refused, or front-panel-overridden unkey
+is exactly the case where the radio's report is the only thing telling the
+operator they are still on the air. RFC #4983 states the rule directly
+("explicit PTT OFF and fail-safe unkey are never suppressed by a key-on
+transition guard") and Constitution VI requires every path that can transmit to
+fail closed. Radio truth wins again as soon as the bounded window expires.
+
+| group | interval | condition |
+|---|---:|---|
+| PTT fallback | 250 ms | always connected; Transceive is only a hint |
+| S meter | 100 ms | RX and visible |
+| power, SWR, ALC, compression | 200 ms | TX and visible |
+| PA current | 500 ms | TX and visible |
+| voltage | 1000 ms | visible |
+| overflow | 500 ms | RX and visible |
+| NR, NB, auto/manual notch state | 1000 ms | connected |
+| frequency, mode/DATA, monitor and VOX state | 2000 ms | connected |
+| levels, RF power, preamp, AGC, attenuator, tuner, RIT/XIT | 3000 ms | connected |
+
+#### State convergence is snapshot + transceive + polling
+
+CI-V Transceive is a useful low-latency hint, not a complete subscription. The
+IC-7300MK2 does not reliably announce NR, NB, RF gain, RF power, mic gain,
+monitor, VOX, notch, preamp, attenuator, or tuner changes made at the radio.
+Reliable remote state therefore has three layers:
+
+1. read every supported state at connect;
+2. accept unsolicited Transceive frames when they arrive; and
+3. rotate explicit reads on the link timer for states the model guide permits.
+
+Poll slowly enough to leave command latency and meter traffic headroom. The
+current intervals are in the table above; priority, coalescing and aging bound
+their interaction instead of relying on independent timers to miss each other.
+A reply is radio authority and updates the model without reflecting a new
+command back down.
+Radio-authoritative Icom state must not be replayed from client persistence on
+reconnect.
+
+The one measured exception is a write-only-in-practice register such as the
+IC-7300MK2 RX-ANT selection: its documented read produced only `FB`. Scope the
+send-only control to the model, keep its optimistic state session-local, and
+document why it cannot participate in the ordinary polling contract.
+
+#### `DATA OFF MOD` is written; `DATA MOD` is not. Why the two differ
+
+Both are `1A 05` SET-menu leaves the radio persists identically, so the
+asymmetry needs stating rather than assuming.
+
+`DATA OFF MOD` selects where **voice** modulation comes from, and PC Audio is
+the operator saying "my voice is on this computer" — the two answer the same
+question, so a click on that button is a legible request to change it
+(Principle II: a user action is a request). `DATA MOD` selects where **data**
+modulation comes from, and nothing in AetherSDR's UI expresses an intent about
+it: WSJT-X, fldigi and the built-in beacons all reach the radio the same way
+whichever source is selected, so a client that wrote it would be changing
+operator state on a guess. It stays read-and-report.
+
+Three rules keep the writable half inside Principle III:
+
+1. **Only an operator click writes.** The connect edge *publishes* the client's
+   PC Audio state (`icom/audio.pc.state`) so `checkModInput()` can warn about a
+   mismatch; the write lives behind `icom/audio.pc`, which nothing but the
+   button calls. Replaying the client-persisted `PcAudioEnabled` key onto the
+   register at connect is precisely the two-sources-of-truth fight Principle III
+   exists to prevent.
+2. **"Off" restores, it does not assume.** The register is four-valued on an
+   IC-705 and six-valued on an IC-7300MK2; the button has two states. The
+   backend latches the radio's own value immediately before its first write of
+   the session and puts *that* back, falling back to the profile's `micValue`
+   only when there was nothing to capture. Writing a fixed MIC would delete an
+   operator's USB or ACC selection with no undo and no dialog.
+3. **Unverified models are refused, not guessed at.** `modulationProfileFor()`
+   answers only for models whose own CI-V guide has been checked. A click on any
+   other Icom is declined and says so; nothing is read, written or shown.
+
+That third rule has a cost worth naming: on a model with no profile, Radio
+Health shows no `DATA OFF MOD` / `DATA MOD` row at all, where it used to show
+one. The old row read items 118/119 on **every** Icom and labelled the result
+from the IC-705's enum — which is how an IC-9700 correctly set to LAN reported
+"USB" and got warned at, every session. A row that is wrong is worse than a
+missing one; the fix is another verified profile, not a re-enabled guess.
+
+#### A 0000–0255 level is not a 0–255 meter
+
+CI-V `14 xx` levels and `15 xx` meters can both carry values up to 255, but they
+have different contracts:
+
+- Percentage controls use the radio front panel's integer buckets. Decode with
+  `floor(raw * 100 / 255)` and encode with `ceil(percent * 255 / 100)` so a
+  value set in AetherSDR reads back as the same number on the radio. Nearest
+  rounding on decode made roughly half the range display one point high.
+- Meters use model-specific published curves. Power, SWR, ALC, COMP, Vd, Id,
+  and S-meter must never be passed through the percentage helper: ALC reaches
+  full scale at raw 120, S9+60 is raw 241, and power curves differ by model.
+
+Keep the percentage conversion in `CivCodec` and meter calibration in
+`IcomMeters`. A new model adds or selects curves; it does not fork the control
+codec.
+
+#### Transmit meters have a keyed lifetime
+
+Polling a TX meter only while transmitting is necessary but insufficient. The
+radio-authoritative `1C 00` state must drive both the poller and the visible
+consumer. At startup and idle the forward-power gauge is zero. On unkey it is
+cleared immediately, and any late response already in flight is retained only
+as diagnostic history — it must not repaint the gauge.
+
+Certification must sample four moments: startup idle, active key, immediate
+unkey, and a delayed post-unkey reply. "The backend received a meter" proves
+the producer; the visible gauge value proves the product.
+
+#### ATU state is frequency-scoped toggle state
+
+`1C 01` reports bypass/on/tuning, but AetherSDR's successful tune result is also
+associated with the frequency that was tuned. Publish current TX frequency in
+the same state delta as the tuner reply; otherwise response ordering can leave
+the button unable to recognize that `Successful` belongs to the current dial.
+Clicking a successful ATU state means bypass (`1C 01 00`) and must not key. A
+second click from bypass starts a new tune cycle and is a transmit operation.
 
 ### Gap C — the seam's audio contract is 24 kHz stereo, and the radio is 48 kHz mono
 
@@ -359,7 +559,8 @@ single-packet WLAN waveform, emit spectrum and waterfall. Proof: a screenshot
 with a real signal at a known frequency landing in the right bin.
 
 **Phase 3 — audio.** `IcomAudio`: codec 4 LPCM 48 k mono, RX first. Then TX,
-which needs DATA MOD = WLAN on the radio and **verification outside the system** —
+which needs the model's network source in DATA MOD (WLAN on IC-705, LAN on
+IC-7300MK2) and **verification outside the system** —
 a second receiver or a WebSDR, per `feedback-verify-outside-the-system`. A TX
 path that looks perfect from inside AetherSDR and is silent on the air is the
 exact failure mode this project has already been bitten by.
@@ -636,48 +837,48 @@ for fifteen unbroken seconds — a stimulus we could not have built by hand.
 audio path plus timing accuracy on the keying edge — and is not established by
 a decode. A spot on PSK Reporter would establish it.
 
-### Known-unresolved: transmit meters stop updating
+### Resolved: transmit meter polling and visible lifetime
 
-After extended use, `TX:FWDPWR` / `TX:SWR` / `TX:ALC` stop being refreshed while
-the CI-V stream is otherwise healthy — observed at `fwdPowerAgeMs` of 181 s with
-the radio keyed (`transmitting: true`) and the newest CI-V frame 135 ms old.
+The earlier failure was real: `TX:FWDPWR` / `TX:SWR` / `TX:ALC` could stop being
+refreshed while the CI-V stream remained healthy. The poller was gated by a TX
+state inferred too narrowly from our own keying path or a missed unsolicited
+edge. The backend now polls `1C 00`, and radio-authoritative MOX updates drive
+both `TransmitModel::transmitting` and the meter poller.
 
-This is NOT the token stall fixed above, and it is NOT the link: general CI-V
-traffic continues. Suspicion falls on `MeterPoller`'s transmit gating — TxOnly
-meters are only due while `setTransmitting(true)`, which is driven from the
-backend's `m_keyed`, which is itself set from a CHANGE-ONLY decode of the `1C 00`
-poll. A missed edge there would leave the poller believing the radio is
-receiving and silently stop asking for every transmit meter.
+The IC-7300MK2 pass exposed the inverse failure after that fix: the last live
+forward-power sample remained visible after unkey. The model may retain it for
+diagnostics, but `TxApplet` now presents power only while transmitting, clears
+immediately on unkey, and ignores a late response that was already in flight.
+Live validation left a 16 W sample in the backend after an emergency unkey while
+the visible gauge correctly read zero.
 
-**It also invalidates naive measurement.** A stale non-zero `fwdPower` looks
-exactly like healthy transmit. Any harness sampling these must gate on
-`fwdPowerAgeMs` and discard stale samples rather than counting them as good —
-a run that reported "0% zero-power, no outages" turned out to have a median
-sample age of 19.8 seconds.
+**Harness rule:** require both a fresh age and an active radio-authoritative TX
+window. Sample startup idle, active key, immediate unkey, and delayed idle. A
+stale non-zero value is not power, and a fresh reply after unkey is not current
+power either.
 
 ---
 
 ## Appendix C — CI-V coverage audit
 
-Every meter and switch the IC-705's CI-V guide documents, against what this
-backend maps and what the UI actually consumes. Written after live testing found
-five "broken" meters that were all publishing correctly at the seam.
+Every meter and switch in the IC-705 and IC-7300MK2 CI-V guides, against what
+this backend maps and what the UI actually consumes. Written after live testing
+found five "broken" meters that were all publishing correctly at the seam.
 
 > **RESOLVED, 2026-08-06.** The two unit-contract defects called out below are
 > fixed and verified in `MeterModel`: `m_fwdPwrUnit` is honoured (`"Watts"`
 > skips the dBm conversion) and `m_swAlcUnit` is honoured (`"Percent"` maps onto
 > the dBFS gauge). The prose is kept because the *shape* of the defect is the
 > lesson, not its instance — a `unit` field that is carried, displayed and then
-> ignored by the consumer that matters. `TX:FWDPWR` and `TX:ALC` are still
-> **uncertified**, which is a different statement: see the certification report.
+> ignored by the consumer that matters. Both are now certified on live Icom
+> hardware; see the certification report for model-specific evidence.
 
-**The dominant defect is not a missing mapping — it is a UNIT CONTRACT.**
-`MeterModel` interprets a meter by NAME, with a unit it assumes rather than
-reads. `TX:FWDPWR` is unconditionally treated as dBm and converted with
-`10^(v/10)/1000`; `TX:ALC` is routed to `swAlcChanged(float dbfs)` and rendered
-on a −20…0 dBFS gauge. A backend that publishes the honest unit from its own
-radio — watts, percent — is silently mis-rendered. The `unit` field in
-`MeterDef` is carried, displayed, and then ignored by the consumers that matter.
+**The dominant defect was not a missing mapping — it was a UNIT CONTRACT.**
+`MeterModel` interpreted a meter by name with a unit it assumed rather than the
+one declared. `TX:FWDPWR` in watts was converted as dBm, and `TX:ALC` percent was
+rendered on a dBFS gauge. The consumer now honours `MeterDef::unit`. Keep this
+history because a backend can publish an honest value and still be wrong on
+screen; certification has to inspect the consumer, not stop at the seam.
 
 ### C.1 Meters (`15 xx`)
 
@@ -687,9 +888,9 @@ radio — watts, percent — is silently mis-rendered. The `unit` field in
 | `15 02` | S-meter, 0=S0 / 120=S9 / 241=S9+60 | ✅ | `SLC:LEVEL` dBm | **working** |
 | `15 05` | Various squelch (tone etc.) open | ✗ | — | unmapped |
 | `15 07` | ADC OVF indicator | `kOverflow` | `RAD:OVF` Percent | published, no consumer |
-| `15 11` | Po, 0=0% / 143=50% / 213=100% | ✅ | `TX:FWDPWR` **Watts** | **BROKEN — seam wants dBm** |
-| `15 12` | SWR, 0=1.0 / 48=1.5 / 80=2.0 / 120=3.0 | ✅ | `TX:SWR` SWR | **BROKEN — gated behind FWDPWR** |
-| `15 13` | ALC, 0=min / 120=max | ✅ | `TX:ALC` **Percent** | **BROKEN — seam wants dBFS, so it pegs** |
+| `15 11` | Po, 0=0% / 143=50% / 213=100% | ✅ | `TX:FWDPWR` **Watts** | **working** — model-specific curve; visible only while keyed |
+| `15 12` | SWR, 0=1.0 / 48=1.5 / 80=2.0 / 120=3.0 | ✅ | `TX:SWR` SWR | **working** — transmit-only; clears on unkey |
+| `15 13` | ALC, 0=min / 120=max | ✅ | `TX:ALC` **Percent** | **working** — consumer honours Percent |
 | `15 14` | COMP, 0=0 dB / 130=15 dB / 210=25.5 dB | ✅ | `TX:COMPPEAK` dB | contract correct; reads 0 while PROC is unmapped |
 | `15 15` | Vd, 0=0 V / 75=5 V / 241=16 V | ✅ | `RAD:+13.8A` Volts | **working** |
 | `15 16` | Id, 0=0 A / 121=2 A / 241=4 A | ✅ | `RAD:PACURRENT` Amps | published, no consumer |
@@ -760,7 +961,8 @@ Which controls on the surfaces the operator uses actually reach this radio.
 "linked" when its intent reaches an `IRadioBackend` verb this backend overrides.
 The second DROVE the controls against a live IC-705 and read the resulting CI-V
 frames back through `civ trace`, checking each encoded value against arithmetic
-rather than against an observed capture.
+rather than against an observed capture. The 2026-08-13 IC-7300MK2 pass extends
+the same shared command paths; model-specific exceptions are called out below.
 
 Rows marked ✅ **verified** were driven and their bytes checked. Rows marked
 ✅ implemented were traced but never driven — treat those exactly as the first
@@ -815,13 +1017,14 @@ their own right (CERTIFICATION.md §1.29):
 | **S-meter applet** | level display | ✅ |
 | **RX Controls** | AGC mode | ✅ `setSliceAgc` (FAST/MID/SLOW) |
 | | AGC threshold | ❌ accepted and discarded — the radio has no threshold register |
-| | preamp / RF gain | ✅ `setPanRfGain` → 3-position preamp |
+| | RF gain | ✅ `setPanRfGain` → continuous `14 02`; polled for front-panel changes |
+| | preamp / attenuator | ✅ discrete `16 02` / `11`; separate from RF gain |
 | | filter width | ✅ snaps to FIL1/2/3, and the three are now published as `rxFilterWidthsHz` so the applet stops offering widths that all land on the same filter. Capability wiring is code-verified; the three buttons have NOT been confirmed on screen |
 | | NR | ✅ **verified** — `16 40 01` + `14 06 01 53` (60 % = 153) |
 | | NB | ✅ **verified** — `16 22 01` + `14 12 01 40` (55 % = 140) |
 | | ANF | ✅ **verified** — `16 41 01` |
 | | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control and off is zero |
-| | manual notch | ❌ `16 48` mapped, no seam verb |
+| | manual notch | ✅ `setSliceManualNotch` (`16 48` + `14 0D`); state is polled |
 | | AF gain / mute / pan | ❌ seam verbs exist, backend does not implement |
 | **TX Controls** | MOX / PTT | ✅ `setKeying` |
 | | TUNE | ✅ `setTune` |
@@ -832,12 +1035,12 @@ their own right (CERTIFICATION.md §1.29):
 | | ALC / Compression gauges | ✅ (ALC scale fixed; unverified) |
 | | Level gauge | ⛔ hidden — this radio publishes no mic meter |
 | | mic source | ✅ collapsed to PC by capability |
-| | mic gain | ✅ implemented (`14 0B`) — **not driven live**, no bridge verb reaches it |
-| | monitor | ✅ implemented (`16 45`) — **not driven live**. Function only: the radio's monitor LEVEL is a separate register and no verb carries it, so writing one would overwrite what the operator set on the radio |
-| | VOX | ❌ no seam verb (`16 46` + `14 16` mapped) |
+| | mic gain | ✅ `setMicGain` (`14 0B`), read at connect and polled |
+| | monitor | ✅ `setTxMonitor` (`16 45` + `14 15`), both switch and level read back |
+| | VOX | ✅ `setVox` (`16 46` + `14 16`), both switch and level read back |
 | | CW speed / pitch / break-in | ❌ no seam verb (`14 0C`, `14 09` mapped; `16 47` unmapped) |
 | **Status bar** | voltage | ✅ `RAD:+13.8A` |
-| | temperature | ⛔ no temperature meter exists in CI-V |
+| | temperature / current | IC-705: no temperature; IC-7300MK2: `Id` from `15 16` while transmitting |
 | | radio name / model | ✅ from the handshake + `19 00` |
 | | hostname / alias | ⚠️ shows the connect address; the radio's own name is in the capabilities packet and unused |
 
@@ -861,8 +1064,8 @@ CERTIFICATION.md §1.31 because it generalises to any fanned-out control.
 1. **Audio gain / mute / pan** — seam verbs exist, no override here. The radio's
    AF level IS now read at connect, so the control opens in the right place and
    then cannot move it, which is arguably worse than not reading it.
-2. **Manual notch, VOX, CW speed / pitch / break-in** — CI-V mapped or trivially
-   mappable; no seam verb yet.
+2. **CW speed / pitch / break-in** — CI-V mapped or trivially mappable; no seam
+   verb yet.
 3. **TX filter** (`16 58` SSB TX bandwidth) — `setTxFilter` exists, unimplemented.
 4. **AGC threshold** is accepted and discarded; the radio has no threshold
    register. Better to advertise it as unavailable than keep a live slider that
@@ -874,7 +1077,8 @@ CERTIFICATION.md §1.31 because it generalises to any fanned-out control.
 exists to keep visible:
 
 6. **The TUNE carrier.** Synthesised, built, never keyed into a tuner.
-7. **Mic gain and TX monitor.** No bridge verb reaches either.
+7. **Mic gain and TX monitor on IC-705.** The shared paths are live-proven on
+   IC-7300MK2; an IC-705 UI/effect pass is still outstanding.
 8. **The three filter buttons**, on screen with the applet open.
 9. **Connect-time state adoption**, beyond confirming the values arrive: whether
    each one lands on the control an operator is looking at is a separate

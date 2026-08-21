@@ -25,6 +25,13 @@ constexpr std::array<CurvePoint, 13> kPowerIc705{{
     {183, 7.5}, {213, 10.0}, {255, 12.0},
 }};
 
+// IC-7300MK2 Po meter, raw -> watts. Its official guide gives 0/50/100
+// percent at 0/143/213 and the model is rated at 100 W. Keep the documented
+// headroom above the 100 percent point rather than pinning a hot final.
+constexpr std::array<CurvePoint, 4> kPowerIc7300Mk2{{
+    {0, 0.0}, {143, 50.0}, {213, 100.0}, {255, 130.0},
+}};
+
 // SWR. Icom's guide: 0 = 1.0, 48 = 1.5, 80 = 2.0, 120 = 3.0.
 //
 // The guide stops at 3.0 and the field is a full byte. The final point is an
@@ -48,6 +55,14 @@ constexpr std::array<CurvePoint, 3> kVd{{
 // Id (PA current), raw -> amps. Icom's guide: 0 = 0 A, 121 = 2 A, 241 = 4 A.
 constexpr std::array<CurvePoint, 3> kId{{
     {0, 0.0}, {121, 2.0}, {241, 4.0},
+}};
+
+// IC-7300MK2 desktop-radio calibration from its own CI-V guide.
+constexpr std::array<CurvePoint, 3> kVdIc7300Mk2{{
+    {0, 0.0}, {13, 10.0}, {241, 16.0},
+}};
+constexpr std::array<CurvePoint, 4> kIdIc7300Mk2{{
+    {0, 0.0}, {97, 10.0}, {146, 15.0}, {241, 25.0},
 }};
 
 // ALC, raw -> percent. Icom's guide gives only "0 = Minimum, 120 = Maximum",
@@ -115,6 +130,7 @@ double interpolateCurve(std::span<const CurvePoint> curve, int raw)
 }
 
 std::span<const CurvePoint> powerCurveIc705() { return kPowerIc705; }
+std::span<const CurvePoint> powerCurveIc7300Mk2() { return kPowerIc7300Mk2; }
 std::span<const CurvePoint> swrCurve()        { return kSwr; }
 std::span<const CurvePoint> compCurve()       { return kComp; }
 std::span<const CurvePoint> vdCurve()         { return kVd; }
@@ -160,16 +176,24 @@ const MeterSpec* meterSpecForSub(std::uint8_t sub)
     return nullptr;
 }
 
-double meterValue(MeterId id, int raw, double s9Dbm)
+double meterValue(MeterId id, int raw, double s9Dbm, std::uint8_t civAddress)
 {
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
-    case MeterId::Power:    return interpolateCurve(kPowerIc705, raw);
+    case MeterId::Power:    return interpolateCurve(
+                                civAddress == 0xB6 ? powerCurveIc7300Mk2()
+                                                   : powerCurveIc705(), raw);
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
     case MeterId::Comp:     return interpolateCurve(kComp, raw);
-    case MeterId::Vd:       return interpolateCurve(kVd, raw);
-    case MeterId::Id:       return interpolateCurve(kId, raw);
+    case MeterId::Vd:       return interpolateCurve(
+                                civAddress == 0xB6
+                                    ? std::span<const CurvePoint>(kVdIc7300Mk2)
+                                    : std::span<const CurvePoint>(kVd), raw);
+    case MeterId::Id:       return interpolateCurve(
+                                civAddress == 0xB6
+                                    ? std::span<const CurvePoint>(kIdIc7300Mk2)
+                                    : std::span<const CurvePoint>(kId), raw);
     // OVF is 00/01 from the radio, not a scaled reading.
     case MeterId::Overflow: return raw != 0 ? 1.0 : 0.0;
     }

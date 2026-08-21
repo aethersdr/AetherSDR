@@ -7,7 +7,9 @@ exposes when launched with AETHER_AUTOMATION=1:
 
   log categories                 list logging categories + enabled state
   log get <cat>                  whether a category is enabled
-  log set <cat> <on|off>         toggle a category at runtime (no restart)
+  log set <cat> [<cat>...] <on|off>
+                                 toggle one or more categories at runtime
+  log set <cat>=<on|off>[;...]   batch form, a single shell token
   log set all <on|off>           toggle every category
   log reset                      restore the operator's persisted prefs
   log tail [n] [since=<seq>]     pull recent ring events (default newest 100);
@@ -135,6 +137,94 @@ class LogStream:
             self._thread.join(timeout=1.0)
 
 
+class UsageError(Exception):
+    """A CLI argument problem. Reported as one usage line, never a traceback."""
+
+
+_TRUE_WORDS = ("on", "true", "1", "yes", "enable", "enabled")
+_FALSE_WORDS = ("off", "false", "0", "no", "disable", "disabled")
+
+
+def parse_onoff(word):
+    w = word.strip().lower()
+    if w in _TRUE_WORDS:
+        return True
+    if w in _FALSE_WORDS:
+        return False
+    raise UsageError("expected on|off, got %r" % word)
+
+
+def parse_set_targets(rest):
+    """`set` arguments -> [(category, enabled), ...].
+
+    Two accepted forms, because both are reached for in practice (#4912):
+
+        set <cat> [<cat> ...] <on|off>   the documented form, now also taking
+                                         several categories against one state
+        set "a=true;b=false"             the batch form — ONE shell token, which
+                                         is exactly why the old blind rest[1]
+                                         raised IndexError on it, and why the
+                                         command silently did nothing even when
+                                         it did not crash
+
+    A '=' anywhere switches the whole call to pair parsing, so the two forms
+    cannot mix into an ambiguous half-state.
+    """
+    if not rest:
+        raise UsageError("set requires <cat> <on|off>, or <cat>=<on|off>[;...]")
+
+    if any("=" in tok for tok in rest):
+        pairs = []
+        for tok in rest:
+            for item in tok.split(";"):
+                item = item.strip()
+                if not item:
+                    continue
+                if "=" not in item:
+                    raise UsageError("expected <cat>=<on|off>, got %r" % item)
+                cat, _, state = item.partition("=")
+                cat = cat.strip()
+                if not cat:
+                    raise UsageError("missing category name in %r" % item)
+                pairs.append((cat, parse_onoff(state)))
+        if not pairs:
+            raise UsageError("set requires at least one <cat>=<on|off>")
+        return pairs
+
+    if len(rest) < 2:
+        raise UsageError("set requires <cat> <on|off> (got only %r)" % rest[0])
+    on = parse_onoff(rest[-1])
+    return [(cat, on) for cat in rest[:-1]]
+
+
+def parse_tail_args(rest):
+    """`tail` arguments -> (count, since). Accepts [n] [since=<seq>], any order.
+
+    The docstring has always advertised `since=<seq>`, but the old code ran
+    int(rest[0]) on whatever came first, so `tail since=42` died with a
+    ValueError traceback.
+    """
+    n = 100
+    since = None
+    seen_count = False
+    for tok in rest:
+        if tok.startswith("since="):
+            value = tok[len("since="):]
+            try:
+                since = int(value)
+            except ValueError:
+                raise UsageError("since= expects an integer sequence, got %r" % value)
+            continue
+        if seen_count:
+            raise UsageError("unexpected argument %r" % tok)
+        try:
+            n = int(tok)
+        except ValueError:
+            raise UsageError("tail expects a count, got %r" % tok)
+        seen_count = True
+    return n, since
+
+
 def main():
     ap = argparse.ArgumentParser(description="AetherSDR bridge log/observability helper")
     ap.add_argument("action", choices=["categories", "get", "set", "reset",
@@ -143,6 +233,25 @@ def main():
     ap.add_argument("--socket")
     ap.add_argument("--secs", type=float, default=3.0, help="watch duration")
     args = ap.parse_args()
+
+    # Validate arity BEFORE touching the bridge, so a typo costs a usage line
+    # rather than a socket connection and a traceback interleaved with whatever
+    # else is writing to the terminal (#4912).
+    try:
+        set_targets = parse_set_targets(args.rest) if args.action == "set" else []
+        tail_count, tail_since = (parse_tail_args(args.rest)
+                                  if args.action == "tail" else (100, None))
+        if args.action == "get":
+            if len(args.rest) != 1:
+                raise UsageError("get requires exactly one category")
+        if args.action == "mark" and not args.rest:
+            raise UsageError("mark requires the text to record")
+    except UsageError as exc:
+        sys.exit("error: %s\nusage: %s %s"
+                 % (exc, ap.prog,
+                    "categories | get <cat> | set <cat> <on|off> | "
+                    "set <cat>=<on|off>[;...] | reset | tail [n] [since=<seq>] | "
+                    "mark <text> | watch [cat ...]"))
 
     path = args.socket or discover_socket()
     if not path:
@@ -164,14 +273,14 @@ def main():
     elif args.action == "get":
         print(c.get(args.rest[0]))
     elif args.action == "set":
-        print(json.dumps(c.set(args.rest[0], args.rest[1].lower() in ("on", "true", "1"))))
+        for cat, on in set_targets:
+            print(json.dumps(c.set(cat, on)))
     elif args.action == "reset":
         print(json.dumps(c.reset()))
     elif args.action == "mark":
         print(json.dumps(c.mark(" ".join(args.rest))))
     elif args.action == "tail":
-        n = int(args.rest[0]) if args.rest else 100
-        for e in c.tail(n):
+        for e in c.tail(tail_count, tail_since):
             print(f"{e['seq']:>5} {e['mono_us']:>10} {e['lvl']} {e['cat']}: {e['msg']}")
 
 

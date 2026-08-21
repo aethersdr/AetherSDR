@@ -3,6 +3,7 @@
 #include "core/backends/hl2/Hl2Discovery.h"   // shared nickname + MAC->serial helpers
 #include "core/backends/icom/IcomCredentials.h"  // password -> OS keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
+#include "core/backends/icom/IcomModels.h"       // knownModels() -> the chooser's items
 #include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
 #include "core/NetworkPathResolver.h"
@@ -630,6 +631,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualLayout->setContentsMargins(0, 0, 0, 0);
     manualLayout->setSpacing(8);
     m_manualHintLabel = makeWrappedLabel(QString(), kHintLabelStyle);
+    m_manualHintLabel->setObjectName(QStringLiteral("connectionManualHintLabel"));
     manualLayout->addWidget(m_manualHintLabel);
 
     auto* manualGroup = new QGroupBox("Radio IP address", manualPage);
@@ -757,19 +759,73 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // no scope and no transmit — which reads as "this backend has no
     // panadapter yet" rather than "wrong address".
     //
-    // Blank is the normal case: the placeholder shows what will be used, which
-    // is the model the RS-BA1 handshake already named. Typing here is the
-    // override for a radio whose address has been changed from default.
+    // MOSTLY A DISPLAY, NOT AN INPUT — and that is the reframe that justifies a
+    // chooser at all. The connect path now asks the radio for its own address
+    // (a broadcast 0x19 0x00, which needs no model table and is right even when
+    // the address was changed ON the radio), so the operator does not have to
+    // know any of this. What the control buys is LEGIBILITY: it names the
+    // models, so "A2" stops being a number to look up, and picking one is a
+    // one-click shortcut for an operator who would rather be explicit.
+    //
+    // Non-editable, with a "Custom..." sentinel and a hidden hex row —
+    // populateSerialPortCombo()'s shape (RadioSetupDialog.cpp), MIRRORED rather
+    // than reused because that helper is serial-specific and behind
+    // HAVE_SERIALPORT. It is the closer of the two in-repo precedents:
+    // m_manualIpCombo above is an editable recent-values HISTORY, whereas this
+    // enumerates a known set and offers an escape hatch. That helper's own
+    // header records being factored out after two call sites reimplemented it
+    // "with a subtly different isCustom computation"; this is deliberately not
+    // the third.
+    m_manualIcomCivCombo = new QComboBox(manualGroup);
+    m_manualIcomCivCombo->setObjectName(QStringLiteral("connectionManualIcomCivCombo"));
+    m_manualIcomCivCombo->setAccessibleName(tr("Icom radio model"));
+    m_manualIcomCivCombo->setAccessibleDescription(
+        tr("Which Icom model to address, or Auto-detect to ask the radio for its own "
+           "CI-V address."));
+    AetherSDR::applyComboStyle(m_manualIcomCivCombo, comboExtraRules);
+    populateIcomCivCombo();
+    m_manualIcomCivRow = addManualRow(QStringLiteral("Icom CI-V:"), m_manualIcomCivCombo);
+
+    // The hex entry, kept for the radio whose address has been changed to
+    // something no model uses, and for a shared CI-V bus where the operator is
+    // selecting WHICH DEVICE rather than naming a model.
+    //
+    // The objectName is UNCHANGED and must stay so: the automation bridge and
+    // any UI test address this field by that name, and renaming it would break
+    // them silently rather than loudly.
     m_manualIcomCivEdit = new QLineEdit(manualGroup);
     m_manualIcomCivEdit->setObjectName(QStringLiteral("connectionManualIcomCivAddress"));
     m_manualIcomCivEdit->setAccessibleName(tr("Icom CI-V address"));
     m_manualIcomCivEdit->setAccessibleDescription(
         tr("The radio's CI-V address in hex, from MENU > SET > Connectors > CI-V. "
-           "Leave blank to use the address for the model the radio reports."));
+           "Only needed for a radio whose address has been changed, or to pick one "
+           "device on a shared CI-V bus."));
     m_manualIcomCivEdit->setClearButtonEnabled(true);
-    m_manualIcomCivEdit->setPlaceholderText(tr("auto (e.g. A2 for IC-9700)"));
+    m_manualIcomCivEdit->setPlaceholderText(tr("e.g. A2"));
     ThemeManager::instance().applyStyleSheet(m_manualIcomCivEdit, lineEditStyle);
-    m_manualIcomCivRow = addManualRow(QStringLiteral("Icom CI-V:"), m_manualIcomCivEdit);
+    m_manualIcomCivCustomRow =
+        addManualRow(QStringLiteral("CI-V address:"), m_manualIcomCivEdit);
+
+    // ⚠ AUTOMATION: THIS FIELD IS NOW HIDDEN UNTIL "Custom..." IS SELECTED, and
+    // the bridge refuses to drive a hidden widget — `invoke
+    // connectionManualIcomCivAddress setText A2` returns
+    // "refused: 'connectionManualIcomCivAddress' is not visible". Verified
+    // against a running build, not assumed.
+    //
+    // A script that sets this field must now select Custom first:
+    //     invoke connectionManualIcomCivCombo setCurrentText "Custom..."
+    //     invoke connectionManualIcomCivAddress setText A2
+    // …or, better, name the model and skip the hex entirely:
+    //     invoke connectionManualIcomCivCombo setCurrentText "IC-9700 — A2"
+    //
+    // The objectName is deliberately unchanged so that message names the field
+    // the script already knows, and the failure is LOUD rather than a silent
+    // no-op. An earlier revision of this tried to keep the old call working by
+    // selecting Custom from the field's own textChanged — which cannot fire,
+    // because the bridge's visibility check runs first. Removed rather than
+    // left in as a comment promising something it does not do.
+    connect(m_manualIcomCivCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { syncIcomCivCustomRow(); });
 
     // One column, set from the widest label. Rows that are hidden for a family
     // still count: the Icom rows appear and disappear as the operator changes
@@ -1239,6 +1295,9 @@ void ConnectionPanel::clearPendingIcomCredentials()
 {
     m_pendingIcomPassword.clear();
     m_pendingIcomHost.clear();
+    m_pendingIcomResolvedHost.clear();
+    m_pendingIcomBindSettings = RadioBindSettings{};
+    m_pendingIcomSessionBindAddress.clear();
 }
 
 void ConnectionPanel::setConnected(bool connected)
@@ -1256,8 +1315,24 @@ void ConnectionPanel::setConnected(bool connected)
     if (connected && !m_pendingIcomPassword.isEmpty()
         && currentManualFamily() == QLatin1String(kFamilyIcom)) {
         IcomCredentials::save(m_pendingIcomPassword);
-        if (!m_pendingIcomHost.isEmpty())
+        if (!m_pendingIcomHost.isEmpty()) {
             IcomSettings::setLastHost(m_pendingIcomHost);
+            // The routed profile restores the family and source path for this
+            // address at the next launch. Icom cannot be probed anonymously,
+            // so commit it only after the authenticated session proves the
+            // host and credentials together.
+            saveManualProfile(m_pendingIcomHost,
+                              m_pendingIcomBindSettings,
+                              m_pendingIcomSessionBindAddress);
+            if (m_pendingIcomResolvedHost != m_pendingIcomHost) {
+                // MainWindow retains the resolved address in LastRoutedRadioIp.
+                // Mirror the profile under that key as well so a hostname such
+                // as ic-705.local still restores the Icom family at startup.
+                saveManualProfile(m_pendingIcomResolvedHost,
+                                  m_pendingIcomBindSettings,
+                                  m_pendingIcomSessionBindAddress);
+            }
+        }
     }
     if (!connected || !m_pendingIcomPassword.isEmpty()) {
         // Cleared on BOTH edges: a failed attempt must not commit on the next
@@ -2049,6 +2124,95 @@ void ConnectionPanel::setManualFamily(const QString& family)
     updateManualFamilyHints();
 }
 
+// Build the model list, and select what the settings say.
+//
+// FROM knownModels(), never hand-typed, so the list cannot drift from the table
+// the backend decodes against. A model added there appears here for free —
+// which is the point, given the table is where the IC-7760 row is missing.
+void ConnectionPanel::populateIcomCivCombo()
+{
+    if (!m_manualIcomCivCombo)
+        return;
+    const QSignalBlocker block(m_manualIcomCivCombo);
+    m_manualIcomCivCombo->clear();
+
+    // FIRST, and the default. Auto-detect is measured working on both lab
+    // radios, needs no table, and is correct when the address was changed on the
+    // radio — so it is the right thing for an operator who has never heard of
+    // CI-V to land on without touching anything.
+    m_manualIcomCivCombo->addItem(tr("Auto-detect (recommended)"),
+                                  QStringLiteral("__auto__"));
+    for (const auto& model : AetherSDR::icom::knownModels()) {
+        // ONLY RADIOS THIS PAGE CAN ACTUALLY DIAL.
+        //
+        // `hasNetwork` false means CI-V only — a serial port, or Icom's own
+        // RS-BA1 *server* software on a PC acting as a front end. The IC-7300 is
+        // the one such row today, and offering it here would invite an operator
+        // with a USB-only IC-7300 to pick it and get a connect timeout on a page
+        // whose whole premise is "you already know the radio's IP".
+        //
+        // The server-fronted case is not lost: that session's address is still
+        // the radio's 0x94, reachable through `Custom...`. It is the rarer path
+        // and the one where auto-detect by NAME cannot help anyway, because the
+        // handshake names the server rather than the radio behind it.
+        if (!model.hasNetwork)
+            continue;
+        const QString name = QString::fromUtf8(model.name.data(),
+                                               static_cast<int>(model.name.size()));
+        const QString hex =
+            QStringLiteral("%1").arg(model.civAddress, 2, 16, QLatin1Char('0')).toUpper();
+        // "%1 — %2" is populateSerialPortCombo's own label idiom, with the raw
+        // value in userData so the read-back never has to re-parse the label.
+        m_manualIcomCivCombo->addItem(QStringLiteral("%1 — %2").arg(name, hex), hex);
+    }
+    // TRAILING sentinel, and the read-back below relies on it being last.
+    m_manualIcomCivCombo->addItem(tr("Custom..."), QStringLiteral("__custom__"));
+
+    const QSignalBlocker blockEdit(m_manualIcomCivEdit);
+    switch (IcomSettings::civSelection()) {
+    case IcomSettings::CivSelection::Auto:
+        m_manualIcomCivCombo->setCurrentIndex(0);
+        break;
+    case IcomSettings::CivSelection::Model:
+    case IcomSettings::CivSelection::Custom: {
+        const QString hex = QStringLiteral("%1")
+                                .arg(IcomSettings::civAddress(), 2, 16, QLatin1Char('0'))
+                                .toUpper();
+        int found = -1;
+        for (int i = 1; i < m_manualIcomCivCombo->count() - 1; ++i) {
+            if (m_manualIcomCivCombo->itemData(i).toString() == hex) {
+                found = i;
+                break;
+            }
+        }
+        // A SAVED VALUE THAT MATCHES NO ITEM FALLS BACK TO Custom... WITH THE
+        // EDIT PRE-FILLED, rather than being silently dropped — which is exactly
+        // the changed-CI-V-address case this field exists for, and the one a
+        // naive "select it or give up" would throw away on every restart.
+        if (found >= 0 && IcomSettings::civSelection()
+                              == IcomSettings::CivSelection::Model) {
+            m_manualIcomCivCombo->setCurrentIndex(found);
+        } else {
+            m_manualIcomCivCombo->setCurrentIndex(m_manualIcomCivCombo->count() - 1);
+            if (m_manualIcomCivEdit)
+                m_manualIcomCivEdit->setText(hex);
+        }
+        break;
+    }
+    }
+    syncIcomCivCustomRow();
+}
+
+void ConnectionPanel::syncIcomCivCustomRow()
+{
+    if (!m_manualIcomCivCombo || !m_manualIcomCivCustomRow)
+        return;
+    const bool icom = currentManualFamily() == QLatin1String(kFamilyIcom);
+    const bool custom =
+        m_manualIcomCivCombo->currentData().toString() == QLatin1String("__custom__");
+    m_manualIcomCivCustomRow->setVisible(icom && custom);
+}
+
 void ConnectionPanel::updateManualFamilyHints()
 {
     const QString family = currentManualFamily();
@@ -2063,6 +2227,9 @@ void ConnectionPanel::updateManualFamilyHints()
         m_manualIcomPassRow->setVisible(icom);
     if (m_manualIcomCivRow)
         m_manualIcomCivRow->setVisible(icom);
+    // The hex row has a second condition — "Custom..." — so it gets the shared
+    // helper rather than a copy of the visibility rule.
+    syncIcomCivCustomRow();
 
     if (icom) {
         // Fill from settings, and read the password out of the keychain — which
@@ -2071,15 +2238,26 @@ void ConnectionPanel::updateManualFamilyHints()
         // between the request and the answer.
         if (m_manualIcomUserEdit && m_manualIcomUserEdit->text().isEmpty())
             m_manualIcomUserEdit->setText(IcomSettings::username());
-        // Show a stored override; leave blank when it is the default, so the
-        // placeholder can say "auto" rather than presenting A4 as a choice the
-        // operator made.
-        if (m_manualIcomCivEdit && m_manualIcomCivEdit->text().isEmpty()) {
-            const std::uint8_t civ = IcomSettings::civAddress();
-            if (civ != IcomSettings::kDefaultCivAddress)
-                m_manualIcomCivEdit->setText(
-                    QStringLiteral("%1").arg(civ, 2, 16, QLatin1Char('0')).toUpper());
-        }
+        // The chooser answers this now. Rebuilt rather than left alone so a
+        // settings change made elsewhere in the session is reflected, and
+        // because the selection is what decides whether the hex row is showing.
+        //
+        // EXCEPT over an address the operator is still typing. This function is
+        // reached from setManualFamily(), which applySavedSourceSelection()
+        // calls when a recent host is picked from the dropdown — so selecting
+        // "Custom...", typing an address and then choosing an IP rebuilt the
+        // chooser from settings, reset it to Auto, hid the row and discarded the
+        // entry with nothing said. The sibling user / password / IP fills below
+        // have always guarded on isEmpty() for exactly this reason; the chooser
+        // is a combo rather than a line edit, so its "unsaved work in progress"
+        // is the Custom hex field standing open with something in it.
+        const bool customEntryInFlight =
+            m_manualIcomCivCombo
+            && m_manualIcomCivCombo->currentData().toString()
+                   == QLatin1String("__custom__")
+            && m_manualIcomCivEdit && !m_manualIcomCivEdit->text().isEmpty();
+        if (!customEntryInFlight)
+            populateIcomCivCombo();
         if (m_manualIpEdit && m_manualIpEdit->text().isEmpty())
             m_manualIpEdit->setText(IcomSettings::lastHost());
         if (m_manualIcomPassEdit && m_manualIcomPassEdit->text().isEmpty()) {
@@ -2092,20 +2270,19 @@ void ConnectionPanel::updateManualFamilyHints()
     }
 
     if (m_manualHintLabel) {
+        const QString passwordStorageHint = IcomCredentials::persistentStoreAvailable()
+            ? QStringLiteral(
+                  "The password is stored in your operating system keychain, never in the "
+                  "settings file.")
+            : QStringLiteral(
+                  "This build has no QtKeychain support, so the password is kept for this "
+                  "session only.");
         m_manualHintLabel->setText(
             icom
                 ? QStringLiteral(
-                      "Enter the radio address and the network user name and password set on "
-                      "the radio itself. On the radio, Network Control must be ON (IC-705: "
-                      "Menu > Set > WLAN set > Remote settings). The password is stored in "
-                      "your operating system keychain, never in the settings file.\n\n"
-                      "TO TRANSMIT, the radio must also be told to take its modulation from "
-                      "the network. Under Menu > Set > Connectors > MOD Input, set BOTH:\n"
-                      "    \u2022  DATA OFF MOD \u2192 WLAN  (SSB, CW, AM, FM \u2014 voice)\n"
-                      "    \u2022  DATA MOD \u2192 WLAN  (FT8 and other data modes)\n"
-                      "Each covers a different set of modes, so setting only one leaves the "
-                      "other silent. If either is left on MIC or USB the radio ignores the "
-                      "audio AetherSDR sends: it keys, makes no power, and reports no error.")
+                      "Enter the radio address and the network user name and password "
+                      "configured for network control. %1")
+                      .arg(passwordStorageHint)
                 : hl2
                 ? QStringLiteral(
                       "Use this path when discovery broadcasts cannot reach the radio — a VPN, a "
@@ -2118,7 +2295,7 @@ void ConnectionPanel::updateManualFamilyHints()
     }
     if (m_manualIpEdit) {
         m_manualIpEdit->setPlaceholderText(
-            icom ? QStringLiteral("Example: ic-705.local")
+            icom ? QStringLiteral("Example: radio.local or 192.168.1.90")
           : hl2  ? QStringLiteral("Example: 192.168.1.21")
                  : QStringLiteral("Example: 10.0.0.25"));
     }
@@ -2214,22 +2391,23 @@ void ConnectionPanel::onManualAdvancedToggled(bool checked)
     m_manualAdvancedWidget->setVisible(checked);
 }
 
-void ConnectionPanel::probeRadio(const QString& ip)
+void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 {
     const QString trimmedIp = ip.trimmed();
     if (trimmedIp.isEmpty())
         return;
 
-    // NOT the family, on either branch. By the time we are probing, the Radio
-    // type combo says what the operator wants spoken at this address — whether
-    // they picked it themselves or `activated` restored it when they chose the
-    // address. Letting the saved profile win here would overrule a deliberate
-    // change made after the address was entered.
+    // Interactive and automation probes keep the family currently selected by
+    // the operator. Startup is the exception: it has no current operator
+    // choice, so restoreSavedFamily asks the retained route which wire protocol
+    // belongs to the saved address.
     if (m_manualIpEdit->text().trimmed() != trimmedIp) {
         m_manualIpEdit->setText(trimmedIp);
-        applySavedSourceSelection(trimmedIp, /*restoreFamily=*/false);
+        applySavedSourceSelection(trimmedIp, restoreSavedFamily);
     } else if (m_manualProfileIp != trimmedIp) {
-        applySavedSourceSelection(trimmedIp, /*restoreFamily=*/false);
+        applySavedSourceSelection(trimmedIp, restoreSavedFamily);
+    } else if (restoreSavedFamily) {
+        applySavedSourceSelection(trimmedIp, /*restoreFamily=*/true);
     }
 
     bool staleSelection = false;
@@ -2276,13 +2454,51 @@ void ConnectionPanel::probeRadio(const QString& ip)
             user = IcomSettings::username();
         if (pass.isEmpty())
             pass = IcomCredentials::sessionPassword();
-        if (user.isEmpty() || pass.isEmpty()) {
+        if (user.isEmpty()) {
             resetManualConnectButton();
             setManualMessage(
                 QStringLiteral("An Icom needs the network user name and password set on the "
                                "radio. Check Network Control is ON in the radio's menu, then "
                                "enter the same credentials here."),
                 true);
+            return;
+        }
+        if (pass.isEmpty()) {
+            // Keychain reads are asynchronous. Startup auto-connect reaches
+            // this path on a fixed timer, so relying on the dialog's earlier
+            // best-effort read races a locked or merely slow macOS Keychain.
+            // Finish the read here and resume the same family-selected probe;
+            // the synchronous connect path itself remains keychain-free.
+            const QString requestedHost = trimmedIp;
+            setManualMessage(QStringLiteral("Loading the saved Icom password…"));
+            QPointer<ConnectionPanel> panel(this);
+            IcomCredentials::load(this, [panel, requestedHost](const QString& password) {
+                if (!panel) {
+                    return;
+                }
+                if (panel->currentManualFamily() != QLatin1String(kFamilyIcom)
+                    || !panel->m_manualIpEdit
+                    || panel->m_manualIpEdit->text().trimmed() != requestedHost) {
+                    panel->resetManualConnectButton();
+                    panel->m_manualConnectPending = false;
+                    return;
+                }
+                if (password.isEmpty()) {
+                    panel->resetManualConnectButton();
+                    panel->setManualMessage(
+                        QStringLiteral(
+                            "No saved Icom password is available. Enter the network password "
+                            "set on the radio, then connect once to remember it."),
+                        true);
+                    panel->m_manualConnectPending = false;
+                    return;
+                }
+                if (panel->m_manualIcomPassEdit
+                    && panel->m_manualIcomPassEdit->text().isEmpty()) {
+                    panel->m_manualIcomPassEdit->setText(password);
+                }
+                panel->probeRadio(requestedHost);
+            });
             return;
         }
 
@@ -2293,39 +2509,54 @@ void ConnectionPanel::probeRadio(const QString& ip)
         // a wrong CI-V address is silent (the radio simply never answers), so
         // guessing on the operator's behalf would hide their typo behind the
         // exact symptom this field exists to cure.
-        if (m_manualIcomCivEdit) {
-            QString civ = m_manualIcomCivEdit->text().trimmed();
-            if (civ.isEmpty()) {
-                // BLANK MEANS AUTO, and it has to mean that on the way OUT as
-                // well as in. Without this an override could be typed but never
-                // taken back: clearing the field left the stored value in place
-                // and the placeholder then said "auto" while the radio was
-                // still being addressed at the old override. Restores the
-                // default rather than writing 0, so civAddress() has a real
-                // address to fall back on.
-                IcomSettings::setCivAddress(IcomSettings::kDefaultCivAddress);
-            } else {
-                if (civ.startsWith(QLatin1String("0x"), Qt::CaseInsensitive))
-                    civ = civ.mid(2);
-                if (civ.endsWith(QLatin1Char('h'), Qt::CaseInsensitive))
-                    civ.chop(1);
-                bool ok = false;
-                const uint addr = civ.toUInt(&ok, 16);
-                if (ok && addr > 0 && addr <= 0xFF) {
-                    IcomSettings::setCivAddress(static_cast<std::uint8_t>(addr));
+        // WITH A NON-EDITABLE COMBO THE READ-BACK IS UNAMBIGUOUS: branch on
+        // currentData(), which is the raw value the item was built with. The old
+        // single-field form had to infer intent from an empty string, and could
+        // not tell "the operator chose A4" from "nobody chose anything" at all.
+        if (m_manualIcomCivCombo) {
+            const QString sel = m_manualIcomCivCombo->currentData().toString();
+            if (sel == QLatin1String("__auto__")) {
+                // NOTHING IS WRITTEN AS AN ADDRESS. Detected is not chosen: an
+                // auto-detected value persisted as though it had been typed
+                // would turn this session's radio into next session's pin, and
+                // "auto" would survive exactly one connect.
+                IcomSettings::setCivAddressAuto();
+            } else if (sel != QLatin1String("__custom__")) {
+                // A PICKED MODEL is a shortcut for an address, so the radio's
+                // own 0x19 0x00 reply may correct it — see IcomSettings.h.
+                bool okPick = false;
+                const uint picked = sel.toUInt(&okPick, 16);
+                if (okPick && picked > 0 && picked <= 0xFF)
+                    IcomSettings::setCivAddressFromModel(static_cast<std::uint8_t>(picked));
+            } else if (m_manualIcomCivEdit) {
+                QString civ = m_manualIcomCivEdit->text().trimmed();
+                if (civ.isEmpty()) {
+                    // "Custom..." with nothing in it is not a choice. Fall back to
+                    // auto rather than to a stale value the operator just cleared.
+                    IcomSettings::setCivAddressAuto();
                 } else {
-                    // SAY SO rather than connecting with something else. This
-                    // field exists because a wrong CI-V address fails SILENTLY
-                    // — the radio just never answers — so silently ignoring bad
-                    // input reproduces the exact symptom the field is here to
-                    // cure, and the operator would be left reading a "no reply"
-                    // that their typo caused.
-                    setStatusText(tr("CI-V address \"%1\" is not a hex byte "
-                                     "(try A2, 0xA2 or A2h) — not connecting.")
-                                      .arg(m_manualIcomCivEdit->text().trimmed()));
-                    m_manualIcomCivEdit->setFocus();
-                    m_manualIcomCivEdit->selectAll();
-                    return;
+                    if (civ.startsWith(QLatin1String("0x"), Qt::CaseInsensitive))
+                        civ = civ.mid(2);
+                    if (civ.endsWith(QLatin1Char('h'), Qt::CaseInsensitive))
+                        civ.chop(1);
+                    bool ok = false;
+                    const uint addr = civ.toUInt(&ok, 16);
+                    if (ok && addr > 0 && addr <= 0xFF) {
+                        IcomSettings::setCivAddress(static_cast<std::uint8_t>(addr));
+                    } else {
+                        // SAY SO rather than connecting with something else. This
+                        // field exists because a wrong CI-V address fails SILENTLY
+                        // — the radio just never answers — so silently ignoring bad
+                        // input reproduces the exact symptom the field is here to
+                        // cure, and the operator would be left reading a "no reply"
+                        // that their typo caused.
+                        setStatusText(tr("CI-V address \"%1\" is not a hex byte "
+                                         "(try A2, 0xA2 or A2h) — not connecting.")
+                                          .arg(m_manualIcomCivEdit->text().trimmed()));
+                        m_manualIcomCivEdit->setFocus();
+                        m_manualIcomCivEdit->selectAll();
+                        return;
+                    }
                 }
             }
         }
@@ -2347,6 +2578,11 @@ void ConnectionPanel::probeRadio(const QString& ip)
         IcomCredentials::setSessionPassword(pass);
         m_pendingIcomHost = trimmedIp;
         m_pendingIcomPassword = pass;
+        m_pendingIcomBindSettings = bindSettings;
+        m_pendingIcomSessionBindAddress =
+            bindSettings.mode == RadioBindMode::Explicit
+                ? bindSettings.bindAddress
+                : QHostAddress();
 
         // RESOLVE FIRST. QHostAddress parses NUMERIC addresses only — given a
         // host name it yields a null address SILENTLY, and the connect then
@@ -2367,6 +2603,7 @@ void ConnectionPanel::probeRadio(const QString& ip)
             }
             resolved = hostInfo.addresses().first();
         }
+        m_pendingIcomResolvedHost = resolved.toString();
 
         RadioInfo info;
         info.family   = QString::fromLatin1(kFamilyIcom);
@@ -2379,6 +2616,13 @@ void ConnectionPanel::probeRadio(const QString& ip)
         // the restore/persist scope keys off it.
         info.serial   = QStringLiteral("icom:%1").arg(resolved.toString());
         info.nickname = info.model;
+        // Manual Icom sessions use the same retention path as routed Flex and
+        // HL2 sessions. Without this marker MainWindow removes
+        // LastRoutedRadioIp immediately, so the startup checkbox has no host to
+        // reconnect to even though LastConnectedRadioSerial was retained.
+        info.isRouted           = true;
+        info.bindSettings       = bindSettings;
+        info.sessionBindAddress = m_pendingIcomSessionBindAddress;
         rememberManualIp(trimmedIp);
         resetManualConnectButton();
         emit connectRequested(info);

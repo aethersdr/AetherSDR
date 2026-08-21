@@ -2,7 +2,7 @@
 //
 // That decoupling is the whole point of the display-rate shaper: without it the
 // rate defaults to the IQ sample rate over the FFT size, so zooming out speeds
-// the display up and zooming in slows it down. HERMES.md documents the shaper as
+// the display up and zooming in slows it down. docs/HERMES.md documents the shaper as
 // delivering a span-independent rate, but the first implementation emptied the
 // FFT accumulator whenever an interval was skipped — and refilling it costs
 // ~fftSize/126 EP6 blocks, which is 23.6 ms at 48 kHz against 3.0 ms at 384 kHz.

@@ -425,7 +425,7 @@ private:
     // Opus audio decoder (lazy-initialized on first Opus packet)
     OpusCodec* m_opusCodec{nullptr};
 
-    // DAX stream routing: stream ID → DAX channel (1-4)
+    // DAX stream routing: stream ID → DAX channel (1-8)
     QMap<quint32, int> m_daxStreamIds;
     // Centralized DAX RX channel ownership (#3305), guarded by m_streamMutex.
     // `generation` invalidates in-flight deferred removal/recreate lambdas

@@ -157,8 +157,9 @@ int main()
             Mac, Out, Pan, dev({48000}, {F}),
             true, 48000, F, ResamplerKind::PreservePan, 2, true, FormatPreference::Int16First});
 
-    // ── macOS Bluetooth-HFP mic: native low rate first, NOT forced to 48k
-    //    (#2615). preferred-first puts 16k ahead of the 48k ladder. ───────────
+    // ── macOS Bluetooth-HFP mic: open the native low rate first (#2615).
+    //    preferred-first puts 16k ahead of the 48k device ladder; downstream
+    //    voice DSP still normalizes the captured signal to its own 48k domain. ─
     {
         DeviceCaps c = dev({8000, 16000, 24000}, {I});
         c.isBluetoothHfp = true;
@@ -180,9 +181,14 @@ int main()
                 true, 16000, I, ResamplerKind::PreservePan, 2, false});
     }
 
-    // ── Linux mic standard: native 24k, no resample ──────────────────────────
-    runRow({"std mic / Linux / TX -> 24k native", Lin, In, Pan, dev({24000, 48000}, {I}),
-            true, 24000, I, ResamplerKind::None, 2, false});
+    // ── Linux mic: 48k first so the TX voice strip skips its ingress SRC ──────
+    // The 48 kHz DSP domain makes 48k capture the conversion-free choice; a
+    // 24k-capable device must no longer win the first rung.
+    runRow({"std mic / Linux / TX -> 48k native", Lin, In, Pan, dev({24000, 48000}, {I}),
+            true, 48000, I, ResamplerKind::PreservePan, 2, false});
+    // A mic that cannot do 48k still falls back to 24k rather than failing.
+    runRow({"24k-only mic / Linux / TX -> falls back to 24k", Lin, In, Pan, dev({24000}, {I}),
+            true, 24000, I, ResamplerKind::None, 2, true});
 
     // ── Windows mic: probe-at-open, 48k first (#2929) ─────────────────────────
     {

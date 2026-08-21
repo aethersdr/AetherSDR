@@ -86,6 +86,40 @@ public:
     void floatContainer(const QString& id);
     void dockContainer(const QString& id);
 
+    // ── Canvas transitions (RFC #4887 phase 3) ───────────────────
+    //
+    // The third placement: the container becomes a child of a
+    // WorkspaceCanvas, which owns its geometry from then on.
+    //
+    // These mirror float/dock deliberately — same detach-and-remember
+    // step, same #2495 RHI guard, same restore-to-the-original-slot on
+    // the way back.  The failure modes are identical, and a second,
+    // subtly different reparent path is how the float/dock crash
+    // lineage (#2495, #4319, #4617) got as long as it did.
+    //
+    // detachForCanvas() takes the container out of its panel slot and
+    // hands it back for the caller to place — the canvas needs a rect,
+    // which is workspace state this class does not own.  Returns
+    // nullptr for an unknown id or one already on a canvas.  A
+    // FLOATING container is docked first, so "float, then canvas" is
+    // not a special case anyone has to remember.
+    ContainerWidget* detachForCanvas(const QString& id);
+
+    // Put it back in the slot it left, exactly as dockContainer() does
+    // after a float.  The caller has already taken it off the canvas
+    // (WorkspaceCanvas::takeItem()).
+    void returnFromCanvas(const QString& id, ContainerWidget* c);
+
+    // The manager's one hook into whoever owns the canvas.  When a
+    // canvas-mode container asks to dock (title-bar button) or must leave
+    // the canvas before floating, the manager calls this to have the
+    // controller take the item off the canvas and hand the container back
+    // through returnFromCanvas().  Kept as a callback rather than a
+    // signal because the transition must complete synchronously — a
+    // float that queued the eviction would reparent a widget the canvas
+    // still owns.
+    void setCanvasEvictor(std::function<void(const QString&)> evictor);
+
     // Follow the main-window frameless setting for all active floating windows.
     void setFramelessMode(bool on);
 
@@ -134,9 +168,18 @@ private:
 
     void wireContainer(ContainerWidget* container);
 
+    // The two halves every placement transition shares: remember and leave
+    // the current slot, and return to the remembered one.  Factored out when
+    // the canvas became a third placement — float/dock and canvas/panel are
+    // the same reparent with a different destination, and keeping one
+    // implementation is what stops them drifting apart.
+    void detachFromCurrentSlot(const QString& id, ContainerWidget* c);
+    void restoreToOriginalSlot(const QString& id, ContainerWidget* c);
+
     QMap<QString, QPointer<ContainerWidget>> m_containers;
     QMap<QString, FloatingContainerWindow*> m_floatingWindows;
     QMap<QString, ContentFactory>           m_factories;
+    std::function<void(const QString&)>     m_canvasEvictor;
     QMap<QString, Meta>                     m_meta;
 
     // True only while restoreState() is replaying saved state, so saveState()

@@ -596,6 +596,38 @@ void MetisClient::setTxDriveLevel(int level)
     m_oneShot.push_back(m_ccTxDrive);
 }
 
+void MetisClient::setCwKeyDown(bool down)
+{
+    // Refuse the carrier at the same final wire authority that refuses MOX.
+    // Do not even latch a pending down edge: opening the gate later must never
+    // turn an earlier refused request into RF.
+    if (down && !m_txAllowed) {
+        return;
+    }
+    if (!down && !m_cwMode) {
+        return;
+    }
+    if (down && !m_cwMode) {
+        // CW owns the IQ stream until PTT drops. Voice already queued behind a
+        // manual MOX must not leak into the spaces between elements.
+        m_txIq.clear();
+        m_cwEnvelope = 0.0;
+    }
+    m_cwMode = true;
+    m_cwKeyDown = down;
+}
+
+void MetisClient::clearCwKeying()
+{
+    m_cwMode = false;
+    m_cwKeyDown = false;
+    m_cwEnvelope = 0.0;
+    // Anything captured while CW owned the stream is stale by definition.
+    // Dropping it here prevents an explicit CW-mode exit under a still-keyed
+    // manual PTT from releasing old microphone audio onto the wire.
+    m_txIq.clear();
+}
+
 void MetisClient::queueTxIq(std::span<const std::complex<float>> iq)
 {
     for (const auto& s : iq)
@@ -656,7 +688,27 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     // Only put samples on the wire while actually keyed. Unkeyed frames carry
     // transmit silence, which is what ep2Packet's zero fill already gives us --
     // and which also keeps EADDR zero (see ep2WriteTxIq).
-    if (keyed && m_toneAmp > 0.0) {
+    if (keyed && m_cwMode) {
+        // piHPSDR's local/PC keyer likewise transmits host-generated IQ under
+        // MOX. Five milliseconds is long enough to suppress key clicks while
+        // staying short against a 40 ms dit at 30 WPM. A raised cosine has zero
+        // slope at both ends, unlike a linear edge.
+        constexpr double kCwCarrierAmplitude = 0.5;
+        constexpr int kCwRampSamples = 5 * kEp2AudioRateHz / 1000;
+        constexpr double kRampStep = 1.0 / static_cast<double>(kCwRampSamples);
+        constexpr double kPi = 3.14159265358979323846;
+        std::vector<std::complex<float>> block(kTxSamplesPerPacket);
+        for (std::complex<float>& sample : block) {
+            if (m_cwKeyDown) {
+                m_cwEnvelope = std::min(1.0, m_cwEnvelope + kRampStep);
+            } else {
+                m_cwEnvelope = std::max(0.0, m_cwEnvelope - kRampStep);
+            }
+            const double shaped = 0.5 - 0.5 * std::cos(kPi * m_cwEnvelope);
+            sample = {static_cast<float>(kCwCarrierAmplitude * shaped), 0.0f};
+        }
+        ep2WriteTxIq(pkt, block);
+    } else if (keyed && m_toneAmp > 0.0) {
         // EP2 is clocked at a fixed 48 kHz regardless of the RX sample rate.
         std::vector<std::complex<float>> block(kTxSamplesPerPacket);
         const double dphi = 2.0 * 3.14159265358979323846 * m_toneHz / kEp2AudioRateHz;

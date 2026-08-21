@@ -52,6 +52,10 @@ public:
     // monotonic guard across a reconnect. (#3949)
     void resetDrainWatch();
     void setSpeed(int wpm);
+    // Adopt a radio-authoritative speed without emitting a command back to the
+    // radio. Used by non-Flex keyers after their connect-time readback.
+    void adoptSpeed(int wpm);
+    void setSpeedModifiersEnabled(bool enabled) { m_speedModifiersEnabled = enabled; }
     void setDelay(int ms);
     void setSpeedStep(int step);
     void setQsk(bool on);
@@ -93,6 +97,7 @@ signals:
     // See handleSendReply(). (#3949)
     void replyCommandReady(const QString& cmd, int epoch, int nChars);
     void speedChanged(int wpm);
+    void speedCommandIssued(int wpm);
     void speedStepChanged(int step);
     void delayChanged(int ms);
     void qskChanged(bool on);
@@ -122,6 +127,7 @@ private:
     int     m_pendingWpmEchoes{0};
     bool    m_qsk{false};
     bool    m_live{false};
+    bool    m_speedModifiersEnabled{true};
     int     m_sentIndex{-1};
     int     m_nextBlock{1};
     int     m_cwxEndIndex{-1};   // radio_index to watch for; -1 = not tracking

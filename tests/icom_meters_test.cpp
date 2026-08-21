@@ -5,12 +5,17 @@
 // synthetic clock, which is the only practical way to prove the in-flight and
 // user-guard rules.
 
+#include "core/backends/icom/CivCodec.h"
 #include "core/backends/icom/IcomMeters.h"
 #include "core/backends/icom/IcomModels.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <span>
+#include <string>
+#include <string_view>
 
 using namespace AetherSDR::icom;
 
@@ -87,6 +92,12 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Power, 255, kS9DbmHf), 12.0), "raw 255 is 12 W, above rated");
     check(meterValue(MeterId::Power, 240, kS9DbmHf) > 10.0, "and the region between is reachable");
 
+    // Same CI-V addresses, different radio-specific faces.
+    check(near(meterValue(MeterId::Power, 143, kS9DbmHf, 0xB6), 50.0),
+          "IC-7300MK2 raw 143 is 50 W");
+    check(near(meterValue(MeterId::Power, 213, kS9DbmHf, 0xB6), 100.0),
+          "IC-7300MK2 raw 213 is its rated 100 W");
+
     check(near(meterValue(MeterId::Swr, 0, 0), 1.0), "SWR 1.0 at zero");
     check(near(meterValue(MeterId::Swr, 48, 0), 1.5), "SWR 1.5");
     check(near(meterValue(MeterId::Swr, 120, 0), 3.0), "SWR 3.0");
@@ -98,6 +109,10 @@ static void testPowerAndOthers()
     check(near(meterValue(MeterId::Comp, 130, 0), 15.0), "COMP 15 dB");
     check(near(meterValue(MeterId::Vd, 75, 0), 5.0), "Vd 5 V");
     check(near(meterValue(MeterId::Id, 121, 0), 2.0), "Id 2 A");
+    check(near(meterValue(MeterId::Vd, 13, 0, 0xB6), 10.0),
+          "IC-7300MK2 Vd uses its desktop calibration");
+    check(near(meterValue(MeterId::Id, 97, 0, 0xB6), 10.0),
+          "IC-7300MK2 Id uses its 25 A face");
 
     // ALC full scale is 120, NOT 255 — the guide says so. Scaling by 255 makes
     // a fully-driven ALC read 47%.
@@ -219,6 +234,8 @@ static void testModelTable()
     check(ic705 && ic705->scopePoints == 475 && ic705->scopeMaxAmplitude == 160,
           "475 points, 0..160 — straight from Icom's CI-V guide");
     check(ic705 && ic705->receivers == 1 && ic705->hasWifi, "one receiver, WiFi");
+    check(ic705 && ic705->hasVfoModeCommand,
+          "and its official guide verifies selected-VFO 26 00 mode/DATA/filter");
 
     // Geometry genuinely varies, which is why it cannot be a compile-time
     // constant shared across models.
@@ -226,6 +243,21 @@ static void testModelTable()
     check(ic7610 && ic7610->scopePoints == 689 && ic7610->scopeMaxAmplitude == 200,
           "the IC-7610 has a DIFFERENT scope geometry");
     check(ic7610 && !ic7610->verified, "and is honestly marked unverified");
+    check(ic7610 && !ic7610->hasVfoModeCommand,
+          "so it does not inherit the IC-705's selected-VFO 26 00 shape");
+
+    // The IC-9700 is the case that shows the two claims are independent. Its
+    // scope geometry is still ASSUMED from the IC-705, so `verified` stays
+    // false — but its 26 00 shape was read off the radio, so the DATA-capable
+    // flag is true. Without the flag, selecting FM-D falls to the legacy 06
+    // branch, which sends no DATA byte and takes the radio back OUT of data
+    // mode — the failure #4931 reported, on the radio that reported it.
+    const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    check(ic9700 != nullptr, "the IC-9700 is in the table");
+    check(ic9700 && !ic9700->verified,
+          "its geometry is cross-referenced, not confirmed against its own guide");
+    check(ic9700 && ic9700->hasVfoModeCommand,
+          "yet its measured 26 00 mode/DATA/filter shape is attested independently");
 
     // Six-byte frequencies. A codec against a hardcoded 5 misaligns by two
     // bytes and decodes a plausible-looking wrong frequency.
@@ -246,6 +278,8 @@ static void testModelTable()
     check(mk2 && mk2->hasNetwork, "and unlike the original IC-7300 it HAS a network transport");
     check(mk2 && !mk2->hasWifi, "Ethernet, not WiFi — the IC-705 is the WiFi one");
     check(mk2 && mk2->verified, "its numbers came from its own Icom CI-V guide");
+    check(mk2 && mk2->hasVfoModeCommand,
+          "including its selected-VFO 26 00 mode/DATA/filter command");
     check(mk2 && mk2->scopePoints == 475 && mk2->scopeMaxAmplitude == 160,
           "475 points, 0..160");
     check(mk2 && mk2->tuningMaxHz == 74'800'000ULL, "0.03 to 74.8 MHz");
@@ -262,6 +296,76 @@ static void testModelTable()
     check(modelForCivAddress(0x01) == nullptr,
           "an unrecognised address resolves to nothing — a normal outcome, not an error");
     check(!knownModels().empty(), "the table is populated");
+    if (ic9700) {
+        // ONE TABLE, TWO CONSUMERS. The tune guard and the published PA
+        // ceilings describe the same three RF decks, so they are read from the
+        // same rows — and this is the assertion that keeps them that way. A
+        // future edit that widened a range for power but not for tuning (or
+        // the reverse) used to be invisible; now it fails here.
+        const std::span<const IcomBand> bands = bandsFor(*ic9700);
+        check(bands.size() == 3, "the IC-9700 declares three RF decks");
+        for (const IcomBand& band : bands) {
+            check(supportsFrequency(*ic9700, band.lowHz)
+                      && supportsFrequency(*ic9700, band.highHz),
+                  "every declared IC-9700 power band is tunable end to end");
+            check(band.maxWatts > 0.0,
+                  "every declared IC-9700 band carries a PA rating");
+        }
+        // The other half of the same claim: a continuous model has no table,
+        // and that emptiness is what keeps its tune path untouched. #5116
+        // names both of these as non-goals.
+        for (const std::uint8_t addr : {std::uint8_t(0xA4), std::uint8_t(0xB6)}) {
+            const IcomModel* m = modelForCivAddress(addr);
+            check(m && bandsFor(*m).empty(),
+                  "a continuous model (IC-705, IC-7300MK2) declares no band "
+                  "table, so the IC-9700 gate cannot reach it");
+        }
+        check(nearestSupportedFrequency(*ic9700, 149'000'000ULL) == 148'000'000ULL,
+              "an IC-9700 drag above 2 m clamps to the 148 MHz edge");
+        check(nearestSupportedFrequency(*ic9700, 500'000'000ULL) == 450'000'000ULL,
+              "an IC-9700 drag in the upper gap clamps to the nearest edge");
+        check(nearestSupportedFrequency(*ic9700, 1'296'000'000ULL)
+                  == 1'296'000'000ULL,
+              "an in-band IC-9700 drag remains unchanged");
+    }
+    // NO MODEL INHERITS THE 26 00 SHAPE BY ASSUMPTION.
+    //
+    // This started life as `m.verified || !m.hasVfoModeCommand`, which read the
+    // right intent off the wrong field. `verified` is a claim about the WHOLE
+    // row — scope geometry, amplitude range, tuning limits, all confirmed
+    // against that model's own CI-V Reference Guide. The 0x26 shape is a
+    // narrower and independent question, and coupling them forced a choice
+    // between two dishonest options for a radio whose 0x26 form has been
+    // measured but whose scope geometry is still assumed: either overclaim the
+    // whole row, or drop a flag that a live trace supports.
+    //
+    // So attest the flag directly. The hazard the original guarded against is
+    // SILENT inheritance — a new row copied from the IC-705 and quietly picking
+    // up a command shape nobody checked on that radio. Naming each address here
+    // keeps that guard: the flag cannot go true without a deliberate edit to
+    // this list, and the comment beside it has to say what the evidence was.
+    static const std::array<std::uint8_t, 3> kAttestedVfoMode{
+        0xA4,  // IC-705     — its own CI-V Reference Guide documents 26 00
+        0xB6,  // IC-7300MK2 — likewise, from its own guide
+        0xA2,  // IC-9700    — measured on a live radio, 2026-08-14: 26 00 read
+               //              answered 26 00 05 00 01, the same three-byte
+               //              mode/DATA/filter body cmdSetVfoMode writes
+    };
+    check(std::all_of(knownModels().begin(), knownModels().end(), [](const IcomModel& m) {
+              return !m.hasVfoModeCommand
+                  || std::find(kAttestedVfoMode.begin(), kAttestedVfoMode.end(),
+                               m.civAddress)
+                      != kAttestedVfoMode.end();
+          }),
+          "no model silently inherits a DATA command shape");
+    // The converse, so the list cannot rot into a permission slip for rows that
+    // no longer set the flag.
+    check(std::all_of(kAttestedVfoMode.begin(), kAttestedVfoMode.end(),
+                      [](std::uint8_t addr) {
+                          const IcomModel* m = modelForCivAddress(addr);
+                          return m && m->hasVfoModeCommand;
+                      }),
+          "every attested address is a real model that actually sets the flag");
 }
 
 static void testUnknownModelIsConservative()
@@ -305,6 +409,63 @@ static void testPowerCurveIsNotShared()
     check(powerCurveFor(unknownModel()).empty(), "and nor does an unknown radio");
 }
 
+// The mode vocabulary this backend publishes onto the slice (#5040).
+//
+// WFM was implemented end to end in CivCodec from the start and was unreachable
+// only because nothing published a mode list, so the UI stayed on its
+// compiled-in FlexRadio one — which has no WFM because a FLEX-6000 has no WFM.
+static void testModeList()
+{
+    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    check(ic705 != nullptr, "the IC-705 is in the table");
+    if (!ic705)
+        return;
+
+    const auto modes = modeListFor(*ic705);
+    check(!modes.empty(), "the IC-705 publishes a mode list");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"WFM"}) != modes.end(),
+          "and WFM is in it - the whole point of #5040");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"CW"}) != modes.end(),
+          "normal Icom CW is published under the neutral CW name");
+    check(std::find(modes.begin(), modes.end(), std::string_view{"CWU"}) == modes.end(),
+          "the Flex-oriented CWU alias is not published for Icom");
+
+    // EVERY ENTRY MUST ROUND-TRIP. A name the radio can be put into but never
+    // reports back (RTTY, which comes home as DIGL) makes the combo jump on the
+    // confirmation read; a name modeFromNeutral refuses (SAM) silently reverts.
+    // Both read as a broken control.
+    for (const std::string_view m : modes) {
+        bool data = false;
+        const auto civ = modeFromNeutral(std::string(m), data);
+        check(civ.has_value(), "every published mode is one the radio accepts");
+        if (!civ)
+            continue;
+        check(modeToNeutral(*civ, data) == std::string(m),
+              "and one the radio reports back under the same name");
+        check(std::count(modes.begin(), modes.end(), m) == 1, "listed exactly once");
+    }
+
+    // The same provenance rule powerCurveFor states: a row nobody has read that
+    // model's own guide for gets NOTHING, not the IC-705's list.
+    const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* mk2 = modelForCivAddress(0xB6);
+    check(ic9700 && modeListFor(*ic9700).empty(), "another model gets no borrowed list");
+    check(mk2 && modeListFor(*mk2).empty(), "including the verified IC-7300MK2");
+    check(modeListFor(unknownModel()).empty(), "and nor does an unknown radio");
+}
+
+// WFM receives 76-108 MHz broadcast; the transmitter does not follow.
+static void testWfmIsReceiveOnly()
+{
+    const IcomModel* ic705 = modelForCivAddress(0xA4);
+    check(ic705 && modeIsReceiveOnly(*ic705, "WFM"), "the IC-705 does not transmit in WFM");
+    check(ic705 && !modeIsReceiveOnly(*ic705, "FM"), "but FM keys normally");
+    check(ic705 && !modeIsReceiveOnly(*ic705, "USB"), "and so does USB");
+    // No claim in EITHER direction for a model whose modes we have not read.
+    check(!modeIsReceiveOnly(unknownModel(), "WFM"),
+          "an unknown radio is not second-guessed");
+}
+
 int main()
 {
     testInterpolation();
@@ -320,6 +481,8 @@ int main()
     testUnknownModelIsConservative();
     testModelDiscovery();
     testPowerCurveIsNotShared();
+    testModeList();
+    testWfmIsReceiveOnly();
 
     if (g_failures == 0)
         std::printf("icom_meters_test: all checks passed\n");

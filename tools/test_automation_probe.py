@@ -31,6 +31,25 @@ def test_memory_mapping():
     }, f"unexpected memory mapping: {request}")
 
 
+def test_audio_capture_mapping():
+    mapper = automation_probe.MAPPERS["audioCapture"]
+    check(mapper([]) == {"action": "status"},
+          "audioCapture defaults to a status request")
+    check(mapper(["probeNr2Stereo"]) == {"action": "probeNr2Stereo"},
+          "legacy probeNr2Stereo stays a no-option action")
+    check(mapper(["probeDspStereo", "all", "strict"]) == {
+        "action": "probeDspStereo", "value": "all strict",
+    }, "legacy all strict probe forwards unchanged")
+    check(mapper(["probeDspStereo", "RN2", "rate=Native48k",
+                  "output=ProcessedMono", "blocks=480,960"]) == {
+        "action": "probeDspStereo",
+        "value": "RN2 rate=Native48k output=ProcessedMono blocks=480,960",
+    }, "RN2 key=value options forward unchanged")
+    check(mapper(["read", "/tmp/aether-audio.json"]) == {
+        "action": "read", "path": "/tmp/aether-audio.json",
+    }, "audioCapture read retains its JSON path field")
+
+
 def test_token_attachment():
     captured = {}
     bridge = automation_probe.Bridge.__new__(automation_probe.Bridge)
@@ -59,5 +78,6 @@ def test_token_attachment():
 if __name__ == "__main__":
     test_drag_at_mapping()
     test_memory_mapping()
+    test_audio_capture_mapping()
     test_token_attachment()
     print("automation probe request-mapping checks passed")

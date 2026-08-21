@@ -104,7 +104,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // their current balance when the applets split.
     {
         auto& s = AppSettings::instance();
-        for (int ch = 1; ch <= 4; ++ch) {
+        for (int ch = 1; ch <= 8; ++ch) {
             const QString key = QStringLiteral("TciRxGain%1").arg(ch);
             if (!s.contains(key)) {
                 const QString legacy = s.value(QStringLiteral("DaxRxGain%1").arg(ch), "0.5").toString();
@@ -314,7 +314,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 
             auto* ps = m_model ? m_model->panStream() : nullptr;
             if (!ps) return;
-            for (int ch = 1; ch <= 4; ++ch) {
+            for (int ch = 1; ch <= 8; ++ch) {
                 if (!ps->daxChannelHeldBy(ch, PanadapterStream::DaxConsumer::Tci))
                     continue;
                 bool stillWanted = false;
@@ -660,7 +660,7 @@ void TciServer::setOverflowMode(int mode)
 
 void TciServer::setRxChannelGain(int channel, float gain)
 {
-    if (channel < 1 || channel > 4) return;
+    if (channel < 1 || channel > 8) return;
     const float clamped = std::clamp(gain, 0.0f, 1.0f);
     if (m_rxChannelGain[channel - 1] == clamped) return;
     m_rxChannelGain[channel - 1] = clamped;
@@ -672,7 +672,7 @@ void TciServer::setRxChannelGain(int channel, float gain)
 
 float TciServer::rxChannelGain(int channel) const
 {
-    if (channel < 1 || channel > 4) return 1.0f;
+    if (channel < 1 || channel > 8) return 1.0f;
     return m_rxChannelGain[channel - 1];
 }
 
@@ -1049,10 +1049,25 @@ void TciServer::onTextMessage(const QString& msg)
             continue;
         }
 
-        // IQ start/stop — track per-client IQ state, then forward to protocol
+        // IQ start/stop — track per-client IQ state, then forward to protocol.
+        //
+        // The trx is parsed with the ok flag checked for the same reason
+        // TciProtocol's argToInt exists (#4867): an unchecked toInt() turns
+        // `iq_start:abc;` into trx 0. That used to be merely wrong in the same
+        // way on both sides — the protocol also resolved it to 0 and created
+        // DAX IQ channel 1, so server bookkeeping and radio state agreed. Now
+        // that cmdIqStart rejects it, an unchecked parse here would leave the
+        // two DISAGREEING: this client registered as a subscriber on trx 0
+        // with no stream ever created for it, receiving another client's
+        // channel-1 IQ frames (onIqDataReady) and eligible to tear that
+        // client's stream down on disconnect. Drop the command instead, which
+        // is also what the protocol does with it half a dozen lines later.
         if (trimmed.startsWith("iq_start:")) {
-            int colonIdx2 = trimmed.indexOf(':');
-            int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt();
+            const int colonIdx2 = trimmed.indexOf(':');
+            bool trxOk = false;
+            const int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt(&trxOk);
+            if (!trxOk || trx < 0 || trx > 3)
+                continue;
             client.iqEnabled = true;
             client.iqChannel = trx;
             qCInfo(lcCat) << "TCI: IQ started for client"
@@ -1066,8 +1081,15 @@ void TciServer::onTextMessage(const QString& msg)
             continue;
         }
         if (trimmed.startsWith("iq_stop:")) {
-            int colonIdx2 = trimmed.indexOf(':');
-            int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt();
+            // Checked for the same reason as iq_start above: an unchecked
+            // parse would clear iqEnabled for a client whose channel really
+            // is 0 whenever any garbage arrived, while the protocol declined
+            // to remove the stream.
+            const int colonIdx2 = trimmed.indexOf(':');
+            bool trxOk = false;
+            const int trx = trimmed.mid(colonIdx2 + 1).trimmed().toInt(&trxOk);
+            if (!trxOk || trx < 0 || trx > 3)
+                continue;
             if (client.iqChannel == trx)
                 client.iqEnabled = false;
             qCInfo(lcCat) << "TCI: IQ stopped for client"
@@ -1285,11 +1307,20 @@ void TciServer::tuneSliceAndConfirm(
         return;
     }
 
+    const long long beforeHz = TciProtocol::mhzToHz(slice->frequency());
     const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
+    // The in-span test is shared with the CAT/rigctld planes (#4497):
+    // PanadapterModel::spanContainsMhz is the single definition, so the three
+    // command planes cannot drift apart on what "in span" means. This used to be
+    // open-coded here and in RigctlProtocol; the copies were identical until the
+    // predicate grew a centerKnown term, which is exactly the drift the shared
+    // definition prevents. Behaviour change from the dedupe: before the radio has
+    // reported a real centre, PanadapterModel::centerMhz is a placeholder, so a
+    // TCI retune in that window now recenters instead of trusting it — the safe
+    // direction, and it establishes the centre.
     bool inSpan = false;
-    if (PanadapterModel* pan = m_model->panadapter(slice->panId())) {
-        const double halfBandwidth = pan->bandwidthMhz() / 2.0;
-        inSpan = halfBandwidth > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBandwidth;
+    if (const PanadapterModel* pan = m_model->panadapter(slice->panId())) {
+        inSpan = pan->spanContainsMhz(mhz);
     }
 
     // TUNE THROUGH THE MODEL, ON EVERY COMMAND PLANE (#4500, #4493).
@@ -1329,15 +1360,26 @@ void TciServer::tuneSliceAndConfirm(
     // where it was; in both cases the honest answer is the value the model
     // holds, or a client's mirror drifts away from the radio.
     //
-    // Sent unconditionally even though a successful tune also reaches clients
-    // via frequencyChanged → broadcastSliceFrequencies(). That duplicates the
-    // channel-0 vfo: frame, which is idempotent and harmless — whereas the
-    // alternative failure, a client left with NO confirmation, hangs WSJT-X for
-    // its full rig-control timeout. Channel 1 is not covered by that automatic
-    // path at all unless the routing state happens to be bound, so suppressing
-    // this would make split confirmations depend on unrelated state.
+    // A successful tune also reaches clients via frequencyChanged →
+    // broadcastSliceFrequencies(), fired synchronously inside setFrequency()/
+    // tuneAndRecenter() above (their own qFuzzyCompare guard skips the emit on
+    // a genuine no-op). For channel 0 that sends an identical vfo:<trx>,0,<hz>;
+    // frame BEFORE this line ever runs, so confirming again here produced two
+    // near-simultaneous vfo: frames for the same value — suspected of racing a
+    // TCI client's own frequency-restore scheduler (#5086: intermittent RX
+    // frequency drift on WSJT-X "Fake It" split, after a TX/RX cycle). Detect
+    // that case by comparing the pre-tune and post-tune Hz value: if it moved,
+    // channel 0 is already covered and this broadcast would be the duplicate.
+    // A genuine no-op (locked slice, or the request matched what was already
+    // there) never emits frequencyChanged, so channel 0 still needs this
+    // explicit confirmation — otherwise a client is left with none and hangs
+    // for its full rig-control timeout. Channel 1 keeps its unconditional
+    // confirmation regardless of whether the frequency moved: the automatic
+    // path only covers it when the routing state happens to track this slice
+    // as TX, so it cannot be assumed sent.
     const long long acceptedHz = TciProtocol::mhzToHz(slice->frequency());
-    if (acceptedHz > 0) {
+    const bool channelZeroAlreadyBroadcast = (channel == 0 && acceptedHz != beforeHz);
+    if (acceptedHz > 0 && !channelZeroAlreadyBroadcast) {
         broadcast(QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
     }
 }
@@ -2330,12 +2372,12 @@ void TciServer::onDaxAudioReady(int channel, const QByteArray& pcm)
 
     ++m_rxAudioPackets;
 
-    const float channelGain = (channel >= 1 && channel <= 4)
+    const float channelGain = (channel >= 1 && channel <= 8)
         ? m_rxChannelGain[channel - 1] : 1.0f;
 
     // RMS level meter — post-gain, consistent with DAX meter convention.
     // One emission per DAX packet is cheap at ~187 Hz (128-frame packets /24kHz).
-    if (channel >= 1 && channel <= 4) {
+    if (channel >= 1 && channel <= 8) {
         const auto* src = reinterpret_cast<const float*>(pcm.constData());
         const int n = pcm.size() / static_cast<int>(sizeof(float));
         if (n > 0) {
@@ -3448,7 +3490,7 @@ void TciServer::ensureDaxForTci()
                     used.insert(sl->daxChannel());
                 }
             }
-            for (int ch = 1; ch <= 4; ++ch) {
+            for (int ch = 1; ch <= 8; ++ch) {
                 if (!used.contains(ch)) {
                     qCDebug(lcCat) << "TCI: auto-assigning DAX channel" << ch
                                    << "to slice" << s->sliceId();

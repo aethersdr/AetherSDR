@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.8.2** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.8.3** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -27,7 +27,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **KiwiSDR public-receiver browser** — find and connect to public KiwiSDR receivers worldwide through an API-policy-aware directory (diversity receive with receive-only TX inhibit)
 - **Aetherial Audio Channel Strip** — a unified RX **and** TX DSP suite (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and a per-side scope
 - **Six client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), DFNR (DeepFilterNet3), BNR (NVIDIA GPU AI — the Maxine denoiser in-process on a local NVIDIA RTX/GeForce GPU, Linux + Windows; see [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)), and MNR (macOS)
-- **DAX virtual audio + IQ** — 4 RX + 1 TX channels and raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
+- **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent — 8 on a FLEX-6700, 4 on 6500/6600/8600, 2 on 6300/6400) + 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, and an **APRS client** (station map, GPS beacon, messaging) with a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, FreeDV Reporter, N1MM+/DXLog contest bandmap, the EiBi shortwave broadcast schedule, and the KiwiSDR DX Community database, with auto-mode switch and per-feed spot colouring
@@ -36,6 +36,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
 - **Broad hardware control** — rigctld + virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
+- **Workspace canvas** — place pans and applets freely as resizable, layered items with edge and grid snapping, across several canvas windows if you want them; named workspaces recall which applets are open as well as where they sit, and can be bound to radio profiles. Off by default; the Classic shell is unchanged until you enable it
 - **Built-in demo mode** — a synthetic backend that generates its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
 ---
@@ -68,7 +69,8 @@ Works with any FlexRadio transceiver, including:
 Supported external devices include the 4O3A/FlexRadio PGXL (Power Genius XL)
 power amplifier and TGXL (Tuner Genius XL) antenna tuner, and — outside the
 radio seam entirely — ACOM S-series and SPE Expert (1.3K-FA / 1.5K-FA / 2K-FA)
-amplifiers over serial or ser2net TCP.
+amplifiers over serial or ser2net TCP, and VK3AMP (600 W / 1000 W / 2000 W)
+amplifiers over TCP control with UDP telemetry.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
@@ -78,12 +80,15 @@ is a supported family yet, and FlexRadio remains the supported target:
 
 - **Hermes-Lite 2** — **experimental**. Four independent receivers, SSB voice,
   CW/RTTY decoding, AX.25 packet, band switching with hardware filters, manual
-  notch filters, host frequency calibration and per-radio state restore.
+  notch filters, a host-side impulse noise blanker, host frequency calibration
+  and per-radio state restore (including AGC mode and threshold).
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
-  on the IC-705 (receive, scope, transmit, FT8). Only the IC-705 and IC-7300MK2
-  are verified against their own CI-V guides — an unrecognised model gets no
-  scope and no transmit rather than optimistic defaults.
-  transmit rather than optimistic defaults.
+  on the IC-705 (receive, scope, transmit, FT8) and completed against a live
+  IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
+  The connect path asks the radio for its own CI-V address rather than assuming
+  one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
+  — an unrecognised model gets no scope and no transmit rather than optimistic
+  defaults.
 
 No radio at all? **Demo mode** runs the full UI against a synthetic backend
 that generates its own audio and spectrum.
@@ -97,7 +102,7 @@ MIDI, Stream Deck/StreamController plugins, and generic USB-serial adapters:
 - Icom RC-28 USB remote encoder
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
-- MIDI controllers with learn mode, manual mapping entry, profiles, and relative-encoder support
+- MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
 - Elgato Stream Deck devices through the bundled macOS/Windows Stream Deck plugin
 - Stream Deck devices on Linux through the bundled StreamController plugin
 - USB-serial PTT/CW interfaces for foot switches, straight keys, iambic paddles,
@@ -357,14 +362,18 @@ Currently in flight:
 - **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam, now
   running four independent receivers, the SSB voice chain, CW/RTTY decoding,
   AX.25 packet, band switching with hardware filters, memory channels, manual
-  notch filters, host frequency calibration and per-radio operating-state
-  restore. Not yet a supported radio family: remaining work is wider mode
-  coverage, panadapter parity with the Flex path, and hardening the raw-IQ DSP
-  chain.
+  notch filters, a host-side noise blanker, host frequency calibration and
+  per-radio operating-state restore. Not yet a supported radio family:
+  remaining work is wider mode coverage, panadapter parity with the Flex path,
+  and hardening the raw-IQ DSP chain.
 - **Networked Icom** — an **early** CI-V/RS-BA1 backend on the same seam,
-  brought up on the IC-705 and IC-7300. Remaining work is transmit confirmation
-  beyond the 705, per-model SET-menu mapping, and the rest of the control
-  surface.
+  brought up on the IC-705 and IC-7300, now with a scheduled command plane and a
+  completed IC-7300MK2 control surface. Remaining work is transmit confirmation
+  beyond the 705, per-model SET-menu mapping, and audio gain/VOX/break-in.
+- **Workspace canvas** — an **experimental** alternative shell where pans and
+  applets are freely placed items across one or more canvas windows. Off by
+  default; remaining work is live cross-window drag and field time against the
+  Classic shell.
 - **AppSettings nested-JSON refactor** — the storage layer moved to SQLite with
   per-radio versioned feature documents; the remaining work is migrating the
   legacy flat keys.

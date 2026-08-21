@@ -31,6 +31,7 @@
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
 #include "core/SpeConnection.h"
+#include "core/VkampConnection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
@@ -636,12 +637,13 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    KiwiSdrManager* kiwiSdrManager,
                                    AcomConnection* acom,
                                    SpeConnection* spe,
+                                   VkampConnection* vkamp,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -7762,6 +7764,148 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             if (m_spe->isConnected() && m_spe->description().startsWith(savedIp + ":")) {
                 m_spe->disconnect();
             }
+        });
+    }
+
+    // Row 7: VK3AMP amplifier — TCP control/status only for v1 (see
+    // docs/architecture/vkamp-amplifier-design.md Section 3.3/Section 9:
+    // serial is a genuinely different wire format, deferred to a later
+    // phase), so this row is a plain host/port pair, no Serial/Network
+    // toggle.
+    if (m_vkamp) {
+        const int row = 7;
+
+        auto* devLbl = new QLabel("VK3AMP Amplifier");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(devLbl, kLabelStyle);
+        grid->addWidget(devLbl, row, 0);
+
+        auto* ipEdit = new QLineEdit;
+        ipEdit->setPlaceholderText("e.g. 192.168.1.50");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(ipEdit, kEditStyle);
+        ipEdit->setText(PeripheralSettings::deviceString("Vkamp", "ManualIp"));
+        // Name answers "what is this?", description answers "what do I type?"
+        // -- docs/a11y.md Section 2's rule for input widgets.
+        ipEdit->setAccessibleName(tr("VK3AMP address"));
+        ipEdit->setAccessibleDescription(tr("IP address or host name of the VK3AMP amplifier"));
+        grid->addWidget(ipEdit, row, 1);
+
+        auto* portSpin = new QSpinBox;
+        portSpin->setRange(1, 65535);
+        portSpin->setValue(PeripheralSettings::deviceInt("Vkamp", "ManualPort", 5005));
+        portSpin->setAccessibleName(tr("VK3AMP control port"));
+        portSpin->setAccessibleDescription(tr("TCP control port, 1 to 65535, default 5005"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        grid->addWidget(portSpin, row, 2);
+
+        static const QString kVkampConnectedStyle = "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        static const QString kVkampDisconnectedStyle = "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+        static const QString kVkampErrorStyle = "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
+        static const QString kVkampConnectingStyle = "QLabel { color: {{color.accent.warning}}; font-size: 11px; }";
+
+        auto* statusLbl = new QLabel(m_vkamp->isConnected() ? "Connected" : "Not connected");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+            m_vkamp->isConnected() ? kVkampConnectedStyle : kVkampDisconnectedStyle);
+        statusLbl->setAccessibleName(tr("VK3AMP connection status"));
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* vkampBtn = new QPushButton(m_vkamp->isConnected() ? "Disconnect" : "Connect");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(vkampBtn, kBtnStyle);
+        vkampBtn->setAccessibleName(tr("Connect or disconnect the VK3AMP amplifier"));
+        grid->addWidget(vkampBtn, row, 3);
+
+        auto updateVkampState = [this, vkampBtn, statusLbl]() {
+            const bool conn = m_vkamp->isConnected();
+            vkampBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                conn ? kVkampConnectedStyle : kVkampDisconnectedStyle);
+        };
+        connect(m_vkamp, &VkampConnection::connected, this, updateVkampState);
+        connect(m_vkamp, &VkampConnection::disconnected, this, updateVkampState);
+        connect(m_vkamp, &VkampConnection::connectionFailed, this,
+                [statusLbl](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampErrorStyle);
+        });
+
+        connect(vkampBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_vkamp->isConnected()) {
+                m_vkamp->disconnect();
+                return;
+            }
+            const QString ip = ipEdit->text().trimmed();
+            if (ip.isEmpty()) return;
+            const int port = portSpin->value();
+            PeripheralSettings::setDeviceString("Vkamp", "ManualIp", ip);
+            PeripheralSettings::setDeviceInt("Vkamp", "ManualPort", port);
+            // Immediate feedback -- a cold connect can legitimately take
+            // several seconds (this amp's own network stack only answers
+            // broadcast ARP, which can stall Windows' unicast-first
+            // neighbor-cache reconfirmation for up to ~kConnectTimeoutMs --
+            // see VkampConnection.h's own doc comment). Without this the
+            // status label just sits on "Not connected" the whole time,
+            // which reads as frozen/unresponsive rather than in progress.
+            // Overwritten by updateVkampState()/the connectionFailed handler
+            // below as soon as the real outcome lands.
+            statusLbl->setText("Connecting…");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kVkampConnectingStyle);
+            m_vkamp->connectNetwork(ip, static_cast<quint16>(port));
+        });
+
+        // Save-on-close: same "user cleared the field and closed the dialog
+        // without clicking Connect/Disconnect" handling as ACOM's own row
+        // above.
+        m_peripheralRowSavers.append([ipEdit, this]() {
+            if (!ipEdit) return;
+            const QString ip = ipEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("Vkamp", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("Vkamp", "ManualIp");
+            PeripheralSettings::clearDeviceField("Vkamp", "ManualPort");
+            if (m_vkamp->isConnected() && m_vkamp->description().startsWith(savedIp + ":")) {
+                m_vkamp->disconnect();
+            }
+        });
+
+        // Row 8: VK3AMP hardware variant -- 600W/1000W/2000W ship as
+        // distinct rated-power classes, and the wire protocol has no
+        // model/wattage field to auto-detect which one this is (design
+        // doc's variant table). Picking the wrong one only misscales the
+        // forward-power gauge, not a safety issue, so this defaults to
+        // W2000 (the originally-confirmed unit) rather than blocking on a
+        // choice.
+        auto* variantLbl = new QLabel("Amplifier Model");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(variantLbl, kLabelStyle);
+        grid->addWidget(variantLbl, row + 1, 0);
+
+        auto* variantCombo = new QComboBox;
+        static const QString kVariantComboStyle =
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+        AetherSDR::ThemeManager::instance().applyStyleSheet(variantCombo, kVariantComboStyle);
+        variantCombo->setAccessibleName(tr("VK3AMP amplifier model"));
+        variantCombo->setAccessibleDescription(
+            tr("Rated output of your unit. Sets the power meter's full scale; it does not change "
+               "anything on the amplifier."));
+        for (auto v : {Vkamp::Variant::W600, Vkamp::Variant::W1000, Vkamp::Variant::W2000}) {
+            variantCombo->addItem(Vkamp::variantLabel(v), static_cast<int>(v));
+        }
+        const int savedVariant = PeripheralSettings::deviceInt(
+            "Vkamp", "Variant", static_cast<int>(Vkamp::Variant::W2000));
+        {
+            const int idx = variantCombo->findData(savedVariant);
+            variantCombo->setCurrentIndex(idx >= 0 ? idx : variantCombo->count() - 1);
+        }
+        grid->addWidget(variantCombo, row + 1, 1);
+
+        connect(variantCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this, variantCombo](int idx) {
+            PeripheralSettings::setDeviceInt("Vkamp", "Variant", variantCombo->itemData(idx).toInt());
+            emit vkampVariantChanged();
         });
     }
 

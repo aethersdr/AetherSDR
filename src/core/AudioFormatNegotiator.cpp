@@ -29,6 +29,8 @@ QList<int> primaryRateOrder(TargetOs os, Direction dir, int internalRate)
         case TargetOs::MacOS:   return {48000, internalRate};
         // Linux: native 24k is fine (no WASAPI resampler in the path) — avoid an
         // unnecessary upsample. Deliberate, documented divergence from Win/Mac.
+        // RX is still canonically 24 kHz, so this stays 24k-first even though
+        // the Linux *input* ladder now leads with 48k for the TX voice strip.
         case TargetOs::Linux:   return {internalRate, 48000};
         }
     } else { // Input (mic / TX capture)
@@ -39,8 +41,12 @@ QList<int> primaryRateOrder(TargetOs os, Direction dir, int internalRate)
         // about isFormatSupported(48000) for 16k-native / BT-HFP mics — #2930 /
         // #2615); the remaining order is the conservative ladder.
         case TargetOs::MacOS:   return {48000, 44100, internalRate, 16000};
-        // Linux: native 24k first, then the common rates.
-        case TargetOs::Linux:   return {internalRate, 48000, 44100};
+        // Linux: 48k first. Normal voice TX is normalized to TxVoiceProcessor's
+        // fixed 48 kHz DSP domain, so opening the mic at 48k is what removes the
+        // ingress SRC. This inverts the pre-48k-strip rule, where native 24k
+        // capture was preferred precisely because it meant no conversion at all.
+        // A mic that cannot open 48k still lands on 24k at the next rung.
+        case TargetOs::Linux:   return {48000, internalRate, 44100};
         }
     }
     Q_UNREACHABLE(); // every TargetOs value is covered in both branches above

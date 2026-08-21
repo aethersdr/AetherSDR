@@ -32,6 +32,12 @@ private:
     // (existing == nullptr) and the per-row edit button (existing == the row's
     // current binding). Commits through the same addBinding()/save path as Learn.
     void openManualEditor(const QString& paramId, const MidiBinding* existing);
+    // Profile file import/export (#4888). Import accepts the native
+    // <MidiProfile> XML or a SmartSDR iOS/Mac ".map" (auto-detected), stores
+    // a new profile (suffix on name collision) and selects it in the combo;
+    // Export writes the current bindings as a shareable profile XML.
+    void importProfileFromFile();
+    void exportProfileToFile();
 
     MidiControlManager* m_manager;
 

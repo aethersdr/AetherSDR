@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.8.2
+## Current cycle: post-v26.8.3
 
 ### In flight
 
@@ -31,10 +31,32 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   transmit, and FT8 both decoding and spotting on PSK Reporter) and an
   **IC-7300** (RX, scope and stability; transmit unverified). Only the IC-705
   and IC-7300MK2 are `verified` against their own CI-V guides; an unknown model
-  gets no scope and no transmit rather than optimistic defaults. Remaining:
-  transmit confirmation beyond the 705, the per-model SET-menu item numbers the
-  MOD Input check needs, audio gain/mute/pan, VOX and CW break-in, and the
-  once-a-second FT8 transmit dropout still under investigation.
+  gets no scope and no transmit rather than optimistic defaults. v26.8.3 gave
+  the backend a **command plane**: every meter read, control write,
+  reconciliation poll and PTT transition goes through one CI-V scheduler with
+  explicit priorities, coalescing and stale-reply rejection — written because a
+  delayed PTT-OFF reply arriving after a newer PTT-ON was cutting transmit
+  audio. It also completed the **IC-7300MK2** control surface (18
+  operator-visible defects), fixed the **RS-BA1 lease renewal** that froze the
+  panadapter at the 255→256 sequence boundary, made **DATA mode** actually reach
+  the radio for DIGU/DIGL and DFM, and replaced the hardcoded `0xA4` connect
+  address with a broadcast `19 00` query. **WSPR** transmits (20 PSK Reporter
+  reception reports on the air), **PC Audio** switches the model-specific DATA OFF
+  modulation input, and the built-in CW decoder opens on normalized `CWU`.
+  Remaining: transmit confirmation beyond the 705, the per-model SET-menu item
+  numbers the MOD Input check needs, audio gain/mute/pan, VOX and CW break-in, an
+  automation verb making the modulation sources assertable without parsing Radio
+  Health text, and the once-a-second FT8 transmit dropout still under
+  investigation.
+- **Workspace canvas — experimental** — RFC #4887 landed complete in v26.8.3,
+  all seven phases: pans and applets as freely placed, resizable, layered items
+  on a canvas that can span several top-level windows, with named workspaces,
+  full-recall switching and radio-profile bindings. It is **off by default**, and
+  an install that never enables it never gains a settings key. Remaining before
+  the experimental label can come off: live cross-window drag (deferred this
+  cycle — a cross-top-level reparent is the #2495/#4617/#4319 crash lineage, so
+  moves go through one deliberate menu path for now), and field time on real
+  stations against the Classic shell.
 - **Hermes-Lite 2 — from experimental to supported** — the backend arrived
   experimental in v26.7.4 and grew most of the way to parity in v26.8.1: four
   independent receivers, the SSB voice chain, CW/RTTY decoding and the QSO
@@ -43,6 +65,12 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   restore with per-band drive/LNA memory, live connection health and a Radio
   Health dialog. v26.8.2 added **manual notch filters** and **manual frequency
   calibration**, DC-blocked the AM/SAM audio, and unfroze the first connect.
+  v26.8.3 gave it a working **NB** button (WDSP's impulse blanker on the raw IQ,
+  the only place it can run on this radio), a **real BFO** so a CW passband
+  straddles the marker instead of sitting where a USB filter would, **AGC mode
+  and threshold that survive a restart**, and a **TX ALC that no longer
+  normalises away a TCI/DAX client's own level control**. Its meter surface is
+  now certified against physical hardware.
   **The experimental → supported call itself is still open**; what remains
   before making it is wider mode coverage, panadapter/waterfall parity with the
   Flex path, and hardening the raw-IQ DSP chain (HL2 ships raw IQ, so the client
@@ -137,6 +165,50 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **The workspace canvas** — pans and applets become freely placed, resizable,
+  layered items on a canvas that can span several top-level windows, with named
+  workspaces, full-recall switching, radio-profile bindings and an Edit Layout
+  posture so operating the station never brushes the arranging machinery.
+  Experimental and off by default (v26.8.3).
+- **A CI-V command scheduler for Icom** — one ordered command plane above the
+  transport, replacing independent sends from meter, control, startup,
+  reconciliation and PTT producers, with priority, coalescing and stale-reply
+  rejection. Written because a delayed PTT-OFF reply arriving after a newer
+  PTT-ON was cutting transmit audio (v26.8.3).
+- **IC-7300MK2 controls, meters and certification** — 18 operator-visible
+  defects closed against live hardware, from an ATU button that could not be
+  clicked back into bypass to a missing RF Power and SWR meter (v26.8.3).
+- **WSPR from an Icom** — the readiness check gated the seam-audio path on
+  `hostModulates`, which Icom deliberately reports false, so PSK Reporter never
+  advanced to PTT. Confirmed on the air with 20 reception reports from the
+  continental US and Alaska (v26.8.3).
+- **Icom RS-BA1 lease renewal** — the frozen panadapter was a media-lease
+  failure, not a renderer failure: the inner renewal sequence was byte-identical
+  to the correct encoding only through sequence 255 (v26.8.3).
+- **Hermes-Lite 2 — a host-side noise blanker** — WDSP's impulse blanker on the
+  raw IQ ahead of the demodulator, which is the only place it can run on a radio
+  that ships raw IQ and runs no firmware DSP (v26.8.3).
+- **Hermes-Lite 2 — a real BFO for CW** — the panadapter passband now straddles
+  the marker instead of sitting where a USB filter would; the gateware generates
+  the shaped CW carrier at the TX NCO, so the receiver had been listening 600 Hz
+  from where the radio transmits (v26.8.3).
+- **VK3AMP amplifiers** — 600 W / 1000 W / 2000 W units over TCP control and
+  UDP telemetry, with calibrated power/reflected/SWR gauges, a bypass and
+  voltage-rail interlock, and a variant selector that rescales the forward-power
+  gauge (v26.8.3).
+- **The TX voice chain moves to 48 kHz float** — one high-quality rate
+  conversion to transport rate with TPDF dither before the final quantization,
+  replacing several conversions and truncations that compounded aliasing and
+  quantization noise (v26.8.3).
+- **8 DAX RX audio channels on a FLEX-6700** — slices assigned to DAX 5–8 were
+  silently carrying silence-fill; the selectors are now driven from the radio's
+  actual slice capacity so smaller models present no dead entries (v26.8.3).
+- **CAT band changes bring the panadapter with them** — a band change from
+  WSJT-X, FLDigi, rigctld or SmartCAT no longer leaves the view behind on the
+  old band until a manual GUI action (v26.8.3).
+- **A multi-hour Windows transmit crash** — a TCI session left the local
+  microphone device undrained, and the Windows capture backlog eventually
+  crossed the signed 2 GiB boundary inside the channel normalizer (v26.8.3).
 - **Networked Icom radios** — `IcomCIV`, a fourth backend on the aetherd seam,
   speaking CI-V inside the RS-BA1 UDP transport. Brought up on a live IC-705
   (RX, 30 sweeps/s scope, RX audio, TCI RX, transmit, FT8 decoding and spotting)

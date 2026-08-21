@@ -7,12 +7,11 @@
 
 namespace AetherSDR {
 
-// Final-stage brickwall limiter for the TX audio chain — sits at the
-// very tail of the chain, after every user-configurable stage (Gate,
-// EQ, Comp, DeEss, Tube, PUDU, Reverb) AND after the PC mic gain
-// scaling.  Its job is to ensure no sample escapes louder than the
-// configured ceiling, regardless of what the upstream chain does (a
-// reverb tail spike, an over-driven PUDU, or a mic-gain user error).
+// Final nonlinear processor in the 48 kHz TX audio chain. It runs after every
+// user-configurable stage (Gate, EQ, Comp, DeEss, Tube, PUDU, Reverb) and after
+// PC mic gain, but before the 48-to-24 kHz egress SRC. It bounds its own 48 kHz
+// output samples against the configured ceiling; downstream SRC reconstruction
+// can overshoot that sample ceiling before final Int16 saturation.
 //
 // Topology: feed-forward peak limiter with a per-block smoothed
 // envelope (fast attack, moderately fast release) applied as a single
@@ -43,9 +42,9 @@ public:
     void  setCeilingDb(float db) noexcept;
     float ceilingDb() const noexcept;
 
-    // Master output trim applied AFTER the limiter.  Useful for
-    // setting average level independently of the brickwall ceiling
-    // (ceiling caps peaks; trim sets RMS).  Range [-12, +12] dB.
+    // Drive trim applied before the limiter. Positive values increase limiter
+    // activity; negative values lower the signal below the ceiling. Range
+    // [-12, +12] dB.
     void  setOutputTrimDb(float db) noexcept;
     float outputTrimDb() const noexcept;
 
@@ -63,9 +62,8 @@ public:
 
     // UI-thread meter snapshots.
     float inputPeakDb()      const noexcept;  // pre-limiter peak
-    float outputPeakDb()     const noexcept;  // post-limiter peak (the
-                                              // value the radio actually
-                                              // sees)
+    float outputPeakDb()     const noexcept;  // post-limiter 48 kHz peak;
+                                              // egress SRC may overshoot it
     float outputRmsDb()      const noexcept;  // ~300 ms post-limiter RMS
     float gainReductionDb()  const noexcept;  // ≤ 0 dB
     bool  active()           const noexcept;  // true while limiter is

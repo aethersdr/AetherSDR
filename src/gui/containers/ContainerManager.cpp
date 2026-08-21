@@ -27,7 +27,12 @@ constexpr int         kSchemaVersion = 1;
 
 QString dockModeToString(ContainerWidget::DockMode m)
 {
-    return m == ContainerWidget::DockMode::Floating ? "floating" : "panel";
+    switch (m) {
+    case ContainerWidget::DockMode::Floating: return QStringLiteral("floating");
+    case ContainerWidget::DockMode::Canvas:   return QStringLiteral("canvas");
+    case ContainerWidget::DockMode::PanelDocked: break;
+    }
+    return QStringLiteral("panel");
 }
 
 // QRhiWidget descendants must deregister their cleanup callback from the old
@@ -55,8 +60,9 @@ void prepareRhiChildrenForReparent(QWidget* root)
 
 ContainerWidget::DockMode dockModeFromString(const QString& s)
 {
-    return s == "floating" ? ContainerWidget::DockMode::Floating
-                           : ContainerWidget::DockMode::PanelDocked;
+    if (s == QLatin1String("floating")) return ContainerWidget::DockMode::Floating;
+    if (s == QLatin1String("canvas"))   return ContainerWidget::DockMode::Canvas;
+    return ContainerWidget::DockMode::PanelDocked;
 }
 
 // Build the AppSettings key for a floating container's geometry.
@@ -235,14 +241,9 @@ int ContainerManager::containerCount() const
     return m_containers.size();
 }
 
-void ContainerManager::floatContainer(const QString& id)
+void ContainerManager::detachFromCurrentSlot(const QString& id, ContainerWidget* c)
 {
-    ContainerWidget* c = m_containers.value(id).data();
-    if (!c || c->isFloating()) return;
-
-    prepareRhiChildrenForReparent(c);   // #2495 — before any reparent below
-
-    // Remember the container's current slot so re-dock restores it.
+    // Remember the container's current slot so a later re-dock restores it.
     // Two cases: nested (parentId points at another container) and
     // top-level (no parent container, sitting in an external layout).
     auto& meta = m_meta[id];
@@ -263,6 +264,52 @@ void ContainerManager::floatContainer(const QString& id)
         }
         c->setParent(nullptr);
     }
+}
+
+void ContainerManager::restoreToOriginalSlot(const QString& id, ContainerWidget* c)
+{
+    const auto& meta = m_meta.value(id);
+
+    if (!meta.parentId.isEmpty()) {
+        ContainerWidget* parent = m_containers.value(meta.parentId).data();
+        if (parent) {
+            const int clamped = std::min(std::max(meta.originalIndex, 0),
+                                         parent->childWidgetCount());
+            parent->insertChildWidget(clamped, c);
+        }
+        return;
+    }
+
+    if (meta.originalParent) {
+        c->setParent(meta.originalParent);
+        if (auto* box = qobject_cast<QBoxLayout*>(meta.originalParent->layout())) {
+            const int clamped = std::min(std::max(meta.originalIndex, 0),
+                                         box->count());
+            box->insertWidget(clamped, c);
+        }
+        c->show();
+    }
+}
+
+void ContainerManager::floatContainer(const QString& id)
+{
+    ContainerWidget* c = m_containers.value(id).data();
+    if (!c || c->isFloating()) return;
+
+    // A canvas-mode container leaves the canvas first, through the one
+    // hook that knows how, and arrives here panel-docked in its original
+    // slot — so the float below records a REAL slot to dock back to,
+    // not the canvas it can no longer see.
+    if (c->isOnCanvas()) {
+        if (!m_canvasEvictor) return;   // no canvas owner: nothing safe to do
+        m_canvasEvictor(id);
+        c = m_containers.value(id).data();
+        if (!c || c->isFloating() || c->isOnCanvas()) return;
+    }
+
+    prepareRhiChildrenForReparent(c);   // #2495 — before any reparent below
+
+    detachFromCurrentSlot(id, c);
 
     // Parent the popped-out window to the main application window so it
     // stays on top of MainWindow without becoming WindowStaysOnTopHint
@@ -280,7 +327,9 @@ void ContainerManager::floatContainer(const QString& id)
 
     m_floatingWindows.insert(id, win);
     win->setWindowTitle(c->title());
-    win->restoreAndEnsureVisible(meta.originalParent);
+    // detachFromCurrentSlot() recorded the slot we just left; the floating
+    // window uses that widget's screen to pick a sensible first position.
+    win->restoreAndEnsureVisible(m_meta.value(id).originalParent);
 
     // Apply the persisted always-on-top preference *after*
     // restoreAndEnsureVisible(): toggling Qt::WindowStaysOnTopHint
@@ -310,30 +359,45 @@ void ContainerManager::dockContainer(const QString& id)
     win->deleteLater();
     if (!released) return;
 
-    const auto& meta = m_meta.value(id);
+    // Nested containers re-enter their logical parent's body; top-level
+    // ones re-enter the external layout they came from.  A parent that is
+    // itself floating is not a special case — Qt reparenting is transparent
+    // to which top-level window the body happens to live in.
+    restoreToOriginalSlot(id, released);
+    saveState();
+}
 
-    if (!meta.parentId.isEmpty()) {
-        // Nested: re-insert into logical parent container's body.
-        // If the parent is itself currently floating, re-docking the
-        // child just re-inserts it into the parent's body which
-        // happens to live in a floating window — Qt reparenting is
-        // transparent to that.
-        ContainerWidget* parent = m_containers.value(meta.parentId).data();
-        if (parent) {
-            const int clamped = std::min(std::max(meta.originalIndex, 0),
-                                         parent->childWidgetCount());
-            parent->insertChildWidget(clamped, released);
-        }
-    } else if (meta.originalParent) {
-        // Top-level: re-insert into the external layout we came from.
-        released->setParent(meta.originalParent);
-        if (auto* box = qobject_cast<QBoxLayout*>(meta.originalParent->layout())) {
-            const int clamped = std::min(std::max(meta.originalIndex, 0),
-                                         box->count());
-            box->insertWidget(clamped, released);
-        }
-        released->show();
+ContainerWidget* ContainerManager::detachForCanvas(const QString& id)
+{
+    ContainerWidget* c = m_containers.value(id).data();
+    if (!c || c->isOnCanvas()) return nullptr;
+
+    // Float -> canvas goes through dock first, so the floating window is
+    // closed and its geometry saved by the one path that knows how.  That
+    // also means detachFromCurrentSlot() below always sees a panel-docked
+    // container, which is the only case it has ever had to handle.
+    if (c->isFloating()) {
+        dockContainer(id);
+        c = m_containers.value(id).data();
+        if (!c) return nullptr;
     }
+
+    prepareRhiChildrenForReparent(c);   // #2495 — before any reparent below
+
+    detachFromCurrentSlot(id, c);
+    c->setDockMode(ContainerWidget::DockMode::Canvas);
+    saveState();
+    return c;
+}
+
+void ContainerManager::returnFromCanvas(const QString& id, ContainerWidget* c)
+{
+    if (!c || !c->isOnCanvas()) return;
+
+    prepareRhiChildrenForReparent(c);   // #2495 — leaving the canvas is a reparent too
+
+    c->setDockMode(ContainerWidget::DockMode::PanelDocked);
+    restoreToOriginalSlot(id, c);
     saveState();
 }
 
@@ -378,7 +442,18 @@ void ContainerManager::onDockRequested()
 {
     auto* c = qobject_cast<ContainerWidget*>(sender());
     if (!c) return;
+    // On the canvas, "dock" means return to the panel — the evictor takes
+    // the item off the canvas and routes back through returnFromCanvas().
+    if (c->isOnCanvas()) {
+        if (m_canvasEvictor) m_canvasEvictor(c->id());
+        return;
+    }
     dockContainer(c->id()); // dockContainer() -> saveState() flushes (#4427)
+}
+
+void ContainerManager::setCanvasEvictor(std::function<void(const QString&)> evictor)
+{
+    m_canvasEvictor = std::move(evictor);
 }
 
 void ContainerManager::onCloseRequested()
@@ -538,6 +613,11 @@ void ContainerManager::restoreState()
         if (mode == ContainerWidget::DockMode::Floating) {
             floatContainer(id);
         }
+        // DockMode::Canvas deliberately falls through to panel-docked here:
+        // no canvas exists at restore time.  The WorkspaceController
+        // re-places canvas items from the workspace document when the mode
+        // is enabled — the document, not ContainerTree, is placement truth
+        // (Principle V); the mode string is a dual-write mirror.
     }
 }
 

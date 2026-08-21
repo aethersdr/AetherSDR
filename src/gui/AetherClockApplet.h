@@ -59,9 +59,11 @@ public:
 public slots:
     // AppletPanel::setSlice forwarding (per-applet, explicit).
     void setSlice(SliceModel* slice);
+    void setMaxDaxChannels(int n);  // radio slice capacity -> DAX chooser length
 
 private:
     void buildUi();
+    void populateDaxCombo();
     void buildSettingsDrawer();
     void setSettingsExpanded(bool expanded);
     void updateStartStopUi();
@@ -123,6 +125,7 @@ private:
     QPushButton* m_drawerToggle{nullptr};
     GuardedComboBox* m_presetCombo{nullptr};
     GuardedComboBox* m_daxCombo{nullptr};  // DAX chooser for the selected slice
+    int m_maxDaxChannels{8};               // radio slice capacity (FlexLib table)
     bool m_daxControlsVisible{true};       // false = radio declares no DAX plane
     QPushButton* m_tuneButton{nullptr};
     QPushButton* m_startStopButton{nullptr};

@@ -28,16 +28,73 @@ constexpr std::array kSpecs = {
                 Plane::Slice, Encoding::ModeFilter, Wiring::Both,
                 0, 3, "enum", 0, 0,
                 "setSliceMode", "vfoModeCombo", true,
-                "The SECOND payload byte is the filter slot (1..3) and carries the "
+                "ORDINARY mode only — DATA on/off is NOT in this frame, which is why "
+                "writes go out as 0x26 (the data.mode row) on every model that has "
+                "it and fall back to 0x06 only on an unrecognised radio. The radio "
+                "still READS and REPORTS here (0x04, and 0x01 unsolicited). The "
+                "SECOND payload byte is the filter slot (1..3) and carries the "
                 "passband: an IC-705 cannot report a passband in Hz, so the slot is "
                 "the only source. SAM/DRM/DSB have no equivalent and are refused."},
+    ControlSpec{"data.mode", 0x26, 0x00, true, "Mode + DATA on/off + filter slot",
+                Plane::Slice, Encoding::Enum, Wiring::Both,
+                0, 3, "enum", 0, 0,
+                "setSliceMode", "vfoModeCombo", true,
+                "WHAT MAKES DIGU DIFFERENT FROM USB. Commands 01/04/06 carry only "
+                "the mode byte, and USB and USB-D share it — 26 is the only command "
+                "that tells them apart, in either direction. It states mode, DATA "
+                "and filter slot for the selected VFO in ONE frame, so a mode "
+                "change cannot clear DATA and a filter change cannot leave DATA "
+                "behind. Written on every mode and filter change, confirmed by a "
+                "read, and adopted from the radio at connect and after every "
+                "front-panel mode change. Unselected VFO (26 01) is split, which "
+                "this backend does not yet model."},
     ControlSpec{"filter", 0x06, 0, false, "IF filter slot",
                 Plane::Slice, Encoding::ModeFilter, Wiring::Both,
                 1, 3, "slot", 1, 3,
                 "setSliceFilter", "vfoFilterBtn", true,
-                "THREE slots whose widths change with the mode: SSB 3.0/2.4/1.8k, "
+                "THE SLOT, NOT THE WIDTH — see if.width for the difference. Three "
+                "slots whose FACTORY widths change with the mode: SSB 3.0/2.4/1.8k, "
                 "CW 1.2k/500/250, RTTY 2.4k/500/250, AM+SAM 9/6/3k, FM 15/10/7k, "
-                "WFM one fixed filter. Published per mode as rxFilterWidthsHz."},
+                "WFM one fixed filter. Published per mode as rxFilterWidthsHz, and "
+                "those labels are DEFAULTS: an operator who redefined a slot gets a "
+                "button whose label is stale, which is why the drawn passband comes "
+                "from 1A 03 instead. A seam request that matches a published width "
+                "exactly is taken as a slot pick; anything else is a width change."},
+    ControlSpec{"if.width", 0x1A, 0x03, true, "IF filter width (actual)",
+                Plane::Slice, Encoding::BcdByte, Wiring::Both,
+                0, 49, "Hz", 50, 10000,
+                "setSliceFilter", "spectrumPassbandEdge", true,
+                "THE HZ THE SELECTED SLOT IS ACTUALLY DEFINED AS, which the slot "
+                "number cannot tell you. Mode-dependent code table, identical on "
+                "IC-705 and IC-7300MK2: SSB/CW 00-09 = 50-500 Hz in 50 Hz and "
+                "10-40 = 600-3600 Hz in 100 Hz; RTTY the same but capped at code 31 "
+                "(2.7 kHz); AM 00-49 = 200 Hz-10 kHz in 200 Hz. NOTE THE GAP — 550 Hz "
+                "does not exist. FM/DV/WFM have NO settable width and this command "
+                "does not apply there. Re-read after every mode, DATA and slot change, "
+                "because the radio stores a separate width for each combination and "
+                "announces none of them. A write REDEFINES the selected slot, which "
+                "is exactly what the radio's own FILTER knob does."},
+    ControlSpec{"pbt.inner", 0x14, 0x07, true, "Twin PBT inner",
+                Plane::Slice, Encoding::Level255, Wiring::Both,
+                0, 255, "Hz", -3600, 3600,
+                "setSliceFilter", "spectrumPassbandEdge", true,
+                "A SIGNED POSITION about 0128, not a magnitude — do NOT put it "
+                "through the 0-255-to-percent conversion every other level uses, or "
+                "the centre quantises away and the passband walks one step per "
+                "round trip. Hz per step SCALES WITH THE WIDTH in circuit: full "
+                "deflection is one whole filter width, so the same code is 3.6 kHz in "
+                "wide SSB and 250 Hz in narrow CW. Written together with pbt.outer to "
+                "SLIDE the passband; the pair moving apart is what narrows it from "
+                "the inside, and is the only way an Icom produces an asymmetric "
+                "response."},
+    ControlSpec{"pbt.outer", 0x14, 0x08, true, "Twin PBT outer",
+                Plane::Slice, Encoding::Level255, Wiring::Both,
+                0, 255, "Hz", -3600, 3600,
+                "setSliceFilter", "spectrumPassbandEdge", true,
+                "The other end of the pair — see pbt.inner. setSliceFilter writes "
+                "both to the SAME code, because 1A 03 has already set the width and "
+                "separating them would subtract from a window that is already the "
+                "right size."},
 
     // ---- Levels (0x14) --------------------------------------------------
     ControlSpec{"af.gain", 0x14, 0x01, true, "AF gain",
@@ -67,12 +124,10 @@ constexpr std::array kSpecs = {
                 "Only pushed while NR is enabled: the register survives the "
                 "function being switched off."},
     ControlSpec{"cw.pitch", 0x14, 0x09, true, "CW pitch",
-                Plane::Slice, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "Hz", 300, 900,
-                "", "", false,
-                "NOT WANTED. AetherSDR decodes CW itself, so the radio's pitch is not "
-                "ours to set; the CW passband we draw assumes the radio's default "
-                "and that is the correct division of labour."},
+                "setCwPitch", "cwPitchSlider", true,
+                "Shared by the Icom text keyer and the existing CW sidebar."},
     ControlSpec{"tx.power", 0x14, 0x0A, true, "RF power",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
@@ -82,11 +137,10 @@ constexpr std::array kSpecs = {
                 0, 255, "%", 0, 100,
                 "setMicGain", "phoneMicSlider", true, ""},
     ControlSpec{"cw.speed", 0x14, 0x0C, true, "Keyer speed",
-                Plane::Transmit, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "wpm", 6, 48,
-                "", "", false,
-                "NOT WANTED. The radio owns its keyer and AetherSDR has its own CW "
-                "engine — operator decision, not a gap."},
+                "setCwSpeed", "cwSpeedSlider", true,
+                "Shared by the Icom text keyer and the existing CW sidebar."},
     ControlSpec{"notch.pos", 0x14, 0x0D, true, "Manual notch position",
                 Plane::Slice, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
@@ -104,12 +158,11 @@ constexpr std::array kSpecs = {
                 0, 255, "%", 0, 100,
                 "setSliceNoiseBlanker", "dspNBBtn", true, ""},
     ControlSpec{"monitor.level", 0x14, 0x15, true, "Monitor level",
-                Plane::Transmit, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
-                "", "", false,
-                "DELIBERATELY not sent: no seam verb carries a monitor level, so "
-                "writing it would overwrite whatever the operator dialled in on "
-                "the radio. 16 45 toggles the function and is wired."},
+                "setTxMonitor", "phoneMonitorSlider", true,
+                "14 15 carries the level and 16 45 carries enable; both are read "
+                "from the radio and operator intent crosses one neutral seam verb."},
 
     // ---- Functions (0x16) ------------------------------------------------
     ControlSpec{"preamp", 0x16, 0x02, true, "Preamp",
@@ -146,7 +199,7 @@ constexpr std::array kSpecs = {
     ControlSpec{"monitor", 0x16, 0x45, true, "TX monitor",
                 Plane::Transmit, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "setTxAudioMonitor", "txMonitorBtn", true,
+                "setTxMonitor", "txMonitorBtn", true,
                 "The reply used to fall through the 0x16 switch's default and be "
                 "dropped, so the button opened at OUR default on a radio that may "
                 "have had the monitor on."},
@@ -161,13 +214,14 @@ constexpr std::array kSpecs = {
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
                 "setVox", "phoneVoxSlider", true,
-                "The trigger threshold. Only pushed while VOX is enabled: the "
-                "register survives the function being switched off."},
+                "The trigger threshold. An operator slider change is pushed even "
+                "while VOX is off because the register defines the next enable."},
     ControlSpec{"break.in", 0x16, 0x47, true, "Break-in",
-                Plane::Transmit, Encoding::Enum, Wiring::Declared,
+                Plane::Transmit, Encoding::Enum, Wiring::Both,
                 0, 2, "step", 0, 2,
-                "", "", false,
-                "STUB: 00 off, 01 semi, 02 full. Declared, never used."},
+                "setCwBreakIn", "cwBreakInBtn", true,
+                "The existing boolean control selects OFF or semi break-in. "
+                "Full break-in needs a future three-state UI."},
     ControlSpec{"notch", 0x16, 0x48, true, "Manual notch",
                 Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -192,6 +246,16 @@ constexpr std::array kSpecs = {
                 "(0x00 off, 0x20 = 20 dB). HF and 50 MHz only — the radio ignores "
                 "it above and reports OFF."},
 
+    // ---- Receive antenna (0x12) ----------------------------------------
+    ControlSpec{"rx.antenna", 0x12, 0x00, true, "Receive-only antenna",
+                Plane::Slice, Encoding::OnOff, Wiring::SendOnly,
+                0, 1, "main/rx", 0, 1,
+                "setSliceRxAntenna", "sliceRxAntennaBtn", true,
+                "IC-7300MK2-specific: 00 uses ANT1 for receive; 01 selects the "
+                "RX-ANT input. Live B6 firmware returns bare FB to the official "
+                "read form. The operator command is therefore optimistic for "
+                "this session only; reconnect does not invent or replay state."},
+
     // ---- Control (0x1C) --------------------------------------------------
     ControlSpec{"ptt", 0x1C, 0x00, true, "PTT",
                 Plane::Transmit, Encoding::OnOff, Wiring::Both,
@@ -203,9 +267,9 @@ constexpr std::array kSpecs = {
                 Plane::Transmit, Encoding::Enum, Wiring::Both,
                 0, 2, "step", 0, 2,
                 "setAtu", "txAtuBtn", true,
-                "NOT a tune carrier — it runs an EXTERNAL AH-705 matching cycle, "
-                "and it KEYS. There is no command to ask whether a tuner is "
-                "attached, so capabilities().hasTuner follows canTransmit and the "
+                "NOT a tune carrier — it runs the model's internal or external "
+                "antenna-tuner matching cycle and it KEYS. There is no universal "
+                "attachment query, so capabilities().hasTuner follows canTransmit and the "
                 "button is honest about the OUTCOME (00 none / 01 matched / 02 "
                 "tuning) rather than about the hardware."},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
@@ -233,17 +297,18 @@ constexpr std::array kSpecs = {
 
     // ---- SET menu (0x1A 05) ----------------------------------------------
     ControlSpec{"mod.input.dataoff", 0x1A, 0x05, true, "DATA OFF MOD input",
-                Plane::Radio, Encoding::Bcd4, Wiring::DecodeOnly,
-                0, 3, "enum", 0, 3,
-                "", "", true,
-                "MENU ITEM 118. THE SINGLE MOST IMPORTANT SETTING FOR TRANSMIT: if "
-                "it is not WLAN the radio discards every byte of our audio, keys, "
-                "and reports zero forward power with no error. Read and warned "
-                "about, deliberately never written."},
+                Plane::Radio, Encoding::Bcd4, Wiring::Both,
+                0, 5, "enum", 0, 5,
+                "invokeExtension icom/audio.pc", "pcAudioBtn", true,
+                "MODEL-SPECIFIC: item 0118 and WLAN=03 on IC-705; item 0084 "
+                "and LAN=05 on IC-7300MK2. PC Audio writes only this voice-mode "
+                "selection and confirms it by readback."},
     ControlSpec{"mod.input.data", 0x1A, 0x05, true, "DATA MOD input",
                 Plane::Radio, Encoding::Bcd4, Wiring::DecodeOnly,
-                0, 3, "enum", 0, 3,
-                "", "", true, "MENU ITEM 119 — the data-mode half of the above."},
+                0, 5, "enum", 0, 5,
+                "", "", true,
+                "MODEL-SPECIFIC: item 0119 on IC-705 and 0085 on IC-7300MK2. "
+                "Radio-authoritative and deliberately never written by PC Audio."},
 
     // ---- Scope (0x27) ----------------------------------------------------
     ControlSpec{"scope.onoff", 0x27, 0x10, true, "Scope on/off",
@@ -276,6 +341,35 @@ constexpr std::array kSpecs = {
                 "STUB, and deliberately: FIXED mode's edges are three saved presets "
                 "per band, so following a pan drag would overwrite the operator's "
                 "own stored scope edges thirty times a second."},
+
+    // ---- Transmit passband ------------------------------------------------
+    ControlSpec{"tx.bandwidth.slot", 0x16, 0x58, true, "SSB TX bandwidth slot",
+                Plane::Transmit, Encoding::Enum, Wiring::DecodeOnly,
+                0, 2, "enum", 0, 2,
+                "", "", true,
+                "00 WIDE, 01 MID, 02 NAR. NAMES A SLOT, IS NOT A PASSBAND: the edges "
+                "live in the SET item the slot points at (tx.bandwidth.edges), and "
+                "the radio also swaps slots on its own with the speech compressor. "
+                "DECODE-ONLY deliberately — AetherSDR's seam carries Hz, not a preset "
+                "name, so a write here would be a control with no operator intent "
+                "behind it. Read at connect and used to route the edge read/write to "
+                "the slot actually in circuit."},
+    ControlSpec{"tx.bandwidth.edges", 0x1A, 0x05, true, "SSB TX passband edges",
+                Plane::Transmit, Encoding::Enum, Wiring::Both,
+                0, 0x53, "Hz", 100, 2900,
+                "setTxFilter", "TX low cut frequency", true,
+                "MODEL-SPECIFIC ITEM NUMBERS: IC-7300MK2 00 14/15/16/17 and IC-705 "
+                "0019/0020/0021/0022 for WIDE/MID/NAR/SSB-D. ONE PACKED BCD BYTE — "
+                "high digit indexes the low-edge table, low digit the high-edge "
+                "table. The tables differ: IC-7300MK2 low edges are 100/120/150/200/"
+                "300/500 Hz and the IC-705's are 100/200/300/500; both share high "
+                "edges 2500/2700/2800/2900. NOTHING BETWEEN THEM EXISTS, so a seam "
+                "request SNAPS and the applet must show the read-back, never the "
+                "request. UNVERIFIED ON THE IC-705: its own guide cites 0017/0018/0019 "
+                "in the 16 58 note, which collides with the SSB TX Tone levels — the "
+                "0019-0022 run is the consistent reading and the read-back is what "
+                "settles it. A model with no profile gets NO write and an empty "
+                "txFilterLowEdgesHz, so the UI and the backend decline together."},
 
     // ---- Identity / power ------------------------------------------------
     ControlSpec{"id", 0x19, 0x00, true, "Transceiver ID",

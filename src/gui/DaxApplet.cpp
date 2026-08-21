@@ -106,7 +106,7 @@ void DaxApplet::buildUI()
         emit daxToggled(on);
     });
 
-    // RX channel meter/sliders (DAX 1-4)
+    // RX channel meter/sliders (DAX 1-8)
     for (int i = 0; i < kChannels; ++i) {
         auto* row = new QHBoxLayout;
         row->setContentsMargins(4, 1, 4, 1);
@@ -137,7 +137,11 @@ void DaxApplet::buildUI()
         });
         row->addWidget(m_daxRxMeter[i], 1);
 
-        outer->addLayout(row);
+        // Wrap each row in a container widget so setMaxDaxChannels() can hide
+        // whole rows on radios with fewer than kChannels slices (#4854 review).
+        m_daxRxRow[i] = new QWidget;
+        m_daxRxRow[i]->setLayout(row);
+        outer->addWidget(m_daxRxRow[i]);
     }
 
     // TX meter/slider
@@ -172,6 +176,22 @@ void DaxApplet::buildUI()
     outer->addLayout(txRow);
     outer->addLayout(daxEnRow);
 #endif  // !Q_OS_WIN
+}
+
+// Hide RX rows above the radio's slice capacity so a 2-slice (6300/6400) or
+// 4-slice (6600/8600) radio doesn't show dead DAX rows with live-but-routing-
+// nowhere gain sliders. kChannels stays the allocation; we only toggle
+// visibility. Note-only Windows builds leave m_daxRxRow[] null — guarded. (#4854)
+void DaxApplet::setMaxDaxChannels(int n)
+{
+    n = qBound(1, n, kChannels);
+    if (n == m_maxDaxChannels)
+        return;
+    m_maxDaxChannels = n;
+    for (int i = 0; i < kChannels; ++i) {
+        if (m_daxRxRow[i])
+            m_daxRxRow[i]->setVisible(i < n);
+    }
 }
 
 void DaxApplet::setRadioModel(RadioModel* model)

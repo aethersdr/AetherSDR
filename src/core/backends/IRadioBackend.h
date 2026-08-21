@@ -216,6 +216,11 @@ public:
         Q_UNUSED(panId);
         Q_UNUSED(step);
     }
+    virtual void setSliceRxAntenna(int sliceId, const QString& antenna)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(antenna);
+    }
 
     // How often the operator wants panadapter frames, in frames per second.
     //
@@ -351,6 +356,19 @@ public:
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
 
+    // A client-timed CW element. This is deliberately separate from setKeying:
+    // setKeying is the transmitter/PTT envelope, while this is the carrier
+    // inside that envelope. A host-modulating backend turns the element into
+    // shaped IQ and may use breakIn to raise/drop PTT around it; a radio-side
+    // keyer translates it to its own key-line protocol. Flex keeps using its
+    // timestamped NetCW path above this seam, so the default is a no-op.
+    virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs)
+    {
+        Q_UNUSED(down);
+        Q_UNUSED(breakIn);
+        Q_UNUSED(breakInDelayMs);
+    }
+
     // Let receive audio through WHILE TRANSMITTING.
     //
     // Receive audio is normally muted on transmit — the radio hears its own
@@ -363,10 +381,18 @@ public:
     // panadapter reads raw wire order and therefore agrees with the transmitter
     // by construction, while the demodulator applies the receive conjugation and
     // WDSP's sideband selection independently. That distinction is what a whole
-    // bring-up turned on — see HERMES.md 14.6 and 15.5.
+    // bring-up turned on — see docs/HERMES.md 14.6 and 15.5.
     //
     // Default OFF. Turning it on outside a measurement will be unpleasant.
     virtual void setTxAudioMonitor(bool on) { Q_UNUSED(on); }
+
+    // The operator-facing radio MON switch and level. This is deliberately
+    // separate from the diagnostic receive-during-TX gate above.
+    virtual void setTxMonitor(bool on, int level)
+    {
+        Q_UNUSED(on);
+        Q_UNUSED(level);
+    }
 
     // Tune carrier on/off, at the operator's TUNE power (percent, 0..100).
     //
@@ -391,6 +417,35 @@ public:
     // nothing to do here. A backend that owns its own drive register (HL2)
     // implements it.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000).
+    //
+    // A sidetone setting on a radio that keys itself; a TUNING setting on a
+    // radio whose demodulator we own. The CW convention every client shares is
+    // that the marker sits on the signal and the receiver produces the pitch
+    // from a BFO, so a host-demodulating backend has to know the pitch to place
+    // its passband at all — see Hl2Backend::cwBfoHz(). Get this wrong and the
+    // panadapter's CW passband draws a whole pitch away from the marker while
+    // the transmitter keys on the marker itself.
+    //
+    // Default no-op: a Flex owns its own DSP and takes `cw pitch` as text from
+    // TransmitModel, so this seam would be a second, redundant opinion.
+    virtual void setCwPitch(int hz) { Q_UNUSED(hz); }
+
+    // Radio-resident text keyer. Unlike setCwKeying(), this hands printable
+    // text to a keyer in the radio; it is the neutral seam used by CWX, CAT,
+    // MIDI/controller macros and the automation bridge.
+    // Empty return means accepted for delivery. A non-empty string is an
+    // operator-facing rejection reason; callers must not report success when
+    // the backend could not preserve the requested text.
+    virtual QString sendCwText(const QString& text)
+    {
+        Q_UNUSED(text);
+        return QStringLiteral("radio has no text keyer");
+    }
+    virtual void abortCwText() {}
+    virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
+    virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
 
     // The speech processor, as the operator sees it: an enable plus one of
     // three presets (0 = NOR, 1 = DX, 2 = DX+).
@@ -550,10 +605,19 @@ public:
     // compressor and EQ before this point. That is deliberate — the TONE button,
     // the microphone and any future source all reach the air through ONE path,
     // so what the operator monitors is what gets transmitted.
-    virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
+    //
+    // `clientLeveled` is true when the audio came from an external TCI/DAX
+    // client rather than the mic chain or the engine's own generators. The
+    // sender of such audio has already applied its own level control, so a
+    // host-modulating backend must not run makeup gain (ALC) over it (#4796).
+    // No default argument — defaults on virtuals bind statically, and the
+    // override a caller actually reaches would quietly diverge from it.
+    virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
+                               bool clientLeveled)
     {
         Q_UNUSED(int16Stereo);
         Q_UNUSED(sampleRateHz);
+        Q_UNUSED(clientLeveled);
     }
 
     // ---- diagnostics ----

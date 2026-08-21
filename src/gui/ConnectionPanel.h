@@ -52,7 +52,7 @@ public:
                                    const QRect& availableGeometry) const;
     void setConnected(bool connected);
     void setStatusText(const QString& text);
-    void probeRadio(const QString& ip);
+    void probeRadio(const QString& ip, bool restoreSavedFamily = false);
 
     // Radio families the "Connect by IP" page can dial. The manual page can no
     // longer guess: a FlexRadio answers TCP/4992 and a Hermes-Lite 2 answers
@@ -254,9 +254,20 @@ private:
     QWidget*     m_manualIcomUserRow{nullptr};
     QWidget*     m_manualIcomPassRow{nullptr};
     QWidget*     m_manualIcomCivRow{nullptr};
+    // The hex entry's own row, shown only for "Custom...". Separate from the
+    // combo's row so the two can be hidden independently — the label column is
+    // measured across hidden rows too, so revealing this one does not move the
+    // Radio type and Radio IP fields sideways.
+    QWidget*     m_manualIcomCivCustomRow{nullptr};
     QLineEdit*   m_manualIcomUserEdit{nullptr};
     QLineEdit*   m_manualIcomPassEdit{nullptr};
+    // The model chooser. Non-editable: it enumerates a known set with an escape
+    // hatch, which is populateSerialPortCombo's job, not m_manualIpCombo's
+    // recent-values history.
+    QComboBox*   m_manualIcomCivCombo{nullptr};
     QLineEdit*   m_manualIcomCivEdit{nullptr};
+    void         populateIcomCivCombo();
+    void         syncIcomCivCustomRow();
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.
@@ -266,6 +277,9 @@ private:
 
     QString      m_pendingIcomPassword;
     QString      m_pendingIcomHost;
+    QString      m_pendingIcomResolvedHost;
+    RadioBindSettings m_pendingIcomBindSettings;
+    QHostAddress m_pendingIcomSessionBindAddress;
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
     QToolButton* m_manualAdvancedToggle{nullptr};

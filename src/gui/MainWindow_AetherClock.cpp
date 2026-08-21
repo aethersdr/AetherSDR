@@ -97,8 +97,15 @@ void MainWindow::setupAetherClock()
             });
 
     if (m_appletPanel) {
-        if (auto* applet = m_appletPanel->aetherClockApplet())
+        if (auto* applet = m_appletPanel->aetherClockApplet()) {
             applet->attach(m_clockEngine, m_clockModel);
+            // DAX chooser follows the radio's slice capacity (#4854 review).
+            applet->setMaxDaxChannels(m_radioModel.maxSlices());
+            connect(&m_radioModel, &RadioModel::infoChanged, applet,
+                    [this, applet] { applet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+            connect(&m_radioModel, &RadioModel::connectionStateChanged, applet,
+                    [this, applet](bool) { applet->setMaxDaxChannels(m_radioModel.maxSlices()); });
+        }
     }
 }
 

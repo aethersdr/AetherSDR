@@ -11,6 +11,7 @@
 #include <QFont>
 #include <QLabel>
 #include <QLayout>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
@@ -96,6 +97,42 @@ bool expandManualAdvancedSection(ConnectionPanel& panel)
     section->setVisible(true);
     QApplication::processEvents();
     return true;
+}
+
+void checkIcomManualGuidanceIsModelNeutral()
+{
+    ConnectionPanel panel;
+    auto* manualMode =
+        panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"));
+    auto* radioType =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualRadioType"));
+    auto* hint =
+        panel.findChild<QLabel*>(QStringLiteral("connectionManualHintLabel"));
+    auto* ip = panel.findChild<QLineEdit*>(QStringLiteral("connectionManualIp"));
+
+    if (manualMode) {
+        manualMode->click();
+    }
+    const int icomIndex = radioType
+        ? radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyIcom))
+        : -1;
+    if (radioType && icomIndex >= 0) {
+        radioType->setCurrentIndex(icomIndex);
+    }
+    QApplication::processEvents();
+
+    const QString guidance = hint ? hint->text() : QString();
+    report("Icom IP guidance remains credential-focused",
+           guidance.contains(QStringLiteral("configured for network control")));
+    report("Icom IP guidance does not name one radio model",
+           !guidance.contains(QStringLiteral("IC-705")));
+    report("Icom IP guidance omits model-specific MOD settings",
+           !guidance.contains(QStringLiteral("MOD Input"))
+               && !guidance.contains(QStringLiteral("DATA OFF MOD"))
+               && !guidance.contains(QStringLiteral("DATA MOD")));
+    report("Icom address example is model-neutral",
+           ip && !ip->placeholderText().contains(QStringLiteral("IC-705"),
+                                                  Qt::CaseInsensitive));
 }
 
 bool setScaledApplicationFont(QApplication& app,
@@ -230,6 +267,67 @@ void checkFooterReachable(QApplication& app,
     }
 
     panel.hide();
+}
+
+// A networked Icom is reached through the manual-IP page rather than broadcast
+// discovery. It must carry the same routed marker as manual Flex/HL2 sessions
+// or MainWindow will discard LastRoutedRadioIp and startup auto-connect will
+// have no host to dial.
+void checkIcomUsesRoutedRetention()
+{
+    auto& settings = AppSettings::instance();
+    const QString previousProfiles =
+        settings.value(QStringLiteral("RoutedProfilesJson"), QStringLiteral("{}")).toString();
+    settings.setValue(
+        QStringLiteral("RoutedProfilesJson"),
+        QStringLiteral(
+            R"({"127.0.0.1":{"identity":{"target_address":"127.0.0.1","family":"icom"},"bind":{"mode":"auto"}}})"));
+    settings.save();
+
+    ConnectionPanel panel;
+    QComboBox* radioType = panel.findChild<QComboBox*>(
+        QStringLiteral("connectionManualRadioType"));
+    QLineEdit* user = panel.findChild<QLineEdit*>(
+        QStringLiteral("connectionManualIcomUser"));
+    QLineEdit* password = panel.findChild<QLineEdit*>(
+        QStringLiteral("connectionManualIcomPassword"));
+
+    const int flexIndex = radioType
+        ? radioType->findData(QString::fromLatin1(ConnectionPanel::kFamilyFlex))
+        : -1;
+    if (radioType && flexIndex >= 0) {
+        radioType->setCurrentIndex(flexIndex);
+    }
+    if (user) {
+        user->setText(QStringLiteral("test-user"));
+    }
+    if (password) {
+        password->setText(QStringLiteral("test-password"));
+    }
+
+    bool emitted = false;
+    RadioInfo requested;
+    QObject::connect(&panel, &ConnectionPanel::connectRequested,
+                     [&emitted, &requested](const RadioInfo& info) {
+        emitted = true;
+        requested = info;
+    });
+    panel.probeRadio(QStringLiteral("127.0.0.1"), /*restoreSavedFamily=*/true);
+
+    report("retained route restores the Icom radio family",
+           radioType
+               && radioType->currentData().toString()
+                      == QString::fromLatin1(ConnectionPanel::kFamilyIcom));
+    report("manual Icom emits a connection request", emitted);
+    report("manual Icom is retained as a routed radio",
+           emitted && requested.isRouted);
+    report("manual Icom keeps its stable host identity",
+           emitted && requested.serial == QStringLiteral("icom:127.0.0.1"));
+    report("manual Icom carries the selected source-path settings",
+           emitted && requested.bindSettings.mode == RadioBindMode::Auto);
+
+    settings.setValue(QStringLiteral("RoutedProfilesJson"), previousProfiles);
+    settings.save();
 }
 
 } // namespace
@@ -429,6 +527,8 @@ int main(int argc, char** argv)
     }
 
     app.setFont(originalFont);
+    checkIcomManualGuidanceIsModelNeutral();
+    checkIcomUsesRoutedRetention();
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES PRESENT");
     return g_failed == 0 ? 0 : 1;
 }
