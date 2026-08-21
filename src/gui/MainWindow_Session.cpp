@@ -1128,16 +1128,15 @@ void MainWindow::wireRadioModel()
         // VITA-49 burst pressure on the GUI event loop can't gap CW elements
         // (#3623) — same reason the iambic keyer below avoids QTimer.
         m_cwxLocalKeyer = std::make_unique<CwxLocalKeyer>();
-        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
+        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down,
+                                                   std::chrono::steady_clock::time_point when) {
             // Lock-free atomic gate; safe to call directly from the keyer
-            // thread, matching the iambic keyer's gate path below.
-            // CWX: same fix pending (#4890).  This keyer runs the same
-            // absolute-grid schedule (#3644) and knows each edge's instant
-            // (m_epoch + m_nextEdgeMs), but still takes the 1-arg callback,
-            // so its sidetone renders wake rhythm while the iambic path
-            // below renders scheduled rhythm.
+            // thread, matching the iambic keyer's gate path below.  `when`
+            // is the element's absolute grid instant (#4890/#4977), so a
+            // machine-formed CWX macro renders the rhythm it was scheduled
+            // with rather than the worker's wake rhythm.
             if (m_audio)
-                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
+                m_audio->setCwKeyDown(down, when);   // keys audible + recorder sidetone
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
                 this, [this](const QString& text, int wpm) {
