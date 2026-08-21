@@ -14,6 +14,7 @@
 #include <sys/proc_info.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <QSettings>
 #include <vector>
 #elif defined(Q_OS_WIN)
 #include <winsock2.h>
@@ -134,6 +135,24 @@ TciPeerProcessInfo resolveLinux(const QHostAddress& peer, quint16 port)
 
 #elif defined(Q_OS_MACOS)
 
+// A macOS program is usually an app bundle, and the bundle's Info.plist
+// carries the version the user sees in Finder (WSJT-X: "3.0.1").  Walk up
+// from ".../Foo.app/Contents/MacOS/foo" to ".../Foo.app/Contents/Info.plist"
+// and read it — a plain file read, never an execution of the client.  A bare
+// executable (no bundle) yields an empty string.
+QString bundleVersionForExecutable(const QString& exePath)
+{
+    const int macosDir = exePath.lastIndexOf(QStringLiteral("/Contents/MacOS/"));
+    if (macosDir < 0) return {};
+    const QString plist = exePath.left(macosDir) + QStringLiteral("/Contents/Info.plist");
+    // NativeFormat on macOS reads property lists (binary or XML).
+    QSettings info(plist, QSettings::NativeFormat);
+    QString version = info.value(QStringLiteral("CFBundleShortVersionString")).toString().trimmed();
+    if (version.isEmpty())
+        version = info.value(QStringLiteral("CFBundleVersion")).toString().trimmed();
+    return version;
+}
+
 QHostAddress sockinfoLocalAddress(const in_sockinfo& ini)
 {
     if (ini.insi_vflag & INI_IPV6) {
@@ -189,6 +208,8 @@ TciPeerProcessInfo resolveMac(const QHostAddress& peer, quint16 port)
                 info.name = QString::fromUtf8(name);
             if (info.name.isEmpty() && !info.exePath.isEmpty())
                 info.name = info.exePath.section(QLatin1Char('/'), -1);
+            if (!info.exePath.isEmpty())
+                info.version = bundleVersionForExecutable(info.exePath);   // empty off-bundle
             info.resolved = !info.name.isEmpty() || !info.exePath.isEmpty();
             return info;
         }
