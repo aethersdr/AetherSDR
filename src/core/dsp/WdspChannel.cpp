@@ -51,6 +51,23 @@ std::string wisdomPath()
 {
     namespace fs = std::filesystem;
     fs::path dir;
+    // Explicit override, consulted before anything else. This exists so a TEST
+    // process can be pointed at a build-local cache and be structurally unable
+    // to reach the operator's real one — see tests/TestWdspWisdomIsolation.cpp,
+    // which sets it before main() so it holds for a test binary run DIRECTLY,
+    // not only for one launched through ctest.
+    //
+    // Redirecting beats suppressing the export: the tests keep a persistent
+    // cache of their own, so repeat runs import instead of re-measuring, and
+    // there is no "did we remember to disable writing" question left to get
+    // wrong. Never set by the app.
+    if (const char* override = std::getenv("AETHER_WDSP_WISDOM_DIR");
+        override != nullptr && *override != '\0') {
+        dir = override;
+        std::error_code overrideEc;
+        fs::create_directories(dir, overrideEc);   // best-effort
+        return (dir / "wdsp-fftw-wisdom").string();
+    }
 #ifdef _WIN32
     if (const char* la = std::getenv("LOCALAPPDATA")) dir = la;
 #else
@@ -67,10 +84,67 @@ std::string wisdomPath()
     return (dir / "wdsp-fftw-wisdom").string();
 }
 
+// Test/CI escape hatch: bound how long FFTW may spend measuring each plan.
+//
+// WDSP builds every FFT with FFTW_PATIENT, which is right for a radio session
+// and ruinous for a test suite: the first OpenChannel in a cold process spends
+// 20 s (macOS, arm64) to 190 s (CI, x86_64) measuring plans, and a CI container
+// starts cold on every single run. That cost is not the tests' own work and it
+// buys them nothing -- a correctness test cares that the FFT is right, never
+// that it is optimal.
+//
+// AETHER_WDSP_FFTW_TIMELIMIT=<seconds> caps the planner via FFTW's own
+// documented global setting, so no vendored WDSP source has to be patched to
+// reach the flag it hardcodes. Measured on this machine, 15 representative
+// PATIENT plans: 4.79 s unbounded, 0.02 s at 0.001. The bound is approximate
+// and applies PER PLAN, not to the process -- FFTW cannot interrupt a single
+// measurement -- so the total still scales with the number of plans. Do not
+// read a 0.001 limit as "planning takes 1 ms".
+//
+// UNSET IS THE SHIPPING PATH. A radio session never sets this and gets the
+// full PATIENT plans it always had.
+//
+// A bounded process also NEVER WRITES THE WISDOM CACHE (see open()). Plans
+// measured under a time limit are worse than the ones a real session wants,
+// and the cache is shared with the app -- exporting them would hand the
+// operator's radio the test suite's rushed plans. That is the whole reason
+// this is one knob and not two: it is not possible to bound the planner and
+// forget to isolate the cache.
+double plannerTimeLimitSeconds()
+{
+    static const double limit = [] {
+        const char* raw = std::getenv("AETHER_WDSP_FFTW_TIMELIMIT");
+        if (raw == nullptr || *raw == '\0')
+            return -1.0;
+        char* end = nullptr;
+        const double parsed = std::strtod(raw, &end);
+        // A malformed value is ignored rather than treated as 0: silently
+        // rushing every plan because someone typed "yes" would be a very
+        // quiet way to ship bad plans.
+        if (end == raw || !std::isfinite(parsed) || parsed < 0.0)
+            return -1.0;
+        return parsed;
+    }();
+    return limit;
+}
+
+// True when this process is running with a bounded planner, i.e. its measured
+// plans are not good enough to publish to the shared cache.
+bool plannerIsBounded()
+{
+    return plannerTimeLimitSeconds() >= 0.0;
+}
+
 void loadWisdomOnce()
 {
     static std::once_flag flag;
-    std::call_once(flag, [] { fftw_import_wisdom_from_filename(wisdomPath().c_str()); });
+    std::call_once(flag, [] {
+        // Before the first plan, so it governs every one of them. FFTW's
+        // default is FFTW_NO_TIMELIMIT and we only ever move off it here.
+        if (plannerIsBounded())
+            fftw_set_timelimit(plannerTimeLimitSeconds());
+        fftw_import_wisdom_from_filename(wisdomPath().c_str());
+    });
 }
 
 // Write the wisdom cache NOW. Called at the end of open(), under g_setupMutex,
@@ -615,11 +689,6 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
     return wdspPortOutstandingAllocations();
 }
 
-std::string WdspChannel::wisdomCachePathForTest()
-{
-    return wisdomPath();
-}
-
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept
 {
     if (config.inputBlockSize == 0 || config.dspBlockSize == 0 ||
@@ -779,8 +848,13 @@ void WdspChannel::open() noexcept
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.
-    exportWisdomNow();
-    armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
+    // Bounded planner => rushed plans => do not publish them. See
+    // plannerTimeLimitSeconds(): this cache is shared with the running app, so
+    // a test run that exported would degrade the operator's next connect.
+    if (!plannerIsBounded()) {
+        exportWisdomNow();
+        armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
+    }
     // Before the channel starts, so the first block through processIq() finds
     // its staging buffers sized and the stage already created.
     openNoiseBlanker();

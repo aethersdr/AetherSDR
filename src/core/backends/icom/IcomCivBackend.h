@@ -155,6 +155,12 @@ private slots:
 
 private:
     void publishCapabilities();
+    // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
+    // from it. One call rather than two because they are the same answer — a
+    // model whose name reached the UI while its bands did not is how an IC-705
+    // ended up with a band menu that had no 2 m or 70 cm button on it (#5041).
+    // Emitted from every point that resolves m_model, so the two cannot drift.
+    void publishIdentity();
     // Publish the scope's dBm axis, derived from the SAME ScopeCalibration that
     // toDbm() decodes with. Call whenever anything it depends on changes — at
     // connect, and on every reference-level change.
@@ -206,7 +212,20 @@ private:
     // slot — and a 26 that did not republish would decode the DATA flag into a
     // mode indicator that never changed.
     void publishModeState();
+    // Publish THIS MODEL's mode vocabulary onto the slice, so the mode combo
+    // offers what the radio actually has instead of the compiled-in FlexRadio
+    // list. Emitted on every model resolution, including the one that WITHDRAWS
+    // an identity (the ambiguous-bus revert): an empty list is this backend's
+    // honest answer for a radio it cannot characterise, and SliceModel carries
+    // it. (What the combos do with an empty list is theirs to decide — they keep
+    // their last one, #891 — but the model must not go on asserting a vocabulary
+    // we have just stopped standing behind.)
+    void publishModeList();
     void publishMeterDefs();
+    // The receive-only mode gate. True when the radio will not transmit in the
+    // mode it is currently in, in which case the caller must NOT key. Warns and
+    // puts the transmit indicator back where the radio is. See the definition.
+    bool refuseKeyingInReceiveOnlyMode();
     void sendUserCommand(const std::vector<std::uint8_t>& frame);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0);

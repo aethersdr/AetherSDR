@@ -133,15 +133,14 @@ void MainWindow::tuneToNet(const NetEntry& entry)
         const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
         if (targetBand != currentBand) {
             const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-            const auto stackKeyResult = XvtrPolicy::resolveBandStackKey(
-                targetBand, xvtrs, m_radioModel.capabilities());
-            if (!stackKeyResult.isSupported()) {
-                QString reason = stackKeyResult.unsupportedReason;
-                if (freqMhz > 54.0 && xvtrs.isEmpty()) {
-                    reason = QString("Band %1 requires a configured XVTR before "
-                                     "Aether can tune it.")
-                                 .arg(targetBand);
-                }
+            const RadioCapabilities backendCaps = m_radioModel.backendCapabilities();
+            const auto admissibility = XvtrPolicy::evaluateBandTune(
+                m_radioModel.usesFlexCommandPlane(), targetBand, freqMhz,
+                backendCaps.tuningMinHz, backendCaps.tuningMaxHz, xvtrs,
+                m_radioModel.capabilities());
+            if (!admissibility.supported) {
+                const QString reason =
+                    bandTuneRefusalText(admissibility, targetBand);
                 qCWarning(lcProtocol).noquote().nospace()
                     << "MainWindow: net tune cannot preselect band stack"
                     << " source=net-tune net=" << entry.name

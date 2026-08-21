@@ -601,7 +601,7 @@ PassbandEdges passbandFromWidthAndPbt(int centreHz, int widthHz, int innerCode,
     return {centre - effective / 2, centre + effective / 2};
 }
 
-int passbandCentreHz(const std::string& mode) noexcept
+int passbandCentreHz(const std::string& mode, int widthHz) noexcept
 {
     const std::string u = upperMode(mode);
     // CW's slice frequency IS the tone (see passbandForModeAndFilter), so the
@@ -610,9 +610,13 @@ int passbandCentreHz(const std::string& mode) noexcept
         return 0;
     if (!isSingleSideband(mode))
         return 0;   // AM, SAM, FM, WFM straddle the carrier
-    // 1500 Hz for voice. The data modes sit lower because their own filters are
-    // narrow and centred on the tone pair rather than on speech.
-    const int centre = (u == "RTTY" || u == "RTTYR") ? 1000 : 1500;
+    // The RTTY mark frequency is configurable (SET 0050: 1275/1615/2125 Hz)
+    // and has not been read into this model. Preserve the previous conservative
+    // geometry with its carrier-side edge at 150 Hz; 1000 Hz is not a valid
+    // mark value and would present an invented passband as radio truth.
+    const int centre = (u == "RTTY" || u == "RTTYR")
+        ? 150 + std::max(0, widthHz) / 2
+        : 1500;
     return isLowerSideband(mode) ? -centre : centre;
 }
 

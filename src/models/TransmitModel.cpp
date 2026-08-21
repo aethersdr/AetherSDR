@@ -655,18 +655,18 @@ void TransmitModel::setDexpLevel(int level)
 // command (Principle II).
 void TransmitModel::setTxFilterLow(int hz)
 {
-    setTxFilter(qBound(0, hz, 10000), m_txFilterHigh);
+    setTxFilter(qBound(kTxFilterMinHz, hz, kTxFilterMaxHz), m_txFilterHigh);
 }
 
 void TransmitModel::setTxFilterHigh(int hz)
 {
-    setTxFilter(m_txFilterLow, qBound(0, hz, 10000));
+    setTxFilter(m_txFilterLow, qBound(kTxFilterMinHz, hz, kTxFilterMaxHz));
 }
 
 void TransmitModel::setTxFilter(int lowHz, int highHz)
 {
-    lowHz = qBound(0, lowHz, 9950);
-    highHz = qBound(lowHz + 50, highHz, 10000);
+    lowHz  = qBound(kTxFilterMinHz, lowHz, kTxFilterMaxHz - kTxFilterMinWidthHz);
+    highHz = qBound(lowHz + kTxFilterMinWidthHz, highHz, kTxFilterMaxHz);
     if (m_txFilterLow != lowHz || m_txFilterHigh != highHz) {
         m_txFilterLow = lowHz;
         m_txFilterHigh = highHz;

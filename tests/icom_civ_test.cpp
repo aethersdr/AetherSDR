@@ -591,22 +591,24 @@ static void testTwinPbt()
 
     // Centred, unshifted, an SSB passband sits where the radio puts it: around
     // 1500 Hz, NOT with its low edge pinned at 300.
-    const auto ssb = passbandFromWidthAndPbt(passbandCentreHz("USB"), 2400,
+    const auto ssb = passbandFromWidthAndPbt(passbandCentreHz("USB", 2400), 2400,
                                              kPbtCentreCode, kPbtCentreCode);
     check(ssb.lowHz == 300 && ssb.highHz == 2700, "2.4 kHz USB is 300..2700");
-    const auto narrowSsb = passbandFromWidthAndPbt(passbandCentreHz("USB"), 1800,
+    const auto narrowSsb = passbandFromWidthAndPbt(passbandCentreHz("USB", 1800), 1800,
                                                    kPbtCentreCode, kPbtCentreCode);
     check(narrowSsb.lowHz == 600 && narrowSsb.highHz == 2400,
           "1.8 kHz USB narrows SYMMETRICALLY to 600..2400, not 300..2100");
 
     // LSB mirrors, sign carrying the sideband.
-    const auto lsb = passbandFromWidthAndPbt(passbandCentreHz("LSB"), 2400,
+    const auto lsb = passbandFromWidthAndPbt(passbandCentreHz("LSB", 2400), 2400,
                                              kPbtCentreCode, kPbtCentreCode);
     check(lsb.lowHz == -2700 && lsb.highHz == -300, "2.4 kHz LSB mirrors to -2700..-300");
 
     // CW is centred on the tone, and AetherSDR's CW slice frequency IS the tone.
-    check(passbandCentreHz("CW") == 0, "CW has no carrier offset");
-    check(passbandCentreHz("AM") == 0, "AM straddles the carrier");
+    check(passbandCentreHz("CW", 500) == 0, "CW has no carrier offset");
+    check(passbandCentreHz("AM", 6000) == 0, "AM straddles the carrier");
+    check(passbandCentreHz("RTTY", 500) == -400,
+          "RTTY keeps the conservative 150 Hz carrier-side edge until SET 0050 is read");
     const auto cw = passbandFromWidthAndPbt(0, 500, kPbtCentreCode, kPbtCentreCode);
     check(cw.lowHz == -250 && cw.highHz == 250, "500 Hz CW is +/-250 about the tone");
 }

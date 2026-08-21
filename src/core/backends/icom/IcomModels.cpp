@@ -1,5 +1,6 @@
 #include "core/backends/icom/IcomModels.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdlib>
@@ -36,6 +37,17 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*tuningMinHz*/ 30'000ULL, /*tuningMaxHz*/ 470'000'000ULL,
         /*verified*/ true,
         /*hasVfoModeCommand*/ true,
+        // HF/50/144/430 — the amateur allocations inside the guide's own
+        // 30 kHz – 470 MHz range above. 70 cm is spelled 440 because that is
+        // what BandDefs names it.
+        //
+        // 2200m/630m are deliberately absent: they are non-declarable by
+        // #4027's non-goals and keep their own utility buttons, so naming them
+        // here would be dropped at the boundary anyway. 4 m likewise — this
+        // radio receives there and transmits nowhere in the band, and a band
+        // button is a tune-and-operate affordance rather than a coverage
+        // claim. Both stay reachable by typing the frequency.
+        /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
     },
     {
         // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),
@@ -72,6 +84,11 @@ constexpr std::array<IcomModel, 7> kModels{{
         // transmit audio on the MICROPHONE, so a 2 m AX.25 frame keyed the
         // radio and put room noise out instead of the modem's AFSK.
         /*hasVfoModeCommand*/ true,
+        // The tri-bander's three bands, exactly the 144 MHz – 1.3 GHz the row
+        // already claims. Declaring is not a nicety here: with no declaration
+        // this radio gets the HF grid, every button of which its tuning range
+        // then DISABLES — a band menu with nothing in it that can be pressed.
+        /*bands*/ "2m,440,23cm",
     },
     {
         0x98, "IC-7610", 2, 1,
@@ -138,6 +155,14 @@ constexpr std::array<IcomModel, 7> kModels{{
         true, 10.0,
         144'000'000ULL, 10'500'000'000ULL,
         false,
+        /*hasVfoModeCommand*/ false,
+        // NO DECLARATION, on purpose. This radio's bands are not the contiguous
+        // span its 144 MHz – 10.5 GHz range suggests — it covers five discrete
+        // bands, the top one only with the CX-10G unit fitted — so the band set
+        // is a fact to read out of the model's own guide, like the rest of this
+        // unverified row, not one to infer from two numbers. Until someone does,
+        // frequency entry still reaches every one of them.
+        /*bands*/ "",
     },
 }};
 
@@ -156,6 +181,27 @@ constexpr IcomModel kUnknown{
     // every Icom has had for decades and no DATA control.
     /*hasVfoModeCommand*/ false,
 };
+
+// THE IC-9700's THREE RF DECKS — the one place these numbers live.
+//
+// This radio is not a continuous 144-1300 MHz receiver with a wide tuning
+// range; it is three separate RF decks with two large holes between them, and
+// each deck has its own PA rating. Both facts have to agree, because they
+// describe the same hardware: the tune guard refuses the holes, and
+// IcomCivBackend::capabilities() publishes the ratings as txPowerBands. When
+// those two lists were kept separately, nothing stopped an edge correction
+// landing in one and not the other — a radio that would tune 430-450 while the
+// power scale still described 430-440, or the reverse.
+//
+// Ranges are the US/A version's published coverage. A region whose radio is
+// narrower (the EU 9700 stops at 146 and 440) is REFUSED BY THE RADIO, which
+// is the safe direction to be wrong in: we offer a frequency it declines,
+// rather than silently withholding one it supports.
+constexpr std::array<IcomBand, 3> kIc9700Bands{{
+    {  144'000'000ULL,   148'000'000ULL, 100.0},   // 2 m
+    {  430'000'000ULL,   450'000'000ULL,  75.0},   // 70 cm
+    {1'240'000'000ULL, 1'300'000'000ULL,  10.0},   // 23 cm
+}};
 
 constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{
     {0x00, "MIC",     ModSourceMic},
@@ -211,6 +257,56 @@ std::span<const IcomModel> knownModels() { return kModels; }
 
 const IcomModel& unknownModel() { return kUnknown; }
 
+std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept
+{
+    // The IC-9700 is the only row whose min/max envelope contains holes. Every
+    // other model — including the unknown fallback — returns an empty span, and
+    // that emptiness is what keeps their tune path exactly as it was.
+    if (model.civAddress == 0xA2) {
+        return kIc9700Bands;
+    }
+    return {};
+}
+
+bool supportsFrequency(const IcomModel& model, std::uint64_t hz) noexcept
+{
+    if (const std::span<const IcomBand> bands = bandsFor(model); !bands.empty()) {
+        return std::ranges::any_of(bands, [hz](const IcomBand& band) {
+            return hz >= band.lowHz && hz <= band.highHz;
+        });
+    }
+    if (model.tuningMinHz == 0 || model.tuningMaxHz == 0) {
+        return true;
+    }
+    return hz >= model.tuningMinHz && hz <= model.tuningMaxHz;
+}
+
+std::uint64_t nearestSupportedFrequency(const IcomModel& model,
+                                        std::uint64_t hz) noexcept
+{
+    if (supportsFrequency(model, hz)) {
+        return hz;
+    }
+    if (const std::span<const IcomBand> bands = bandsFor(model); !bands.empty()) {
+        std::uint64_t nearest = bands.front().lowHz;
+        std::uint64_t distance = hz > nearest ? hz - nearest : nearest - hz;
+        for (const IcomBand& band : bands) {
+            for (const std::uint64_t edge : {band.lowHz, band.highHz}) {
+                const std::uint64_t edgeDistance = hz > edge ? hz - edge : edge - hz;
+                if (edgeDistance < distance) {
+                    nearest = edge;
+                    distance = edgeDistance;
+                }
+            }
+        }
+        return nearest;
+    }
+    if (model.tuningMinHz == 0 || model.tuningMaxHz == 0) {
+        return hz;
+    }
+    return std::clamp(hz, model.tuningMinHz, model.tuningMaxHz);
+}
+
 std::optional<ModulationProfile> modulationProfileFor(const IcomModel& model)
 {
     // IC-705 CI-V guide: USB/WLAN levels 0116/0117, DATA OFF/DATA MOD
@@ -243,16 +339,11 @@ std::optional<TxBandwidthProfile> txBandwidthProfileFor(const IcomModel& model)
     if (model.civAddress == 0xA4) {
         // IC-705: 0019 WIDE, 0020 MID, 0021 NAR, 0022 SSB-D.
         //
-        // THE GUIDE CONTRADICTS ITSELF HERE and the wire is what settles it.
-        // The 16 58 entry's own note cites 1A 05 0017/0018/0019 for
-        // WIDE/MID/NAR, which collides with 0017 and 0018 being the SSB TX
-        // Tone Bass and Treble levels two pages later. The 0019..0022 run is
-        // the internally consistent reading and matches the IC-7300MK2's
-        // equivalent block exactly, so it is what goes on the wire — and the
-        // read-back confirmation in applyTxBandwidth() is what catches it if
-        // the note turns out to be right after all. A TX Tone level is 00..10
-        // in one byte and an edge pair is a packed nibble pair, so the two are
-        // distinguishable in a reply rather than merely wrong.
+        // The 16 58 command-table note mistakenly cites 0017/0018/0019. The
+        // guide's detailed SET table assigns 0017/0018 to TX Tone Bass/Treble
+        // and explicitly assigns 0019..0022 to WIDE/MID/NAR/SSB-D; its command
+        // format page independently repeats the 0019..0022 range. Those two
+        // authoritative tables are the basis for the mapping below.
         return TxBandwidthProfile{kTbwLowIc705, kTbwHigh, 19, 20, 21, 22};
     }
     if (model.civAddress == 0xB6) {
@@ -317,6 +408,66 @@ std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
     if (model.civAddress == 0xA4 || model.civAddress == 0xB6)
         return kIc705;
     return {};
+}
+
+std::span<const std::string_view> modeListFor(const IcomModel& model)
+{
+    // THE IC-705's OWN 0x06 MODE TABLE, in neutral names.
+    //
+    // The guide lists ten wire modes — LSB, USB, AM, CW, RTTY, FM, WFM, CW-R,
+    // RTTY-R and DV. Eight of them appear here; the two that do not are absent
+    // for reasons that would show up as a broken control:
+    //
+    //   RTTY / RTTY-R — modeToNeutral() collapses both onto DIGL/DIGU, which are
+    //                   already in the list. Offering "RTTY" would set the radio
+    //                   correctly and then have the confirmation read move the
+    //                   combo to DIGL, which reads as the button not working.
+    //   DV            — D-STAR is a whole waveform, not a demodulator setting,
+    //                   and modeToNeutral() returns an empty string for it. There
+    //                   is nothing honest to put in a mode combo.
+    //
+    // DFM, DIGU and DIGL are the DATA-flag forms of FM, USB and LSB; they are
+    // separate entries here because they are separate entries in the neutral
+    // vocabulary and cmdSetVfoMode carries the flag.
+    //
+    // WFM is the mode this list exists for. It has always been implemented end
+    // to end in CivCodec — wire value, both directions of the neutral mapping,
+    // its own 200 kHz filter slot and a carrier-straddling passband — and was
+    // unreachable only because nothing published a mode list, so the UI stayed on
+    // its compiled-in FlexRadio one, which has no WFM because a FLEX-6000 has no
+    // WFM (#5040).
+    static constexpr std::array<std::string_view, 10> kIc705{
+        "USB", "LSB", "CWU", "CWL", "AM", "FM", "DFM", "WFM", "DIGU", "DIGL"};
+    if (model.civAddress == 0xA4)
+        return kIc705;
+
+    // EVERY OTHER MODEL IS EMPTY, INCLUDING THE VERIFIED IC-7300MK2. The mode
+    // table is a per-model fact — the 7300 family has no WFM and no DV, the
+    // IC-9700 has DV but no HF — and this file's provenance rule (see the header)
+    // is that a row is filled only once that model's own CI-V guide has been read
+    // for it. An empty span leaves the UI exactly where it is today.
+    return {};
+}
+
+bool modeIsReceiveOnly(const IcomModel& model, std::string_view neutralMode)
+{
+    // WFM IS A BROADCAST RECEIVE MODE. The IC-705 covers 76-108 MHz in it and its
+    // transmitter does not follow: the mode exists to listen to FM broadcast, and
+    // that segment is outside every amateur allocation the radio transmits in.
+    //
+    // Answered only for a model whose mode table has been read — an unfilled row
+    // gets no claim in either direction, the same rule modeListFor() states above.
+    //
+    // That "no claim" is safe for the WITHDRAWN identity too, which is the one
+    // case where it looks unsafe: after the ambiguous-bus revert the combos keep
+    // offering the previous radio's WFM (they ignore an empty mode list, #891),
+    // so it looks as though keying in WFM has quietly become permitted again.
+    // It has not — kUnknown also reports hasTransmit=false, so capabilities()
+    // says canTransmit=false and RadioModel refuses to key it in ANY mode. This
+    // gate never has to answer for a radio we cannot characterise. (#5106 review)
+    if (model.civAddress == 0xA4)
+        return neutralMode == "WFM";
+    return false;
 }
 
 std::span<const AttenStep> attenStepsFor(const IcomModel& model)

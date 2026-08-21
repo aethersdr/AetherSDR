@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QVector>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <QBuffer>
@@ -213,7 +214,8 @@ public:
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
     void setRadioTransmitting(bool tx);  // raw interlock state (regardless of TX ownership)
-    void clearTxAccumulators() { m_txAccumulator.clear(); m_txFloatAccumulator.clear(); m_daxPreTxBuffer.clear(); }
+    // Self-marshals onto the AudioEngine thread; safe from any caller.
+    Q_INVOKABLE void clearTxAccumulators();
     Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
@@ -549,7 +551,19 @@ public:
     // call so every local CW source (manual keyer, CWX macros, iambic paddle)
     // drives them in lockstep. The recorder copy is what lets a Client-Side QSO
     // recording capture the operator's own sent CW/CWX side-tone (#2539).
-    void setCwKeyDown(bool down);
+    // `when` is the edge's scheduled instant on the producer's element grid
+    // (#4890): keying sources with an exact schedule (iambic keyer) pass their
+    // grid deadline so the sidetone renders intended rhythm, not thread-wake
+    // rhythm; sources without one take the wall-clock default.
+    // Note the deliberate asymmetry with RadioModel::sendCwKeyEdge, whose
+    // `scheduledAt` uses a default-constructed (epoch) time_point as an
+    // explicit "no schedule" sentinel it tests for.  Here the sidetone needs a
+    // usable instant on every call, so "no schedule" is spelled now() and
+    // there is nothing to test for — passing {} would stamp the epoch rather
+    // than mean "unscheduled".
+    void setCwKeyDown(bool down,
+                      std::chrono::steady_clock::time_point when =
+                          std::chrono::steady_clock::now());
 
     // Start the CW-sidetone record pump (#2539). CW has no mic-driven
     // onTxAudioReady, so a free-running timer on the audio thread feeds the

@@ -14,6 +14,7 @@
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/ShutdownTrace.h"
+#include "core/SystemInventory.h"
 #include "core/MacMicPermission.h"
 #include "core/AutomationServer.h"
 
@@ -693,6 +694,16 @@ int main(int argc, char* argv[])
 
     // Load per-module logging toggles (must be after AppSettings::load)
     AetherSDR::LogManager::instance().loadSettings();
+
+    // Hardware/capability inventory (#4986): after loadSettings() so the
+    // aether.sysinfo filter rules are live, and before the main window exists
+    // so no ggml code can have run yet (Copy Assist is built lazily on first
+    // panel open — on a CPU below the speech engine's ISA baseline, entering
+    // ggml is the crash this block diagnoses). Flushed explicitly so the block
+    // is on disk before anything else in startup runs, rather than on the
+    // async writer's next periodic flush.
+    AetherSDR::SystemInventory::logSystemInventory();
+    AetherSDR::LogManager::instance().flushLog();
 
     qDebug() << "Starting AetherSDR" << app.applicationVersion();
 

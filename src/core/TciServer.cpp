@@ -1307,6 +1307,7 @@ void TciServer::tuneSliceAndConfirm(
         return;
     }
 
+    const long long beforeHz = TciProtocol::mhzToHz(slice->frequency());
     const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
     // The in-span test is shared with the CAT/rigctld planes (#4497):
     // PanadapterModel::spanContainsMhz is the single definition, so the three
@@ -1359,15 +1360,26 @@ void TciServer::tuneSliceAndConfirm(
     // where it was; in both cases the honest answer is the value the model
     // holds, or a client's mirror drifts away from the radio.
     //
-    // Sent unconditionally even though a successful tune also reaches clients
-    // via frequencyChanged → broadcastSliceFrequencies(). That duplicates the
-    // channel-0 vfo: frame, which is idempotent and harmless — whereas the
-    // alternative failure, a client left with NO confirmation, hangs WSJT-X for
-    // its full rig-control timeout. Channel 1 is not covered by that automatic
-    // path at all unless the routing state happens to be bound, so suppressing
-    // this would make split confirmations depend on unrelated state.
+    // A successful tune also reaches clients via frequencyChanged →
+    // broadcastSliceFrequencies(), fired synchronously inside setFrequency()/
+    // tuneAndRecenter() above (their own qFuzzyCompare guard skips the emit on
+    // a genuine no-op). For channel 0 that sends an identical vfo:<trx>,0,<hz>;
+    // frame BEFORE this line ever runs, so confirming again here produced two
+    // near-simultaneous vfo: frames for the same value — suspected of racing a
+    // TCI client's own frequency-restore scheduler (#5086: intermittent RX
+    // frequency drift on WSJT-X "Fake It" split, after a TX/RX cycle). Detect
+    // that case by comparing the pre-tune and post-tune Hz value: if it moved,
+    // channel 0 is already covered and this broadcast would be the duplicate.
+    // A genuine no-op (locked slice, or the request matched what was already
+    // there) never emits frequencyChanged, so channel 0 still needs this
+    // explicit confirmation — otherwise a client is left with none and hangs
+    // for its full rig-control timeout. Channel 1 keeps its unconditional
+    // confirmation regardless of whether the frequency moved: the automatic
+    // path only covers it when the routing state happens to track this slice
+    // as TX, so it cannot be assumed sent.
     const long long acceptedHz = TciProtocol::mhzToHz(slice->frequency());
-    if (acceptedHz > 0) {
+    const bool channelZeroAlreadyBroadcast = (channel == 0 && acceptedHz != beforeHz);
+    if (acceptedHz > 0 && !channelZeroAlreadyBroadcast) {
         broadcast(QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
     }
 }

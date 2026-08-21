@@ -83,6 +83,28 @@ struct IcomModel {
     // stops a new row copied from the IC-705 inheriting a shape nobody checked.
     bool hasVfoModeCommand = false;
 
+    // Amateur bands this radio covers, as canonical BandDefs names, comma
+    // separated -- the same "bands=" vocabulary a gateway declares, validated
+    // model-side by parseDeclaredBands() before anything renders it.
+    //
+    // What it buys is the band BUTTONS. With no declaration the band menu falls
+    // back to its built-in HF grid plus FlexLib's ModelCapabilities has4Meters/
+    // has2Meters flags -- and an IC-705 matches nothing in that Flex model
+    // table, so a radio that reaches 2 m and 70 cm natively had no button for
+    // either, and 70 cm has no entry in that grid at any radio (#5041).
+    //
+    // EMPTY MEANS "the built-in HF grid is already right", not "unknown". Every
+    // HF-only row below is served correctly by that grid, and tuningMaxHz
+    // already disables whatever it cannot reach. So declare only where the grid
+    // cannot express the radio -- i.e. it covers VHF/UHF -- and only within the
+    // coverage the row itself already claims in tuningMinHz/tuningMaxHz, which
+    // keeps this from becoming a second, drifting statement about the same
+    // hardware. icom_family_test pins that containment.
+    //
+    // A name outside BandDefs is dropped at the boundary (Principle VII), so a
+    // typo here costs a missing button, never a bogus one.
+    std::string_view bands;
+
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 
@@ -200,6 +222,41 @@ txBandwidthProfileFor(const IcomModel& model);
 // still tune and listen.
 [[nodiscard]] const IcomModel& unknownModel();
 
+// One RF deck: a range this model can tune, and the PA rating inside it.
+//
+// A model needs this only when its tunable range is NOT the single continuous
+// interval [tuningMinHz, tuningMaxHz] — which, today, means the IC-9700 alone.
+struct IcomBand {
+    std::uint64_t lowHz = 0;
+    std::uint64_t highHz = 0;
+    double maxWatts = 0.0;
+};
+
+// This model's discontinuous band table, or an EMPTY span when its tuning
+// range is the one continuous tuningMinHz..tuningMaxHz interval.
+//
+// THE SINGLE SOURCE OF TRUTH for both halves of a banded model: the tune
+// guard (supportsFrequency/nearestSupportedFrequency) and the capability
+// ceilings (IcomCivBackend::capabilities) both read this one table, so a
+// corrected edge or PA rating lands in every consumer at once. Two hand-kept
+// copies would have let the guard and the power scale disagree silently —
+// exactly the shape of drift that only shows up on the air.
+//
+// Emptiness is also the predicate the tune path keys on: no table means no
+// holes to refuse, so continuous models keep their untouched command path.
+[[nodiscard]] std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept;
+
+// True when hz lies in a band this model can tune. Unknown models remain
+// permissive because they have no verified range to enforce.
+[[nodiscard]] bool supportsFrequency(const IcomModel& model,
+                                     std::uint64_t hz) noexcept;
+
+// Resolve an arbitrary request to the nearest frequency this model supports.
+// Continuous-range and unknown models preserve their existing min/max policy;
+// the IC-9700 snaps across the two holes between its three RF decks.
+[[nodiscard]] std::uint64_t nearestSupportedFrequency(const IcomModel& model,
+                                                      std::uint64_t hz) noexcept;
+
 // Decode the reply to CI-V 0x19 0x00. Returns the reported address, or nullopt
 // if this is not that reply.
 [[nodiscard]] std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame);
@@ -229,6 +286,26 @@ txBandwidthProfileFor(const IcomModel& model);
 // A control that does not appear is a better answer than one that appears and
 // lies, so an empty span means the operator simply does not get the button.
 [[nodiscard]] std::span<const std::string_view> preampLabelsFor(const IcomModel& model);
+
+// The demodulator modes this model offers, in AetherSDR's NEUTRAL vocabulary —
+// the same strings SliceModel carries and the mode combo displays.
+//
+// EMPTY means we have no verified mode table for this model, and the caller must
+// publish NOTHING rather than borrow another radio's — the rule powerCurveFor
+// and preampLabelsFor already state, for the same reason. An empty list leaves
+// the UI on its compiled-in FlexRadio default, which is today's behaviour.
+//
+// NEUTRAL, not wire values, and every entry must ROUND-TRIP through
+// modeFromNeutral/modeToNeutral. A name the radio can be put into but never
+// reports back (RTTY, which comes home as DIGL) would make the combo jump on the
+// confirmation read; a name modeFromNeutral refuses (SAM) would silently revert.
+// Both read as a broken control, which is what this list exists to stop.
+[[nodiscard]] std::span<const std::string_view> modeListFor(const IcomModel& model);
+
+// True when this model's `mode` is RECEIVE-ONLY — the radio will not transmit in
+// it whatever the client asks. Keyed on the neutral name, so it answers the same
+// question the mode combo poses.
+[[nodiscard]] bool modeIsReceiveOnly(const IcomModel& model, std::string_view neutralMode);
 
 // Attenuator positions. The label is what the operator reads; the dB is what
 // goes on the wire (BCD — see cmdSetAttenuator), so the two must not drift.

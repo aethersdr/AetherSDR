@@ -73,6 +73,20 @@ public:
     int     amCarrierLevel() const { return m_amCarrierLevel; }
     bool    dexpOn()         const { return m_dexpOn; }
     int     dexpLevel()      const { return m_dexpLevel; }
+    // TX filter bounds.  ACCESSORS, not bare constants, deliberately: every
+    // backend shares this range today, but a radio that declares its own
+    // passband limits should be able to narrow it without any caller
+    // changing — the GUI already asks rather than assumes.
+    //
+    // FlexBackend clamps to the same range on the wire, which is where a
+    // radio-specific limit properly belongs; this is the client-side mirror.
+    static constexpr int kTxFilterMinHz      = 0;
+    static constexpr int kTxFilterMaxHz      = 10000;
+    static constexpr int kTxFilterMinWidthHz = 50;
+    int txFilterMinHz()      const { return kTxFilterMinHz; }
+    int txFilterMaxHz()      const { return kTxFilterMaxHz; }
+    int txFilterMinWidthHz() const { return kTxFilterMinWidthHz; }
+
     int     txFilterLow()    const { return m_txFilterLow; }
     int     txFilterHigh()   const { return m_txFilterHigh; }
 

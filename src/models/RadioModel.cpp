@@ -1245,6 +1245,7 @@ void RadioModel::setupBackend(const QString& family)
             m_slices.append(s);
             s->applyChanges(mapped);
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            refreshTxPowerLimit();
             emit sliceAdded(s);
             return;
         }
@@ -1266,6 +1267,9 @@ void RadioModel::setupBackend(const QString& family)
             // can also move because a slice was REMOVED, which carries no delta
             // at all.
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            if (mapped.frequency.has_value() || mapped.txSlice.has_value()) {
+                refreshTxPowerLimit();
+            }
         }
     });
 
@@ -1917,7 +1921,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
             [this](bool on) {
         if (m_backend && m_family != QLatin1String("flex")) {
-            if (on && !refuseKeyOnTransmitIncapableBackend())
+            if (on && !(refuseKeyOnTransmitIncapableBackend()
+                        && refuseKeyInReceiveOnlyMode()))
                 return;
             m_backend->setKeying(on);
             // The MOX button and the PTT coordinator key here, NOT through
@@ -1930,7 +1935,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
             [this](bool on) {
         if (m_backend && m_family != QLatin1String("flex")) {
-            if (on && !refuseKeyOnTransmitIncapableBackend()) {
+            if (on && !(refuseKeyOnTransmitIncapableBackend()
+                        && refuseKeyInReceiveOnlyMode())) {
                 // Un-latch TUNE as well. m_tune was already set optimistically
                 // (TransmitModel::startTune), and the button's toggle reads it,
                 // so leaving it set would strand TUNE "on" against a radio that
@@ -3693,22 +3699,6 @@ QList<int> RadioModel::radioFilterWidthsHz() const
     return backendCapabilities().rxFilterWidthsHz;
 }
 
-QList<int> RadioModel::radioTxFilterLowEdgesHz() const
-{
-    if (!m_backend || !isConnected()) {
-        return {};
-    }
-    return backendCapabilities().txFilterLowEdgesHz;
-}
-
-QList<int> RadioModel::radioTxFilterHighEdgesHz() const
-{
-    if (!m_backend || !isConnected()) {
-        return {};
-    }
-    return backendCapabilities().txFilterHighEdgesHz;
-}
-
 bool RadioModel::hasRadioSideWaterfallAutoBlack() const
 {
     if (!m_backend || !isConnected()) {
@@ -3751,6 +3741,9 @@ bool RadioModel::hasDaxStreams() const
 void RadioModel::publishCapabilities(bool connected)
 {
     const RadioCapabilities caps = backendCapabilities();
+    m_txPowerBands = connected ? caps.txPowerBands : QVector<TxPowerBand>{};
+    m_activeTxPowerBandLowHz = 0.0;
+    m_activeTxPowerBandHighHz = 0.0;
 
     // Capability-driven, not family()!="flex": only a backend that both
     // host-modulates and may transmit collapses the mic source to PC. (#4449)
@@ -3765,8 +3758,46 @@ void RadioModel::publishCapabilities(bool connected)
     // greyed out after unplugging an HL2 would look like a fault. Every
     // capability below follows the same `!connected || caps.x` shape.
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
+    refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);
+}
+
+void RadioModel::refreshTxPowerLimit()
+{
+    if (!m_backend || !isConnected()) {
+        return;
+    }
+    if (m_txPowerBands.isEmpty()) {
+        return;
+    }
+
+    const SliceModel* tx = txSlice();
+    if (!tx || tx->frequency() <= 0.0) {
+        return;
+    }
+
+    const double frequencyHz = tx->frequency() * 1.0e6;
+    // The common drag-rate path remains entirely below the capability lookup
+    // and TransmitModel setter while the TX VFO stays inside the same RF deck.
+    if (frequencyHz >= m_activeTxPowerBandLowHz
+        && frequencyHz <= m_activeTxPowerBandHighHz) {
+        return;
+    }
+
+    // The capability ranges are cached at the connect edge, so crossing an RF
+    // deck still performs no backend capability rebuild or QString allocation.
+    for (const TxPowerBand& band : m_txPowerBands) {
+        if (frequencyHz >= band.lowHz && frequencyHz <= band.highHz) {
+            m_activeTxPowerBandLowHz = band.lowHz;
+            m_activeTxPowerBandHighHz = band.highHz;
+            const int maxWatts = qRound(band.maxWatts);
+            if (maxWatts > 0) {
+                m_transmitModel.setMaxPowerLevel(maxWatts);
+            }
+            return;
+        }
+    }
 }
 
 IRadioBackend::HealthSnapshot RadioModel::backendHealthSnapshot() const
@@ -3794,10 +3825,56 @@ bool RadioModel::refuseKeyOnTransmitIncapableBackend()
     if (backendCapabilities().canTransmit)
         return true;
 
-    emitInterlockNotification(
+    return refuseKeyWithInterlock(
         tr("This radio is receive-only and cannot transmit."),
-        QStringLiteral("rx-only-tx"),
-        txSlice() ? txSlice()->panId() : QString());
+        QStringLiteral("rx-only-tx"));
+}
+
+// The second key-on reason: the radio transmits, just not in THIS mode.
+//
+// WFM on an IC-705 is the case this exists for (#5040) — the radio offers it to
+// listen to 76-108 MHz broadcast and its transmitter does not follow. The
+// backend refuses the frame as well, so nothing reaches the wire either way;
+// what only this side can do is UNDO THE OPTIMISTIC STATE. TransmitModel::setMox
+// has already set m_transmitting and startTune() has already latched m_tune by
+// the time any of this runs, and a backend cannot reach TransmitModel to put
+// either back — so a refusal made only down there leaves the TX indicator lit
+// and TUNE stuck on over a radio that never keyed, and lets the caller go on to
+// publishBackendTransmitEdge() for a transmission that did not happen (#5106
+// review).
+//
+// Keyed on the TX slice's mode, which is the slice that would actually be
+// keyed. No slice, or a backend that declares no receive-only modes — every
+// backend but Icom today — and this is inert.
+bool RadioModel::refuseKeyInReceiveOnlyMode()
+{
+    SliceModel* s = txSlice();
+    const QString mode = s ? s->mode() : QString();
+    if (!AetherSDR::modeIsReceiveOnly(backendCapabilities(), mode))
+        return true;
+
+    return refuseKeyWithInterlock(
+        tr("This radio receives only in %1 and will not transmit. "
+           "Choose a transmit mode first.").arg(mode),
+        QStringLiteral("rx-only-mode:%1").arg(mode));
+}
+
+// ONE refusal, so the two reasons cannot drift apart in what they clean up.
+//
+// setTransmitting(false) is the load-bearing half: it is what clears
+// m_transmitting — the flag the TX indicator, the audio gate, RigctlProtocol,
+// AutomationServer and the SWR sweep all read, and the one setMox() set
+// optimistically on the way in. Writing a TransmitDelta{mox=false} instead does
+// NOT do this: TransmitModel::applyChanges treats backend mox as observed radio
+// state and assigns it to m_mox, which is already false, so nothing is emitted
+// and nothing clears.
+//
+// Always returns false — "keying may not proceed" — so callers can `return
+// refuseKeyWithInterlock(...)` directly.
+bool RadioModel::refuseKeyWithInterlock(const QString& message, const QString& key)
+{
+    emitInterlockNotification(message, key,
+                              txSlice() ? txSlice()->panId() : QString());
     m_transmitModel.setTransmitting(false);
     return false;
 }
@@ -3812,6 +3889,7 @@ bool RadioModel::forwardNonFlexCwKeying(bool down)
     // (and Break-In MOX) asserted indefinitely.
     if (down
         && (!refuseKeyOnTransmitIncapableBackend()
+            || !refuseKeyInReceiveOnlyMode()
             || transmitStartBlockedByInhibit(QStringLiteral("cw-key")))) {
         return false;
     }
@@ -3834,13 +3912,15 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
         // PTT/MOX/DAX/TCI edge. Unkey (tx=false) is always allowed — it only
         // ever clears state.
         if (!backendCapabilities().canTransmit) {
-            emitInterlockNotification(
+            refuseKeyWithInterlock(
                 tr("This radio is receive-only and cannot transmit."),
-                QStringLiteral("rx-only-tx"),
-                txSlice() ? txSlice()->panId() : QString());
-            m_transmitModel.setTransmitting(false);
+                QStringLiteral("rx-only-tx"));
             return;
         }
+        // ...and the mode the TX slice is actually in. Same rule, same
+        // rollback; see refuseKeyInReceiveOnlyMode().
+        if (!refuseKeyInReceiveOnlyMode())
+            return;
         const QString message = localPttInterlockMessage(source);
         if (!message.isEmpty()) {
             const QString panId = txSlice() ? txSlice()->panId() : QString();
@@ -4135,15 +4215,21 @@ void RadioModel::sendCwPtt(bool on, const QString& debugSource,
 }
 
 void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
-                               quint64 debugTraceId, quint64 debugSourceMs)
+                               quint64 debugTraceId, quint64 debugSourceMs,
+                               std::chrono::steady_clock::time_point scheduledAt)
 {
     if (m_backend && !usesFlexCommandPlane()) {
+        // `scheduledAt` stops here on this branch: setCwKeying() carries no
+        // timestamp, so a non-Flex backend applies the edge at forward time
+        // (worker wake plus its queued thread hop), uncorrected.  Only the
+        // Flex netcw path below back-dates time= to the scheduled instant;
+        // the sidetone and trace consume the instant upstream either way.
         if (!forwardNonFlexCwKeying(down)) {
             return;
         }
     } else {
         sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                         debugSource, debugTraceId, debugSourceMs);
+                         debugSource, debugTraceId, debugSourceMs, scheduledAt);
     }
     const bool prev = m_cwKeyActive;
     m_cwKeyActive = down;
@@ -4189,7 +4275,8 @@ QByteArray RadioModel::buildNetCwPacket(const QByteArray& payload)
 }
 
 void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSource,
-                                  quint64 debugTraceId, quint64 debugSourceMs)
+                                  quint64 debugTraceId, quint64 debugSourceMs,
+                                  std::chrono::steady_clock::time_point scheduledAt)
 {
     if (m_netCwStreamId == 0) {
         // No netcw stream — fall back to TCP immediate
@@ -4214,18 +4301,81 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     // The time value is a 16-bit relative millisecond counter, not an epoch
     // timestamp.  Flex clients reset it after a short idle gap; the radio
     // accepts 0x0000 as a timing resync marker.
+    // NOTE: m_netCwLastSendMs stores the BACK-DATED value, so the idle test
+    // below compares a real elapsed() against a back-dated floor — the
+    // effective reset threshold is 3000 minus the last edge's back-date,
+    // i.e. as low as 2900 ms.  Harmless: crossing it only emits a fresh
+    // 0x0000 resync marker.
     constexpr qint64 kNetCwIdleResetMs = 3000;
     quint16 timeMs = 0;
+    // Trace-side observability: record what back-dating actually did to
+    // this edge, so a log capture distinguishes a session where back-dates
+    // applied cleanly from one where they were clamped or abandoned — the
+    // final time= value alone reads identically in both.
+    qint64 traceSchedAgeMs = -1;    // -1 = edge carried no schedule
+    qint64 traceBackdateMs = 0;     // ms actually subtracted from time=
+    bool   traceFellBack   = false; // ordering fallback re-stamped at send time
+    if (scheduledAt != std::chrono::steady_clock::time_point{})
+        traceSchedAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - scheduledAt).count();
     if (!m_netCwClock.isValid()
         || m_netCwLastSendMs < 0
         || (m_netCwClock.elapsed() - m_netCwLastSendMs) > kNetCwIdleResetMs) {
+        // A burst's FIRST edge is never back-dated: this branch restarts the
+        // counter at 0, so it is stamped at send time and the burst's first
+        // element reconstructs short by that edge's age (wake latency + the
+        // queued GUI hop).  Every later delta is exact — the error is one
+        // element once per >3 s idle gap, i.e. once per over.
         if (m_netCwClock.isValid())
             m_netCwClock.restart();
         else
             m_netCwClock.start();
         m_netCwLastSendMs = 0;
     } else {
-        const qint64 elapsed = m_netCwClock.elapsed();
+        qint64 elapsed = m_netCwClock.elapsed();
+        // #4890: when the edge carries a scheduled grid instant, back-date
+        // the 16-bit counter by the edge's age (worker wake latency + the
+        // queued GUI hop) so the radio's timing reconstruction input is the
+        // intended rhythm, not the send-time rhythm.  The age is clamped to
+        // a sane ceiling (a stale schedule must not warp the counter) and
+        // the result is clamped monotonic against the previous send —
+        // FlexLib's counter never runs backwards, so ours doesn't either.
+        //
+        // Varying the back-date per edge is safe because the radio
+        // reconstructs element lengths from the DELTAS between consecutive
+        // time= values, not from their absolute value: a per-edge offset
+        // cancels between neighbours, so only the spacing changes — which is
+        // exactly the quantity wake latency was corrupting.
+        if (scheduledAt != std::chrono::steady_clock::time_point{}) {
+            constexpr qint64 kMaxScheduleAgeMs = 100;
+            const qint64 age = traceSchedAgeMs;
+            if (age > 0) {
+                traceBackdateMs = std::min(age, kMaxScheduleAgeMs);
+                elapsed -= traceBackdateMs;
+            }
+            // Strictly increasing, not merely non-decreasing: two edges
+            // sharing a time= reconstruct as a zero-length element on the
+            // radio, which is worse than the late edge the back-dating
+            // exists to correct.
+            //
+            // The fallback is the un-back-dated reading, NOT prev + 1: this
+            // counter is shared with senders that carry no schedule (`cw ptt`
+            // from Space/MOX, `cw key` from TCI and MIDI), which stamp at
+            // real elapsed.  With break_in=0 the operator asserts CW PTT
+            // while the keyer runs, so the next scheduled edge back-dates
+            // below that stamp; bumping it to prev + 1 would hand the radio
+            // a 1 ms element, the same defect one participant over.  The
+            // real send time keeps true spacing whenever back-dating cannot
+            // be honoured, and prev + 1 stays as the ordering backstop.
+            // This comparison also covers a fresh burst, where `elapsed` can
+            // go negative because the clock is younger than the age clamp —
+            // m_netCwLastSendMs is >= 0 in this branch, so that lands here too.
+            if (elapsed <= m_netCwLastSendMs) {
+                elapsed = std::max(m_netCwClock.elapsed(), m_netCwLastSendMs + 1);
+                traceFellBack   = true;
+                traceBackdateMs = 0;   // the send went out un-back-dated
+            }
+        }
         timeMs = static_cast<quint16>(elapsed & 0xFFFF);
         m_netCwLastSendMs = elapsed;
     }
@@ -4264,6 +4414,9 @@ void RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
             << " stream=0x" << QString::number(m_netCwStreamId, 16).toUpper()
             << " index=" << index
             << " time=0x" << tsHex
+            << " schedAgeMs=" << traceSchedAgeMs
+            << " backdateMs=" << traceBackdateMs
+            << " backdateFallback=" << (traceFellBack ? 1 : 0)
             << " cmd=\"" << baseCmd << "\""
             << " payloadBytes=" << payload.size()
             << " packetBytes=" << packet0.size()

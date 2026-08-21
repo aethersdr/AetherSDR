@@ -612,28 +612,74 @@ void MidiSettings::writeBindingsToXml(const QString& filePath,
 
 // ── Profiles ────────────────────────────────────────────────────────────────
 
+bool MidiSettings::isValidProfileName(const QString& name)
+{
+    // Separators are tested directly rather than via an allowlist so
+    // non-ASCII station and contest names keep working. A leading dot is
+    // filesystem semantics too: on Unix it is the hidden-file convention, so
+    // the QDir::Files listing omits an accepted ".hidden.xml" — saved, but
+    // vanished from availableProfiles() — and refusing it also covers "."
+    // and "..", the two names that are pure path syntax. Rejecting (not
+    // stripping) is deliberate: stripping "../foo" to "foo" would silently
+    // overwrite an unrelated existing profile. (#4975)
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        return false;
+    }
+    if (trimmed.startsWith(QLatin1Char('.'))) {
+        return false;
+    }
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\'))) {
+        return false;
+    }
+    return true;
+}
+
 QStringList MidiSettings::availableProfiles() const
 {
     QDir dir(profileDir());
     QStringList result;
-    for (const auto& fi : dir.entryInfoList({"*.xml"}, QDir::Files))
-        result.append(fi.baseName());
+    for (const auto& fi : dir.entryInfoList({"*.xml"}, QDir::Files)) {
+        // completeBaseName(), not baseName(): the writers below append exactly
+        // one ".xml", so the reader must strip exactly one extension —
+        // baseName() cuts at the FIRST dot, so a dotted name ("CTR2 v1.0")
+        // listed truncated and could then never be loaded. (#4974)
+        const QString name = fi.completeBaseName();
+        // List only names the other three operations will serve: a legacy
+        // file whose name the store now refuses (e.g. a backslash, legal in
+        // Unix filenames and creatable by the pre-guard GUI) would otherwise
+        // list but never load or delete. The file itself stays on disk.
+        if (isValidProfileName(name)) {
+            result.append(name);
+        }
+    }
     return result;
 }
 
 void MidiSettings::saveProfile(const QString& name,
                                 const QVector<MidiBinding>& bindings)
 {
+    if (!isValidProfileName(name)) {
+        return;
+    }
     writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
 }
 
 QVector<MidiBinding> MidiSettings::loadProfile(const QString& name) const
 {
+    if (!isValidProfileName(name)) {
+        return {};
+    }
     return parseBindingsFromXml(profileDir() + "/" + name + ".xml");
 }
 
 void MidiSettings::deleteProfile(const QString& name)
 {
+    // The guard matters most here: a mis-resolved delete is the one
+    // unrecoverable operation of the three. (#4975)
+    if (!isValidProfileName(name)) {
+        return;
+    }
     QFile::remove(profileDir() + "/" + name + ".xml");
 }
 
@@ -721,20 +767,21 @@ MidiImportResult MidiSettings::importProfile(
 
     // Store name = file base name; never overwrite an existing profile. The
     // prompt-vs-suffix collision policy is an open maintainer call, and a
-    // suffix is the reversible default. Dots are replaced because the store
-    // round-trips names through QFileInfo::baseName(), which cuts at the
-    // first dot — a dotted name would list, load, and collide wrongly.
+    // suffix is the reversible default. Dotted names round-trip through the
+    // store now that it lists via completeBaseName() (#4974), so the old
+    // dots-to-underscores substitution is gone.
     //
     // completeBaseName() operates on fileName(), so any directory component of
-    // the chosen path is already stripped: "../../evil.map" yields "evil". That
-    // is what keeps this call site safe, because saveProfile() — and its load
-    // and delete siblings — concatenate the name straight into profileDir()
-    // with no sanitizing. Do not swap this for a name taken from the document
-    // body or from filePath without stripping separators first.
+    // the chosen path is already stripped: "../../evil.map" yields "evil" —
+    // and the store rejects separator-bearing names itself (#4975), so a name
+    // taken from anywhere else is guarded too.
     QString name = QFileInfo(filePath).completeBaseName().trimmed();
-    name.replace(QLatin1Char('.'), QLatin1Char('_'));
-    if (name.isEmpty())
+    // Not just isEmpty(): a file named "...map" derives ".." here, which the
+    // store rightly refuses — without this fallback the refusal surfaces as a
+    // misleading "couldn't write" error instead of a stored profile.
+    if (!isValidProfileName(name)) {
         name = QStringLiteral("Imported profile");
+    }
     const QStringList existing = availableProfiles();
     const auto taken = [&existing](const QString& candidate) {
         for (const auto& p : existing)

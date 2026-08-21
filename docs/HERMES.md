@@ -341,13 +341,45 @@ removes the pedestal just as thoroughly while eating the bass out of every mode,
 and every DC measurement stays green through it. So it checks a 60 Hz vs 400 Hz
 modulation ratio through the real chain, the closed-form `|H(f)|` at three audio
 rates, and the unconfigured bypass. Six 4 s bursts through the real chain cost
-2.5 s, so it is a cheap test — but only with a warm FFTW wisdom cache. Cold, the
-same binary takes 178 s, because WDSP's first `OpenChannel` measures FFTW
-`PATIENT` plans (see `WdspChannel::open()`, cached at
-`$XDG_CACHE_HOME/aethersdr/wdsp-fftw-wisdom`). A CI container starts cold every
-run, which is why this sat at 188-190 s on the per-PR gate and now runs weekly
-under the sanitizers job instead. Cache that file in CI and it belongs back on
-the gate.
+2.5 s, so it is a cheap test. It used to take 178 s cold, because WDSP's first
+`OpenChannel` measures FFTW `PATIENT` plans (see `WdspChannel::open()`, cached
+at `$XDG_CACHE_HOME/aethersdr/wdsp-fftw-wisdom`) and a CI container starts cold
+every run — which is why it sat at 188-190 s on the per-PR gate and came off it.
+
+**That is fixed, and not by caching the file.** Caching was the obvious move and
+it does not work: the app's own 38 KB cache made no measurable difference to
+`wdsp_channel_test` (22.8 s warm vs 22.4 s cold on macOS/arm64), because the
+app's plan set and the tests' plan set are different FFTW problems. Only a cache
+the tests themselves wrote helped — which a fresh container never has. Instead
+every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (see the block at the
+end of `tests/tests.cmake`), which bounds the planner through
+`fftw_set_timelimit()` and, because rushed plans must never reach the cache the
+app imports, **skips the wisdom export entirely while it is set**. One knob, so
+it is not possible to bound the planner and forget to isolate the cache.
+
+Two independent layers, because one was not enough. The planner bound stops the
+export; separately, `AETHER_WDSP_WISDOM_DIR` **redirects the cache path** to
+`<build>/test-fftw-wisdom`. Both are set by `tests/TestWdspWisdomIsolation.cpp`,
+a TU linked into every test target whose static initializer runs **before
+main()** — because a ctest `ENVIRONMENT` property only covers `ctest`, and
+running a test binary directly (`./build/hl2_rxdsp_test`, the normal way to
+debug one) inherits nothing and would export straight over the operator's real
+cache. Verified: full `ctest` with no isolation, and four binaries run directly
+with a scrubbed environment, all leave `~/.cache/aethersdr/wdsp-fftw-wisdom`
+byte-identical; forcing the unbounded escape hatch writes 15 KB into the build
+dir instead of the real cache.
+
+It is applied to *every* registered test rather than to an `hl2_*`/`wdsp_*` name
+prefix, which was the first attempt and leaked: `automation_connect_wait_phase_test`
+and `transmit_model_test` drive HL2 DSP without an `hl2_` name, ran unbounded, and
+were observed replacing a developer's real 38 KB cache with an 11 KB test-only one.
+Naming is not a proxy for what a test opens, and the failure is silent — the suite
+still passes, it just degrades the next real connect.
+
+Measured cold, `ctest -R '^(hl2|wdsp)_' -j8`, macOS/arm64: **100.5 s wall /
+632.0 s CPU before, 21.6 s wall / 9.3 s CPU after.** The CPU figure is the one
+that matters for CI. A radio session never sets the variable and keeps the full
+`PATIENT` plans it always had.
 
 **Why on `Hl2RxDsp` and not on `WdspChannel`.** The root cause is `amd`'s
 envelope detector, which belongs to WDSP, so a blocker on `WdspChannel`'s own RX
@@ -947,7 +979,7 @@ radio. See §18 for the full audit and the proposed seam.
 | `output_samplerate` | 48000 | 24000 | AudioEngine's native rate; avoids a resample. Legitimate, but it IS a divergence in the area that produced our worst bug — keep it labelled |
 | Rate change | `SetAllRates` | Rebuild the channel | Dodges the intermediate-inconsistent-state hazard entirely. Heavier, but NOT because of FFTW — a rebuild at a new rate re-plans almost nothing (§22.4). It is heavier because it is a close+open per receiver, and it still blocks the GUI thread |
 | Spectrum | WDSP analyzer (returns pixels) | Own `Hl2Spectrum` FFT | A3 §4 recommends exactly this for our architecture. **If it ever looks noisy, the lever is a detector/averaging mode, not a bigger FFT** |
-| FFTW wisdom | `WDSPwisdom(dir)` | Own `fftw_import_wisdom_from_filename` + eager export | `WDSPwisdom` is Windows-console-only. First-run slowness is expected; the fix was a progress indicator plus getting the wisdom to actually persist (§22) |
+| FFTW wisdom | `WDSPwisdom(dir)` | Own `fftw_import_wisdom_from_filename` + eager export | `WDSPwisdom` is Windows-console-only. First-run slowness is expected; the fix was getting the wisdom to actually persist (§22) plus telling the operator what the wait is — in a modal dialog, because the panadapter label that first carried it was drawn behind the Connect Radio window and never seen (#5052). Tests bound the planner instead of paying it; see "AM/SAM hand back a DC pedestal" |
 
 ### Settled — no action
 
@@ -3439,6 +3471,14 @@ Measured cold, both orderings, with `WdspChannel` opened exactly as
 The first open costs ~19 s whichever rate it is; every other rate afterwards is
 40–175 ms. The plan sets overlap almost completely, so **do not reason about
 "cold wisdom for this sample rate"** — there is one cold open per machine, ever.
+
+That "once per machine" is what the first-connect dialog tells the operator, and
+saying it is the point: a 20 s wait you are told happens once reads very
+differently from a 20 s wait with a window on screen that says "Connecting…".
+The dialog is gated on elapsed time (1500 ms), not on a cold-cache predicate —
+`WdspChannel` exposes none, and one could not be exact anyway, since a cache
+that imports cleanly may still lack plans for these geometries and would report
+"warm" while the open measured regardless. See `MainWindow::armWdspSetupDialog`.
 
 ### 22.4 Still open: two paths that still block the GUI thread
 

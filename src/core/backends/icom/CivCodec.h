@@ -543,10 +543,14 @@ struct PassbandEdges {
 // models agree) and wrong at every other: at 1.8 kHz it drew 300..2100 where
 // the radio was actually passing 600..2400.
 //
+// `widthHz` is needed for the conservative RTTY fallback: the radio's actual
+// mark frequency is configurable (SET 0050) and is not modeled yet, so RTTY
+// retains the legacy 150 Hz carrier-side edge instead of inventing a mark.
+//
 // 1500 Hz for SSB is the figure wfview uses for every Icom
 // (receiverwidget.cpp, manufIcom). CW is centred on the pitch, and AetherSDR's
 // slice frequency in CW already IS the pitch, so its centre is zero here.
-[[nodiscard]] int passbandCentreHz(const std::string& mode) noexcept;
+[[nodiscard]] int passbandCentreHz(const std::string& mode, int widthHz) noexcept;
 
 // ---------------------------------------------------------------------------
 // Command builders
