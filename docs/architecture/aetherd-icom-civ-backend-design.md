@@ -16,6 +16,47 @@ Companion to `aetherd-hl2-backend-design.md`, and deliberately shaped like it.
 
 ---
 
+## 0. Current bring-up status (2026-08-21)
+
+The backend is no longer a phase-1 sketch. It is an operating CI-V/RS-BA1
+implementation, but its evidence is deliberately recorded at three different
+levels: a model-specific guide can prove a command exists, automated fake-radio
+tests can prove AetherSDR sends and adopts the right frames, and only a live
+radio can prove the operator experience.
+
+| Model | Current evidence | Boundary |
+|---|---|---|
+| **IC-705 (`A4`)** | Model profile checked against its CI-V guide; live RX, scope, TX, FT8/WSPR, controls and meters. The FM repeater/TONE controls, local-memory recall and momentary XFC path in this increment were all exercised successfully by the operator on 2026-08-21. | Primary fully brought-up model. Regional tuning gaps still cannot be represented by the seam's single min/max range. |
+| **IC-7300MK2 (`B6`)** | Model profile checked against its own CI-V guide; live Ethernet RX/scope, control surface, meters, ATU, WSPR, PC Audio routing and CW decoder. Its guide attests the basic repeater and XFC families. | The basic tone/offset/XFC surface is profile-enabled from guide evidence but has not had the IC-705 operator workflow repeated on this model. |
+| **IC-9700 (`A2`)** | Live RS-BA1 scope geometry and `26 00` VFO/mode replies have been observed. Its profile records official-guide plus PR #5149 live-wire evidence for the basic/extended repeater and XFC command families. | This increment's selected-receiver UX still needs an IC-9700 operator pass; AetherSDR does not yet independently model MAIN and SUB repeater state. |
+| **Other/unknown Icom** | Identity may be discovered, and conservative common controls can be read. | Fail closed: absent profile facets mean no repeater reads/writes or XFC capability, with no fallback by CI-V address. |
+
+### FM repeater and XFC state contract
+
+The controls added in this increment use the model-neutral slice/radio seam; no
+GUI code knows a CI-V byte. The mapping is:
+
+| Operator state | CI-V | Convergence |
+|---|---|---|
+| Repeater TONE off/on | `16 42 00/01` | Read at connect, adopted from replies/front-panel traffic, and written only from operator intent. |
+| Repeater tone frequency | `1B 00` + three BCD bytes | Read at connect and adopted as one-decimal-hertz radio state. This is the TONE frequency; `16 43` TSQL remains separate and unmapped. |
+| Duplex simplex/down/up | `0F 10/11/12` | Read at connect and reflected as simplex, `-`, or `+`. |
+| Repeater offset magnitude | read `0C`, write `0D`, 100 Hz units | Kept unsigned on the wire; the duplex direction determines the signed TX offset shown by the slice model. |
+| Transmit-frequency check | `1C 02 00/01` | Gated by the active model's `TxFrequencyCheck` evidence and FM repeater facet. XFC is momentary: press sends ON; release, window deactivation, control hide, and disconnect send OFF. A 250 ms readback poll catches front-panel changes without requiring CI-V Transceive. |
+
+The radio remains authoritative. Connect performs a snapshot of all four FM
+repeater fields plus XFC where supported; replies update the models without
+being reflected back as commands. Local-memory recall is an explicit operator
+intent, so it writes tone enable/frequency, duplex direction and offset, then
+the normal CI-V readback path converges the UX. The full recall sequence was
+confirmed on a live IC-705, including TONE off/on and duplex `+`, `-`, and
+simplex/off.
+
+XFC is intentionally not stored in a memory. It describes a held front-panel
+action, not an operating-state setting that should survive release or recall.
+
+---
+
 ## 1. Why Icom is a different kind of backend
 
 The two backends we have bracket the design space, and Icom sits between them in
@@ -661,6 +702,33 @@ MK2, which is a different radio from the one the rest of this targets.
 Not built, deliberately. Each is recorded here with what it needs so the
 decision is not re-litigated from scratch.
 
+### Complete the IC-9700 bring-up
+
+The IC-9700 is not an unknown radio: its network session, 475-bin scope geometry
+and `26 00` VFO/mode reply have been observed live, its three disjoint RF decks
+and PA ceilings are modeled, and its profile carries official-guide plus PR
+#5149 live-wire evidence for the repeater and XFC command families. That does
+not make the remaining selected-receiver UX and transmit bring-up complete.
+
+The next bench pass should, in order:
+
+1. repeat this increment's complete TONE enable/frequency,
+   duplex `+`/`-`/simplex, offset and held-XFC operator workflow from both
+   AetherSDR and the front panel;
+2. recall a local memory and confirm the final radio state, not only the UX;
+3. establish whether CI-V addresses repeater state per selected receiver or can
+   independently name MAIN and SUB, then keep the current selected-receiver
+   model or add a neutral receiver selector from evidence;
+4. verify the model-specific mode/filter, preamp/attenuator and meter tables
+   against the guide and hardware; and
+5. run the ordinary transmit safety sweep separately on 144, 430 and 1200 MHz,
+   with the correct dummy-load path and per-band power ceiling.
+
+Do not infer dual-receiver ownership from `maxSlices = 2`. The radio can receive
+on MAIN and SUB simultaneously; the current backend publishes a selected-radio
+state surface, and converting that into two independently authoritative slices
+is a separate seam and routing decision.
+
 ### Read the radio's UDP ports over CI-V (IC-7300MK2 and later)
 
 Today the backend assumes 50001 / 50002 / 50003 and, when the operator has
@@ -734,10 +802,11 @@ saved presets per band that a pan drag must never overwrite. CW pitch is the one
 that costs something today — it decides where a CW filter sits, so the passband
 drawn in CW assumes the radio's default rather than reading it.
 
-`1C 02` XFC is no longer in that list. The IC-705 and IC-9700 expose it as a
-momentary transmit-frequency check, so both repeater-control surfaces send ON
-while held and OFF on release, follow radio readback, and poll the state when
-CI-V Transceive does not announce a front-panel edge.
+`1C 02` XFC is no longer in that list for profiles that attest it. The IC-705,
+IC-7300MK2 and IC-9700 profiles expose it as a momentary transmit-frequency
+check, so both repeater-control surfaces send ON while held and OFF on release,
+follow radio readback, and poll the state when CI-V Transceive does not announce
+a front-panel edge.
 
 **RIT and XIT are send-only.** `21 00/01/02` are written and never read, so the
 controls open at our defaults rather than the radio's. Unlike the above this is
@@ -919,7 +988,8 @@ want hiding on a backend that owns its own microphone, not fixing.
 | `16 22` | Noise blanker | ✅ | ✗ constant only |
 | `16 40` | Noise reduction | ✅ | ✗ constant only |
 | `16 41` | Auto notch | ✅ | ✗ constant only |
-| `16 43` | Tone squelch | ✗ | ✗ |
+| `16 42` | Repeater tone (TONE) | ✅ | ✅ live-verified on IC-705; connect readback + front-panel adoption |
+| `16 43` | Tone squelch (TSQL) | ✗ | ✗ — separate from the mapped repeater TONE control |
 | `16 44` | **Speech compressor (PROC)** | ✅ | ✗ **not wired — the PROC state disagrees with the radio** |
 | `16 45` | Monitor | ✅ | ✗ constant only |
 | `16 46` | VOX | ✅ | ✗ constant only |
@@ -1035,6 +1105,9 @@ their own right (CERTIFICATION.md §1.29):
 | | ANF | ✅ **verified** — `16 41 01` |
 | | squelch | ✅ **verified** — `14 03 01 02` (40 % = 102). No enable exists: the threshold IS the control and off is zero |
 | | manual notch | ✅ `setSliceManualNotch` (`16 48` + `14 0D`); state is polled |
+| | FM repeater TONE + frequency | ✅ **live-verified on IC-705** — `16 42` + `1B 00`; radio readback owns the control |
+| | FM duplex + offset | ✅ **live-verified on IC-705** — `0F 10/11/12` + `0C`/`0D`; local-memory recall verified for `+`, `-`, and simplex/off |
+| | REV / XFC | ✅ momentary XFC via `1C 02` when the active model profile attests it; live-verified on IC-705, guide-attested on IC-7300MK2, and guide + PR #5149 live-wire verified on IC-9700 |
 | | AF gain / mute / pan | ❌ seam verbs exist, backend does not implement |
 | **TX Controls** | MOX / PTT | ✅ `setKeying` |
 | | TUNE | ✅ `setTune` |
@@ -1093,14 +1166,18 @@ exists to keep visible:
    question, and it is the §1.27 gap in a different costume.
 9. **XIT.** RIT was driven and observed on the wire; XIT shares the offset
    register and was not.
+10. **IC-9700 selected-receiver repeater/XFC UX.** The shared command families
+    have official and live-wire evidence through PR #5149; this increment's
+    basic control surface and MAIN/SUB ownership still need a complete operator
+    pass on that radio.
 
 **Open defects**
 
-10. **Transmit cuts out roughly once a second on FT8** — see CERTIFICATION.md
+11. **Transmit cuts out roughly once a second on FT8** — see CERTIFICATION.md
     §2.6. The radio stays keyed and ALC stays active, so this is not a keying
     or an audio-delivery fault; what remains is real RF pulsing or a low-drive
     meter artefact, and those want a higher-power run to separate.
-11. **A revoked session still looks healthy.** The backend swallows a post-grant
+12. **A revoked session still looks healthy.** The backend swallows a post-grant
     auth failure as "the previous session's teardown" — right for a reconnect,
     wrong when the radio really has withdrawn this one. It should disconnect.
 
