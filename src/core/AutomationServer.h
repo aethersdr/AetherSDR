@@ -60,7 +60,9 @@ class AetherClockModel;
 //   invoke <target> <action> [v]   -> drive a control deterministically:
 //                                     click / toggle / setChecked / setValue /
 //                                     setText / setCurrentText / setCurrentIndex /
-//                                     selectRow. SAFETY: refuses any control
+//                                     selectRow / showPopup / hidePopup (combo
+//                                     drop-down held open; container named
+//                                     aetherComboPopup). SAFETY: refuses any control
 //                                     marked as transmit-keying (markTxKeying() /
 //                                     the "aetherTxKeying" property — MOX/PTT,
 //                                     TUNE, ATU, CWX send, packet/APRS send)

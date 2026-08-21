@@ -4398,6 +4398,36 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             selectedRowText = m->data(first, Qt::DisplayRole).toString();
             done = true;
         }
+    } else if (action == QLatin1String("showPopup")
+               || action == QLatin1String("hidePopup")) {
+        // Hold a combo's drop-down open under bridge control so a follow-up
+        // grab_widget can land on it. clickAt opens the popup but it is gone
+        // before the next call arrives, and the never-shown sibling
+        // QComboBoxPrivateContainers all tie at hidden rank, so a grab by
+        // class picks an arbitrary sliver. Deferred to a clean main-loop turn
+        // for the same reason as showMenu: showing a native popup window from
+        // inside the socket-read callback re-enters the platform event loop.
+        // The container is named so grab_widget has an unambiguous target —
+        // objectName is stage 1 of resolution, ahead of class matching. (#5080)
+        if (auto* cb = qobject_cast<QComboBox*>(w)) {
+            const bool show = (action == QLatin1String("showPopup"));
+            QPointer<QComboBox> cbg = cb;
+            QPointer<QWidget> win = cb->window();
+            QTimer::singleShot(0, qApp, [cbg, win, show]() {
+                if (!cbg) return;
+                if (!show) { cbg->hidePopup(); return; }
+                if (win && win->isVisible()) {   // give the popup a realized anchor
+                    win->raise();
+                    win->activateWindow();
+                }
+                cbg->showPopup();
+                if (QWidget* v = cbg->view())
+                    if (QWidget* c = v->window())
+                        c->setObjectName(QStringLiteral("aetherComboPopup"));
+            });
+            done = true;
+            deferred = true;
+        }
     } else {
         return err(QStringLiteral("unknown action: ") + action);
     }
