@@ -269,7 +269,8 @@ private:
         Cancelled,
     };
     void serviceSchedulerWaiters(qint64 nowMs,
-                                 std::optional<SchedulerWaiterOutcome> terminal = std::nullopt);
+                                 std::optional<SchedulerWaiterOutcome> terminal = std::nullopt,
+                                 std::optional<QVariantMap> diagnosticSnapshot = std::nullopt);
     void terminateScheduler(IcomCivScheduler::TerminalOutcome requestOutcome,
                             SchedulerWaiterOutcome waiterOutcome);
     void applyScopeStartup();
@@ -609,7 +610,6 @@ private:
     qint64  m_civRecoveryStartedAtMs = 0;
     qint64  m_lastCivRecoveryAttemptAtMs = 0;
     int     m_civRecoveryAttempts = 0;
-    bool    m_civRecoveryProbeSent = false;
     // Long enough that a quiet moment is not an alarm — the slowest poll here is
     // 1 s and a user-command guard can defer it — short enough that an operator
     // has not yet had time to wonder why the S-meter stopped.

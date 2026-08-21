@@ -18,6 +18,7 @@
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QObject>
+#include <QTimer>
 #include <QUdpSocket>
 
 #include <algorithm>
@@ -26,6 +27,7 @@
 #include <map>
 #include <tuple>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR::icom::test {
@@ -257,6 +259,11 @@ public:
     // shape of the stall this exists to reproduce: `isConnected()` stays true,
     // link statistics keep climbing, and the command plane is dead.
     void setCivSilent(bool silent) { m_civSilent = silent; }
+    void setCivRestartRecovery(bool recovers, int frequencyReplyDelayMs = 0)
+    {
+        m_civRestartRecovers = recovers;
+        m_restartFrequencyReplyDelayMs = std::max(0, frequencyReplyDelayMs);
+    }
 
     // ---- BE A DIFFERENT ICOM ------------------------------------------------
     //
@@ -537,6 +544,10 @@ private:
                 m_serialOpened = false;
             } else if (operation == 0x04) {
                 m_serialRestartTimesMs.push_back(m_clock.elapsed());
+                if (m_civRestartRecovers) {
+                    m_civSilent = false;
+                    m_nextFrequencyReplyDelayMs = m_restartFrequencyReplyDelayMs;
+                }
             }
             return;
         }
@@ -594,7 +605,15 @@ private:
             const auto bcd = encodeFreq(m_frequencyHz);
             reply.insert(reply.end(), bcd.begin(), bcd.end());
             reply.push_back(kCivEom);
-            pushCiv(reply);
+            const int delayMs = std::exchange(m_nextFrequencyReplyDelayMs, 0);
+            if (delayMs > 0) {
+                QTimer::singleShot(delayMs, this,
+                                   [this, reply = std::move(reply)]() {
+                                       pushCiv(reply);
+                                   });
+            } else {
+                pushCiv(reply);
+            }
             return;
         }
         if (frame->cmd == cmd::kSetFreq) {
@@ -1030,6 +1049,9 @@ private:
     int m_authCount = 0;
     int m_civCommands = 0;
     bool m_civSilent = false;
+    bool m_civRestartRecovers = false;
+    int m_restartFrequencyReplyDelayMs = 0;
+    int m_nextFrequencyReplyDelayMs = 0;
     bool m_holdLoginReply = false;
     bool m_injectStaleGrant = false;
     bool m_sentPrematureGrant = false;

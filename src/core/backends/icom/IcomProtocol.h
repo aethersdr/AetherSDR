@@ -406,6 +406,11 @@ struct StreamGrant {
 
 // Restart an already-open CI-V data pipe. The IC-9700 distinguishes this
 // data-start request (magic 0x04) from the initial open above (magic 0x05).
+// Public clean-room provenance: wfview's icomUdpCivData and RigPlane Core's
+// Icom LAN transport use 0x04 for CI-V data start/restart and 0x00 for close;
+// wfview also publishes physical IC-9700 watchdog logs for this path. Icom's
+// public RS-BA1 manual documents the UDP transports, not this packet field.
+// Keep the recovery model-gated; do not infer support for another Icom model.
 [[nodiscard]] std::vector<std::uint8_t> buildSerialRestart(std::uint32_t localSid,
                                                             std::uint32_t remoteSid,
                                                             std::uint16_t sendSeq);

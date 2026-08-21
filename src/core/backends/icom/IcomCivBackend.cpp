@@ -128,6 +128,10 @@ qint64 IcomCivBackend::nowMs() const
 
 IcomCivBackend::~IcomCivBackend()
 {
+    // QObject direct connections may run while this destructor body is still
+    // active, so terminate before member destruction begins. The scheduler is
+    // reset before results are emitted (terminateScheduler), which makes a
+    // re-entrant observer unable to have newly queued work erased afterward.
     terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                        SchedulerWaiterOutcome::Cancelled);
 }
@@ -620,7 +624,6 @@ void IcomCivBackend::disconnectRadio()
     m_civRecoveryStartedAtMs = 0;
     m_lastCivRecoveryAttemptAtMs = 0;
     m_civRecoveryAttempts = 0;
-    m_civRecoveryProbeSent = false;
     m_civStallReported = false;
     // Teardown is not allowed to wait for an ordinary outstanding read.  Drop
     // all background work, fail-safe unkey on every connected disconnect, and
@@ -1457,7 +1460,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         return;
     }
     const bool recoveryFrequencyCandidate = m_civRecoveryStartedAtMs > 0
-        && m_civRecoveryProbeSent && frame.cmd == cmd::kReadFreq
+        && frame.cmd == cmd::kReadFreq
         && m_session && frame.from == m_session->civAddress();
     // Scope first: it is by far the highest-rate frame, and the decoder already
     // rejects anything that is not waveform data.
@@ -1510,18 +1513,20 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     const IcomCivScheduler::Observation observation =
         m_civScheduler.observe(frame, frameAtMs);
     if (recoveryFrequencyCandidate
-        && observation == IcomCivScheduler::Observation::Accepted) {
+        && observation != IcomCivScheduler::Observation::Stale) {
         // CI-V has no transaction identifier. The strongest correlation the
         // protocol permits is therefore all three: selected-radio source,
-        // frequency-reply shape, and acceptance against the scheduler's one
-        // in-flight recovery probe. An unsolicited frame from another device
-        // on the bus cannot verify this session.
+        // frequency-reply shape, and a reply that has not been superseded by
+        // newer intent. A reply slower than the scheduler's 350 ms wait is
+        // Unmatched but still authoritative; Stale is the sole outcome that
+        // proves a newer semantic generation replaced it. An unsolicited
+        // frequency frame from this same radio also proves the CI-V command
+        // plane is alive, while another bus device cannot verify the session.
         qCInfo(lcIcomLink)
             << "CI-V command plane verified after targeted data restart";
         m_civRecoveryStartedAtMs = 0;
         m_lastCivRecoveryAttemptAtMs = 0;
         m_civRecoveryAttempts = 0;
-        m_civRecoveryProbeSent = false;
         m_civStallReported = false;
     }
     // Identity can retarget the CI-V destination. Do not dispatch the next
@@ -2714,7 +2719,8 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
 }
 
 void IcomCivBackend::serviceSchedulerWaiters(
-    qint64 nowMs, std::optional<SchedulerWaiterOutcome> terminal)
+    qint64 nowMs, std::optional<SchedulerWaiterOutcome> terminal,
+    std::optional<QVariantMap> diagnosticSnapshot)
 {
     // COLLECT, ERASE, THEN EMIT. extensionResult is a direct connection, so a
     // slot that registers another waiter would reallocate the vector under an
@@ -2731,7 +2737,7 @@ void IcomCivBackend::serviceSchedulerWaiters(
     }
     if (ready.empty())
         return;
-    QVariantMap result = schedulerDiagnostics();
+    QVariantMap result = diagnosticSnapshot.value_or(schedulerDiagnostics());
     SchedulerWaiterOutcome outcome = SchedulerWaiterOutcome::Completed;
     if (terminal) {
         outcome = *terminal;
@@ -2756,10 +2762,10 @@ void IcomCivBackend::terminateScheduler(
     IcomCivScheduler::TerminalOutcome requestOutcome,
     SchedulerWaiterOutcome waiterOutcome)
 {
-    // Waiters observe the terminal reason while diagnostics still describe the
-    // work being terminated. Then consume reset()'s per-request accounting so
-    // queued and in-flight commands do not disappear into an ignored return.
-    serviceSchedulerWaiters(nowMs(), waiterOutcome);
+    // Snapshot first, reset second, emit last. extensionResult is a direct
+    // connection: emitting before reset let a re-entrant observer queue fresh
+    // work that the following reset silently erased.
+    QVariantMap diagnostics = schedulerDiagnostics();
     const IcomCivScheduler::ResetResult terminal =
         m_civScheduler.reset(requestOutcome);
     const quint64 requestCount = static_cast<quint64>(terminal.requests.size());
@@ -2768,6 +2774,12 @@ void IcomCivBackend::terminateScheduler(
     } else {
         m_schedulerCancelledRequests += requestCount;
     }
+    diagnostics.insert(QStringLiteral("cancelledRequests"),
+                       static_cast<qulonglong>(m_schedulerCancelledRequests));
+    diagnostics.insert(QStringLiteral("failedRequests"),
+                       static_cast<qulonglong>(m_schedulerFailedRequests));
+    m_schedulerTimeoutsReported = 0;
+    serviceSchedulerWaiters(nowMs(), waiterOutcome, diagnostics);
 }
 
 void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
@@ -4859,7 +4871,6 @@ void IcomCivBackend::onLinkTick()
                 cmdReadFrequency(m_session->civAddress());
             queueRead(probe, semanticKey(probe),
                       IcomCivScheduler::Priority::Maintenance);
-            m_civRecoveryProbeSent = true;
             pumpCiv(now);
             qCWarning(lcIcomLink) << "CI-V data restart attempt"
                                   << m_civRecoveryAttempts << "of"
@@ -4970,9 +4981,9 @@ void IcomCivBackend::onLinkTick()
 
     terminateScheduler(IcomCivScheduler::TerminalOutcome::Failed,
                        SchedulerWaiterOutcome::Failed);
-    // The 0x04 data-pipe restart is measured on the IC-9700 only. Preserve the
-    // established full-session reconnect for every other Icom until its own
-    // firmware supplies evidence for this exceptional packet.
+    // The 0x04 data-pipe restart is measured on the IC-9700 only. Every other
+    // Icom retains main's warn-only stall behavior until its own firmware
+    // supplies evidence and a maintainer approves a recovery policy.
     const bool supportsTargetedRestart = m_model
         && m_model->civAddress == kTargetedRestartModelAddress;
     if (supportsTargetedRestart && m_session->reopenCivPipe()) {
@@ -4983,17 +4994,15 @@ void IcomCivBackend::onLinkTick()
             cmdReadFrequency(m_session->civAddress());
         queueRead(probe, semanticKey(probe),
                   IcomCivScheduler::Priority::Maintenance);
-        m_civRecoveryProbeSent = true;
         pumpCiv(now);
         qCWarning(lcIcomLink) << "CI-V data restart attempt 1 of"
                               << kMaxCivRecoveryAttempts;
         return;
     }
 
-    const QString reason = QStringLiteral(
-        "Icom CI-V stream stopped responding; reconnecting the radio session");
-    disconnectRadio();
-    emit connectionError(reason);
+    // This is intentionally not a family-wide reconnect. Before #5119, a
+    // non-9700 stall was diagnostic only; preserve that shipping contract for
+    // IC-705, IC-7300MK2 and unknown models.
 }
 
 IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const
