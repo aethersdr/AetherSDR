@@ -78,6 +78,22 @@ public:
         std::int64_t lastDispatchMs = 0;
     };
 
+    enum class TerminalOutcome : std::uint8_t {
+        Cancelled,
+        Failed,
+    };
+
+    struct TerminalRequest {
+        std::string key;
+        std::uint64_t generation = 0;
+        bool wasInFlight = false;
+        TerminalOutcome outcome = TerminalOutcome::Cancelled;
+    };
+
+    struct ResetResult {
+        std::vector<TerminalRequest> requests;
+    };
+
     // Returns the semantic generation assigned to the request.  A return of
     // zero means an identical read was already queued/in flight and this one
     // was coalesced away.
@@ -85,7 +101,11 @@ public:
     [[nodiscard]] std::optional<Dispatch> takeNext(std::int64_t nowMs);
     [[nodiscard]] Observation observe(const CivFrame& frame, std::int64_t nowMs);
 
-    void reset() noexcept;
+    // Return every request removed by reset with its terminal disposition.
+    // Dispatch policy is deliberately unchanged; this is lifecycle accounting
+    // for callers that must distinguish teardown cancellation from link failure.
+    [[nodiscard]] ResetResult reset(
+        TerminalOutcome outcome = TerminalOutcome::Cancelled) noexcept;
     [[nodiscard]] Stats stats() const;
     [[nodiscard]] bool idle() const noexcept { return m_queue.empty() && !m_inFlight; }
 
@@ -100,6 +120,8 @@ public:
     static constexpr int kLateReplyGraceMs = 2000;
 
 private:
+    friend struct IcomCivBackendTestAccess;
+
     struct Queued {
         Request request;
         std::uint64_t generation = 0;

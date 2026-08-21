@@ -530,6 +530,16 @@ std::vector<std::uint8_t> buildSerialOpen(std::uint32_t localSid, std::uint32_t 
     return p;
 }
 
+std::vector<std::uint8_t> buildSerialRestart(std::uint32_t localSid,
+                                             std::uint32_t remoteSid,
+                                             std::uint16_t sendSeq)
+{
+    std::vector<std::uint8_t> packet =
+        buildSerialOpen(localSid, remoteSid, sendSeq, true);
+    packet[0x15] = 0x04;
+    return packet;
+}
+
 std::vector<std::uint8_t> buildSerialData(std::uint32_t localSid, std::uint32_t remoteSid,
                                           std::uint16_t headerSeq, std::uint16_t sendSeq,
                                           std::span<const std::uint8_t> civFrame)

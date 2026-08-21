@@ -126,7 +126,11 @@ qint64 IcomCivBackend::nowMs() const
     return m_clock.elapsed();
 }
 
-IcomCivBackend::~IcomCivBackend() = default;
+IcomCivBackend::~IcomCivBackend()
+{
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
+}
 
 // ---------------------------------------------------------------------------
 // Capability
@@ -596,10 +600,14 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     p.sampleRateHz = static_cast<quint32>(m_audioRateHz);
 
     m_session = std::make_unique<IcomSession>();
+    const std::uint64_t sessionGeneration = ++m_sessionGeneration;
     connect(m_session.get(), &IcomSession::connected, this, &IcomCivBackend::onSessionConnected);
     connect(m_session.get(), &IcomSession::disconnected, this,
             &IcomCivBackend::onSessionDisconnected);
-    connect(m_session.get(), &IcomSession::civFrameReady, this, &IcomCivBackend::onCivFrame);
+    connect(m_session.get(), &IcomSession::civFrameReady, this,
+            [this, sessionGeneration](const CivFrame& frame) {
+                onCivFrame(frame, sessionGeneration);
+            });
     connect(m_session.get(), &IcomSession::audioReady, this, &IcomCivBackend::onAudio);
 
     if (!m_session->start(p))
@@ -608,13 +616,20 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    ++m_sessionGeneration;
+    m_civRecoveryStartedAtMs = 0;
+    m_lastCivRecoveryAttemptAtMs = 0;
+    m_civRecoveryAttempts = 0;
+    m_civRecoveryProbeSent = false;
+    m_civStallReported = false;
     // Teardown is not allowed to wait for an ordinary outstanding read.  Drop
     // all background work, fail-safe unkey on every connected disconnect, and
     // restore the operator's RF-power setpoint if TUNE had borrowed it.  These
     // are response-free emergency dispatches so every datagram reaches the
     // session before its sockets close; no state is optimistically adopted.
     if (m_session && m_connected) {
-        m_civScheduler.reset();
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                           SchedulerWaiterOutcome::Cancelled);
         queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
                                    "cw.message");
         queueEmergencyWriteNoReply(cmdSetPtt(m_session->civAddress(), false), "ptt");
@@ -653,9 +668,9 @@ void IcomCivBackend::disconnectRadio()
     m_rxResampler.reset();
     m_scope.reset();
     m_meters.reset();
-    m_civScheduler.reset();
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
     m_schedulerTimeoutsReported = 0;
-    serviceSchedulerWaiters(nowMs());
     m_pendingPttIntent.reset();
     m_pendingPttUntilMs = 0;
     m_transmitFrequencyCheck = false;
@@ -910,7 +925,8 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
             // including a directed identity read that may already be in flight.
             // The replacement snapshot below is the only work allowed to
             // survive the destination change.
-            m_civScheduler.reset();
+            terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                               SchedulerWaiterOutcome::Cancelled);
             if (m_session) {
                 if (m_session->civAddress() != m_civSeedAddress)
                     m_session->setCivAddress(m_civSeedAddress);
@@ -965,7 +981,8 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
     // No queued or in-flight command addressed to the old destination can be
     // reused after this point. In particular, semantic read coalescing must not
     // mistake an old-address startup read for the replacement snapshot.
-    m_civScheduler.reset();
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
     qCInfo(lcIcomAddr) << "retargeting CI-V from" << Qt::hex << m_session->civAddress()
                    << "to the address the radio reported:" << reported;
     m_session->setCivAddress(reported);
@@ -1326,6 +1343,12 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
 {
     const bool was = m_connected;
     m_connected = false;
+    ++m_sessionGeneration;
+    if (m_session) {
+        disconnect(m_session.get(), nullptr, this, nullptr);
+    }
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
 
     // UNKNOWN IS THE ONLY HONEST STARTING POINT for anything the radio told
     // us, and this object outlives the session: the same backend serves the
@@ -1427,8 +1450,15 @@ void IcomCivBackend::applyScopeStartup()
 // CI-V decode
 // ---------------------------------------------------------------------------
 
-void IcomCivBackend::onCivFrame(const CivFrame& frame)
+void IcomCivBackend::onCivFrame(const CivFrame& frame,
+                                std::uint64_t sessionGeneration)
 {
+    if (!m_connected || sessionGeneration != m_sessionGeneration) {
+        return;
+    }
+    const bool recoveryFrequencyCandidate = m_civRecoveryStartedAtMs > 0
+        && m_civRecoveryProbeSent && frame.cmd == cmd::kReadFreq
+        && m_session && frame.from == m_session->civAddress();
     // Scope first: it is by far the highest-rate frame, and the decoder already
     // rejects anything that is not waveform data.
     if (auto sweep = m_scope.feed(frame)) {
@@ -1479,6 +1509,21 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
 
     const IcomCivScheduler::Observation observation =
         m_civScheduler.observe(frame, frameAtMs);
+    if (recoveryFrequencyCandidate
+        && observation == IcomCivScheduler::Observation::Accepted) {
+        // CI-V has no transaction identifier. The strongest correlation the
+        // protocol permits is therefore all three: selected-radio source,
+        // frequency-reply shape, and acceptance against the scheduler's one
+        // in-flight recovery probe. An unsolicited frame from another device
+        // on the bus cannot verify this session.
+        qCInfo(lcIcomLink)
+            << "CI-V command plane verified after targeted data restart";
+        m_civRecoveryStartedAtMs = 0;
+        m_lastCivRecoveryAttemptAtMs = 0;
+        m_civRecoveryAttempts = 0;
+        m_civRecoveryProbeSent = false;
+        m_civStallReported = false;
+    }
     // Identity can retarget the CI-V destination. Do not dispatch the next
     // queued startup frame until adoptReportedCivAddress() has either confirmed
     // the address or discarded all work aimed at the old one.
@@ -2651,6 +2696,10 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
     out.insert(QStringLiteral("replies"), static_cast<qulonglong>(stats.replies));
     out.insert(QStringLiteral("staleReplies"), static_cast<qulonglong>(stats.staleReplies));
     out.insert(QStringLiteral("timeouts"), static_cast<qulonglong>(stats.timeouts));
+    out.insert(QStringLiteral("cancelledRequests"),
+               static_cast<qulonglong>(m_schedulerCancelledRequests));
+    out.insert(QStringLiteral("failedRequests"),
+               static_cast<qulonglong>(m_schedulerFailedRequests));
     out.insert(QStringLiteral("pendingPttIntent"), m_pendingPttIntent.has_value());
     if (m_pendingPttIntent) {
         out.insert(QStringLiteral("pttIntent"), *m_pendingPttIntent);
@@ -2664,7 +2713,8 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
     return out;
 }
 
-void IcomCivBackend::serviceSchedulerWaiters(qint64 nowMs)
+void IcomCivBackend::serviceSchedulerWaiters(
+    qint64 nowMs, std::optional<SchedulerWaiterOutcome> terminal)
 {
     // COLLECT, ERASE, THEN EMIT. extensionResult is a direct connection, so a
     // slot that registers another waiter would reallocate the vector under an
@@ -2672,7 +2722,7 @@ void IcomCivBackend::serviceSchedulerWaiters(qint64 nowMs)
     // re-entrant case merely queue more work instead of corrupting the walk.
     std::vector<quint64> ready;
     for (auto it = m_schedulerWaiters.begin(); it != m_schedulerWaiters.end();) {
-        if (!m_civScheduler.idle() && nowMs < it->deadlineMs) {
+        if (!terminal && !m_civScheduler.idle() && nowMs < it->deadlineMs) {
             ++it;
             continue;
         }
@@ -2682,9 +2732,42 @@ void IcomCivBackend::serviceSchedulerWaiters(qint64 nowMs)
     if (ready.empty())
         return;
     QVariantMap result = schedulerDiagnostics();
-    result.insert(QStringLiteral("timedOut"), !m_civScheduler.idle());
+    SchedulerWaiterOutcome outcome = SchedulerWaiterOutcome::Completed;
+    if (terminal) {
+        outcome = *terminal;
+    } else if (!m_civScheduler.idle()) {
+        outcome = SchedulerWaiterOutcome::TimedOut;
+    }
+    const QString outcomeName = outcome == SchedulerWaiterOutcome::Completed
+        ? QStringLiteral("completed")
+        : outcome == SchedulerWaiterOutcome::TimedOut
+            ? QStringLiteral("timed-out")
+            : outcome == SchedulerWaiterOutcome::Failed
+                ? QStringLiteral("failed") : QStringLiteral("cancelled");
+    result.insert(QStringLiteral("outcome"), outcomeName);
+    result.insert(QStringLiteral("timedOut"), outcome == SchedulerWaiterOutcome::TimedOut);
+    result.insert(QStringLiteral("failed"), outcome == SchedulerWaiterOutcome::Failed);
+    result.insert(QStringLiteral("cancelled"), outcome == SchedulerWaiterOutcome::Cancelled);
     for (quint64 requestId : ready)
         emit extensionResult(requestId, result);
+}
+
+void IcomCivBackend::terminateScheduler(
+    IcomCivScheduler::TerminalOutcome requestOutcome,
+    SchedulerWaiterOutcome waiterOutcome)
+{
+    // Waiters observe the terminal reason while diagnostics still describe the
+    // work being terminated. Then consume reset()'s per-request accounting so
+    // queued and in-flight commands do not disappear into an ignored return.
+    serviceSchedulerWaiters(nowMs(), waiterOutcome);
+    const IcomCivScheduler::ResetResult terminal =
+        m_civScheduler.reset(requestOutcome);
+    const quint64 requestCount = static_cast<quint64>(terminal.requests.size());
+    if (requestOutcome == IcomCivScheduler::TerminalOutcome::Failed) {
+        m_schedulerFailedRequests += requestCount;
+    } else {
+        m_schedulerCancelledRequests += requestCount;
+    }
 }
 
 void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
@@ -4761,6 +4844,37 @@ void IcomCivBackend::onLinkTick()
         return;
     const qint64 now = nowMs();
 
+    if (m_civRecoveryStartedAtMs > 0) {
+        if (now - m_lastCivRecoveryAttemptAtMs < kCivRecoveryIntervalMs) {
+            return;
+        }
+        // Retire the previous unanswered probe before queuing the next one;
+        // otherwise semantic coalescing would correctly suppress the retry.
+        pumpCiv(now);
+        if (m_civRecoveryAttempts < kMaxCivRecoveryAttempts
+            && m_session->reopenCivPipe()) {
+            ++m_civRecoveryAttempts;
+            m_lastCivRecoveryAttemptAtMs = now;
+            const std::vector<std::uint8_t> probe =
+                cmdReadFrequency(m_session->civAddress());
+            queueRead(probe, semanticKey(probe),
+                      IcomCivScheduler::Priority::Maintenance);
+            m_civRecoveryProbeSent = true;
+            pumpCiv(now);
+            qCWarning(lcIcomLink) << "CI-V data restart attempt"
+                                  << m_civRecoveryAttempts << "of"
+                                  << kMaxCivRecoveryAttempts;
+            return;
+        }
+        qCWarning(lcIcomLink)
+            << "CI-V data restarts produced no command reply; reconnecting session";
+        const QString reason = QStringLiteral(
+            "Icom CI-V stream stopped responding; reconnecting the radio session");
+        disconnectRadio();
+        emit connectionError(reason);
+        return;
+    }
+
     // CI-V Transceive is a low-latency hint, not a subscription. Queue bounded
     // reconciliation groups; the scheduler turns them into one paced stream,
     // coalesces duplicates and lets an operator command overtake all of them.
@@ -4853,6 +4967,33 @@ void IcomCivBackend::onLinkTick()
         << "The transport is still up (rxPackets" << out.rxPackets
         << "), so this is the command plane alone."
         << "Read `civ trace all` for the frames either side of it.";
+
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Failed,
+                       SchedulerWaiterOutcome::Failed);
+    // The 0x04 data-pipe restart is measured on the IC-9700 only. Preserve the
+    // established full-session reconnect for every other Icom until its own
+    // firmware supplies evidence for this exceptional packet.
+    const bool supportsTargetedRestart = m_model
+        && m_model->civAddress == kTargetedRestartModelAddress;
+    if (supportsTargetedRestart && m_session->reopenCivPipe()) {
+        m_civRecoveryStartedAtMs = now;
+        m_lastCivRecoveryAttemptAtMs = now;
+        m_civRecoveryAttempts = 1;
+        const std::vector<std::uint8_t> probe =
+            cmdReadFrequency(m_session->civAddress());
+        queueRead(probe, semanticKey(probe),
+                  IcomCivScheduler::Priority::Maintenance);
+        m_civRecoveryProbeSent = true;
+        pumpCiv(now);
+        qCWarning(lcIcomLink) << "CI-V data restart attempt 1 of"
+                              << kMaxCivRecoveryAttempts;
+        return;
+    }
+
+    const QString reason = QStringLiteral(
+        "Icom CI-V stream stopped responding; reconnecting the radio session");
+    disconnectRadio();
+    emit connectionError(reason);
 }
 
 IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const

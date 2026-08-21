@@ -93,6 +93,9 @@ public:
 
     // Send one CI-V frame. Frames are built by CivCodec's cmd* helpers.
     void sendCiv(std::span<const std::uint8_t> frame);
+    // Re-open only the RS-BA1 CI-V data pipe while retaining the authenticated
+    // control and audio streams. The backend owns the bounded retry policy.
+    [[nodiscard]] bool reopenCivPipe();
     // Queue transmit audio (mono float). Nothing leaves until a full 20 ms
     // frame is available — the radio's jitter buffer reads a short packet as a
     // discontinuity.

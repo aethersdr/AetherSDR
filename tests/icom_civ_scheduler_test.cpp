@@ -1,5 +1,6 @@
 #include "core/backends/icom/IcomCivScheduler.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <string>
@@ -227,6 +228,62 @@ int main()
         check(scheduler.observe(reply(0x14, 0x02, 0x50), 360)
                   == IcomCivScheduler::Observation::Unmatched,
               "a late reply with no newer intent behind it is not marked stale");
+    }
+
+    {
+        IcomCivScheduler scheduler;
+        scheduler.enqueue(read("queued", 0x16, 0x40, Priority::Control), 0);
+        scheduler.enqueue(read("in-flight", 0x15, 0x02, Priority::ActiveMeter), 0);
+        check(scheduler.takeNext(0).has_value(), "reset fixture dispatches one request");
+        const IcomCivScheduler::ResetResult reset = scheduler.reset();
+        check(reset.requests.size() == 2,
+              "reset explicitly reports every queued and in-flight cancellation");
+        check(std::count_if(reset.requests.begin(), reset.requests.end(),
+                            [](const IcomCivScheduler::TerminalRequest& request) {
+                                return request.outcome
+                                        == IcomCivScheduler::TerminalOutcome::Cancelled
+                                    && request.wasInFlight;
+                            }) == 1,
+              "reset identifies the cancelled in-flight request");
+        check(std::count_if(reset.requests.begin(), reset.requests.end(),
+                            [](const IcomCivScheduler::TerminalRequest& request) {
+                                return request.outcome
+                                        == IcomCivScheduler::TerminalOutcome::Cancelled
+                                    && !request.wasInFlight;
+                            }) == 1,
+              "reset identifies the cancelled queued request");
+        check(scheduler.idle(), "reset leaves the scheduler idle");
+    }
+
+    {
+        IcomCivScheduler scheduler;
+        scheduler.enqueue(read("failed-in-flight", 0x15, 0x02,
+                               Priority::ActiveMeter), 0);
+        scheduler.enqueue(read("failed-queued", 0x16, 0x40,
+                               Priority::Control), 0);
+        check(scheduler.takeNext(0).has_value(), "failure fixture dispatches");
+        const IcomCivScheduler::ResetResult reset =
+            scheduler.reset(IcomCivScheduler::TerminalOutcome::Failed);
+        check(reset.requests.size() == 2
+                  && std::ranges::all_of(
+                      reset.requests,
+                      [](const IcomCivScheduler::TerminalRequest& request) {
+                          return request.outcome
+                              == IcomCivScheduler::TerminalOutcome::Failed;
+                      }),
+              "a command-plane failure terminates every queued and in-flight "
+              "request distinctly from operator cancellation");
+        check(std::ranges::any_of(
+                  reset.requests,
+                  [](const IcomCivScheduler::TerminalRequest& request) {
+                      return request.key == "failed-in-flight" && request.wasInFlight;
+                  })
+                  && std::ranges::any_of(
+                      reset.requests,
+                      [](const IcomCivScheduler::TerminalRequest& request) {
+                          return request.key == "failed-queued" && !request.wasInFlight;
+                      }),
+              "failure accounting preserves each request identity and lifecycle state");
     }
 
     if (g_failures == 0) {

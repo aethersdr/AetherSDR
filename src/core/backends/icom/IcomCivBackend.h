@@ -159,12 +159,19 @@ public:
 private slots:
     void onSessionConnected(const QString& deviceName);
     void onSessionDisconnected(const QString& reason);
-    void onCivFrame(const AetherSDR::icom::CivFrame& frame);
+    void onCivFrame(const AetherSDR::icom::CivFrame& frame,
+                    std::uint64_t sessionGeneration);
     void onAudio(const std::vector<float>& mono);
     void onMeterTick();
     void onLinkTick();
 
 private:
+    // Focused access for the generation-gate regression test.  The test must
+    // inject a frame carrying an obsolete session generation after the backend
+    // has advanced to a replacement session; exercising only the public UDP
+    // path cannot make that queued-delivery race deterministic.
+    friend struct IcomCivBackendTestAccess;
+
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
     // from it. One call rather than two because they are the same answer — a
@@ -255,7 +262,16 @@ private:
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] QVariantMap schedulerDiagnostics() const;
-    void serviceSchedulerWaiters(qint64 nowMs);
+    enum class SchedulerWaiterOutcome : std::uint8_t {
+        Completed,
+        TimedOut,
+        Failed,
+        Cancelled,
+    };
+    void serviceSchedulerWaiters(qint64 nowMs,
+                                 std::optional<SchedulerWaiterOutcome> terminal = std::nullopt);
+    void terminateScheduler(IcomCivScheduler::TerminalOutcome requestOutcome,
+                            SchedulerWaiterOutcome waiterOutcome);
     void applyScopeStartup();
     // The connect-edge read burst, lifted out of onSessionConnected UNCHANGED.
     //
@@ -274,6 +290,7 @@ private:
     [[nodiscard]] QString panId() const { return QStringLiteral("0"); }
 
     std::unique_ptr<IcomSession> m_session;
+    std::uint64_t m_sessionGeneration = 0;
     const IcomModel* m_model = nullptr;
 
     // ---- CI-V address resolution (see IcomSettings::CivSelection) ------------
@@ -580,6 +597,8 @@ private:
     };
     std::vector<SchedulerWaiter> m_schedulerWaiters;
     quint64 m_schedulerTimeoutsReported = 0;
+    quint64 m_schedulerCancelledRequests = 0;
+    quint64 m_schedulerFailedRequests = 0;
 
     // CI-V stall detection. The transport can be healthy while the command
     // plane is dead — see onLinkTick — so these track the command plane alone.
@@ -587,10 +606,17 @@ private:
     QString m_lastOutboundCiv;      // the last frame we sent, as hex
     qint64  m_lastOutboundCivAtMs = 0;
     bool    m_civStallReported = false;
+    qint64  m_civRecoveryStartedAtMs = 0;
+    qint64  m_lastCivRecoveryAttemptAtMs = 0;
+    int     m_civRecoveryAttempts = 0;
+    bool    m_civRecoveryProbeSent = false;
     // Long enough that a quiet moment is not an alarm — the slowest poll here is
     // 1 s and a user-command guard can defer it — short enough that an operator
     // has not yet had time to wonder why the S-meter stopped.
     static constexpr qint64 kCivStallMs = 5000;
+    static constexpr qint64 kCivRecoveryIntervalMs = 1000;
+    static constexpr int kMaxCivRecoveryAttempts = 3;
+    static constexpr std::uint8_t kTargetedRestartModelAddress = 0xA2; // IC-9700
     // Note the id for a frame we are about to send or have just decoded.
     void noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlScheduled(std::uint8_t cmd, std::uint8_t sub, bool hasSub);

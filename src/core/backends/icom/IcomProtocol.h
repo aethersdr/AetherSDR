@@ -404,6 +404,12 @@ struct StreamGrant {
                                                          std::uint16_t sendSeq,
                                                          bool open);
 
+// Restart an already-open CI-V data pipe. The IC-9700 distinguishes this
+// data-start request (magic 0x04) from the initial open above (magic 0x05).
+[[nodiscard]] std::vector<std::uint8_t> buildSerialRestart(std::uint32_t localSid,
+                                                            std::uint32_t remoteSid,
+                                                            std::uint16_t sendSeq);
+
 // Wrap one raw CI-V frame for the serial stream.
 //
 // NOTE the two sequence numbers with DIFFERENT endianness in the same packet:
