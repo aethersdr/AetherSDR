@@ -952,20 +952,26 @@ std::optional<GpsPosition> decodeGpsPosition(std::span<const std::uint8_t> data)
         return std::nullopt;
     }
 
-    // Longitude: DDD MM mmm 00 0H, H=0 west / 1 east.
-    for (std::size_t i = 5; i <= 8; ++i) {
+    // Longitude: 0D DD MM mm m0 0H, H=0 west / 1 east.
+    //
+    // Unlike latitude, the three degree digits straddle two bytes. A real
+    // IC-705 reporting 118 deg 03.534 min sends `01 18 03 53 40 00`.
+    // Treating the second byte's low nibble as the first minutes digit turns
+    // that into the impossible 11 deg 95.390 min and rejects an otherwise
+    // valid fix.
+    for (std::size_t i = 5; i <= 9; ++i) {
         if (!validBcd(data[i])) {
             return std::nullopt;
         }
     }
-    if (data[9] != 0 || (data[10] & 0xf0) != 0 || (data[10] & 0x0f) > 1) {
+    if ((data[5] & 0xf0) != 0 || (data[9] & 0x0f) != 0
+        || (data[10] & 0xf0) != 0 || (data[10] & 0x0f) > 1) {
         return std::nullopt;
     }
-    const int lonDegrees = ((data[5] >> 4) & 0x0f) * 100
-        + (data[5] & 0x0f) * 10 + ((data[6] >> 4) & 0x0f);
-    const double lonMinutes = (data[6] & 0x0f) * 10.0
-        + ((data[7] >> 4) & 0x0f) + (data[7] & 0x0f) / 10.0
-        + ((data[8] >> 4) & 0x0f) / 100.0 + (data[8] & 0x0f) / 1000.0;
+    const int lonDegrees = (data[5] & 0x0f) * 100 + decodeBcdByte(data[6]);
+    const double lonMinutes = decodeBcdByte(data[7])
+        + decodeBcdByte(data[8]) / 100.0
+        + ((data[9] >> 4) & 0x0f) / 1000.0;
     if (lonDegrees > 180 || lonMinutes >= 60.0
         || (lonDegrees == 180 && lonMinutes > 0.0)) {
         return std::nullopt;

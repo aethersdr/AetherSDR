@@ -676,6 +676,13 @@ private:
                         0xFE, 0xFE, kControllerAddress, kIc705Addr, cmd::kSetting,
                         settingSub::kMenu, frame->data[0], frame->data[1]};
                     reply.insert(reply.end(), textIt->second.begin(), textIt->second.end());
+                    if (item == setting::kNtpServer && textIt->second.size() < 64) {
+                        // The real IC-705 returns this leaf as a 64-byte,
+                        // NUL-padded field. Mirroring that here keeps the
+                        // backend test from accepting a friendlier fake-only
+                        // response shape.
+                        reply.resize(8 + 64, 0x00);
+                    }
                     reply.push_back(kCivEom);
                     pushCiv(reply);
                     return;

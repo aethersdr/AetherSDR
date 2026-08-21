@@ -2078,8 +2078,16 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                 return;
             }
             if (item == setting::kNtpServer) {
-                const QByteArray raw(reinterpret_cast<const char*>(frame.data.data() + 2),
-                                     static_cast<qsizetype>(frame.data.size() - 2));
+                QByteArray raw(reinterpret_cast<const char*>(frame.data.data() + 2),
+                               static_cast<qsizetype>(frame.data.size() - 2));
+                // The IC-705 answers this SET-menu leaf as a fixed-width,
+                // NUL-padded field (64 bytes in the observed 2026-08-21
+                // response), not as the variable-length string our fake used
+                // to return. The padding is transport shape, not hostname.
+                const qsizetype nul = raw.indexOf('\0');
+                if (nul >= 0) {
+                    raw.truncate(nul);
+                }
                 const QString server = QString::fromLatin1(raw);
                 if (server.isEmpty() || validNtpServer(server)) {
                     d.ntpServer = server;
