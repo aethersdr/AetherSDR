@@ -370,7 +370,12 @@ void CwxPanel::configureTextKeyer(const QString& name, int minWpm, int maxWpm,
         m_setupBtn->setVisible(supportsStoredMacros);
         if (!supportsStoredMacros) {
             m_setupBtn->setChecked(false);
-            showSendView();
+            // Capability updates are radio-driven and may arrive while the
+            // operator is editing an unrelated control. Select the only
+            // supported page without showSendView()'s user-action focus grab.
+            if (m_stack->currentWidget() != m_sendPage) {
+                m_stack->setCurrentWidget(m_sendPage);
+            }
         }
     }
 }
