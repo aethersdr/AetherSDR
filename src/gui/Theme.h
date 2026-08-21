@@ -15,7 +15,6 @@
 #include "core/ThemeManager.h"
 
 #include <QEvent>
-#include <QMetaObject>
 #include <QObject>
 #include <QString>
 #include <QWidget>
@@ -24,30 +23,36 @@ namespace AetherSDR {
 
 namespace detail {
 
-// Supports applyPrimarySliderStyle()'s Qt::WA_Hover suppression (#4869) —
-// re-clears the attribute every time QStyleSheetStyle::polish() sets it.
-// One process-wide instance filters every themed slider; `watched`
-// disambiguates which one on each call.
+// Supports applyPrimarySliderStyle()'s and GuardedSlider's hover-repaint
+// suppression (#4869) — swallows the hover events that
+// QSliderPrivate::updateHoverControl() uses to trigger its partial-rect
+// repaint. One process-wide instance filters every themed slider and every
+// GuardedSlider (installed from its constructor); `watched` disambiguates
+// which one on each call. QObject::installEventFilter() de-duplicates
+// internally (it removes any existing entry before prepending), so a
+// GuardedSlider that also goes through applyPrimarySliderStyle() — the
+// common case — only ever has one registration.
 //
-// Two distinct polish events, two distinct fixes — verified against Qt
-// 6.11.1 by instrumenting WA_Hover through the real construction sequence
-// every call site uses (style while unparented -> reparent -> show):
+// This PR originally tried to CLEAR Qt::WA_Hover instead, on the theory
+// that QStyleSheetStyle::polish() sets it because our stylesheet has no
+// :hover rule. That diagnosis was wrong (review on #4923, credit NF0T):
+// QStyleSheetStyle::polish() only sets the attribute when a :hover rule
+// IS present (qstylesheetstyle.cpp:2928, conditional). AetherSDR forces
+// the Fusion style app-wide (main.cpp), and QFusionStyle::polish()
+// (qfusionstyle.cpp:3144) sets WA_Hover on every QAbstractSlider BY
+// WIDGET TYPE, stylesheet or not — confirmed with a probe: a completely
+// unstyled QSlider gets WA_Hover=1 under Fusion, identically to one
+// carrying this project's :hover-free template.
 //
-//   - RE-polish (a theme switch via ThemeManager::reapplyAllTrackedStyleSheets(),
-//     or a reparent via ThemeManager::eventFilter()'s ParentChange path) calls
-//     setStyleSheet() again, which polishes the widget FIRST and sends
-//     QEvent::StyleChange AFTER. Clearing inline on StyleChange is correct
-//     here — the attribute is already set by the time this filter runs.
-//   - FIRST polish is different. Every slider is styled via
-//     applyPrimarySliderStyle() while still unparented, so setStyleSheet()
-//     does not repolish (QWidget::setStyleSheet() only repolishes a widget
-//     that is ALREADY polished) — WA_Hover is not set yet at that call.  The
-//     real first polish happens later, inside ensurePolished() on first
-//     show(), which delivers QEvent::Polish — and event filters run BEFORE
-//     QWidget::event() reaches style()->polish(), so an inline clear here
-//     would fire too early, before polish() has set anything to clear.
-//     The clear has to be queued so it lands immediately after polish()
-//     runs instead.
+// That means the attribute cannot be reliably cleared — it is set by
+// Qt's own style machinery, including via a direct style()->polish() call
+// (RxApplet.cpp / VfoWidget.cpp's squelch-mode redraw) that emits neither
+// QEvent::Polish nor QEvent::StyleChange, so no filter watching those
+// events can ever see it happen. Swallowing the hover events themselves
+// sidesteps that entirely: QSlider::event() never reaches
+// updateHoverControl() when HoverEnter/HoverMove/HoverLeave never reach
+// QSlider::event() at all, regardless of how or when WA_Hover got set —
+// there is nothing left to race.
 class SliderHoverSuppressor : public QObject {
 public:
     static SliderHoverSuppressor& instance()
@@ -57,20 +62,16 @@ public:
     }
 
 protected:
-    bool eventFilter(QObject* watched, QEvent* event) override
+    bool eventFilter(QObject*, QEvent* event) override
     {
-        const QEvent::Type type = event->type();
-        if (type == QEvent::StyleChange || type == QEvent::Polish) {
-            if (auto* w = qobject_cast<QWidget*>(watched)) {
-                if (type == QEvent::StyleChange) {
-                    w->setAttribute(Qt::WA_Hover, false);
-                } else {
-                    QMetaObject::invokeMethod(w, [w] { w->setAttribute(Qt::WA_Hover, false); },
-                                              Qt::QueuedConnection);
-                }
-            }
+        switch (event->type()) {
+        case QEvent::HoverEnter:
+        case QEvent::HoverMove:
+        case QEvent::HoverLeave:
+            return true;
+        default:
+            return false;
         }
-        return false;
     }
 };
 
@@ -251,9 +252,9 @@ inline QString darkThemeStylesheet()
 // their own token here — those overrides still work since the helper
 // just substitutes whatever token name is provided.
 //
-// NOTE: do not add a :hover rule here without first removing the WA_Hover
-// suppression in applyPrimarySliderStyle() below (#4869) — the attribute that
-// gates hover rendering is deliberately cleared on every themed slider.
+// NOTE: do not add a :hover rule here without first removing the hover-event
+// suppression in applyPrimarySliderStyle() below (#4869) — hover events are
+// deliberately swallowed before they reach every themed slider.
 inline QString primarySliderStyleTemplate(const QString& accentToken = QStringLiteral("color.slider.foreground"))
 {
     return QStringLiteral(
@@ -291,41 +292,34 @@ inline QString primarySliderStyleTemplate(const QString& accentToken = QStringLi
 // scope override naturally reaches the rendered output without any
 // per-call-site change.
 //
-// Every themed slider also gets Qt::WA_Hover turned back off (#4869).
-// QStyleSheetStyle::polish() unconditionally turns WA_Hover ON for any
-// widget that has a stylesheet, regardless of whether that stylesheet
-// defines a :hover rule — and ours doesn't (see the groove/handle rules
-// above; hover/pressed states deliberately fall through to Qt defaults).
-// So hovering a themed slider fires a repaint that changes no pixels —
-// except at a fractional effective device pixel ratio (a non-integer
-// AetherSDR UI scale on a Retina display), where Qt's logical-to-native
-// rounding on that no-op repaint's flush leaves stale pixels on screen.
-// Confirmed: artifacts reproduce at 125%/150% and are absent at 100%
-// and 200% (integral DPR, no rounding error).
+// Every themed slider also has hover repaints suppressed (#4869).
+// AetherSDR forces the Fusion style app-wide, and QFusionStyle::polish()
+// sets Qt::WA_Hover on every QAbstractSlider by widget type — regardless
+// of whether this stylesheet defines a :hover rule, which it deliberately
+// doesn't (see the groove/handle rules above; hover/pressed states fall
+// through to Qt defaults). So hovering a themed slider fires a repaint
+// that changes no pixels — except at a fractional effective device pixel
+// ratio (a non-integer AetherSDR UI scale on a Retina display), where
+// Qt's logical-to-native rounding on that no-op repaint's flush leaves
+// stale pixels on screen. Confirmed: artifacts reproduce at 125%/150%
+// and are absent at 100% and 200% (integral DPR, no rounding error).
+//
+// See SliderHoverSuppressor above for why this suppresses the hover
+// EVENTS rather than the WA_Hover attribute they depend on.
 //
 // This makes the ABSENCE of a slider :hover rule load-bearing — if one is
 // ever added to primarySliderStyleTemplate() above, it will silently never
-// render, because this suppression turns the attribute that gates it back
-// off before the operator can ever trigger it. Remove this suppression
-// first if that changes.
+// render, because the hover events that would trigger it never reach the
+// slider. Remove this suppression first if that changes.
 inline void applyPrimarySliderStyle(QWidget* slider,
                                     const QString& accentToken = QStringLiteral("color.slider.foreground"))
 {
     if (!slider) return;
     ThemeManager::instance().applyStyleSheet(slider, primarySliderStyleTemplate(accentToken));
-    // Belt-and-braces for the rare caller that re-styles an already-shown
-    // (already-polished) slider — QWidget::setStyleSheet() only repolishes a
-    // widget that is already polished, so on the normal path (every current
-    // call site styles the slider while it's still unparented) this clears
-    // an attribute that was never set: polish() hasn't run yet, so WA_Hover
-    // isn't set yet either. The real first polish happens later, inside
-    // ensurePolished() on first show() — see SliderHoverSuppressor for how
-    // that path is actually covered.
-    slider->setAttribute(Qt::WA_Hover, false);
-    // One shared filter instance serves every themed slider.
-    // QObject::installEventFilter() de-duplicates internally (it removes any
-    // existing entry before prepending), so a second applyPrimarySliderStyle()
-    // call on the same widget cannot register the filter twice.
+    // One shared filter instance serves every themed slider (and, via
+    // GuardedSlider's own constructor, every GuardedSlider regardless of
+    // styling path — see GuardedSlider.h). installEventFilter() de-dups
+    // internally, so installing it twice on the same widget is harmless.
     slider->installEventFilter(&detail::SliderHoverSuppressor::instance());
 }
 

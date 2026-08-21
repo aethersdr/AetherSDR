@@ -3268,6 +3268,7 @@ add_executable(theme_manager_test
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
+    src/gui/DragValuePopup.cpp
     ${THEME_TEST_RESOURCES}
 )
 target_include_directories(theme_manager_test PRIVATE src)
