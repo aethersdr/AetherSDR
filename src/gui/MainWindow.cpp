@@ -7113,6 +7113,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
+        m_appletPanel->meterApplet()->setPaTemperatureTelemetryState(
+            connected, caps.hasPaTemperatureTelemetry);
         // The mic-level gauge follows the METER, not the capability: a Flex
         // does not let a client pick its input either and still publishes
         // MICPEAK. Absence of the meter is the only thing that means the face

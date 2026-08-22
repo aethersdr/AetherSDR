@@ -115,6 +115,10 @@ int main(int argc, char** argv)
     // distinction so the old false warning cannot quietly come back.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+    check(!AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+               .meters.hasPaTemperatureTelemetry,
+          "the IC-9700 profile does not declare PA-temperature telemetry");
 
     // ── TX bandwidth: the models genuinely differ ─────────────────────────
     {

@@ -252,6 +252,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.hasSupplyVoltageTelemetry =
         profile.meters.calibration != MeterCalibration::Uncalibrated;
+    c.hasPaTemperatureTelemetry = profile.meters.hasPaTemperatureTelemetry;
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //

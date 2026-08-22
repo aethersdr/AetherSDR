@@ -248,6 +248,8 @@ int main(int argc, char** argv)
         // readout that ships and works today.
         check(caps.hasSupplyVoltageTelemetry,
               "Flex declares hasSupplyVoltageTelemetry (the \"+13.8A\" meter)");
+        check(caps.hasPaTemperatureTelemetry,
+              "Flex declares hasPaTemperatureTelemetry (the PATEMP meter)");
         // The two DSP flags are independent statements, not synonyms: the base
         // set and the extra 8000-series filters. A default Flex model string is
         // unknown to the platform table, so the narrower one is false here while
@@ -376,6 +378,8 @@ int main(int argc, char** argv)
         // not the stack.
         check(!caps.hasSupplyVoltageTelemetry,
               "HL2 declares hasSupplyVoltageTelemetry=false (PATEMP, no +13.8A)");
+        check(caps.hasPaTemperatureTelemetry,
+              "HL2 declares hasPaTemperatureTelemetry (host-decoded PATEMP)");
         // The three status-bar toggles. The HL2 has no CW text buffer, no voice
         // recorder and no full-duplex setting, so all three labels go away
         // entirely rather than sitting permanently dim.
@@ -577,6 +581,8 @@ int main(int argc, char** argv)
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
+        check(!caps.hasPaTemperatureTelemetry,
+              "Sim declares hasPaTemperatureTelemetry=false");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
@@ -867,6 +873,8 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults hasManualNotch to false (absent unless declared)");
         check(!fresh.hasLmsNoiseFilters,
               "RadioCapabilities defaults hasLmsNoiseFilters to false (absent unless declared)");
+        check(!fresh.hasPaTemperatureTelemetry,
+              "RadioCapabilities defaults PA temperature telemetry to absent");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.
@@ -884,6 +892,8 @@ int main(int argc, char** argv)
               "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");
         check(icomCaps.hasManualNotch,
               "Icom declares hasManualNotch (16 48 enable, 14 0D position, 16 57 width)");
+        check(!icomCaps.hasPaTemperatureTelemetry,
+              "Icom declares no PA-temperature telemetry without a model profile");
 
         // The gates themselves, through the SAME expression the UI applies, so
         // these assert behaviour rather than paraphrase it.

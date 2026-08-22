@@ -23,6 +23,7 @@ public:
     explicit MeterApplet(QWidget* parent = nullptr);
 
     void setMeterModel(MeterModel* model);
+    void setPaTemperatureTelemetryState(bool connected, bool available);
 
 private:
     void resolveIndices();
