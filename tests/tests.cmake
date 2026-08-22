@@ -3742,6 +3742,21 @@ add_test(NAME phone_cw_mic_gain_authority_test
 set_tests_properties(phone_cw_mic_gain_authority_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(phone_cw_level_meter_state_test
+    tests/phone_cw_level_meter_state_test.cpp
+    src/gui/PhoneCwApplet.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(phone_cw_level_meter_state_test PRIVATE src)
+target_link_libraries(phone_cw_level_meter_state_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets
+)
+set_target_properties(phone_cw_level_meter_state_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_cw_level_meter_state_test
+         COMMAND phone_cw_level_meter_state_test)
+set_tests_properties(phone_cw_level_meter_state_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(container_manager_test
     tests/container_manager_test.cpp
     src/gui/FramelessResizer.cpp

@@ -7129,8 +7129,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
-        m_appletPanel->setMicLevelMeterAvailable(
-            !connected || m_radioModel.meterModel().hasMicPeakMeter());
+        m_appletPanel->setMicLevelMeterState(
+            connected ? MicMeterSessionState::Connected
+                      : MicMeterSessionState::Disconnected,
+            m_radioModel.meterModel().hasMicPeakMeter());
     }
 
     // ── Display dBm scale: who owns it ─────────────────────────────────────
