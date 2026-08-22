@@ -458,19 +458,17 @@ static const QString kModeBtn =
     "QPushButton:checked { background: #0070c0; color: #ffffff; border: 1px solid #0090e0; }"
     "QPushButton:hover { border: 1px solid #0090e0; }";
 
-// Template, not a literal stylesheet: the :disabled rule resolves through
-// ThemeManager so a disabled row (the APF level row while APF is off) dims
-// its caption and value label together with its slider — a stylesheet
-// colour otherwise beats the disabled palette (#4658). Apply with
-// applyLabelStyle(), never setStyleSheet() directly.
+// Shared :disabled rule: a stylesheet colour beats the disabled palette, so
+// a label in a disabled row stays bright unless the sheet says otherwise.
+// #5e6e7c is ~0.45 of the normal text over the flag background. Used by
+// kLabelStyle (so the APF level row dims as a unit while APF is off, #4658)
+// and by makeOptLabel() below.
+static const QString kDisabledLabelRule =
+    "QLabel:disabled { color: #5e6e7c; }";
+
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }"
-    "QLabel:disabled { color: {{color.text.disabled}}; }";
-
-static void applyLabelStyle(QWidget* label)
-{
-    AetherSDR::ThemeManager::instance().applyStyleSheet(label, kLabelStyle);
-}
+    + kDisabledLabelRule;
 
 // Meter-view selector buttons.  Unselected look matches the DSP NR/NB/ANF
 // toggles exactly (kDspToggle base + hover); the selected/checked look matches
@@ -1281,11 +1279,10 @@ void VfoWidget::buildUI()
         auto* lbl = new QLabel(text);
         // :disabled dims the label when its row is disabled — a render()-compatible
         // replacement for the old QGraphicsOpacityEffect (which QWidget::render()
-        // can't rasterize, so it blanked these rows in GPU flag sprites). #5e6e7c is
-        // ~0.45 of the normal text over the flag background.
+        // can't rasterize, so it blanked these rows in GPU flag sprites).
         lbl->setStyleSheet("QLabel { background: transparent; border: none; "
                            "color: #c8d8e8; font-size: 12px; }"
-                           "QLabel:disabled { color: #5e6e7c; }");
+                           + kDisabledLabelRule);
         return lbl;
     };
 
@@ -1569,7 +1566,7 @@ void VfoWidget::buildTabContent()
         applyPrimarySliderStyle(m_afGainSlider);
         gainRow->addWidget(m_afGainSlider, 1);
         auto* afVal = new QLabel("0");
-        applyLabelStyle(afVal);
+        afVal->setStyleSheet(kLabelStyle);
         afVal->setFixedWidth(20);
         afVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         gainRow->addWidget(afVal);
@@ -1591,7 +1588,7 @@ void VfoWidget::buildTabContent()
         applyPrimarySliderStyle(m_sqlSlider);
         sqlRow->addWidget(m_sqlSlider, 1);
         m_sqlValueLbl = new QLabel("20");
-        applyLabelStyle(m_sqlValueLbl);
+        m_sqlValueLbl->setStyleSheet(kLabelStyle);
         m_sqlValueLbl->setFixedWidth(20);
         m_sqlValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sqlRow->addWidget(m_sqlValueLbl);
@@ -1615,7 +1612,7 @@ void VfoWidget::buildTabContent()
         applyPrimarySliderStyle(m_agcTSlider);
         agcRow->addWidget(m_agcTSlider, 1);
         m_agcValueLbl = new QLabel("65");
-        applyLabelStyle(m_agcValueLbl);
+        m_agcValueLbl->setStyleSheet(kLabelStyle);
         m_agcValueLbl->setFixedWidth(20);
         m_agcValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         agcRow->addWidget(m_agcValueLbl);
@@ -1633,7 +1630,7 @@ void VfoWidget::buildTabContent()
         m_divBtn->setVisible(false);  // shown only on dual-SCU radios
         panRow->addWidget(m_divBtn);
         auto* panL = new QLabel("L");
-        applyLabelStyle(panL);
+        panL->setStyleSheet(kLabelStyle);
         panL->setFixedWidth(10);
         panL->setAlignment(Qt::AlignCenter);
         panRow->addWidget(panL);
@@ -1643,7 +1640,7 @@ void VfoWidget::buildTabContent()
         applyPrimarySliderStyle(m_panSlider);
         panRow->addWidget(m_panSlider, 1);
         auto* panR = new QLabel("R");
-        applyLabelStyle(panR);
+        panR->setStyleSheet(kLabelStyle);
         panR->setFixedWidth(10);
         panR->setAlignment(Qt::AlignCenter);
         panRow->addWidget(panR);
@@ -1678,7 +1675,7 @@ void VfoWidget::buildTabContent()
         m_escBtn->setStyleSheet(kDspToggle);
         escTopRow->addWidget(m_escBtn);
         auto* phaseLbl = new QLabel("P");
-        applyLabelStyle(phaseLbl);
+        phaseLbl->setStyleSheet(kLabelStyle);
         escTopRow->addWidget(phaseLbl);
         m_escPhaseSlider = new GuardedSlider(Qt::Horizontal);
         m_escPhaseSlider->setAccessibleName("ESC phase");
@@ -1687,7 +1684,7 @@ void VfoWidget::buildTabContent()
         applyPrimarySliderStyle(m_escPhaseSlider);
         escTopRow->addWidget(m_escPhaseSlider, 1);
         m_escPhaseLbl = new QLabel("0\u00B0");
-        applyLabelStyle(m_escPhaseLbl);
+        m_escPhaseLbl->setStyleSheet(kLabelStyle);
         m_escPhaseLbl->setFixedWidth(28);
         m_escPhaseLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         escTopRow->addWidget(m_escPhaseLbl);
@@ -1709,7 +1706,7 @@ void VfoWidget::buildTabContent()
         auto* gainCol = new QVBoxLayout;
         gainCol->setSpacing(1);
         m_escGainLbl = new QLabel("1.00");
-        applyLabelStyle(m_escGainLbl);
+        m_escGainLbl->setStyleSheet(kLabelStyle);
         m_escGainLbl->setAlignment(Qt::AlignHCenter);
         gainCol->addWidget(m_escGainLbl);
         m_escGainSlider = new GuardedSlider(Qt::Vertical);
@@ -1719,7 +1716,7 @@ void VfoWidget::buildTabContent()
         applyPrimarySliderStyle(m_escGainSlider);
         gainCol->addWidget(m_escGainSlider, 1);
         auto* gainLbl = new QLabel("G");
-        applyLabelStyle(gainLbl);
+        gainLbl->setStyleSheet(kLabelStyle);
         gainLbl->setAlignment(Qt::AlignHCenter);
         gainCol->addWidget(gainLbl);
         escBodyRow->addLayout(gainCol);
@@ -2059,7 +2056,7 @@ void VfoWidget::buildTabContent()
             apfVb->setSpacing(3);
 
             auto* lbl = new QLabel("APF");
-            applyLabelStyle(lbl);
+            lbl->setStyleSheet(kLabelStyle);
             lbl->setFixedWidth(26);
             apfVb->addWidget(lbl);
             m_apfSlider = new GuardedSlider(Qt::Horizontal);
@@ -2071,7 +2068,7 @@ void VfoWidget::buildTabContent()
             m_apfSlider->setToolTip("Adjusts APF bandwidth. Higher values narrow the peak for better CW selectivity. Enabled when APF is on in the DSP grid.");
             apfVb->addWidget(m_apfSlider, 1);
             m_apfValueLbl = new QLabel("50");
-            applyLabelStyle(m_apfValueLbl);
+            m_apfValueLbl->setStyleSheet(kLabelStyle);
             m_apfValueLbl->setFixedWidth(20);
             m_apfValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             apfVb->addWidget(m_apfValueLbl);
@@ -2361,7 +2358,7 @@ void VfoWidget::buildTabContent()
             auto* offRow = new QHBoxLayout;
             offRow->setSpacing(4);
             auto* offLbl = new QLabel("Offset:");
-            applyLabelStyle(offLbl);
+            offLbl->setStyleSheet(kLabelStyle);
             offRow->addWidget(offLbl);
             m_fmOffsetSpin = new QDoubleSpinBox;
             m_fmOffsetSpin->setAccessibleName("Repeater offset");
@@ -2757,7 +2754,7 @@ void VfoWidget::buildTabContent()
         auto* row = new QHBoxLayout;
         row->setSpacing(3);
         auto* lbl = new QLabel("DAX Ch");
-        applyLabelStyle(lbl);
+        lbl->setStyleSheet(kLabelStyle);
         row->addWidget(lbl);
         m_daxCmb = new GuardedComboBox;
         populateDaxCombo();  // capacity-gated; rebuilt on connect (setRadioModel)
