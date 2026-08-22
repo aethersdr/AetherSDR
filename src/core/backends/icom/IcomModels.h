@@ -146,6 +146,20 @@ struct ModulationProfile {
 [[nodiscard]] std::optional<ModulationProfile>
 modulationProfileFor(const IcomModel& model);
 
+// A narrow per-model attestation for the FM repeater register set.  This is
+// intentionally independent of IcomModel::verified: the public IC-9700 CI-V
+// guide establishes these commands even while unrelated scope-row facts remain
+// measured rather than guide-verified.  Empty means no capability and zero
+// poll/write traffic.
+struct FmRepeaterProfile {
+    std::span<const std::string_view> accessModes;
+    bool hasDuplex = false;  // 0C/0D offset plus 0F simplex/DUP-/DUP+
+    bool hasReverse = false; // 1C 02 transmit-frequency monitor (XFC)
+};
+
+[[nodiscard]] std::optional<FmRepeaterProfile>
+fmRepeaterProfileFor(const IcomModel& model);
+
 // THE SSB TRANSMIT PASSBAND, and why it cannot be two sliders.
 //
 // AetherSDR's seam carries setTxFilter(lowHz, highHz) — two continuous

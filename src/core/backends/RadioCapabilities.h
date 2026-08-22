@@ -14,6 +14,12 @@ struct TxPowerBand {
     double maxWatts = 0.0;
 };
 
+enum class FmRepeaterPresentation {
+    Legacy,
+    Hidden,
+    Extended,
+};
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is
@@ -365,6 +371,16 @@ struct RadioCapabilities {
     // high ones.
     QList<int> txFilterLowEdgesHz;
     QList<int> txFilterHighEdgesHz;
+
+    // Model-evidenced FM repeater functions.  Empty is the load-bearing
+    // default: no extended tone surface and no backend traffic.  The tokens
+    // use SliceModel's normalized vocabulary.  Flex deliberately leaves this
+    // empty because its established Off/CTCSS TX path is a separate locked
+    // regression contract, not an "extended" capability.
+    QStringList fmRepeaterAccessModes;
+    bool hasFmRepeaterDuplex = false;
+    bool hasFmRepeaterReverse = false;
+    FmRepeaterPresentation fmRepeaterPresentation = FmRepeaterPresentation::Hidden;
 
     // The RADIO stores named configuration profiles (global / TX / mic) that a
     // client can list, load and save. The seam already carries ProfileDelta and

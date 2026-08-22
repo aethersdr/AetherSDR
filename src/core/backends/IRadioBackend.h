@@ -264,6 +264,36 @@ public:
         Q_UNUSED(panPercent);
     }
 
+    // Model-gated extended FM repeater access.  Defaults are deliberately
+    // inert so adding the seam does not reroute Flex or create traffic for an
+    // unattested backend.  A backend advertises the matching capabilities
+    // only when every field is implemented and evidenced for the active model.
+    virtual void setFmRepeaterAccess(int sliceId, const QString& mode,
+                                     double txCtcssHz, double rxCtcssHz,
+                                     int dtcsCode, bool dtcsTxReverse,
+                                     bool dtcsRxReverse)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(mode);
+        Q_UNUSED(txCtcssHz);
+        Q_UNUSED(rxCtcssHz);
+        Q_UNUSED(dtcsCode);
+        Q_UNUSED(dtcsTxReverse);
+        Q_UNUSED(dtcsRxReverse);
+    }
+    virtual void setFmRepeaterOffset(int sliceId, const QString& direction,
+                                     double offsetMhz)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(direction);
+        Q_UNUSED(offsetMhz);
+    }
+    virtual void setFmRepeaterReverse(int sliceId, bool enabled)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(enabled);
+    }
+
     // Move transmit to this slice. A radio with one transmitter and several
     // receivers has to MOVE it — retarget the TX oscillator, mode and passband —
     // rather than set a per-slice flag, so this is a verb and not a setter with

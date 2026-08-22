@@ -21,6 +21,7 @@ class QToolButton;
 
 namespace AetherSDR {
 
+enum class FmRepeaterPresentation;
 class SliceModel;
 class RadioModel;
 class KiwiSdrManager;
@@ -181,6 +182,9 @@ public:
     // An EMPTY list restores the operator's own configurable set, so this is
     // reversible on disconnect rather than a one-way edit of their settings.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setFmRepeaterCapabilities(FmRepeaterPresentation presentation,
+                                   const QStringList& accessModes,
+                                   bool hasDuplex, bool hasReverse);
 private:
     // The list actually in force: the radio's when it declared one, else the
     // operator's configurable set. Every site that indexes filter buttons must
@@ -194,6 +198,9 @@ private:
     void updateAgcCombo();
     void updateOffsetDirButtons();
     void applyOffsetDir(const QString& dir);
+    void rebuildFmToneModes();
+    void updateFmToneControlVisibility(const QString& mode);
+    void requestExtendedFmAccess();
     static QString formatHz(int hz);
     static QString formatStepLabel(int hz);
 
@@ -264,11 +271,23 @@ private:
     QWidget*        m_fmContainer{nullptr};
     QComboBox*      m_toneModeCmb{nullptr};
     QComboBox*      m_toneValueCmb{nullptr};
+    QComboBox*      m_toneRxValueCmb{nullptr};
+    QComboBox*      m_dtcsCodeCmb{nullptr};
+    QComboBox*      m_dtcsTxPolarityCmb{nullptr};
+    QComboBox*      m_dtcsRxPolarityCmb{nullptr};
+    QLabel*         m_offsetLabel{nullptr};
     QDoubleSpinBox* m_offsetSpin{nullptr};
     QPushButton*    m_offsetDown{nullptr};
     QPushButton*    m_simplexBtn{nullptr};
     QPushButton*    m_offsetUp{nullptr};
+    QButtonGroup*   m_offsetDirectionGroup{nullptr};
     QPushButton*    m_revBtn{nullptr};
+    QStringList     m_fmRepeaterAccessModes;
+    bool            m_extendedFmRepeaterControls{false};
+    bool            m_fmRepeaterSurfaceAvailable{true};
+    bool            m_fmRepeaterAccessAvailable{true};
+    bool            m_fmRepeaterDuplexAvailable{true};
+    bool            m_fmRepeaterReverseAvailable{true};
 
     // Containers for show/hide on mode change
     QWidget*     m_agcContainer{nullptr};

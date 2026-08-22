@@ -103,6 +103,13 @@ public:
     void setSliceManualNotch(int sliceId, bool on, int position) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
+    void setFmRepeaterAccess(int sliceId, const QString& mode,
+                             double txCtcssHz, double rxCtcssHz,
+                             int dtcsCode, bool dtcsTxReverse,
+                             bool dtcsRxReverse) override;
+    void setFmRepeaterOffset(int sliceId, const QString& direction,
+                             double offsetMhz) override;
+    void setFmRepeaterReverse(int sliceId, bool enabled) override;
     void setVox(bool on, int level, int delayMs) override;
     void setAtu(bool start) override;
     void setRitEnabled(bool on) override;

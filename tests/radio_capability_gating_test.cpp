@@ -233,6 +233,10 @@ int main(int argc, char** argv)
               "it demodulates), so the mode key guard is inert on it");
         check(caps.txPowerBands.isEmpty(),
               "Flex explicitly leaves per-band TX power limits empty");
+        check(caps.fmRepeaterAccessModes.isEmpty()
+                  && !caps.hasFmRepeaterDuplex && !caps.hasFmRepeaterReverse
+                  && caps.fmRepeaterPresentation == FmRepeaterPresentation::Legacy,
+              "Flex leaves the model-gated Icom repeater profile empty");
         check(caps.hasDaxStreams,
               "Flex declares hasDaxStreams (DAX audio + DAX IQ)");
         check(caps.hasRadioSideDsp,
@@ -501,6 +505,10 @@ int main(int argc, char** argv)
         const RadioCapabilities caps = model.backendCapabilities();
         check(caps.txPowerBands.size() == 3,
               "Icom declares the three IC-9700 per-band TX power limits");
+        check(caps.fmRepeaterAccessModes.size() == 8
+                  && caps.hasFmRepeaterDuplex && caps.hasFmRepeaterReverse
+                  && caps.fmRepeaterPresentation == FmRepeaterPresentation::Extended,
+              "IC-9700 declares its narrow evidenced repeater profile");
 
         const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
                                           const char* description) {
@@ -871,6 +879,10 @@ int main(int argc, char** argv)
               "Flex declares hasLmsNoiseFilters (NRL/ANFL/ANFT are base firmware)");
         check(!icomCaps.hasLmsNoiseFilters,
               "Icom declares NO hasLmsNoiseFilters (no WDSP LMS/FFT register exists)");
+        check(icomCaps.fmRepeaterAccessModes.isEmpty()
+                  && !icomCaps.hasFmRepeaterDuplex && !icomCaps.hasFmRepeaterReverse
+                  && icomCaps.fmRepeaterPresentation == FmRepeaterPresentation::Hidden,
+              "default IC-705 does not inherit the IC-9700 repeater profile");
 
         check(!flexCaps.hasManualNotch,
               "Flex declares NO hasManualNotch (it notches with TNFs — a different instrument)");

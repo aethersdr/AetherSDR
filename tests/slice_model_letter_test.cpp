@@ -551,6 +551,34 @@ int main(int argc, char** argv)
         EXPECT_EQ(s.filterLow(),  -2500);
         EXPECT_EQ(s.filterHigh(), -95);
     }
+    {
+        // Issue #5120 locks the shipping Flex FM wire contract. The new Icom
+        // seam signals are additive; these setters keep emitting the exact
+        // SmartSDR keys and values they emitted before the model-gated work.
+        SliceModel s(3);
+        QSignalSpy commandSpy(&s, &SliceModel::commandReady);
+        s.setFmToneMode(QStringLiteral("ctcss_tx"));
+        s.setFmToneValue(QStringLiteral("88.5"));
+        s.setRepeaterOffsetDir(QStringLiteral("down"));
+        s.setFmRepeaterOffsetFreq(0.6);
+        s.setTxOffsetFreq(-0.6);
+        EXPECT_EQ(commandSpy.at(0).at(0).toString(),
+                  QStringLiteral("slice set 3 fm_tone_mode=ctcss_tx"));
+        EXPECT_EQ(commandSpy.at(1).at(0).toString(),
+                  QStringLiteral("slice set 3 fm_tone_value=88.5"));
+        EXPECT_EQ(commandSpy.at(2).at(0).toString(),
+                  QStringLiteral("slice set 3 repeater_offset_dir=down"));
+        EXPECT_EQ(commandSpy.at(3).at(0).toString(),
+                  QStringLiteral("slice set 3 fm_repeater_offset_freq=0.600000"));
+        EXPECT_EQ(commandSpy.at(4).at(0).toString(),
+                  QStringLiteral("slice set 3 tx_offset_freq=-0.600000"));
+
+        QSignalSpy accessSpy(&s, &SliceModel::fmRepeaterAccessCommandIssued);
+        s.requestFmRepeaterAccess(QStringLiteral("dtcs_txrx"), 100.0, 100.0,
+                                  23, false, true);
+        EXPECT_EQ(accessSpy.count(), 1);
+        EXPECT_EQ(commandSpy.count(), 5);
+    }
 
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");

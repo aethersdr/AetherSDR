@@ -231,6 +231,7 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.fmRepeaterPresentation = FmRepeaterPresentation::Legacy;
     caps.txPowerBands = {};
     caps.family = familyName();
     caps.manufacturer = QStringLiteral("AetherSDR");

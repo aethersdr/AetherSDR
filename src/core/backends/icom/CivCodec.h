@@ -185,6 +185,9 @@ inline constexpr std::uint8_t kReadFreq     = 0x03;
 inline constexpr std::uint8_t kReadMode     = 0x04;
 inline constexpr std::uint8_t kSetFreq      = 0x05;
 inline constexpr std::uint8_t kSetMode      = 0x06;
+inline constexpr std::uint8_t kReadRepeaterOffset = 0x0C;
+inline constexpr std::uint8_t kSetRepeaterOffset  = 0x0D;
+inline constexpr std::uint8_t kDuplex       = 0x0F;
 inline constexpr std::uint8_t kLevel        = 0x14;   // sub-addressed levels
 inline constexpr std::uint8_t kMeter        = 0x15;   // sub-addressed meters
 inline constexpr std::uint8_t kFunction     = 0x16;   // sub-addressed on/off functions
@@ -192,6 +195,7 @@ inline constexpr std::uint8_t kCwMessage    = 0x17;   // up to 30 ASCII characte
 inline constexpr std::uint8_t kPower        = 0x18;   // 00 off, 01 on
 inline constexpr std::uint8_t kReadId       = 0x19;   // sub 00: read transceiver ID
 inline constexpr std::uint8_t kSetting      = 0x1A;   // memory / filter / SET menu
+inline constexpr std::uint8_t kTone         = 0x1B;   // repeater tone/code registers
 inline constexpr std::uint8_t kControl      = 0x1C;   // PTT, tuner, XFC
 inline constexpr std::uint8_t kScope        = 0x27;
 // The attenuator, and it is NOT sub-addressed like 0x14/0x16 — the single
@@ -351,6 +355,22 @@ inline constexpr std::uint8_t kTuner = 0x01;
 inline constexpr std::uint8_t kXfc   = 0x02;
 inline constexpr std::uint8_t kReadTxFreq = 0x03;
 }  // namespace control
+
+namespace repeaterAccess {
+inline constexpr std::uint8_t kFunction = 0x5D;
+}
+
+namespace tone {
+inline constexpr std::uint8_t kTxCtcss = 0x00;
+inline constexpr std::uint8_t kRxCtcss = 0x01;
+inline constexpr std::uint8_t kDtcs    = 0x02;
+}
+
+struct ToneRegister {
+    int value = 0;
+    bool txReverse = false;
+    bool rxReverse = false;
+};
 
 namespace scope {
 inline constexpr std::uint8_t kWaveData    = 0x00;
@@ -585,6 +605,25 @@ struct PassbandEdges {
 [[nodiscard]] std::vector<std::uint8_t> cmdReadFunction(std::uint8_t to, std::uint8_t which);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetFunction(std::uint8_t to, std::uint8_t which,
                                                         int value);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to,
+                                                              std::uint8_t mode);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTone(std::uint8_t to, std::uint8_t which);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetTone(std::uint8_t to, std::uint8_t which,
+                                                   int value, bool txReverse = false,
+                                                   bool rxReverse = false);
+[[nodiscard]] std::optional<ToneRegister> decodeTone(std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadRepeaterOffset(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterOffset(std::uint8_t to,
+                                                              std::uint64_t hz);
+[[nodiscard]] std::optional<std::uint64_t>
+decodeRepeaterOffset(std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadDuplex(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetDuplex(std::uint8_t to,
+                                                      std::uint8_t mode);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadXfc(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetXfc(std::uint8_t to, bool enabled);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);
 [[nodiscard]] std::vector<std::uint8_t> cmdSetPtt(std::uint8_t to, bool transmit);
 // Attenuator. `db` is the dB figure the radio prints (0 or 20 on an
 // IC-705), encoded as one BCD byte. The read form carries no payload.

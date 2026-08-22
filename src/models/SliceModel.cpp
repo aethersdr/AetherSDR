@@ -778,6 +778,24 @@ void SliceModel::setFmToneValue(const QString& value)
     emit fmToneValueChanged(value);
 }
 
+void SliceModel::requestFmRepeaterAccess(const QString& mode, double txCtcssHz,
+                                         double rxCtcssHz, int dtcsCode,
+                                         bool dtcsTxReverse, bool dtcsRxReverse)
+{
+    emit fmRepeaterAccessCommandIssued(mode, txCtcssHz, rxCtcssHz, dtcsCode,
+                                       dtcsTxReverse, dtcsRxReverse);
+}
+
+void SliceModel::requestFmRepeaterOffset(const QString& direction, double offsetMhz)
+{
+    emit fmRepeaterOffsetCommandIssued(direction, offsetMhz);
+}
+
+void SliceModel::requestFmRepeaterReverse(bool enabled)
+{
+    emit fmRepeaterReverseCommandIssued(enabled);
+}
+
 void SliceModel::setRepeaterOffsetDir(const QString& dir)
 {
     if (m_repeaterOffsetDir == dir) return;
@@ -1514,6 +1532,36 @@ void SliceModel::applyChanges(const SliceDelta& d)
         double v = *d.fmToneValue;
         m_fmToneValue = QString::number(v, 'f', 1);
         emit fmToneValueChanged(m_fmToneValue);
+    }
+    bool repeaterAccessChanged = false;
+    if (d.fmToneTxValue.has_value()) {
+        m_fmToneTxValue = QString::number(*d.fmToneTxValue, 'f', 1);
+        m_fmToneValue = m_fmToneTxValue;
+        emit fmToneValueChanged(m_fmToneValue);
+        repeaterAccessChanged = true;
+    }
+    if (d.fmToneRxValue.has_value()) {
+        m_fmToneRxValue = QString::number(*d.fmToneRxValue, 'f', 1);
+        repeaterAccessChanged = true;
+    }
+    if (d.fmDtcsCode.has_value()) {
+        m_fmDtcsCode = *d.fmDtcsCode;
+        repeaterAccessChanged = true;
+    }
+    if (d.fmDtcsTxReverse.has_value()) {
+        m_fmDtcsTxReverse = *d.fmDtcsTxReverse;
+        repeaterAccessChanged = true;
+    }
+    if (d.fmDtcsRxReverse.has_value()) {
+        m_fmDtcsRxReverse = *d.fmDtcsRxReverse;
+        repeaterAccessChanged = true;
+    }
+    if (repeaterAccessChanged) {
+        emit fmRepeaterAccessChanged();
+    }
+    if (d.fmRepeaterReverse.has_value()) {
+        m_fmRepeaterReverse = *d.fmRepeaterReverse;
+        emit fmRepeaterReverseChanged(m_fmRepeaterReverse);
     }
     if (d.repeaterOffsetDir.has_value()) {
         m_repeaterOffsetDir = *d.repeaterOffsetDir;

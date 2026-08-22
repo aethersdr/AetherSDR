@@ -131,6 +131,7 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.fmRepeaterPresentation = FmRepeaterPresentation::Legacy;
     caps.txPowerBands = {};
     caps.family = QStringLiteral("flex");
     caps.manufacturer = QStringLiteral("FlexRadio");

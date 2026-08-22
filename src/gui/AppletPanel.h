@@ -20,6 +20,7 @@ class QGridLayout;
 namespace AetherSDR {
 class ContainerManager;
 class ContainerWidget;
+enum class FmRepeaterPresentation;
 } // namespace AetherSDR
 
 namespace AetherSDR {
@@ -203,6 +204,9 @@ public:
     void setSelectableMicInputs(bool selectable);
     void setMicLevelMeterAvailable(bool available);
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setFmRepeaterCapabilities(FmRepeaterPresentation presentation,
+                                   const QStringList& accessModes,
+                                   bool hasDuplex, bool hasReverse);
 
     // Show/hide the DAX and DAX-IQ buttons and applets based on whether the
     // connected radio produces per-slice audio / per-pan IQ streams

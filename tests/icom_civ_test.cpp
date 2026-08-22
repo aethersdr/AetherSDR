@@ -488,10 +488,54 @@ static void testSubcommandPredicate()
                   "a bare command keeps both payload bytes");
         }
     }
-    // The eleven that carry subcommands: 12 14 15 16 18 19 1A 1C 21 26 27. A
+    // The twelve that carry subcommands: 12 14 15 16 18 19 1A 1B 1C 21 26 27. A
     // change to the list is a deliberate protocol decision, so it should have
     // to come past this number rather than arrive as a silent side effect.
-    check(subAddressed == 11, "exactly eleven CI-V commands are sub-addressed");
+    check(subAddressed == 12, "exactly twelve CI-V commands are sub-addressed");
+}
+
+static void testFmRepeaterCodec()
+{
+    constexpr std::uint8_t radio = 0xA2;
+    check(bytesAre(cmdReadRepeaterOffset(radio),
+                   {0xFE,0xFE,0xA2,0xE0,0x0C,0xFD}),
+          "repeater offset read frame");
+    check(bytesAre(cmdSetRepeaterOffset(radio, 5'000'000ULL),
+                   {0xFE,0xFE,0xA2,0xE0,0x0D,0x00,0x00,0x05,0xFD}),
+          "5 MHz offset is little-endian BCD in 100 Hz units");
+    const std::array<std::uint8_t, 3> offset{0x00,0x00,0x05};
+    check(decodeRepeaterOffset(offset) == 5'000'000ULL, "offset round trip");
+    const std::array<std::uint8_t, 3> badOffset{0x00,0x0A,0x05};
+    check(!decodeRepeaterOffset(badOffset), "malformed offset BCD rejected");
+
+    check(bytesAre(cmdSetDuplex(radio, 0x11),
+                   {0xFE,0xFE,0xA2,0xE0,0x0F,0x11,0xFD}), "DUP- frame");
+    check(bytesAre(cmdSetDuplex(radio, 0x10),
+                   {0xFE,0xFE,0xA2,0xE0,0x0F,0x10,0xFD}),
+          "simplex writes 10; the IC-9700 authoritatively reads it back as 00");
+    check(bytesAre(cmdSetRepeaterAccess(radio, 0x09),
+                   {0xFE,0xFE,0xA2,0xE0,0x16,0x5D,0x09,0xFD}),
+          "CTCSS TX/RX selector frame");
+    check(bytesAre(cmdSetTone(radio, tone::kTxCtcss, 1273),
+                   {0xFE,0xFE,0xA2,0xE0,0x1B,0x00,0x00,0x12,0x73,0xFD}),
+          "127.3 Hz TX CTCSS frame");
+    check(bytesAre(cmdSetTone(radio, tone::kDtcs, 23, true, true),
+                   {0xFE,0xFE,0xA2,0xE0,0x1B,0x02,0x11,0x00,0x23,0xFD}),
+          "DTCS 023 reversed/reversed frame");
+    const std::array<std::uint8_t, 3> dtcs{0x10,0x07,0x54};
+    const auto decoded = decodeTone(dtcs);
+    check(decoded && decoded->value == 754 && decoded->txReverse
+              && !decoded->rxReverse, "DTCS register round trip");
+    const std::array<std::uint8_t, 3> badTone{0x00,0x0A,0x23};
+    check(!decodeTone(badTone), "malformed tone BCD rejected");
+    const std::array<std::uint8_t, 3> badPolarity{0x20,0x00,0x23};
+    check(!decodeTone(badPolarity), "reserved polarity bits rejected");
+
+    check(bytesAre(cmdSetXfc(radio, true),
+                   {0xFE,0xFE,0xA2,0xE0,0x1C,0x02,0x01,0xFD}), "XFC on frame");
+    check(bytesAre(cmdReadTransmitFrequency(radio),
+                   {0xFE,0xFE,0xA2,0xE0,0x1C,0x03,0xFD}),
+          "transmit-frequency read frame");
 }
 
 // ---------------------------------------------------------------------------
@@ -634,6 +678,7 @@ int main()
     testModes();
     testCommands();
     testDataMode();
+    testFmRepeaterCodec();
     testSubcommandPredicate();
 
     if (g_failures == 0)

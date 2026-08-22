@@ -1,6 +1,7 @@
 #include "core/backends/icom/IcomCivBackend.h"
 
 #include <QDateTime>
+#include <QHash>
 #include <QLoggingCategory>
 #include <QTimer>
 #include <QVariant>
@@ -15,6 +16,7 @@
 
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomSettings.h"
+#include "core/MemoryFieldValues.h"
 #include "core/Resampler.h"
 
 namespace AetherSDR::icom {
@@ -272,6 +274,17 @@ RadioCapabilities IcomCivBackend::capabilities() const
     if (const auto tbw = txBandwidthProfileFor(*m_model)) {
         c.txFilterLowEdgesHz  = QList<int>(tbw->lowEdgesHz.begin(), tbw->lowEdgesHz.end());
         c.txFilterHighEdgesHz = QList<int>(tbw->highEdgesHz.begin(), tbw->highEdgesHz.end());
+    }
+
+    c.fmRepeaterPresentation = FmRepeaterPresentation::Hidden;
+    if (const auto repeater = fmRepeaterProfileFor(*m_model)) {
+        c.fmRepeaterPresentation = FmRepeaterPresentation::Extended;
+        for (const std::string_view mode : repeater->accessModes) {
+            c.fmRepeaterAccessModes.append(QString::fromUtf8(
+                mode.data(), static_cast<int>(mode.size())));
+        }
+        c.hasFmRepeaterDuplex = repeater->hasDuplex;
+        c.hasFmRepeaterReverse = repeater->hasReverse;
     }
 
     c.hasProfiles = false;
@@ -763,6 +776,21 @@ void IcomCivBackend::sendConnectReadBurst()
                              tuneOffset::kXitOnOff})
         queueStartupRead(cmdReadTuneOffset(m_session->civAddress(), sub));
     queueStartupRead(cmdReadTuner(m_session->civAddress()));
+
+    if (const auto repeater = fmRepeaterProfileFor(*m_model)) {
+        if (repeater->hasDuplex) {
+            queueStartupRead(cmdReadRepeaterOffset(m_session->civAddress()));
+            queueStartupRead(cmdReadDuplex(m_session->civAddress()));
+        }
+        queueStartupRead(cmdReadRepeaterAccess(m_session->civAddress()));
+        for (const std::uint8_t sub : {tone::kTxCtcss, tone::kRxCtcss, tone::kDtcs}) {
+            queueStartupRead(cmdReadTone(m_session->civAddress(), sub));
+        }
+        if (repeater->hasReverse) {
+            queueStartupRead(cmdReadXfc(m_session->civAddress()));
+            queueStartupRead(cmdReadTransmitFrequency(m_session->civAddress()));
+        }
+    }
 }
 
 // The radio answered 0x19 0x00. Decide whether to believe it, and where that
@@ -1546,6 +1574,36 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         return;
     }
 
+    case cmd::kReadRepeaterOffset: {
+        if (!fmRepeaterProfileFor(*m_model)) {
+            return;
+        }
+        const std::optional<std::uint64_t> hz = decodeRepeaterOffset(frame.data);
+        if (!hz) {
+            return;
+        }
+        SliceDelta d;
+        d.fmRepeaterOffsetFreq = static_cast<double>(*hz) / 1.0e6;
+        emit sliceChanged(sliceId(), d);
+        return;
+    }
+
+    case cmd::kDuplex: {
+        const auto profile = fmRepeaterProfileFor(*m_model);
+        if (!profile || !profile->hasDuplex || frame.data.size() != 1) {
+            return;
+        }
+        SliceDelta d;
+        switch (frame.data[0]) {
+        case 0x00: d.repeaterOffsetDir = QStringLiteral("simplex"); break;
+        case 0x11: d.repeaterOffsetDir = QStringLiteral("down"); break;
+        case 0x12: d.repeaterOffsetDir = QStringLiteral("up"); break;
+        default: return;
+        }
+        emit sliceChanged(sliceId(), d);
+        return;
+    }
+
     // THE RADIO'S OWN LEVELS AND SWITCHES, adopted into the models.
     //
     // These arrive as answers to the connect-time reads above, and also
@@ -1682,6 +1740,22 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         const int v = frame.data[0];
         switch (frame.sub) {
+        case repeaterAccess::kFunction: {
+            if (!fmRepeaterProfileFor(*m_model)) {
+                return;
+            }
+            static constexpr std::array<const char*, 10> kModes{
+                "off", "ctcss_tx", "ctcss_rx", "dtcs_txrx", nullptr, nullptr,
+                "dtcs_tx", "ctcss_tx_dtcs_rx", "dtcs_tx_ctcss_rx", "ctcss_txrx",
+            };
+            if (v < 0 || v >= static_cast<int>(kModes.size()) || kModes[v] == nullptr) {
+                return;
+            }
+            SliceDelta d;
+            d.fmToneMode = QString::fromLatin1(kModes[v]);
+            emit sliceChanged(sliceId(), d);
+            return;
+        }
         // WHICH OF THE THREE TRANSMIT PASSBANDS IS IN CIRCUIT. Not a passband
         // itself — it names the SET item that holds one, so the only useful
         // thing to do with it is go and read that item.
@@ -2001,6 +2075,31 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         return;
     }
 
+    case cmd::kTone: {
+        if (!fmRepeaterProfileFor(*m_model) || !frame.hasSub) {
+            return;
+        }
+        const std::optional<ToneRegister> value = decodeTone(frame.data);
+        if (!value) {
+            return;
+        }
+        SliceDelta d;
+        if (frame.sub == tone::kTxCtcss) {
+            d.fmToneTxValue = value->value / 10.0;
+            d.fmToneValue = *d.fmToneTxValue;
+        } else if (frame.sub == tone::kRxCtcss) {
+            d.fmToneRxValue = value->value / 10.0;
+        } else if (frame.sub == tone::kDtcs) {
+            d.fmDtcsCode = value->value;
+            d.fmDtcsTxReverse = value->txReverse;
+            d.fmDtcsRxReverse = value->rxReverse;
+        } else {
+            return;
+        }
+        emit sliceChanged(sliceId(), d);
+        return;
+    }
+
     case cmd::kControl: {
         if (frame.hasSub && frame.sub == control::kPtt && !frame.data.empty()) {
             const bool keyed = frame.data[0] != 0;
@@ -2060,6 +2159,43 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             TransmitDelta t;
             t.mox = m_keyed;
             emit transmitChanged(t);
+            // XFC is temporary radio state, and PTT is one of the transitions
+            // that can end it. Reconcile both the XFC bit and the radio's TX
+            // frequency immediately on a real PTT edge instead of leaving two
+            // frequency presentations stale until the slow control sweep.
+            if (const auto repeater = fmRepeaterProfileFor(*m_model);
+                repeater && repeater->hasReverse) {
+                for (const std::vector<std::uint8_t>& read
+                     : {cmdReadXfc(m_session->civAddress()),
+                        cmdReadTransmitFrequency(m_session->civAddress())}) {
+                    queueRead(read, semanticKey(read),
+                              IcomCivScheduler::Priority::Control);
+                }
+                pumpCiv(frameAtMs);
+            }
+            return;
+        }
+        if (frame.hasSub && frame.sub == control::kXfc && !frame.data.empty()) {
+            const auto profile = fmRepeaterProfileFor(*m_model);
+            if (!profile || !profile->hasReverse || frame.data.size() != 1
+                || frame.data[0] > 1) {
+                return;
+            }
+            SliceDelta d;
+            d.fmRepeaterReverse = frame.data[0] != 0;
+            emit sliceChanged(sliceId(), d);
+            return;
+        }
+        if (frame.hasSub && frame.sub == control::kReadTxFreq) {
+            const auto profile = fmRepeaterProfileFor(*m_model);
+            const std::optional<std::uint64_t> hz = decodeFreq(frame.data);
+            if (!profile || !profile->hasReverse || !hz) {
+                return;
+            }
+            SliceDelta d;
+            d.txOffsetFreq = (static_cast<double>(*hz)
+                              - static_cast<double>(m_frequencyHz)) / 1.0e6;
+            emit sliceChanged(sliceId(), d);
             return;
         }
         if (frame.hasSub && frame.sub == control::kTuner && !frame.data.empty()) {
@@ -2314,10 +2450,15 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         return cmdReadFrequency(addr);
     case cmd::kSetMode:
         return cmdReadMode(addr);
+    case cmd::kSetRepeaterOffset:
+        return cmdReadRepeaterOffset(addr);
+    case cmd::kDuplex:
+        return cmdReadDuplex(addr);
     case cmd::kVfoMode:
         return cmdReadVfoMode(addr);
     case cmd::kLevel:
     case cmd::kFunction:
+    case cmd::kTone:
     case cmd::kControl:
     case cmd::kTuneOffset:
         if (parsed->hasSub) {
@@ -3142,6 +3283,104 @@ void IcomCivBackend::setSliceAudioGain(int, int gainPercent)
     m_afGainPercent = std::clamp(gainPercent, 0, 100);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
                                 level::kAf, percentToLevelRaw(m_afGainPercent)));
+}
+
+void IcomCivBackend::setFmRepeaterAccess(int, const QString& mode,
+                                         double txCtcssHz, double rxCtcssHz,
+                                         int dtcsCode, bool dtcsTxReverse,
+                                         bool dtcsRxReverse)
+{
+    const auto profile = fmRepeaterProfileFor(*m_model);
+    const QString normalized = AetherSDR::MemoryFields::toneModeToWire(mode);
+    if (!profile || normalized.isEmpty()) {
+        return;
+    }
+    const bool offered = std::ranges::any_of(profile->accessModes,
+        [&normalized](std::string_view candidate) {
+            return normalized == QString::fromUtf8(candidate.data(),
+                                                   static_cast<int>(candidate.size()));
+        });
+    if (!offered) {
+        return;
+    }
+
+    static const QHash<QString, int> kSelector{
+        {QStringLiteral("off"), 0x00},
+        {QStringLiteral("ctcss_tx"), 0x01},
+        {QStringLiteral("ctcss_rx"), 0x02},
+        {QStringLiteral("dtcs_txrx"), 0x03},
+        {QStringLiteral("dtcs_tx"), 0x06},
+        {QStringLiteral("ctcss_tx_dtcs_rx"), 0x07},
+        {QStringLiteral("dtcs_tx_ctcss_rx"), 0x08},
+        {QStringLiteral("ctcss_txrx"), 0x09},
+    };
+    const bool usesTxCtcss = normalized == QLatin1String("ctcss_tx")
+        || normalized == QLatin1String("ctcss_txrx")
+        || normalized == QLatin1String("ctcss_tx_dtcs_rx");
+    const bool usesRxCtcss = normalized == QLatin1String("ctcss_rx")
+        || normalized == QLatin1String("ctcss_txrx")
+        || normalized == QLatin1String("dtcs_tx_ctcss_rx");
+    const bool usesDtcs = normalized == QLatin1String("dtcs_tx")
+        || normalized == QLatin1String("dtcs_txrx")
+        || normalized == QLatin1String("ctcss_tx_dtcs_rx")
+        || normalized == QLatin1String("dtcs_tx_ctcss_rx");
+
+    if ((usesTxCtcss && !AetherSDR::MemoryFields::isCtcssTone(txCtcssHz))
+        || (usesRxCtcss && !AetherSDR::MemoryFields::isCtcssTone(rxCtcssHz))
+        || (usesDtcs && !AetherSDR::MemoryFields::isDtcsCode(dtcsCode))) {
+        qCWarning(lcIcomCiv) << "rejected invalid FM repeater access values" << normalized;
+        return;
+    }
+
+    const std::uint8_t addr = m_session ? m_session->civAddress() : m_model->civAddress;
+    if (usesTxCtcss) {
+        sendUserCommand(cmdSetTone(addr, tone::kTxCtcss,
+                                   static_cast<int>(std::lround(txCtcssHz * 10.0))));
+    }
+    if (usesRxCtcss) {
+        sendUserCommand(cmdSetTone(addr, tone::kRxCtcss,
+                                   static_cast<int>(std::lround(rxCtcssHz * 10.0))));
+    }
+    if (usesDtcs) {
+        sendUserCommand(cmdSetTone(addr, tone::kDtcs, dtcsCode,
+                                   dtcsTxReverse, dtcsRxReverse));
+    }
+    sendUserCommand(cmdSetRepeaterAccess(
+        addr, static_cast<std::uint8_t>(kSelector.value(normalized))));
+}
+
+void IcomCivBackend::setFmRepeaterOffset(int, const QString& direction,
+                                         double offsetMhz)
+{
+    const auto profile = fmRepeaterProfileFor(*m_model);
+    const QString normalized = AetherSDR::MemoryFields::offsetDirToWire(direction);
+    if (!profile || !profile->hasDuplex || normalized.isEmpty()
+        || !std::isfinite(offsetMhz) || offsetMhz < 0.0 || offsetMhz > 99.9999) {
+        return;
+    }
+    static const QHash<QString, int> kDuplex{
+        // IC-9700 CI-V is asymmetric here: 10 requests duplex-off, while the
+        // authoritative readback is 00. Live-radio trace 2026-08-21.
+        {QStringLiteral("simplex"), 0x10},
+        {QStringLiteral("down"), 0x11},
+        {QStringLiteral("up"), 0x12},
+    };
+    const std::uint8_t addr = m_session ? m_session->civAddress() : m_model->civAddress;
+    // Magnitude first: leaving simplex must never expose the previous offset.
+    sendUserCommand(cmdSetRepeaterOffset(
+        addr, static_cast<std::uint64_t>(std::llround(offsetMhz * 1.0e6))));
+    sendUserCommand(cmdSetDuplex(addr,
+        static_cast<std::uint8_t>(kDuplex.value(normalized))));
+}
+
+void IcomCivBackend::setFmRepeaterReverse(int, bool enabled)
+{
+    const auto profile = fmRepeaterProfileFor(*m_model);
+    if (!profile || !profile->hasReverse) {
+        return;
+    }
+    sendUserCommand(cmdSetXfc(m_session ? m_session->civAddress() : m_model->civAddress,
+                              enabled));
 }
 
 // VOX. The enable is a function (16 46) and the trigger threshold a level
@@ -4352,6 +4591,21 @@ void IcomCivBackend::onLinkTick()
         for (std::uint8_t sub : {tuneOffset::kFrequency, tuneOffset::kRitOnOff,
                                  tuneOffset::kXitOnOff}) {
             queueControl(cmdReadTuneOffset(addr, sub));
+        }
+        if (const auto repeater = fmRepeaterProfileFor(*m_model)) {
+            if (repeater->hasDuplex) {
+                queueControl(cmdReadRepeaterOffset(addr));
+                queueControl(cmdReadDuplex(addr));
+            }
+            queueControl(cmdReadRepeaterAccess(addr));
+            for (const std::uint8_t sub : {tone::kTxCtcss, tone::kRxCtcss,
+                                           tone::kDtcs}) {
+                queueControl(cmdReadTone(addr, sub));
+            }
+            if (repeater->hasReverse) {
+                queueControl(cmdReadXfc(addr));
+                queueControl(cmdReadTransmitFrequency(addr));
+            }
         }
     }
     // SET-menu changes can originate on the front panel. Refresh slowly: they

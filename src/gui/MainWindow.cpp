@@ -7094,6 +7094,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // than stranding them on the last radio's three filters.
         m_appletPanel->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                       : QList<int>{});
+        m_appletPanel->setFmRepeaterCapabilities(
+            connected ? caps.fmRepeaterPresentation
+                      : FmRepeaterPresentation::Legacy,
+            connected ? caps.fmRepeaterAccessModes : QStringList{},
+            connected && caps.hasFmRepeaterDuplex,
+            connected && caps.hasFmRepeaterReverse);
         // Same contract for the TRANSMIT passband, and the same restore-on-
         // disconnect: an Icom's four-to-six discrete low cuts must not outlive
         // the session and leave a Flex's continuous control stepping through

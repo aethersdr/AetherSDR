@@ -185,6 +185,12 @@ public:
     // Getters — FM duplex/repeater
     QString fmToneMode()          const { return m_fmToneMode; }
     QString fmToneValue()         const { return m_fmToneValue; }
+    QString fmToneTxValue()       const { return m_fmToneTxValue; }
+    QString fmToneRxValue()       const { return m_fmToneRxValue; }
+    int     fmDtcsCode()          const { return m_fmDtcsCode; }
+    bool    fmDtcsTxReverse()     const { return m_fmDtcsTxReverse; }
+    bool    fmDtcsRxReverse()     const { return m_fmDtcsRxReverse; }
+    bool    fmRepeaterReverse()   const { return m_fmRepeaterReverse; }
     QString repeaterOffsetDir()   const { return m_repeaterOffsetDir; }
     double  fmRepeaterOffsetFreq()const { return m_fmRepeaterOffsetFreq; }
     double  txOffsetFreq()        const { return m_txOffsetFreq; }
@@ -299,6 +305,11 @@ public:
     // Setters — FM duplex/repeater
     void setFmToneMode(const QString& mode);
     void setFmToneValue(const QString& value);
+    void requestFmRepeaterAccess(const QString& mode, double txCtcssHz,
+                                 double rxCtcssHz, int dtcsCode,
+                                 bool dtcsTxReverse, bool dtcsRxReverse);
+    void requestFmRepeaterOffset(const QString& direction, double offsetMhz);
+    void requestFmRepeaterReverse(bool enabled);
     void setRepeaterOffsetDir(const QString& dir);
     void setFmRepeaterOffsetFreq(double mhz);
     void setTxOffsetFreq(double mhz);
@@ -337,6 +348,11 @@ signals:
     // setAgcThreshold(), and always carries BOTH values because a backend
     // configuring a DSP AGC needs the pair to act on either.
     void agcCommandIssued(const QString& mode, int thresholdDb);
+    void fmRepeaterAccessCommandIssued(const QString& mode, double txCtcssHz,
+                                       double rxCtcssHz, int dtcsCode,
+                                       bool dtcsTxReverse, bool dtcsRxReverse);
+    void fmRepeaterOffsetCommandIssued(const QString& direction, double offsetMhz);
+    void fmRepeaterReverseCommandIssued(bool enabled);
 
     // RECEIVE DSP THE RADIO RUNS. Same contract as the signals above: emitted
     // only by the operator-facing setters, never by status application, so a
@@ -453,6 +469,8 @@ signals:
     // FM duplex/repeater signals
     void fmToneModeChanged(const QString& mode);
     void fmToneValueChanged(const QString& value);
+    void fmRepeaterAccessChanged();
+    void fmRepeaterReverseChanged(bool enabled);
     void repeaterOffsetDirChanged(const QString& dir);
     void fmRepeaterOffsetFreqChanged(double mhz);
     void txOffsetFreqChanged(double mhz);
@@ -592,6 +610,12 @@ private:
     // FM duplex/repeater state
     QString m_fmToneMode{"off"};
     QString m_fmToneValue{"100.0"};
+    QString m_fmToneTxValue{"100.0"};
+    QString m_fmToneRxValue{"100.0"};
+    int     m_fmDtcsCode{23};
+    bool    m_fmDtcsTxReverse{false};
+    bool    m_fmDtcsRxReverse{false};
+    bool    m_fmRepeaterReverse{false};
     QString m_repeaterOffsetDir{"simplex"};
     double  m_fmRepeaterOffsetFreq{0.0};
     double  m_txOffsetFreq{0.0};

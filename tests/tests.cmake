@@ -3223,6 +3223,33 @@ target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
 
+add_executable(fm_repeater_ui_policy_test
+    tests/fm_repeater_ui_policy_test.cpp
+)
+target_include_directories(fm_repeater_ui_policy_test PRIVATE src)
+target_link_libraries(fm_repeater_ui_policy_test PRIVATE Qt6::Core)
+add_test(NAME fm_repeater_ui_policy_test COMMAND fm_repeater_ui_policy_test)
+
+# Real-widget regression contract for the shared Flex/IC-9700 FM surface.
+add_executable(fm_repeater_rx_applet_test
+    tests/fm_repeater_rx_applet_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(fm_repeater_rx_applet_test PRIVATE src tests)
+target_link_libraries(fm_repeater_rx_applet_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+set_target_properties(fm_repeater_rx_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME fm_repeater_rx_applet_test COMMAND fm_repeater_rx_applet_test)
+set_tests_properties(fm_repeater_rx_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(local_memory_store_test
     tests/local_memory_store_test.cpp
     src/core/LocalMemoryStore.cpp
@@ -3852,6 +3879,7 @@ set(AETHER_SETTINGS_CONSUMERS
     bandplan_voice_labels_test
     vkamp_connection_test
     radio_capability_gating_test
+    fm_repeater_rx_applet_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

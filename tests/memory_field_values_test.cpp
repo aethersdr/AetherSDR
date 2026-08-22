@@ -73,6 +73,17 @@ int main()
                  "offsetDirectionsDisplay() has SIMPLEX/UP/DOWN");
     ok &= expect(toneModesDisplay() == QStringList({"OFF", "CTCSS_TX"}),
                  "toneModesDisplay() is OFF then CTCSS_TX");
+    ok &= expect(extendedToneModesDisplay().contains("DTCS_TXRX")
+                     && extendedToneModesDisplay().contains("CTCSS_TX_DTCS_RX"),
+                 "extended tone modes include DTCS RX combinations");
+    ok &= expect(ctcssChoices().front().code == 1
+                     && ctcssChoices().front().designation == "XZ"
+                     && ctcssChoices().front().frequency == "67.0",
+                 "normalized CTCSS presentation carries code/designation/tone");
+    ok &= expect(isCtcssTone(103.5) && !isCtcssTone(103.6),
+                 "CTCSS validation accepts only normalized choices");
+    ok &= expect(isDtcsCode(23) && !isDtcsCode(199),
+                 "DTCS validation accepts only normalized choices");
     ok &= expect(ctcssTones().contains("88.5") && ctcssTones().contains("254.1"),
                  "ctcssTones() includes standard EIA tones");
     ok &= expect(!tuningSteps().isEmpty(), "tuningSteps() is populated");

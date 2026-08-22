@@ -166,6 +166,14 @@ constexpr std::array<IcomModel, 7> kModels{{
     },
 }};
 
+// IC-9700 CI-V Reference Guide (2019), pp. 4-5 and 11:
+// 0C/0D repeater offset, 0F duplex, 16 5D access selector, 1B 00/01/02
+// tone/code registers, and 1C 02 XFC.  No other model inherits this list.
+constexpr std::array<std::string_view, 8> kIc9700FmAccessModes{
+    "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx",
+    "dtcs_tx", "dtcs_txrx", "ctcss_tx_dtcs_rx", "dtcs_tx_ctcss_rx",
+};
+
 // Conservative fallback for an unrecognised address. No scope, no transmit.
 constexpr IcomModel kUnknown{
     /*civAddress*/ 0x00, /*name*/ "Unknown Icom",
@@ -320,6 +328,14 @@ std::optional<ModulationProfile> modulationProfileFor(const IcomModel& model)
     if (model.civAddress == 0xB6) {
         return ModulationProfile{81, 82, 83, 84, 85, 0x05, 0x00,
                                  kIc7300Mk2ModInputs};
+    }
+    return std::nullopt;
+}
+
+std::optional<FmRepeaterProfile> fmRepeaterProfileFor(const IcomModel& model)
+{
+    if (model.civAddress == 0xA2) {
+        return FmRepeaterProfile{kIc9700FmAccessModes, true, true};
     }
     return std::nullopt;
 }

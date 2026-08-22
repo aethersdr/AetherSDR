@@ -1,0 +1,90 @@
+{
+  "model": "IC-9700",
+  "civ_address": "A2",
+  "authority": {
+    "document": "IC-9700 CI-V Reference Guide (2019)",
+    "pages": [4, 5, 11],
+    "live_traces": [
+      "docs/data/icom-ic9700-fm-repeater-live-trace.txt"
+    ]
+  },
+  "registers": [
+    {
+      "field": "repeater_offset",
+      "read": "0C",
+      "write": "0D dd dd dd",
+      "encoding": "three little-endian packed-BCD bytes in 100 Hz units",
+      "validation": "all nibbles BCD; unsigned magnitude; direction is 0F",
+      "preserved_trace": "19:10:18.865-18.879 read and 19:10:21.433-21.472 write/read"
+    },
+    {
+      "field": "duplex",
+      "read": "0F",
+      "write": "0F value",
+      "values": {
+        "simplex_write": "10",
+        "simplex_readback": "00",
+        "duplex_minus": "11",
+        "duplex_plus": "12"
+      },
+      "live_observation": [
+        "Preserved trace 19:10:21.500 TX 0F 10 followed by 19:10:21.533 RX 0F 00",
+        "Preserved trace 19:10:24.502 TX 0F 11 followed by 19:10:24.567 RX 0F 11",
+        "Preserved trace 19:10:26.844 TX 0F 12 followed by 19:10:26.899 RX 0F 12"
+      ]
+    },
+    {
+      "field": "access_selector",
+      "read_write": "16 5D value",
+      "values": {
+        "00": "off",
+        "01": "ctcss_tx",
+        "02": "ctcss_rx",
+        "03": "dtcs_txrx",
+        "06": "dtcs_tx",
+        "07": "ctcss_tx_dtcs_rx",
+        "08": "dtcs_tx_ctcss_rx",
+        "09": "ctcss_txrx"
+      },
+      "preserved_trace": "19:10:18.927 TX read followed by 19:10:18.933 RX 16 5D 00"
+    },
+    {
+      "field": "tx_ctcss",
+      "read_write": "1B 00 pp dd dd",
+      "encoding": "packed BCD in 0.1 Hz units; reserved polarity byte must be zero",
+      "preserved_trace": "19:10:18.956 TX read followed by 19:10:18.959 RX 1B 00 00 10 35"
+    },
+    {
+      "field": "rx_ctcss",
+      "read_write": "1B 01 pp dd dd",
+      "encoding": "packed BCD in 0.1 Hz units; reserved polarity byte must be zero",
+      "preserved_trace": "19:10:18.986 TX read followed by 19:10:18.988 RX 1B 01 00 06 70"
+    },
+    {
+      "field": "dtcs_code_and_polarity",
+      "read_write": "1B 02 pp dd dd",
+      "encoding": "three-digit packed-BCD code; pp bit 4 reverses TX polarity and bit 0 reverses RX polarity",
+      "validation": "reject any pp bits outside 0x11 and every non-BCD nibble",
+      "preserved_trace": "19:10:19.016 TX read followed by 19:10:19.020 RX 1B 02 00 00 23"
+    },
+    {
+      "field": "reverse_xfc",
+      "read_write": "1C 02 value",
+      "values": {"00": "off", "01": "on"},
+      "semantics": "temporary cross-frequency check; never represented as a fourth duplex mode",
+      "preserved_trace": "19:10:30.950-31.700 records set/readback for both on and off"
+    },
+    {
+      "field": "transmit_frequency",
+      "read": "1C 03",
+      "encoding": "five-byte little-endian packed-BCD frequency",
+      "ptt_policy": "on every confirmed PTT edge, schedule 1C 02 and 1C 03 through IcomCivScheduler and adopt the replies; this follows either clear-or-retain behavior from the radio without guessing",
+      "preserved_trace": "19:10:19.075 TX read followed by 19:10:19.079 RX 1C 03 00 56 42 48 04"
+    }
+  ],
+  "cross_model_scope": {
+    "IC-705": "empty profile; zero repeater reads and writes",
+    "IC-7300MK2": "empty profile; zero repeater reads and writes",
+    "unknown_icom": "empty profile; zero repeater reads and writes"
+  }
+}

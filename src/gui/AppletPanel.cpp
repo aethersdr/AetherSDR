@@ -1622,6 +1622,16 @@ void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
         m_rxApplet->setRadioFilterWidths(widthsHz);
 }
 
+void AppletPanel::setFmRepeaterCapabilities(FmRepeaterPresentation presentation,
+                                            const QStringList& accessModes,
+                                            bool hasDuplex, bool hasReverse)
+{
+    if (m_rxApplet) {
+        m_rxApplet->setFmRepeaterCapabilities(presentation, accessModes,
+                                              hasDuplex, hasReverse);
+    }
+}
+
 void AppletPanel::setMicLevelMeterAvailable(bool available)
 {
     if (m_phoneCwApplet)

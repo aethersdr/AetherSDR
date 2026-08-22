@@ -1240,6 +1240,28 @@ void RadioModel::setupBackend(const QString& family)
                 // overridable by a radio with two (Flex).
                 m_backend->setXitOffset(hz);
             });
+            connect(s, &SliceModel::fmRepeaterAccessCommandIssued, this,
+                    [this, s](const QString& mode, double txCtcssHz,
+                              double rxCtcssHz, int dtcsCode,
+                              bool dtcsTxReverse, bool dtcsRxReverse) {
+                if (m_backend) {
+                    m_backend->setFmRepeaterAccess(s->sliceId(), mode, txCtcssHz,
+                                                   rxCtcssHz, dtcsCode,
+                                                   dtcsTxReverse, dtcsRxReverse);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterOffsetCommandIssued, this,
+                    [this, s](const QString& direction, double offsetMhz) {
+                if (m_backend) {
+                    m_backend->setFmRepeaterOffset(s->sliceId(), direction, offsetMhz);
+                }
+            });
+            connect(s, &SliceModel::fmRepeaterReverseCommandIssued, this,
+                    [this, s](bool enabled) {
+                if (m_backend) {
+                    m_backend->setFmRepeaterReverse(s->sliceId(), enabled);
+                }
+            });
 
             wireSliceAudioIntentsToBackend(s);
             m_slices.append(s);

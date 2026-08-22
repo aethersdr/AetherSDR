@@ -66,6 +66,16 @@ static bool movesPttOrTuner(const CivFrame& f)
         && !f.data.empty();
 }
 
+static bool isFmRepeaterFrame(const CivFrame& f)
+{
+    return f.cmd == cmd::kReadRepeaterOffset || f.cmd == cmd::kSetRepeaterOffset
+        || f.cmd == cmd::kDuplex || f.cmd == cmd::kTone
+        || (f.cmd == cmd::kFunction && f.hasSub
+            && f.sub == repeaterAccess::kFunction)
+        || (f.cmd == cmd::kControl && f.hasSub
+            && (f.sub == control::kXfc || f.sub == control::kReadTxFreq));
+}
+
 // ---------------------------------------------------------------------------
 // CI-V trace capture
 //
@@ -1680,6 +1690,7 @@ int main(int argc, char** argv)
         IcomCivBackend backend;
         double frequencyMHz = 0.0;
         int frequencyPublications = 0;
+        SliceDelta repeaterState;
         QStringList warnings;
 
         CivCase(std::uint8_t addr, const char* name, bool echo = true)
@@ -1692,6 +1703,36 @@ int main(int argc, char** argv)
                                  if (d.frequency) {
                                      frequencyMHz = *d.frequency;
                                      ++frequencyPublications;
+                                 }
+                                 if (d.fmToneMode) {
+                                     repeaterState.fmToneMode = d.fmToneMode;
+                                 }
+                                 if (d.fmToneTxValue) {
+                                     repeaterState.fmToneTxValue = d.fmToneTxValue;
+                                 }
+                                 if (d.fmToneRxValue) {
+                                     repeaterState.fmToneRxValue = d.fmToneRxValue;
+                                 }
+                                 if (d.fmDtcsCode) {
+                                     repeaterState.fmDtcsCode = d.fmDtcsCode;
+                                 }
+                                 if (d.fmDtcsTxReverse) {
+                                     repeaterState.fmDtcsTxReverse = d.fmDtcsTxReverse;
+                                 }
+                                 if (d.fmDtcsRxReverse) {
+                                     repeaterState.fmDtcsRxReverse = d.fmDtcsRxReverse;
+                                 }
+                                 if (d.repeaterOffsetDir) {
+                                     repeaterState.repeaterOffsetDir = d.repeaterOffsetDir;
+                                 }
+                                 if (d.fmRepeaterOffsetFreq) {
+                                     repeaterState.fmRepeaterOffsetFreq = d.fmRepeaterOffsetFreq;
+                                 }
+                                 if (d.fmRepeaterReverse) {
+                                     repeaterState.fmRepeaterReverse = d.fmRepeaterReverse;
+                                 }
+                                 if (d.txOffsetFreq) {
+                                     repeaterState.txOffsetFreq = d.txOffsetFreq;
                                  }
                              });
             QObject::connect(&backend, &IRadioBackend::configurationWarning, &backend,
@@ -1771,6 +1812,105 @@ int main(int argc, char** argv)
                   && caps.txPowerMaxWattsAt(432'000'000.0) == 75.0
                   && caps.txPowerMaxWattsAt(1'296'000'000.0) == 10.0,
               "auto: IC-9700 capabilities carry all three PA ceilings");
+        check(caps.fmRepeaterAccessModes.size() == 8
+                  && caps.fmRepeaterAccessModes.contains(QStringLiteral("dtcs_txrx"))
+                  && caps.hasFmRepeaterDuplex && caps.hasFmRepeaterReverse
+                  && caps.fmRepeaterPresentation == FmRepeaterPresentation::Extended,
+              "auto: IC-9700 alone publishes the evidenced repeater profile");
+        check(waitFor([&] {
+                  return std::ranges::any_of(c.radio.civCommands(), isFmRepeaterFrame);
+              }),
+              "auto: IC-9700 schedules its radio-authoritative repeater snapshot");
+
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kDuplex,0x11,kCivEom});
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kFunction,repeaterAccess::kFunction,0x09,kCivEom});
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kTone,tone::kTxCtcss,0x00,0x10,0x00,kCivEom});
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kTone,tone::kDtcs,0x11,0x00,0x23,kCivEom});
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kControl,control::kXfc,0x01,kCivEom});
+        check(waitFor([&] {
+                  return c.repeaterState.repeaterOffsetDir == QStringLiteral("down")
+                      && c.repeaterState.fmToneMode == QStringLiteral("ctcss_txrx")
+                      && c.repeaterState.fmToneTxValue == 100.0
+                      && c.repeaterState.fmDtcsCode == 23
+                      && c.repeaterState.fmDtcsTxReverse == true
+                      && c.repeaterState.fmDtcsRxReverse == true
+                      && c.repeaterState.fmRepeaterReverse == true;
+              }), "auto: front-panel repeater reports reconcile into normalized state");
+
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kDuplex,0x00,kCivEom});
+        check(waitFor([&] {
+                  return c.repeaterState.repeaterOffsetDir == QStringLiteral("simplex");
+              }), "auto: the IC-9700's observed 0F 00 report reconciles simplex");
+
+        const auto pttRefreshReads = [&c] {
+            return std::ranges::count_if(c.radio.civCommands(), [](const CivFrame& f) {
+                return f.cmd == cmd::kControl && f.hasSub
+                    && (f.sub == control::kXfc || f.sub == control::kReadTxFreq)
+                    && f.data.empty();
+            });
+        };
+        const auto refreshesBeforePtt = pttRefreshReads();
+        const double rxFrequencyBeforePtt = c.frequencyMHz;
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kControl,control::kPtt,0x01,kCivEom});
+        check(waitFor([&] { return pttRefreshReads() >= refreshesBeforePtt + 2; }),
+              "auto: a PTT edge immediately schedules XFC and TX-frequency reads");
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kControl,control::kXfc,0x00,kCivEom});
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kControl,control::kReadTxFreq,
+                         0x00,0x40,0x67,0x14,0x00,kCivEom});
+        check(waitFor([&] {
+                  return c.repeaterState.fmRepeaterReverse == false
+                      && c.repeaterState.txOffsetFreq
+                      && std::abs(*c.repeaterState.txOffsetFreq - 0.6) < 0.000001
+                      && c.frequencyMHz == rxFrequencyBeforePtt;
+              }),
+              "auto: post-PTT XFC and TX frequency reconcile radio truth while RX stays put");
+        const auto refreshesBeforeUnkey = pttRefreshReads();
+        c.radio.pushCiv({0xFE,0xFE,kControllerAddress,0xA2,
+                         cmd::kControl,control::kPtt,0x00,kCivEom});
+        check(waitFor([&] { return pttRefreshReads() >= refreshesBeforeUnkey + 2; }),
+              "auto: PTT release also refreshes XFC and TX frequency immediately");
+
+        const int toneWritesBefore = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& f) {
+                return f.cmd == cmd::kTone && !f.data.empty();
+            }));
+        c.backend.setFmRepeaterAccess(0, QStringLiteral("ctcss_tx"),
+                                      100.0, 100.0, 23, false, false);
+        check(waitFor([&] {
+                  return std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& f) {
+                      return f.cmd == cmd::kTone && f.hasSub
+                          && f.sub == tone::kTxCtcss && !f.data.empty();
+                  });
+              }), "auto: CTCSS TX reaches the scheduler");
+        const int toneWrites = static_cast<int>(std::ranges::count_if(
+            c.radio.civCommands(), [](const CivFrame& f) {
+                return f.cmd == cmd::kTone && !f.data.empty();
+            }));
+        check(toneWrites == toneWritesBefore + 1,
+              "auto: CTCSS TX writes only the selected TX tone register");
+
+        c.backend.setFmRepeaterOffset(0, QStringLiteral("up"), 5.0);
+        check(waitFor([&] {
+                  return std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& f) {
+                      return f.cmd == cmd::kDuplex && !f.data.empty();
+                  });
+              }), "auto: offset magnitude and DUP+ traverse the scheduler");
+        c.backend.setFmRepeaterReverse(0, true);
+        check(waitFor([&] {
+                  return std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& f) {
+                      return f.cmd == cmd::kControl && f.hasSub
+                          && f.sub == control::kXfc && !f.data.empty();
+                  });
+              }), "auto: REV is the IC-9700 XFC command, not a duplex value");
 
         // cmd::kSetFreq (0x05), NOT cmd::kSetFreqTrx (0x00). 0x00 is the
         // TRANSCEIVE frame a radio sends the controller when its own VFO
@@ -1833,6 +1973,27 @@ int main(int argc, char** argv)
         check(bandsFor(c.backend.model()).empty(),
               "continuous model: it declares no discontinuous band table, so "
               "the IC-9700 gate cannot apply to it");
+        const RadioCapabilities repeaterCaps = c.backend.capabilities();
+        check(repeaterCaps.fmRepeaterAccessModes.isEmpty()
+                  && !repeaterCaps.hasFmRepeaterDuplex
+                  && !repeaterCaps.hasFmRepeaterReverse
+                  && repeaterCaps.fmRepeaterPresentation
+                      == FmRepeaterPresentation::Hidden,
+              "continuous model: it publishes no IC-9700 repeater capability");
+        QTest::qWait(3200); // spans the phase-3 reconciliation group
+        check(std::ranges::none_of(c.radio.civCommands(), isFmRepeaterFrame),
+              "continuous model: startup and periodic reconciliation send zero repeater polls");
+        const auto repeaterFrameCount = [&c] {
+            return std::ranges::count_if(c.radio.civCommands(), isFmRepeaterFrame);
+        };
+        const auto framesBeforeRepeaterIntent = repeaterFrameCount();
+        c.backend.setFmRepeaterAccess(0, QStringLiteral("ctcss_tx"),
+                                      100.0, 100.0, 23, false, false);
+        c.backend.setFmRepeaterOffset(0, QStringLiteral("up"), 0.6);
+        c.backend.setFmRepeaterReverse(0, true);
+        QTest::qWait(100);
+        check(repeaterFrameCount() == framesBeforeRepeaterIntent,
+              "continuous model: unsupported repeater intents send zero writes");
 
         const auto setFrequencyCount = [&c] {
             return static_cast<int>(std::ranges::count_if(
@@ -1972,6 +2133,23 @@ int main(int argc, char** argv)
         check(c.warnedAbout("not a model AetherSDR has data for"),
               "unknown model: and the reduced radio is EXPLAINED rather than "
               "left looking like a half-finished backend");
+        const RadioCapabilities caps = c.backend.capabilities();
+        check(caps.fmRepeaterPresentation == FmRepeaterPresentation::Hidden
+                  && caps.fmRepeaterAccessModes.isEmpty(),
+              "unknown model: repeater presentation and capability are absent");
+        QTest::qWait(3200); // spans the phase-3 reconciliation group
+        check(std::ranges::none_of(c.radio.civCommands(), isFmRepeaterFrame),
+              "unknown model: startup and periodic reconciliation send zero repeater polls");
+        const auto repeaterFramesBefore = std::ranges::count_if(
+            c.radio.civCommands(), isFmRepeaterFrame);
+        c.backend.setFmRepeaterAccess(0, QStringLiteral("ctcss_tx"),
+                                      100.0, 100.0, 23, false, false);
+        c.backend.setFmRepeaterOffset(0, QStringLiteral("down"), 0.6);
+        c.backend.setFmRepeaterReverse(0, true);
+        QTest::qWait(100);
+        check(std::ranges::count_if(c.radio.civCommands(), isFmRepeaterFrame)
+                  == repeaterFramesBefore,
+              "unknown model: unsupported repeater intents send zero writes");
     }
 
     // ---- A SILENT RADIO STILL CONNECTS -------------------------------------

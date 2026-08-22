@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 // Canonical value lists and text sanitization for memory-channel fields.
 //
@@ -34,8 +35,30 @@ const QStringList& offsetDirectionsDisplay();
 // FM tone modes, display (upper-case) form.
 const QStringList& toneModesDisplay();
 
+// The model-gated extended FM access vocabulary.  Kept separate from
+// toneModesDisplay() because that function is the established FlexRadio
+// Off/CTCSS TX contract and must not grow when an Icom advertises more modes.
+const QStringList& extendedToneModesDisplay();
+
 // Standard EIA CTCSS tone frequencies as "%.1f" strings (e.g. "88.5").
 const QStringList& ctcssTones();
+
+struct CtcssChoice {
+    int code = 0;
+    QString designation;
+    QString frequency;
+};
+
+// Canonical presentation used by every TX/RX CTCSS selector.  Keeping the
+// code, designation and frequency together prevents the second ad-hoc
+// "frequency only" style that issue #5120 replaces.
+const QVector<CtcssChoice>& ctcssChoices();
+
+// Canonical three-digit DTCS choices, stored as integer values so leading
+// zeroes are presentation only.
+const QList<int>& dtcsCodes();
+bool isCtcssTone(double hz);
+bool isDtcsCode(int code);
 
 // Common tuning-step suggestions in Hz, as strings.
 const QStringList& tuningSteps();
