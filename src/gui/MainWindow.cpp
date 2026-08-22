@@ -6010,16 +6010,21 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Keyed off RadioCapabilities::hasDdcPanEdgeRolloff (see its own
-    // comment), not a family-name check -- a future DDC-based backend gets
-    // this automatically instead of needing its own family string added
-    // here. Re-evaluate on every connect and disconnect, since
-    // backendCapabilities() only knows the CURRENTLY connected radio.
+    // Band/segment zoom only ever works on Flex (see SpectrumWidget::
+    // setBandSegmentZoomAvailable()'s own comment) -- re-evaluate on every
+    // connect and disconnect, since hasCommandPlane() only knows the
+    // CURRENTLY connected radio's family, not the previous one's. Edge taper
+    // is keyed off RadioCapabilities::hasDdcPanEdgeRolloff instead (see its
+    // own comment), not a family-name check -- a future DDC-based backend
+    // gets that automatically instead of needing its own family string added
+    // here.
     if (m_panStack) {
+        const bool bandSegmentZoomAvailable = connected && m_radioModel.hasCommandPlane();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
+                applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
             }
         }

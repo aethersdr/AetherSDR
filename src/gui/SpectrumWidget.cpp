@@ -61,6 +61,7 @@
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QEvent>
+#include <QHelpEvent>
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
@@ -2200,6 +2201,17 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     m_zoomBandBtn = makeBtn("B", QStringLiteral("panZoomBandBtn"), QStringLiteral("Zoom to band"));
     m_zoomOutBtn  = makeBtn("\u2212", QStringLiteral("panZoomOutBtn"), QStringLiteral("Zoom out"));  // minus sign U+2212
     m_zoomInBtn   = makeBtn("+", QStringLiteral("panZoomInBtn"),   QStringLiteral("Zoom in"));
+
+    // setBandSegmentZoomAvailable() disables these two on non-Flex radios so
+    // the click is a real no-op instead of a silent one -- but Qt's default
+    // QWidget::event() skips QEvent::ToolTip on a disabled widget by design
+    // (confirmed: Qt does not auto-show tooltips for disabled widgets), which
+    // would silently defeat the very tooltip explaining WHY they're grayed
+    // out. eventFilter() answers QEvent::ToolTip for these two directly,
+    // bypassing that skip -- the QHelpEvent itself still arrives at a
+    // disabled widget, only the base class's auto-display is what's skipped.
+    m_zoomSegBtn->installEventFilter(this);
+    m_zoomBandBtn->installEventFilter(this);
 
     // SmartSDR pcap: B sends "band_zoom=1", S sends "segment_zoom=1"
     connect(m_zoomBandBtn, &QPushButton::clicked, this, [this]() {
@@ -8363,7 +8375,17 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
             updateNativeWaterfallFallbackState(now);
             if (!m_hasNativeWaterfall) {
-                pushRxWaterfallFallbackIfDue(*spectrumBins, now);
+                // m_smoothed (the same client-side EMA the trace already
+                // reads, computed above), not the raw *spectrumBins -- a
+                // fallback row is one un-averaged FFT snapshot, and at this
+                // radio's refresh rate that snapshot-to-snapshot variance
+                // reads as visible horizontal graininess once stacked into a
+                // waterfall (the trace doesn't show it because IT already
+                // reads the smoothed array, not this one). Any backend
+                // without native waterfall tiles goes through this same
+                // fallback, so this also smooths their waterfall the same
+                // way, not just this one's.
+                pushRxWaterfallFallbackIfDue(m_smoothed, now);
             }
         }
     } else {
@@ -8382,7 +8404,17 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
             updateNativeWaterfallFallbackState(now);
             if (!m_hasNativeWaterfall) {
-                pushRxWaterfallFallbackIfDue(*spectrumBins, now);
+                // m_smoothed (the same client-side EMA the trace already
+                // reads, computed above), not the raw *spectrumBins -- a
+                // fallback row is one un-averaged FFT snapshot, and at this
+                // radio's refresh rate that snapshot-to-snapshot variance
+                // reads as visible horizontal graininess once stacked into a
+                // waterfall (the trace doesn't show it because IT already
+                // reads the smoothed array, not this one). Any backend
+                // without native waterfall tiles goes through this same
+                // fallback, so this also smooths their waterfall the same
+                // way, not just this one's.
+                pushRxWaterfallFallbackIfDue(m_smoothed, now);
             }
         }
     }
@@ -11436,6 +11468,17 @@ bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
     QWidget* widget = qobject_cast<QWidget*>(watched);
     if (!widget || anyDragActive()) {
         return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
+    }
+
+    // See the installEventFilter() call sites in the constructor: only these
+    // two are ever disabled-with-an-explanatory-tooltip, so only these two
+    // need the disabled-widget tooltip workaround.
+    if ((widget == m_zoomSegBtn || widget == m_zoomBandBtn)
+        && event->type() == QEvent::ToolTip && !widget->isEnabled()
+        && !widget->toolTip().isEmpty()) {
+        auto* helpEvent = static_cast<QHelpEvent*>(event);
+        QToolTip::showText(helpEvent->globalPos(), widget->toolTip(), widget);
+        return true;
     }
 
     bool vfoDescendant = false;
