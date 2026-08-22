@@ -139,6 +139,7 @@ public:
     // and power: two of them transmit and the third cannot be undone over WiFi.
     [[nodiscard]] QVariantList controlMap() const;
     [[nodiscard]] QVariantMap profileMap() const;
+    [[nodiscard]] QVariantMap repeaterStateMap() const;
     [[nodiscard]] QVariantList meterMap() const;
     [[nodiscard]] QVariantMap controlScrub(const QString& filter);
     // Returns false when the row cannot be re-asserted safely — the scrub's
@@ -492,6 +493,12 @@ private:
     std::optional<double> m_repeaterToneHz;
     std::optional<icom::RepeaterOffsetDirection> m_repeaterOffsetDirection;
     std::optional<int> m_repeaterOffsetHz;
+    std::optional<std::uint8_t> m_repeaterAccess;
+    std::optional<double> m_repeaterRxToneHz;
+    std::optional<int> m_repeaterDtcsCode;
+    std::optional<bool> m_repeaterDtcsTxReverse;
+    std::optional<bool> m_repeaterDtcsRxReverse;
+    std::optional<std::uint64_t> m_repeaterTxFrequencyHz;
     int     m_controlPollPhase = 0;
     bool    m_rxAntennaExternal = false;
 

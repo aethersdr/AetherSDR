@@ -137,6 +137,16 @@ struct IcomCivBackendTestAccess {
         const auto recovery = profileFor(*backend.m_model).civRecovery;
         return recovery ? recovery->maxAttempts : 0;
     }
+
+    static QVariantMap repeaterState(const IcomCivBackend& backend)
+    {
+        return backend.repeaterStateMap();
+    }
+
+    static QVariantList controls(const IcomCivBackend& backend)
+    {
+        return backend.controlMap();
+    }
 };
 
 }  // namespace AetherSDR::icom
@@ -2555,6 +2565,17 @@ int main(int argc, char** argv)
         expectedStartup.push_back(cmdScopeDataOutput(addr, true));
         check(startupInventory == expectedStartup,
               "continuous model: startup inventory, order, and request count are unchanged");
+        const QVariantList controls = IcomCivBackendTestAccess::controls(c.backend);
+        const bool extendedRowsStayUnsupported = std::ranges::all_of(
+            controls, [](const QVariant& value) {
+                const QVariantMap row = value.toMap();
+                const QString feature = row.value(QStringLiteral("profileFeature")).toString();
+                return feature != QLatin1String("fm-repeater-extended-readback")
+                    || !row.value(QStringLiteral("supported")).toBool();
+            });
+        check(extendedRowsStayUnsupported,
+              "continuous model: extended IC-9700 readback is absent from the "
+              "IC-705/IC-7300MK2 effective control surface");
 
         // #5119 freezes the healthy IC-705 / IC-7300MK2 scheduler contract.
         // Pin every distinct steady-state group, including the phase-12 SET
@@ -2812,10 +2833,15 @@ int main(int argc, char** argv)
                 || frame.cmd == cmd::kReadRepeaterOffset
                 || frame.cmd == cmd::kSetRepeaterOffset
                 || (frame.cmd == cmd::kFunction && frame.hasSub
-                    && frame.sub == func::kRepeaterTone)
-                || (frame.cmd == cmd::kTone && frame.hasSub && frame.sub == 0x00)
+                    && (frame.sub == func::kRepeaterTone
+                        || frame.sub == repeaterAccess::kFunction))
+                || (frame.cmd == cmd::kTone && frame.hasSub
+                    && (frame.sub == repeaterTone::kTxCtcss
+                        || frame.sub == repeaterTone::kRxCtcss
+                        || frame.sub == repeaterTone::kDtcs))
                 || (frame.cmd == cmd::kControl && frame.hasSub
-                    && frame.sub == control::kXfc);
+                    && (frame.sub == control::kXfc
+                        || frame.sub == control::kReadTxFreq));
         };
         check(std::none_of(c.radio.civCommands().begin(), c.radio.civCommands().end(),
                            isRepeaterOrXfc),
@@ -2916,6 +2942,32 @@ int main(int argc, char** argv)
               "IC-9700 XFC: the session comes up");
         check(c.backend.capabilities().hasTransmitFrequencyCheck,
               "IC-9700 advertises the verified momentary XFC capability");
+        check(waitFor([&] {
+                  const QVariantMap state =
+                      IcomCivBackendTestAccess::repeaterState(c.backend);
+                  return state.value(QStringLiteral("accessMode")).toString()
+                             == QLatin1String("dtcs_txrx")
+                      && std::abs(state.value(QStringLiteral("rxCtcssHz")).toDouble()
+                                  - 67.0) < 0.001
+                      && state.value(QStringLiteral("dtcsCode")).toInt() == 23
+                      && !state.value(QStringLiteral("dtcsTxReverse")).toBool()
+                      && state.value(QStringLiteral("dtcsRxReverse")).toBool()
+                      && state.value(QStringLiteral("txFrequencyHz")).toULongLong()
+                             == 448'425'600ULL;
+              }),
+              "IC-9700 adopts capability-gated access, RX CTCSS, DTCS polarity, "
+              "and TX-frequency readback without changing the shared UI model");
+        const QVariantList controls = IcomCivBackendTestAccess::controls(c.backend);
+        const int supportedExtendedRows = static_cast<int>(std::ranges::count_if(
+            controls, [](const QVariant& value) {
+                const QVariantMap row = value.toMap();
+                return row.value(QStringLiteral("profileFeature")).toString()
+                           == QLatin1String("fm-repeater-extended-readback")
+                    && row.value(QStringLiteral("supported")).toBool();
+            }));
+        check(supportedExtendedRows == 4,
+              "IC-9700 effective control map exposes exactly four read-only "
+              "extended repeater rows");
         c.radio.clearCivLog();
         c.backend.setTransmitFrequencyCheck(true);
         check(waitFor([&] { return c.radio.m_transmitFrequencyCheck; }),

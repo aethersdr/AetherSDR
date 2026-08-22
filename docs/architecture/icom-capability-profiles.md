@@ -51,6 +51,14 @@ that the repeater family must be hidden on IC-705. The IC-705 guide documents
 offset, and XFC treatment. The IC-7300MK2 guide documents tone and tone-squelch
 but not the DTCS combinations, so its profile is narrower.
 
+Documented command coverage and activated runtime traffic remain separate
+facts. `FmRepeaterExtendedReadback` activates `16 5D`, `1B 01`, `1B 02`, and
+`1C 03` only for the IC-9700, whose preserved live trace covers those reads.
+The IC-705 keeps its live-proven basic poll/write inventory unchanged even
+though its guide documents the wider register family; moving that radio to the
+extended runtime surface requires its own operator proof and an explicit
+profile change.
+
 ## Effective control registry
 
 Each `ControlSpec` names the `IcomFeature` it requires. `controls map` returns

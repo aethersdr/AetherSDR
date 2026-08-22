@@ -44,6 +44,15 @@ GUI code knows a CI-V byte. The mapping is:
 | Repeater offset magnitude | read `0C`, write `0D`, 100 Hz units | Kept unsigned on the wire; the duplex direction determines the signed TX offset shown by the slice model. |
 | Transmit-frequency check | `1C 02 00/01` | Gated by the active model's `TxFrequencyCheck` evidence and FM repeater facet. XFC is momentary: press sends ON; release, window deactivation, control hide, and disconnect send OFF. A 250 ms readback poll catches front-panel changes without requiring CI-V Transceive. |
 
+The IC-9700 additionally activates a read-only extended snapshot (`16 5D`,
+`1B 01`, `1B 02`, and `1C 03`) through the model-specific
+`FmRepeaterExtendedReadback` facet. These values are retained in the Icom
+backend and available through its `repeater.state` extension; they do not
+change the shared FM applet, VFO controls, memory vocabulary, or the existing
+IC-705/IC-7300MK2 poll and write paths. The sanitized source trace and exact
+field provenance live in
+`docs/data/icom-ic9700-fm-repeater-{evidence.json,live-trace.txt}`.
+
 The radio remains authoritative. Connect performs a snapshot of all four FM
 repeater fields plus XFC where supported; replies update the models without
 being reflected back as commands. Local-memory recall is an explicit operator
