@@ -283,6 +283,24 @@ void MainWindow::showFlexControlDialog()
                 m_flexControlDialog->setPhysicalReady(false);
 #endif
         });
+#ifdef HAVE_SERIALPORT
+        connect(m_flexControlDialog, &FlexControlDialog::configureRequested,
+                this, [this] {
+            // Same deep-link pattern as Settings → USB Cables… (#4940):
+            // open Radio Setup with Serial & Controllers pre-selected,
+            // where the FlexControl Tuning Knob group actually lives.
+            const QString prevComp = m_radioModel.audioCompressionParam();
+            const bool wasFresh = !m_radioSetupDialog;
+            showOrRaisePersistent(m_radioSetupDialog,
+                                  &m_radioModel, m_audio,
+                                  &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                                  m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
+            if (wasFresh && m_radioSetupDialog)
+                wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
+            if (m_radioSetupDialog)
+                m_radioSetupDialog->selectTab(QStringLiteral("Serial & Controllers"));
+        });
+#endif
         connect(m_flexControlDialog, &FlexControlDialog::physicalDisconnectRequested,
                 this, [this] {
 #ifdef HAVE_SERIALPORT
