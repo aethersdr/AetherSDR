@@ -126,6 +126,22 @@ void MainWindow::buildMenuBar()
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
 
+#ifdef HAVE_SERIALPORT
+    // Primary discoverability entry for #4940 — a Settings-menu shortcut
+    // straight to the FlexControl Tuning Knob group, for the user who
+    // browses Settings looking for it rather than opening AetherControl...
+    // first. Guarded the same as the Serial & Controllers page itself
+    // (RadioSetupDialog.cpp) and the AetherControl "Settings…" button
+    // (MainWindow_Controllers.cpp) that offers the same deep-link from
+    // inside the controller window.
+    auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
+    flexControlKnobAction->setMenuRole(QAction::NoRole);
+    connect(flexControlKnobAction, &QAction::triggered, this, [this] {
+        if (RadioSetupDialog* dlg = openRadioSetupPage())
+            dlg->revealFlexControlSettings();
+    });
+#endif
+
     auto* networkAction = settingsMenu->addAction("Network...");
     connect(networkAction, &QAction::triggered, this, [this] {
         showNetworkDiagnosticsDialog();
