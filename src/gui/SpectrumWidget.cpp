@@ -14377,9 +14377,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             };
             // Match drawSliceMarkers / the CPU 3D fallback: the passband band
             // and marker cue(s) are placed independently (an off-screen passband
-            // must not drop an on-screen cue, and vice versa); RTTY adds a
-            // mark+space pair on top of the carrier cue; markerWidth == 0 draws
-            // the passband with no carrier cue at all.
+            // must not drop an on-screen cue, and vice versa); RTTY draws a
+            // mark+space pair rather than a carrier cue; markerWidth == 0 draws
+            // the passband with no cue at all.
             const auto appendShadow = [&](const SliceOverlay& so) {
                 const double shadowMarginMhz =
                     static_cast<double>(shadowUnitMargin) * shadowBandwidthMhz;
@@ -14401,16 +14401,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     !(high < shadowUnitLow || low > shadowUnitHigh);
 
                 struct ShadowCue { float center; QColor color; };
-                // Three: a carrier cue plus, on RTTY, the mark/space pair. The
-                // carrier is additive rather than replaced (#5097), so RTTY can
-                // now need all three at once.
-                static constexpr int kMaxShadowCues = 3;
-                std::array<ShadowCue, kMaxShadowCues> cues;
+                std::array<ShadowCue, 2> cues;
                 int cueCount = 0;
-                if (so.markerWidth > 0) {
-                    cues[cueCount++] = {unitForShadowMhz(so.freqMhz),
-                                        sliceColorForOverlay(so)};
-                }
+                // RTTY keeps its exclusive mark/space pair — the RF frequency
+                // IS the mark, so a carrier cue would be coincident with it and
+                // would spend a third descriptor against kDssMeshShadowSlices
+                // for no visible gain. DIGL now falls through to the carrier
+                // cue instead of being treated as RTTY (#5097).
                 if (drawsRttyToneCues(so.mode)) {
                     // RTTY: RF_frequency IS the mark (radio applies IF shift).
                     const double markMhz = so.freqMhz;
@@ -14421,10 +14418,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     cues[cueCount++] = {unitForShadowMhz(spaceMhz),
                         AetherSDR::ThemeManager::instance().color(
                             "color.accent.danger")};
+                } else if (so.markerWidth > 0) {
+                    cues[cueCount++] = {unitForShadowMhz(so.freqMhz),
+                                        sliceColorForOverlay(so)};
                 }
 
                 // Cull each cue by its own position, matching appendLine.
-                std::array<ShadowCue, kMaxShadowCues> visible;
+                std::array<ShadowCue, 2> visible;
                 int visibleCount = 0;
                 for (int i = 0; i < cueCount; ++i) {
                     if (cues[i].center >= shadowUnitLow
@@ -16924,12 +16924,9 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
             }
         };
 
-        // Carrier cue first, tone cues over it — additive, never exclusive
-        // (#5097). Mirrors drawSliceMarkers and appendShadow.
-        if (so.markerWidth > 0) {
-            appendLine(so.freqMhz, markerColor,
-                       std::max<qreal>(1.0, so.markerWidth));
-        }
+        // RTTY keeps its exclusive mark/space pair: the RF frequency IS the
+        // mark, so a carrier cue would land at the identical x. DIGL now falls
+        // through to the carrier cue instead of being treated as RTTY (#5097).
         if (drawsRttyToneCues(so.mode)) {
             // RTTY: RF_frequency IS the mark (radio applies the IF shift).
             const double markMhz = so.freqMhz;
@@ -16942,6 +16939,9 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
                 spaceMhz,
                 AetherSDR::ThemeManager::instance().color("color.accent.danger"),
                 1.0);
+        } else if (so.markerWidth > 0) {
+            appendLine(so.freqMhz, markerColor,
+                       std::max<qreal>(1.0, so.markerWidth));
         }
 
     };
@@ -17100,33 +17100,15 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.drawLine(fX2, specRect.top(), fX2, specRect.bottom());
         }
 
-        // ── Standard VFO center line ─────────────────────────────────────
-        // Drawn for every mode. RTTY tone cues are painted *over* this below,
-        // never instead of it: making the two mutually exclusive is what hid
-        // the carrier marker on RTTY and DIGL slices (#5097).
-        // Skipped entirely when markerWidth == 0 (user chose "Marker: Off") —
-        // passband bracket only.
-        if (so.markerWidth > 0) {
-            int markerX = vfoX;
-
-            // Per-slice VFO marker thickness — user-toggled via VFO flag (#1526)
-            const qreal vfoLineW = static_cast<qreal>(so.markerWidth);
-            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 220), vfoLineW));
-            drawFrequencyLine(markerX);
-
-            // ── Triangle marker at top ───────────────────────────────────
-            const int triHalf = 6;
-            const int triH = 10;
-            p.setPen(Qt::NoPen);
-            p.setBrush(col);
-            QPolygon tri;
-            tri << QPoint(markerX - triHalf, specRect.top())
-                << QPoint(markerX + triHalf, specRect.top())
-                << QPoint(markerX, specRect.top() + triH);
-            p.drawPolygon(tri);
-        }
-
-        // ── RTTY mark/space tone cues, on top of the centre line ─────────
+        // ── RTTY: mark/space lines replace the VFO center line ───────────
+        // For RTTY the RF frequency IS the mark (the radio applies the IF
+        // shift), so the mark cue already marks the tuned frequency — a
+        // separate carrier line would sit at the identical x. RTTY rendering
+        // is therefore left exactly as it was.
+        //
+        // DIGL used to be routed here too, which cost it the carrier marker
+        // and gave it two meaningless FSK cues; it now falls through to the
+        // standard centre line below. See drawsRttyToneCues() (#5097).
         if (drawsRttyToneCues(so.mode)) {
             // In RTTY mode, RF_frequency IS the mark (radio applies IF shift).
             const double markMhz  = so.freqMhz;
@@ -17151,6 +17133,27 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             p.drawText(markX + 2, specRect.top() + 12, "M");
             p.setPen(AetherSDR::theme::withAlpha("color.accent.danger", 240));
             p.drawText(spaceX + 2, specRect.top() + 12, "S");
+        } else if (so.markerWidth > 0) {
+            // ── Standard VFO center line ─────────────────────────────────
+            // Skipped entirely when markerWidth == 0 (user chose
+            // "Marker: Off") — passband bracket only.
+            int markerX = vfoX;
+
+            // Per-slice VFO marker thickness — user-toggled via VFO flag (#1526)
+            const qreal vfoLineW = static_cast<qreal>(so.markerWidth);
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 220), vfoLineW));
+            drawFrequencyLine(markerX);
+
+            // ── Triangle marker at top ───────────────────────────────────
+            const int triHalf = 6;
+            const int triH = 10;
+            p.setPen(Qt::NoPen);
+            p.setBrush(col);
+            QPolygon tri;
+            tri << QPoint(markerX - triHalf, specRect.top())
+                << QPoint(markerX + triHalf, specRect.top())
+                << QPoint(markerX, specRect.top() + triH);
+            p.drawPolygon(tri);
         }
 
         // ── RIT/XIT offset lines ──────────────────────────────────────

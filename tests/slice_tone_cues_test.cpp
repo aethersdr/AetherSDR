@@ -5,10 +5,14 @@
 // VARA, SSTV and RADE on any lower-sideband band — lost its centre line and
 // triangle and gained two meaningless FSK lines at 2125 / 2295 Hz.
 //
-// That behaviour was introduced by 8fba0f97 (PR #660) and had to be reverted
-// twice over: the carrier is now drawn unconditionally, and only genuine RTTY
-// adds tone cues. This test pins the second half so the DIGL case cannot creep
-// back in.
+// DIGL was added to the RTTY branch by 8fba0f97 (PR #660). Removing it lets a
+// DIGL slice fall through to the normal carrier path in all three renderers
+// (2D painter, GPU shadow cues, 3D CPU fallback). RTTY rendering is unchanged:
+// there the RF frequency IS the mark, so replacing the carrier is correct.
+//
+// This test pins the predicate. The carrier-restored half of the symptom lives
+// inside the three renderers and is not extractable without factoring out cue
+// selection as a pure function — see the note on the PR.
 
 #include "gui/SliceToneCues.h"
 

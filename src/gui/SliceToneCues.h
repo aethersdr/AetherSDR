@@ -14,9 +14,12 @@ namespace AetherSDR {
 // reasoning MainWindow::refreshRttyDecodeState() already applies when it
 // refuses to open a Baudot decoder on a DIGL slice.
 //
-// Treating DIGL as RTTY also *suppressed the carrier marker entirely*, because
-// the tone cues were drawn instead of the centre line rather than on top of it
-// (#5097). The carrier is now unconditional; this predicate only adds cues.
+// Tone cues *replace* the carrier marker rather than adding to it, which is
+// correct for RTTY — there the RF frequency IS the mark, so the mark cue
+// already marks the tuned frequency and a carrier line would be drawn at the
+// identical x. It was wrong for DIGL, which has no such relationship: including
+// DIGL here suppressed its carrier marker entirely (#5097). Excluding DIGL lets
+// it fall through to the normal carrier path in all three renderers.
 //
 // Lives in its own header so the rule is unit-testable without dragging in
 // SpectrumWidget.h (which pulls QRhiWidget and the DSS renderer).
