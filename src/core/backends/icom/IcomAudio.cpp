@@ -159,8 +159,27 @@ void TxPacketizer::submit(std::span<const float> mono)
     // Drop the OLDEST on overflow. On transmit the freshest audio is what
     // matters; keeping a backlog just means the operator's voice arrives late
     // and keeps getting later.
-    while (m_pending.size() > kMaxPendingBytes)
+    //
+    // COUNTED, because for a DIGITAL burst this rule is destructive in a way it
+    // never is for voice: the oldest bytes of an AX.25 transmission are the
+    // preamble and the opening flag, so dropping from the front leaves a frame
+    // that still sounds like packet and syncs on nothing. A 596 ms burst is
+    // 2.4x this queue, and onTxPaceTick's catch-up pacing ships a larger chunk
+    // whenever a tick lands late — so an oversized submit is reachable in
+    // production, not just in theory.
+    //
+    // Counting rather than logging keeps this file free of Qt logging (it is
+    // pure protocol, no QObject, and the unit test links it standalone). The
+    // owner reads droppedBytes() and decides what to say about it.
+    std::size_t dropped = 0;
+    while (m_pending.size() > kMaxPendingBytes) {
         m_pending.pop_front();
+        ++dropped;
+    }
+    if (dropped > 0) {
+        m_droppedBytes += dropped;
+        ++m_dropEvents;
+    }
 }
 
 std::vector<TxPacketizer::Chunk> TxPacketizer::takeFrame()

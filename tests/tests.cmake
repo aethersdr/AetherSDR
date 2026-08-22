@@ -411,6 +411,17 @@ add_executable(icom_civ_test
 target_include_directories(icom_civ_test PRIVATE src)
 add_test(NAME icom_civ_test COMMAND icom_civ_test)
 
+# TxPacketizer overflow accounting. The drop rule sheds the OLDEST bytes, which
+# on an AX.25 burst is the preamble — audible, and undecodable. Links IcomAudio
+# standalone: that file is pure protocol, no QObject and no Qt logging.
+add_executable(icom_tx_packetiser_drop_test
+    tests/icom_tx_packetiser_drop_test.cpp
+    src/core/backends/icom/IcomAudio.cpp
+)
+target_include_directories(icom_tx_packetiser_drop_test PRIVATE src)
+target_link_libraries(icom_tx_packetiser_drop_test PRIVATE Qt6::Core)
+add_test(NAME icom_tx_packetiser_drop_test COMMAND icom_tx_packetiser_drop_test)
+
 add_executable(icom_civ_scheduler_test
     tests/icom_civ_scheduler_test.cpp
     src/core/backends/icom/IcomCivScheduler.cpp

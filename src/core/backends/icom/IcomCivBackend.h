@@ -349,6 +349,12 @@ private:
     std::unique_ptr<Resampler> m_txResampler;
     int m_txResamplerFromHz = 0;
     int m_txResamplerToHz = 0;
+
+    // Edge detection for the TX packetiser drop counter (see onLinkTick).
+    // The counter is cumulative, so reporting it directly would repeat the
+    // same total every tick; this holds the last value so only NEW drops are
+    // logged.
+    std::size_t m_lastTxDroppedBytes = 0;
     // The DEFAULT audio rate, not the only one. 48 kHz 16-bit mono LPCM is
     // 768 kbps in each direction — about 1.5 Mbps of uncompressed UDP for a
     // duplex session, which saturates a marginal 2.4 GHz link and starves the
