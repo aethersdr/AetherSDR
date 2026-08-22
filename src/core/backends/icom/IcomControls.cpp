@@ -398,8 +398,15 @@ constexpr std::array kSpecs = {
 
 std::span<const ControlSpec> controlSpecs() { return kSpecs; }
 
-bool controlSupported(const IcomModelProfile& profile, const ControlSpec& spec) noexcept
+bool controlSupported(const IcomModel& model, const IcomModelProfile& profile,
+                      const ControlSpec& spec) noexcept
 {
+    if (spec.requiredFeature == IcomFeature::Scope) {
+        // Scope startup and status handling have always followed identity
+        // geometry. Keep the registry aligned with that real wire behavior;
+        // profile evidence remains a separate diagnostic field.
+        return model.hasScope;
+    }
     return profile.supports(spec.requiredFeature);
 }
 

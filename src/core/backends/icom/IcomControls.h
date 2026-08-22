@@ -112,14 +112,16 @@ struct ControlSpec {
     // band limits — this is where that lives, so the report explains itself.
     std::string_view note;
 
-    // The model-profile attestation required before this row is effective.
-    // Core is still explicit: an unprofiled model gets an honest unsupported
-    // registry rather than inheriting every generic-looking CI-V command.
+    // The model-profile facet required before this row is effective. Core is
+    // the backend's model-neutral CI-V floor; Scope follows the discovered
+    // model's transport geometry. Their evidence can still be "none" so the
+    // registry distinguishes reachability from guide/live attestation.
     IcomFeature requiredFeature = IcomFeature::Core;
 };
 
 [[nodiscard]] std::span<const ControlSpec> controlSpecs();
-[[nodiscard]] bool controlSupported(const IcomModelProfile& profile,
+[[nodiscard]] bool controlSupported(const IcomModel& model,
+                                    const IcomModelProfile& profile,
                                     const ControlSpec& spec) noexcept;
 
 [[nodiscard]] std::string_view encodingName(Encoding e);

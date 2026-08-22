@@ -14,10 +14,15 @@ them separate matters because evidence is often narrow: the live IC-9700 trace
 attests its `26 00` shape and repeater registers without proving every scope and
 meter fact for that model.
 
-An absent profile facet means unsupported for code routed through that facet.
-The backend must not borrow another radio's SET address, enum, meter curve,
-front-end ladder, mode vocabulary, or command shape. Identity-only rows remain
-discoverable but do not receive a supported bring-up profile.
+An absent model-specific profile facet means unsupported for code routed through
+that facet. Two compatibility floors deliberately remain reachable without
+profile evidence: model-neutral Core CI-V controls, and Scope controls when the
+discovered identity declares scope geometry. `controls map` reports that split
+as `supported: true` with `profileEvidence: none`; reachability is not an
+attestation. The backend must not borrow another radio's SET address, enum,
+meter curve, front-end ladder, mode vocabulary, or model-specific command
+shape. Identity-only rows remain discoverable but do not receive a supported
+bring-up profile.
 
 ## Initial supported profiles
 
@@ -61,10 +66,11 @@ declarations for features that are implemented but unavailable on the active
 radio.
 
 The backend's read-only `profile.show` extension returns the active model, guide
-revision, SET-item differences, per-feature evidence, and the FM repeater facet.
-It contains no credentials. `controls map` is the currently public automation
-surface; routing the RFC's proposed `icom profile show` bridge spelling remains
-separate automation work so this foundation does not cross the radio seam.
+revision, SET-item differences, per-feature evidence, FM repeater access modes,
+RX-antenna readback behavior, and the scope-command facet. It contains no
+credentials. `controls map` is the currently public automation surface; routing
+the RFC's proposed `icom profile show` bridge spelling remains separate
+automation work so this foundation does not cross the radio seam.
 
 ## Adding another Icom
 

@@ -383,7 +383,6 @@ struct MeterCalibrationProfile {
 // migrated to a facet must treat its absence as unsupported and must never
 // borrow another model's command shape or calibration.
 struct IcomModelProfile {
-    const IcomModel* model = nullptr;
     bool supportedBringup = false;
     std::string_view guideRevision;
     std::span<const FeatureEvidence> features;

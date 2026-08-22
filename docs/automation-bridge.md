@@ -3137,7 +3137,11 @@ raw and seam ranges, the seam verb it maps to, the UI control that drives it, an
 what it has actually done this session. Read-only; works with no radio attached.
 For Icom, `supported`, `profileFeature`, `profileEvidence`, and `profileSource`
 describe the effective active-model row; an unsupported row is declaration
-inventory, not a claim that the radio accepts it.
+inventory, not a claim that the radio accepts it. Core controls and scope on a
+scope-capable discovered model can be reachable with `profileEvidence: "none"`:
+the former is the backend's model-neutral CI-V floor and the latter matches the
+identity geometry already used by scope startup. Evidence remains independent
+so neither is presented as guide- or live-attested.
 
 ```json
 → {"cmd":"controls","args":"map"}

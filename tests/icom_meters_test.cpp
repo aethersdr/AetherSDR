@@ -445,18 +445,32 @@ static void testCapabilityProfiles()
     const ControlSpec* rxAntenna = spec("rx.antenna");
     const ControlSpec* dataMode = spec("data.mode");
     const ControlSpec* txBandwidth = spec("tx.bandwidth.edges");
-    check(rxAntenna && !controlSupported(p705, *rxAntenna)
-              && controlSupported(pMk2, *rxAntenna),
+    const IcomModel& model705 = *modelForCivAddress(0xA4);
+    const IcomModel& model9700 = *modelForCivAddress(0xA2);
+    const IcomModel& modelMk2 = *modelForCivAddress(0xB6);
+    check(rxAntenna && !controlSupported(model705, p705, *rxAntenna)
+              && controlSupported(modelMk2, pMk2, *rxAntenna),
           "effective registry gates RX-ANT to the IC-7300MK2 profile");
-    check(dataMode && controlSupported(p705, *dataMode)
-              && controlSupported(p9700, *dataMode) && controlSupported(pMk2, *dataMode),
+    check(dataMode && controlSupported(model705, p705, *dataMode)
+              && controlSupported(model9700, p9700, *dataMode)
+              && controlSupported(modelMk2, pMk2, *dataMode),
           "all three profiles attest selected-VFO mode/DATA/filter");
-    check(txBandwidth && controlSupported(p705, *txBandwidth)
-              && !controlSupported(p9700, *txBandwidth)
-              && controlSupported(pMk2, *txBandwidth),
+    check(txBandwidth && controlSupported(model705, p705, *txBandwidth)
+              && !controlSupported(model9700, p9700, *txBandwidth)
+              && controlSupported(modelMk2, pMk2, *txBandwidth),
           "effective registry refuses to borrow TX bandwidth on IC-9700");
-    check(!profileFor(*modelForCivAddress(0x98)).supports(IcomFeature::Core),
-          "an identity-only model receives no effective control profile");
+    const IcomModel& identityOnly = *modelForCivAddress(0x98);
+    const IcomModelProfile& identityOnlyProfile = profileFor(identityOnly);
+    const ControlSpec* frequency = spec("freq");
+    const ControlSpec* scopeMode = spec("scope.onoff");
+    check(identityOnlyProfile.supports(IcomFeature::Core)
+              && identityOnlyProfile.evidenceFor(IcomFeature::Core) == nullptr
+              && frequency
+              && controlSupported(identityOnly, identityOnlyProfile, *frequency),
+          "identity-only models retain the generic CI-V floor without claiming evidence");
+    check(scopeMode && controlSupported(identityOnly, identityOnlyProfile, *scopeMode)
+              && !identityOnlyProfile.supports(IcomFeature::Scope),
+          "scope reachability follows identity geometry while attestation remains absent");
 }
 
 static void testModelDiscovery()

@@ -497,6 +497,14 @@ const FeatureEvidence* IcomModelProfile::evidenceFor(IcomFeature feature) const 
 
 bool IcomModelProfile::supports(IcomFeature feature) const noexcept
 {
+    // Core is the implementation's model-neutral CI-V floor: identity,
+    // frequency, mode and the other generic registers that the backend already
+    // uses for every discovered Icom. Evidence remains independently absent on
+    // an unprofiled model so diagnostics do not turn reachability into an
+    // attestation.
+    if (feature == IcomFeature::Core) {
+        return true;
+    }
     const FeatureEvidence* evidence = evidenceFor(feature);
     return evidence && evidence->evidence != EvidenceKind::None;
 }
@@ -508,7 +516,6 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
     // their own guide is mapped. This is what prevents a copied IC-705 table
     // from silently becoming a write contract for another transmitter.
     static const IcomModelProfile kIc705Profile{
-        .model = &kModels[0],
         .supportedBringup = true,
         .guideRevision = "IC-705 CI-V Reference Guide 2020",
         .features = kIc705Evidence,
@@ -529,7 +536,6 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .receiveOnlyModes = kIc705ReceiveOnlyModes,
     };
     static const IcomModelProfile kIc9700Profile{
-        .model = &kModels[1],
         .supportedBringup = true,
         .guideRevision = "IC-9700 CI-V Reference Guide 2019",
         .features = kIc9700Evidence,
@@ -541,7 +547,6 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .meters = MeterCalibrationProfile{MeterCalibration::Uncalibrated, {}, 0.0},
     };
     static const IcomModelProfile kIc7300Mk2Profile{
-        .model = &kModels[5],
         .supportedBringup = true,
         .guideRevision = "IC-7300MK2 CI-V Reference Guide",
         .features = kIc7300Mk2Evidence,

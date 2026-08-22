@@ -1232,7 +1232,6 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // A small default set so the status bar is alive before any UI declares
     // what it is showing. setMeterVisible() narrows or widens this.
     m_meters.setVisible(MeterId::SMeter, true);
-    m_meters.setVisible(MeterId::Vd, true);
     m_meters.setVisible(MeterId::Overflow, true);
     // The transmit meters. Visible so the poller WILL ask for them — it still
     // only does so while transmitting, which is what the TX/RX split is for.
@@ -1240,7 +1239,6 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_meters.setVisible(MeterId::Swr, true);
     m_meters.setVisible(MeterId::Alc, true);
     m_meters.setVisible(MeterId::Comp, true);
-    m_meters.setVisible(MeterId::Id, true);
 
     m_meterTimer = new QTimer(this);
     connect(m_meterTimer, &QTimer::timeout, this, &IcomCivBackend::onMeterTick);
@@ -3419,7 +3417,8 @@ void IcomCivBackend::setCwBreakIn(bool on)
 // AND the filter slot in the same message, and both are real controls with their
 // own seam verbs. Returning the first match credited `mode` and left `filter`
 // looking unwired on a radio where they cannot be separated.
-static void forEachSpecForFrame(const IcomModelProfile& profile,
+static void forEachSpecForFrame(const IcomModel& model,
+                                const IcomModelProfile& profile,
                                 std::uint8_t cmd, std::uint8_t sub, bool hasSub,
                                 const std::function<void(const icom::ControlSpec&)>& fn)
 {
@@ -3441,7 +3440,7 @@ static void forEachSpecForFrame(const IcomModelProfile& profile,
     const bool alsoModeRows = cmd == cmd::kVfoMode && hasSub && sub == vfoMode::kSelected;
 
     for (const auto& c : icom::controlSpecs()) {
-        if (!controlSupported(profile, c)) {
+        if (!controlSupported(model, profile, c)) {
             continue;
         }
         if (c.cmd != setCmd && !(alsoModeRows && c.cmd == cmd::kSetMode))
@@ -3454,7 +3453,7 @@ static void forEachSpecForFrame(const IcomModelProfile& profile,
 
 void IcomCivBackend::noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub)
 {
-    forEachSpecForFrame(profileFor(*m_model), cmd, sub, hasSub,
+    forEachSpecForFrame(*m_model, profileFor(*m_model), cmd, sub, hasSub,
                         [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsSent.insert(id);
@@ -3466,7 +3465,7 @@ void IcomCivBackend::noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool ha
 void IcomCivBackend::noteControlScheduled(std::uint8_t cmd, std::uint8_t sub,
                                           bool hasSub)
 {
-    forEachSpecForFrame(profileFor(*m_model), cmd, sub, hasSub,
+    forEachSpecForFrame(*m_model, profileFor(*m_model), cmd, sub, hasSub,
                         [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsScheduled.insert(id);
@@ -3475,7 +3474,7 @@ void IcomCivBackend::noteControlScheduled(std::uint8_t cmd, std::uint8_t sub,
 
 void IcomCivBackend::noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub)
 {
-    forEachSpecForFrame(profileFor(*m_model), cmd, sub, hasSub,
+    forEachSpecForFrame(*m_model, profileFor(*m_model), cmd, sub, hasSub,
                         [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsSeen.insert(id);
@@ -3533,7 +3532,7 @@ QVariantList IcomCivBackend::controlMap() const
         m.insert(QStringLiteral("seamVerb"), sv(c.seamVerb));
         m.insert(QStringLiteral("uiTarget"), sv(c.uiTarget));
         m.insert(QStringLiteral("readAtConnect"), c.readAtConnect);
-        m.insert(QStringLiteral("supported"), controlSupported(profile, c));
+        m.insert(QStringLiteral("supported"), controlSupported(*m_model, profile, c));
         m.insert(QStringLiteral("profileFeature"), sv(featureName(c.requiredFeature)));
         m.insert(QStringLiteral("profileEvidence"),
                  sv(evidenceName(evidence ? evidence->evidence : EvidenceKind::None)));
@@ -3554,7 +3553,7 @@ QVariantList IcomCivBackend::controlMap() const
         // The gap, named. Anything other than an empty string here is a finding
         // rather than a description, which is what lets a caller sort by it.
         QString gap;
-        if (!controlSupported(profile, c)) {
+        if (!controlSupported(*m_model, profile, c)) {
             gap = QStringLiteral("unsupported by the active model profile");
         } else if (c.wiring == icom::Wiring::Declared) {
             gap = QStringLiteral("no code path at all — the constant exists and nothing uses it");
@@ -3607,8 +3606,27 @@ QVariantMap IcomCivBackend::profileMap() const
         fm.insert(QStringLiteral("xfc"), profile.fmRepeater->hasXfc);
         fm.insert(QStringLiteral("txFrequencyReadback"),
                   profile.fmRepeater->hasTxFrequencyReadback);
+        QStringList accessModes;
+        for (const std::string_view mode : profile.fmRepeater->accessModes) {
+            accessModes.append(sv(mode));
+        }
+        fm.insert(QStringLiteral("accessModes"), accessModes);
         out.insert(QStringLiteral("fmRepeater"), fm);
     }
+    if (profile.rxAntenna) {
+        QVariantMap rxAntenna;
+        rxAntenna.insert(QStringLiteral("selectable"), profile.rxAntenna->selectable);
+        rxAntenna.insert(QStringLiteral("readbackAvailable"),
+                         profile.rxAntenna->readbackAvailable);
+        out.insert(QStringLiteral("rxAntenna"), rxAntenna);
+    }
+    QVariantMap scope;
+    scope.insert(QStringLiteral("center"), profile.scope.center);
+    scope.insert(QStringLiteral("fixed"), profile.scope.fixed);
+    scope.insert(QStringLiteral("scrollCenter"), profile.scope.scrollCenter);
+    scope.insert(QStringLiteral("scrollFixed"), profile.scope.scrollFixed);
+    scope.insert(QStringLiteral("sweepSpeed"), profile.scope.hasSweepSpeed);
+    out.insert(QStringLiteral("scope"), scope);
     return out;
 }
 
@@ -3700,7 +3718,7 @@ QVariantMap IcomCivBackend::controlScrub(const QString& filter)
     QVariantList rows;
     int checked = 0, reached = 0, skipped = 0;
     for (const auto& c : icom::controlSpecs()) {
-        if (!controlSupported(profileFor(*m_model), c)) {
+        if (!controlSupported(*m_model, profileFor(*m_model), c)) {
             continue;
         }
         const QString id = sv(c.id);
@@ -4308,15 +4326,25 @@ void IcomCivBackend::publishModeList()
 
 void IcomCivBackend::publishMeterDefs()
 {
-    int index = 0;
+    const bool calibrated = profileFor(*m_model).meters.calibration
+        != MeterCalibration::Uncalibrated;
+    // Poll eligibility follows the active profile too. This runs both for the
+    // handshake name and for an authoritative 0x19 identity correction.
+    m_meters.setVisible(MeterId::Vd, calibrated);
+    m_meters.setVisible(MeterId::Id, calibrated);
+
     for (const MeterSpec& s : meterSpecs()) {
-        if ((s.id == MeterId::Vd || s.id == MeterId::Id)
-            && profileFor(*m_model).meters.calibration
-                == MeterCalibration::Uncalibrated) {
+        const int index = static_cast<int>(s.id);
+        if ((s.id == MeterId::Vd || s.id == MeterId::Id) && !calibrated) {
+            // Meter indices are stable identities, not positions in the
+            // currently visible subset. Withdraw old definitions explicitly
+            // so a calibrated handshake name corrected to another model cannot
+            // leave Vd/Id cached or alias OVF onto the former Vd index.
+            emit meterRemoved(index);
             continue;
         }
         MeterDef d;
-        d.index = index++;
+        d.index = index;
         d.source = QString::fromUtf8(s.source.data(), static_cast<int>(s.source.size()));
         d.name = QString::fromUtf8(s.name.data(), static_cast<int>(s.name.size()));
         d.unit = QString::fromUtf8(s.unit.data(), static_cast<int>(s.unit.size()));
