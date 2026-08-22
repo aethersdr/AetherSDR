@@ -3135,6 +3135,9 @@ at once.
 **`controls map`** — every CI-V message the backend names, with its wire address,
 raw and seam ranges, the seam verb it maps to, the UI control that drives it, and
 what it has actually done this session. Read-only; works with no radio attached.
+For Icom, `supported`, `profileFeature`, `profileEvidence`, and `profileSource`
+describe the effective active-model row; an unsupported row is declaration
+inventory, not a claim that the radio accepts it.
 
 ```json
 → {"cmd":"controls","args":"map"}

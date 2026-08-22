@@ -176,22 +176,34 @@ const MeterSpec* meterSpecForSub(std::uint8_t sub)
     return nullptr;
 }
 
-double meterValue(MeterId id, int raw, double s9Dbm, std::uint8_t civAddress)
+double meterValue(MeterId id, int raw, double s9Dbm, MeterCalibration calibration)
 {
+    const bool desktop = calibration == MeterCalibration::Ic7300Mk2;
     switch (id) {
     case MeterId::SMeter:   return sMeterDbm(raw, s9Dbm);
-    case MeterId::Power:    return interpolateCurve(
-                                civAddress == 0xB6 ? powerCurveIc7300Mk2()
-                                                   : powerCurveIc705(), raw);
+    case MeterId::Power:
+        if (calibration == MeterCalibration::Uncalibrated) {
+            return std::clamp(raw, 0, 255) * 100.0 / 255.0;
+        }
+        return interpolateCurve(desktop ? powerCurveIc7300Mk2()
+                                        : powerCurveIc705(), raw);
     case MeterId::Swr:      return interpolateCurve(kSwr, raw);
     case MeterId::Alc:      return interpolateCurve(kAlc, raw);
     case MeterId::Comp:     return interpolateCurve(kComp, raw);
-    case MeterId::Vd:       return interpolateCurve(
-                                civAddress == 0xB6
+    case MeterId::Vd:
+        if (calibration == MeterCalibration::Uncalibrated) {
+            return 0.0;
+        }
+        return interpolateCurve(
+                                desktop
                                     ? std::span<const CurvePoint>(kVdIc7300Mk2)
                                     : std::span<const CurvePoint>(kVd), raw);
-    case MeterId::Id:       return interpolateCurve(
-                                civAddress == 0xB6
+    case MeterId::Id:
+        if (calibration == MeterCalibration::Uncalibrated) {
+            return 0.0;
+        }
+        return interpolateCurve(
+                                desktop
                                     ? std::span<const CurvePoint>(kIdIc7300Mk2)
                                     : std::span<const CurvePoint>(kId), raw);
     // OVF is 00/01 from the radio, not a scaled reading.

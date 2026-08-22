@@ -113,6 +113,7 @@ IcomCivBackend::~IcomCivBackend() = default;
 RadioCapabilities IcomCivBackend::capabilities() const
 {
     const IcomModel& m = *m_model;
+    const IcomModelProfile& profile = profileFor(m);
     RadioCapabilities c;
     c.family = QStringLiteral("icom");
     c.manufacturer = QStringLiteral("Icom");
@@ -127,12 +128,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.txPowerMaxWatts = m.txPowerMaxWatts;
     // Official CI-V guides for both network targets define command 17 text
     // keying and 17 FF abort. Keep other model profiles dark until verified.
-    c.hasRadioSideCwKeyer = m.civAddress == 0xA4    // IC-705
-        || m.civAddress == 0xB6;                    // IC-7300MK2
+    c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
     c.cwTextKeyerName = QStringLiteral("CWK");
-    c.cwTextMinWpm = 6;
-    c.cwTextMaxWpm = 48;
-    c.cwTextMaxMessageChars = 30;
+    c.cwTextMinWpm = profile.cwTextKeyer ? profile.cwTextKeyer->minWpm : 6;
+    c.cwTextMaxWpm = profile.cwTextKeyer ? profile.cwTextKeyer->maxWpm : 48;
+    c.cwTextMaxMessageChars = profile.cwTextKeyer
+        ? profile.cwTextKeyer->maxMessageChars : 30;
     c.cwTextAllowedCharacters =
         QStringLiteral("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :");
     c.cwTextHasProgress = false;
@@ -215,7 +216,8 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // The radio HAS a GPS and the protocol will not carry its data.
     c.hasGpsLocation = false;
 
-    c.hasSupplyVoltageTelemetry = true;   // 0x15 0x15 Vd
+    c.hasSupplyVoltageTelemetry =
+        profile.meters.calibration != MeterCalibration::Uncalibrated;
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //
@@ -691,7 +693,7 @@ void IcomCivBackend::sendConnectReadBurst()
     // first thing AetherSDR wrote pushed the radio the rest of the way out of
     // DATA. 26 00 reports mode, DATA and filter together, so it also corrects
     // the 04 above if the two ever disagree.
-    if (m_model->hasVfoModeCommand)
+    if (profileFor(*m_model).supports(IcomFeature::VfoMode))
         queueStartupRead(cmdReadVfoMode(m_session->civAddress()));
 
     // ASK WHERE THE RADIO TAKES ITS MODULATION FROM, using this model's own
@@ -1160,7 +1162,8 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     s.inUse = true;
     s.active = true;
     s.txSlice = true;   // one receiver IS the transmitter
-    if (m_model && m_model->civAddress == 0xB6) {
+    if (m_model && profileFor(*m_model).rxAntenna
+        && profileFor(*m_model).rxAntenna->selectable) {
         s.rxAntennaList = QStringList{QStringLiteral("ANT1"),
                                       QStringLiteral("RX-ANT")};
         s.txAntennaList = QStringList{QStringLiteral("ANT1")};
@@ -1547,11 +1550,12 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // m_dataMode, so combining it with the new ordinary mode would expose a
         // transient false DIGU/DIGL (or false voice mode) until 26 answered.
         // Command 26 is the single authoritative publication for these models.
-        if (frame.cmd == cmd::kSetModeTrx && m_session && m_model->hasVfoModeCommand) {
+        if (frame.cmd == cmd::kSetModeTrx && m_session
+            && profileFor(*m_model).supports(IcomFeature::VfoMode)) {
             const auto read = cmdReadVfoMode(m_session->civAddress());
             queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Maintenance);
             pumpCiv(nowMs());
-        } else if (!m_model->hasVfoModeCommand) {
+        } else if (!profileFor(*m_model).supports(IcomFeature::VfoMode)) {
             // This model has no verified DATA readback. An ordinary mode frame
             // can only justify an ordinary mode claim.
             m_dataMode = false;
@@ -1991,9 +1995,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
 
         m_meters.markAnswered(spec->id, nowMs());
-        const double value = meterValue(spec->id, *raw,
-                                        s9ReferenceFor(m_frequencyHz),
-                                        m_model ? m_model->civAddress : 0xA4);
+        const double value = meterValue(
+            spec->id, *raw, s9ReferenceFor(m_frequencyHz),
+            m_model ? profileFor(*m_model).meters.calibration
+                    : MeterCalibration::Uncalibrated);
 
         if (spec->id == MeterId::Overflow) {
             m_overflow = value > 0.5;
@@ -2633,7 +2638,7 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     // DATA on the radio, so mode-then-DATA is a sequence whose correctness
     // depends on both frames landing and landing in order; 26 states all three
     // at once and the radio applies or refuses them as a unit.
-    if (m_model->hasVfoModeCommand) {
+    if (profileFor(*m_model).supports(IcomFeature::VfoMode)) {
         m_dataMode = data;
         sendUserCommand(cmdSetVfoMode(addr, *civ, data, m_filter));
     } else {
@@ -2724,7 +2729,7 @@ void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
         // read at connect, re-read after every front-panel mode change, and
         // confirmed after every mode write, so this re-asserts what the radio
         // said (Constitution II) rather than pushing a client belief over it.
-        if (m_model->hasVfoModeCommand)
+        if (profileFor(*m_model).supports(IcomFeature::VfoMode))
             sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
         else
             sendUserCommand(cmdSetMode(addr, m_mode, filter));
@@ -3013,7 +3018,8 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
 
 void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)
 {
-    if (!m_model || m_model->civAddress != 0xB6)
+    if (!m_model || !profileFor(*m_model).rxAntenna
+        || !profileFor(*m_model).rxAntenna->selectable)
         return;
     const bool external = antenna.compare(QStringLiteral("RX-ANT"),
                                           Qt::CaseInsensitive) == 0;
@@ -3413,7 +3419,8 @@ void IcomCivBackend::setCwBreakIn(bool on)
 // AND the filter slot in the same message, and both are real controls with their
 // own seam verbs. Returning the first match credited `mode` and left `filter`
 // looking unwired on a radio where they cannot be separated.
-static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
+static void forEachSpecForFrame(const IcomModelProfile& profile,
+                                std::uint8_t cmd, std::uint8_t sub, bool hasSub,
                                 const std::function<void(const icom::ControlSpec&)>& fn)
 {
     // The SET address is the row's identity, but a radio answers a read with its
@@ -3434,6 +3441,9 @@ static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
     const bool alsoModeRows = cmd == cmd::kVfoMode && hasSub && sub == vfoMode::kSelected;
 
     for (const auto& c : icom::controlSpecs()) {
+        if (!controlSupported(profile, c)) {
+            continue;
+        }
         if (c.cmd != setCmd && !(alsoModeRows && c.cmd == cmd::kSetMode))
             continue;
         if (c.hasSub && (!hasSub || c.sub != sub))
@@ -3444,7 +3454,8 @@ static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
 
 void IcomCivBackend::noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub)
 {
-    forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
+    forEachSpecForFrame(profileFor(*m_model), cmd, sub, hasSub,
+                        [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsSent.insert(id);
         // We commanded it, so the mirror holds a real value from here on.
@@ -3455,7 +3466,8 @@ void IcomCivBackend::noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool ha
 void IcomCivBackend::noteControlScheduled(std::uint8_t cmd, std::uint8_t sub,
                                           bool hasSub)
 {
-    forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
+    forEachSpecForFrame(profileFor(*m_model), cmd, sub, hasSub,
+                        [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsScheduled.insert(id);
     });
@@ -3463,7 +3475,8 @@ void IcomCivBackend::noteControlScheduled(std::uint8_t cmd, std::uint8_t sub,
 
 void IcomCivBackend::noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub)
 {
-    forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
+    forEachSpecForFrame(profileFor(*m_model), cmd, sub, hasSub,
+                        [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsSeen.insert(id);
         // The radio answered for this row, so the decode above adopted its
@@ -3495,8 +3508,10 @@ QVariantList IcomCivBackend::controlMap() const
         diag.insert(QStringLiteral("controlsSent"), m_controlsSent.size());
         out.append(diag);
     }
+    const IcomModelProfile& profile = profileFor(*m_model);
     for (const auto& c : icom::controlSpecs()) {
         const QString id = sv(c.id);
+        const FeatureEvidence* evidence = profile.evidenceFor(c.requiredFeature);
         QVariantMap m;
         m.insert(QStringLiteral("id"), id);
         m.insert(QStringLiteral("label"), sv(c.label));
@@ -3518,8 +3533,16 @@ QVariantList IcomCivBackend::controlMap() const
         m.insert(QStringLiteral("seamVerb"), sv(c.seamVerb));
         m.insert(QStringLiteral("uiTarget"), sv(c.uiTarget));
         m.insert(QStringLiteral("readAtConnect"), c.readAtConnect);
-        if (!c.note.empty())
+        m.insert(QStringLiteral("supported"), controlSupported(profile, c));
+        m.insert(QStringLiteral("profileFeature"), sv(featureName(c.requiredFeature)));
+        m.insert(QStringLiteral("profileEvidence"),
+                 sv(evidenceName(evidence ? evidence->evidence : EvidenceKind::None)));
+        if (evidence && !evidence->source.empty()) {
+            m.insert(QStringLiteral("profileSource"), sv(evidence->source));
+        }
+        if (!c.note.empty()) {
             m.insert(QStringLiteral("note"), sv(c.note));
+        }
 
         // OBSERVED, next to declared. The table says what the code intends; these
         // two say what this session has actually put on the wire and taken off
@@ -3531,16 +3554,60 @@ QVariantList IcomCivBackend::controlMap() const
         // The gap, named. Anything other than an empty string here is a finding
         // rather than a description, which is what lets a caller sort by it.
         QString gap;
-        if (c.wiring == icom::Wiring::Declared)
+        if (!controlSupported(profile, c)) {
+            gap = QStringLiteral("unsupported by the active model profile");
+        } else if (c.wiring == icom::Wiring::Declared) {
             gap = QStringLiteral("no code path at all — the constant exists and nothing uses it");
-        else if (c.wiring == icom::Wiring::DecodeOnly && c.seamVerb.empty())
+        } else if (c.wiring == icom::Wiring::DecodeOnly && c.seamVerb.empty()) {
             gap = QStringLiteral("readable but not settable — no seam verb reaches this register");
-        else if (c.wiring == icom::Wiring::SendOnly)
+        } else if (c.wiring == icom::Wiring::SendOnly) {
             gap = QStringLiteral("settable but never read back — the control opens at our default, not the radio's");
-        else if (!c.uiTarget.empty() && c.wiring == icom::Wiring::DecodeOnly)
+        } else if (!c.uiTarget.empty() && c.wiring == icom::Wiring::DecodeOnly) {
             gap = QStringLiteral("the UI control exists and reaches no register");
+        }
         m.insert(QStringLiteral("gap"), gap);
         out.append(m);
+    }
+    return out;
+}
+
+QVariantMap IcomCivBackend::profileMap() const
+{
+    const auto sv = [](std::string_view v) {
+        return QString::fromUtf8(v.data(), static_cast<int>(v.size()));
+    };
+    const IcomModelProfile& profile = profileFor(*m_model);
+    QVariantMap out;
+    out.insert(QStringLiteral("model"), sv(m_model->name));
+    out.insert(QStringLiteral("civAddress"),
+               QStringLiteral("0x%1").arg(m_model->civAddress, 2, 16, QLatin1Char('0')));
+    out.insert(QStringLiteral("supportedBringup"), profile.supportedBringup);
+    out.insert(QStringLiteral("guideRevision"), sv(profile.guideRevision));
+    out.insert(QStringLiteral("voxDelaySetItem"), profile.setMenu.voxDelayItem);
+    out.insert(QStringLiteral("civTransceiveSetItem"), profile.setMenu.civTransceiveItem);
+    QVariantList features;
+    for (const FeatureEvidence& feature : profile.features) {
+        QVariantMap row;
+        row.insert(QStringLiteral("feature"), sv(featureName(feature.feature)));
+        row.insert(QStringLiteral("supported"), feature.evidence != EvidenceKind::None);
+        row.insert(QStringLiteral("evidence"), sv(evidenceName(feature.evidence)));
+        row.insert(QStringLiteral("source"), sv(feature.source));
+        features.append(row);
+    }
+    out.insert(QStringLiteral("features"), features);
+    if (profile.fmRepeater) {
+        QVariantMap fm;
+        fm.insert(QStringLiteral("dialect"),
+                  profile.fmRepeater->dialect == FmRepeaterDialect::Extended
+                      ? QStringLiteral("extended") : QStringLiteral("basic"));
+        fm.insert(QStringLiteral("duplex"), profile.fmRepeater->hasDuplex);
+        fm.insert(QStringLiteral("txCtcss"), profile.fmRepeater->hasTxCtcss);
+        fm.insert(QStringLiteral("rxCtcss"), profile.fmRepeater->hasRxCtcss);
+        fm.insert(QStringLiteral("dtcs"), profile.fmRepeater->hasDtcs);
+        fm.insert(QStringLiteral("xfc"), profile.fmRepeater->hasXfc);
+        fm.insert(QStringLiteral("txFrequencyReadback"),
+                  profile.fmRepeater->hasTxFrequencyReadback);
+        out.insert(QStringLiteral("fmRepeater"), fm);
     }
     return out;
 }
@@ -3561,15 +3628,33 @@ QVariantList IcomCivBackend::meterMap() const
         return QString::fromUtf8(v.data(), static_cast<int>(v.size()));
     };
     const qint64 now = nowMs();
+    const IcomModelProfile& profile = profileFor(*m_model);
 
     QVariantList out;
     for (const auto& m : meterSpecs()) {
+        if ((m.id == MeterId::Vd || m.id == MeterId::Id)
+            && profile.meters.calibration == MeterCalibration::Uncalibrated) {
+            continue;
+        }
         QVariantMap r;
         r.insert(QStringLiteral("id"), QStringLiteral("%1:%2").arg(sv(m.source), sv(m.name)));
         r.insert(QStringLiteral("civ"),
                  QStringLiteral("15 %1").arg(m.sub, 2, 16, QLatin1Char('0')));
-        r.insert(QStringLiteral("unit"), sv(m.unit));
-        r.insert(QStringLiteral("range"), QStringLiteral("%1..%2").arg(m.low).arg(m.high));
+        QString unit = sv(m.unit);
+        double high = m.high;
+        if (m.id == MeterId::Power) {
+            const std::span<const CurvePoint> curve = profile.meters.powerCurve;
+            if (curve.empty()) {
+                unit = QStringLiteral("Percent");
+                high = 100.0;
+            } else {
+                high = curve.back().value;
+            }
+        } else if (m.id == MeterId::Id) {
+            high = profile.meters.currentFullScaleAmps;
+        }
+        r.insert(QStringLiteral("unit"), unit);
+        r.insert(QStringLiteral("range"), QStringLiteral("%1..%2").arg(m.low).arg(high));
         r.insert(QStringLiteral("pollMs"), m.intervalMs);
         r.insert(QStringLiteral("when"),
                  m.when == MeterWhen::RxOnly   ? QStringLiteral("rx-only")
@@ -3615,6 +3700,9 @@ QVariantMap IcomCivBackend::controlScrub(const QString& filter)
     QVariantList rows;
     int checked = 0, reached = 0, skipped = 0;
     for (const auto& c : icom::controlSpecs()) {
+        if (!controlSupported(profileFor(*m_model), c)) {
+            continue;
+        }
         const QString id = sv(c.id);
         if (kNeverScrub.contains(id))
             continue;
@@ -3843,7 +3931,8 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     }
     // No verified 0x26 means there is no frame that can carry data.mode. Report
     // NOT-TESTED, not MISSING after driving an unrelated bare 0x06 mode write.
-    if (id == QLatin1String("data.mode") && !m_model->hasVfoModeCommand)
+    if (id == QLatin1String("data.mode")
+        && !profileFor(*m_model).supports(IcomFeature::VfoMode))
         return false;
     if (id == QLatin1String("mode") || id == QLatin1String("filter")
         || id == QLatin1String("data.mode")) {
@@ -4102,6 +4191,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, controlMap());
         return;
     }
+    if (verb == QLatin1String("profile.show")) {
+        emit extensionResult(requestId, profileMap());
+        return;
+    }
     if (verb == QLatin1String("controls.meters")) {
         emit extensionResult(requestId, meterMap());
         return;
@@ -4217,6 +4310,11 @@ void IcomCivBackend::publishMeterDefs()
 {
     int index = 0;
     for (const MeterSpec& s : meterSpecs()) {
+        if ((s.id == MeterId::Vd || s.id == MeterId::Id)
+            && profileFor(*m_model).meters.calibration
+                == MeterCalibration::Uncalibrated) {
+            continue;
+        }
         MeterDef d;
         d.index = index++;
         d.source = QString::fromUtf8(s.source.data(), static_cast<int>(s.source.size()));
@@ -4234,8 +4332,8 @@ void IcomCivBackend::publishMeterDefs()
             } else {
                 d.high = curve.back().value;
             }
-        } else if (s.id == MeterId::Id && m_model->civAddress == 0xB6) {
-            d.high = 25.0;
+        } else if (s.id == MeterId::Id) {
+            d.high = profileFor(*m_model).meters.currentFullScaleAmps;
         }
         emit meterDefined(d);
     }
@@ -4342,8 +4440,8 @@ void IcomCivBackend::onLinkTick()
 
     if (phase % 2 == 0) {
         queueControl(cmdReadFrequency(addr));
-        queueControl(m_model->hasVfoModeCommand ? cmdReadVfoMode(addr)
-                                                : cmdReadMode(addr));
+        queueControl(profileFor(*m_model).supports(IcomFeature::VfoMode)
+                         ? cmdReadVfoMode(addr) : cmdReadMode(addr));
         for (std::uint8_t fn : {func::kMonitorFn, func::kVox}) {
             queueControl(cmdReadFunction(addr, fn));
         }

@@ -438,6 +438,7 @@ add_executable(icom_meters_test
     tests/icom_meters_test.cpp
     src/core/backends/icom/IcomMeters.cpp
     src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/IcomControls.cpp
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)

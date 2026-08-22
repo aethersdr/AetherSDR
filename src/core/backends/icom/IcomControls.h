@@ -4,6 +4,8 @@
 #include <span>
 #include <string_view>
 
+#include "core/backends/icom/IcomModels.h"
+
 // THE CONTROL REGISTRY — every CI-V message this backend knows about, declared
 // once, in a form something other than a human can read.
 //
@@ -109,9 +111,16 @@ struct ControlSpec {
     // than its fields — the mode-dependent filter ladder, the attenuator's
     // band limits — this is where that lives, so the report explains itself.
     std::string_view note;
+
+    // The model-profile attestation required before this row is effective.
+    // Core is still explicit: an unprofiled model gets an honest unsupported
+    // registry rather than inheriting every generic-looking CI-V command.
+    IcomFeature requiredFeature = IcomFeature::Core;
 };
 
 [[nodiscard]] std::span<const ControlSpec> controlSpecs();
+[[nodiscard]] bool controlSupported(const IcomModelProfile& profile,
+                                    const ControlSpec& spec) noexcept;
 
 [[nodiscard]] std::string_view encodingName(Encoding e);
 [[nodiscard]] std::string_view planeName(Plane p);

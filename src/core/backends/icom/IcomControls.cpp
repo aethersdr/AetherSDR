@@ -47,7 +47,7 @@ constexpr std::array kSpecs = {
                 "behind. Written on every mode and filter change, confirmed by a "
                 "read, and adopted from the radio at connect and after every "
                 "front-panel mode change. Unselected VFO (26 01) is split, which "
-                "this backend does not yet model."},
+                "this backend does not yet model.", IcomFeature::VfoMode},
     ControlSpec{"filter", 0x06, 0, false, "IF filter slot",
                 Plane::Slice, Encoding::ModeFilter, Wiring::Both,
                 1, 3, "slot", 1, 3,
@@ -254,7 +254,8 @@ constexpr std::array kSpecs = {
                 "IC-7300MK2-specific: 00 uses ANT1 for receive; 01 selects the "
                 "RX-ANT input. Live B6 firmware returns bare FB to the official "
                 "read form. The operator command is therefore optimistic for "
-                "this session only; reconnect does not invent or replay state."},
+                "this session only; reconnect does not invent or replay state.",
+                IcomFeature::RxAntenna},
 
     // ---- Control (0x1C) --------------------------------------------------
     ControlSpec{"ptt", 0x1C, 0x00, true, "PTT",
@@ -275,7 +276,8 @@ constexpr std::array kSpecs = {
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
                 Plane::Radio, Encoding::OnOff, Wiring::Declared,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "STUB: declared, never used."},
+                "", "", false, "STUB: declared, never used.",
+                IcomFeature::TxFrequencyCheck},
 
     // ---- RIT / XIT (0x21) ------------------------------------------------
     ControlSpec{"rit.offset", 0x21, 0x00, true, "RIT / XIT offset",
@@ -302,13 +304,14 @@ constexpr std::array kSpecs = {
                 "invokeExtension icom/audio.pc", "pcAudioBtn", true,
                 "MODEL-SPECIFIC: item 0118 and WLAN=03 on IC-705; item 0084 "
                 "and LAN=05 on IC-7300MK2. PC Audio writes only this voice-mode "
-                "selection and confirms it by readback."},
+                "selection and confirms it by readback.", IcomFeature::ModulationInput},
     ControlSpec{"mod.input.data", 0x1A, 0x05, true, "DATA MOD input",
                 Plane::Radio, Encoding::Bcd4, Wiring::DecodeOnly,
                 0, 5, "enum", 0, 5,
                 "", "", true,
                 "MODEL-SPECIFIC: item 0119 on IC-705 and 0085 on IC-7300MK2. "
-                "Radio-authoritative and deliberately never written by PC Audio."},
+                "Radio-authoritative and deliberately never written by PC Audio.",
+                IcomFeature::ModulationInput},
 
     // ---- Scope (0x27) ----------------------------------------------------
     ControlSpec{"scope.onoff", 0x27, 0x10, true, "Scope on/off",
@@ -317,30 +320,32 @@ constexpr std::array kSpecs = {
                 "", "", false,
                 "Pushed at connect. BOTH this and scope.output are needed — "
                 "enabling only this turns the scope on the radio's own screen and "
-                "sends us nothing, the number-one black-panadapter cause."},
+                "sends us nothing, the number-one black-panadapter cause.",
+                IcomFeature::Scope},
     ControlSpec{"scope.output", 0x27, 0x11, true, "Scope data output",
                 Plane::Pan, Encoding::OnOff, Wiring::SendOnly,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "Pushed at connect; see scope.onoff."},
+                "", "", false, "Pushed at connect; see scope.onoff.", IcomFeature::Scope},
     ControlSpec{"scope.span", 0x27, 0x15, true, "Scope span",
                 Plane::Pan, Encoding::Bcd4, Wiring::Both,
                 2500, 500000, "Hz", 5000, 1000000,
                 "setPanBandwidth", "", false,
                 "A HALF-width on the wire and a TOTAL width at the seam. Snaps to "
                 "one of eight values; a zoom request that resolves to the current "
-                "span moves one detent in the requested direction instead."},
+                "span moves one detent in the requested direction instead.", IcomFeature::Scope},
     ControlSpec{"scope.reference", 0x27, 0x19, true, "Scope reference level",
                 Plane::Pan, Encoding::Bcd4, Wiring::SendOnly,
                 -20, 20, "dB", -20, 20,
                 "invokeExtension icom/scope.reference", "", false,
-                "Signed magnitude with a separate sign byte. Extension-only; no UI."},
+                "Signed magnitude with a separate sign byte. Extension-only; no UI.",
+                IcomFeature::Scope},
     ControlSpec{"scope.fixededge", 0x27, 0x1E, true, "Scope fixed edges",
                 Plane::Pan, Encoding::Bcd4, Wiring::Declared,
                 1, 3, "preset", 1, 3,
                 "", "", false,
                 "STUB, and deliberately: FIXED mode's edges are three saved presets "
                 "per band, so following a pan drag would overwrite the operator's "
-                "own stored scope edges thirty times a second."},
+                "own stored scope edges thirty times a second.", IcomFeature::Scope},
 
     // ---- Transmit passband ------------------------------------------------
     ControlSpec{"tx.bandwidth.slot", 0x16, 0x58, true, "SSB TX bandwidth slot",
@@ -353,7 +358,7 @@ constexpr std::array kSpecs = {
                 "DECODE-ONLY deliberately — AetherSDR's seam carries Hz, not a preset "
                 "name, so a write here would be a control with no operator intent "
                 "behind it. Read at connect and used to route the edge read/write to "
-                "the slot actually in circuit."},
+                "the slot actually in circuit.", IcomFeature::TxBandwidth},
     ControlSpec{"tx.bandwidth.edges", 0x1A, 0x05, true, "SSB TX passband edges",
                 Plane::Transmit, Encoding::Enum, Wiring::Both,
                 0, 0x53, "Hz", 100, 2900,
@@ -369,7 +374,8 @@ constexpr std::array kSpecs = {
                 "in the 16 58 note, which collides with the SSB TX Tone levels — the "
                 "0019-0022 run is the consistent reading and the read-back is what "
                 "settles it. A model with no profile gets NO write and an empty "
-                "txFilterLowEdgesHz, so the UI and the backend decline together."},
+                "txFilterLowEdgesHz, so the UI and the backend decline together.",
+                IcomFeature::TxBandwidth},
 
     // ---- Identity / power ------------------------------------------------
     ControlSpec{"id", 0x19, 0x00, true, "Transceiver ID",
@@ -391,6 +397,11 @@ constexpr std::array kSpecs = {
 }  // namespace
 
 std::span<const ControlSpec> controlSpecs() { return kSpecs; }
+
+bool controlSupported(const IcomModelProfile& profile, const ControlSpec& spec) noexcept
+{
+    return profile.supports(spec.requiredFeature);
+}
 
 std::string_view encodingName(Encoding e)
 {

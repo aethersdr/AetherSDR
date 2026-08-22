@@ -313,6 +313,30 @@ int main(int argc, char** argv)
     check(caps.hasRadioSideDsp, "NR/NB/notch run in the radio's firmware");
     check(caps.hasRadioSideCwKeyer && caps.cwTextKeyerName == QLatin1String("CWK"),
           "CWK capability follows the resolved CI-V model, not its display string");
+
+    // RFC #4984's profile diagnostic is the hand-off contract for subsequent
+    // model bring-ups. Pin the serialized form here, not only the C++ table, so
+    // PRs #5140/#5149 can consume it without reintroducing address branches.
+    {
+        QSignalSpy profileSpy(&backend, &IRadioBackend::extensionResult);
+        backend.invokeExtension(QStringLiteral("icom"), QStringLiteral("profile.show"),
+                                9001, {});
+        check(profileSpy.count() == 1, "profile.show answers synchronously");
+        if (profileSpy.count() == 1) {
+            const QVariantMap profile = profileSpy.at(0).at(1).toMap();
+            check(profile.value(QStringLiteral("model")).toString()
+                      == QLatin1String("IC-705"),
+                  "profile.show names the active model");
+            check(profile.value(QStringLiteral("supportedBringup")).toBool(),
+                  "the active IC-705 profile is an intentional bring-up target");
+            const QVariantMap fm = profile.value(QStringLiteral("fmRepeater")).toMap();
+            check(fm.value(QStringLiteral("dialect")).toString()
+                      == QLatin1String("extended")
+                      && fm.value(QStringLiteral("dtcs")).toBool()
+                      && fm.value(QStringLiteral("xfc")).toBool(),
+                  "profile.show carries the IC-705 repeater dialect, DTCS and XFC");
+        }
+    }
     check(caps.cwTextMinWpm == 6 && caps.cwTextMaxWpm == 48
               && caps.cwTextMaxMessageChars == 30
               && !caps.cwTextHasProgress && !caps.cwTextHasStoredMacros,

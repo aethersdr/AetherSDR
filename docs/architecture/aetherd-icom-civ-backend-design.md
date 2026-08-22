@@ -1,5 +1,9 @@
 # Icom CI-V Backend — Design Note
 
+Model-specific command capability and evidence are defined in
+[`icom-capability-profiles.md`](icom-capability-profiles.md), implementing the
+profile foundation from RFC issue #4984 without widening `IRadioBackend`.
+
 Bring-up plan for `IcomCivBackend`, an `IRadioBackend` implementor for Icom
 networked radios. First targets: **IC-705 over WiFi** and **IC-7300MK2 over
 Ethernet**.

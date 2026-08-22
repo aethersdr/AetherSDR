@@ -133,6 +133,7 @@ public:
     // NEITHER KEYS THE TRANSMITTER. The scrub deliberately excludes ptt, tuner
     // and power: two of them transmit and the third cannot be undone over WiFi.
     [[nodiscard]] QVariantList controlMap() const;
+    [[nodiscard]] QVariantMap profileMap() const;
     [[nodiscard]] QVariantList meterMap() const;
     [[nodiscard]] QVariantMap controlScrub(const QString& filter);
     // Returns false when the row cannot be re-asserted safely — the scrub's
