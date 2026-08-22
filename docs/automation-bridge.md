@@ -2272,10 +2272,11 @@ tally, while `resync`/`refresh` send the `sub pan all` subscription command to
 the radio.
 
 ### `devices`
-Read-only external-device diagnostics. `devices list` reports the available
-diagnostic names; `devices ulanzi` probes the exact macOS HID match used by the
-Ulanzi backend and joins that inventory with the backend's exclusive-claim
-state. It never enumerates or returns unrelated HID devices.
+External-device diagnostics and bounded lifecycle control. `devices list`
+reports the available diagnostic names; `devices ulanzi` probes the exact
+macOS HID match used by the Ulanzi backend and joins that inventory with the
+backend's access and system-event suppression state. It never returns unrelated
+HID devices.
 
 ```json
 → {"cmd":"devices","action":"ulanzi"}
@@ -2287,25 +2288,34 @@ state. It never enumerates or returns unrelated HID devices.
    "matchedDevices":[{"product":"Ulanzi Dial","vendorId":65521,
                       "productId":130,"primaryUsagePage":1,
                       "primaryUsage":6,"expected":true}],
-   "inventoryAvailable":true,
-   "openAttempted":true,"lastOpenResult":0,"lastOpenStatus":"success",
-   "exclusiveClaimActive":true,"connected":true,"deviceName":"Ulanzi Dial"}
+   "inventoryAvailable":true,"accessMode":"shared",
+   "exclusiveOpenStatus":"notPrivileged","sharedOpenStatus":"success",
+   "systemEventsSuppressed":true,"suppressionStatus":"active",
+   "previousMappingPreserved":true,"eventSystemClientRetained":true,
+   "connected":true,"deviceName":"Ulanzi Dial"}
 ```
 
 `matchedCount` is the number of devices currently inside the production match
 dictionary. `unexpectedMatchCount` must be zero before treating an exclusive
 claim as safely scoped; the Apple trackpad regression in #5126 produced
 unexpected matches here. `inventoryAvailable` describes the temporary
-read-only inventory query, while `lastOpen*` and `exclusiveClaimActive`
-describe the real backend's seize attempt. The inventory query does not open or
-claim any device.
-A denied Input Monitoring permission therefore reads as a populated inventory
-plus `lastOpenStatus:"notPrivileged"` and `exclusiveClaimActive:false`, rather
-than being confused with a bad match.
+read-only inventory query, while `exclusiveOpen*`, `sharedOpen*`, and
+`accessMode` describe the real backend's access attempts. If macOS rejects an
+exclusive claim for the Bluetooth keyboard-class dial, the backend opens only
+the exact matched device in shared mode and applies a device-scoped system key
+mapping. `systemEventsSuppressed` and `suppressionStatus` report that state;
+`previousMappingPreserved` and `eventSystemClientRetained` are the restoration
+ownership guards.
 
-The verb is available in **Observe only** mode and never keys the transmitter.
-On non-macOS platforms it returns `supported:false` because those backends do
-not use the affected IOKit claim path.
+`devices ulanzi-stop` restores the prior mapping and closes the backend;
+`devices ulanzi-start` starts it again. These lifecycle actions are blocked in
+Observe only mode. A successful stop reports `restorationStatus:"success"`,
+`systemEventsSuppressed:false`, and `eventSystemClientRetained:false`.
+
+The read-only diagnostic is available in **Observe only** mode; none of these
+actions keys the transmitter. On non-macOS platforms it returns
+`supported:false` because those backends do not use the affected IOKit claim
+path.
 
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak
@@ -3622,7 +3632,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
-| `devices` | — | devices <list\|ulanzi> — read-only external-device diagnostics |
+| `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |

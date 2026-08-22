@@ -2554,7 +2554,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         return tciServer()->routingSnapshot();
     });
     m_automation->setDeviceDiagnosticsHandler([this](const QString& diagnostic) {
-        if (diagnostic != QLatin1String("ulanzi")) {
+        if (diagnostic != QLatin1String("ulanzi")
+            && diagnostic != QLatin1String("ulanzi-start")
+            && diagnostic != QLatin1String("ulanzi-stop")) {
             return QJsonObject{
                 {QStringLiteral("ok"), false},
                 {QStringLiteral("error"), QStringLiteral("unknown device diagnostic")},
@@ -2567,7 +2569,13 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                 {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable")},
             };
         }
+        if (diagnostic == QLatin1String("ulanzi-start")) {
+            m_dialBackend->start();
+        } else if (diagnostic == QLatin1String("ulanzi-stop")) {
+            m_dialBackend->stop();
+        }
         QJsonObject snapshot = m_dialBackend->diagnostics();
+        snapshot[QStringLiteral("operation")] = diagnostic;
         snapshot[QStringLiteral("enabled")] =
             AppSettings::instance()
                     .value(QStringLiteral("UlanziDialEnabled"),

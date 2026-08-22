@@ -17,7 +17,9 @@ namespace AetherSDR {
 // is the documented exclusive-claim mechanism on Darwin.  When seized,
 // the dial's input is delivered only to AetherSDR — the OS keyboard
 // stack stops receiving it — so the dial's media keys don't leak to the
-// focused window.
+// focused window. If macOS specifically denies the exclusive claim, the
+// manager reopens the same matched device in shared mode and temporarily
+// suppresses that service's system key mapping instead.
 class UlanziDialMacOSManager : public QObject {
     Q_OBJECT
 public:
@@ -37,6 +39,12 @@ signals:
     void connectionChanged(bool connected, const QString& name);
 
 private:
+    enum class AccessMode {
+        None,
+        Exclusive,
+        Shared,
+    };
+
     // Wired from the IOKit C callback shims.  Each call is one usage
     // transition (page + usage + value).
     void onHidValue(int usagePage, int usage, int value);
@@ -45,12 +53,27 @@ private:
 
     // Chord assembly state — same logic as the other two backends.
     void emitKeyTransition(int linuxKey, int value);
+    QString accessModeName() const;
+    void applySystemEventSuppression();
+    void restoreSystemEventSuppression();
+    void discardSystemEventSuppression();
 
     void* m_manager{nullptr};   // IOHIDManagerRef
+    void* m_eventSystemClient{nullptr}; // IOHIDEventSystemClientRef
+    void* m_suppressedService{nullptr}; // IOHIDServiceClientRef
+    void* m_previousUserKeyMapping{nullptr}; // CFTypeRef
     QString m_deviceName;
     bool m_anyOpen{false};
+    AccessMode m_accessMode{AccessMode::None};
     bool m_openAttempted{false};
     qint32 m_lastOpenResult{0};
+    qint32 m_exclusiveOpenResult{0};
+    bool m_sharedOpenAttempted{false};
+    qint32 m_sharedOpenResult{0};
+    bool m_systemEventsSuppressed{false};
+    bool m_previousMappingPreserved{false};
+    QString m_suppressionStatus{QStringLiteral("notNeeded")};
+    QString m_restorationStatus{QStringLiteral("notNeeded")};
 
     // Chord assembly and signature formatting are shared with the Linux and
     // Windows backends (ulanzi_chord_decoder_test covers all three).

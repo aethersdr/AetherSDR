@@ -3240,7 +3240,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("devices", {},
-            "devices <list|ulanzi> — read-only external-device diagnostics",
+            "devices <list|ulanzi|ulanzi-start|ulanzi-stop> — external-device diagnostics and lifecycle control",
             parseActionOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doDeviceDiagnostics(a.action);
@@ -11263,11 +11263,17 @@ QJsonObject AutomationServer::doDeviceDiagnostics(const QString& action) const
              static_cast<bool>(m_deviceDiagnosticsHandler)},
         };
     }
-    if (normalized != QLatin1String("ulanzi")) {
-        return err(QStringLiteral("devices requires list|ulanzi"));
+    const bool lifecycle = normalized == QLatin1String("ulanzi-start")
+        || normalized == QLatin1String("ulanzi-stop");
+    if (normalized != QLatin1String("ulanzi") && !lifecycle) {
+        return err(QStringLiteral(
+            "devices requires list|ulanzi|ulanzi-start|ulanzi-stop"));
     }
     if (!m_deviceDiagnosticsHandler) {
         return err(QStringLiteral("Ulanzi device diagnostics unavailable"));
+    }
+    if (lifecycle && m_readOnly) {
+        return err(QStringLiteral("device lifecycle control is unavailable in read-only mode"));
     }
     return m_deviceDiagnosticsHandler(normalized);
 }

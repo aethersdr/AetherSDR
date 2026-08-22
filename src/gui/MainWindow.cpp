@@ -3691,6 +3691,15 @@ void MainWindow::changeEvent(QEvent* event)
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     ShutdownTrace closeEventTrace("main_window.close_event");
+#ifdef Q_OS_MAC
+    // Shared Ulanzi access temporarily remaps only the dial's system key
+    // events. Restore that mapping while the macOS HID event system and Qt
+    // event loop are still live; ~MainWindow runs only after app.exec().
+    if (m_dialBackend) {
+        ShutdownTrace trace("controllers.dial.stop");
+        m_dialBackend->stop();
+    }
+#endif
     // Release the TGXL/PGXL native control sockets explicitly so the radio
     // can resume polling them on behalf of other clients (e.g. Maestro).
     // The radio-disconnect handler does this via a queued connection on
