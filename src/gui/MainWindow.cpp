@@ -3285,6 +3285,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
             s.value("UlanziDialEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
                                       Qt::QueuedConnection);
+        } else if (m_dialBackend) {
+            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
+                                      Qt::QueuedConnection);
         }
 #ifdef HAVE_HIDAPI
         if (m_hidEncoder &&

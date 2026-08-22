@@ -12,7 +12,7 @@ namespace AetherSDR {
 // macOS backend for the Ulanzi Dial using IOKit HID Manager.  Mirrors
 // the Linux evdev / Windows hidapi backends' Qt signal contract.
 //
-// Key advantage over Windows: IOHIDDeviceOpen with kIOHIDOptionsTypeSeizeDevice
+// Key advantage over Windows: IOHIDManagerOpen with kIOHIDOptionsTypeSeizeDevice
 // is the documented exclusive-claim mechanism on Darwin.  When seized,
 // the dial's input is delivered only to AetherSDR — the OS keyboard
 // stack stops receiving it — so the dial's media keys don't leak to the

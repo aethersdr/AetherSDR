@@ -43,16 +43,23 @@ int hidKbdToLinuxKey(int usage)
     }
 }
 
-// Build a matching dictionary so IOHIDManager only surfaces our dial,
-// not every keyboard on the machine.  Match by product-name substring
-// "Ulanzi Dial".
+// Build a matching dictionary so IOHIDManager only surfaces the Ulanzi Dial,
+// not unrelated Apple HID devices. Product-only matching was not sufficiently
+// specific for an exclusive claim on macOS 26 (#5126), so use the dial's
+// observed numeric vendor and product identifiers.
 CFMutableDictionaryRef makeMatchDict()
 {
     CFMutableDictionaryRef d = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    CFStringRef product = CFSTR("Ulanzi Dial");
-    CFDictionarySetValue(d, CFSTR(kIOHIDProductKey), product);
+    constexpr int kVendorId = 0xFFF1;
+    constexpr int kProductId = 0x0082;
+    CFNumberRef vendor = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kVendorId);
+    CFNumberRef product = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kProductId);
+    CFDictionarySetValue(d, CFSTR(kIOHIDVendorIDKey), vendor);
+    CFDictionarySetValue(d, CFSTR(kIOHIDProductIDKey), product);
+    CFRelease(vendor);
+    CFRelease(product);
     return d;
 }
 
@@ -68,7 +75,10 @@ void UlanziDialMacOSManager::start()
     if (m_manager) return;
     IOHIDManagerRef mgr = IOHIDManagerCreate(kCFAllocatorDefault,
                                              kIOHIDOptionsTypeNone);
-    m_manager = mgr;
+    if (!mgr) {
+        qCWarning(lcDevices) << "UlanziDialMacOSManager: failed to create HID manager";
+        return;
+    }
 
     CFMutableDictionaryRef match = makeMatchDict();
     IOHIDManagerSetDeviceMatching(mgr, match);
@@ -83,9 +93,18 @@ void UlanziDialMacOSManager::start()
 
     IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
 
-    // Open with seize-device so the dial's events stop reaching the
+    // Seize only the numerically matched dial so its events stop reaching the
     // OS keyboard stack — the macOS equivalent of Linux EVIOCGRAB.
-    IOHIDManagerOpen(mgr, kIOHIDOptionsTypeSeizeDevice);
+    const IOReturn result = IOHIDManagerOpen(mgr, kIOHIDOptionsTypeSeizeDevice);
+    if (result != kIOReturnSuccess) {
+        qCWarning(lcDevices)
+            << "UlanziDialMacOSManager: failed to open HID manager" << result;
+        IOHIDManagerClose(mgr, kIOHIDOptionsTypeNone);
+        IOHIDManagerUnscheduleFromRunLoop(mgr, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+        CFRelease(mgr);
+        return;
+    }
+    m_manager = mgr;
 }
 
 void UlanziDialMacOSManager::stop()
