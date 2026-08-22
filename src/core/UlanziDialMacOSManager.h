@@ -4,6 +4,7 @@
 
 #include "core/UlanziChordDecoder.h"
 
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 
@@ -28,6 +29,7 @@ public:
 
     bool isConnected() const { return m_anyOpen; }
     QString deviceName() const { return m_deviceName; }
+    QJsonObject diagnostics() const;
 
 signals:
     void tuneSteps(int steps);
@@ -47,6 +49,8 @@ private:
     void* m_manager{nullptr};   // IOHIDManagerRef
     QString m_deviceName;
     bool m_anyOpen{false};
+    bool m_openAttempted{false};
+    qint32 m_lastOpenResult{0};
 
     // Chord assembly and signature formatting are shared with the Linux and
     // Windows backends (ulanzi_chord_decoder_test covers all three).

@@ -332,6 +332,11 @@ public:
     {
         m_tciRouteSnapshotHandler = std::move(handler);
     }
+    void setDeviceDiagnosticsHandler(
+        std::function<QJsonObject(const QString&)> handler)
+    {
+        m_deviceDiagnosticsHandler = std::move(handler);
+    }
 
     // Shared-secret auth (#3646). When set to a non-empty token, every verb
     // except `ping` must carry a matching `token` field or it's rejected —
@@ -392,6 +397,7 @@ private:
     static QString verbNamesJoined();
 
     QJsonObject doDumpTree() const;
+    QJsonObject doDeviceDiagnostics(const QString& action) const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
     // grab pan <index> [path]: capture the raw SpectrumWidget framebuffer for a
@@ -763,6 +769,7 @@ private:
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;
     std::function<QJsonObject()> m_tciRouteSnapshotHandler;
+    std::function<QJsonObject(const QString&)> m_deviceDiagnosticsHandler;
     QJsonObject m_lastWaveformCommand;
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station

@@ -2559,7 +2559,7 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
         QStringLiteral("grab"),     QStringLiteral("get"),
         QStringLiteral("floors"),   QStringLiteral("hitTest"),
         // Reads backend telemetry; keys nothing and sets nothing.
-        QStringLiteral("health"),
+        QStringLiteral("health"),   QStringLiteral("devices"),
     };
     if (kSafe.contains(name)) {
         return true;
@@ -3237,6 +3237,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doStreams(a.action);
+            });
+
+        add("devices", {},
+            "devices <list|ulanzi> — read-only external-device diagnostics",
+            parseActionOnly,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doDeviceDiagnostics(a.action);
             });
 
         add("modem", {"aethermodem"},
@@ -11242,6 +11249,27 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("readOnly"), m_readOnly},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };
+}
+
+QJsonObject AutomationServer::doDeviceDiagnostics(const QString& action) const
+{
+    const QString normalized = action.trimmed().toLower();
+    if (normalized.isEmpty() || normalized == QLatin1String("list")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("diagnostics"),
+             QJsonArray{QStringLiteral("ulanzi")}},
+            {QStringLiteral("providerAvailable"),
+             static_cast<bool>(m_deviceDiagnosticsHandler)},
+        };
+    }
+    if (normalized != QLatin1String("ulanzi")) {
+        return err(QStringLiteral("devices requires list|ulanzi"));
+    }
+    if (!m_deviceDiagnosticsHandler) {
+        return err(QStringLiteral("Ulanzi device diagnostics unavailable"));
+    }
+    return m_deviceDiagnosticsHandler(normalized);
 }
 
 // ---------------------------------------------------------------------------

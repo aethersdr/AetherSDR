@@ -6,6 +6,7 @@
 #include "core/UlanziChordDecoder.h"
 
 #include <QDebug>
+#include <QJsonArray>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDManager.h>
@@ -13,9 +14,14 @@
 #include <IOKit/hid/IOHIDValue.h>
 #include <IOKit/hid/IOHIDElement.h>
 
+#include <vector>
+
 namespace AetherSDR {
 
 namespace {
+
+constexpr int kUlanziVendorId = 0xFFF1;
+constexpr int kUlanziProductId = 0x0082;
 
 int hidConsumerToLinuxKey(int usage)
 {
@@ -52,15 +58,60 @@ CFMutableDictionaryRef makeMatchDict()
     CFMutableDictionaryRef d = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    constexpr int kVendorId = 0xFFF1;
-    constexpr int kProductId = 0x0082;
-    CFNumberRef vendor = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kVendorId);
-    CFNumberRef product = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kProductId);
+    CFNumberRef vendor =
+        CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kUlanziVendorId);
+    CFNumberRef product =
+        CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &kUlanziProductId);
     CFDictionarySetValue(d, CFSTR(kIOHIDVendorIDKey), vendor);
     CFDictionarySetValue(d, CFSTR(kIOHIDProductIDKey), product);
     CFRelease(vendor);
     CFRelease(product);
     return d;
+}
+
+qint64 deviceNumber(IOHIDDeviceRef device, CFStringRef key)
+{
+    CFTypeRef property = IOHIDDeviceGetProperty(device, key);
+    if (!property || CFGetTypeID(property) != CFNumberGetTypeID()) {
+        return -1;
+    }
+    qint64 value = -1;
+    CFNumberGetValue(static_cast<CFNumberRef>(property), kCFNumberSInt64Type, &value);
+    return value;
+}
+
+QString deviceString(IOHIDDeviceRef device, CFStringRef key)
+{
+    CFTypeRef property = IOHIDDeviceGetProperty(device, key);
+    if (!property || CFGetTypeID(property) != CFStringGetTypeID()) {
+        return {};
+    }
+    const CFStringRef text = static_cast<CFStringRef>(property);
+    const CFIndex length = CFStringGetLength(text);
+    const CFIndex bytes =
+        CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
+    QByteArray utf8(static_cast<qsizetype>(bytes), '\0');
+    if (!CFStringGetCString(text, utf8.data(), bytes, kCFStringEncodingUTF8)) {
+        return {};
+    }
+    return QString::fromUtf8(utf8.constData());
+}
+
+QString openResultName(bool attempted, qint32 result)
+{
+    if (!attempted) {
+        return QStringLiteral("notAttempted");
+    }
+    if (result == kIOReturnSuccess) {
+        return QStringLiteral("success");
+    }
+    if (result == kIOReturnNotPrivileged) {
+        return QStringLiteral("notPrivileged");
+    }
+    if (result == kIOReturnExclusiveAccess) {
+        return QStringLiteral("exclusiveAccess");
+    }
+    return QStringLiteral("error");
 }
 
 } // namespace
@@ -96,6 +147,8 @@ void UlanziDialMacOSManager::start()
     // Seize only the numerically matched dial so its events stop reaching the
     // OS keyboard stack — the macOS equivalent of Linux EVIOCGRAB.
     const IOReturn result = IOHIDManagerOpen(mgr, kIOHIDOptionsTypeSeizeDevice);
+    m_openAttempted = true;
+    m_lastOpenResult = static_cast<qint32>(result);
     if (result != kIOReturnSuccess) {
         qCWarning(lcDevices)
             << "UlanziDialMacOSManager: failed to open HID manager" << result;
@@ -105,6 +158,78 @@ void UlanziDialMacOSManager::start()
         return;
     }
     m_manager = mgr;
+}
+
+QJsonObject UlanziDialMacOSManager::diagnostics() const
+{
+    QJsonArray devices;
+    int expectedMatchCount = 0;
+    int unexpectedMatchCount = 0;
+
+    IOHIDManagerRef probe = IOHIDManagerCreate(kCFAllocatorDefault,
+                                               kIOHIDOptionsTypeNone);
+    const bool inventoryAvailable = probe != nullptr;
+    if (probe) {
+        CFMutableDictionaryRef match = makeMatchDict();
+        IOHIDManagerSetDeviceMatching(probe, match);
+        CFRelease(match);
+
+        CFSetRef matched = IOHIDManagerCopyDevices(probe);
+        const CFIndex count = matched ? CFSetGetCount(matched) : 0;
+        std::vector<const void*> values(static_cast<std::size_t>(count));
+        if (matched) {
+            CFSetGetValues(matched, values.data());
+        }
+        for (const void* value : values) {
+            IOHIDDeviceRef device = static_cast<IOHIDDeviceRef>(const_cast<void*>(value));
+            const qint64 vendorId = deviceNumber(device, CFSTR(kIOHIDVendorIDKey));
+            const qint64 productId = deviceNumber(device, CFSTR(kIOHIDProductIDKey));
+            const bool expected = vendorId == kUlanziVendorId
+                && productId == kUlanziProductId;
+            if (expected) {
+                ++expectedMatchCount;
+            } else {
+                ++unexpectedMatchCount;
+            }
+            devices.append(QJsonObject{
+                {QStringLiteral("product"), deviceString(device, CFSTR(kIOHIDProductKey))},
+                {QStringLiteral("vendorId"), vendorId},
+                {QStringLiteral("productId"), productId},
+                {QStringLiteral("primaryUsagePage"),
+                 deviceNumber(device, CFSTR(kIOHIDPrimaryUsagePageKey))},
+                {QStringLiteral("primaryUsage"),
+                 deviceNumber(device, CFSTR(kIOHIDPrimaryUsageKey))},
+                {QStringLiteral("expected"), expected},
+            });
+        }
+        if (matched) {
+            CFRelease(matched);
+        }
+        CFRelease(probe);
+    }
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
+        {QStringLiteral("platform"), QStringLiteral("macos")},
+        {QStringLiteral("supported"), true},
+        {QStringLiteral("expectedMatch"),
+         QJsonObject{{QStringLiteral("vendorId"), kUlanziVendorId},
+                     {QStringLiteral("productId"), kUlanziProductId}}},
+        {QStringLiteral("matchedCount"), devices.size()},
+        {QStringLiteral("expectedMatchCount"), expectedMatchCount},
+        {QStringLiteral("unexpectedMatchCount"), unexpectedMatchCount},
+        {QStringLiteral("matchScopeSafe"), unexpectedMatchCount == 0},
+        {QStringLiteral("matchedDevices"), devices},
+        {QStringLiteral("inventoryAvailable"), inventoryAvailable},
+        {QStringLiteral("exclusiveClaimActive"), m_manager != nullptr},
+        {QStringLiteral("connected"), m_anyOpen},
+        {QStringLiteral("deviceName"), m_deviceName},
+        {QStringLiteral("openAttempted"), m_openAttempted},
+        {QStringLiteral("lastOpenResult"), m_lastOpenResult},
+        {QStringLiteral("lastOpenStatus"),
+         openResultName(m_openAttempted, m_lastOpenResult)},
+    };
 }
 
 void UlanziDialMacOSManager::stop()

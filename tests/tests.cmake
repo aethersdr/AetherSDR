@@ -2299,6 +2299,19 @@ target_link_libraries(automation_json_id_test PRIVATE
 )
 add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
 
+# Read-only external-device diagnostic registry and provider dispatch. The
+# platform-specific Ulanzi HID snapshot is supplied by MainWindow on macOS;
+# this test pins the bridge contract without requiring physical hardware.
+add_executable(automation_device_diagnostics_test
+    tests/automation_device_diagnostics_test.cpp
+)
+target_include_directories(automation_device_diagnostics_test PRIVATE src)
+target_link_libraries(automation_device_diagnostics_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_device_diagnostics_test
+         COMMAND automation_device_diagnostics_test)
+
 # `connect ip` family resolution + the `family` field on `connect list` (#4912).
 # Pure verb-level test against a fake IConnectionAutomation — no socket, no radio.
 add_executable(automation_connect_family_test
