@@ -1450,10 +1450,15 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             // #4658: the level only reaches audio while the APF filter is in
             // circuit. Writing apf_level into a disengaged filter — and showing
             // an "APF 42" overlay that reads as the radio acknowledging it — is
-            // the controller-side twin of the GUI slider defect fixed in #4660.
-            // No-op here and tell the operator why, mirroring the slider's
-            // greyed-with-reason treatment. ToggleApf remains the way in.
+            // the controller-side twin of the GUI slider defect (#4658, fixed
+            // for the slider by #4660). No-op here and tell the operator why,
+            // mirroring the slider's greyed-with-reason treatment: the status
+            // bar reaches every controller (FlexControl, RC-28, Ulanzi, the
+            // virtual wheel); the TMate 2 additionally gets it on its own
+            // display. ToggleApf remains the way in.
             if (!s->apfOn()) {
+                statusBar()->showMessage(
+                    QStringLiteral("APF level: turn APF on first"), 3000);
 #ifdef HAVE_HIDAPI
                 triggerTMate2TextOverlay(QStringLiteral("APF OFF"));
 #endif

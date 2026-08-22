@@ -196,7 +196,9 @@ int main(int argc, char** argv)
     ok &= expect(allKnown, "every action in knownWheelActions registry is recognized by isKnownWheelAction");
 
     // ── drift detection: assert every actionId handled by applyFlexControlWheelAction is registered ─
-    auto extractDispatchActions = []() -> QStringList {
+    // Loads applyFlexControlWheelAction's body out of the source. Shared by
+    // the drift check below and the #4658 guard check after it.
+    auto loadWheelDispatchBody = []() -> QString {
         // AETHER_SOURCE_DIR comes from CMake so this works for an
         // out-of-source build too; the relative forms are the fallback for a
         // hand-compiled run from the source root or a build directory.
@@ -229,7 +231,12 @@ int main(int argc, char** argv)
         // pass, which is worse than no check at all.
         const int end = content.indexOf(QStringLiteral("\n}\n"), start);
         if (end < 0) return {};
-        const QString fnBody = content.mid(start, end - start);
+        return content.mid(start, end - start);
+    };
+
+    auto extractDispatchActions = [&loadWheelDispatchBody]() -> QStringList {
+        const QString fnBody = loadWheelDispatchBody();
+        if (fnBody.isEmpty()) return {};
 
         // The optional wrapper matters: `actionId == QLatin1String("...")` is
         // used in this very file at ~:2549 and is the dominant form in
@@ -274,6 +281,26 @@ int main(int argc, char** argv)
     }
     ok &= expect(allRegisteredDispatched,
                  "every action in UlanziDialMappings::knownWheelActions() is handled in applyFlexControlWheelAction");
+
+    // ── #4658: the WheelApf branch must bail on a disengaged filter before it
+    // writes apf_level. A level written into a filter that is not in circuit
+    // reaches no audio, and on a TMate 2 the overlay then confirms a change
+    // that never happened. Source-level, like the drift check above, so the
+    // guard survives a refactor of the else-if chain without a GUI harness.
+    {
+        const QString fnBody = loadWheelDispatchBody();
+        const int apfStart = fnBody.indexOf(QStringLiteral("actionId == \"WheelApf\""));
+        int apfEnd = apfStart < 0 ? -1
+                   : fnBody.indexOf(QStringLiteral("} else if (actionId =="), apfStart + 1);
+        if (apfStart >= 0 && apfEnd < 0) apfEnd = fnBody.size();
+        const QString apfBranch = apfStart < 0 ? QString() : fnBody.mid(apfStart, apfEnd - apfStart);
+        const int guard = apfBranch.indexOf(QStringLiteral("apfOn()"));
+        const int write = apfBranch.indexOf(QStringLiteral("setApfLevel("));
+        const bool guarded = apfStart >= 0 && guard >= 0 && write > guard
+            && apfBranch.mid(guard, write - guard).contains(QStringLiteral("return;"));
+        ok &= expect(guarded,
+                     "WheelApf branch checks apfOn() and returns before setApfLevel() (#4658)");
+    }
 
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;
