@@ -8385,17 +8385,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
             updateNativeWaterfallFallbackState(now);
             if (!m_hasNativeWaterfall) {
-                // m_smoothed (the same client-side EMA the trace already
-                // reads, computed above), not the raw *spectrumBins -- a
-                // fallback row is one un-averaged FFT snapshot, and at this
-                // radio's refresh rate that snapshot-to-snapshot variance
-                // reads as visible horizontal graininess once stacked into a
-                // waterfall (the trace doesn't show it because IT already
-                // reads the smoothed array, not this one). Any backend
-                // without native waterfall tiles goes through this same
-                // fallback, so this also smooths their waterfall the same
-                // way, not just this one's.
-                pushRxWaterfallFallbackIfDue(m_smoothed, now);
+                pushRxWaterfallFallbackIfDue(*spectrumBins, now);
             }
         }
     } else {
@@ -8414,17 +8404,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
             updateNativeWaterfallFallbackState(now);
             if (!m_hasNativeWaterfall) {
-                // m_smoothed (the same client-side EMA the trace already
-                // reads, computed above), not the raw *spectrumBins -- a
-                // fallback row is one un-averaged FFT snapshot, and at this
-                // radio's refresh rate that snapshot-to-snapshot variance
-                // reads as visible horizontal graininess once stacked into a
-                // waterfall (the trace doesn't show it because IT already
-                // reads the smoothed array, not this one). Any backend
-                // without native waterfall tiles goes through this same
-                // fallback, so this also smooths their waterfall the same
-                // way, not just this one's.
-                pushRxWaterfallFallbackIfDue(m_smoothed, now);
+                pushRxWaterfallFallbackIfDue(*spectrumBins, now);
             }
         }
     }
