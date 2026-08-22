@@ -1452,13 +1452,26 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             // an "APF 42" overlay that reads as the radio acknowledging it — is
             // the controller-side twin of the GUI slider defect (#4658, fixed
             // for the slider by #4660). No-op here and tell the operator why,
-            // mirroring the slider's greyed-with-reason treatment: the status
-            // bar reaches every controller (FlexControl, RC-28, Ulanzi, the
-            // virtual wheel); the TMate 2 additionally gets it on its own
-            // display. ToggleApf remains the way in.
+            // mirroring the slider's greyed-with-reason treatment. The notice
+            // goes on the slice's panadapter as a transient card, NOT the
+            // status bar (#4649: a QStatusBar temporary message hides every
+            // permanent widget — TX indicator, PA temperature — for its whole
+            // duration, and a spinning dead knob would retrigger it
+            // continuously); the status bar is only the no-panadapter
+            // fallback. That reaches every controller family (FlexControl,
+            // RC-28, Ulanzi, the virtual wheel); a TMate 2 additionally gets
+            // it on its own display. Minimal mode shows neither surface —
+            // a slice-level signal consumed by the applet panel is the
+            // follow-up for that layout. ToggleApf remains the way in.
             if (!s->apfOn()) {
-                statusBar()->showMessage(
-                    QStringLiteral("APF level: turn APF on first"), 3000);
+                if (SpectrumWidget* sw = spectrumForSlice(s)) {
+                    sw->showTxFilterNotification(QStringLiteral("APF level"),
+                                                 QStringLiteral("Turn APF on first"),
+                                                 1500);
+                } else {
+                    statusBar()->showMessage(
+                        QStringLiteral("APF level: turn APF on first"), 1500);
+                }
 #ifdef HAVE_HIDAPI
                 triggerTMate2TextOverlay(QStringLiteral("APF OFF"));
 #endif

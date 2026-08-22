@@ -460,9 +460,11 @@ static const QString kModeBtn =
 
 // Shared :disabled rule: a stylesheet colour beats the disabled palette, so
 // a label in a disabled row stays bright unless the sheet says otherwise.
-// #5e6e7c is ~0.45 of the normal text over the flag background. Used by
-// kLabelStyle (so the APF level row dims as a unit while APF is off, #4658)
-// and by makeOptLabel() below.
+// #5e6e7c is ~0.45 of makeOptLabel()'s #c8d8e8 over the flag background (a
+// lighter step, ~0.65, from kLabelStyle's #8aa8c0). Used by kLabelStyle and
+// by makeOptLabel() below. Note the rule only bites a label whose row is
+// disabled as a container: today that is the APF level row while APF is off
+// (#4658); rows that disable just their slider (SQL) keep a bright label.
 static const QString kDisabledLabelRule =
     "QLabel:disabled { color: #5e6e7c; }";
 
