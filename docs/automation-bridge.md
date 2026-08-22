@@ -471,7 +471,7 @@ for common controls so you can assert without a screenshot:
 | `QSpinBox` / `QDoubleSpinBox` | numeric value |
 | `QProgressBar` | numeric value |
 | `QLabel` | its text |
-| `QTextEdit` / `QPlainTextEdit` (transcripts, decode logs, consoles) | plain text, capped at 2048 characters with a trailing `…<truncated>` marker and a sibling `valueTruncated: true` (the cap applies wherever `value` is reported — `dump_tree` and `invoke`'s `newValue` echo alike) — use [`text`](#text) for the full document |
+| `QTextEdit` / `QPlainTextEdit` (transcripts, decode logs, consoles) | plain text, capped at 2048 characters with a trailing `…<truncated>` marker; the `dump_tree` node also carries `valueTruncated: true` when cut (the cap itself applies wherever `value` is reported, including `invoke`'s `newValue` echo, which carries only the in-band marker) — use [`text`](#text) for the full document |
 | `QAction` inside a `QMenu` | label text, or `"checked"` / `"unchecked"` for checkable actions |
 | containers / custom-painted surfaces | omitted |
 
