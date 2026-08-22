@@ -116,9 +116,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     RadioCapabilities c;
     c.family = QStringLiteral("icom");
     c.manufacturer = QStringLiteral("Icom");
-    c.model  = m_deviceName.isEmpty() ? QString::fromUtf8(m.name.data(),
-                                                          static_cast<int>(m.name.size()))
-                                      : m_deviceName;
+    c.model = QString::fromUtf8(m.name.data(), static_cast<int>(m.name.size()));
 
     c.maxSlices = m.receivers;
     c.maxPanadapters = m.hasScope ? m.receivers : 0;

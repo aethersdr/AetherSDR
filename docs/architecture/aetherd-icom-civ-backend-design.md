@@ -1070,6 +1070,7 @@ CERTIFICATION.md §1.31 because it generalises to any fanned-out control.
 4. **AGC threshold** is accepted and discarded; the radio has no threshold
    register. Better to advertise it as unavailable than keep a live slider that
    does nothing.
+
 **Implemented and NOT proven on hardware** — the distinction this appendix
 exists to keep visible:
 

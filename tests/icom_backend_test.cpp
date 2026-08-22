@@ -1662,6 +1662,66 @@ int main(int argc, char** argv)
           "disconnect aborts radio-buffered CW with 17 FF before teardown");
     check(!backend.isConnected(), "the backend disconnects cleanly");
 
+    // A NETWORK RADIO NAME IS A NICKNAME, NOT A MODEL DESIGNATION.
+    //
+    // The primary fake above deliberately uses "IC 705", which resolves through
+    // modelForName() and therefore cannot exercise the custom-name branch. Use a
+    // name that no model table can recognise, snapshot the seam on connected(),
+    // then let the authoritative 0x19 0x00 response arrive. This pins all three
+    // promises of the identity split: the nickname beats the connect edge, the
+    // later model response does not overwrite it, and capabilities keep reporting
+    // the hardware model rather than reclassifying the nickname as one.
+    {
+        FakeIc705 namedRadio;
+        namedRadio.setDeviceName("Shack 705");
+        IcomCivBackend namedBackend;
+
+        QString publishedNickname;
+        QString publishedModel;
+        QString nicknameAtConnect;
+        QString modelAtConnect;
+        QObject::connect(&namedBackend, &IRadioBackend::radioChanged, &app,
+                         [&](const RadioDelta& d) {
+                             if (d.nickname) {
+                                 publishedNickname = *d.nickname;
+                             }
+                             if (d.model) {
+                                 publishedModel = *d.model;
+                             }
+                         });
+        QObject::connect(&namedBackend, &IRadioBackend::connected, &app, [&] {
+            nicknameAtConnect = publishedNickname;
+            modelAtConnect = publishedModel;
+        });
+
+        RadioConnectRequest namedRequest;
+        namedRequest.host = QStringLiteral("127.0.0.1");
+        namedRequest.port = namedRadio.controlPort();
+        namedRequest.params.insert(QStringLiteral("icom.serialPort"),
+                                   namedRadio.serialPort());
+        namedRequest.params.insert(QStringLiteral("icom.audioPort"),
+                                   namedRadio.audioPort());
+        namedRequest.params.insert(QStringLiteral("icom.username"), QStringLiteral("beer"));
+        namedRequest.params.insert(QStringLiteral("icom.password"), QStringLiteral("beerbeer"));
+        namedRequest.params.insert(QStringLiteral("icom.civAddress"), 0xA4);
+
+        namedBackend.connectRadio(namedRequest);
+        check(waitFor([&] { return namedBackend.isConnected(); }),
+              "a radio with a custom Network Radio Name connects");
+        check(nicknameAtConnect == QStringLiteral("Shack 705"),
+              "and publishes that custom name as its nickname before connected()");
+        check(modelAtConnect.isEmpty(),
+              "without misreporting the custom nickname as an early hardware model");
+        check(waitFor([&] { return publishedModel == QStringLiteral("IC-705"); }),
+              "then adopts the canonical model from the authoritative 0x19 0x00 response");
+        check(publishedNickname == QStringLiteral("Shack 705"),
+              "without overwriting the custom nickname during model resolution");
+        check(namedBackend.capabilities().model == QStringLiteral("IC-705"),
+              "and reports the resolved hardware model through RadioCapabilities");
+
+        namedBackend.disconnectRadio();
+        check(!namedBackend.isConnected(), "the custom-name backend disconnects cleanly");
+    }
 
     // =======================================================================
     // CI-V ADDRESS RESOLUTION
