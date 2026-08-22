@@ -60,7 +60,12 @@ int main()
     expectMatch("iec958", "Built-in Audio Digital Stereo (HDMI)", DeviceNameMatch::None, "unrelated plugin");
     expectMatch("dmix", "Built-in Audio Analog Stereo", DeviceNameMatch::None, "unrelated plugin");
     // A short token that happens to START the description is still a prefix
-    // match by the rule below — the rule is about direction, not length.
+    // match — the rule is about direction, not length.  The shape is real on
+    // Qt's plain-ALSA backend, where descriptions are the ALSA hint strings:
+    // alsa-plugins' pulse.conf describes its `pulse` PCM as "PulseAudio Sound
+    // Server", and that IS the pulse plugin, so matching it is correct.
+    expectMatch("pulse", "PulseAudio Sound Server", DeviceNameMatch::Partial,
+                "short PA name that is a prefix of the description");
     expectMatch("HDA NVidia: HDMI 0 (hw:0,3)", "Built-in Audio Digital Stereo (HDMI)",
                 DeviceNameMatch::None, "different vocabulary, no containment either way");
 
