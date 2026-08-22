@@ -1459,12 +1459,23 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             // permanent widget — TX indicator, PA temperature — for its whole
             // duration, and a spinning dead knob would retrigger it
             // continuously); the status bar is only the no-panadapter
-            // fallback. That reaches every controller family (FlexControl,
+            // (null-pan) fallback. That reaches every controller family (FlexControl,
             // RC-28, Ulanzi, the virtual wheel); a TMate 2 additionally gets
             // it on its own display. Minimal mode shows neither surface —
             // a slice-level signal consumed by the applet panel is the
             // follow-up for that layout. ToggleApf remains the way in.
             if (!s->apfOn()) {
+                // One notice per window, not one per detent: a timed card is
+                // not deduplicated by the overlay (its re-assert early-out is
+                // for untimed cards only), so each re-upsert would re-sort it
+                // to the top of the stack and relayout the others under a
+                // spinning knob — the #4649 objection, moved to a better
+                // surface. Show once, then stay quiet until it has expired.
+                constexpr int kApfOffHintMs = 1500;
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                if (nowMs < m_apfOffHintUntilMs)
+                    return;
+                m_apfOffHintUntilMs = nowMs + kApfOffHintMs;
                 if (SpectrumWidget* sw = spectrumForSlice(s)) {
                     // Own id and Info tone: this is a control hint, not a
                     // warning, and it must neither evict nor be evicted by
@@ -1474,13 +1485,17 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
                     card.id = QStringLiteral("apf.level-off");
                     card.title = QStringLiteral("APF level");
                     card.detail = QStringLiteral("Turn APF on first");
-                    card.timeoutMs = 1500;
+                    card.timeoutMs = kApfOffHintMs;
                     card.dismissible = true;
                     card.tone = PanadapterOverlayMessageTone::Info;
                     sw->upsertOverlayMessage(std::move(card));
                 } else {
+                    // Null-pan edge only: spectrumForSlice() still returns a
+                    // (hidden) widget in minimal mode, so that layout lands in
+                    // the branch above with nothing on screen — see the
+                    // comment at the top of this block.
                     statusBar()->showMessage(
-                        QStringLiteral("APF level: turn APF on first"), 1500);
+                        QStringLiteral("APF level: turn APF on first"), kApfOffHintMs);
                 }
 #ifdef HAVE_HIDAPI
                 triggerTMate2TextOverlay(QStringLiteral("APF OFF"));

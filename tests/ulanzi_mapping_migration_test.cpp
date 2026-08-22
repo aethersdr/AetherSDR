@@ -300,10 +300,21 @@ int main(int argc, char** argv)
         const QString apfBranch = apfStart < 0 ? QString() : fnBody.mid(apfStart, apfEnd - apfStart);
         const int guard = apfBranch.indexOf(QStringLiteral("apfOn()"));
         const int write = apfBranch.indexOf(QStringLiteral("setApfLevel("));
-        const bool guarded = apfStart >= 0 && guard >= 0 && write > guard
-            && apfBranch.mid(guard, write - guard).contains(QStringLiteral("return;"));
+        const QString guardRegion = (apfStart >= 0 && guard >= 0 && write > guard)
+            ? apfBranch.mid(guard, write - guard) : QString();
+        const bool guarded = !guardRegion.isEmpty() && guardRegion.contains(QStringLiteral("return;"));
         ok &= expect(guarded,
                      "WheelApf branch checks apfOn() and returns before setApfLevel() (#4658)");
+        // The guard must stay OUTSIDE any #ifdef: the overlay is HAVE_HIDAPI-only,
+        // the write is not, and a guard moved inside that block would silently
+        // regress every non-hidapi build while the positional check above still
+        // passed. "Outside" = every #if opened before the guard line is closed
+        // again before it; the overlay's own #ifdef inside the guard body is fine.
+        const QString beforeGuard = apfStart < 0 || guard < 0 ? QString() : apfBranch.left(guard);
+        const bool guardOutsideIfdef = guarded
+            && beforeGuard.count(QStringLiteral("#if")) == beforeGuard.count(QStringLiteral("#endif"));
+        ok &= expect(guardOutsideIfdef,
+                     "WheelApf guard is not inside a preprocessor conditional (#4658)");
     }
 
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';

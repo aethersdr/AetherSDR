@@ -1593,6 +1593,9 @@ private:
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
+    // WheelApf-while-off hint: wall-clock until which the notice is already
+    // on screen, so a spinning knob does not re-upsert the card per detent (#4658).
+    qint64 m_apfOffHintUntilMs{0};
     // User layout choices should suppress startup rearrange, but still allow
     // the pending timer to restore saved floating pan windows.
     bool m_suppressStartupPanLayoutRearrange{false};
