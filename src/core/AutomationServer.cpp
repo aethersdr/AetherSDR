@@ -4431,6 +4431,13 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         // objectName is stage 1 of resolution, ahead of class matching. (#5080)
         if (auto* cb = qobject_cast<QComboBox*>(w)) {
             const bool show = (action == QLatin1String("showPopup"));
+            // QComboBox::showPopup() is a no-op on an empty combo: nothing
+            // would open, no Hide would ever fire, and a name set anyway
+            // would stick to a hidden container for good. Refuse up front so
+            // the caller gets an error instead of ok/deferred + a stale grab.
+            if (show && cb->count() == 0)
+                return err(QStringLiteral("combo '") + target
+                           + QStringLiteral("' has no items: showPopup would be a no-op"));
             QPointer<QComboBox> cbg = cb;
             QPointer<QWidget> win = cb->window();
             QTimer::singleShot(0, qApp, [cbg, win, show]() {
@@ -4452,7 +4459,9 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                 }
                 cbg->showPopup();
                 if (QWidget* v = cbg->view()) {
-                    if (QWidget* c = v->window()) {
+                    // Name it only if it actually opened: the name must be
+                    // true of an OPEN list and nothing else (#5080).
+                    if (QWidget* c = v->window(); c && c->isVisible()) {
                         c->setObjectName(QStringLiteral("aetherComboPopup"));
                         // The popup also closes on its own (item pick, Esc,
                         // click-away, focus loss). Clear the name on that hide

@@ -64,6 +64,8 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     QWidget window; window.resize(300, 120);
     auto* layout = new QVBoxLayout(&window);
+    QComboBox emptyCombo; emptyCombo.setObjectName(QStringLiteral("emptyCombo"));
+    layout->addWidget(&emptyCombo);
     QComboBox combo; combo.setObjectName(QStringLiteral("modeCombo"));
     combo.addItems({QStringLiteral("USB"), QStringLiteral("CW"), QStringLiteral("AM")});
     layout->addWidget(&combo);
@@ -81,6 +83,14 @@ int main(int argc, char** argv)
 
     const QJsonObject notApplicable = invoke(&client, QStringLiteral("modeCombo"), QStringLiteral("bogusAction"));
     expect("unknown action is refused", !notApplicable.value(QStringLiteral("ok")).toBool());
+
+    const QJsonObject emptyShown = invoke(&client, QStringLiteral("emptyCombo"), QStringLiteral("showPopup"));
+    expect("showPopup on an empty combo is refused, not deferred",
+           !emptyShown.value(QStringLiteral("ok")).toBool()
+               && emptyShown.value(QStringLiteral("error")).toString().contains(QStringLiteral("no items")));
+    AetherTest::waitFor([]() { return false; }, 50);   // one loop turn; nothing should get named
+    expect("an empty combo never acquires the name",
+           !popupOf(&emptyCombo) || popupOf(&emptyCombo)->objectName().isEmpty());
 
     const QJsonObject shown = invoke(&client, QStringLiteral("modeCombo"), QStringLiteral("showPopup"));
     expect("showPopup answers ok+deferred",
