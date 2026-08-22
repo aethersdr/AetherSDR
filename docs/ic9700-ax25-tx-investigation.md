@@ -71,8 +71,9 @@ radio's own audio processing, which AetherSDR can neither observe nor tap.
 On unkey, `setKeying(false)` calls `IcomSession::flushTxAudio()` — queued
 audio belongs to the transmission that ended. Correct in intent, but it means
 **an unkey that races the packetiser drain discards the burst tail**. The
-AX.25 dialog waits `m_txTailMs` (default 200 ms) after the last chunk, which
-bounds but does not eliminate the race when pacing has fallen behind.
+AX.25 dialog waits `m_txTailMs` (default 150 ms; the recorded bench sessions
+ran it at 200) after the last chunk, which bounds but does not eliminate the
+race when pacing has fallen behind.
 
 ### 2.2 The transmit KEYING path — and why it is not synchronized with audio
 
@@ -86,8 +87,9 @@ TransmitModel::requestPttOn → setMox(true)
         │  `isTransmitting()` guard therefore cannot fail for timing reasons.
         ▼
 commandReady("xmit 1") → command plane → IcomCivBackend::setKeying
-        │  sets m_keyed=true and emits mox=true IMMEDIATELY — this opens the
-        │  §2.1 audio gate — then ENQUEUES the CI-V PTT frame:
+        │  ENQUEUES the CI-V PTT frame (below), then sets m_keyed=true and
+        │  emits mox=true in the same synchronous call — this opens the §2.1
+        │  audio gate before the frame has been dispatched, let alone answered:
         ▼
 IcomCivScheduler  (PR #5006)
         │  one dispatch slot per kSlotMs = 25 ms
@@ -96,7 +98,11 @@ IcomCivScheduler  (PR #5006)
         │    on a lost reply (queueWrite sets expectsReply = true)
         │  PTT-OFF is Priority::Emergency and bypasses all pacing (correct:
         │    an unkey must never queue). PTT-ON is Priority::Operator and is
-        │    fully paced — THE KEYING EDGE IS THE ONE THAT WAITS.
+        │    fully paced — THE KEYING EDGE IS THE ONE THAT WAITS. NB for
+        │    anyone reaching for "just promote PTT-ON": sendUserCommand
+        │    derives Emergency from the frame's payload byte (data.front()
+        │    == 0), so Emergency is structurally reserved for unkey — the
+        │    fix shape lives at the audio/keying synchronization, not here.
         ▼
 CI-V transport (serial or RS-BA1 LAN) → radio keys
         ▼
@@ -130,9 +136,14 @@ code at every step above.
 - **Post-resample tap** (#5058) — the exact mono float handed to
   `IcomSession::sendAudio`; a WAV from it feeds `atest` directly.
 - **Wire tap** (#5058) — decodes the audio payload of each outbound UDP
-  datagram back to float. NB: the tap itself had defects (double-recording
-  retransmits, keyed-flag truncation — fixed on the #5058 branch) and its
+  datagram back to float. NB: two of the tap's defects (double-recording
+  retransmits, keyed-flag truncation) are fixed on the #5058 branch, and its
   first output produced a false "wire is corrupt" reading, recorded as #5060.
+  **#5060 is still open**: after both fixes the capture still holds ~52 frames
+  of audio more than was sent, cause unestablished. Frame-COUNT claims from
+  this tap are therefore not trustworthy yet; frame-CONTENT claims (what
+  decodes, at which tones) are, because a decoder validates them
+  independently.
 - **TxPacketizer drop counters** (#5162) — cumulative dropped bytes and
   overflow events; before them a transmission that lost 63% of itself was
   indistinguishable from one that lost nothing.
@@ -151,11 +162,11 @@ code at every step above.
 | 08-16 | Amplitude sweep of a known-good capture: 1.00→0.010 (−40 dB) | 2 packets at every level | level/amplitude is not the mechanism |
 | 08-17 | Radio-side MOD level 8% vs 80%, client +8.2 dB | identical on-air deviation | deviation is PINNED radio-side; RS-BA1 audio-path anomaly (#5011, open) |
 | 08-18 | Wire tap first output | ~2.5× audio over-recorded | the TAP was the liar, not the wire (#5060); tap fixed |
-| 08-20 | Post-resample + wire taps (fixed) → `atest` | decode clean at both points | resampler, LPCM encode, datagram payload all clean |
+| 08-20 | Post-resample + wire taps (defects partially fixed, #5060 residual open) → `atest` | frames decode clean at both points, at the right tones | resampler, LPCM encode and datagram CONTENT clean; datagram COUNT still suspect (#5060) |
 | 08-20 | `icom_tx_resample_ax25_test` | ratio 1.0000, LPCM worst error < 1 quantum, oversized submit drops 40960/64960 bytes silently (pre-#5162) | packetiser overflow is reachable and was invisible |
 | 08-22 | @jensenpat: PTT timing truncates preamble (Icom VHF) | confirmed in code (§2.2), every step | a real defect; the fix belongs at the keying/audio synchronization |
 | 08-22 | Off-air burst structural analysis (08-12 captures) | bursts full-length (0.60–0.67 s ×3 retries), modulation present start to end | **front-truncation is NOT what these captures show** — PTT timing does not explain this fault instance |
-| 08-22 | Spectral comparison, same analysis on control | client wire tap (08-20): peaks 1176 / 2224 Hz — mark/space where they belong. Off-air (08-12): 1175 / **1775** Hz — mark in place, space displaced ~425 Hz | corruption is SPECTRAL, not temporal; consistent with radio-side audio-path anomaly; level-invariant, audible, undecodable |
+| 08-22 | Spectral comparison, same analysis on control (bench artifacts: `ax25bench-wire.wav` / `ax25bench-post.wav` 08-20 controls; `ax25-connect-burst.wav` 08-12 off-air; 64k-FFT band-peak method, reproducible from the WAVs) | client wire tap (08-20): peaks 1176 / 2224 Hz — mark/space where they belong. Off-air (08-12): 1175 / **1775** Hz — mark in place, space displaced ~425 Hz | corruption is SPECTRAL, not temporal; consistent with radio-side audio-path anomaly; level-invariant, audible, undecodable |
 
 **Era caveat on the last row:** the off-air captures (08-12) and the client
 tap controls (08-20) are eight days and several Icom fixes apart. "The seam
@@ -178,10 +189,12 @@ since been fixed" cannot be separated from these files.
    leading candidate for THIS fault.** Level-invariance, full-length corrupt
    bursts, and a displaced space tone all point past the UDP datagrams into
    the RS-BA1 audio path. AetherSDR's last observable point (the wire tap)
-   is clean.
-4. The wire-tap defects (#5060) cost a week of chasing a corruption that was
-   in the instrument. Recorded so the next investigator distrusts
-   instruments first.
+   is clean in CONTENT — with the honest limit that the tap's frame-count
+   residual (#5060) is unexplained, so "clean" here rests on what decodes,
+   per Finding 4's own rule about instruments.
+4. The wire-tap defects cost a week of chasing a corruption that was in the
+   instrument, and #5060's frame-count residual remains open. Recorded so
+   the next investigator distrusts instruments first — including these.
 
 ## 6. The deciding experiment
 
