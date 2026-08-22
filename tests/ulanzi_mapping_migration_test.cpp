@@ -289,9 +289,13 @@ int main(int argc, char** argv)
     // guard survives a refactor of the else-if chain without a GUI harness.
     {
         const QString fnBody = loadWheelDispatchBody();
-        const int apfStart = fnBody.indexOf(QStringLiteral("actionId == \"WheelApf\""));
+        // Same optional-wrapper tolerance as the drift check: a branch written
+        // as `actionId == QLatin1String("WheelApf")` must not fail this pin.
+        static const QRegularExpression apfRx(QStringLiteral(
+            "actionId\\s*==\\s*(?:QLatin1String\\(|QStringLiteral\\()?\"WheelApf\""));
+        const int apfStart = fnBody.indexOf(apfRx);
         int apfEnd = apfStart < 0 ? -1
-                   : fnBody.indexOf(QStringLiteral("} else if (actionId =="), apfStart + 1);
+                   : fnBody.indexOf(QStringLiteral("} else if (actionId"), apfStart + 1);
         if (apfStart >= 0 && apfEnd < 0) apfEnd = fnBody.size();
         const QString apfBranch = apfStart < 0 ? QString() : fnBody.mid(apfStart, apfEnd - apfStart);
         const int guard = apfBranch.indexOf(QStringLiteral("apfOn()"));
