@@ -298,7 +298,10 @@ int main(int argc, char** argv)
                    : fnBody.indexOf(QStringLiteral("} else if (actionId"), apfStart + 1);
         if (apfStart >= 0 && apfEnd < 0) apfEnd = fnBody.size();
         const QString apfBranch = apfStart < 0 ? QString() : fnBody.mid(apfStart, apfEnd - apfStart);
-        const int guard = apfBranch.indexOf(QStringLiteral("apfOn()"));
+        // The literal negated test, not any mention of apfOn(): an inverted
+        // guard (`if (s->apfOn())`) or a comment naming the accessor must not
+        // satisfy this pin.
+        const int guard = apfBranch.indexOf(QStringLiteral("if (!s->apfOn())"));
         const int write = apfBranch.indexOf(QStringLiteral("setApfLevel("));
         const QString guardRegion = (apfStart >= 0 && guard >= 0 && write > guard)
             ? apfBranch.mid(guard, write - guard) : QString();

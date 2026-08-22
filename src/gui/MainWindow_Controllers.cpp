@@ -1464,6 +1464,11 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             // it on its own display. Minimal mode shows neither surface —
             // a slice-level signal consumed by the applet panel is the
             // follow-up for that layout. ToggleApf remains the way in.
+            // APF is CW-only: the DSP grid does not even mount the button in
+            // other modes (VfoWidget hides m_apfBtn unless isCw), so a hint
+            // to "turn APF on" there would point at nothing. Stay silent.
+            if (!isCwMode(s->mode()))
+                return;
             if (!s->apfOn()) {
                 // One notice per window, not one per detent: a timed card is
                 // not deduplicated by the overlay (its re-assert early-out is
