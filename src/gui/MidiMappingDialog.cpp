@@ -330,8 +330,17 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
             // happened — an overwrite is otherwise invisible, because the list
             // refresh changes nothing. Asked of the filesystem, so it matches
             // what the write does on case-insensitive volumes too. (#5077)
-            const bool existed = MidiSettings::profileExists(name);
             const int count = m_manager->bindings().size();
+            if (count == 0) {
+                // The store refuses an empty set (it would replace the profile
+                // with nothing); say so here so the refusal isn't reported as
+                // an unwritable directory.
+                FramelessMessageBox::warning(
+                    this, QStringLiteral("Save Profile"),
+                    QStringLiteral("No bindings to save — add a binding first."));
+                return;
+            }
+            const bool existed = MidiSettings::profileExists(name);
             if (!MidiSettings::instance().saveProfile(name, m_manager->bindings())) {
                 FramelessMessageBox::warning(
                     this, QStringLiteral("Save Profile"),
@@ -351,6 +360,8 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         btnRow->addWidget(saveProfileBtn);
 
         auto* loadProfileBtn = makeStyledButton("Load");
+        loadProfileBtn->setObjectName(QStringLiteral("midiProfileLoadButton"));
+        loadProfileBtn->setAccessibleName(QStringLiteral("Load MIDI profile"));
         loadProfileBtn->setToolTip(
             QStringLiteral("Apply the selected profile to the current bindings"));
         connect(loadProfileBtn, &QPushButton::clicked, this, [this] {

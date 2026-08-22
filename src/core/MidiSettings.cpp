@@ -612,11 +612,15 @@ bool MidiSettings::writeBindingsToXml(const QString& filePath,
     QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
 
-    QXmlStreamWriter xml(&file);
-    writeProfileDocument(xml, bindings);
-    if (xml.hasError()) {
-        file.cancelWriting();
-        return false;
+    // Writer scoped so the document is complete before commit() — same shape
+    // as exportProfile(), so it doesn't rest on the writer's destructor order.
+    {
+        QXmlStreamWriter xml(&file);
+        writeProfileDocument(xml, bindings);
+        if (xml.hasError()) {
+            file.cancelWriting();
+            return false;
+        }
     }
     return file.commit();
 }
@@ -679,6 +683,14 @@ bool MidiSettings::saveProfile(const QString& name,
                                 const QVector<MidiBinding>& bindings)
 {
     if (!isValidProfileName(name)) {
+        return false;
+    }
+    // Refused for the same reason exportProfile() refuses it: an empty set
+    // serializes to a childless <MidiProfile/> that loadProfile() reports as
+    // empty-or-missing, so "saved" would be untrue of what comes back — and
+    // Clear All → Save would otherwise replace a profile with nothing.
+    // importProfile() already guards this before it gets here. (#5077)
+    if (bindings.isEmpty()) {
         return false;
     }
     return writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);

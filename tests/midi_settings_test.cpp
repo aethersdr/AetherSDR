@@ -774,11 +774,21 @@ int main(int argc, char** argv)
     // does not — either way it must agree with the path the store writes.
     ok &= expect(MidiSettings::profileExists("Outcome"),
                  "profile store: a saved profile exists");
+    // Compared against what the store itself hands back for that spelling:
+    // on a case-insensitive volume "outcome" loads "Outcome", on a
+    // case-sensitive one it loads nothing — existence must agree either way.
     ok &= expect(MidiSettings::profileExists("outcome")
-                     == QFile::exists(appConfigDir + "/midi/outcome.xml"),
-                 "profile store: existence check agrees with the filesystem on case");
+                     == !settings.loadProfile("outcome").isEmpty(),
+                 "profile store: existence check agrees with loadProfile on case");
     ok &= expect(!MidiSettings::profileExists("a/b"),
                  "profile store: a refused name never exists");
+    // An empty set is refused (as exportProfile refuses it) and, refused,
+    // leaves the existing profile untouched — Clear All → Save must not
+    // replace a profile with nothing.
+    ok &= expect(!settings.saveProfile("Outcome", QVector<MidiBinding>{}),
+                 "profile store: saving an empty binding set returns false");
+    ok &= expect(settings.loadProfile("Outcome").size() == saved.size(),
+                 "profile store: the refused empty save left the profile intact");
     settings.deleteProfile("Outcome");
     ok &= expect(!MidiSettings::profileExists("Outcome"),
                  "profile store: a deleted profile no longer exists");
