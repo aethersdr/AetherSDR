@@ -131,9 +131,10 @@ MeterApplet::MeterApplet(QWidget* parent)
     vbox->addWidget(m_paTempGauge);
 
     // ── Supply voltage gauge ───────────────────────────────────────────────────
-    m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "+13.8V", "",
+    m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "Supply Voltage", "",
         {{10.5f, "10.5"}, {12, "12"}, {13.8f, "13.8"}, {15, "15"}},
         this, 14.1f);
+    m_supplyGauge->setObjectName(QStringLiteral("mtrSupplyVoltageGauge"));
     m_supplyGauge->setAccessibleName(tr("Supply voltage"));
     vbox->addWidget(m_supplyGauge);
 
@@ -163,8 +164,13 @@ void MeterApplet::setMeterModel(MeterModel* model)
             m_paTempGauge->setLabel(formatTemp(paTemp, m_tempFahrenheit));
         }
 
-        m_supplyGauge->setValue(supplyV);
-        m_supplyGauge->setLabel(QString("+%1V").arg(supplyV, 0, 'f', 2));
+        // hwTelemetryChanged carries PA temperature and supply voltage
+        // together. A temperature-only update must not format MeterModel's
+        // 0.0 V initialiser as though the radio reported it.
+        if (m_model->hasSupplyVoltage()) {
+            m_supplyGauge->setValue(supplyV);
+            m_supplyGauge->setLabel(QStringLiteral("+%1V").arg(supplyV, 0, 'f', 2));
+        }
     });
 
     connect(model, &MeterModel::meterUpdated,
@@ -188,6 +194,23 @@ void MeterApplet::setPaTemperatureTelemetryState(bool connected, bool available)
     const bool visible = !connected || available;
     m_paTempGauge->setVisible(visible);
     m_tempUnitBtn->setVisible(visible);
+}
+
+void MeterApplet::setSupplyVoltageTelemetryState(bool connected)
+{
+    // A reading belongs to one extant meter in one radio session.
+    // MeterModel::clear() and removeMeter() drop the sample-validity sentinel
+    // without a telemetry update, so restore the neutral label when the shared
+    // capability lifecycle reports either transition.
+    if (!connected || !m_model || !m_model->hasSupplyVoltage()) {
+        resetSupplyVoltageDisplay();
+    }
+}
+
+void MeterApplet::resetSupplyVoltageDisplay()
+{
+    m_supplyGauge->setValueImmediate(0.0f);
+    m_supplyGauge->setLabel(QStringLiteral("Supply Voltage"));
 }
 
 void MeterApplet::resolveIndices()

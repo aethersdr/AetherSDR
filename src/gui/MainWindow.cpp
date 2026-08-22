@@ -7291,6 +7291,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // meter, and MeterModel emits hwTelemetryChanged whenever EITHER half
     // changes — so on a radio that reports only PA temperature the volts half
     // arrives as its 0.0f initialiser on every tick.
+    if (m_appletPanel) {
+        m_appletPanel->meterApplet()->setSupplyVoltageTelemetryState(connected);
+    }
     if (m_supplyVoltLabel) {
         m_supplyVoltLabel->setVisible(!connected || caps.hasSupplyVoltageTelemetry);
         if (!connected) {

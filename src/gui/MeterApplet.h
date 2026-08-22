@@ -24,11 +24,13 @@ public:
 
     void setMeterModel(MeterModel* model);
     void setPaTemperatureTelemetryState(bool connected, bool available);
+    void setSupplyVoltageTelemetryState(bool connected);
 
 private:
     void resolveIndices();
     void onMeterUpdated(int index, float value);
     void updatePaTempDisplay();
+    void resetSupplyVoltageDisplay();
 
     MeterModel* m_model{nullptr};
 

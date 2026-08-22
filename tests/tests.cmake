@@ -2735,6 +2735,29 @@ add_test(NAME meter_applet_capability_test COMMAND meter_applet_capability_test)
 set_tests_properties(meter_applet_capability_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(meter_applet_voltage_state_test
+    tests/meter_applet_voltage_state_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(meter_applet_voltage_state_test PRIVATE src)
+target_link_libraries(meter_applet_voltage_state_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+if(UNIX)
+    target_link_libraries(meter_applet_voltage_state_test PRIVATE pthread)
+endif()
+set_target_properties(meter_applet_voltage_state_test PROPERTIES AUTOMOC ON)
+add_test(NAME meter_applet_voltage_state_test COMMAND meter_applet_voltage_state_test)
+set_tests_properties(meter_applet_voltage_state_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). SimBackend was once
 # wire-free, but Path B (RFC #4288) had it own a RadioConnection + PanadapterStream,
 # so it no longer links against a hand-picked subset of sources: those pull in
@@ -3877,6 +3900,7 @@ set(AETHER_SETTINGS_CONSUMERS
     meter_model_test
     health_applet_test
     meter_applet_capability_test
+    meter_applet_voltage_state_test
     perf_telemetry_test
     local_memory_bank_test
     transmit_model_apd_test
