@@ -2154,6 +2154,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         vfo->setHasManualNotch(m_radioModel.hasManualNotch());
         vfo->setHasHostNoiseBlanker(m_radioModel.hasHostNoiseBlanker());
         vfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
+        vfo->setFmRepeaterPresentation(
+            m_radioModel.backendCapabilities().fmRepeaterPresentation);
 
         wireVfoWidget(vfo, s);
 

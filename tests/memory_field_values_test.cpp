@@ -65,6 +65,13 @@ int main()
     ok &= expect(toneModeToDisplay("ctcss_tx") == "CTCSS_TX", "toneModeToDisplay ctcss_tx");
     ok &= expect(toneModeToDisplay("") == "OFF",
                  "toneModeToDisplay defaults blank to OFF");
+    ok &= expect(toneModeToWire("DTCS_TXRX").isEmpty(),
+                 "legacy tone converter rejects extended Icom modes");
+    ok &= expect(extendedToneModeToWire("DTCS_TXRX") == "dtcs_txrx",
+                 "extended converter accepts IC-9700 DTCS TX/RX");
+    ok &= expect(extendedToneModeToDisplay("ctcss_tx_dtcs_rx")
+                     == "CTCSS_TX_DTCS_RX",
+                 "extended display converter preserves normalized vocabulary");
 
     // ── value lists are populated and well-formed ───────────────────────────
     ok &= expect(modes().contains("USB") && modes().contains("AME"),

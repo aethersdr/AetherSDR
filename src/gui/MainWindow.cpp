@@ -7100,6 +7100,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             connected ? caps.fmRepeaterAccessModes : QStringList{},
             connected && caps.hasFmRepeaterDuplex,
             connected && caps.hasFmRepeaterReverse);
+        const FmRepeaterPresentation vfoPresentation = connected
+            ? caps.fmRepeaterPresentation : FmRepeaterPresentation::Legacy;
+        const QList<VfoWidget*> vfoWidgets = findChildren<VfoWidget*>();
+        for (VfoWidget* vfo : vfoWidgets) {
+            vfo->setFmRepeaterPresentation(vfoPresentation);
+        }
         // Same contract for the TRANSMIT passband, and the same restore-on-
         // disconnect: an Icom's four-to-six discrete low cuts must not outlive
         // the session and leave a Flex's continuous control stepping through

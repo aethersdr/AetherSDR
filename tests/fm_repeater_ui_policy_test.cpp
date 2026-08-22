@@ -23,6 +23,8 @@ int main()
           "Flex retains exactly Off and CTCSS TX");
     check(flex.duplexVisible && flex.reverseVisible,
           "Flex retains its existing duplex and REV controls");
+    check(vfoFmRepeaterSurfaceVisible(FmRepeaterPresentation::Legacy),
+          "the established VFO FM surface remains visible for Legacy backends");
     check(fmRepeaterDirectionLabels()
               == QStringList({QString::fromUtf8("\xe2\x88\x92"),
                               QStringLiteral("Simplex"), QStringLiteral("+"),
@@ -42,6 +44,8 @@ int main()
           "evidenced IC-9700 profile exposes the extended surface");
     check(ic9700.duplexVisible && ic9700.reverseVisible,
           "evidenced IC-9700 profile exposes duplex and XFC");
+    check(!vfoFmRepeaterSurfaceVisible(FmRepeaterPresentation::Extended),
+          "the incomplete duplicate VFO surface is hidden for extended controls");
 
     const FmRepeaterUiPolicy duplexOnly = fmRepeaterUiPolicy(
         FmRepeaterPresentation::Extended, {}, true, false);
@@ -61,6 +65,8 @@ int main()
     check(!unattested.surfaceVisible && !unattested.extendedControls
               && !unattested.duplexVisible && !unattested.reverseVisible,
           "unattested Icom controls are hidden, not disabled");
+    check(!vfoFmRepeaterSurfaceVisible(FmRepeaterPresentation::Hidden),
+          "the VFO surface is hidden for unattested models");
 
     return failures == 0 ? 0 : 1;
 }

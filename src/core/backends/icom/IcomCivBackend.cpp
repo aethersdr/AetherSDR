@@ -3291,7 +3291,7 @@ void IcomCivBackend::setFmRepeaterAccess(int, const QString& mode,
                                          bool dtcsRxReverse)
 {
     const auto profile = fmRepeaterProfileFor(*m_model);
-    const QString normalized = AetherSDR::MemoryFields::toneModeToWire(mode);
+    const QString normalized = AetherSDR::MemoryFields::extendedToneModeToWire(mode);
     if (!profile || normalized.isEmpty()) {
         return;
     }
@@ -3354,8 +3354,11 @@ void IcomCivBackend::setFmRepeaterOffset(int, const QString& direction,
 {
     const auto profile = fmRepeaterProfileFor(*m_model);
     const QString normalized = AetherSDR::MemoryFields::offsetDirToWire(direction);
-    if (!profile || !profile->hasDuplex || normalized.isEmpty()
-        || !std::isfinite(offsetMhz) || offsetMhz < 0.0 || offsetMhz > 99.9999) {
+    if (!profile || !profile->hasDuplex || normalized.isEmpty()) {
+        return;
+    }
+    if (!std::isfinite(offsetMhz) || offsetMhz < 0.0 || offsetMhz > 99.9999) {
+        qCWarning(lcIcomCiv) << "rejected invalid FM repeater offset" << offsetMhz;
         return;
     }
     static const QHash<QString, int> kDuplex{

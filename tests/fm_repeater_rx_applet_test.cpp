@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -72,6 +73,7 @@ int main(int argc, char** argv)
     QComboBox* txTone = child<QComboBox>(applet, "FmRepeaterTxCtcss");
     QComboBox* rxTone = child<QComboBox>(applet, "FmRepeaterRxCtcss");
     QComboBox* dtcs = child<QComboBox>(applet, "FmRepeaterDtcsCode");
+    QDoubleSpinBox* offset = child<QDoubleSpinBox>(applet, "FmRepeaterOffset");
     QPushButton* down = child<QPushButton>(applet, "FmRepeaterDuplexDown");
     QPushButton* simplex = child<QPushButton>(applet, "FmRepeaterSimplex");
     QPushButton* up = child<QPushButton>(applet, "FmRepeaterDuplexUp");
@@ -138,6 +140,17 @@ int main(int argc, char** argv)
           "the evidenced IC-9700 profile renders only its declared access modes");
     check(reverse->isVisible() && !reverse->isEnabled(),
           "IC-9700 REV stays visible but inapplicable while simplex is authoritative");
+    check(offset->maximum() == 99.999 && !offset->keyboardTracking(),
+          "IC-9700 offset entry matches the wire limit and commits once per edit");
+
+    QSignalSpy offsetRequest(&slice, &SliceModel::fmRepeaterOffsetCommandIssued);
+    down->click();
+    process();
+    check(offsetRequest.count() == 1
+              && offsetRequest.first().at(0).toString() == QStringLiteral("down"),
+          "direction click emits one IC-9700 offset request");
+    check(simplex->isChecked() && !down->isChecked(),
+          "direction buttons retain radio-authoritative truth until readback");
 
     return gFailures == 0 ? 0 : 1;
 }

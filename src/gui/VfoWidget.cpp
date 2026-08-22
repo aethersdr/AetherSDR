@@ -7,6 +7,7 @@
 #include "AdaptiveFilterControls.h"
 #include "ComboStyle.h"
 #include "FrequencyEntryParser.h"
+#include "FmRepeaterUiPolicy.h"
 #include "GuardedSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
@@ -3246,6 +3247,15 @@ void VfoWidget::setRadioFilterWidths(const QList<int>& widthsHz)
     updateModeTab();
 }
 
+void VfoWidget::setFmRepeaterPresentation(FmRepeaterPresentation presentation)
+{
+    m_fmRepeaterSurfaceAvailable = vfoFmRepeaterSurfaceVisible(presentation);
+    if (m_fmContainer) {
+        m_fmContainer->setVisible(m_fmRepeaterSurfaceAvailable && m_slice
+                                  && isFmRfMode(m_slice->mode()));
+    }
+}
+
 void VfoWidget::setHasManualNotch(bool has)
 {
     if (m_hasManualNotch == has)
@@ -4405,7 +4415,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_rttyContainer->setVisible(isRtty);
         m_apfContainer->setVisible(isCw);
         m_digContainer->setVisible(isDig && !isFdv && mode != "NT");
-        m_fmContainer->setVisible(isFm);
+        m_fmContainer->setVisible(isFm && m_fmRepeaterSurfaceAvailable);
         m_fmToneContainer->setVisible(hasToneControls);
         if (isDig) {
             int off = (mode == "DIGL") ? m_slice->diglOffset() : m_slice->diguOffset();
@@ -5028,7 +5038,7 @@ void VfoWidget::syncFromSlice()
     updateExtendedDspVisibility();
     m_apfContainer->setVisible(isCw);
     m_digContainer->setVisible(isDig && m_slice->mode() != "NT");
-    m_fmContainer->setVisible(isFm);
+    m_fmContainer->setVisible(isFm && m_fmRepeaterSurfaceAvailable);
     m_fmToneContainer->setVisible(hasToneControls);
     // CW: radio locks squelch on at fixed level; Digital: not meaningful
     m_sqlBtn->setEnabled(!isDig && !isCw);

@@ -46,7 +46,8 @@
         "08": "dtcs_tx_ctcss_rx",
         "09": "ctcss_txrx"
       },
-      "preserved_trace": "19:10:18.927 TX read followed by 19:10:18.933 RX 16 5D 00"
+      "preserved_trace": "19:10:18.927 TX read followed by 19:10:18.933 RX 16 5D 00",
+      "value_provenance": "00 is live-trace-attested; 01, 02, 03, 06, 07, 08, and 09 are transcribed from the official IC-9700 CI-V Reference Guide (2019), page 5, and codec-tested but are not live-trace-attested"
     },
     {
       "field": "tx_ctcss",

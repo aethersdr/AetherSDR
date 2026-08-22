@@ -34,6 +34,7 @@ class QShowEvent;
 
 namespace AetherSDR {
 
+enum class FmRepeaterPresentation;
 class SliceModel;
 class TransmitModel;
 class RadioModel;
@@ -610,6 +611,7 @@ public:
     // the VFO grid was simply never given it, so the two filter surfaces
     // in the app disagreed about what the radio could do.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setFmRepeaterPresentation(FmRepeaterPresentation presentation);
 
     // Reflect whether any client-side AetherDSP NR module (NR2 / NR4 / MNR /
     // BNR / DFNR / RN2) is active by accenting the ADSP launcher, so the cue is
@@ -707,6 +709,7 @@ private:
     QStackedWidget*  m_digOffsetStack{nullptr};    // switches between label and edit
     // FM-family OPT controls. DSTR uses the duplex controls but not CTCSS.
     QWidget*       m_fmContainer{nullptr};
+    bool           m_fmRepeaterSurfaceAvailable{true};
     QWidget*       m_fmToneContainer{nullptr};
     QComboBox*     m_fmToneModeCmb{nullptr};
     QComboBox*     m_fmToneValueCmb{nullptr};

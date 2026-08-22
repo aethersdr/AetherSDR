@@ -155,20 +155,29 @@ QString toneModeToWire(const QString& any)
     const QString upper = sanitizeText(any).trimmed().toUpper();
     if (upper == "OFF")      return "off";
     if (upper == "CTCSS_TX") return "ctcss_tx";
-    if (upper == "CTCSS_RX") { return "ctcss_rx"; }
-    if (upper == "CTCSS_TXRX") { return "ctcss_txrx"; }
-    if (upper == "DTCS_TX") { return "dtcs_tx"; }
-    if (upper == "DTCS_TXRX") { return "dtcs_txrx"; }
-    if (upper == "CTCSS_TX_DTCS_RX") { return "ctcss_tx_dtcs_rx"; }
-    if (upper == "DTCS_TX_CTCSS_RX") { return "dtcs_tx_ctcss_rx"; }
     return {};
 }
 
 QString toneModeToDisplay(const QString& any)
 {
     const QString upper = sanitizeText(any).trimmed().toUpper();
-    if (extendedToneModesDisplay().contains(upper)) { return upper; }
+    if (toneModesDisplay().contains(upper)) { return upper; }
     return "OFF";
+}
+
+QString extendedToneModeToWire(const QString& any)
+{
+    const QString upper = sanitizeText(any).trimmed().toUpper();
+    if (!extendedToneModesDisplay().contains(upper)) {
+        return {};
+    }
+    return upper.toLower();
+}
+
+QString extendedToneModeToDisplay(const QString& any)
+{
+    const QString upper = sanitizeText(any).trimmed().toUpper();
+    return extendedToneModesDisplay().contains(upper) ? upper : QStringLiteral("OFF");
 }
 
 QString modeToWire(const QString& any)

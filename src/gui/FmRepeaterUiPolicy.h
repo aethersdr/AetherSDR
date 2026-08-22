@@ -47,6 +47,14 @@ inline bool fmRepeaterReverseEnabled(bool extendedControls, bool reverseAvailabl
         || duplexDirection == QLatin1String("up");
 }
 
+// The VFO OPT panel implements only the established Legacy (Flex-style)
+// command path. Extended, radio-authoritative controls live in RxApplet until
+// that second surface implements the same backend contract end-to-end.
+inline bool vfoFmRepeaterSurfaceVisible(FmRepeaterPresentation presentation)
+{
+    return presentation == FmRepeaterPresentation::Legacy;
+}
+
 inline const QStringList& fmRepeaterDirectionLabels()
 {
     static const QStringList labels{

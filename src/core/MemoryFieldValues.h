@@ -79,6 +79,11 @@ QString toneModeToWire(const QString& any);
 // Tone mode: any-case in -> upper-case display form; defaults to "OFF".
 QString toneModeToDisplay(const QString& any);
 
+// IC-9700 extended access-mode vocabulary. Kept separate so memory/editor
+// consumers retain their established OFF/CTCSS_TX contract.
+QString extendedToneModeToWire(const QString& any);
+QString extendedToneModeToDisplay(const QString& any);
+
 // Mode: sanitize and upper-case (the wire form). Does not validate membership.
 QString modeToWire(const QString& any);
 

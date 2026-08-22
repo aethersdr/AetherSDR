@@ -826,9 +826,13 @@ void RxApplet::buildUI()
             row->addWidget(m_offsetLabel);
 
             m_offsetSpin = new QDoubleSpinBox;
-            m_offsetSpin->setRange(0.0, 100.0);
+            m_offsetSpin->setObjectName(QStringLiteral("FmRepeaterOffset"));
+            // CI-V carries five decimal digits of Hz magnitude (99.9999 MHz),
+            // while this surface presents three decimals.
+            m_offsetSpin->setRange(0.0, 99.999);
             m_offsetSpin->setDecimals(3);
             m_offsetSpin->setSingleStep(0.1);
+            m_offsetSpin->setKeyboardTracking(false);
             m_offsetSpin->setValue(0.0);
             m_offsetSpin->setSuffix(" Mhz");
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_offsetSpin, "QDoubleSpinBox { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
@@ -3255,17 +3259,13 @@ void RxApplet::applyOffsetDir(const QString& dir)
         if (!m_fmRepeaterDuplexAvailable) {
             return;
         }
-        {
-            QSignalBlocker blocker(m_revBtn);
-            m_revBtn->setChecked(false);
-        }
-        m_revBtn->setVisible(m_fmRepeaterReverseAvailable);
-        m_revBtn->setEnabled(m_fmRepeaterReverseAvailable
-                             && dir != QLatin1String("simplex"));
         if (m_slice->fmRepeaterReverse()) {
             m_slice->requestFmRepeaterReverse(false);
         }
         m_slice->requestFmRepeaterOffset(dir, m_offsetSpin->value());
+        // A click changes a checkable button before the radio can answer.
+        // Restore the last authoritative model state until CI-V readback lands.
+        updateOffsetDirButtons();
         return;
     }
     m_slice->setRepeaterOffsetDir(dir);
