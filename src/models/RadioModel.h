@@ -52,6 +52,7 @@
 #include <QSet>
 #include <functional>
 #include <memory>
+#include <set>
 
 #include <QTimer>
 #include <QElapsedTimer>

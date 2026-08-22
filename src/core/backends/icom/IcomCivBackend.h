@@ -11,6 +11,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
