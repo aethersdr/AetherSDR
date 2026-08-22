@@ -244,6 +244,26 @@ constexpr int kTextViewValueCap = 2048;
 // set in the same pass that builds the string, so the document is
 // materialized once, not re-read for the flag (a 5k-line log would
 // otherwise be built twice per dump_tree node).
+
+// Clears the aetherComboPopup name when the named container hides, then
+// removes itself. Keeps "aetherComboPopup" true only of an open drop-down so a
+// grab after the popup closed cannot resolve stale geometry under a name the
+// driver was told to trust (#5080). QObject-only: no QtWidgets include.
+class ComboPopupNameReset : public QObject {
+public:
+    explicit ComboPopupNameReset(QObject* container) : QObject(container) {}
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::Hide) {
+            if (watched->objectName() == QLatin1String("aetherComboPopup"))
+                watched->setObjectName(QString());
+            watched->removeEventFilter(this);
+            deleteLater();
+        }
+        return false;
+    }
+};
+
 QString widgetValue(const QWidget* w, bool* truncated = nullptr)
 {
     if (auto* s = qobject_cast<const QAbstractSlider*>(w))
@@ -4415,15 +4435,32 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             QPointer<QWidget> win = cb->window();
             QTimer::singleShot(0, qApp, [cbg, win, show]() {
                 if (!cbg) return;
-                if (!show) { cbg->hidePopup(); return; }
+                if (!show) {
+                    // Drop the name with the popup: a hidden container that
+                    // still answered to aetherComboPopup would hand a later
+                    // grab_widget residue geometry as if it were the open
+                    // list (doGrab has no visibility check). (#5080)
+                    if (QWidget* v = cbg->view())
+                        if (QWidget* c = v->window())
+                            c->setObjectName(QString());
+                    cbg->hidePopup();
+                    return;
+                }
                 if (win && win->isVisible()) {   // give the popup a realized anchor
                     win->raise();
                     win->activateWindow();
                 }
                 cbg->showPopup();
-                if (QWidget* v = cbg->view())
-                    if (QWidget* c = v->window())
+                if (QWidget* v = cbg->view()) {
+                    if (QWidget* c = v->window()) {
                         c->setObjectName(QStringLiteral("aetherComboPopup"));
+                        // The popup also closes on its own (item pick, Esc,
+                        // click-away, focus loss). Clear the name on that hide
+                        // too, so the name is only ever true of an OPEN list.
+                        // One-shot: the filter removes itself after firing.
+                        c->installEventFilter(new ComboPopupNameReset(c));
+                    }
+                }
             });
             done = true;
             deferred = true;

@@ -621,7 +621,7 @@ the no-op is an explicit, assertable signal.
 | `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) | text |
 | `setCurrentIndex` | `QComboBox` / `QTabBar` | integer index |
 | `selectRow` | `QAbstractItemView` (`QTableWidget`/`QTreeWidget`/`QListWidget`) | integer row index |
-| `showPopup` / `hidePopup` | `QComboBox` — holds the drop-down open under bridge control (deferred to a clean main-loop turn, like `showMenu`); the open container is named `aetherComboPopup` so a follow-up `grab_widget aetherComboPopup` / `dump_tree` lands on it instead of a hidden sibling | — |
+| `showPopup` / `hidePopup` | `QComboBox` — holds the drop-down open under bridge control (deferred to a clean main-loop turn, like `showMenu`); the open container is named `aetherComboPopup` so a follow-up `grab_widget aetherComboPopup` / `dump_tree` lands on it instead of a hidden sibling. The name is valid **only while the popup is open** — it is cleared on `hidePopup` and when the list closes on its own (item pick, Esc, click-away) — so grab before hiding; a stale name is never left behind | — |
 | `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
 

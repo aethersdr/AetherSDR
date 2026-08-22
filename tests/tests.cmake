@@ -1322,6 +1322,20 @@ add_test(NAME automation_server_gesture_test COMMAND automation_server_gesture_t
 set_tests_properties(automation_server_gesture_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# invoke showPopup/hidePopup on a QComboBox (#5080): deferred reply, the
+# aetherComboPopup name while open, and its reset on hidePopup and self-close.
+add_executable(automation_combo_popup_test
+    tests/automation_combo_popup_test.cpp
+)
+target_include_directories(automation_combo_popup_test PRIVATE src tests)
+target_link_libraries(automation_combo_popup_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(automation_combo_popup_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_combo_popup_test COMMAND automation_combo_popup_test)
+set_tests_properties(automation_combo_popup_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp
     src/core/ClientQuindarTone.cpp
