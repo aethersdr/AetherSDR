@@ -262,6 +262,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // before the fuse), which the status bar renders under the PA temperature.
     caps.hasSupplyVoltageTelemetry = true;
     caps.hasPaTemperatureTelemetry = true;
+    caps.hasMainFanTelemetry = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and

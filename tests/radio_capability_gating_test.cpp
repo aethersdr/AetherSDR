@@ -1,5 +1,6 @@
 // Capability-gated UI surfaces: hasProfiles, hasDaxStreams, hasExtendedDsp,
-// hasSupplyVoltageTelemetry, hasTransmitFrequencyCheck, and the three status-bar toggles
+// hasSupplyVoltageTelemetry, hasMainFanTelemetry,
+// hasTransmitFrequencyCheck, and the three status-bar toggles
 // (hasRadioSideCwKeyer / hasVoiceKeyer / hasFullDuplex).
 //
 // The rule these guard (RadioCapabilities.h header comment, aetherd RFC §1) is
@@ -29,6 +30,10 @@
 //                 renders the 0.0f initialiser as a two-decimal measurement.
 //                 Asserted on the CAPABILITY, so this stays true of any future
 //                 family that reports no supply rail.
+//   main fan      hasMainFanTelemetry gates the Radio Vitals Main Fan gauge.
+//                 Unsupported radios omit the instrument rather than showing
+//                 an empty scale, while disconnect restores the permissive
+//                 surface for the next session.
 //   radio DSP     hasRadioSideDsp gates the radio's own NR/NB/ANF/NRL/ANFL/
 //                 ANFT, the APD row and the WNB row. It must NOT gate the
 //                 host-side equivalents — the AetherDSP modules and the
@@ -250,6 +255,8 @@ int main(int argc, char** argv)
               "Flex declares hasSupplyVoltageTelemetry (the \"+13.8A\" meter)");
         check(caps.hasPaTemperatureTelemetry,
               "Flex declares hasPaTemperatureTelemetry (the PATEMP meter)");
+        check(caps.hasMainFanTelemetry,
+              "Flex declares hasMainFanTelemetry (the MAINFAN meter)");
         // The two DSP flags are independent statements, not synonyms: the base
         // set and the extra 8000-series filters. A default Flex model string is
         // unknown to the platform table, so the narrower one is false here while
@@ -380,6 +387,8 @@ int main(int argc, char** argv)
               "HL2 declares hasSupplyVoltageTelemetry=false (PATEMP, no +13.8A)");
         check(caps.hasPaTemperatureTelemetry,
               "HL2 declares hasPaTemperatureTelemetry (host-decoded PATEMP)");
+        check(!caps.hasMainFanTelemetry,
+              "HL2 declares hasMainFanTelemetry=false");
         // The three status-bar toggles. The HL2 has no CW text buffer, no voice
         // recorder and no full-duplex setting, so all three labels go away
         // entirely rather than sitting permanently dim.
@@ -513,6 +522,8 @@ int main(int argc, char** argv)
               "Icom declares the profiled IC-9700 momentary XFC command");
         check(caps.hasSupplyVoltageTelemetry,
               "Icom declares the profiled IC-9700 supply-voltage telemetry");
+        check(!caps.hasMainFanTelemetry,
+              "Icom declares no Main Fan telemetry family-wide");
 
         const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
                                           const char* description) {
@@ -585,6 +596,8 @@ int main(int argc, char** argv)
               "Sim declares hasSupplyVoltageTelemetry=false");
         check(!caps.hasPaTemperatureTelemetry,
               "Sim declares hasPaTemperatureTelemetry=false");
+        check(!caps.hasMainFanTelemetry,
+              "Sim declares hasMainFanTelemetry=false");
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
@@ -877,6 +890,8 @@ int main(int argc, char** argv)
               "RadioCapabilities defaults hasLmsNoiseFilters to false (absent unless declared)");
         check(!fresh.hasPaTemperatureTelemetry,
               "RadioCapabilities defaults PA temperature telemetry to absent");
+        check(!fresh.hasMainFanTelemetry,
+              "RadioCapabilities defaults Main Fan telemetry to absent");
 
         // Read from each backend's DECLARATION rather than restating it, so a
         // copy-paste that flips either one reds this suite.

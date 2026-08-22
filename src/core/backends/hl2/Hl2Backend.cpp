@@ -1494,6 +1494,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
+    c.hasMainFanTelemetry = false;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
     // These are the domains the client owns as the radio's memory

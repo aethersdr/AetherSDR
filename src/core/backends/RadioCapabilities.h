@@ -315,6 +315,13 @@ struct RadioCapabilities {
     // both, or neither telemetry source.
     bool hasPaTemperatureTelemetry = false;
 
+    // The radio reports main-fan speed as live telemetry. False means the
+    // Radio Vitals applet omits the fan gauge instead of presenting an
+    // instrument that can never receive a sample. This is independent of PA
+    // temperature and supply voltage: each telemetry source is declared on
+    // its own evidence.
+    bool hasMainFanTelemetry = false;
+
     // The radio exposes SELECTABLE HARDWARE microphone inputs — the Phone
     // applet's MIC / BAL / LINE / ACC choices, which are FlexRadio's front and
     // rear connectors.

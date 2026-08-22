@@ -213,6 +213,33 @@ void MeterApplet::resetSupplyVoltageDisplay()
     m_supplyGauge->setLabel(QStringLiteral("Supply Voltage"));
 }
 
+void MeterApplet::setMainFanTelemetryState(bool connected, bool available)
+{
+    // applyCapabilitiesToUi() also runs for mid-session oscillator and GPS
+    // updates. Those are not radio/capability edges and must not discard the
+    // live meter identity on every refresh.
+    if (m_hasMainFanTelemetryState
+        && m_mainFanConnected == connected
+        && m_mainFanAvailable == available) {
+        return;
+    }
+    m_hasMainFanTelemetryState = true;
+    m_mainFanConnected = connected;
+    m_mainFanAvailable = available;
+
+    // A reading and its meter index belong to one radio session. Do not let a
+    // capable radio's last fan speed survive a disconnect or get interpreted
+    // as another radio's unrelated meter at the same index.
+    m_fanIdx = -1;
+    m_resolved = false;
+    if (!connected || !available) {
+        m_fanGauge->setValueImmediate(0.0f);
+        m_fanGauge->setLabel(QStringLiteral("Main Fan"));
+    }
+
+    m_fanGauge->setVisible(!connected || available);
+}
+
 void MeterApplet::resolveIndices()
 {
     if (!m_model || m_resolved) return;
