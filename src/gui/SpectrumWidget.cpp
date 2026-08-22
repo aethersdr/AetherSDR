@@ -2175,8 +2175,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         "QPushButton:hover { background: rgba(30,50,70,200); color: #c8d8e8; }"
         "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
         "QPushButton:pressed { background: #00b4d8; color: #000; }"
-        "QPushButton:disabled { background: rgba(15,15,26,90); border-color: #1c2833;"
-        " color: #4a5560; }";
+        "QPushButton:disabled { background: rgba(15,15,26,90); border-color: {{color.border.subtle}};"
+        " color: {{color.text.disabled}}; }";
 
     // objectName + accessibleName let the automation bridge target these by a
     // stable handle instead of the visible label \u2014 notably zoom-out, whose glyph
@@ -2186,7 +2186,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         btn->setObjectName(objName);
         btn->setAccessibleName(a11y);
         btn->setFixedSize(22, 22);
-        btn->setStyleSheet(kZoomBtnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, kZoomBtnStyle);
         btn->setCursor(Qt::PointingHandCursor);
         return btn;
     };
@@ -2197,7 +2197,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         tr("Switches the displayed spectrum and waterfall between Flex and KiwiSDR. Audio and meters are unchanged."));
     m_kiwiSdrDisplaySourceBtn->setCheckable(true);
     m_kiwiSdrDisplaySourceBtn->setFixedSize(46, 22);
-    m_kiwiSdrDisplaySourceBtn->setStyleSheet(kZoomBtnStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_kiwiSdrDisplaySourceBtn, kZoomBtnStyle);
     m_kiwiSdrDisplaySourceBtn->setCursor(Qt::PointingHandCursor);
     m_kiwiSdrDisplaySourceBtn->setToolTip(
         tr("Show Flex or KiwiSDR spectrum/waterfall. Audio and meters are unchanged."));

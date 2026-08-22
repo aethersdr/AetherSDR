@@ -4986,7 +4986,7 @@ void MainWindow::buildUI()
             return;
         }
         applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            m_radioModel.isConnected() && m_radioModel.hasCommandPlane());
+            m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
     });
 
     // Band stack panel signal wiring
@@ -6029,15 +6029,19 @@ void MainWindow::onConnectionStateChanged(bool connected)
     updateExperimentalRadioSupport(connected);
 
     // Band/segment zoom only ever works on Flex (see SpectrumWidget::
-    // setBandSegmentZoomAvailable()'s own comment) -- re-evaluate on every
-    // connect and disconnect, since hasCommandPlane() only knows the
-    // CURRENTLY connected radio's family, not the previous one's. Edge taper
-    // is keyed off RadioCapabilities::hasDdcPanEdgeRolloff instead (see its
-    // own comment), not a family-name check -- a future DDC-based backend
-    // gets that automatically instead of needing its own family string added
-    // here.
+    // setBandSegmentZoomAvailable()'s own comment) -- usesFlexCommandPlane()
+    // is a direct family() == "flex" check (RadioModel.h), not merely "some
+    // connection object exists": SimBackend/demo mode owns a RadioConnection
+    // too but isn't Flex and doesn't understand band_zoom=/segment_zoom=, so
+    // the plain hasCommandPlane() this used before was one indirection looser
+    // than the actual question being asked. Edge taper is keyed off
+    // RadioCapabilities::hasDdcPanEdgeRolloff instead (see its own comment)
+    // -- a future DDC-based backend gets that automatically instead of
+    // needing its own family string added here. Re-evaluate both on every
+    // connect and disconnect, since usesFlexCommandPlane()/
+    // backendCapabilities() only know the CURRENTLY connected radio.
     if (m_panStack) {
-        const bool bandSegmentZoomAvailable = connected && m_radioModel.hasCommandPlane();
+        const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         for (auto* applet : m_panStack->allApplets()) {
