@@ -4855,15 +4855,27 @@ void IcomCivBackend::onLinkTick()
     if (!m_connected)
         return;
     const qint64 now = nowMs();
+    const IcomModelProfile& activeProfile = profileFor(*m_model);
+    const std::optional<CivRecoveryProfile>& recovery = activeProfile.civRecovery;
 
     if (m_civRecoveryStartedAtMs > 0) {
-        if (now - m_lastCivRecoveryAttemptAtMs < kCivRecoveryIntervalMs) {
+        // A recovery can exist only under the model profile that started it.
+        // If authoritative identity ever withdraws that capability, stop the
+        // model-specific state machine without changing the new model's
+        // connection, scheduler, or timer policy.
+        if (!activeProfile.supports(IcomFeature::CivDataRestart) || !recovery) {
+            m_civRecoveryStartedAtMs = 0;
+            m_lastCivRecoveryAttemptAtMs = 0;
+            m_civRecoveryAttempts = 0;
+            return;
+        }
+        if (now - m_lastCivRecoveryAttemptAtMs < recovery->retryIntervalMs) {
             return;
         }
         // Retire the previous unanswered probe before queuing the next one;
         // otherwise semantic coalescing would correctly suppress the retry.
         pumpCiv(now);
-        if (m_civRecoveryAttempts < kMaxCivRecoveryAttempts
+        if (m_civRecoveryAttempts < recovery->maxAttempts
             && m_session->reopenCivPipe()) {
             ++m_civRecoveryAttempts;
             m_lastCivRecoveryAttemptAtMs = now;
@@ -4874,7 +4886,7 @@ void IcomCivBackend::onLinkTick()
             pumpCiv(now);
             qCWarning(lcIcomLink) << "CI-V data restart attempt"
                                   << m_civRecoveryAttempts << "of"
-                                  << kMaxCivRecoveryAttempts;
+                                  << recovery->maxAttempts;
             return;
         }
         qCWarning(lcIcomLink)
@@ -4979,14 +4991,14 @@ void IcomCivBackend::onLinkTick()
         << "), so this is the command plane alone."
         << "Read `civ trace all` for the frames either side of it.";
 
-    terminateScheduler(IcomCivScheduler::TerminalOutcome::Failed,
-                       SchedulerWaiterOutcome::Failed);
-    // The 0x04 data-pipe restart is measured on the IC-9700 only. Every other
-    // Icom retains main's warn-only stall behavior until its own firmware
-    // supplies evidence and a maintainer approves a recovery policy.
-    const bool supportsTargetedRestart = m_model
-        && m_model->civAddress == kTargetedRestartModelAddress;
-    if (supportsTargetedRestart && m_session->reopenCivPipe()) {
+    // The 0x04 data-pipe restart, scheduler termination, and retry timer are a
+    // single model capability.  Profiles without it retain main's warn-only
+    // stall behavior byte-for-byte: no scheduler reset, no refresh command,
+    // no recovery timer, and no connection replacement.
+    if (activeProfile.supports(IcomFeature::CivDataRestart) && recovery
+        && m_session->reopenCivPipe()) {
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Failed,
+                           SchedulerWaiterOutcome::Failed);
         m_civRecoveryStartedAtMs = now;
         m_lastCivRecoveryAttemptAtMs = now;
         m_civRecoveryAttempts = 1;
@@ -4996,7 +5008,7 @@ void IcomCivBackend::onLinkTick()
                   IcomCivScheduler::Priority::Maintenance);
         pumpCiv(now);
         qCWarning(lcIcomLink) << "CI-V data restart attempt 1 of"
-                              << kMaxCivRecoveryAttempts;
+                              << recovery->maxAttempts;
         return;
     }
 

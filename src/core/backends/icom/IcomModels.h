@@ -331,6 +331,7 @@ enum class IcomFeature : std::uint8_t {
     FmRepeaterBasic,
     FmRepeaterExtended,
     TxFrequencyCheck,
+    CivDataRestart,
 };
 
 enum class EvidenceKind : std::uint8_t {
@@ -377,6 +378,14 @@ struct MeterCalibrationProfile {
     double currentFullScaleAmps = 4.0;
 };
 
+// Recovery policy is model capability, not shared Icom scheduler policy.  The
+// RS-BA1 data-start envelope and its retry timing are enabled only for models
+// whose public/live evidence supports this exact recovery path.
+struct CivRecoveryProfile {
+    int retryIntervalMs = 1000;
+    int maxAttempts = 3;
+};
+
 // The immutable, backend-private capability profile from RFC #4984. IcomModel
 // remains transport/identity geometry; every command-table difference lives
 // here. Adding a radio is intentionally metadata-first and conservative: code
@@ -396,6 +405,7 @@ struct IcomModelProfile {
     SetMenuProfile setMenu;
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;
+    std::optional<CivRecoveryProfile> civRecovery;
     std::span<const std::string_view> preampLabels;
     std::span<const AttenStep> attenuatorSteps;
     std::span<const std::string_view> modes;

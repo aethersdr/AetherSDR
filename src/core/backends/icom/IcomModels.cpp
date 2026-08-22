@@ -268,7 +268,7 @@ constexpr std::array<FeatureEvidence, 10> kIc7300Mk2Evidence{{
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
 }};
 
-constexpr std::array<FeatureEvidence, 7> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 8> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -281,6 +281,8 @@ constexpr std::array<FeatureEvidence, 7> kIc9700Evidence{{
      "IC-9700 CI-V Reference Guide 2019, pp. 4-5 and 11; PR #5149 live trace"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019, 1C 02/03; PR #5149 live trace"},
+    {IcomFeature::CivDataRestart, EvidenceKind::CrossReferenced,
+     "wfview RS-BA1 data-start implementation and published physical IC-9700 watchdog log"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not attested"},
 }};
 
@@ -545,6 +547,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        true, true, true, true, true, true},
         .scope = ScopeCommandProfile{true, false, false, false, false},
         .meters = MeterCalibrationProfile{MeterCalibration::Uncalibrated, {}, 0.0},
+        .civRecovery = CivRecoveryProfile{1000, 3},
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,
@@ -593,6 +596,7 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::FmRepeaterBasic:     return "fm-repeater-basic";
     case IcomFeature::FmRepeaterExtended:  return "fm-repeater-extended";
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
+    case IcomFeature::CivDataRestart:      return "civ-data-restart";
     }
     return "unknown";
 }

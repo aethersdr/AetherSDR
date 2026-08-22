@@ -43,6 +43,7 @@ bring-up profile.
 | RX antenna | None | Selectable; live firmware returns ACK without readback | Not attested |
 | RF decks | Continuous envelope | Continuous envelope | Three discontinuous decks with 100/75/10 W ceilings |
 | FM repeater | Extended registers documented; basic tone/level/offset/XFC live-proved | Tone + TSQL, no DTCS claim | Extended registers official-guide + live-proved |
+| CI-V data restart | Not enabled | Not enabled | `0x04` data-start recovery, three attempts at 1 s; public implementation + physical watchdog evidence |
 
 The FM row deliberately corrects the assumption in the original IC-9700 PR
 that the repeater family must be hidden on IC-705. The IC-705 guide documents

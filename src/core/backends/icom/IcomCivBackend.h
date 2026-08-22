@@ -614,9 +614,6 @@ private:
     // 1 s and a user-command guard can defer it — short enough that an operator
     // has not yet had time to wonder why the S-meter stopped.
     static constexpr qint64 kCivStallMs = 5000;
-    static constexpr qint64 kCivRecoveryIntervalMs = 1000;
-    static constexpr int kMaxCivRecoveryAttempts = 3;
-    static constexpr std::uint8_t kTargetedRestartModelAddress = 0xA2; // IC-9700
     // Note the id for a frame we are about to send or have just decoded.
     void noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub);
     void noteControlScheduled(std::uint8_t cmd, std::uint8_t sub, bool hasSub);

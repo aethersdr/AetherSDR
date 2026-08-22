@@ -126,8 +126,17 @@ struct IcomCivBackendTestAccess {
                                    IcomCivBackend::SchedulerWaiterOutcome::Cancelled);
     }
 
-    static int recoveryIntervalMs() { return IcomCivBackend::kCivRecoveryIntervalMs; }
-    static int maxRecoveryAttempts() { return IcomCivBackend::kMaxCivRecoveryAttempts; }
+    static int recoveryIntervalMs(const IcomCivBackend& backend)
+    {
+        const auto recovery = profileFor(*backend.m_model).civRecovery;
+        return recovery ? recovery->retryIntervalMs : -1;
+    }
+
+    static int maxRecoveryAttempts(const IcomCivBackend& backend)
+    {
+        const auto recovery = profileFor(*backend.m_model).civRecovery;
+        return recovery ? recovery->maxAttempts : 0;
+    }
 };
 
 }  // namespace AetherSDR::icom
@@ -2322,10 +2331,10 @@ int main(int argc, char** argv)
         check(waitFor([&] { return !c.backend.isConnected(); }, 12000),
               "IC-9700 exhaustion: bounded restarts fall back to session replacement");
         const std::vector<qint64>& attempts = c.radio.serialRestartTimesMs();
-        check(IcomCivBackendTestAccess::maxRecoveryAttempts() == 3
+        check(IcomCivBackendTestAccess::maxRecoveryAttempts(c.backend) == 3
                   && attempts.size() == 3,
               "IC-9700 exhaustion: exactly three targeted restarts are attempted");
-        check(IcomCivBackendTestAccess::recoveryIntervalMs() == 1000,
+        check(IcomCivBackendTestAccess::recoveryIntervalMs(c.backend) == 1000,
               "IC-9700 exhaustion: configured retry cadence remains one second");
         bool cadenceValid = attempts.size() == 3;
         for (std::size_t i = 1; cadenceValid && i < attempts.size(); ++i) {
@@ -2349,11 +2358,20 @@ int main(int argc, char** argv)
               "non-9700 stall: startup reaches a live command plane");
         c.radio.setCivSilent(true);
         c.backend.setPanPreamp(QStringLiteral("0"), 1);
+        const auto terminalBefore =
+            IcomCivBackendTestAccess::terminalRequestCounts(c.backend);
         QTest::qWait(7000);
         check(c.backend.isConnected(),
               "non-9700 stall: main's established warn-only behavior is retained");
         check(c.radio.serialRestartTimesMs().empty(),
               "non-9700 stall: no unverified 0x04 data restart is sent");
+        check(!IcomCivBackendTestAccess::recoveryActive(c.backend),
+              "non-9700 stall: no model-specific recovery timer starts");
+        check(IcomCivBackendTestAccess::terminalRequestCounts(c.backend)
+                  == terminalBefore,
+              "non-9700 stall: the shared scheduler is not reset or failed");
+        check(IcomCivBackendTestAccess::linkPollIntervalMs(c.backend) == 1000,
+              "non-9700 stall: the existing link timer cadence is unchanged");
     }
 
     // MainWindow/RadioModel application shutdown invokes the backend's public
@@ -2519,6 +2537,11 @@ int main(int argc, char** argv)
                  func::kMonitorFn, func::kVox, func::kBreakIn}) {
             expectedStartup.push_back(cmdReadFunction(addr, function));
         }
+        expectedStartup.push_back(cmdReadRepeaterOffsetDirection(addr));
+        expectedStartup.push_back(cmdReadRepeaterOffset(addr));
+        expectedStartup.push_back(cmdReadFunction(addr, func::kRepeaterTone));
+        expectedStartup.push_back(cmdReadRepeaterTone(addr));
+        expectedStartup.push_back(cmdReadTransmitFrequencyCheck(addr));
         expectedStartup.push_back(cmdReadFilterWidth(addr));
         expectedStartup.push_back(cmdReadLevel(addr, level::kPbtInner));
         expectedStartup.push_back(cmdReadLevel(addr, level::kPbtOuter));
@@ -2557,10 +2580,14 @@ int main(int argc, char** argv)
             {cmd::kFunction, func::kManualNotch, -1},
             {cmd::kFunction, func::kNoiseReduce, -1},
             {cmd::kFunction, func::kNoiseBlanker, -1},
+            {cmd::kFunction, func::kRepeaterTone, -1},
         };
         std::vector<CommandSignature> phase2Extra{
             {cmd::kReadFreq, -1, -1},
             {cmd::kVfoMode, vfoMode::kSelected, -1},
+            {cmd::kDuplex, -1, -1},
+            {cmd::kReadRepeaterOffset, -1, -1},
+            {cmd::kTone, 0x00, -1},
             {cmd::kFunction, func::kMonitorFn, -1},
             {cmd::kFunction, func::kVox, -1},
         };
