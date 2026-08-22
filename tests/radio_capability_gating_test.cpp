@@ -511,6 +511,8 @@ int main(int argc, char** argv)
               "Icom declares the three IC-9700 per-band TX power limits");
         check(caps.hasTransmitFrequencyCheck,
               "Icom declares the profiled IC-9700 momentary XFC command");
+        check(caps.hasSupplyVoltageTelemetry,
+              "Icom declares the profiled IC-9700 supply-voltage telemetry");
 
         const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
                                           const char* description) {

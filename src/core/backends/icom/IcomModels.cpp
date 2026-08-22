@@ -422,7 +422,7 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 
 std::span<const CurvePoint> powerCurveFor(const IcomModel& model)
 {
-    return profileFor(model).meters.powerCurve;
+    return powerCurveForCalibration(profileFor(model).meters.calibration);
 }
 
 std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
@@ -530,8 +530,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .cwTextKeyer = CwTextKeyerProfile{},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic705,
-                                          powerCurveIc705(), 4.0},
+        .meters = MeterCalibrationProfile{MeterCalibration::Ic705, 4.0},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
         .modes = kIc705Modes,
@@ -546,7 +545,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Uncalibrated, {}, 0.0},
+        .meters = MeterCalibrationProfile{MeterCalibration::Ic9700Voltage, 0.0},
         .civRecovery = CivRecoveryProfile{1000, 3},
     };
     static const IcomModelProfile kIc7300Mk2Profile{
@@ -564,8 +563,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .rxAntenna = RxAntennaProfile{true, false},
         .setMenu = SetMenuProfile{267, 89},
         .scope = ScopeCommandProfile{true, true, true, true, true},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic7300Mk2,
-                                          powerCurveIc7300Mk2(), 25.0},
+        .meters = MeterCalibrationProfile{MeterCalibration::Ic7300Mk2, 25.0},
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };
