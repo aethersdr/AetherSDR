@@ -8208,6 +8208,20 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
     };
 }
 
+// A release edge hands TX policing back ONLY if the transmitter is actually
+// down. A release that did not un-key — the momentary handler declined it
+// (text entry focused, radio dropped) or TX is up from another source — must
+// leave the watchdog armed, or a leaked press would sit keyed with its only
+// backstop disarmed (Constitution VI: fail closed). onTxWatchdog() clears the
+// flag itself on the next poll that finds nothing keyed, so keeping it armed
+// here never over-polices.
+void AutomationServer::releaseEdgeHandsBackPolicing()
+{
+    if (txBridgeOwnsCurrentTransmit())
+        return;
+    clearTxBridgeInitiated();
+}
+
 QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& spec)
 {
     const QString act = action.trimmed().toLower();
@@ -8263,7 +8277,7 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
                    + QLatin1Char('\''));
     }
     if (!press)
-        clearTxBridgeInitiated();   // the edge that un-keys hands policing back
+        releaseEdgeHandsBackPolicing();
 
     qCInfo(lcAutomation).noquote() << "keyevent" << (press ? "press" : "release")
                                    << spec << "consumed=" << consumed;

@@ -688,6 +688,8 @@ private:
     // app event filter for the momentary shortcut family (#5079). Press is
     // TX-gated like shortcut; a release is never blocked.
     QJsonObject doKeyEvent(const QString& action, const QString& spec);
+    // Release-edge policing hand-back, gated on the transmitter being down.
+    void releaseEdgeHandsBackPolicing();
     // Inject a learned VFO Tune Knob MIDI CC value through the controller
     // decoder. Automation-only, RX-only, and never persists a binding.
     QJsonObject doMidi(const QString& action, const QString& value) const;
