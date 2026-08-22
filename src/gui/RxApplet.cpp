@@ -1907,6 +1907,9 @@ void RxApplet::configureRepeaterReverseControl()
         return;
     }
     const bool xfc = usesTransmitFrequencyCheck();
+    if (!xfc) {
+        releaseTransmitFrequencyCheck();
+    }
     QSignalBlocker blocker(m_revBtn);
     m_revBtn->setText(xfc ? QStringLiteral("XFC") : QStringLiteral("REV"));
     m_revBtn->setAccessibleName(xfc ? QStringLiteral("Transmit frequency check")
@@ -1921,7 +1924,7 @@ void RxApplet::configureRepeaterReverseControl()
 
 void RxApplet::releaseTransmitFrequencyCheck()
 {
-    if (!m_xfcHeldByThisControl || !usesTransmitFrequencyCheck()) {
+    if (!m_xfcHeldByThisControl) {
         m_xfcHeldByThisControl = false;
         return;
     }
@@ -1929,7 +1932,9 @@ void RxApplet::releaseTransmitFrequencyCheck()
     if (m_revBtn) {
         m_revBtn->setDown(false);
     }
-    m_radioModel->setTransmitFrequencyCheck(false);
+    if (m_radioModel) {
+        m_radioModel->setTransmitFrequencyCheck(false);
+    }
 }
 
 void RxApplet::setKiwiSdrManager(KiwiSdrManager* manager)
@@ -3096,6 +3101,7 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
 {
     if (obj == m_revBtn
         && (ev->type() == QEvent::Hide
+            || ev->type() == QEvent::HideToParent
             || ev->type() == QEvent::UngrabMouse
             || ev->type() == QEvent::WindowDeactivate)) {
         releaseTransmitFrequencyCheck();

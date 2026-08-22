@@ -3735,10 +3735,14 @@ RadioCapabilities RadioModel::backendCapabilities() const
 
 void RadioModel::setTransmitFrequencyCheck(bool on)
 {
-    if (!m_backend || !isConnected()
-        || !backendCapabilities().hasTransmitFrequencyCheck) {
+    if (!m_backend || !isConnected()) {
         return;
     }
+    if (on && !backendCapabilities().hasTransmitFrequencyCheck) {
+        return;
+    }
+    // Capability gates a new ON edge, never OFF. The backend retains the
+    // release obligation if authoritative identity changes while ON is queued.
     // The backend reply owns m_transmitFrequencyCheck. The button's physical
     // down-state gives immediate press feedback without inventing radio state.
     m_backend->setTransmitFrequencyCheck(on);

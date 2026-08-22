@@ -354,6 +354,10 @@ private:
     bool m_connected = false;
     bool m_keyed = false;
     bool m_transmitFrequencyCheck = false;
+    // Set before an XFC ON enters the scheduler and cleared only by radio
+    // readback of OFF (or completed teardown). Capability may change while a
+    // command is in flight, but the obligation to release the radio may not.
+    bool m_xfcReleaseRequired = false;
     std::optional<bool> m_pendingPttIntent;
     qint64 m_pendingPttUntilMs = 0;
     bool m_overflow = false;

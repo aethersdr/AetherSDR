@@ -6186,6 +6186,9 @@ void VfoWidget::configureRepeaterReverseControl()
         return;
     }
     const bool xfc = usesTransmitFrequencyCheck();
+    if (!xfc) {
+        releaseTransmitFrequencyCheck();
+    }
     QSignalBlocker blocker(m_fmRevBtn);
     m_fmRevBtn->setText(xfc ? QStringLiteral("XFC") : QStringLiteral("REV"));
     m_fmRevBtn->setAccessibleName(xfc ? QStringLiteral("Transmit frequency check")
@@ -6200,7 +6203,7 @@ void VfoWidget::configureRepeaterReverseControl()
 
 void VfoWidget::releaseTransmitFrequencyCheck()
 {
-    if (!m_xfcHeldByThisControl || !usesTransmitFrequencyCheck()) {
+    if (!m_xfcHeldByThisControl) {
         m_xfcHeldByThisControl = false;
         return;
     }
@@ -6208,7 +6211,9 @@ void VfoWidget::releaseTransmitFrequencyCheck()
     if (m_fmRevBtn) {
         m_fmRevBtn->setDown(false);
     }
-    m_radioModel->setTransmitFrequencyCheck(false);
+    if (m_radioModel) {
+        m_radioModel->setTransmitFrequencyCheck(false);
+    }
 }
 
 void VfoWidget::setKiwiSdrManager(KiwiSdrManager* manager)
@@ -6358,6 +6363,7 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
 {
     if (obj == m_fmRevBtn
         && (event->type() == QEvent::Hide
+            || event->type() == QEvent::HideToParent
             || event->type() == QEvent::UngrabMouse
             || event->type() == QEvent::WindowDeactivate)) {
         releaseTransmitFrequencyCheck();

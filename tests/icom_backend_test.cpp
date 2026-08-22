@@ -1993,6 +1993,37 @@ int main(int argc, char** argv)
         c.backend.disconnectRadio();
     }
 
+    // XFC release is an obligation created when ON is sent, not a capability
+    // lookup repeated at mouse-up. Authoritative identity can narrow the
+    // profile while the control is held; that transition must send OFF to the
+    // newly reported address before the UI loses the momentary control.
+    {
+        CivCase c(0x98, "IC-705");
+        bool xfcPressedAtConnect = false;
+        QObject::connect(&c.backend, &IRadioBackend::connected, &c.backend, [&] {
+            xfcPressedAtConnect = true;
+            c.backend.setTransmitFrequencyCheck(true);
+        });
+        c.backend.connectRadio(c.request());
+        check(waitFor([&] {
+                  return c.backend.isConnected()
+                      && c.backend.model().civAddress == 0x98
+                      && !c.backend.capabilities().hasTransmitFrequencyCheck;
+              }),
+              "XFC capability withdrawal: authoritative identity narrows the profile");
+        check(xfcPressedAtConnect,
+              "XFC capability withdrawal: ON was requested under the handshake profile");
+        check(waitFor([&] {
+                  return std::ranges::any_of(c.radio.civCommands(), [](const CivFrame& frame) {
+                      return frame.to == 0x98 && frame.cmd == cmd::kControl
+                          && frame.hasSub && frame.sub == control::kXfc
+                          && frame.data == std::vector<std::uint8_t>{0x00};
+                  });
+              }),
+              "XFC capability withdrawal: OFF follows the corrected identity");
+        c.backend.disconnectRadio();
+    }
+
     // ---- AUTO: the bug, and the fix ---------------------------------------
     //
     // An IC-9700 lives on 0xA2. Before this change, an operator who left the

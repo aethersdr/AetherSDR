@@ -320,7 +320,17 @@ RadioCapabilities IcomCivBackend::capabilities() const
     return c;
 }
 
-void IcomCivBackend::publishCapabilities() { emit capabilitiesChanged(); }
+void IcomCivBackend::publishCapabilities()
+{
+    // A model correction can withdraw XFC while an ON write is in flight.
+    // Capability gates future presses, not the release obligation created by
+    // an earlier one, so queue OFF before publishing the narrower profile.
+    if (m_connected && m_xfcReleaseRequired
+        && !supportsTransmitFrequencyCheck(m_model)) {
+        setTransmitFrequencyCheck(false);
+    }
+    emit capabilitiesChanged();
+}
 
 void IcomCivBackend::publishIdentity()
 {
@@ -608,7 +618,8 @@ void IcomCivBackend::disconnectRadio()
         queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
                                    "cw.message");
         queueEmergencyWriteNoReply(cmdSetPtt(m_session->civAddress(), false), "ptt");
-        if (capabilities().hasTransmitFrequencyCheck) {
+        if (capabilities().hasTransmitFrequencyCheck
+            || m_xfcReleaseRequired || m_transmitFrequencyCheck) {
             queueEmergencyWriteNoReply(
                 cmdSetTransmitFrequencyCheck(m_session->civAddress(), false), "xfc");
         }
@@ -648,6 +659,7 @@ void IcomCivBackend::disconnectRadio()
     m_pendingPttIntent.reset();
     m_pendingPttUntilMs = 0;
     m_transmitFrequencyCheck = false;
+    m_xfcReleaseRequired = false;
     // The radio keeps its own DSP state across our sessions and we have not
     // read it back, so "unknown" is the only honest starting point — carrying
     // the last session's belief would suppress the first command that matters.
@@ -2233,7 +2245,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             emit transmitChanged(t);
         }
         if (frame.hasSub && frame.sub == control::kXfc && !frame.data.empty()) {
-            if (!supportsTransmitFrequencyCheck(m_model)) {
+            if (!supportsTransmitFrequencyCheck(m_model)
+                && !m_xfcReleaseRequired && !m_transmitFrequencyCheck) {
                 return;
             }
             if (frame.data[0] != 0x00 && frame.data[0] != 0x01) {
@@ -2241,6 +2254,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                 return;
             }
             const bool on = frame.data[0] == 0x01;
+            if (!on) {
+                m_xfcReleaseRequired = false;
+            }
             if (on != m_transmitFrequencyCheck) {
                 m_transmitFrequencyCheck = on;
                 emit transmitFrequencyCheckChanged(on);
@@ -3450,12 +3466,20 @@ void IcomCivBackend::setSliceFmRepeaterOffset(int, double hz)
 
 void IcomCivBackend::setTransmitFrequencyCheck(bool on)
 {
-    if (!supportsTransmitFrequencyCheck(m_model)) {
+    if (on && !supportsTransmitFrequencyCheck(m_model)) {
         return;
     }
+    if (!on && !supportsTransmitFrequencyCheck(m_model)
+        && !m_xfcReleaseRequired && !m_transmitFrequencyCheck) {
+        return;
+    }
+    if (on) {
+        m_xfcReleaseRequired = true;
+    }
     // Do not deduplicate release. A mouse-up is a fail-safe edge: even if our
-    // mirror already says OFF, the radio may have missed the prior write or the
-    // front panel may have changed after the last poll.
+    // mirror already says OFF, the radio may have missed the prior write, the
+    // front panel may have changed after the last poll, or authoritative model
+    // identity may have withdrawn the capability while ON was in flight.
     sendUserCommand(cmdSetTransmitFrequencyCheck(
         m_session ? m_session->civAddress() : 0xA4, on));
 }

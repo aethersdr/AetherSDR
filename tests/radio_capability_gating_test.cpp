@@ -1,5 +1,5 @@
 // Capability-gated UI surfaces: hasProfiles, hasDaxStreams, hasExtendedDsp,
-// hasSupplyVoltageTelemetry, and the three status-bar toggles
+// hasSupplyVoltageTelemetry, hasTransmitFrequencyCheck, and the three status-bar toggles
 // (hasRadioSideCwKeyer / hasVoiceKeyer / hasFullDuplex).
 //
 // The rule these guard (RadioCapabilities.h header comment, aetherd RFC §1) is
@@ -256,6 +256,8 @@ int main(int argc, char** argv)
               "hasRadioSideDsp and hasExtendedDsp are independent");
         check(caps.hasRadioSideWaterfallAutoBlack,
               "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
+        check(!caps.hasTransmitFrequencyCheck,
+              "Flex declares hasTransmitFrequencyCheck=false (REV is local state)");
         // The three status-bar toggles. Same regression shape as the supply-rail
         // field above and worse in kind: these are shipping SmartSDR features
         // whose only implementation is a command-plane verb, so a field added
@@ -361,6 +363,8 @@ int main(int argc, char** argv)
               "HL2 declares hasRadioSideDsp=false (host runs every noise module)");
         check(!caps.hasRadioSideWaterfallAutoBlack,
               "HL2 declares hasRadioSideWaterfallAutoBlack=false (no display engine)");
+        check(!caps.hasTransmitFrequencyCheck,
+              "HL2 declares hasTransmitFrequencyCheck=false");
         check(!caps.hasWaveforms,
               "HL2 declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
@@ -501,6 +505,8 @@ int main(int argc, char** argv)
         const RadioCapabilities caps = model.backendCapabilities();
         check(caps.txPowerBands.size() == 3,
               "Icom declares the three IC-9700 per-band TX power limits");
+        check(caps.hasTransmitFrequencyCheck,
+              "Icom declares the profiled IC-9700 momentary XFC command");
 
         const auto expectPowerLimit = [&](std::uint64_t hz, int watts,
                                           const char* description) {
@@ -563,6 +569,8 @@ int main(int argc, char** argv)
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
         check(!caps.hasRadioSideWaterfallAutoBlack,
               "Sim declares hasRadioSideWaterfallAutoBlack=false");
+        check(!caps.hasTransmitFrequencyCheck,
+              "Sim declares hasTransmitFrequencyCheck=false");
         check(!caps.hasWaveforms, "Sim declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
