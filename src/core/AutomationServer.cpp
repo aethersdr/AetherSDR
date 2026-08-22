@@ -3769,7 +3769,11 @@ QJsonObject AutomationServer::doGetText(const QString& target) const
                        {QStringLiteral("target"), target},
                        {QStringLiteral("class"), shortClassName(w)},
                        {QStringLiteral("length"), doc.size()},
-                       {QStringLiteral("lines"), doc.isEmpty() ? 0 : doc.count(QLatin1Char('\n')) + 1},
+                       // Count lines the way the pane shows them: a trailing
+                       // newline ends the last line, it does not start another.
+                       {QStringLiteral("lines"), doc.isEmpty() ? 0
+                            : doc.count(QLatin1Char('\n'))
+                              + (doc.endsWith(QLatin1Char('\n')) ? 0 : 1)},
                        {QStringLiteral("text"), doc}};
 }
 

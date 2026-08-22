@@ -471,6 +471,7 @@ for common controls so you can assert without a screenshot:
 | `QSpinBox` / `QDoubleSpinBox` | numeric value |
 | `QProgressBar` | numeric value |
 | `QLabel` | its text |
+| `QTextEdit` / `QPlainTextEdit` (transcripts, decode logs, consoles) | plain text, capped at 2048 characters with a trailing `…<truncated>` marker — use [`text`](#text) for the full document |
 | `QAction` inside a `QMenu` | label text, or `"checked"` / `"unchecked"` for checkable actions |
 | containers / custom-painted surfaces | omitted |
 
@@ -1714,6 +1715,26 @@ Section-title rows (a disabled `QWidgetAction` + `QLabel`, the app's idiom for
 menu headers since `QMenu::addSection` text doesn't render under the app styling)
 serialize with `"type":"header"` and the label's text, so titles are assertable
 instead of blank rows.
+
+### `text`
+Full plain text of one `QTextEdit` / `QPlainTextEdit` view (alias `getText`). Read-only; refused in
+observe-only mode like every non-allow-listed verb is — except that `text` *is* allow-listed, since it
+sets nothing and keys nothing.
+
+```json
+→ {"cmd":"text","target":"cwDecodeText"}
+← {"ok":true,"target":"cwDecodeText","class":"QPlainTextEdit",
+   "length":5102,"lines":48,"text":"CQ CQ DE ..."}
+```
+
+- `dump_tree` carries only a 2048-character prefix of these views (see the `value` table above); this
+  verb returns the whole document, so a transcript assertion is not truncated.
+- `lines` counts lines as the pane shows them: a trailing newline ends the last line rather than
+  starting another.
+- A non-text target answers `not a text view: <target> (<class>)`.
+- The view is read through its `plainText` property (Qt's `QTextEdit`/`QPlainTextEdit` both export it),
+  so `QTextBrowser` and read-only views are covered; `QLineEdit` has no such property and keeps its
+  echo-mode `<hidden>` guard.
 
 ### `hitTest`
 Read-only Qt hit-test probe for overlay/input-mask regressions. The point is
