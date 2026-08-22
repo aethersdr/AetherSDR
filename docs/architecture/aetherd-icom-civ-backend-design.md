@@ -1041,8 +1041,8 @@ their own right (CERTIFICATION.md §1.29):
 | | CW speed / pitch / break-in | ❌ no seam verb (`14 0C`, `14 09` mapped; `16 47` unmapped) |
 | **Status bar** | voltage | ✅ `RAD:+13.8A` |
 | | temperature / current | IC-705: no temperature; IC-7300MK2: `Id` from `15 16` while transmitting |
-| | radio name / model | ✅ from the handshake + `19 00` |
-| | hostname / alias | ⚠️ shows the connect address; the radio's own name is in the capabilities packet and unused |
+| | radio nickname / model | ✅ **verified on IC-705** — Network Radio Name from the RS-BA1 handshake; canonical model from `19 00` |
+| | network hostname | ⚠️ shows the connect address; no separate host alias is published |
 
 ### D.3 One control, two registers
 
@@ -1070,29 +1070,26 @@ CERTIFICATION.md §1.31 because it generalises to any fanned-out control.
 4. **AGC threshold** is accepted and discarded; the radio has no threshold
    register. Better to advertise it as unavailable than keep a live slider that
    does nothing.
-5. **The radio's own name** arrives in the capabilities packet and is unused;
-   the status bar shows the connect address instead.
-
 **Implemented and NOT proven on hardware** — the distinction this appendix
 exists to keep visible:
 
-6. **The TUNE carrier.** Synthesised, built, never keyed into a tuner.
-7. **Mic gain and TX monitor on IC-705.** The shared paths are live-proven on
+5. **The TUNE carrier.** Synthesised, built, never keyed into a tuner.
+6. **Mic gain and TX monitor on IC-705.** The shared paths are live-proven on
    IC-7300MK2; an IC-705 UI/effect pass is still outstanding.
-8. **The three filter buttons**, on screen with the applet open.
-9. **Connect-time state adoption**, beyond confirming the values arrive: whether
+7. **The three filter buttons**, on screen with the applet open.
+8. **Connect-time state adoption**, beyond confirming the values arrive: whether
    each one lands on the control an operator is looking at is a separate
    question, and it is the §1.27 gap in a different costume.
-10. **XIT.** RIT was driven and observed on the wire; XIT shares the offset
-    register and was not.
+9. **XIT.** RIT was driven and observed on the wire; XIT shares the offset
+   register and was not.
 
 **Open defects**
 
-11. **Transmit cuts out roughly once a second on FT8** — see CERTIFICATION.md
+10. **Transmit cuts out roughly once a second on FT8** — see CERTIFICATION.md
     §2.6. The radio stays keyed and ALC stays active, so this is not a keying
     or an audio-delivery fault; what remains is real RF pulsing or a low-drive
     meter artefact, and those want a higher-power run to separate.
-12. **A revoked session still looks healthy.** The backend swallows a post-grant
+11. **A revoked session still looks healthy.** The backend swallows a post-grant
     auth failure as "the previous session's teardown" — right for a reconnect,
     wrong when the radio really has withdrawn this one. It should disconnect.
 

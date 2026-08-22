@@ -299,8 +299,15 @@ void IcomCivBackend::publishCapabilities() { emit capabilitiesChanged(); }
 void IcomCivBackend::publishIdentity()
 {
     RadioDelta r;
-    r.model = QString::fromUtf8(m_model->name.data(),
-                                static_cast<int>(m_model->name.size()));
+    const QString modelName = QString::fromUtf8(m_model->name.data(),
+                                                static_cast<int>(m_model->name.size()));
+    r.model = modelName;
+    // The RS-BA1 handshake carries the radio's operator-configured Network
+    // Radio Name. It is the Icom equivalent of the nickname this neutral delta
+    // exposes, and is distinct from both the network hostname and the station
+    // callsign. Fall back to the CI-V-resolved model only when the radio leaves
+    // that field blank; never retain ConnectionPanel's generic "Icom" seed.
+    r.nickname = m_deviceName.isEmpty() ? modelName : m_deviceName;
     // ALWAYS SET, even when the row declares nothing. bandsRaw is a present-only
     // field, so omitting it leaves whatever the last radio declared standing —
     // and an empty declaration is a real answer here: it means "use the built-in
@@ -977,7 +984,7 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
 
 void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
-    m_deviceName = deviceName;
+    m_deviceName = deviceName.trimmed();
     m_connected = true;
 
     // RESOLVE THE MODEL FROM THE NAME, NOW.
@@ -993,7 +1000,7 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // The capabilities packet already told us the name during the handshake, so
     // use it. The address query still runs and still wins — it is the
     // authority, this is just early enough to be useful.
-    m_modelByName = modelForName(deviceName.toStdString());
+    m_modelByName = modelForName(m_deviceName.toStdString());
     if (m_modelByName) {
         m_model = m_modelByName;
         // And declare the bands NOW, for the same reason the model is resolved
@@ -1004,6 +1011,15 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
         // unidentified radio declares nothing and keeps the HF grid, rather
         // than announcing itself as "Unknown Icom" with no bands at all.
         publishIdentity();
+    } else {
+        // A custom Network Radio Name is intentionally not a model name. Publish
+        // it before connected() anyway so the status bar never exposes the
+        // manual-connect placeholder while the broadcast 0x19 0x00 query learns
+        // the canonical model. A present-but-empty nickname also clears that
+        // placeholder; publishIdentity() supplies the model fallback later.
+        RadioDelta r;
+        r.nickname = m_deviceName;
+        emit radioChanged(r);
     }
 
     // WRONG DEVICE, said as early as it can be said.
