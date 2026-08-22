@@ -41,6 +41,10 @@ public:
     // With the list, one click is one reachable edge.
     void setTxFilterEdges(const QList<int>& lowEdgesHz, const QList<int>& highEdgesHz);
 
+    // Hides the complete TX cutoff editor when the backend has no independent
+    // low/high cutoff command. Unsupported controls are absent, not inert.
+    void setTxFilterControlsAvailable(bool available);
+
 private:
     void buildUI();
     void syncFromModel();
@@ -66,6 +70,7 @@ private:
     QLabel*      m_dexpLabel{nullptr};
 
     // TX filter
+    QWidget* m_txFilterWidget{nullptr};
     QSlider* m_lowCutSlider{nullptr};
     ScrollableLabel* m_lowCutLabel{nullptr};
     QPushButton* m_lowCutDown{nullptr};
