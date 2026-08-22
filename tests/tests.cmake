@@ -707,6 +707,13 @@ target_include_directories(vfo_flag_placement_test PRIVATE src)
 target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
 add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
 
+add_executable(slice_tone_cues_test
+    tests/slice_tone_cues_test.cpp
+)
+target_include_directories(slice_tone_cues_test PRIVATE src)
+target_link_libraries(slice_tone_cues_test PRIVATE Qt6::Core)
+add_test(NAME slice_tone_cues_test COMMAND slice_tone_cues_test)
+
 add_executable(mac_cursor_compat_test
     tests/mac_cursor_compat_test.cpp
 )
