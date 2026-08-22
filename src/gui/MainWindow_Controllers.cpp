@@ -38,6 +38,7 @@
 #include "UlanziDialMapperDialog.h"
 #include "RxApplet.h"
 #include "SpectrumWidget.h"
+#include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
 
@@ -1465,9 +1466,18 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             // follow-up for that layout. ToggleApf remains the way in.
             if (!s->apfOn()) {
                 if (SpectrumWidget* sw = spectrumForSlice(s)) {
-                    sw->showTxFilterNotification(QStringLiteral("APF level"),
-                                                 QStringLiteral("Turn APF on first"),
-                                                 1500);
+                    // Own id and Info tone: this is a control hint, not a
+                    // warning, and it must neither evict nor be evicted by
+                    // the TX-filter ("txfilter.audio-loss") or interlock
+                    // cards — re-keying only replaces an earlier APF hint.
+                    PanadapterOverlayMessage card;
+                    card.id = QStringLiteral("apf.level-off");
+                    card.title = QStringLiteral("APF level");
+                    card.detail = QStringLiteral("Turn APF on first");
+                    card.timeoutMs = 1500;
+                    card.dismissible = true;
+                    card.tone = PanadapterOverlayMessageTone::Info;
+                    sw->upsertOverlayMessage(std::move(card));
                 } else {
                     statusBar()->showMessage(
                         QStringLiteral("APF level: turn APF on first"), 1500);
