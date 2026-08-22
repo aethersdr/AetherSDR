@@ -3388,7 +3388,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
 
         add("keyevent", {},
             "keyevent <press|release> <action-id|key-seq> — inject a real key edge through "
-            "the app event filter (momentary shortcuts; press is TX-gated)",
+            "the app event filter (momentary shortcuts only — PTT hold, CW keys; other ids "
+            "fire nothing; press is TX-gated)",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
                 a.action = vtok(p, 1);
                 a.value = vtok(p, 2);
@@ -8244,6 +8245,10 @@ QJsonObject AutomationServer::doKeyEvent(const QString& action, const QString& s
         break;
     case 1:  // KeyInjectUnknownKey
         return err(QStringLiteral("not a known action id or key sequence: ") + spec);
+    case 5:  // KeyInjectUnbound
+        return err(QStringLiteral("action '") + spec
+                   + QStringLiteral("' exists but has no key binding; bind it in "
+                                    "Settings or pass a literal key sequence"));
     case 2:  // KeyInjectTxBlocked
         qCWarning(lcAutomation).noquote() << "BLOCKED transmit-keying key press" << spec;
         return err(QStringLiteral("blocked: '") + spec

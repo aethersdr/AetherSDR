@@ -250,6 +250,7 @@ public:
     static constexpr int KeyInjectTxBlocked   = 2;  // keysTx PRESS with allowTx false (releases are never blocked)
     static constexpr int KeyInjectNotConsumed = 3;  // delivered, no momentary handler claimed it
     static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
+    static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
     Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
     // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
     // disable / place, driven by the `workspace` automation verb.  Returns

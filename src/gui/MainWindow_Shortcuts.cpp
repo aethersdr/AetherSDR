@@ -1308,6 +1308,10 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     const ShortcutManager::Action* a = m_shortcutManager.action(spec);
     if (a && !a->currentKey.isEmpty()) {
         seq = a->currentKey;
+    } else if (a) {
+        // The id exists but has no binding (the CW momentary ids ship
+        // unbound): say so, rather than "not a known action id".
+        return KeyInjectUnbound;
     } else {
         seq = QKeySequence::fromString(spec, QKeySequence::PortableText);
         // fromString() parses unrecognised text into a non-empty sequence whose
@@ -1328,15 +1332,19 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     QKeyEvent ev(press ? QEvent::KeyPress : QEvent::KeyRelease,
                  kc.key(), kc.keyboardModifiers(), QString(), /*autorep=*/false);
 
-    // Send (not post) to the focus widget: filters installed on qApp run for
-    // events delivered to any object, so this walks the same eventFilter path
-    // a real key takes — synchronously, so isAccepted() is meaningful on
-    // return. Nothing goes through the window manager, so focus-stealing
-    // prevention cannot defeat it.
-    QWidget* recv = QApplication::focusWidget();
-    if (!recv)
-        recv = this;
-    QApplication::sendEvent(recv, &ev);
+    // Send (not post) to the main window itself, never to the focus widget.
+    // Filters installed on qApp run for events delivered to any object, so
+    // this still walks the same eventFilter path a real key takes —
+    // synchronously, so isAccepted() is meaningful on return — and the
+    // momentary handlers do not look at the receiver. Delivering to the
+    // focus widget instead would let an unbound key reach a widget that keys
+    // TX on its own (a focused ATU/CWX/APRS button clicks on Space; a
+    // dialog's default button on Return), bypassing the action-level gate
+    // above — the widget-marker guard `invoke` honours (aetherTxKeying) would
+    // be skipped. A synthesized edge that only the filter can see cannot
+    // click anything. Nothing goes through the window manager, so
+    // focus-stealing prevention cannot defeat it. (Constitution VI)
+    QApplication::sendEvent(this, &ev);
     if (!ev.isAccepted())
         return KeyInjectNotConsumed;
     return (press && keysTx) ? KeyInjectTxOk : KeyInjectOk;
