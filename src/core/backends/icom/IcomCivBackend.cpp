@@ -246,10 +246,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // position/time through 23 00, but no satellite count or GPSDO/reference
     // lock. Do not lend this claim to another Icom row until its own guide has
     // been checked.
-    c.hasGpsLocation = m_model->hasGpsPosition;
+    c.hasGpsLocation = profile.supports(IcomFeature::GpsPosition);
     c.hasGpsSatelliteTelemetry = false;
     c.hasGpsFrequencyReference = false;
-    c.hasGpsTimeConfiguration = m_model->hasGpsTimeConfiguration;
+    c.hasGpsTimeConfiguration = profile.supports(IcomFeature::GpsTimeConfiguration);
 
     c.hasSupplyVoltageTelemetry =
         profile.meters.calibration != MeterCalibration::Uncalibrated;
@@ -744,16 +744,19 @@ void IcomCivBackend::sendConnectReadBurst()
         }
     }
 
-    if (m_model->hasGpsPosition) {
+    const IcomModelProfile& profile = profileFor(*m_model);
+    if (profile.supports(IcomFeature::GpsPosition)) {
         queueStartupRead(cmdReadGpsSource(m_session->civAddress()));
         queueStartupRead(cmdReadGpsPosition(m_session->civAddress()));
     }
-    if (m_model->hasGpsTimeConfiguration) {
-        for (int item : {setting::kNtpEnabled, setting::kNtpServer,
-                         setting::kGpsTimeCorrect}) {
+    if (profile.supports(IcomFeature::GpsTimeConfiguration) && profile.gps) {
+        for (int item : {profile.gps->ntpEnabledItem, profile.gps->ntpServerItem,
+                         profile.gps->timeCorrectItem}) {
             queueStartupRead(cmdReadSetting(m_session->civAddress(), item));
         }
-        queueStartupRead(cmdReadNtpAccessResult(m_session->civAddress()));
+        if (profile.gps->hasNtpAccess) {
+            queueStartupRead(cmdReadNtpAccessResult(m_session->civAddress()));
+        }
     }
 
     // ADOPT THE RADIO'S OWN LEVELS. Constitution II/III says an Icom is
@@ -1931,7 +1934,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
     }
 
     case cmd::kGps: {
-        if (!frame.hasSub || !m_model->hasGpsPosition) {
+        if (!frame.hasSub
+            || !profileFor(*m_model).supports(IcomFeature::GpsPosition)) {
             return;
         }
         if (frame.sub == gps::kSource) {
@@ -2040,7 +2044,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         }
         if (frame.sub == settingSub::kNtpResult) {
-            if (!m_model->hasGpsTimeConfiguration || frame.data.size() != 1
+            if (!profileFor(*m_model).supports(IcomFeature::GpsTimeConfiguration)
+                || frame.data.size() != 1
                 || frame.data[0] > 0x02) {
                 return;
             }
@@ -2063,21 +2068,22 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         const int item = decodeBcdByte(frame.data[0]) * 100 + decodeBcdByte(frame.data[1]);
 
-        if (m_model->hasGpsTimeConfiguration) {
+        const IcomModelProfile& profile = profileFor(*m_model);
+        if (profile.supports(IcomFeature::GpsTimeConfiguration) && profile.gps) {
             GpsDelta d;
-            if (item == setting::kNtpEnabled && frame.data.size() == 3
+            if (item == profile.gps->ntpEnabledItem && frame.data.size() == 3
                 && frame.data[2] <= 0x01) {
                 d.ntpEnabled = frame.data[2] == 0x01;
                 emit gpsChanged(d);
                 return;
             }
-            if (item == setting::kGpsTimeCorrect && frame.data.size() == 3
+            if (item == profile.gps->timeCorrectItem && frame.data.size() == 3
                 && frame.data[2] <= 0x01) {
                 d.gpsTimeCorrectionEnabled = frame.data[2] == 0x01;
                 emit gpsChanged(d);
                 return;
             }
-            if (item == setting::kNtpServer) {
+            if (item == profile.gps->ntpServerItem) {
                 QByteArray raw(reinterpret_cast<const char*>(frame.data.data() + 2),
                                static_cast<qsizetype>(frame.data.size() - 2));
                 // The IC-705 answers this SET-menu leaf as a fixed-width,
@@ -3794,6 +3800,14 @@ QVariantMap IcomCivBackend::profileMap() const
                   profile.fmRepeater->hasTxFrequencyReadback);
         out.insert(QStringLiteral("fmRepeater"), fm);
     }
+    if (profile.gps) {
+        QVariantMap gps;
+        gps.insert(QStringLiteral("ntpEnabledSetItem"), profile.gps->ntpEnabledItem);
+        gps.insert(QStringLiteral("ntpServerSetItem"), profile.gps->ntpServerItem);
+        gps.insert(QStringLiteral("timeCorrectSetItem"), profile.gps->timeCorrectItem);
+        gps.insert(QStringLiteral("ntpAccess"), profile.gps->hasNtpAccess);
+        out.insert(QStringLiteral("gps"), gps);
+    }
     return out;
 }
 
@@ -4287,7 +4301,8 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             }
             return;
         }
-        if (!m_model->hasGpsTimeConfiguration) {
+        const IcomModelProfile& profile = profileFor(*m_model);
+        if (!profile.supports(IcomFeature::GpsTimeConfiguration) || !profile.gps) {
             if (requestId != 0) {
                 emit extensionError(requestId,
                                     QStringLiteral("GPS clock controls are not supported by %1")
@@ -4298,10 +4313,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         }
         const std::uint8_t addr = m_session->civAddress();
         if (verb == QLatin1String("gps.ntp.enabled")) {
-            sendUserCommand(cmdWriteSetting(addr, setting::kNtpEnabled,
+            sendUserCommand(cmdWriteSetting(addr, profile.gps->ntpEnabledItem,
                                             arg.toBool() ? 0x01 : 0x00));
         } else if (verb == QLatin1String("gps.time-correction")) {
-            sendUserCommand(cmdWriteSetting(addr, setting::kGpsTimeCorrect,
+            sendUserCommand(cmdWriteSetting(addr, profile.gps->timeCorrectItem,
                                             arg.toBool() ? 0x01 : 0x00));
         } else if (verb == QLatin1String("gps.ntp.server")) {
             const QString address = arg.toString().trimmed();
@@ -4316,7 +4331,7 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             const std::span<const std::uint8_t> bytes(
                 reinterpret_cast<const std::uint8_t*>(ascii.constData()),
                 static_cast<std::size_t>(ascii.size()));
-            sendUserCommand(cmdWriteSettingData(addr, setting::kNtpServer, bytes));
+            sendUserCommand(cmdWriteSettingData(addr, profile.gps->ntpServerItem, bytes));
         } else if (verb == QLatin1String("gps.ntp.sync")) {
             m_ntpAccessInProgress = true;
             GpsDelta d;
@@ -4671,7 +4686,8 @@ void IcomCivBackend::onLinkTick()
     };
     const int phase = ++m_controlPollPhase;
 
-    if (m_model->hasGpsPosition) {
+    const IcomModelProfile& profile = profileFor(*m_model);
+    if (profile.supports(IcomFeature::GpsPosition)) {
         queueRead(cmdReadGpsPosition(addr), semanticKey(cmdReadGpsPosition(addr)),
                   IcomCivScheduler::Priority::Maintenance);
     }
@@ -4728,12 +4744,12 @@ void IcomCivBackend::onLinkTick()
                 }
             }
         }
-        if (m_model->hasGpsPosition) {
+        if (profile.supports(IcomFeature::GpsPosition)) {
             queueControl(cmdReadGpsSource(addr));
         }
-        if (m_model->hasGpsTimeConfiguration) {
-            for (int item : {setting::kNtpEnabled, setting::kNtpServer,
-                             setting::kGpsTimeCorrect}) {
+        if (profile.supports(IcomFeature::GpsTimeConfiguration) && profile.gps) {
+            for (int item : {profile.gps->ntpEnabledItem, profile.gps->ntpServerItem,
+                             profile.gps->timeCorrectItem}) {
                 queueControl(cmdReadSetting(addr, item));
             }
         }

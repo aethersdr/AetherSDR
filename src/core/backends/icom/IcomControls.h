@@ -46,6 +46,8 @@ enum class Encoding : std::uint8_t {
     BcdFreq,     // five BCD bytes, little-endian, Hz
     ModeFilter,  // mode byte + filter slot byte
     Bcd4,        // four BCD digits (a scope span, a SET-menu item)
+    Ascii,       // bounded ASCII text after the command-specific address
+    GpsPosition, // latitude/longitude plus optional altitude/course/speed/UTC
 };
 
 // Which model the value belongs to once it is across the seam. Says where to

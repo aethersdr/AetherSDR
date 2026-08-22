@@ -368,6 +368,12 @@ int main(int argc, char** argv)
                       && fm.value(QStringLiteral("dtcs")).toBool()
                       && fm.value(QStringLiteral("xfc")).toBool(),
                   "profile.show carries the IC-705 repeater dialect, DTCS and XFC");
+            const QVariantMap gps = profile.value(QStringLiteral("gps")).toMap();
+            check(gps.value(QStringLiteral("ntpEnabledSetItem")).toInt() == 167
+                      && gps.value(QStringLiteral("ntpServerSetItem")).toInt() == 168
+                      && gps.value(QStringLiteral("timeCorrectSetItem")).toInt() == 169
+                      && gps.value(QStringLiteral("ntpAccess")).toBool(),
+                  "profile.show carries the IC-705 GPS/NTP command shape");
         }
     }
     check(caps.cwTextMinWpm == 6 && caps.cwTextMaxWpm == 48

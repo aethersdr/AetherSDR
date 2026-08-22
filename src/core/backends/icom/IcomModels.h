@@ -86,11 +86,6 @@ struct IcomModel {
     // typo here costs a missing button, never a bogus one.
     std::string_view bands;
 
-    // Verified per model from that model's own CI-V guide. Defaults are
-    // deliberately false so another row cannot inherit IC-705 GPS commands.
-    bool hasGpsPosition = false;
-    bool hasGpsTimeConfiguration = false;
-
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
 };
 
@@ -336,6 +331,8 @@ enum class IcomFeature : std::uint8_t {
     FmRepeaterBasic,
     FmRepeaterExtended,
     TxFrequencyCheck,
+    GpsPosition,
+    GpsTimeConfiguration,
 };
 
 enum class EvidenceKind : std::uint8_t {
@@ -376,6 +373,17 @@ struct RxAntennaProfile {
     bool readbackAvailable = false;
 };
 
+// Model-specific GPS and clock command shape. SET-menu item numbers are not
+// stable across Icom models, so they belong in the profile rather than in an
+// IC-705 address branch at the call site. Feature evidence independently gates
+// position and clock support: a future radio may implement only one half.
+struct GpsProfile {
+    int ntpEnabledItem = -1;
+    int ntpServerItem = -1;
+    int timeCorrectItem = -1;
+    bool hasNtpAccess = false;
+};
+
 struct MeterCalibrationProfile {
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     std::span<const CurvePoint> powerCurve;
@@ -399,6 +407,7 @@ struct IcomModelProfile {
     std::optional<FmRepeaterProfile> fmRepeater;
     std::optional<CwTextKeyerProfile> cwTextKeyer;
     std::optional<RxAntennaProfile> rxAntenna;
+    std::optional<GpsProfile> gps;
     SetMenuProfile setMenu;
     ScopeCommandProfile scope;
     MeterCalibrationProfile meters;

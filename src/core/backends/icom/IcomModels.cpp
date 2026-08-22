@@ -47,8 +47,6 @@ constexpr std::array<IcomModel, 7> kModels{{
         // button is a tune-and-operate affordance rather than a coverage
         // claim. Both stay reachable by typing the frequency.
         /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
-        /*hasGpsPosition*/ true,
-        /*hasGpsTimeConfiguration*/ true,
     },
     {
         // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),
@@ -225,7 +223,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 10> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 12> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -245,6 +243,10 @@ constexpr std::array<FeatureEvidence, 10> kIc705Evidence{{
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020, 1C 02"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
+    {IcomFeature::GpsPosition, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-705 CI-V Reference Guide 2020, 23 00/01; live position proof 2026-08-21"},
+    {IcomFeature::GpsTimeConfiguration, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-705 CI-V Reference Guide 2020, SET 0167-0169 and 1A 07/08; live NTP proof 2026-08-21"},
 }};
 
 constexpr std::array<FeatureEvidence, 10> kIc7300Mk2Evidence{{
@@ -521,6 +523,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .cwTextKeyer = CwTextKeyerProfile{},
+        .gps = GpsProfile{167, 168, 169, true},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
         .meters = MeterCalibrationProfile{MeterCalibration::Ic705,
@@ -590,6 +593,8 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::FmRepeaterBasic:     return "fm-repeater-basic";
     case IcomFeature::FmRepeaterExtended:  return "fm-repeater-extended";
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
+    case IcomFeature::GpsPosition:         return "gps-position";
+    case IcomFeature::GpsTimeConfiguration: return "gps-time-configuration";
     }
     return "unknown";
 }

@@ -38,6 +38,8 @@ discoverable but do not receive a supported bring-up profile.
 | RX antenna | None | Selectable; live firmware returns ACK without readback | Not attested |
 | RF decks | Continuous envelope | Continuous envelope | Three discontinuous decks with 100/75/10 W ceilings |
 | FM repeater | Extended registers documented; basic tone/level/offset/XFC live-proved | Tone + TSQL, no DTCS claim | Extended registers official-guide + live-proved |
+| GPS position | `23 00/01`, official guide + live-proved | Not attested | Not attested |
+| GPS/NTP clock | SET `0167`-`0169` plus `1A 07/08`, official guide + live-proved | Not attested | Not attested |
 
 The FM row deliberately corrects the assumption in the original IC-9700 PR
 that the repeater family must be hidden on IC-705. The IC-705 guide documents
@@ -61,7 +63,8 @@ declarations for features that are implemented but unavailable on the active
 radio.
 
 The backend's read-only `profile.show` extension returns the active model, guide
-revision, SET-item differences, per-feature evidence, and the FM repeater facet.
+revision, SET-item differences, per-feature evidence, and the FM repeater and
+GPS facets.
 It contains no credentials. `controls map` is the currently public automation
 surface; routing the RFC's proposed `icom profile show` bridge spelling remains
 separate automation work so this foundation does not cross the radio seam.
