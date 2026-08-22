@@ -78,6 +78,8 @@
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QPoint>
 #include <QHostAddress>
 #include <QClipboard>
 #include <QDebug>
@@ -8016,7 +8018,19 @@ void RadioSetupDialog::revealFlexControlSettings()
         // walk up the parent chain to find that enclosing scroll area.
         for (QWidget* w = group->parentWidget(); w; w = w->parentWidget()) {
             if (auto* area = qobject_cast<QScrollArea*>(w)) {
-                area->ensureWidgetVisible(group);
+                QWidget* content = area->widget();
+                if (!content) {
+                    return;
+                }
+                // Deliberately not ensureWidgetVisible(): it *centers* a
+                // widget taller than the viewport, and the FlexControl
+                // Tuning Knob group (~450-480px) is tall enough that at the
+                // dialog's 960x680 floor, centering pushes the group's own
+                // title and Status row above the top edge — the opposite of
+                // what "reveal" should do. Scroll its top edge into view
+                // directly instead (PR #5157 review).
+                const int y = group->mapTo(content, QPoint(0, 0)).y();
+                area->verticalScrollBar()->setValue(qMax(0, y - 8));
                 return;
             }
         }
