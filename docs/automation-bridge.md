@@ -2275,19 +2275,18 @@ the radio.
 External-device diagnostics and bounded lifecycle control. `devices list`
 reports the available diagnostic names; `devices ulanzi` probes the exact
 macOS HID match used by the Ulanzi backend and joins that inventory with the
-backend's access and system-event suppression state. It never returns unrelated
-HID devices.
+backend's access and system-event suppression state. The inventory is limited
+to devices selected by the production VID/PID dictionary.
 
 ```json
 → {"cmd":"devices","action":"ulanzi"}
 ← {"ok":true,"diagnostic":"ulanzi","platform":"macos","supported":true,
    "enabled":true,
-   "expectedMatch":{"vendorId":65521,"productId":130},
-   "matchedCount":1,"expectedMatchCount":1,"unexpectedMatchCount":0,
-   "matchScopeSafe":true,
+   "productionMatch":{"vendorId":65521,"productId":130},
+   "matchedCount":1,
    "matchedDevices":[{"product":"Ulanzi Dial","vendorId":65521,
                       "productId":130,"primaryUsagePage":1,
-                      "primaryUsage":6,"expected":true}],
+                      "primaryUsage":6}],
    "inventoryAvailable":true,"accessMode":"shared",
    "exclusiveOpenStatus":"notPrivileged","sharedOpenStatus":"success",
    "systemEventsSuppressed":true,"suppressionStatus":"active",
@@ -2296,14 +2295,13 @@ HID devices.
 ```
 
 `matchedCount` is the number of devices currently inside the production match
-dictionary. `unexpectedMatchCount` must be zero before treating an exclusive
-claim as safely scoped; the Apple trackpad regression in #5126 produced
-unexpected matches here. `inventoryAvailable` describes the temporary
-read-only inventory query, while `exclusiveOpen*`, `sharedOpen*`, and
-`accessMode` describe the real backend's access attempts. If macOS rejects an
-exclusive claim for the Bluetooth keyboard-class dial, the backend opens only
-the exact matched device in shared mode and applies a device-scoped system key
-mapping. `systemEventsSuppressed` and `suppressionStatus` report that state;
+dictionary; `matchedDevices` exposes the selected devices' identity and primary
+usage for audit. `inventoryAvailable` describes the temporary read-only
+inventory query, while `exclusiveOpen*`, `sharedOpen*`, and `accessMode`
+describe the real backend's access attempts. If macOS rejects an exclusive
+claim for the Bluetooth keyboard-class dial, the backend opens only the exact
+matched device in shared mode and applies a device-scoped system key mapping.
+`systemEventsSuppressed` and `suppressionStatus` report that state;
 `previousMappingPreserved` and `eventSystemClientRetained` are the restoration
 ownership guards.
 

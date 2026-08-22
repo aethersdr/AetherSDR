@@ -2588,7 +2588,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             {QStringLiteral("ok"), true},
             {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
             {QStringLiteral("supported"), false},
-            {QStringLiteral("error"),
+            {QStringLiteral("message"),
              QStringLiteral("Ulanzi HID diagnostics are currently macOS-only")},
         };
 #endif

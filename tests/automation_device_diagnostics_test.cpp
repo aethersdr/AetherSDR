@@ -65,7 +65,7 @@ int main(int argc, char** argv)
             {QStringLiteral("ok"), true},
             {QStringLiteral("diagnostic"), diagnostic},
             {QStringLiteral("matchedCount"), 1},
-            {QStringLiteral("unexpectedMatchCount"), 0},
+            {QStringLiteral("accessMode"), QStringLiteral("shared")},
             {QStringLiteral("exclusiveClaimActive"), true},
         };
     });
@@ -76,7 +76,8 @@ int main(int argc, char** argv)
               && snapshot.value(QStringLiteral("diagnostic")).toString()
                      == QLatin1String("ulanzi")
               && snapshot.value(QStringLiteral("matchedCount")).toInt() == 1
-              && snapshot.value(QStringLiteral("unexpectedMatchCount")).toInt() == 0
+              && snapshot.value(QStringLiteral("accessMode")).toString()
+                     == QLatin1String("shared")
               && snapshot.value(QStringLiteral("exclusiveClaimActive")).toBool()
               && calls == 1,
           "devices ulanzi dispatches its provider in observe-only mode");

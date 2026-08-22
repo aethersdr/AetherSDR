@@ -24,6 +24,8 @@ namespace AetherSDR {
 
 namespace {
 
+// Reporter's Bluetooth LE descriptor dump in #5126 records VendorID 65521
+// (0xFFF1) and ProductID 130 (0x0082); the bench device reports the same pair.
 constexpr int kUlanziVendorId = 0xFFF1;
 constexpr int kUlanziProductId = 0x0082;
 
@@ -522,8 +524,6 @@ void UlanziDialMacOSManager::discardSystemEventSuppression()
 QJsonObject UlanziDialMacOSManager::diagnostics() const
 {
     QJsonArray devices;
-    int expectedMatchCount = 0;
-    int unexpectedMatchCount = 0;
 
     IOHIDManagerRef probe = IOHIDManagerCreate(kCFAllocatorDefault,
                                                kIOHIDOptionsTypeNone);
@@ -543,13 +543,6 @@ QJsonObject UlanziDialMacOSManager::diagnostics() const
             IOHIDDeviceRef device = static_cast<IOHIDDeviceRef>(const_cast<void*>(value));
             const qint64 vendorId = deviceNumber(device, CFSTR(kIOHIDVendorIDKey));
             const qint64 productId = deviceNumber(device, CFSTR(kIOHIDProductIDKey));
-            const bool expected = vendorId == kUlanziVendorId
-                && productId == kUlanziProductId;
-            if (expected) {
-                ++expectedMatchCount;
-            } else {
-                ++unexpectedMatchCount;
-            }
             devices.append(QJsonObject{
                 {QStringLiteral("product"), deviceString(device, CFSTR(kIOHIDProductKey))},
                 {QStringLiteral("vendorId"), vendorId},
@@ -558,7 +551,6 @@ QJsonObject UlanziDialMacOSManager::diagnostics() const
                  deviceNumber(device, CFSTR(kIOHIDPrimaryUsagePageKey))},
                 {QStringLiteral("primaryUsage"),
                  deviceNumber(device, CFSTR(kIOHIDPrimaryUsageKey))},
-                {QStringLiteral("expected"), expected},
             });
         }
         if (matched) {
@@ -572,13 +564,10 @@ QJsonObject UlanziDialMacOSManager::diagnostics() const
         {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
         {QStringLiteral("platform"), QStringLiteral("macos")},
         {QStringLiteral("supported"), true},
-        {QStringLiteral("expectedMatch"),
+        {QStringLiteral("productionMatch"),
          QJsonObject{{QStringLiteral("vendorId"), kUlanziVendorId},
                      {QStringLiteral("productId"), kUlanziProductId}}},
         {QStringLiteral("matchedCount"), devices.size()},
-        {QStringLiteral("expectedMatchCount"), expectedMatchCount},
-        {QStringLiteral("unexpectedMatchCount"), unexpectedMatchCount},
-        {QStringLiteral("matchScopeSafe"), unexpectedMatchCount == 0},
         {QStringLiteral("matchedDevices"), devices},
         {QStringLiteral("inventoryAvailable"), inventoryAvailable},
         {QStringLiteral("accessMode"), accessModeName()},
