@@ -175,6 +175,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // Global / TX / mic profiles are a SmartSDR feature on every current model.
     caps.hasProfiles = true;
     caps.hasSelectableMicInputs = true;
+    // SmartSDR's compander command is the authoritative DEXP path used by
+    // TransmitModel::setDexp/setDexpLevel.
+    caps.hasDownwardExpander = true;
 
     // FALSE, and stated rather than left to the default. A Flex modulates on
     // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one

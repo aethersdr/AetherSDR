@@ -266,6 +266,8 @@ int main(int argc, char** argv)
               "Flex declares hasRadioSideCwKeyer (the `cwx` text buffer)");
         check(caps.hasVoiceKeyer,
               "Flex declares hasVoiceKeyer (the `dvk` recorder)");
+        check(caps.hasDownwardExpander,
+              "Flex preserves its authoritative DEXP compander surface");
         check(caps.hasFullDuplex,
               "Flex declares hasFullDuplex (radio set full_duplex_enabled=)");
         // Three flags, not one ride on hasRadioSideDsp. All three are true on a
@@ -383,6 +385,8 @@ int main(int argc, char** argv)
               "HL2 declares hasRadioSideCwKeyer=false (no text buffer)");
         check(!caps.hasVoiceKeyer,
               "HL2 declares hasVoiceKeyer=false (no on-radio recorder)");
+        check(!caps.hasDownwardExpander,
+              "HL2 declares hasDownwardExpander=false (no command path)");
         check(!caps.hasFullDuplex,
               "HL2 declares hasFullDuplex=false (exclusive T/R changeover)");
         // The keyer F1-F12 shortcuts, evaluated as updateKeyerAvailability()
@@ -580,6 +584,8 @@ int main(int argc, char** argv)
         check(!caps.hasRadioSideCwKeyer,
               "Sim declares hasRadioSideCwKeyer=false");
         check(!caps.hasVoiceKeyer, "Sim declares hasVoiceKeyer=false");
+        check(!caps.hasDownwardExpander,
+              "Sim declares hasDownwardExpander=false");
         check(!caps.hasFullDuplex, "Sim declares hasFullDuplex=false");
         // The two keyer ACCESSORS, on the one backend in this file that really
         // connects — so this is the only place the permissive rule inside them

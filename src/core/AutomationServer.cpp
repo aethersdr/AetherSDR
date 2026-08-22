@@ -1804,9 +1804,9 @@ QString atuStatusName(ATUStatus s)
     return QStringLiteral("unknown");
 }
 
-QJsonObject transmitSnapshot(const TransmitModel* t)
+QJsonObject transmitSnapshot(const TransmitModel* t, bool hasDownwardExpander)
 {
-    return QJsonObject{
+    QJsonObject snapshot{
         // power / keying (read-only)
         {QStringLiteral("rfPower"),         t->rfPower()},
         {QStringLiteral("tunePower"),       t->tunePower()},
@@ -1830,8 +1830,6 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         {QStringLiteral("voxLevel"),        t->voxLevel()},
         {QStringLiteral("voxDelay"),        t->voxDelay()},
         {QStringLiteral("amCarrierLevel"),  t->amCarrierLevel()},
-        {QStringLiteral("dexp"),            t->dexpOn()},
-        {QStringLiteral("dexpLevel"),       t->dexpLevel()},
         {QStringLiteral("txFilterLow"),     t->txFilterLow()},
         {QStringLiteral("txFilterHigh"),    t->txFilterHigh()},
         // CW
@@ -1853,6 +1851,11 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         {QStringLiteral("apdEnabled"),      t->apdEnabled()},
         {QStringLiteral("showTxInWaterfall"), t->showTxInWaterfall()},
     };
+    if (hasDownwardExpander) {
+        snapshot.insert(QStringLiteral("dexp"), t->dexpOn());
+        snapshot.insert(QStringLiteral("dexpLevel"), t->dexpLevel());
+    }
+    return snapshot;
 }
 
 // CWX keyer snapshot — the queue-drain watch that the #3949 fix rests on.
@@ -5430,7 +5433,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("gps")) {
         data = gpsSnapshot(radio);
     } else if (model == QLatin1String("transmit")) {
-        data = transmitSnapshot(&radio->transmitModel());
+        data = transmitSnapshot(&radio->transmitModel(),
+                                radio->backendCapabilities().hasDownwardExpander);
     } else if (model == QLatin1String("cwx")) {
         data = cwxSnapshot(&radio->cwxModel(), radio->cwxActive());
     } else if (model == QLatin1String("equalizer") || model == QLatin1String("eq")) {

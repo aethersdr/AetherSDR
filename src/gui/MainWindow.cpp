@@ -7126,6 +7126,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // the session and leave a Flex's continuous control stepping through
         // another radio's list.
         if (auto* phone = m_appletPanel->phoneApplet()) {
+            phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }

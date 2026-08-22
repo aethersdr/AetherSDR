@@ -1443,6 +1443,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // lives in this application, so there is nothing for a profile to name.
     c.hasProfiles = false;
     c.hasSelectableMicInputs = false;
+    c.hasDownwardExpander = false;
 
     // EMPTY: the HL2's receive filters are the host DSP's, and continuous.
     c.rxFilterWidthsHz = {};

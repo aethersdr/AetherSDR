@@ -82,6 +82,8 @@ int main(int argc, char** argv)
           "no IQ on any networked Icom — a true here offers a DAX-IQ path that cannot exist");
     check(caps.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
           "an Icom remembers its own state, so the client restores NOTHING");
+    check(!caps.hasDownwardExpander,
+          "Icom exposes no DEXP surface without an evidenced command path");
     RadioCapabilities transmittingIcom = caps;
     transmittingIcom.canTransmit = true;
     check(wsprSeamAudioRouteReady(true, transmittingIcom),

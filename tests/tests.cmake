@@ -3728,6 +3728,24 @@ add_test(NAME phone_tx_filter_numeric_entry_test
 set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(phone_applet_dexp_visibility_test
+    tests/phone_applet_dexp_visibility_test.cpp
+    src/gui/PhoneApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
+)
+target_include_directories(phone_applet_dexp_visibility_test PRIVATE src)
+target_compile_definitions(phone_applet_dexp_visibility_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(phone_applet_dexp_visibility_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_applet_dexp_visibility_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_applet_dexp_visibility_test
+         COMMAND phone_applet_dexp_visibility_test)
+set_tests_properties(phone_applet_dexp_visibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp

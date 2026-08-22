@@ -265,6 +265,7 @@ RadioCapabilities SimBackend::capabilities() const
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
+    caps.hasDownwardExpander = false;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;

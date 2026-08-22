@@ -273,6 +273,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // cannot pick MIC / BAL / LINE / ACC, so the Phone applet collapses to PC.
     c.hasSelectableMicInputs = false;
 
+    // No active Icom profile has a complete, evidenced DEXP SET/read-back
+    // path. In particular, the IC-9700 must not inherit Flex's compander
+    // surface merely because both radios perform other DSP on-radio.
+    c.hasDownwardExpander = false;
+
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
     // fixed list is wrong in every mode but one. This is republished on every
