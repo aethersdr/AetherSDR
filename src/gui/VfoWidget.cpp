@@ -458,8 +458,12 @@ static const QString kModeBtn =
     "QPushButton:checked { background: #0070c0; color: #ffffff; border: 1px solid #0090e0; }"
     "QPushButton:hover { border: 1px solid #0090e0; }";
 
+// :disabled rule so a disabled row (APF level while APF is off, SQL in
+// CW/DIG) dims its caption and value label together with its slider — a
+// stylesheet colour otherwise beats the disabled palette (#4658).
 static const QString kLabelStyle =
-    "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
+    "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }"
+    "QLabel:disabled { color: #5e6e7c; }";
 
 // Meter-view selector buttons.  Unselected look matches the DSP NR/NB/ANF
 // toggles exactly (kDspToggle base + hover); the selected/checked look matches
@@ -2053,7 +2057,7 @@ void VfoWidget::buildTabContent()
             apfVb->addWidget(lbl);
             m_apfSlider = new GuardedSlider(Qt::Horizontal);
             m_apfSlider->setAccessibleName("APF bandwidth");
-            m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
+            m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth. Enabled when APF is on in the DSP grid.");
             m_apfSlider->setRange(0, 100);
             m_apfSlider->setValue(50);
             applyPrimarySliderStyle(m_apfSlider);
