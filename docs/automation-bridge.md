@@ -167,10 +167,16 @@ that should have changed → `grab_widget` for a visual check.
 random token (stored in your OS secret store via QtKeychain — macOS
 Keychain / Windows Credential Manager / libsecret-KWallet, never in the
 settings store — RFC #4603 bans credentials from it outright). Copy it
-into your assistant's MCP config as the
-`AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
-verb except `ping` without a matching token. Headless/CI can supply the
-token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
+and `export AETHER_MCP_TOKEN=<token>` in the shell that launches your
+assistant — `tools/aether_mcp.py` inherits it from the parent process
+environment automatically, so there is no file to edit. In particular,
+**do not** add an `env` block to `.mcp.json` (or any other MCP config
+file) to carry this token — that puts a live credential in a file on
+disk instead of your OS keychain, undoing the point of storing it there
+in the first place, and risks it landing in a commit if that file is
+tracked. The bridge rejects every verb except `ping` without a matching
+token. Headless/CI can supply the token via `AETHER_MCP_TOKEN` directly,
+which overrides the keychain.
 
 ### Secure fresh-build handoff
 

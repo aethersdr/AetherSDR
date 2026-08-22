@@ -25,10 +25,13 @@ AETHER_AUTOMATION_ALLOW_TX — that gate lives in the app, not here, so
 no MCP client can key a live radio by accident.
 
 Auth: if the operator set an access token in Radio Setup → Network, the
-bridge rejects every verb (except ping) without a matching token. Put
-that token in AETHER_MCP_TOKEN and this server attaches it to every
-request. Without the right token the app cannot be driven — that's what
-stops a random local agent from touching the radio.
+bridge rejects every verb (except ping) without a matching token. This
+process inherits AETHER_MCP_TOKEN from whatever shell launched your
+assistant — export it there (e.g. in your shell profile) and this server
+picks it up automatically. No file needs to carry it: nothing here reads
+an "env" block from an MCP config file, so there's no reason to put the
+token in one. Without the right token the app cannot be driven — that's
+what stops a random local agent from touching the radio.
 
 Env:
     AETHER_MCP_SOCKET   override the bridge socket path (else discovery)
@@ -999,8 +1002,10 @@ def handle_tool(name, args):
                 status["hint"] = ("This bridge requires a token, but "
                                   "AETHER_MCP_TOKEN is not set for this server. "
                                   "Copy the token from Radio Setup → Network → "
-                                  "Access Token and set it in this MCP server's "
-                                  "env config.")
+                                  "Access Token, then export AETHER_MCP_TOKEN=<token> "
+                                  "in the shell that launches your assistant -- no "
+                                  "file needs to carry it, this process inherits "
+                                  "the shell environment automatically.")
             if status.get("bridge_read_only"):
                 status["read_only_note"] = (
                     "This bridge is observe-only. Read verbs work; every "
