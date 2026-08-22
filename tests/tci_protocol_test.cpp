@@ -1122,6 +1122,124 @@ bool testGlobalVerbsAndBooleansEndToEnd()
 
 } // namespace
 
+// #4997: `cw_macros:0,TEST` keyed "0,TEST" on the air — the TCI receiver
+// index was joined into the message text and transmitted. Reported against a
+// FLEX-8400 with two independent TCI clients (SDC and Log4OM), both of which
+// send the spec form.
+//
+// Driven through the pure helper rather than handleCommand(): cmdCwMacros'
+// work happens inside a queued lambda that first requires
+// hasRadioSideCwKeyer(), and the in-process demo backend sets that false
+// (SimBackend), so the end-to-end path cannot be reached from a test at all.
+// The helper is where the defect lived, so it is where the regression is
+// pinned.
+bool testCwMacrosStripsTheReceiverIndex()
+{
+    constexpr int kTrxCount = 2;   // AetherSDR advertises two receivers
+
+    // The reporter's exact repro.
+    if (!check(cwMacrosTextFromArgs({"0", "TEST"}, kTrxCount)
+                   == QStringLiteral("TEST"),
+            "cw_macros:0,TEST must key TEST, not 0,TEST")) {
+        return false;
+    }
+    if (!check(cwMacrosTextFromArgs({"0", "CQ DE OH6NEQ"}, kTrxCount)
+                   == QStringLiteral("CQ DE OH6NEQ"),
+            "the issue's own example must lose its 0, prefix")) {
+        return false;
+    }
+    // The second receiver is just as valid an index.
+    if (!check(cwMacrosTextFromArgs({"1", "TEST"}, kTrxCount)
+                   == QStringLiteral("TEST"),
+            "trx 1 is a real receiver and must be stripped too")) {
+        return false;
+    }
+    // The join is load-bearing: a message may legitimately contain commas,
+    // which is why the original code joined at all. Only the index was wrong.
+    if (!check(cwMacrosTextFromArgs({"0", "CQ", "CQ", "DE OH6NEQ"}, kTrxCount)
+                   == QStringLiteral("CQ,CQ,DE OH6NEQ"),
+            "commas inside the message text must survive")) {
+        return false;
+    }
+
+    // ── The two populations a bare args.mid(1) would have broken ──────────
+    //
+    // A client that omits the index still sends its text, rather than
+    // silently keying nothing.
+    if (!check(cwMacrosTextFromArgs({"TEST"}, kTrxCount)
+                   == QStringLiteral("TEST"),
+            "an index-less cw_macros:TEST must still send TEST")) {
+        return false;
+    }
+    // ...and a message whose text genuinely STARTS with a number keeps it.
+    // 599 is not a receiver this radio has, so it is text. Stripping it would
+    // key "TU" and eat the contest report — a worse bug than the one fixed.
+    if (!check(cwMacrosTextFromArgs({"599", "TU"}, kTrxCount)
+                   == QStringLiteral("599,TU"),
+            "a contest exchange must not lose its report to index-stripping")) {
+        return false;
+    }
+    // Same rule at the boundary: trx 2 does not exist when trxCount is 2.
+    if (!check(cwMacrosTextFromArgs({"2", "TU"}, kTrxCount)
+                   == QStringLiteral("2,TU"),
+            "an out-of-range index is text, not an index")) {
+        return false;
+    }
+    // Non-numeric first arg is plainly text.
+    if (!check(cwMacrosTextFromArgs({"CQ", "DE OH6NEQ"}, kTrxCount)
+                   == QStringLiteral("CQ,DE OH6NEQ"),
+            "a non-numeric first argument is message text")) {
+        return false;
+    }
+    // Base 10 only, matching argToInt's documented contract — "0x1" must not
+    // resolve to receiver 1 and get stripped.
+    if (!check(cwMacrosTextFromArgs({"0x1", "TU"}, kTrxCount)
+                   == QStringLiteral("0x1,TU"),
+            "a hex-looking first argument is text, not receiver 1")) {
+        return false;
+    }
+    // A negative index is not a receiver, so it is text.
+    if (!check(cwMacrosTextFromArgs({"-1", "TU"}, kTrxCount)
+                   == QStringLiteral("-1,TU"),
+            "a negative first argument is text, not a receiver")) {
+        return false;
+    }
+
+    // ── Degenerate inputs must not crash or invent text ───────────────────
+    if (!check(cwMacrosTextFromArgs({}, kTrxCount).isEmpty(),
+            "no arguments must yield no text")) {
+        return false;
+    }
+    // A lone index with no message: nothing to key. The rule is uniform —
+    // args[0] naming a real receiver is an INDEX whether or not text
+    // follows, so this must be empty, not "0". Returning "0" here would key
+    // the index on the air, which is this very defect in its
+    // single-argument form.
+    if (!check(cwMacrosTextFromArgs({"0"}, kTrxCount).isEmpty(),
+            "a lone receiver index must key nothing, not the index itself")) {
+        return false;
+    }
+    // ...but a lone NON-index argument is a message, and must still send.
+    if (!check(cwMacrosTextFromArgs({"599"}, kTrxCount)
+                   == QStringLiteral("599"),
+            "a lone non-index argument is a message and must still send")) {
+        return false;
+    }
+    // An index with an explicitly empty message (`cw_macros:0,`) is also
+    // nothing to key — handleCommand() splits with KeepEmptyParts.
+    if (!check(cwMacrosTextFromArgs({"0", ""}, kTrxCount).isEmpty(),
+            "an index with an empty message must key nothing")) {
+        return false;
+    }
+    // A degenerate trxCount must not make every numeric first arg text.
+    if (!check(cwMacrosTextFromArgs({"0", "TEST"}, 0)
+                   == QStringLiteral("TEST"),
+            "receiver 0 is valid even when trxCount is reported as 0")) {
+        return false;
+    }
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     // Must be constructed before QCoreApplication (see TestSettingsProfile.h)
@@ -1198,7 +1316,8 @@ int main(int argc, char** argv)
         || !testModulationEndToEndRejectsUnknownName()
         || !testMalformedValueArgsAreDropped()
         || !testMalformedTrxDoesNotLandOnSliceZero()
-        || !testGlobalVerbsAndBooleansEndToEnd()) {
+        || !testGlobalVerbsAndBooleansEndToEnd()
+        || !testCwMacrosStripsTheReceiverIndex()) {
         return 1;
     }
 
