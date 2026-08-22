@@ -235,6 +235,15 @@ QJsonObject describeAction(const QAction* action, const QMenu* owner)
 // Human-meaningful "value" for a control, so an assertion can read state
 // without a screenshot. Returns a null QString for widgets that have no
 // natural scalar/text value (containers, custom-painted surfaces).
+// Text views (QTextEdit / QPlainTextEdit) serialize a bounded prefix wherever
+// `value` is reported — dump_tree and invoke's newValue echo alike (#5078).
+constexpr int kTextViewValueCap = 2048;
+bool textViewValueTruncated(const QWidget* w)
+{
+    const QVariant plain = w->property("plainText");
+    return plain.isValid() && plain.toString().size() > kTextViewValueCap;
+}
+
 QString widgetValue(const QWidget* w)
 {
     if (auto* s = qobject_cast<const QAbstractSlider*>(w))
@@ -268,13 +277,18 @@ QString widgetValue(const QWidget* w)
     // view yields a valid QVariant even when empty, so "the transcript is
     // empty" serializes as "" and is a real assertion. (#5078)
     {
-        constexpr int kTextViewValueCap = 2048;
         const QVariant plain = w->property("plainText");
         if (plain.isValid()) {
             const QString doc = plain.toString();
-            return doc.size() > kTextViewValueCap
-                       ? doc.left(kTextViewValueCap) + QStringLiteral("…<truncated>")
-                       : doc;
+            if (doc.size() <= kTextViewValueCap)
+                return doc;
+            // Cut on a code-point boundary: a cap landing between the halves
+            // of a surrogate pair would leave a lone surrogate that the JSON
+            // encoder replaces with U+FFFD.
+            int cut = kTextViewValueCap;
+            if (doc.at(cut - 1).isHighSurrogate())
+                --cut;
+            return doc.left(cut) + QStringLiteral("…<truncated>");
         }
     }
     if (auto* sb = qobject_cast<const QSpinBox*>(w))
@@ -391,8 +405,13 @@ QJsonObject describeWidget(const QWidget* w)
     }
 
     const QString val = widgetValue(w);
-    if (!val.isNull())
+    if (!val.isNull()) {
         o[QStringLiteral("value")] = val;
+        // Machine-readable truncation signal: the "…<truncated>" marker is
+        // in-band and a transcript could contain it itself. (#5078)
+        if (textViewValueTruncated(w))
+            o[QStringLiteral("valueTruncated")] = true;
+    }
 
     // A checkable button reports its value as "checked"/"unchecked", which hides
     // the label that says *which* control it is (the six DSP method buttons —

@@ -471,7 +471,7 @@ for common controls so you can assert without a screenshot:
 | `QSpinBox` / `QDoubleSpinBox` | numeric value |
 | `QProgressBar` | numeric value |
 | `QLabel` | its text |
-| `QTextEdit` / `QPlainTextEdit` (transcripts, decode logs, consoles) | plain text, capped at 2048 characters with a trailing `…<truncated>` marker — use [`text`](#text) for the full document |
+| `QTextEdit` / `QPlainTextEdit` (transcripts, decode logs, consoles) | plain text, capped at 2048 characters with a trailing `…<truncated>` marker and a sibling `valueTruncated: true` (the cap applies wherever `value` is reported — `dump_tree` and `invoke`'s `newValue` echo alike) — use [`text`](#text) for the full document |
 | `QAction` inside a `QMenu` | label text, or `"checked"` / `"unchecked"` for checkable actions |
 | containers / custom-painted surfaces | omitted |
 
@@ -1727,8 +1727,11 @@ sets nothing and keys nothing.
    "length":5102,"lines":48,"text":"CQ CQ DE ..."}
 ```
 
-- `dump_tree` carries only a 2048-character prefix of these views (see the `value` table above); this
-  verb returns the whole document, so a transcript assertion is not truncated.
+- `dump_tree` carries only a 2048-character prefix of these views (see the `value` table above; the
+  node also carries `valueTruncated: true` when cut); this verb returns the whole document, so a
+  transcript assertion is not truncated. The response is unbounded — a long console goes into one
+  JSON line; whether it should take a newest-`n`/`path` form like `log tail` / `grab` is an open
+  design question.
 - `lines` counts lines as the pane shows them: a trailing newline ends the last line rather than
   starting another.
 - A non-text target answers `not a text view: <target> (<class>)`.
