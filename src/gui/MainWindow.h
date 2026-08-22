@@ -840,6 +840,9 @@ private:
     void publishRadioStateMqtt();
 #endif
     void applyPanLayout(const QString& layoutId);
+    void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
+    void settleCanvasPanLayout(const QString& layoutId, int expectedPanCount,
+                               int attemptsRemaining, quint64 generation);
     void createPansSequentially(const QString& layoutId, int total,
                                 std::shared_ptr<QStringList> panIds, int created);
     void showPanadapterSliceCapacityMessage();
@@ -1266,6 +1269,9 @@ private:
     WorkspaceCanvas*     m_workspaceCanvas{nullptr};
     WorkspaceController* m_workspaceController{nullptr};
     QAction*             m_workspaceCanvasAction{nullptr};
+    quint64              m_canvasPanLayoutGeneration{0};
+    QString              m_pendingCanvasPanLayoutId;
+    int                  m_pendingCanvasPanLayoutTarget{-1};
     // Additional canvas windows (phase 7), keyed by surface id.  A hidden
     // window stays in the map (hide-and-keep reuses its canvas object);
     // only remove/shutdown deletes.

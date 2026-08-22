@@ -37,6 +37,7 @@
 #include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
 #include "models/SliceModel.h"
+#include "workspace/WorkspaceController.h"
 
 #include <QAbstractSlider>
 #include <QJsonObject>
@@ -667,7 +668,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (!m_radioModel.isConnected()) return true;
         int maxPans = m_radioModel.maxPanadapters();
         // Determine current layout from actual pan count, not saved setting
-        int activePanCount = m_panStack ? m_panStack->count() : 1;
+        const bool canvasEnabled = m_workspaceController
+            && m_workspaceController->isEnabled();
+        int activePanCount = canvasEnabled
+            ? m_workspaceController->activeMainPanIdsForLayout().size()
+            : (m_panStack ? m_panStack->count() : 1);
         QString currentLayout = "1";
         if (activePanCount >= 2)
             currentLayout = AppSettings::instance()
@@ -676,9 +681,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (dlg.exec() == QDialog::Accepted && !dlg.selectedLayout().isEmpty()) {
             const QString layoutId = dlg.selectedLayout();
             const int requestedPanCount = panCountForLayoutId(layoutId);
-            const int currentSliceCount = static_cast<int>(m_radioModel.slices().size());
-            if (requestedPanCount > activePanCount
-                    && currentSliceCount >= m_radioModel.maxSlices()) {
+            const int additionalPans = qMax(0, requestedPanCount - activePanCount);
+            const int globalPanCount = m_panStack ? m_panStack->count() : 0;
+            if (globalPanCount + additionalPans > m_radioModel.maxPanadapters()) {
                 showPanadapterSliceCapacityMessage();
                 return true;
             }

@@ -10017,17 +10017,32 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     if (!m_radioModel.isConnected()) return;
 
     const int needed = panCountForLayoutId(layoutId);
-    const int existing = m_panStack->count();
+    const bool canvasLayout = m_workspaceController
+        && m_workspaceController->isEnabled();
+    const QStringList canvasPanIds = canvasLayout
+        ? m_workspaceController->activeMainPanIdsForLayout() : QStringList{};
+    const int existing = canvasLayout ? canvasPanIds.size() : m_panStack->count();
+    if (!canvasLayout) {
+        ++m_canvasPanLayoutGeneration;
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+    }
 
     if (needed < existing) {
         qDebug() << "applyPanLayout: reducing from" << existing << "to" << needed << "pans";
 
         // Close extra pans from the end (keep the first N)
-        auto allApplets = m_panStack->allApplets();
+        QStringList removalCandidates;
+        if (canvasLayout) {
+            removalCandidates = canvasPanIds;
+        } else {
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                removalCandidates.append(applet->panId());
+            }
+        }
         int toRemove = existing - needed;
-        for (int i = allApplets.size() - 1; i >= 0 && toRemove > 0; --i) {
-            auto* applet = allApplets[i];
-            QString panId = applet->panId();
+        for (int i = removalCandidates.size() - 1; i >= 0 && toRemove > 0; --i) {
+            const QString panId = removalCandidates.at(i);
             if (panId == "default") continue;
             qDebug() << "applyPanLayout: closing pan" << panId;
             // Route through removePanadapter so a layout-shrink tears down the
@@ -10039,27 +10054,35 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             --toRemove;
         }
 
+        // Pan removal and slot rekeying arrive asynchronously. Reflow now and
+        // after each settling turn so the final survivors, rather than a pan
+        // that is still waiting to disappear, receive the canonical cells.
+        startCanvasPanLayoutSettle(layoutId, needed);
+
         // Rearrange remaining pans after a short delay for radio to process
         QTimer::singleShot(500, this, [this, layoutId]() {
-            m_panStack->rearrangeLayout(layoutId);
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
         });
         return;
     }
     if (needed == existing) {
         // Same count, just rearrange
-        m_panStack->rearrangeLayout(layoutId);
+        if (!canvasLayout) {
+            m_panStack->rearrangeLayout(layoutId);
+        }
+        startCanvasPanLayoutSettle(layoutId, needed);
         return;
     }
 
     // Create additional pans to reach the needed count.
     // Keep existing pan(s) alive — no tear-down, no dangling signals.
-    const int currentSliceCount = static_cast<int>(m_radioModel.slices().size());
-    if (currentSliceCount >= m_radioModel.maxSlices()) {
+    const int toCreate = needed - existing;
+    if (m_panStack->count() + toCreate > m_radioModel.maxPanadapters()) {
         showPanadapterSliceCapacityMessage();
         return;
     }
-
-    const int toCreate = needed - existing;
     auto panIds = std::make_shared<QStringList>();
 
     // Collect existing pan IDs first (they'll be part of the layout)
@@ -10069,7 +10092,66 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     qDebug() << "applyPanLayout: have" << existing << "pans, creating"
              << toCreate << "more for layout" << layoutId;
 
+    if (canvasLayout) {
+        startCanvasPanLayoutSettle(layoutId, needed);
+    }
     createPansSequentially(layoutId, toCreate, panIds, 0);
+}
+
+void MainWindow::startCanvasPanLayoutSettle(const QString& layoutId,
+                                            int expectedPanCount)
+{
+    if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+        return;
+    }
+    m_pendingCanvasPanLayoutId = layoutId;
+    m_pendingCanvasPanLayoutTarget = expectedPanCount;
+    const quint64 generation = ++m_canvasPanLayoutGeneration;
+    settleCanvasPanLayout(layoutId, expectedPanCount, 25, generation);
+}
+
+void MainWindow::settleCanvasPanLayout(const QString& layoutId,
+                                       int expectedPanCount,
+                                       int attemptsRemaining,
+                                       quint64 generation)
+{
+    if (m_shuttingDown || !m_panStack || generation != m_canvasPanLayoutGeneration) {
+        return;
+    }
+
+    if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+        if (attemptsRemaining > 0) {
+            QTimer::singleShot(200, this,
+                               [this, layoutId, expectedPanCount,
+                                attemptsRemaining, generation]() {
+                settleCanvasPanLayout(layoutId, expectedPanCount,
+                                      attemptsRemaining - 1, generation);
+            });
+        }
+        return;
+    }
+
+    m_workspaceController->applyPanLayout(layoutId);
+    const int actualPanCount =
+        m_workspaceController->activeMainPanIdsForLayout().size();
+    if (actualPanCount == expectedPanCount) {
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+        return;
+    }
+    if (attemptsRemaining <= 0) {
+        qWarning() << "applyPanLayout: canvas settle expired for" << layoutId
+                   << "expected" << expectedPanCount << "pans, found"
+                   << actualPanCount;
+        return;
+    }
+
+    QTimer::singleShot(200, this,
+                       [this, layoutId, expectedPanCount, attemptsRemaining,
+                        generation]() {
+        settleCanvasPanLayout(layoutId, expectedPanCount,
+                              attemptsRemaining - 1, generation);
+    });
 }
 
 void MainWindow::createPansSequentially(const QString& layoutId, int total,
@@ -10093,7 +10175,10 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
             }
 
             // Rearrange splitter structure for the selected layout
-            m_panStack->rearrangeLayout(layoutId);
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
+            startCanvasPanLayoutSettle(layoutId, panCountForLayoutId(layoutId));
 
             m_panApplet = m_panStack->activeApplet();
 
@@ -10200,12 +10285,12 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
 
 void MainWindow::showPanadapterSliceCapacityMessage()
 {
-    const int limit = m_radioModel.maxSlices();
+    const int limit = m_radioModel.maxPanadapters();
     const QString model = m_radioModel.model().isEmpty()
         ? QStringLiteral("This radio")
         : m_radioModel.model();
     statusBar()->showMessage(
-        QStringLiteral("Slice capacity is full; cannot add another panadapter (%1 supports %2 slice%3)")
+        QStringLiteral("Panadapter capacity is full (%1 supports %2 panadapter%3)")
             .arg(model)
             .arg(limit)
             .arg(limit == 1 ? QString() : QStringLiteral("s")),

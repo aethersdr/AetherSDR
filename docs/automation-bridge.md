@@ -3522,6 +3522,25 @@ actually paint? is the layout right?), because a live spectrum is
 non-deterministic noise and won't golden-match until replay mode (Phase 2)
 lands.
 
+### Workspace pan-layout proof
+
+`workspace pan-layout <id>` drives the same production path as selecting a
+panadapter layout in the UI. It persists `PanadapterLayout`, creates or removes
+pans to reach the layout's count, and reflows Workspace Canvas pan rectangles
+when canvas mode is enabled. Valid IDs are `1`, `2v`, `2h`, `2h1`, `12h`,
+`3v`, `2x2`, `4v`, `3h2`, `2x3`, `4h3`, and `2x4`.
+
+Pan creation and removal settle asynchronously. The initial reply includes
+`targetPanCount`, active-main `panCount`, global `globalPanCount`, and
+`settling`. Poll `workspace status` until the active main surface has the
+target pan count before asserting its live rectangles. Floating pans and pans
+on extra surfaces are outside that count and remain untouched. To prove the
+rectangles persisted, disable and re-enable canvas mode (or restart with the
+same isolated settings profile) and assert the replayed geometry. This action
+returns an error before mutation when the target cannot fit within the radio's
+receiver capacity. It never enables transmit and remains available without
+`AETHER_AUTOMATION_ALLOW_TX`.
+
 ---
 
 ## Gotchas
@@ -3624,7 +3643,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
 | `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864) |
-| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
+| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |

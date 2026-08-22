@@ -3132,7 +3132,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
 
         add("workspace", {},
             "workspace <status|enable|disable|edit|place|list|switch|create|"
-            "bind|import-floats|palette|window|move|add> — the canvas, its "
+            "bind|import-floats|pan-layout|palette|window|move|add> — the canvas, its "
             "workspaces and its extra windows as data; arg shapes in "
             "docs/automation-bridge.md (#4887 ph4/ph6/ph7)",
             parseActionRest,
@@ -3140,7 +3140,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 Q_UNUSED(s);
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "workspace requires an action (status|enable|disable|place)"));
+                        "workspace requires an action (status|enable|disable|place|pan-layout)"));
                 QWidget* mw = primaryTopLevelWindow();
                 if (!mw)
                     return err(QStringLiteral("no main window"));
