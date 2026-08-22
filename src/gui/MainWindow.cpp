@@ -4971,6 +4971,24 @@ void MainWindow::buildUI()
     setActivePanApplet(m_panStack->addPanadapter("default"));
     splitter->addWidget(m_panStack);
 
+    // A panadapter created AFTER the initial connect (Add Panadapter, layout
+    // switch, band-recall) never goes through onConnectionStateChanged()'s
+    // loop over allApplets() -- it comes up with QPushButton's default
+    // enabled state, silently reopening the exact no-op-click gap
+    // setBandSegmentZoomAvailable() exists to close, until the next
+    // connect/disconnect happens to re-sync it. panAdded fires once per
+    // applet "however it was created" (see its own comment on
+    // PanadapterStack::panAdded), so this is the one place that reliably
+    // catches every creation path.
+    connect(m_panStack, &PanadapterStack::panAdded, this, [this](const QString& panId) {
+        auto* applet = m_panStack->panadapter(panId);
+        if (!applet || !applet->spectrumWidget()) {
+            return;
+        }
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            m_radioModel.isConnected() && m_radioModel.hasCommandPlane());
+    });
+
     // Band stack panel signal wiring
     auto* bsPanel = m_panStack->bandStackPanel();
 

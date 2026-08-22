@@ -2160,13 +2160,23 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // m_vfoWidget is set by setActiveVfoWidget() as an alias to the active one.
 
     // Bottom-left waterfall zoom buttons
+    // An explicit :disabled rule is required here, not optional -- a custom
+    // QPushButton { ... } base rule takes over the cascade for every state,
+    // including disabled, so without one setEnabled(false) alone leaves a
+    // disabled button visually identical to an enabled one (Qt's own default
+    // grayed-out rendering never gets a chance to apply). Dimmer text and a
+    // more transparent background than the base rule, matching the same
+    // "communicate inactive without hiding the control" intent as
+    // setBandSegmentZoomAvailable()'s explanatory tooltip.
     static const QString kZoomBtnStyle =
         "QPushButton { background: rgba(15,15,26,180); border: 1px solid #304050;"
         " border-radius: 2px; color: #90a0b0; font-size: 11px; font-weight: bold;"
         " padding: 0; margin: 0; min-width: 0; }"
         "QPushButton:hover { background: rgba(30,50,70,200); color: #c8d8e8; }"
         "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
-        "QPushButton:pressed { background: #00b4d8; color: #000; }";
+        "QPushButton:pressed { background: #00b4d8; color: #000; }"
+        "QPushButton:disabled { background: rgba(15,15,26,90); border-color: #1c2833;"
+        " color: #4a5560; }";
 
     // objectName + accessibleName let the automation bridge target these by a
     // stable handle instead of the visible label \u2014 notably zoom-out, whose glyph
