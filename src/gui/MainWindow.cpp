@@ -10143,6 +10143,12 @@ void MainWindow::settleCanvasPanLayout(const QString& layoutId,
         qWarning() << "applyPanLayout: canvas settle expired for" << layoutId
                    << "expected" << expectedPanCount << "pans, found"
                    << actualPanCount;
+        // Expiry is terminal. Only the disabled-canvas path above represents
+        // a suspended selection that may resume when canvas mode returns.
+        // Leaving an expired selection pending would let a later enable
+        // overwrite geometry the operator arranged in the meantime.
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
         return;
     }
 

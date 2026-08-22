@@ -1622,8 +1622,9 @@ bool WorkspaceController::applyPanLayout(const QString& layoutId)
         return true;
     }
 
-    // Persist the complete document before publishing the matching canvas
-    // geometry. The replay signals are descriptions of this write, not edits.
+    // Make the complete document authoritative before publishing matching
+    // canvas geometry, then flush both as one persisted gesture below. The
+    // replay signals describe this document update; they are not fresh edits.
     const bool wasApplying = m_applying;
     m_applying = true;
     m_store.setDocument(doc);
