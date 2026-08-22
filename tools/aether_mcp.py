@@ -26,12 +26,12 @@ no MCP client can key a live radio by accident.
 
 Auth: if the operator set an access token in Radio Setup → Network, the
 bridge rejects every verb (except ping) without a matching token. This
-process inherits AETHER_MCP_TOKEN from whatever shell launched your
-assistant — export it there (e.g. in your shell profile) and this server
-picks it up automatically. No file needs to carry it: nothing here reads
-an "env" block from an MCP config file, so there's no reason to put the
-token in one. Without the right token the app cannot be driven — that's
-what stops a random local agent from touching the radio.
+process inherits AETHER_MCP_TOKEN from the environment that launched your
+assistant. Set it only for the current session using a secret-safe input
+method; do not put the literal token in a shell profile or command history.
+Nothing here reads an "env" block from an MCP config file, so no file needs
+to carry it. Without the right token the app cannot be driven — that's what
+stops a random local agent from touching the radio.
 
 Env:
     AETHER_MCP_SOCKET   override the bridge socket path (else discovery)
@@ -1002,10 +1002,11 @@ def handle_tool(name, args):
                 status["hint"] = ("This bridge requires a token, but "
                                   "AETHER_MCP_TOKEN is not set for this server. "
                                   "Copy the token from Radio Setup → Network → "
-                                  "Access Token, then export AETHER_MCP_TOKEN=<token> "
-                                  "in the shell that launches your assistant -- no "
-                                  "file needs to carry it, this process inherits "
-                                  "the shell environment automatically.")
+                                  "Access Token, then set AETHER_MCP_TOKEN only for "
+                                  "the current shell session using secret-safe input "
+                                  "that does not record it in history. Do not put the "
+                                  "literal token in a shell profile or MCP config; "
+                                  "this process inherits the session environment.")
             if status.get("bridge_read_only"):
                 status["read_only_note"] = (
                     "This bridge is observe-only. Read verbs work; every "
