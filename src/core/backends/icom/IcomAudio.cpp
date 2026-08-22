@@ -164,9 +164,12 @@ void TxPacketizer::submit(std::span<const float> mono)
     // never is for voice: the oldest bytes of an AX.25 transmission are the
     // preamble and the opening flag, so dropping from the front leaves a frame
     // that still sounds like packet and syncs on nothing. A 596 ms burst is
-    // 2.4x this queue, and onTxPaceTick's catch-up pacing ships a larger chunk
-    // whenever a tick lands late — so an oversized submit is reachable in
-    // production, not just in theory.
+    // 2.4x this queue — and the overflow is reachable in production without
+    // any oversized submit: IcomSession::sendAudio() enqueues here whenever
+    // TX is enabled, while onTxPump() drains nothing until the audio codec
+    // reports ready. A producer with no drain fills the 250 ms cap and then
+    // sheds every older byte submitted, silently, for as long as that state
+    // holds.
     //
     // Counting rather than logging keeps this file free of Qt logging (it is
     // pure protocol, no QObject, and the unit test links it standalone). The

@@ -674,6 +674,12 @@ void IcomCivBackend::disconnectRadio()
     terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
                        SchedulerWaiterOutcome::Cancelled);
     m_schedulerTimeoutsReported = 0;
+    // The packetiser's drop counter dies with the session (fresh TxPacketizer
+    // per connect), so the edge tracker must die with it too. Left standing,
+    // a new session's drops stay SILENT until they exceed the old session's
+    // lifetime total — the warning failing in exactly the way it exists to
+    // prevent.
+    m_lastTxDroppedBytes = 0;
     m_pendingPttIntent.reset();
     m_pendingPttUntilMs = 0;
     m_transmitFrequencyCheck = false;

@@ -419,7 +419,6 @@ add_executable(icom_tx_packetiser_drop_test
     src/core/backends/icom/IcomAudio.cpp
 )
 target_include_directories(icom_tx_packetiser_drop_test PRIVATE src)
-target_link_libraries(icom_tx_packetiser_drop_test PRIVATE Qt6::Core)
 add_test(NAME icom_tx_packetiser_drop_test COMMAND icom_tx_packetiser_drop_test)
 
 add_executable(icom_civ_scheduler_test
