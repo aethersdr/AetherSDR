@@ -368,10 +368,17 @@ void testSetupPageUnaffectedAtNormalWindowHeight()
     }
 
     if (f1) {
-        std::printf("(normal height) F1 macro row height()=%d\n", f1->height());
+        // Calls the SAME function buildSetupView() calls, not a copy of its
+        // formula — a hardcoded `34` here is exactly how this and the
+        // production constant drifted apart the first time (#5125 review,
+        // credit NF0T): production moved to font metrics and this test
+        // kept its own old number.
+        const int floor = CwxPanel::macroRowMinimumHeight(f1->font());
+        std::printf("(normal height) F1 macro row height()=%d  floor=%d\n",
+                    f1->height(), floor);
         report("rows are NOT capped at the #4945 minimum-height floor when "
                "there's room to be taller",
-               f1->height() > 34);
+               f1->height() > floor);
     }
 
     f.panel.setParent(nullptr);
@@ -404,7 +411,11 @@ void reproduceIssue4945MinimizedHeight()
     auto* filler = new QWidget; // stands in for the panadapter stack + RX applet column
     splitter->addWidget(filler);
     splitter->setParent(host);
-    host->resize(1024, 330); // 400 min height minus an estimated title/status bar allowance
+    // 400px app minimum height minus the title/status bar. NF0T measured
+    // the real panel at 322px against a live FLEX-8400 at the app's actual
+    // minimum (review on #5125) -- 330 was an estimate off by ~8px; using
+    // the measured figure instead of guessing again.
+    host->resize(1024, 322);
     splitter->setGeometry(host->rect());
     host->show();
     QCoreApplication::processEvents();
@@ -433,16 +444,32 @@ void reproduceIssue4945MinimizedHeight()
     QScrollArea* macroScroll = macroScrollAreaAncestor(f1);
     report("the macro grid is wrapped in a QScrollArea", macroScroll != nullptr);
 
-    // Check every row, not just F1 — the earlier single-row check on this
-    // repro passed on a mutation that still looked broken overall.
-    const int oneLine = QFontMetrics(f1 ? f1->font() : f.panel.font()).height() + 4;
+    // PITCH, not height() alone (review on #5125, credit NF0T). Checking
+    // every row's height() instead of just F1's was still not enough:
+    // setMinimumHeight() clamps QWidget::height() to the floor even when
+    // the LAYOUT doesn't actually give the widget that much room, so under
+    // a squeeze the rows overlap -- each painting over the one above --
+    // while every individual height() keeps reporting the floor value.
+    // Verified directly: reverting to the pre-#5125 code (scroll area
+    // removed, floor kept) still reports every row's height() at the
+    // floor, while the actual pitch -- the real vertical distance between
+    // consecutive rows -- collapses from ~36px to ~14px, a 20px overlap
+    // per row. Pitch is what actually reveals that; height() cannot.
+    const int oneLine = CwxPanel::macroRowMinimumHeight(f1 ? f1->font() : f.panel.font());
     int shortRows = 0;
+    int previousTop = -1;
     for (int i = 1; i <= 12; ++i) {
         QTextEdit* row = macroEdit(f.panel, i);
-        if (!row || row->height() < oneLine) ++shortRows;
+        if (!row) { ++shortRows; continue; }
+        const int top = row->mapTo(&f.panel, QPoint(0, 0)).y();
+        if (previousTop >= 0 && (top - previousTop) < oneLine)
+            ++shortRows;
+        previousTop = top;
     }
-    std::printf("rows below one readable line (%dpx): %d/12\n", oneLine, shortRows);
-    report("every macro row stays tall enough for one readable line at min window height",
+    std::printf("rows whose pitch to the next row is below one readable "
+               "line (%dpx): %d/11 gaps checked\n", oneLine, shortRows);
+    report("every macro row's pitch to the next stays clear of one "
+           "readable line at min window height (no overlap)",
            shortRows == 0);
 
     // Visual side-by-side: render the live Setup page next to the

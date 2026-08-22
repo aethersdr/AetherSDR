@@ -186,6 +186,37 @@ static const char* kTextStyle =
     "QTextEdit { background: #0a0a14; color: #c8d8e8; border: none; "
     "font-family: monospace; font-size: 13px; padding: 8px; }";
 
+int CwxPanel::macroRowMinimumHeight(const QFont& baseFont)
+{
+    // #4945: with 12 Expanding rows in one grid, a short window (the app's
+    // own 400px minimum height leaves this panel ~330px) squeezed every
+    // row well below one line of text -- Qt's layout protects FIXED-size
+    // siblings like m_textEdit under a deficit, but has nowhere else to
+    // take the shortfall from an Expanding one, so it shrunk the widget
+    // itself and clipped the glyph tops rather than just hiding overflow
+    // text. buildSetupView() puts this grid in a QScrollArea, which is
+    // what actually stops the squeeze (verified: removing just this floor
+    // while keeping the scroll area still passed). Kept anyway as an
+    // explicit floor -- readability shouldn't depend on QTextEdit's
+    // incidental natural size hint staying above one line across Qt
+    // versions/themes.
+    //
+    // Derived from font metrics, not a bare pixel count (review on #5125)
+    // -- the widget's own .font() isn't reliable here (styled while still
+    // unpolished/unshown, the same timing trap #4869 documents for
+    // Qt::WA_Hover), so this constructs an explicit QFont matching the
+    // stylesheet's declared "font-size: 11px" rather than trusting .font()
+    // to already reflect it.
+    QFont macroFont = baseFont;
+    macroFont.setPixelSize(11);
+    const int oneLine = QFontMetrics(macroFont).height();
+    // ~2 lines + 8px. That 8 is QTextDocument's default documentMargin
+    // (4px, top and bottom) -- not the stylesheet's "padding: 2px" above,
+    // which is a QTextEdit frame margin and a separate, smaller
+    // contributor (review on #5125, credit NF0T for the correction).
+    return oneLine * 2 + 8;
+}
+
 CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     : QWidget(parent), m_model(model)
 {
@@ -551,29 +582,9 @@ void CwxPanel::buildSetupView()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_macroEdits[i], "QTextEdit { background: {{color.text.primary}}; color: {{color.background.spectrum}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 2px; padding: 2px; font-size: 11px; }");
         m_macroEdits[i]->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        // #4945: with 12 of these Expanding rows in one grid, a short window
-        // (the app's own 400px minimum height leaves this panel ~330px)
-        // squeezed every row well below one line of text -- Qt's layout
-        // protects FIXED-size siblings like m_textEdit under a deficit, but
-        // has nowhere else to take the shortfall from an Expanding one, so
-        // it shrunk the widget itself and clipped the glyph tops rather
-        // than just hiding overflow text. buildSetupView() now puts this
-        // grid in a QScrollArea, which is what actually stops the squeeze
-        // (verified: removing just this setMinimumHeight while keeping the
-        // scroll area still passed). Kept anyway as an explicit floor --
-        // readability shouldn't depend on QTextEdit's incidental natural
-        // size hint staying above one line across Qt versions/themes.
-        //
-        // Derived from font metrics, not a bare pixel count (review on
-        // #5125) -- the widget's own .font() isn't reliable here (styled
-        // while still unpolished/unshown, the same timing trap #4869
-        // documents for Qt::WA_Hover), so this constructs an explicit QFont
-        // matching the "font-size: 11px" set on the stylesheet two lines up
-        // rather than trusting .font() to already reflect it.
-        QFont macroFont = m_macroEdits[i]->font();
-        macroFont.setPixelSize(11);
-        const int oneLine = QFontMetrics(macroFont).height();
-        m_macroEdits[i]->setMinimumHeight(oneLine * 2 + 8); // ~2 lines + the 2px padding on both edges
+        // See macroRowMinimumHeight() above (#4945/#5121 review) for why
+        // this exists and why it's derived from font metrics.
+        m_macroEdits[i]->setMinimumHeight(macroRowMinimumHeight(m_macroEdits[i]->font()));
         m_macroEdits[i]->setPlaceholderText(QString("F%1 macro...").arg(i + 1));
         m_macroEdits[i]->setAcceptRichText(false);
         m_macroEdits[i]->setLineWrapMode(QTextEdit::WidgetWidth);
