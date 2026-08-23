@@ -25,6 +25,12 @@ struct DeclaredBandRange {
     bool operator==(const DeclaredBandRange&) const = default;
 };
 
+enum class FmTonePresentation {
+    Legacy,
+    Hidden,
+    Ctcss,
+};
+
 // The honest, self-declared feature set of a connected radio, produced by an
 // IRadioBackend and surfaced to clients (aetherd RFC §4.1 `welcome`). Clients
 // render against what the radio *reports* — a control the radio lacks is
@@ -158,6 +164,12 @@ struct RadioCapabilities {
     // rollback a backend cannot perform for itself, because a backend cannot
     // reach TransmitModel (#5106 review).
     QStringList receiveOnlyModes;
+
+    // CTCSS presentation is explicit so a vendor-specific model can expose
+    // its proven registers without changing another radio family's controls.
+    // Hidden is the safe default; established backends opt into Legacy.
+    FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
+    QStringList fmToneModes;
 
     // TX audio is modulated on THIS host rather than inside the radio. True for
     // direct-sampling backends (HL2) where the PC runs the modulator and streams

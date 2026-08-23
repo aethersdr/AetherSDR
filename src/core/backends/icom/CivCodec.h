@@ -298,6 +298,7 @@ inline constexpr std::uint8_t kNoiseBlanker  = 0x22;
 inline constexpr std::uint8_t kNoiseReduce   = 0x40;
 inline constexpr std::uint8_t kAutoNotch     = 0x41;
 inline constexpr std::uint8_t kRepeaterTone  = 0x42;
+inline constexpr std::uint8_t kRepeaterAccess = 0x5D;
 inline constexpr std::uint8_t kCompressor    = 0x44;
 inline constexpr std::uint8_t kMonitorFn     = 0x45;
 inline constexpr std::uint8_t kVox           = 0x46;
@@ -648,6 +649,13 @@ enum class RepeaterOffsetDirection : std::uint8_t {
 [[nodiscard]] std::optional<RepeaterToneRegister> decodeRepeaterToneRegister(
     std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTransmitFrequency(std::uint8_t to);
+[[nodiscard]] std::vector<std::uint8_t> cmdReadCtcssTone(std::uint8_t to,
+                                                         std::uint8_t which);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to,
+                                                        std::uint8_t which,
+                                                        double toneHz);
+[[nodiscard]] std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to,
+                                                             std::uint8_t mode);
 // RIT / dTX read forms, and the antenna tuner. `21 xx` with no payload asks;
 // `1C 01` with no payload asks whether the tuner is on, off or mid-cycle.
 [[nodiscard]] std::vector<std::uint8_t> cmdReadTuneOffset(std::uint8_t to, std::uint8_t sub);

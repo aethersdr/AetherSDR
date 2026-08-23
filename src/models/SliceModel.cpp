@@ -782,6 +782,16 @@ void SliceModel::setFmToneValue(const QString& value)
     emit fmToneValueChanged(value);
 }
 
+void SliceModel::setFmToneRxValue(const QString& value)
+{
+    if (m_fmToneRxValue == value) {
+        return;
+    }
+    m_fmToneRxValue = value;
+    emit fmToneRxValueCommandIssued(value.toDouble());
+    emit fmToneRxValueChanged(value);
+}
+
 void SliceModel::setRepeaterOffsetDir(const QString& dir)
 {
     if (m_repeaterOffsetDir == dir) return;
@@ -1555,6 +1565,11 @@ void SliceModel::applyChanges(const SliceDelta& d)
         double v = *d.fmToneValue;
         m_fmToneValue = QString::number(v, 'f', 1);
         emit fmToneValueChanged(m_fmToneValue);
+    }
+    if (d.fmToneRxValue.has_value()) {
+        const double v = *d.fmToneRxValue;
+        m_fmToneRxValue = QString::number(v, 'f', 1);
+        emit fmToneRxValueChanged(m_fmToneRxValue);
     }
     if (d.repeaterOffsetDir.has_value()) {
         m_repeaterOffsetDir = *d.repeaterOffsetDir;

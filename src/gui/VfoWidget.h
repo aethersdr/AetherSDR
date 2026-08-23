@@ -695,6 +695,7 @@ private:
     void updateExtendedDspVisibility();
     bool usesTransmitFrequencyCheck() const;
     void configureRepeaterReverseControl();
+    void configureFmToneControls();
     void releaseTransmitFrequencyCheck();
     // The ONE owner of the radio-side DSP buttons' visibility: ANDs each
     // button's cached mode eligibility with m_hasRadioSideDsp. Both mode
@@ -713,6 +714,7 @@ private:
     QWidget*       m_fmToneContainer{nullptr};
     QComboBox*     m_fmToneModeCmb{nullptr};
     QComboBox*     m_fmToneValueCmb{nullptr};
+    QComboBox*     m_fmToneRxValueCmb{nullptr};
     QDoubleSpinBox* m_fmOffsetSpin{nullptr};
     QPushButton*   m_fmOffsetDown{nullptr};
     QPushButton*   m_fmSimplexBtn{nullptr};

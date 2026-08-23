@@ -2336,6 +2336,13 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
+    # RxApplet/VfoWidget are full-desktop translation units with no practical
+    # unit-test link seam. Pin the model-capability gate that keeps IC-9700's
+    # TX:/RX: prefixes off Flex and every legacy backend.
+    add_test(NAME fm_tone_presentation_contract
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/fm_tone_presentation_contract_test.py
+                     ${CMAKE_CURRENT_SOURCE_DIR})
     # Argument parsing for the logwatch helper (#4912) — blind rest[0]/rest[1]
     # indexing turned a typo into an IndexError traceback.
     add_test(NAME automation_logwatch_arguments

@@ -725,7 +725,7 @@ void RxApplet::buildUI()
                 if (m_toneModeCmb->signalsBlocked()) return;
                 const QString mode = m_toneModeCmb->itemData(idx).toString();
                 if (m_slice) m_slice->setFmToneMode(mode);
-                m_toneValueCmb->setEnabled(mode == "ctcss_tx");
+                configureFmToneControls();
             });
         }
 
@@ -749,6 +749,26 @@ void RxApplet::buildUI()
                 if (m_toneValueCmb->signalsBlocked()) return;
                 if (m_slice)
                     m_slice->setFmToneValue(m_toneValueCmb->itemData(idx).toString());
+            });
+
+            m_toneRxValueCmb = new GuardedComboBox;
+            for (int i = 0; i < CTCSS_COUNT; ++i) {
+                const auto& t = CTCSS_TONES[i];
+                const QString frequency = QString::number(t.frequency, 'f', 1);
+                const QString label = t.code > 0
+                    ? QString("%1 %2 %3").arg(t.code).arg(t.designation).arg(frequency)
+                    : frequency;
+                m_toneRxValueCmb->addItem(label, frequency);
+            }
+            m_toneRxValueCmb->setAccessibleName("Receive CTCSS tone frequency");
+            AetherSDR::applyComboStyle(m_toneRxValueCmb);
+            m_toneRxValueCmb->setVisible(false);
+            fmLayout->addWidget(m_toneRxValueCmb);
+            connect(m_toneRxValueCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int idx) {
+                if (!m_toneRxValueCmb->signalsBlocked() && m_slice) {
+                    m_slice->setFmToneRxValue(m_toneRxValueCmb->itemData(idx).toString());
+                }
             });
         }
 
@@ -1842,6 +1862,7 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
                 [this](bool, const RadioCapabilities&) {
             configureRepeaterReverseControl();
+            configureFmToneControls();
         });
         connect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged, this,
                 [this](bool on) {
@@ -1878,6 +1899,64 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     }
     updateAntennaButtons();
     configureRepeaterReverseControl();
+    configureFmToneControls();
+}
+
+void RxApplet::configureFmToneControls()
+{
+    if (!m_toneModeCmb || !m_toneValueCmb || !m_toneRxValueCmb) {
+        return;
+    }
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    const RadioCapabilities caps = connected
+        ? m_radioModel->backendCapabilities() : RadioCapabilities{};
+    const FmTonePresentation presentation = connected
+        ? caps.fmTonePresentation : FmTonePresentation::Legacy;
+    const bool distinguishTxRx = presentation == FmTonePresentation::Ctcss;
+    for (int i = 0; i < CTCSS_COUNT; ++i) {
+        const CTCSSTone& tone = CTCSS_TONES[i];
+        const QString frequency = QString::number(tone.frequency, 'f', 1);
+        const QString toneLabel = tone.code > 0
+            ? QString("%1 %2 %3").arg(tone.code).arg(tone.designation).arg(frequency)
+            : frequency;
+        m_toneValueCmb->setItemText(
+            i, distinguishTxRx ? QStringLiteral("TX: %1").arg(toneLabel) : toneLabel);
+        m_toneRxValueCmb->setItemText(
+            i, distinguishTxRx ? QStringLiteral("RX: %1").arg(toneLabel) : toneLabel);
+    }
+    const QString sliceMode = m_slice ? m_slice->mode() : QString();
+    const bool modeEligible = sliceMode == QLatin1String("FM")
+        || sliceMode == QLatin1String("NFM") || sliceMode == QLatin1String("DFM");
+    const QString selected = m_slice
+        ? m_slice->fmToneMode() : m_toneModeCmb->currentData().toString();
+    const QStringList modes = presentation == FmTonePresentation::Ctcss
+        ? caps.fmToneModes : QStringList{QStringLiteral("off"), QStringLiteral("ctcss_tx")};
+    {
+        QSignalBlocker blocker(m_toneModeCmb);
+        m_toneModeCmb->clear();
+        for (const QString& mode : modes) {
+            const QString label = mode == QLatin1String("off") ? QStringLiteral("Off")
+                : mode == QLatin1String("ctcss_tx") ? QStringLiteral("CTCSS TX")
+                : mode == QLatin1String("ctcss_rx") ? QStringLiteral("CTCSS RX")
+                : QStringLiteral("CTCSS TX/RX");
+            m_toneModeCmb->addItem(label, mode);
+        }
+        int index = m_toneModeCmb->findData(selected);
+        if (index < 0 && presentation != FmTonePresentation::Ctcss) {
+            index = m_toneModeCmb->findData(QStringLiteral("off"));
+        }
+        m_toneModeCmb->setCurrentIndex(index);
+    }
+    m_toneModeCmb->setVisible(modeEligible && presentation != FmTonePresentation::Hidden);
+    const QString mode = m_toneModeCmb->currentData().toString();
+    const bool tx = mode == QLatin1String("ctcss_tx") || mode == QLatin1String("ctcss_txrx");
+    const bool rx = mode == QLatin1String("ctcss_rx") || mode == QLatin1String("ctcss_txrx");
+    m_toneValueCmb->setVisible(modeEligible && (presentation == FmTonePresentation::Legacy
+        || (presentation == FmTonePresentation::Ctcss && tx)));
+    m_toneValueCmb->setEnabled(tx);
+    m_toneRxValueCmb->setVisible(modeEligible
+        && presentation == FmTonePresentation::Ctcss && rx);
+    m_toneRxValueCmb->setEnabled(rx);
 }
 
 bool RxApplet::usesTransmitFrequencyCheck() const
@@ -2461,13 +2540,13 @@ void RxApplet::connectSlice(SliceModel* s)
         QSignalBlocker b(m_toneModeCmb);
         int idx = m_toneModeCmb->findData(s->fmToneMode());
         if (idx >= 0) m_toneModeCmb->setCurrentIndex(idx);
-        m_toneValueCmb->setEnabled(s->fmToneMode() == "ctcss_tx");
+        configureFmToneControls();
     }
     connect(s, &SliceModel::fmToneModeChanged, this, [this](const QString& mode) {
         QSignalBlocker b(m_toneModeCmb);
         int idx = m_toneModeCmb->findData(mode);
         if (idx >= 0) m_toneModeCmb->setCurrentIndex(idx);
-        m_toneValueCmb->setEnabled(mode == "ctcss_tx");
+        configureFmToneControls();
     });
 
     // Tone value
@@ -2487,6 +2566,20 @@ void RxApplet::connectSlice(SliceModel* s)
                 m_toneValueCmb->setCurrentIndex(i);
                 break;
             }
+        }
+    });
+    {
+        QSignalBlocker b(m_toneRxValueCmb);
+        const int idx = m_toneRxValueCmb->findData(s->fmToneRxValue());
+        if (idx >= 0) {
+            m_toneRxValueCmb->setCurrentIndex(idx);
+        }
+    }
+    connect(s, &SliceModel::fmToneRxValueChanged, this, [this](const QString& val) {
+        QSignalBlocker b(m_toneRxValueCmb);
+        const int idx = m_toneRxValueCmb->findData(val);
+        if (idx >= 0) {
+            m_toneRxValueCmb->setCurrentIndex(idx);
         }
     });
 

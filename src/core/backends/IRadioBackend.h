@@ -555,6 +555,10 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(hz);
     }
+    virtual void setSliceFmToneRxValue(int sliceId, double hz)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz);
+    }
     virtual void setSliceRepeaterOffsetDir(int sliceId, const QString& direction)
     {
         Q_UNUSED(sliceId); Q_UNUSED(direction);

@@ -264,6 +264,7 @@ private:
     QWidget*        m_fmContainer{nullptr};
     QComboBox*      m_toneModeCmb{nullptr};
     QComboBox*      m_toneValueCmb{nullptr};
+    QComboBox*      m_toneRxValueCmb{nullptr};
     QDoubleSpinBox* m_offsetSpin{nullptr};
     QPushButton*    m_offsetDown{nullptr};
     QPushButton*    m_simplexBtn{nullptr};
@@ -318,6 +319,7 @@ private:
     void syncAgcSliderFromSlice();
     bool usesTransmitFrequencyCheck() const;
     void configureRepeaterReverseControl();
+    void configureFmToneControls();
     void releaseTransmitFrequencyCheck();
 
 

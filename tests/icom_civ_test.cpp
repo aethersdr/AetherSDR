@@ -176,7 +176,6 @@ static void testFmRepeaterCommands()
           "100.0 Hz CTCSS decodes");
     check(!decodeRepeaterToneHz(std::array<std::uint8_t, 3>{0x01, 0x10, 0x00}),
           "invalid repeater tone prefix is rejected");
-
     check(bytesAre(cmdReadRepeaterAccess(0xA2),
                    {0xFE, 0xFE, 0xA2, 0xE0, 0x16, 0x5D, 0xFD}),
           "IC-9700 extended access read is 16 5D");
@@ -208,6 +207,16 @@ static void testFmRepeaterCommands()
               std::array<std::uint8_t, 6>{0x00, 0x56, 0x42, 0x48, 0x04, 0x00},
               kFreqBytes),
           "oversized transmit-frequency readback is rejected");
+    check(bytesAre(cmdSetRepeaterAccess(kIc705, 0x09),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x16, 0x5D, 0x09, 0xFD}),
+          "CTCSS TX/RX access selector write frame");
+    check(bytesAre(cmdReadCtcssTone(kIc705, repeaterTone::kRxCtcss),
+                   {0xFE, 0xFE, kIc705, kControllerAddress, 0x1B, 0x01, 0xFD}),
+          "receive CTCSS tone read frame");
+    check(bytesAre(cmdSetCtcssTone(kIc705, repeaterTone::kRxCtcss, 103.5),
+                   {0xFE, 0xFE, kIc705, kControllerAddress,
+                    0x1B, 0x01, 0x00, 0x10, 0x35, 0xFD}),
+          "receive CTCSS tone write frame");
 }
 
 static void testReassembler()

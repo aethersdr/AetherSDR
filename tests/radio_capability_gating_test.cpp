@@ -279,6 +279,9 @@ int main(int argc, char** argv)
               "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
         check(!caps.hasTransmitFrequencyCheck,
               "Flex declares hasTransmitFrequencyCheck=false (REV is local state)");
+        check(caps.fmTonePresentation == FmTonePresentation::Legacy
+                  && caps.fmToneModes.isEmpty(),
+              "Flex retains its legacy FM-tone presentation and labels");
         // The three status-bar toggles. Same regression shape as the supply-rail
         // field above and worse in kind: these are shipping SmartSDR features
         // whose only implementation is a command-plane verb, so a field added

@@ -808,10 +808,21 @@ std::optional<int> decodeRepeaterOffsetHz(std::span<const std::uint8_t> payload)
 
 std::vector<std::uint8_t> cmdReadRepeaterTone(std::uint8_t to)
 {
-    return buildFrameSub(to, cmd::kTone, 0x00);
+    return cmdReadCtcssTone(to, repeaterTone::kTxCtcss);
 }
 
 std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
+{
+    return cmdSetCtcssTone(to, repeaterTone::kTxCtcss, toneHz);
+}
+
+std::vector<std::uint8_t> cmdReadCtcssTone(std::uint8_t to, std::uint8_t which)
+{
+    return buildFrameSub(to, cmd::kTone, which);
+}
+
+std::vector<std::uint8_t> cmdSetCtcssTone(std::uint8_t to, std::uint8_t which,
+                                          double toneHz)
 {
     // The guide fixes the first two digits at zero and allows 000.0..299.9 Hz.
     // Carry tenths of a hertz as six big-endian BCD digits: 88.5 -> 00 08 85.
@@ -822,7 +833,17 @@ std::vector<std::uint8_t> cmdSetRepeaterTone(std::uint8_t to, double toneHz)
         encodeBcdByte((tenths / 100) % 100),
         encodeBcdByte(tenths % 100),
     };
-    return buildFrameSub(to, cmd::kTone, 0x00, body);
+    return buildFrameSub(to, cmd::kTone, which, body);
+}
+
+std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
+{
+    return cmdReadFunction(to, func::kRepeaterAccess);
+}
+
+std::vector<std::uint8_t> cmdSetRepeaterAccess(std::uint8_t to, std::uint8_t mode)
+{
+    return cmdSetFunction(to, func::kRepeaterAccess, mode);
 }
 
 std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload)
@@ -841,11 +862,6 @@ std::optional<double> decodeRepeaterToneHz(std::span<const std::uint8_t> payload
         return std::nullopt;
     }
     return static_cast<double>(tenths) / 10.0;
-}
-
-std::vector<std::uint8_t> cmdReadRepeaterAccess(std::uint8_t to)
-{
-    return buildFrameSub(to, cmd::kFunction, repeaterAccess::kFunction);
 }
 
 std::optional<std::uint8_t> decodeRepeaterAccess(

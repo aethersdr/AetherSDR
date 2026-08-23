@@ -136,6 +136,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.family = QStringLiteral("flex");
     caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();
+    caps.fmTonePresentation = FmTonePresentation::Legacy;
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller

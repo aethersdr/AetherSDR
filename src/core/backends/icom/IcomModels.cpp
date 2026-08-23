@@ -229,7 +229,7 @@ constexpr std::array<std::string_view, 8> kExtendedFmAccessModes{
 constexpr std::array<std::string_view, 4> kToneSquelchFmAccessModes{
     "off", "ctcss_tx", "ctcss_rx", "ctcss_txrx"};
 
-constexpr std::array<FeatureEvidence, 11> kIc705Evidence{{
+constexpr std::array<FeatureEvidence, 12> kIc705Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020; live IC-705 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuideAndLiveHardware,
@@ -248,12 +248,14 @@ constexpr std::array<FeatureEvidence, 11> kIc705Evidence{{
      "IC-705 CI-V Reference Guide 2020, 16 5D and 1B 00/01/02"},
     {IcomFeature::FmRepeaterExtendedReadback, EvidenceKind::None,
      "not activated; preserve the live-proven basic IC-705 path"},
+    {IcomFeature::FmRepeaterCtcssRx, EvidenceKind::None,
+     "not activated: preserve the proven IC-705 basic repeater path"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-705 CI-V Reference Guide 2020, 1C 02"},
     {IcomFeature::RxAntenna, EvidenceKind::None, "not supported"},
 }};
 
-constexpr std::array<FeatureEvidence, 11> kIc7300Mk2Evidence{{
+constexpr std::array<FeatureEvidence, 12> kIc7300Mk2Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-7300MK2 CI-V Reference Guide; live IC-7300MK2 bring-up"},
     {IcomFeature::Scope, EvidenceKind::OfficialGuide,
@@ -274,11 +276,13 @@ constexpr std::array<FeatureEvidence, 11> kIc7300Mk2Evidence{{
      "DTCS and mixed tone access not documented for IC-7300MK2"},
     {IcomFeature::FmRepeaterExtendedReadback, EvidenceKind::None,
      "extended repeater readback is not attested"},
+    {IcomFeature::FmRepeaterCtcssRx, EvidenceKind::None,
+     "not activated: preserve the proven IC-7300MK2 basic repeater path"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuide,
      "IC-7300MK2 CI-V Reference Guide, 1C 02/03"},
 }};
 
-constexpr std::array<FeatureEvidence, 9> kIc9700Evidence{{
+constexpr std::array<FeatureEvidence, 10> kIc9700Evidence{{
     {IcomFeature::Core, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019; live IC-9700 trace"},
     {IcomFeature::Scope, EvidenceKind::LiveHardware,
@@ -292,6 +296,8 @@ constexpr std::array<FeatureEvidence, 9> kIc9700Evidence{{
     {IcomFeature::FmRepeaterExtendedReadback,
      EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 16 5D, 1B 01/02 and 1C 03; PR #5149 live trace"},
+    {IcomFeature::FmRepeaterCtcssRx, EvidenceKind::OfficialGuideAndLiveHardware,
+     "IC-9700 CI-V Reference Guide 2019, 16 5D and 1B 00/01; live IC-9700"},
     {IcomFeature::TxFrequencyCheck, EvidenceKind::OfficialGuideAndLiveHardware,
      "IC-9700 CI-V Reference Guide 2019, 1C 02/03; PR #5149 live trace"},
     {IcomFeature::CivDataRestart, EvidenceKind::CrossReferenced,
@@ -620,6 +626,7 @@ std::string_view featureName(IcomFeature feature) noexcept
     case IcomFeature::FmRepeaterExtended:  return "fm-repeater-extended";
     case IcomFeature::FmRepeaterExtendedReadback:
         return "fm-repeater-extended-readback";
+    case IcomFeature::FmRepeaterCtcssRx:   return "fm-repeater-ctcss-rx";
     case IcomFeature::TxFrequencyCheck:    return "tx-frequency-check";
     case IcomFeature::CivDataRestart:      return "civ-data-restart";
     }

@@ -105,6 +105,7 @@ public:
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceFmToneMode(int sliceId, const QString& mode) override;
     void setSliceFmToneValue(int sliceId, double hz) override;
+    void setSliceFmToneRxValue(int sliceId, double hz) override;
     void setSliceRepeaterOffsetDir(int sliceId, const QString& direction) override;
     void setSliceFmRepeaterOffset(int sliceId, double hz) override;
     void setTransmitFrequencyCheck(bool on) override;

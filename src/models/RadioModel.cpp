@@ -1267,6 +1267,12 @@ void RadioModel::setupBackend(const QString& family)
                     m_backend->setSliceFmToneValue(s->sliceId(), hz);
                 }
             });
+            connect(s, &SliceModel::fmToneRxValueCommandIssued, this,
+                    [this, s](double hz) {
+                if (m_backend) {
+                    m_backend->setSliceFmToneRxValue(s->sliceId(), hz);
+                }
+            });
             connect(s, &SliceModel::repeaterOffsetDirCommandIssued, this,
                     [this, s](const QString& direction) {
                 if (m_backend) {
