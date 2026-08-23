@@ -5,6 +5,7 @@
 
 #include "models/DeclaredBands.h"
 #include "models/BandDefs.h"
+#include "gui/DeclaredBandMenuPolicy.h"
 
 #include <QCoreApplication>
 #include <QStringList>
@@ -37,14 +38,22 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
 
-    report("declared 2m button label is 144",
-           declaredBandButtonLabel("2m") == "144");
-    report("declared 440 button label is 430",
-           declaredBandButtonLabel("440") == "430");
-    report("declared 23cm button label is 1240",
-           declaredBandButtonLabel("23cm") == "1240");
-    report("other declared labels retain their canonical name",
-           declaredBandButtonLabel("20m") == "20m");
+    const QVector<DeclaredBandRange> ic9700NativeBands{
+        {QStringLiteral("2m"), 144.0e6, 148.0e6},
+        {QStringLiteral("440"), 430.0e6, 450.0e6},
+        {QStringLiteral("23cm"), 1240.0e6, 1300.0e6}};
+    report("IC-9700 native 2m button label is 144",
+           declaredBandButtonLabel(QStringLiteral("2m"), ic9700NativeBands)
+               == QStringLiteral("144"));
+    report("IC-9700 native 440 button label is 430",
+           declaredBandButtonLabel(QStringLiteral("440"), ic9700NativeBands)
+               == QStringLiteral("430"));
+    report("IC-9700 native 23cm button label is 1240",
+           declaredBandButtonLabel(QStringLiteral("23cm"), ic9700NativeBands)
+               == QStringLiteral("1240"));
+    report("a declared radio without native ranges keeps canonical labels",
+           declaredBandButtonLabel(QStringLiteral("440"), {})
+               == QStringLiteral("440"));
     report("IC-9700 range excludes WWV/GEN/LF utility targets",
            !declaredBandUtilityTargetAvailable(10.0, 144.0, 1300.0)
                && !declaredBandUtilityTargetAvailable(0.5, 144.0, 1300.0)
@@ -53,6 +62,23 @@ int main(int argc, char** argv)
     report("a wide-range declared radio retains reachable utility targets",
            declaredBandUtilityTargetAvailable(10.0, 0.03, 470.0)
                && declaredBandUtilityTargetAvailable(0.1375, 0.03, 470.0));
+    report("an unreported range leaves utility targets unconstrained",
+           declaredBandUtilityTargetAvailable(10.0, 0.0, 0.0)
+               && declaredBandUtilityTargetAvailable(0.475, 0.0, 0.0));
+    report("a declared menu suppresses configured and setup XVTR surfaces",
+           configuredXvtrBandCount(true, 3) == 0
+               && !declaredBandMenuIncludesUtility(
+                   true, true, 0.0, 144.0, 1300.0));
+    report("an IC-9700 declared menu suppresses unreachable utility targets",
+           !declaredBandMenuIncludesUtility(
+               true, false, 10.0, 144.0, 1300.0));
+    report("a gateway declared menu with no range keeps utility targets",
+           declaredBandMenuIncludesUtility(
+               true, false, 10.0, 0.0, 0.0));
+    report("an undeclared menu preserves configured XVTR and utility surfaces",
+           configuredXvtrBandCount(false, 3) == 3
+               && declaredBandMenuIncludesUtility(
+                   false, true, 0.0, 144.0, 1300.0));
 
     // Absent / empty -> empty list (real Flex radios never send the key; the
     // band UI must be unchanged, which relies on this being empty).

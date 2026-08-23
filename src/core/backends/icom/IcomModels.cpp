@@ -184,9 +184,9 @@ constexpr IcomModel kUnknown{
 // is the safe direction to be wrong in: we offer a frequency it declines,
 // rather than silently withholding one it supports.
 constexpr std::array<IcomBand, 3> kIc9700Bands{{
-    {  144'000'000ULL,   148'000'000ULL, 100.0},   // 2 m
-    {  430'000'000ULL,   450'000'000ULL,  75.0},   // 70 cm
-    {1'240'000'000ULL, 1'300'000'000ULL,  10.0},   // 23 cm
+    {"2m",     144'000'000ULL,   148'000'000ULL, 100.0},
+    {"440",    430'000'000ULL,   450'000'000ULL,  75.0},
+    {"23cm", 1'240'000'000ULL, 1'300'000'000ULL,  10.0},
 }};
 
 constexpr std::array<ModulationInputChoice, 4> kIc705ModInputs{{

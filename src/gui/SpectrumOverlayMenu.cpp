@@ -1,4 +1,5 @@
 #include "SpectrumOverlayMenu.h"
+#include "DeclaredBandMenuPolicy.h"
 #include "DspParamPopup.h"
 #include "MemoryBrowsePanel.h"
 #include "SpectrumWidget.h"
@@ -306,6 +307,7 @@ static constexpr BandGridEntry BAND_GRID[] = {
 
 // Indices into BAND_GRID for the built-in transverter bands.  Used by
 // the conditional VHF row in setXvtrBands().
+constexpr int kBandIdxXvtr = 15;
 constexpr int kBandIdx4m = 16;
 constexpr int kBandIdx2m = 17;
 
@@ -2910,11 +2912,13 @@ void SpectrumOverlayMenu::setRadioCapabilities(ModelCapabilities caps)
     setXvtrBands(m_lastXvtrBands);
 }
 
-void SpectrumOverlayMenu::setDeclaredBands(const QStringList& bands)
+void SpectrumOverlayMenu::setDeclaredBands(
+    const QStringList& bands, const QVector<DeclaredBandRange>& ranges)
 {
-    if (bands == m_declaredBands)
+    if (bands == m_declaredBands && ranges == m_declaredBandRanges)
         return;  // No change — skip the rebuild.
     m_declaredBands = bands;
+    m_declaredBandRanges = ranges;
     // Same full-rebuild delegation as a capability change (above).
     setXvtrBands(m_lastXvtrBands);
 }
@@ -3040,10 +3044,9 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             const QString bandName = QString::fromLatin1(def.name);
             if (!m_declaredBands.contains(bandName))
                 continue;
-            const std::string_view label = declaredBandButtonLabel(def.name);
-            auto* btn = new QPushButton(
-                QString::fromLatin1(label.data(), static_cast<qsizetype>(label.size())),
-                m_bandPanel);
+            const QString label = declaredBandButtonLabel(
+                bandName, m_declaredBandRanges);
+            auto* btn = new QPushButton(label, m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
             btn->setStyleSheet(bandBtnStyle);
             const double  freq = def.defaultFreqMhz;
@@ -3086,7 +3089,8 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     // XVTR bands (inserted between HF and utility)
     m_xvtrBandBtns.clear();
     const bool radioDeclaredBandSet = !m_declaredBands.isEmpty();
-    const int xvtrBandCount = radioDeclaredBandSet ? 0 : bands.size();
+    const int xvtrBandCount = configuredXvtrBandCount(
+        radioDeclaredBandSet, bands.size());
     for (int i = 0; i < xvtrBandCount; ++i) {
         auto* btn = new QPushButton(bands[i].name, m_bandPanel);
         btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
@@ -3117,15 +3121,12 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             // A declared set belongs to a backend that owns its band surface.
             // Retain only utility targets proven reachable by its reported
             // tuning range, and never expose the Flex XVTR setup entry.
-            if (radioDeclaredBandSet) {
-                if (idx == 15) {
-                    continue;
-                }
-                const double targetMhz = BAND_GRID[idx].freqMhz;
-                if (!declaredBandUtilityTargetAvailable(
-                        targetMhz, m_tuningMinMhz, m_tuningMaxMhz)) {
-                    continue;
-                }
+            const bool xvtrSetup = idx == kBandIdxXvtr;
+            const double targetMhz = BAND_GRID[idx].freqMhz;
+            if (!declaredBandMenuIncludesUtility(
+                    radioDeclaredBandSet, xvtrSetup, targetMhz,
+                    m_tuningMinMhz, m_tuningMaxMhz)) {
+                continue;
             }
             auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
@@ -3133,7 +3134,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             QString bandName = QString::fromLatin1(BAND_GRID[idx].bandName);
             double freq = BAND_GRID[idx].freqMhz;
             QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
-            if (idx == 15) {
+            if (xvtrSetup) {
                 connect(btn, &QPushButton::clicked, this, [this]() {
                     hideAllSubPanels();
                     emit xvtrSetupRequested();

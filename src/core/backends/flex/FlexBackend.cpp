@@ -132,6 +132,7 @@ RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
     caps.txPowerBands = {};
+    caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");
     caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();

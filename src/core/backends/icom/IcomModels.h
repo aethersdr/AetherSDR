@@ -229,6 +229,7 @@ txBandwidthProfileFor(const IcomModel& model);
 // A model needs this only when its tunable range is NOT the single continuous
 // interval [tuningMinHz, tuningMaxHz] — which, today, means the IC-9700 alone.
 struct IcomBand {
+    std::string_view name;
     std::uint64_t lowHz = 0;
     std::uint64_t highHz = 0;
     double maxWatts = 0.0;
