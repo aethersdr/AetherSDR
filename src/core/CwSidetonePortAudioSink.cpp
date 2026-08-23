@@ -437,6 +437,7 @@ int CwSidetonePortAudioSink::paCallback(const void* /*input*/,
     auto* gen = self->m_generator.load(std::memory_order_acquire);
     if (gen) gen->process(dst, static_cast<int>(frameCount));
 
+    self->m_edgeProbe.scan(dst, static_cast<int>(frameCount));
     self->m_cbCount.fetch_add(1, std::memory_order_relaxed);
     float peak = 0.0f;
     for (unsigned long i = 0; i < frameCount * 2; ++i) {
@@ -458,6 +459,7 @@ void CwSidetonePortAudioSink::stop()
         qCInfo(lcAudio) << "CwSidetonePortAudioSink: stopping —"
                         << "callbacks=" << m_cbCount.load(std::memory_order_relaxed)
                         << "peak=" << (m_cbPeakMicro.load(std::memory_order_relaxed) / 1e6);
+        m_edgeProbe.dump("PortAudio", m_actualRate);
         // Halt the callback before clearing the generator pointer so we
         // don't race with paCallback dereferencing a torn-down generator.
         Pa_StopStream(m_stream);
