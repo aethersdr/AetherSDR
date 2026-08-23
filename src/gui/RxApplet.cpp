@@ -725,7 +725,6 @@ void RxApplet::buildUI()
                 if (m_toneModeCmb->signalsBlocked()) return;
                 const QString mode = m_toneModeCmb->itemData(idx).toString();
                 if (m_slice) m_slice->setFmToneMode(mode);
-                configureFmToneControls();
             });
         }
 
@@ -2848,6 +2847,10 @@ void RxApplet::updateModeSettings(const QString& mode)
 
     // Show/hide FM vs SSB/CW controls
     m_fmContainer->setVisible(isFM);
+    // configureFmToneControls() explicitly hides individual children while a
+    // non-FM mode is active. Re-evaluate those child visibilities when the
+    // containing FM panel becomes eligible again (PR #5203 review).
+    configureFmToneControls();
     m_agcContainer->setVisible(!isFM);
     m_ritContainer->setVisible(!isFM);
     m_xitContainer->setVisible(!isFM);

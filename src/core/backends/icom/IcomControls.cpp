@@ -140,7 +140,8 @@ constexpr std::array kSpecs = {
     ControlSpec{"repeater.tone.rx", 0x1B, 0x01, true,
                 "Receive CTCSS frequency", Plane::Slice, Encoding::Bcd6, Wiring::Both,
                 0, 2999, "Hz", 0, 299, "setSliceFmToneRxValue", "vfoFmToneContainer", true,
-                "Three big-endian BCD bytes in tenths of a hertz.",
+                "Three big-endian BCD bytes in tenths of a hertz. The wire encoding "
+                "spans 000.0-299.9; IC-9700 writes accept only the canonical CTCSS list.",
                 IcomFeature::FmRepeaterCtcssRx},
 
     // ---- Levels (0x14) --------------------------------------------------
