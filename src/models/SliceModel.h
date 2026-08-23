@@ -301,6 +301,8 @@ public:
     void setFmToneValue(const QString& value);
     void setRepeaterOffsetDir(const QString& dir);
     void setFmRepeaterOffsetFreq(double mhz);
+    void applyRecalledFmRepeater(const QString& direction, double offsetMhz,
+                                 const QString& toneMode, double toneHz);
     void setTxOffsetFreq(double mhz);
     void setFmDeviation(int hz);
 
@@ -457,6 +459,12 @@ signals:
     void fmRepeaterOffsetFreqChanged(double mhz);
     void txOffsetFreqChanged(double mhz);
     void fmDeviationChanged(int hz);
+    void fmToneModeCommandIssued(const QString& mode);
+    void fmToneValueCommandIssued(double hz);
+    void repeaterOffsetDirCommandIssued(const QString& direction);
+    void fmRepeaterOffsetCommandIssued(double hz);
+    void fmRepeaterRecallCommandIssued(const QString& direction, double offsetHz,
+                                       const QString& toneMode, double toneHz);
 
     void modeListChanged(const QStringList& modes);
     void recordOnChanged(bool on);

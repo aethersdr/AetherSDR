@@ -131,6 +131,7 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.txPowerBands = {};
     caps.family = QStringLiteral("flex");
     caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();
@@ -150,6 +151,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // A Flex notches with TNFs, which are pinned to absolute frequencies and
     // are a different instrument. No single in-passband manual notch.
     caps.hasManualNotch = false;
+    caps.hasTransmitFrequencyCheck = false;
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
@@ -159,6 +161,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // in later. Sample rates and TX power range are refined as their touchpoints
     // convert (they are not part of this skeleton).
     caps.canTransmit = true;
+    // A Flex transmits in every mode it demodulates, so there is nothing for the
+    // receive-only mode guard to refuse. Stated rather than defaulted, per the
+    // "adding a field" rule in RadioCapabilities.h.
+    caps.receiveOnlyModes = {};
     caps.hasTuner = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     // The radio owns its reference and its own calibration ("radio set cal_freq",
@@ -197,6 +203,14 @@ RadioCapabilities FlexBackend::capabilities() const
     // voice keyer; whether this operator is licensed for it is the separate
     // SmartSDR+ entitlement gate.
     caps.hasRadioSideCwKeyer = true;
+    caps.cwTextKeyerName = QStringLiteral("CWX");
+    caps.cwTextMinWpm = 5;
+    caps.cwTextMaxWpm = 100;
+    caps.cwTextMaxMessageChars = 0;
+    caps.cwTextHasProgress = true;
+    caps.cwTextHasStoredMacros = true;
+    caps.cwTextSupportsLive = true;
+    caps.cwTextSupportsSpeedModifiers = true;
     caps.hasVoiceKeyer = true;
     caps.hasFullDuplex = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
@@ -247,6 +261,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // The "+13.8A" meter carries the PA supply rail (measurement point A,
     // before the fuse), which the status bar renders under the PA temperature.
     caps.hasSupplyVoltageTelemetry = true;
+    caps.hasPaTemperatureTelemetry = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and

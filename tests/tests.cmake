@@ -438,6 +438,7 @@ add_executable(icom_meters_test
     tests/icom_meters_test.cpp
     src/core/backends/icom/IcomMeters.cpp
     src/core/backends/icom/IcomModels.cpp
+    src/core/backends/icom/IcomControls.cpp
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
@@ -706,6 +707,13 @@ target_include_directories(vfo_flag_placement_test PRIVATE src)
 target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
 add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
 
+add_executable(slice_tone_cues_test
+    tests/slice_tone_cues_test.cpp
+)
+target_include_directories(slice_tone_cues_test PRIVATE src)
+target_link_libraries(slice_tone_cues_test PRIVATE Qt6::Core)
+add_test(NAME slice_tone_cues_test COMMAND slice_tone_cues_test)
+
 add_executable(mac_cursor_compat_test
     tests/mac_cursor_compat_test.cpp
 )
@@ -745,6 +753,7 @@ add_executable(theme_manager_test
     ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
+    src/gui/DragValuePopup.cpp
     ${THEME_TEST_RESOURCES}
 )
 target_include_directories(theme_manager_test PRIVATE src)
@@ -926,6 +935,40 @@ target_link_libraries(map_wrap_test PRIVATE
 )
 add_test(NAME map_wrap_test COMMAND map_wrap_test)
 set_tests_properties(map_wrap_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# PSK Reporter map query scope and the UTC solar-position math used by the
+# optional day/night overlay. No network access is performed.
+add_executable(psk_reporter_map_behavior_test
+    tests/psk_reporter_map_behavior_test.cpp)
+target_include_directories(psk_reporter_map_behavior_test PRIVATE src)
+target_link_libraries(psk_reporter_map_behavior_test PRIVATE
+    aethercore Qt6::Core)
+add_test(NAME psk_reporter_map_behavior_test
+    COMMAND psk_reporter_map_behavior_test)
+
+# Live PSK Reporter updates must refresh the existing marker/path batches
+# atomically. Replacing them exposes the differently-scaled overview cache and
+# makes every MQTT report pulse between large/small dots and thick/thin paths.
+add_executable(map_live_update_test
+    tests/map_live_update_test.cpp
+    src/gui/map/MapMarkerBatchItem.cpp
+    src/gui/map/MapPathBatchItem.cpp
+    src/gui/map/MapTerminatorItem.cpp
+)
+target_include_directories(map_live_update_test PRIVATE src)
+target_link_libraries(map_live_update_test PRIVATE
+    aethercore
+    qgeoview
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Network
+)
+set_target_properties(map_live_update_test PROPERTIES AUTOMOC ON)
+add_test(NAME map_live_update_test COMMAND map_live_update_test)
+set_tests_properties(map_live_update_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Frameless-window geometry restore (#4328) — blob parse + the caption-free
@@ -2265,6 +2308,19 @@ target_link_libraries(automation_json_id_test PRIVATE
 )
 add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
 
+# Read-only external-device diagnostic registry and provider dispatch. The
+# platform-specific Ulanzi HID snapshot is supplied by MainWindow on macOS;
+# this test pins the bridge contract without requiring physical hardware.
+add_executable(automation_device_diagnostics_test
+    tests/automation_device_diagnostics_test.cpp
+)
+target_include_directories(automation_device_diagnostics_test PRIVATE src)
+target_link_libraries(automation_device_diagnostics_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_device_diagnostics_test
+         COMMAND automation_device_diagnostics_test)
+
 # `connect ip` family resolution + the `family` field on `connect list` (#4912).
 # Pure verb-level test against a fake IConnectionAutomation — no socket, no radio.
 add_executable(automation_connect_family_test
@@ -2461,6 +2517,16 @@ target_include_directories(cw_sidetone_test PRIVATE src)
 target_link_libraries(cw_sidetone_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 
+# #4978 — which device the CW sidetone backend is handed at start(). Pure,
+# header-only policy, so the whole truth table is a compile-time assertion; the
+# "saved device that IS the system default still takes the name-match path" row
+# pins the documented reach of the fix.
+add_executable(cw_sidetone_start_policy_test
+    tests/cw_sidetone_start_policy_test.cpp
+)
+target_include_directories(cw_sidetone_start_policy_test PRIVATE src)
+add_test(NAME cw_sidetone_start_policy_test COMMAND cw_sidetone_start_policy_test)
+
 add_executable(cwx_local_keyer_drift_test
     tests/cwx_local_keyer_drift_test.cpp
     src/core/CwxLocalKeyer.cpp
@@ -2656,6 +2722,9 @@ target_include_directories(cwx_panel_test PRIVATE src)
 target_link_libraries(cwx_panel_test PRIVATE
     Qt6::Core Qt6::Widgets
 )
+add_test(NAME cwx_panel_test COMMAND cwx_panel_test)
+set_tests_properties(cwx_panel_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(meter_model_test
     tests/meter_model_test.cpp
@@ -2692,6 +2761,29 @@ endif()
 set_target_properties(health_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(meter_applet_capability_test
+    tests/meter_applet_capability_test.cpp
+    src/gui/MeterApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(meter_applet_capability_test PRIVATE src)
+target_link_libraries(meter_applet_capability_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+if(UNIX)
+    target_link_libraries(meter_applet_capability_test PRIVATE pthread)
+endif()
+set_target_properties(meter_applet_capability_test PROPERTIES AUTOMOC ON)
+add_test(NAME meter_applet_capability_test COMMAND meter_applet_capability_test)
+set_tests_properties(meter_applet_capability_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). SimBackend was once
@@ -2769,6 +2861,19 @@ add_test(NAME owned_single_shot_timer_test COMMAND owned_single_shot_timer_test)
 
 # The bridge preserves dragAt, target-tune, memory-recall, and authenticated
 # positional requests across its bare and JSON protocol forms.
+# doubleClick / doubleClickAt verbs (#5068) — asserts the real Qt sequence
+# (Press, Release, DblClick, Release) and that mouseDoubleClickEvent fires,
+# which no number of clickAt calls can produce.
+add_executable(automation_double_click_test tests/automation_double_click_test.cpp)
+target_include_directories(automation_double_click_test PRIVATE src)
+target_link_libraries(automation_double_click_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(automation_double_click_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_double_click_test COMMAND automation_double_click_test)
+set_tests_properties(automation_double_click_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(automation_drag_at_test tests/automation_drag_at_test.cpp)
 target_include_directories(automation_drag_at_test PRIVATE src)
 target_link_libraries(automation_drag_at_test PRIVATE
@@ -3688,6 +3793,22 @@ add_test(NAME tx_applet_power_reconciliation_test
 set_tests_properties(tx_applet_power_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(phone_tx_filter_numeric_entry_test
+    tests/phone_tx_filter_numeric_entry_test.cpp
+    src/gui/PhoneApplet.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/GuardedSlider.h      # Q_OBJECT in a header with no .cpp — AUTOMOC
+)
+target_include_directories(phone_tx_filter_numeric_entry_test PRIVATE src)
+target_link_libraries(phone_tx_filter_numeric_entry_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(phone_tx_filter_numeric_entry_test PROPERTIES AUTOMOC ON)
+add_test(NAME phone_tx_filter_numeric_entry_test
+         COMMAND phone_tx_filter_numeric_entry_test)
+set_tests_properties(phone_tx_filter_numeric_entry_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(phone_cw_mic_gain_authority_test
     tests/phone_cw_mic_gain_authority_test.cpp
     src/gui/PhoneCwApplet.cpp
@@ -3806,6 +3927,7 @@ set(AETHER_SETTINGS_CONSUMERS
     cwx_panel_test
     meter_model_test
     health_applet_test
+    meter_applet_capability_test
     perf_telemetry_test
     local_memory_bank_test
     transmit_model_apd_test
@@ -3828,9 +3950,118 @@ set(AETHER_SETTINGS_CONSUMERS
     vkamp_connection_test
     green_heron_model_test
     green_heron_applet_test
+    radio_capability_gating_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
         target_link_libraries(${_settings_consumer} PRIVATE aether_sqlite3)
+    endif()
+endforeach()
+
+# ── FFTW planner bound for the HL2 / WDSP tests ─────────────────────────────
+#
+# WDSP builds every FFT with FFTW_PATIENT. The first OpenChannel in a cold
+# process therefore spends 20 s (macOS arm64) to 190 s (CI x86_64) measuring
+# plans before the test does any work of its own. A CI container starts cold on
+# every run, so that cost was paid in full every time and thrown away.
+#
+# It also could not be fixed by caching the wisdom file. Measured: the app's own
+# 38 KB cache made NO difference to wdsp_channel_test (22.8 s warm vs 22.4 s
+# cold) because the app's plan set and the tests' plan set are different FFTW
+# problems. Only a cache the tests themselves wrote helped (22.4 s -> 2.4 s),
+# which a fresh container never has.
+#
+# So bound the planner instead. These tests assert that the DSP is CORRECT,
+# never that it is optimal, and a time-limited plan is still a correct plan.
+# WdspChannel reads this var, caps FFTW via fftw_set_timelimit(), and — because
+# rushed plans must never reach the cache the real app imports — skips the
+# wisdom export entirely while it is set.
+#
+# Applied to EVERY registered test, not to an hl2_*/wdsp_* name prefix. The
+# prefix was the first attempt and it leaked: `automation_connect_wait_phase_test`
+# and `transmit_model_test` both drive HL2 DSP without an hl2_ name, so they ran
+# unbounded AND exported — observed clobbering a developer's real 38 KB cache
+# with an 11 KB test-only one mid-review. Naming is not a reliable proxy for
+# what a test opens, and the failure is silent: the suite still passes, it just
+# quietly degrades the next real connect.
+#
+# Blanket application is safe because the variable is read in exactly one place
+# (WdspChannel), so it is inert in every test that never opens a channel, and it
+# cannot be escaped by a future test under any name.
+#
+# To re-check this hasn't regressed:
+#   ctest --test-dir build -j8 && \
+#     find "$HOME/.cache/aethersdr" -newer build/CMakeCache.txt   # must be empty
+set(AETHER_TEST_WISDOM_DIR "${CMAKE_BINARY_DIR}/test-fftw-wisdom")
+
+# The per-plan bound itself. MUST BE SET: it is referenced three times below —
+# the ctest ENVIRONMENT property, the compile definition behind
+# TestWdspWisdomIsolation.cpp, and through those the AETHER_WDSP_FFTW_TIMELIMIT
+# the app reads — and an undefined CMake variable expands to the EMPTY STRING at
+# every one of them rather than erroring. WdspChannel treats an empty value as
+# "unset" and returns -1.0 (plannerTimeLimitSeconds()), so the planner runs
+# fully unbounded and the entire bound is silently inert.
+#
+# That failure is invisible to the isolation re-check documented above: the
+# wisdom REDIRECT still works with the bound dead, so no file appears under
+# $HOME/.cache/aethersdr and the check passes. It is also invisible to the test
+# suite, which still passes — just slowly. Measured cold on macOS/arm64,
+# hl2_backend_test: 124.8 s with the variable undefined, 22.5 s with it set
+# here, of which only 2.4 s is CPU. The rest is socket and timer waits.
+#
+# 0.001 s per plan, not per process — FFTW cannot interrupt a measurement in
+# progress, so the total still scales with the number of distinct plans.
+set(AETHER_TEST_FFTW_TIMELIMIT "0.001" CACHE STRING
+    "Seconds FFTW may spend measuring each plan under test (empty = unbounded)")
+
+# Startup hardware inventory (#4986): pins the baseline-comparison contracts
+# that arm the "CPU below the speech-engine baseline" warning, plus host
+# self-consistency of the detection. Compiled with the same baseline define as
+# aethercore so the host check exercises the real compiled value.
+add_executable(system_inventory_test
+    tests/system_inventory_test.cpp
+    src/core/SystemInventory.cpp
+)
+target_include_directories(system_inventory_test PRIVATE src)
+target_link_libraries(system_inventory_test PRIVATE Qt6::Core)
+if (NOT _aether_ggml_baseline_str STREQUAL "")
+    target_compile_definitions(system_inventory_test PRIVATE
+        AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
+endif()
+add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
+
+# The isolation TU, compiled once and linked into every test target below. An
+# OBJECT library rather than STATIC on purpose: its only content is a
+# namespace-scope object whose CONSTRUCTOR is the entire point, and a static
+# library's unreferenced object file can be dropped at link time, which would
+# silently remove the protection.
+add_library(aether_test_wisdom_isolation OBJECT
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/TestWdspWisdomIsolation.cpp)
+target_compile_definitions(aether_test_wisdom_isolation PRIVATE
+    AETHER_TEST_WISDOM_DIR="${AETHER_TEST_WISDOM_DIR}"
+    AETHER_TEST_FFTW_TIMELIMIT_STR="${AETHER_TEST_FFTW_TIMELIMIT}")
+
+get_property(_aether_registered_tests DIRECTORY PROPERTY TESTS)
+set(_aether_test_targets "")
+foreach(_aether_test IN LISTS _aether_registered_tests)
+    # ctest ENVIRONMENT covers `ctest` runs and documents the values in
+    # CTestTestfile.cmake. APPEND, so the QT_QPA_PLATFORM=offscreen entries
+    # already set on the GUI-touching ones survive rather than being replaced.
+    set_property(TEST ${_aether_test} APPEND PROPERTY ENVIRONMENT
+        "AETHER_WDSP_FFTW_TIMELIMIT=${AETHER_TEST_FFTW_TIMELIMIT}"
+        "AETHER_WDSP_WISDOM_DIR=${AETHER_TEST_WISDOM_DIR}")
+    # ...and the linked-in initializer covers running the binary DIRECTLY, which
+    # ctest properties cannot reach and which is how a test is usually debugged.
+    if(TARGET ${_aether_test})
+        list(APPEND _aether_test_targets ${_aether_test})
+    endif()
+endforeach()
+# A target can back more than one registered test; link the TU once per target.
+list(REMOVE_DUPLICATES _aether_test_targets)
+foreach(_aether_target IN LISTS _aether_test_targets)
+    get_target_property(_aether_type ${_aether_target} TYPE)
+    if(_aether_type STREQUAL "EXECUTABLE")
+        target_link_libraries(${_aether_target} PRIVATE aether_test_wisdom_isolation)
     endif()
 endforeach()

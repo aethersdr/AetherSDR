@@ -145,8 +145,8 @@ connection — `connect` / `disconnect`; audio — `capture_audio`; and
 
 The verbs kept behind `bridge_command` on purpose: the low-level widget
 primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
-`contextMenu`, `rightClick`, `hitTest`, `clickAt` — `invoke`/`grab`
-cover the common cases), the transmit-keying verbs (`key`, `txtest`,
+`contextMenu`, `rightClick`, `hitTest`, `clickAt`, `doubleClick`,
+`doubleClickAt` — `invoke`/`grab` cover the common cases), the transmit-keying verbs (`key`, `txtest`,
 `atu`, `cwx`, `testtone`, `txwaterfall` — gated by
 `AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), and the
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
@@ -166,11 +166,16 @@ that should have changed → `grab_widget` for a visual check.
 **Access token.** Enabling the bridge in Radio Setup → Network mints a
 random token (stored in your OS secret store via QtKeychain — macOS
 Keychain / Windows Credential Manager / libsecret-KWallet, never in the
-settings store — RFC #4603 bans credentials from it outright). Copy it
-into your assistant's MCP config as the
-`AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
-verb except `ping` without a matching token. Headless/CI can supply the
-token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
+settings store — RFC #4603 bans credentials from it outright). Make it
+available as `AETHER_MCP_TOKEN` only in the shell session that launches
+your assistant, using a secret-safe input method that does not record the
+value in shell history. `tools/aether_mcp.py` inherits it from the parent
+process environment automatically, so no file needs to carry it. **Do not**
+put the literal token in a shell profile or add an `env` block to `.mcp.json`
+(or any other MCP config file) — those put a live credential on disk instead
+of keeping it in your OS keychain and risk it landing in a commit. The bridge
+rejects every verb except `ping` without a matching token. Headless/CI can
+supply the token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
 
 ### Secure fresh-build handoff
 
@@ -317,6 +322,8 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
 | | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
 | | [`clickAt [<target>] <x> <y>`](#clickat) | Click at a global (or target-local) point — fallback when name matching is ambiguous (TX-guarded). |
+| | [`doubleClick <target> [x y]`](#doubleclick) | Double-click a widget (its centre by default) — the only way to raise `mouseDoubleClickEvent`. |
+| | [`doubleClickAt [<target>] <x> <y>`](#doubleclickat) | Double-click at a global (or target-local) point (TX-guarded, same guards as `clickAt`). |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
@@ -1782,6 +1789,50 @@ Recipe — close a **specific** side-panel tile (not just the first `containerCl
 read the target tile's `containerClose` rect from `dumpTree`, compute its centre in
 global coordinates, and `clickAt` that point.
 
+### `doubleClick`
+Double-click a **named** widget. Two `clickAt` calls are not a substitute: Qt does
+not promote a pair of synthetic press/release sequences into a double-click, so a
+widget that overrides `mouseDoubleClickEvent` — the VFO DIG offset inline editor,
+the TX filter cut readouts — never hears one. The delivered sequence is Qt's own
+(`Press` → `Release` → `DblClick` → `Release`; the window system sends the
+`DblClick` *instead of* the second press).
+
+`x y` are **local** to `<target>` and optional — omitted, the widget's rect centre
+is used, which is the point a person would hit. Guards, TX refusals and deferred
+delivery are inherited wholesale from [`clickAt`](#clickat), which does the actual
+delivery.
+
+```json
+→ {"cmd":"doubleClick","target":"txFilterHighCut"}          // centre of the widget
+← {"ok":true,"clicked":{"class":"ScrollableLabel",…},"deferred":true}
+
+→ {"cmd":"doubleClick","target":"txFilterHighCut","x":10,"y":12}   // target-local point
+← {"ok":true,"clicked":{"class":"ScrollableLabel",…},"deferred":true}
+```
+
+Aliases: `doubleclick`, `dblClick`.
+
+### `doubleClickAt`
+The double-click twin of [`clickAt`](#clickat), with the same two forms and the
+same overload rule (a numeric first token means the global form):
+
+- **`doubleClickAt <x> <y>`** — `x y` are **global** screen coordinates.
+- **`doubleClickAt <target> <x> <y>`** — `x y` are **local** to `<target>`.
+
+```json
+→ {"cmd":"doubleClickAt","x":1420,"y":210}                        // global point
+→ {"cmd":"doubleClickAt","target":"AppletPanel","x":12,"y":34}    // target-local point
+→ {"cmd":"doubleClickAt","target":"AppletPanel","value":"12 34"}  // equivalent
+```
+
+As with `clickAt`, the JSON `x`/`y` fields must both be present and JSON-numeric;
+a missing or string-typed coordinate is rejected rather than coerced to 0. An
+explicit `value` wins over `x`/`y`. The same normalization applies to every alias
+spelling (`doubleclickat`, `dblClickAt`) and to `doubleClick`'s optional
+coordinates, so `bridge_command` reaches all three request forms identically.
+
+Aliases: `doubleclickat`, `dblClickAt`.
+
 ### `menu`
 Enumerate or pop a **menu-bar** menu. On macOS the native menu bar reparents its
 menus to top-level `QMenu`s, so `dumpTree` finds them but `menuBar()->actions()`
@@ -2224,6 +2275,50 @@ the default Layer-A inventory and `radio`/`inventory` reads remain available;
 `reset`, `resync`, and `refresh` are blocked. `reset` changes the local orphan
 tally, while `resync`/`refresh` send the `sub pan all` subscription command to
 the radio.
+
+### `devices`
+External-device diagnostics and bounded lifecycle control. `devices list`
+reports the available diagnostic names; `devices ulanzi` probes the exact
+macOS HID match used by the Ulanzi backend and joins that inventory with the
+backend's access and system-event suppression state. The inventory is limited
+to devices selected by the production VID/PID dictionary.
+
+```json
+→ {"cmd":"devices","action":"ulanzi"}
+← {"ok":true,"diagnostic":"ulanzi","platform":"macos","supported":true,
+   "enabled":true,
+   "productionMatch":{"vendorId":65521,"productId":130},
+   "matchedCount":1,
+   "matchedDevices":[{"product":"Ulanzi Dial","vendorId":65521,
+                      "productId":130,"primaryUsagePage":1,
+                      "primaryUsage":6}],
+   "inventoryAvailable":true,"accessMode":"shared",
+   "exclusiveOpenStatus":"notPrivileged","sharedOpenStatus":"success",
+   "systemEventsSuppressed":true,"suppressionStatus":"active",
+   "previousMappingPreserved":true,"eventSystemClientRetained":true,
+   "connected":true,"deviceName":"Ulanzi Dial"}
+```
+
+`matchedCount` is the number of devices currently inside the production match
+dictionary; `matchedDevices` exposes the selected devices' identity and primary
+usage for audit. `inventoryAvailable` describes the temporary read-only
+inventory query, while `exclusiveOpen*`, `sharedOpen*`, and `accessMode`
+describe the real backend's access attempts. If macOS rejects an exclusive
+claim for the Bluetooth keyboard-class dial, the backend opens only the exact
+matched device in shared mode and applies a device-scoped system key mapping.
+`systemEventsSuppressed` and `suppressionStatus` report that state;
+`previousMappingPreserved` and `eventSystemClientRetained` are the restoration
+ownership guards.
+
+`devices ulanzi-stop` restores the prior mapping and closes the backend;
+`devices ulanzi-start` starts it again. These lifecycle actions are blocked in
+Observe only mode. A successful stop reports `restorationStatus:"success"`,
+`systemEventsSuppressed:false`, and `eventSystemClientRetained:false`.
+
+The read-only diagnostic is available in **Observe only** mode; none of these
+actions keys the transmitter. On non-macOS platforms it returns
+`supported:false` because those backends do not use the affected IOKit claim
+path.
 
 ### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak
@@ -3089,6 +3184,13 @@ at once.
 **`controls map`** — every CI-V message the backend names, with its wire address,
 raw and seam ranges, the seam verb it maps to, the UI control that drives it, and
 what it has actually done this session. Read-only; works with no radio attached.
+For Icom, `supported`, `profileFeature`, `profileEvidence`, and `profileSource`
+describe the effective active-model row; an unsupported row is declaration
+inventory, not a claim that the radio accepts it. Core controls and scope on a
+scope-capable discovered model can be reachable with `profileEvidence: "none"`:
+the former is the backend's model-neutral CI-V floor and the latter matches the
+identity geometry already used by scope startup. Evidence remains independent
+so neither is presented as guide- or live-attested.
 
 ```json
 → {"cmd":"controls","args":"map"}
@@ -3432,6 +3534,25 @@ actually paint? is the layout right?), because a live spectrum is
 non-deterministic noise and won't golden-match until replay mode (Phase 2)
 lands.
 
+### Workspace pan-layout proof
+
+`workspace pan-layout <id>` drives the same production path as selecting a
+panadapter layout in the UI. It persists `PanadapterLayout`, creates or removes
+pans to reach the layout's count, and reflows Workspace Canvas pan rectangles
+when canvas mode is enabled. Valid IDs are `1`, `2v`, `2h`, `2h1`, `12h`,
+`3v`, `2x2`, `4v`, `3h2`, `2x3`, `4h3`, and `2x4`.
+
+Pan creation and removal settle asynchronously. The initial reply includes
+`targetPanCount`, active-main `panCount`, global `globalPanCount`, and
+`settling`. Poll `workspace status` until the active main surface has the
+target pan count before asserting its live rectangles. Floating pans and pans
+on extra surfaces are outside that count and remain untouched. To prove the
+rectangles persisted, disable and re-enable canvas mode (or restart with the
+same isolated settings profile) and assert the replayed geometry. This action
+returns an error before mutation when the target cannot fit within the radio's
+receiver capacity. It never enables transmit and remains available without
+`AETHER_AUTOMATION_ALLOW_TX`.
+
 ---
 
 ## Gotchas
@@ -3491,7 +3612,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 65 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 68 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -3512,6 +3633,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `contextMenu` | — | contextMenu <target> [x y] — Qt context-menu path |
 | `rightClick` | — | rightClick <target> [x y] — mousePressEvent menu path |
 | `hitTest` | `hittest` | hitTest <target> [x y] — read-only widget-owner probe |
+| `doubleClick` | `doubleclick`, `dblClick` | doubleClick <target> [x y] — double-click a widget (centre by default) |
+| `doubleClickAt` | `doubleclickat`, `dblClickAt` | doubleClickAt <x> <y> \| doubleClickAt <target> <x> <y> — coordinate double-click |
 | `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
 | `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
 | `get` | — | get <model> [selector] [property] — live model snapshot; get eqstats [selector] [reset] reports Client EQ paint/cache counters |
@@ -3532,12 +3655,13 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
 | `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864) |
-| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
+| `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
 | `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |

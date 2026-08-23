@@ -231,6 +231,7 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.txPowerBands = {};
     caps.family = familyName();
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
@@ -245,11 +246,16 @@ RadioCapabilities SimBackend::capabilities() const
     // (Principle VI). TX stays off in the skeleton.
     caps.canTransmit = false;
     caps.txPowerMaxWatts = 0.0;
+    // Moot on a backend that cannot key at all — canTransmit=false refuses every
+    // mode already. Empty, not "all of them", because this field means "the
+    // exceptions", and a simulator has none.
+    caps.receiveOnlyModes = {};
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
     caps.hasManualNotch = false;
+    caps.hasTransmitFrequencyCheck = false;
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;
@@ -286,6 +292,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
+    caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.
     caps.clientSettingsDomains = {};

@@ -485,7 +485,7 @@ QString MidiSettings::settingsFilePath() const
            + "/AetherSDR/midi.settings";
 }
 
-QString MidiSettings::profileDir() const
+QString MidiSettings::profileDir()
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
            + "/AetherSDR/midi";
@@ -599,41 +599,118 @@ QVector<MidiBinding> MidiSettings::parseBindingsFromXml(const QString& filePath)
     return result;
 }
 
-void MidiSettings::writeBindingsToXml(const QString& filePath,
-                                       const QVector<MidiBinding>& bindings)
+bool MidiSettings::writeBindingsToXml(const QString& filePath,
+                                      const QVector<MidiBinding>& bindings)
 {
     QDir().mkpath(QFileInfo(filePath).absolutePath());
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    // QSaveFile writes beside the target and renames over it on commit(), so
+    // a failure (unwritable store, full disk) leaves the previous profile
+    // intact instead of a truncated file — the outcome the caller then
+    // reports is true of the disk (Principle XIV). commit() flushes and
+    // returns false on a write error; hasError() covers a failure the stream
+    // writer saw earlier in the document. (#5077)
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
 
-    QXmlStreamWriter xml(&file);
-    writeProfileDocument(xml, bindings);
+    // Writer scoped so the document is complete before commit() — same shape
+    // as exportProfile(), so it doesn't rest on the writer's destructor order.
+    {
+        QXmlStreamWriter xml(&file);
+        writeProfileDocument(xml, bindings);
+        if (xml.hasError()) {
+            file.cancelWriting();
+            return false;
+        }
+    }
+    return file.commit();
 }
 
 // ── Profiles ────────────────────────────────────────────────────────────────
+
+bool MidiSettings::isValidProfileName(const QString& name)
+{
+    // Separators are tested directly rather than via an allowlist so
+    // non-ASCII station and contest names keep working. A leading dot is
+    // filesystem semantics too: on Unix it is the hidden-file convention, so
+    // the QDir::Files listing omits an accepted ".hidden.xml" — saved, but
+    // vanished from availableProfiles() — and refusing it also covers "."
+    // and "..", the two names that are pure path syntax. Rejecting (not
+    // stripping) is deliberate: stripping "../foo" to "foo" would silently
+    // overwrite an unrelated existing profile. (#4975)
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        return false;
+    }
+    if (trimmed.startsWith(QLatin1Char('.'))) {
+        return false;
+    }
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\'))) {
+        return false;
+    }
+    return true;
+}
 
 QStringList MidiSettings::availableProfiles() const
 {
     QDir dir(profileDir());
     QStringList result;
-    for (const auto& fi : dir.entryInfoList({"*.xml"}, QDir::Files))
-        result.append(fi.baseName());
+    for (const auto& fi : dir.entryInfoList({"*.xml"}, QDir::Files)) {
+        // completeBaseName(), not baseName(): the writers below append exactly
+        // one ".xml", so the reader must strip exactly one extension —
+        // baseName() cuts at the FIRST dot, so a dotted name ("CTR2 v1.0")
+        // listed truncated and could then never be loaded. (#4974)
+        const QString name = fi.completeBaseName();
+        // List only names the other three operations will serve: a legacy
+        // file whose name the store now refuses (e.g. a backslash, legal in
+        // Unix filenames and creatable by the pre-guard GUI) would otherwise
+        // list but never load or delete. The file itself stays on disk.
+        if (isValidProfileName(name)) {
+            result.append(name);
+        }
+    }
     return result;
 }
 
-void MidiSettings::saveProfile(const QString& name,
+bool MidiSettings::profileExists(const QString& name)
+{
+    if (!isValidProfileName(name)) {
+        return false;
+    }
+    return QFile::exists(profileDir() + "/" + name + ".xml");
+}
+
+bool MidiSettings::saveProfile(const QString& name,
                                 const QVector<MidiBinding>& bindings)
 {
-    writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
+    if (!isValidProfileName(name)) {
+        return false;
+    }
+    // Refused for the same reason exportProfile() refuses it: an empty set
+    // serializes to a childless <MidiProfile/> that loadProfile() reports as
+    // empty-or-missing, so "saved" would be untrue of what comes back — and
+    // Clear All → Save would otherwise replace a profile with nothing.
+    // importProfile() already guards this before it gets here. (#5077)
+    if (bindings.isEmpty()) {
+        return false;
+    }
+    return writeBindingsToXml(profileDir() + "/" + name + ".xml", bindings);
 }
 
 QVector<MidiBinding> MidiSettings::loadProfile(const QString& name) const
 {
+    if (!isValidProfileName(name)) {
+        return {};
+    }
     return parseBindingsFromXml(profileDir() + "/" + name + ".xml");
 }
 
 void MidiSettings::deleteProfile(const QString& name)
 {
+    // The guard matters most here: a mis-resolved delete is the one
+    // unrecoverable operation of the three. (#4975)
+    if (!isValidProfileName(name)) {
+        return;
+    }
     QFile::remove(profileDir() + "/" + name + ".xml");
 }
 
@@ -721,20 +798,21 @@ MidiImportResult MidiSettings::importProfile(
 
     // Store name = file base name; never overwrite an existing profile. The
     // prompt-vs-suffix collision policy is an open maintainer call, and a
-    // suffix is the reversible default. Dots are replaced because the store
-    // round-trips names through QFileInfo::baseName(), which cuts at the
-    // first dot — a dotted name would list, load, and collide wrongly.
+    // suffix is the reversible default. Dotted names round-trip through the
+    // store now that it lists via completeBaseName() (#4974), so the old
+    // dots-to-underscores substitution is gone.
     //
     // completeBaseName() operates on fileName(), so any directory component of
-    // the chosen path is already stripped: "../../evil.map" yields "evil". That
-    // is what keeps this call site safe, because saveProfile() — and its load
-    // and delete siblings — concatenate the name straight into profileDir()
-    // with no sanitizing. Do not swap this for a name taken from the document
-    // body or from filePath without stripping separators first.
+    // the chosen path is already stripped: "../../evil.map" yields "evil" —
+    // and the store rejects separator-bearing names itself (#4975), so a name
+    // taken from anywhere else is guarded too.
     QString name = QFileInfo(filePath).completeBaseName().trimmed();
-    name.replace(QLatin1Char('.'), QLatin1Char('_'));
-    if (name.isEmpty())
+    // Not just isEmpty(): a file named "...map" derives ".." here, which the
+    // store rightly refuses — without this fallback the refusal surfaces as a
+    // misleading "couldn't write" error instead of a stored profile.
+    if (!isValidProfileName(name)) {
         name = QStringLiteral("Imported profile");
+    }
     const QStringList existing = availableProfiles();
     const auto taken = [&existing](const QString& candidate) {
         for (const auto& p : existing)
@@ -746,11 +824,9 @@ MidiImportResult MidiSettings::importProfile(
     for (int n = 2; taken(unique); ++n)
         unique = name + QStringLiteral(" (%1)").arg(n);
 
-    saveProfile(unique, bindings);
-
-    // The write path returns void, so prove the store took it before
-    // reporting success.
-    if (loadProfile(unique).size() != bindings.size()) {
+    // The write reports failure itself (#5077); the read-back additionally
+    // proves the stored document carries every binding before reporting success.
+    if (!saveProfile(unique, bindings) || loadProfile(unique).size() != bindings.size()) {
         result.errors << QStringLiteral("Couldn't write the profile into %1.")
                              .arg(QDir::toNativeSeparators(profileDir()));
         result.importedCount = 0;

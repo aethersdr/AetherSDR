@@ -2457,7 +2457,7 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     if (m_audio) {
         if (m_txRestoreAudioDaxMode)
             m_audio->setDaxTxMode(m_txPreviousAudioDaxMode);
-        m_audio->clearTxAccumulators();
+        m_audio->clearTxAccumulators();  // self-marshals
     }
 
     if (hadTx) {

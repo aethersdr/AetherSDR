@@ -9,7 +9,9 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <optional>
+#include <span>
 
 #include "core/backends/icom/IcomControls.h"
 #include "core/backends/icom/IcomSettings.h"
@@ -34,6 +36,12 @@ Q_LOGGING_CATEGORY(lcIcomScheduler, "aether.icom.scheduler")
 // distinguishes a wrong address from a dead command plane, and nobody wants the
 // meter traffic alongside it.
 Q_LOGGING_CATEGORY(lcIcomAddr, "aether.icom.address")
+
+// Why a key request did NOT reach the radio. Its own category for the same
+// reason the address has one: a refusal is silent from the operator's side —
+// PTT, and nothing happens — and the trace that names the reason is the
+// difference between a deliberate gate and a dead command plane.
+Q_LOGGING_CATEGORY(lcIcomTx, "aether.icom.tx")
 
 // EVERY CI-V FRAME, both directions, as hex.
 //
@@ -72,6 +80,28 @@ QByteArray floatBytes(const std::vector<float>& v)
             static_cast<qsizetype>(v.size() * sizeof(float))};
 }
 
+const FmRepeaterProfile* basicFmProfileFor(const IcomModel* model) noexcept
+{
+    if (!model) {
+        return nullptr;
+    }
+    const IcomModelProfile& profile = profileFor(*model);
+    if (!profile.supports(IcomFeature::FmRepeaterBasic) || !profile.fmRepeater) {
+        return nullptr;
+    }
+    return &*profile.fmRepeater;
+}
+
+bool supportsTransmitFrequencyCheck(const IcomModel* model) noexcept
+{
+    if (!model) {
+        return false;
+    }
+    const IcomModelProfile& profile = profileFor(*model);
+    const FmRepeaterProfile* fm = basicFmProfileFor(model);
+    return profile.supports(IcomFeature::TxFrequencyCheck) && fm && fm->hasXfc;
+}
+
 }  // namespace
 
 IcomCivBackend::IcomCivBackend(QObject* parent)
@@ -96,7 +126,15 @@ qint64 IcomCivBackend::nowMs() const
     return m_clock.elapsed();
 }
 
-IcomCivBackend::~IcomCivBackend() = default;
+IcomCivBackend::~IcomCivBackend()
+{
+    // QObject direct connections may run while this destructor body is still
+    // active, so terminate before member destruction begins. The scheduler is
+    // reset before results are emitted (terminateScheduler), which makes a
+    // re-entrant observer unable to have newly queued work erased afterward.
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
+}
 
 // ---------------------------------------------------------------------------
 // Capability
@@ -105,12 +143,11 @@ IcomCivBackend::~IcomCivBackend() = default;
 RadioCapabilities IcomCivBackend::capabilities() const
 {
     const IcomModel& m = *m_model;
+    const IcomModelProfile& profile = profileFor(m);
     RadioCapabilities c;
     c.family = QStringLiteral("icom");
     c.manufacturer = QStringLiteral("Icom");
-    c.model  = m_deviceName.isEmpty() ? QString::fromUtf8(m.name.data(),
-                                                          static_cast<int>(m.name.size()))
-                                      : m_deviceName;
+    c.model = QString::fromUtf8(m.name.data(), static_cast<int>(m.name.size()));
 
     c.maxSlices = m.receivers;
     c.maxPanadapters = m.hasScope ? m.receivers : 0;
@@ -119,6 +156,52 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
+    // Official CI-V guides for both network targets define command 17 text
+    // keying and 17 FF abort. Keep other model profiles dark until verified.
+    c.hasRadioSideCwKeyer = profile.cwTextKeyer.has_value();
+    c.cwTextKeyerName = QStringLiteral("CWK");
+    c.cwTextMinWpm = profile.cwTextKeyer ? profile.cwTextKeyer->minWpm : 6;
+    c.cwTextMaxWpm = profile.cwTextKeyer ? profile.cwTextKeyer->maxWpm : 48;
+    c.cwTextMaxMessageChars = profile.cwTextKeyer
+        ? profile.cwTextKeyer->maxMessageChars : 30;
+    c.cwTextAllowedCharacters =
+        QStringLiteral("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :");
+    c.cwTextHasProgress = false;
+    c.cwTextHasStoredMacros = false;
+    c.cwTextSupportsLive = false;
+    c.cwTextSupportsSpeedModifiers = false;
+
+    // Published from the model's own band table rather than a second hand-kept
+    // list, so the ceilings and the tune guard can never describe different
+    // hardware. An empty table (every model but the IC-9700) leaves the vector
+    // empty, which is what RadioModel reads as "txPowerMaxWatts applies
+    // everywhere" — the prior behaviour, unchanged.
+    c.txPowerBands = {};
+    const std::span<const IcomBand> bands = bandsFor(m);
+    c.txPowerBands.reserve(static_cast<int>(bands.size()));
+    for (const IcomBand& band : bands) {
+        c.txPowerBands.append(TxPowerBand{static_cast<double>(band.lowHz),
+                                          static_cast<double>(band.highHz),
+                                          band.maxWatts});
+    }
+
+    // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
+    // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
+    // follow (#5040). Derived from the same two functions the mode combo is
+    // built from rather than listed a third time, so a mode cannot be offered
+    // without the transmit answer for it being consistent.
+    //
+    // The key guards in RadioModel read this: only that side can roll back
+    // TransmitModel's optimistic MOX/TUNE state, which is why the refusal that
+    // the operator SEES lives there and the one below is only the wire backstop.
+    //
+    // Empty for a model whose mode table nobody has read, and for the unknown
+    // model — which also reports canTransmit=false, so keying it is refused
+    // outright and the narrower gate never has to answer for it.
+    for (const std::string_view mode : modeListFor(m))
+        if (icom::modeIsReceiveOnly(m, mode))
+            c.receiveOnlyModes << QString::fromUtf8(mode.data(),
+                                                    static_cast<int>(mode.size()));
 
     // The scope scale is OURS, not the radio's: it comes from ScopeCalibration
     // (floor/span, shifted by the radio's own reference level), and there is no
@@ -150,6 +233,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // it, 16 57 picks one of three widths. Not a TNF and not the auto notch —
     // see the capability's own note.
     c.hasManualNotch = true;
+    // Publish the momentary UI only when the active model profile attests both
+    // the XFC command family and the FM facet's release contract. An address is
+    // identity, not evidence that a command shape is supported.
+    c.hasTransmitFrequencyCheck = supportsTransmitFrequencyCheck(&m);
 
     // The radio's own blanker, reached over CI-V and already covered by
     // hasRadioSideDsp. A networked Icom ships finished audio, not IQ (see
@@ -163,7 +250,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // The radio HAS a GPS and the protocol will not carry its data.
     c.hasGpsLocation = false;
 
-    c.hasSupplyVoltageTelemetry = true;   // 0x15 0x15 Vd
+    c.hasSupplyVoltageTelemetry =
+        profile.meters.calibration != MeterCalibration::Uncalibrated;
+    c.hasPaTemperatureTelemetry = profile.meters.hasPaTemperatureTelemetry;
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //
@@ -191,15 +280,33 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // mode change (see setSliceMode / the mode decode), which is what stops the
     // filter buttons offering widths that all land on the same slot.
     //
-    // The values are the radio's own defaults, which the operator can redefine
-    // in its SET menu and we cannot read back — so these are the best available
-    // labels, not a promise about the passband.
+    // 1A 03 reports only the SELECTED slot's actual width. Replace that slot's
+    // factory value once the reply is current, while retaining the documented
+    // defaults for the two unselected slots that the protocol cannot expose.
     if (m_model->hasScope || m_model->isKnown())
         {
         // std::vector<int> from the codec (which stays Qt-free) into the
         // QList the capability struct carries.
-        const auto widths = filterWidthsForMode(currentLadderMode().toStdString());
+        auto widths = filterWidthsForMode(currentLadderMode().toStdString());
+        if (widths.size() == 3 && passbandWidthIsCurrent() && m_ifWidthHz > 0
+            && m_filter >= 1 && m_filter <= 3) {
+            widths[static_cast<std::size_t>(3 - m_filter)] = m_ifWidthHz;
+            std::sort(widths.begin(), widths.end());
+        }
         c.rxFilterWidthsHz = QList<int>(widths.begin(), widths.end());
+    }
+
+    // THE TRANSMIT PASSBAND IS A SHORT LIST, NOT A SLIDER. Published so the
+    // Phone applet's low/high cut steppers walk the edges the radio HAS —
+    // without this they stepped 50 Hz at a time through values it rounds away,
+    // and eleven clicks out of twelve moved the label and nothing else.
+    //
+    // EMPTY FOR AN UNREAD MODEL, which is what leaves the control continuous
+    // and, correctly, unwired: setTxFilter() declines there too, so the two
+    // agree rather than the UI promising what the backend refuses.
+    if (const auto tbw = txBandwidthProfileFor(*m_model)) {
+        c.txFilterLowEdgesHz  = QList<int>(tbw->lowEdgesHz.begin(), tbw->lowEdgesHz.end());
+        c.txFilterHighEdgesHz = QList<int>(tbw->highEdgesHz.begin(), tbw->highEdgesHz.end());
     }
 
     c.hasProfiles = false;
@@ -222,7 +329,38 @@ RadioCapabilities IcomCivBackend::capabilities() const
     return c;
 }
 
-void IcomCivBackend::publishCapabilities() { emit capabilitiesChanged(); }
+void IcomCivBackend::publishCapabilities()
+{
+    // A model correction can withdraw XFC while an ON write is in flight.
+    // Capability gates future presses, not the release obligation created by
+    // an earlier one, so queue OFF before publishing the narrower profile.
+    if (m_connected && m_xfcReleaseRequired
+        && !supportsTransmitFrequencyCheck(m_model)) {
+        setTransmitFrequencyCheck(false);
+    }
+    emit capabilitiesChanged();
+}
+
+void IcomCivBackend::publishIdentity()
+{
+    RadioDelta r;
+    const QString modelName = QString::fromUtf8(m_model->name.data(),
+                                                static_cast<int>(m_model->name.size()));
+    r.model = modelName;
+    // The RS-BA1 handshake carries the radio's operator-configured Network
+    // Radio Name. It is the Icom equivalent of the nickname this neutral delta
+    // exposes, and is distinct from both the network hostname and the station
+    // callsign. Fall back to the CI-V-resolved model only when the radio leaves
+    // that field blank; never retain ConnectionPanel's generic "Icom" seed.
+    r.nickname = m_deviceName.isEmpty() ? modelName : m_deviceName;
+    // ALWAYS SET, even when the row declares nothing. bandsRaw is a present-only
+    // field, so omitting it leaves whatever the last radio declared standing —
+    // and an empty declaration is a real answer here: it means "use the built-in
+    // HF grid", which is right for every HF-only row in the table.
+    r.bandsRaw = QString::fromUtf8(m_model->bands.data(),
+                                   static_cast<int>(m_model->bands.size()));
+    emit radioChanged(r);
+}
 
 void IcomCivBackend::publishScopeDbmRange()
 {
@@ -282,10 +420,17 @@ void IcomCivBackend::publishModeState()
     SliceDelta s;
     s.mode = neutral;
     // The passband travels WITH the mode, in the same delta, because the radio
-    // will never send one. Applied after the mode by SliceModel's own ordering,
-    // which is what stops a narrow CW window surviving into DIGU.
-    const auto [low, high] =
-        passbandForModeAndFilter(currentLadderMode().toStdString(), m_filter);
+    // will never send one unprompted. Applied after the mode by SliceModel's
+    // own ordering, which is what stops a narrow CW window surviving into DIGU.
+    //
+    // THE RADIO'S OWN WIDTH WINS WHERE WE HAVE IT. 1A 03 reports the Hz the
+    // selected slot is actually defined as and 14 07 / 14 08 report where that
+    // window sits, so between them they describe the real response. The slot
+    // ladder below is the FALLBACK for the interval before the radio has
+    // answered, and for FM/DV/WFM where there is no settable width to read —
+    // it is a table of factory defaults, and an operator who redefined a slot
+    // is exactly who it is wrong for.
+    const auto [low, high] = currentPassbandHz();
     s.filterLow  = low;
     s.filterHigh = high;
     emit sliceChanged(sliceId(), s);
@@ -293,6 +438,106 @@ void IcomCivBackend::publishModeState()
     // rebuilt from the new one. Change-gated inside the models, so the repeat
     // this produces on an unchanged mode costs nothing.
     publishCapabilities();
+}
+
+bool IcomCivBackend::passbandWidthIsCurrent() const
+{
+    if (m_ifWidthMode != m_mode || m_ifWidthData != m_dataMode || m_ifWidthSlot != m_filter)
+        return false;
+    // FM, DV AND WFM ARE FULLY DESCRIBED BY A STAMPED ZERO. Their slots are
+    // fixed and 1A 03 does not apply, so "no width" is the complete answer
+    // there rather than a missing one — without this the request test would
+    // never be satisfied in FM and would re-ask on every frame that touched it.
+    if (filterWidthLimitsFor(currentLadderMode().toStdString()).maxHz <= 0)
+        return true;
+    return m_ifWidthHz > 0;
+}
+
+std::pair<int, int> IcomCivBackend::currentPassbandHz() const
+{
+    const std::string ladder = currentLadderMode().toStdString();
+    // A WIDTH FROM ANOTHER CONTEXT IS WORSE THAN NO WIDTH. Falling back to the
+    // slot ladder for the few hundred ms until 1A 03 answers draws a plausible
+    // window; carrying the previous mode's width across draws a confident wrong
+    // one — live, that was AM's 9 kHz painted over every SSB filter.
+    // BOTH CONDITIONS, and they are different questions: passbandWidthIsCurrent()
+    // answers "should we ask again", which FM satisfies with a zero. Drawing
+    // needs an actual width, so it tests that separately — a zero here means the
+    // slot ladder, not a passband collapsed to nothing.
+    if (m_ifWidthHz > 0 && passbandWidthIsCurrent()) {
+        const auto edges = passbandFromWidthAndPbt(passbandCentreHz(ladder, m_ifWidthHz),
+                                                    m_ifWidthHz, m_pbtInner, m_pbtOuter);
+        return {edges.lowHz, edges.highHz};
+    }
+    return passbandForModeAndFilter(ladder, m_filter);
+}
+
+// THE PASSBAND ALONE, WITHOUT THE MODE, and the distinction is load-bearing.
+//
+// A width or PBT reply says nothing about the operating mode, but it arrives
+// asynchronously — so routing it through publishModeState() republished
+// whatever m_mode/m_dataMode happened to hold at that instant. During a
+// front-panel mode change the two are briefly out of step (the 01 push carries
+// no DATA flag, so the DATA half is still the previous mode's until 26
+// answers), and a width reply landing in that window put a stale DIGL on the
+// slice's mode indicator. Publishing only what the frame actually reported
+// removes the window rather than narrowing it.
+void IcomCivBackend::publishPassband()
+{
+    const auto [low, high] = currentPassbandHz();
+    SliceDelta s;
+    s.filterLow  = low;
+    s.filterHigh = high;
+    emit sliceChanged(sliceId(), s);
+}
+
+void IcomCivBackend::requestPassbandState()
+{
+    if (!m_session)
+        return;
+    const std::uint8_t addr = m_session->civAddress();
+    // ONLY WHERE THERE IS A WIDTH TO READ. 1A 03 does not apply in FM, DV or
+    // WFM — those modes have three fixed slots and no width command — so asking
+    // there spends a round trip to be told nothing, or worse, is answered with
+    // the width of whatever mode the radio was in last.
+    if (filterWidthLimitsFor(currentLadderMode().toStdString()).maxHz > 0) {
+        const auto width = cmdReadFilterWidth(addr);
+        queueRead(width, semanticKey(width), IcomCivScheduler::Priority::Maintenance);
+    } else {
+        // No settable width here. Drop any width carried over from the previous
+        // mode rather than drawing this mode's passband with it — a 250 Hz CW
+        // window left standing in FM is a worse answer than the slot ladder —
+        // and STAMP the context, because "this mode has no width" is a complete
+        // answer that must not be re-asked on every frame.
+        m_ifWidthHz = 0;
+        m_ifWidthMode = m_mode;
+        m_ifWidthData = m_dataMode;
+        m_ifWidthSlot = m_filter;
+    }
+    for (std::uint8_t which : {level::kPbtInner, level::kPbtOuter}) {
+        const auto pbt = cmdReadLevel(addr, which);
+        queueRead(pbt, semanticKey(pbt), IcomCivScheduler::Priority::Maintenance);
+    }
+    pumpCiv(nowMs());
+}
+
+int IcomCivBackend::activeTxBandwidthItem() const
+{
+    const auto profile = txBandwidthProfileFor(*m_model);
+    if (!profile)
+        return -1;
+    // A DATA MODE USES ITS OWN SLOT, and 16 58 has nothing to say about it —
+    // that command selects among the three VOICE slots only. Reshaping a voice
+    // slot while the radio is transmitting FT8 would change a passband the
+    // operator cannot hear and leave the one in circuit untouched.
+    if (m_dataMode)
+        return profile->dataItem;
+    switch (m_txBandwidthSlot) {
+    case 0:  return profile->wideItem;
+    case 1:  return profile->midItem;
+    case 2:  return profile->narrowItem;
+    default: return -1;   // 16 58 has not answered; guessing would reshape the wrong slot
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -360,10 +605,14 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     p.sampleRateHz = static_cast<quint32>(m_audioRateHz);
 
     m_session = std::make_unique<IcomSession>();
+    const std::uint64_t sessionGeneration = ++m_sessionGeneration;
     connect(m_session.get(), &IcomSession::connected, this, &IcomCivBackend::onSessionConnected);
     connect(m_session.get(), &IcomSession::disconnected, this,
             &IcomCivBackend::onSessionDisconnected);
-    connect(m_session.get(), &IcomSession::civFrameReady, this, &IcomCivBackend::onCivFrame);
+    connect(m_session.get(), &IcomSession::civFrameReady, this,
+            [this, sessionGeneration](const CivFrame& frame) {
+                onCivFrame(frame, sessionGeneration);
+            });
     connect(m_session.get(), &IcomSession::audioReady, this, &IcomCivBackend::onAudio);
 
     if (!m_session->start(p))
@@ -372,14 +621,27 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    ++m_sessionGeneration;
+    m_civRecoveryStartedAtMs = 0;
+    m_lastCivRecoveryAttemptAtMs = 0;
+    m_civRecoveryAttempts = 0;
+    m_civStallReported = false;
     // Teardown is not allowed to wait for an ordinary outstanding read.  Drop
     // all background work, fail-safe unkey on every connected disconnect, and
     // restore the operator's RF-power setpoint if TUNE had borrowed it.  These
-    // are response-free emergency dispatches so both datagrams reach the
+    // are response-free emergency dispatches so every datagram reaches the
     // session before its sockets close; no state is optimistically adopted.
     if (m_session && m_connected) {
-        m_civScheduler.reset();
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                           SchedulerWaiterOutcome::Cancelled);
+        queueEmergencyWriteNoReply(cmdAbortCwMessage(m_session->civAddress()),
+                                   "cw.message");
         queueEmergencyWriteNoReply(cmdSetPtt(m_session->civAddress(), false), "ptt");
+        if (capabilities().hasTransmitFrequencyCheck
+            || m_xfcReleaseRequired || m_transmitFrequencyCheck) {
+            queueEmergencyWriteNoReply(
+                cmdSetTransmitFrequencyCheck(m_session->civAddress(), false), "xfc");
+        }
         if (m_tuning && m_preTuneTxPowerPercent >= 0) {
             queueEmergencyWriteNoReply(
                 cmdSetLevel(m_session->civAddress(), level::kRfPower,
@@ -387,8 +649,13 @@ void IcomCivBackend::disconnectRadio()
                 "level.rfPower");
         }
         const qint64 now = nowMs();
-        pumpCiv(now);
-        pumpCiv(now);
+        // No-reply emergency writes retire synchronously, one per pump. Drain
+        // the bounded teardown burst instead of assuming it will forever have
+        // exactly three members (CW abort, unkey, XFC release, optional power
+        // restore today).
+        for (int i = 0; i < 8 && !m_civScheduler.idle(); ++i) {
+            pumpCiv(now);
+        }
     }
 
     for (QTimer** t : {&m_meterTimer, &m_linkTimer, &m_civDetectTimer}) {
@@ -405,15 +672,21 @@ void IcomCivBackend::disconnectRadio()
     m_rxResampler.reset();
     m_scope.reset();
     m_meters.reset();
-    m_civScheduler.reset();
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
     m_schedulerTimeoutsReported = 0;
-    serviceSchedulerWaiters(nowMs());
     m_pendingPttIntent.reset();
     m_pendingPttUntilMs = 0;
+    m_transmitFrequencyCheck = false;
+    m_xfcReleaseRequired = false;
     // The radio keeps its own DSP state across our sessions and we have not
     // read it back, so "unknown" is the only honest starting point — carrying
     // the last session's belief would suppress the first command that matters.
     m_nrEnableSent = m_nbEnableSent = m_anfEnableSent = m_mnEnableSent = -1;
+    m_repeaterToneOn.reset();
+    m_repeaterToneHz.reset();
+    m_repeaterOffsetDirection.reset();
+    m_repeaterOffsetHz.reset();
     // Same reasoning, applied to every OTHER control: the scrub mirrors are
     // stale the moment the session ends, so a scrub run after a reconnect that
     // dropped a read must report NOT-TESTED rather than re-asserting the
@@ -435,6 +708,7 @@ void IcomCivBackend::disconnectRadio()
     m_modelByName = nullptr;
     m_scopeStarted = false;
     m_tuning = false;
+    m_cwBreakInMode = 1;
     m_preTuneTxPowerPercent = -1;
     if (m_connected) {
         m_connected = false;
@@ -489,7 +763,7 @@ void IcomCivBackend::sendConnectReadBurst()
     // first thing AetherSDR wrote pushed the radio the rest of the way out of
     // DATA. 26 00 reports mode, DATA and filter together, so it also corrects
     // the 04 above if the two ever disagree.
-    if (m_model->hasVfoModeCommand)
+    if (profileFor(*m_model).supports(IcomFeature::VfoMode))
         queueStartupRead(cmdReadVfoMode(m_session->civAddress()));
 
     // ASK WHERE THE RADIO TAKES ITS MODULATION FROM, using this model's own
@@ -518,7 +792,8 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t which : {level::kRfPower, level::kAf, level::kSquelch,
                                level::kMicGain, level::kCompLevel, level::kMonitor,
                                level::kNrLevel, level::kNbLevel,
-                               level::kNotchPos, level::kRf, level::kVoxGain})
+                               level::kNotchPos, level::kRf, level::kVoxGain,
+                               level::kCwPitch, level::kKeySpeed})
         queueStartupRead(cmdReadLevel(m_session->civAddress(), which));
 
     // ...and the switches, which have the same problem: the applet toggles all
@@ -526,8 +801,50 @@ void IcomCivBackend::sendConnectReadBurst()
     for (std::uint8_t fn : {func::kPreamp, func::kAgc, func::kNoiseReduce,
                             func::kNoiseBlanker, func::kAutoNotch,
                             func::kManualNotch,
-                            func::kCompressor, func::kMonitorFn, func::kVox})
+                            func::kCompressor, func::kMonitorFn, func::kVox,
+                            func::kBreakIn})
         queueStartupRead(cmdReadFunction(m_session->civAddress(), fn));
+
+    // FM repeater state lives in three more command families.  Read every
+    // field at connect so an FM memory or front-panel setup opens in the UX as
+    // radio truth rather than SliceModel's generic defaults.
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    if (fm && fm->hasDuplex) {
+        queueStartupRead(cmdReadRepeaterOffsetDirection(m_session->civAddress()));
+        queueStartupRead(cmdReadRepeaterOffset(m_session->civAddress()));
+    }
+    if (fm && fm->hasTxCtcss) {
+        queueStartupRead(cmdReadFunction(m_session->civAddress(), func::kRepeaterTone));
+        queueStartupRead(cmdReadRepeaterTone(m_session->civAddress()));
+    }
+    if (supportsTransmitFrequencyCheck(m_model)) {
+        queueStartupRead(cmdReadTransmitFrequencyCheck(m_session->civAddress()));
+    }
+
+    // THE PASSBAND ITSELF, not just the slot that holds it: the width the
+    // selected slot is actually defined as (1A 03) and where both Twin PBT
+    // edges are sitting (14 07 / 14 08). Without these the connect snapshot
+    // knew which of three buttons was lit and had to invent the Hz.
+    //
+    // Queued unconditionally here rather than through requestPassbandState(),
+    // because at this point in the burst the mode reads above have not been
+    // answered yet — m_mode is still the constructor's USB, and gating a read
+    // on a mode we have not been told is how a connect into FM ends up asking
+    // for a width that does not exist there. The decode validates the code
+    // against the mode that has arrived by the time the reply lands.
+    {
+        const auto width = cmdReadFilterWidth(m_session->civAddress());
+        queueStartupRead(width);
+    }
+    for (std::uint8_t which : {level::kPbtInner, level::kPbtOuter})
+        queueStartupRead(cmdReadLevel(m_session->civAddress(), which));
+
+    // WHICH TRANSMIT PASSBAND IS IN CIRCUIT. 16 58 names one of three stored
+    // slots; the edges live in the slot, so this read is what tells the follow
+    // -up which SET item to ask for. Asking for all four slots instead would
+    // read three passbands the transmitter is not using.
+    if (txBandwidthProfileFor(*m_model))
+        queueStartupRead(cmdReadFunction(m_session->civAddress(), func::kTxBandwidth));
 
     // The attenuator is NOT sub-addressed, so it needs its own read rather than
     // a slot in the loop above.
@@ -612,7 +929,8 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
             // including a directed identity read that may already be in flight.
             // The replacement snapshot below is the only work allowed to
             // survive the destination change.
-            m_civScheduler.reset();
+            terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                               SchedulerWaiterOutcome::Cancelled);
             if (m_session) {
                 if (m_session->civAddress() != m_civSeedAddress)
                     m_session->setCivAddress(m_civSeedAddress);
@@ -623,10 +941,12 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
                 applyScopeStartup();
             }
             publishCapabilities();
-            RadioDelta r;
-            r.model = QString::fromUtf8(m_model->name.data(),
-                                        static_cast<int>(m_model->name.size()));
-            emit radioChanged(r);
+            // The mode vocabulary is withdrawn with the rest of the identity.
+            // modeListFor() answers empty for the unknown model, so the model
+            // stops asserting the first responder's list for a radio we have
+            // just decided we cannot identify.
+            publishModeList();
+            publishIdentity();
         }
         return;
     }
@@ -665,7 +985,8 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
     // No queued or in-flight command addressed to the old destination can be
     // reused after this point. In particular, semantic read coalescing must not
     // mistake an old-address startup read for the replacement snapshot.
-    m_civScheduler.reset();
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
     qCInfo(lcIcomAddr) << "retargeting CI-V from" << Qt::hex << m_session->civAddress()
                    << "to the address the radio reported:" << reported;
     m_session->setCivAddress(reported);
@@ -751,7 +1072,7 @@ void IcomCivBackend::adoptReportedCivAddress(std::uint8_t reported)
 
 void IcomCivBackend::onSessionConnected(const QString& deviceName)
 {
-    m_deviceName = deviceName;
+    m_deviceName = deviceName.trimmed();
     m_connected = true;
 
     // RESOLVE THE MODEL FROM THE NAME, NOW.
@@ -767,9 +1088,27 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // The capabilities packet already told us the name during the handshake, so
     // use it. The address query still runs and still wins — it is the
     // authority, this is just early enough to be useful.
-    m_modelByName = modelForName(deviceName.toStdString());
-    if (m_modelByName)
+    m_modelByName = modelForName(m_deviceName.toStdString());
+    if (m_modelByName) {
         m_model = m_modelByName;
+        // And declare the bands NOW, for the same reason the model is resolved
+        // now: the band menu is built on the connect edge, while the 0x19 0x00
+        // query that would confirm this identity still has no serial stream to
+        // run on. That query re-publishes when it answers; this is just early
+        // enough to be useful. Left inside the guard on purpose — an
+        // unidentified radio declares nothing and keeps the HF grid, rather
+        // than announcing itself as "Unknown Icom" with no bands at all.
+        publishIdentity();
+    } else {
+        // A custom Network Radio Name is intentionally not a model name. Publish
+        // it before connected() anyway so the status bar never exposes the
+        // manual-connect placeholder while the broadcast 0x19 0x00 query learns
+        // the canonical model. A present-but-empty nickname also clears that
+        // placeholder; publishIdentity() supplies the model fallback later.
+        RadioDelta r;
+        r.nickname = m_deviceName;
+        emit radioChanged(r);
+    }
 
     // WRONG DEVICE, said as early as it can be said.
     //
@@ -911,7 +1250,8 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     s.inUse = true;
     s.active = true;
     s.txSlice = true;   // one receiver IS the transmitter
-    if (m_model && m_model->civAddress == 0xB6) {
+    if (m_model && profileFor(*m_model).rxAntenna
+        && profileFor(*m_model).rxAntenna->selectable) {
         s.rxAntennaList = QStringList{QStringLiteral("ANT1"),
                                       QStringLiteral("RX-ANT")};
         s.txAntennaList = QStringList{QStringLiteral("ANT1")};
@@ -921,6 +1261,12 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
         // for this session; reconnect never replays client-owned state.
     }
     emit sliceChanged(sliceId(), s);
+
+    // AFTER the slice exists, and from the name-resolved model. The address
+    // query that would correct it needs a serial stream that only just opened,
+    // so this is the earliest the vocabulary can be published — and the 0x19
+    // 0x00 reply republishes it below if it names a different radio.
+    publishModeList();
 
     publishMeterDefs();
 
@@ -974,7 +1320,6 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     // A small default set so the status bar is alive before any UI declares
     // what it is showing. setMeterVisible() narrows or widens this.
     m_meters.setVisible(MeterId::SMeter, true);
-    m_meters.setVisible(MeterId::Vd, true);
     m_meters.setVisible(MeterId::Overflow, true);
     // The transmit meters. Visible so the poller WILL ask for them — it still
     // only does so while transmitting, which is what the TX/RX split is for.
@@ -982,7 +1327,6 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     m_meters.setVisible(MeterId::Swr, true);
     m_meters.setVisible(MeterId::Alc, true);
     m_meters.setVisible(MeterId::Comp, true);
-    m_meters.setVisible(MeterId::Id, true);
 
     m_meterTimer = new QTimer(this);
     connect(m_meterTimer, &QTimer::timeout, this, &IcomCivBackend::onMeterTick);
@@ -1003,6 +1347,12 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
 {
     const bool was = m_connected;
     m_connected = false;
+    ++m_sessionGeneration;
+    if (m_session) {
+        disconnect(m_session.get(), nullptr, this, nullptr);
+    }
+    terminateScheduler(IcomCivScheduler::TerminalOutcome::Cancelled,
+                       SchedulerWaiterOutcome::Cancelled);
 
     // UNKNOWN IS THE ONLY HONEST STARTING POINT for anything the radio told
     // us, and this object outlives the session: the same backend serves the
@@ -1104,8 +1454,15 @@ void IcomCivBackend::applyScopeStartup()
 // CI-V decode
 // ---------------------------------------------------------------------------
 
-void IcomCivBackend::onCivFrame(const CivFrame& frame)
+void IcomCivBackend::onCivFrame(const CivFrame& frame,
+                                std::uint64_t sessionGeneration)
 {
+    if (!m_connected || sessionGeneration != m_sessionGeneration) {
+        return;
+    }
+    const bool recoveryFrequencyCandidate = m_civRecoveryStartedAtMs > 0
+        && frame.cmd == cmd::kReadFreq
+        && m_session && frame.from == m_session->civAddress();
     // Scope first: it is by far the highest-rate frame, and the decoder already
     // rejects anything that is not waveform data.
     if (auto sweep = m_scope.feed(frame)) {
@@ -1156,6 +1513,23 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
 
     const IcomCivScheduler::Observation observation =
         m_civScheduler.observe(frame, frameAtMs);
+    if (recoveryFrequencyCandidate
+        && observation != IcomCivScheduler::Observation::Stale) {
+        // CI-V has no transaction identifier. The strongest correlation the
+        // protocol permits is therefore all three: selected-radio source,
+        // frequency-reply shape, and a reply that has not been superseded by
+        // newer intent. A reply slower than the scheduler's 350 ms wait is
+        // Unmatched but still authoritative; Stale is the sole outcome that
+        // proves a newer semantic generation replaced it. An unsolicited
+        // frequency frame from this same radio also proves the CI-V command
+        // plane is alive, while another bus device cannot verify the session.
+        qCInfo(lcIcomLink)
+            << "CI-V command plane verified after targeted data restart";
+        m_civRecoveryStartedAtMs = 0;
+        m_lastCivRecoveryAttemptAtMs = 0;
+        m_civRecoveryAttempts = 0;
+        m_civStallReported = false;
+    }
     // Identity can retarget the CI-V destination. Do not dispatch the next
     // queued startup frame until adoptReportedCivAddress() has either confirmed
     // the address or discarded all work aimed at the old one.
@@ -1229,14 +1603,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
 
                 publishMeterDefs();
                 publishCapabilities();
+                // The mode vocabulary is a model fact too, and this is the
+                // authority: a name-resolved list published at connect is
+                // replaced here if the address names a different radio.
+                publishModeList();
                 // The scope switches are per-model, so a radio that only became
                 // known just now has not had them sent. No-op once started.
                 applyScopeStartup();
             }
-            RadioDelta r;
-            r.model = QString::fromUtf8(m_model->name.data(),
-                                        static_cast<int>(m_model->name.size()));
-            emit radioChanged(r);
+            publishIdentity();
         }
         pumpCiv(frameAtMs);
         return;
@@ -1291,16 +1666,85 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // m_dataMode, so combining it with the new ordinary mode would expose a
         // transient false DIGU/DIGL (or false voice mode) until 26 answered.
         // Command 26 is the single authoritative publication for these models.
-        if (frame.cmd == cmd::kSetModeTrx && m_session && m_model->hasVfoModeCommand) {
+        if (frame.cmd == cmd::kSetModeTrx && m_session
+            && profileFor(*m_model).supports(IcomFeature::VfoMode)) {
             const auto read = cmdReadVfoMode(m_session->civAddress());
             queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Maintenance);
             pumpCiv(nowMs());
-        } else if (!m_model->hasVfoModeCommand) {
+        } else if (!profileFor(*m_model).supports(IcomFeature::VfoMode)) {
             // This model has no verified DATA readback. An ordinary mode frame
             // can only justify an ordinary mode claim.
             m_dataMode = false;
             publishModeState();
         }
+        return;
+    }
+
+    case cmd::kDuplex: {
+        const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+        if (!fm || !fm->hasDuplex) {
+            return;
+        }
+        const auto direction = decodeRepeaterOffsetDirection(frame.data);
+        if (!direction) {
+            return;
+        }
+        m_repeaterOffsetDirection = *direction;
+        SliceDelta d;
+        d.repeaterOffsetDir = *direction == RepeaterOffsetDirection::Down
+            ? QStringLiteral("down")
+            : *direction == RepeaterOffsetDirection::Up
+            ? QStringLiteral("up") : QStringLiteral("simplex");
+        if (m_repeaterOffsetHz) {
+            const double offsetMhz = static_cast<double>(*m_repeaterOffsetHz) / 1.0e6;
+            d.txOffsetFreq = *direction == RepeaterOffsetDirection::Down
+                ? -offsetMhz
+                : *direction == RepeaterOffsetDirection::Up ? offsetMhz : 0.0;
+        }
+        emit sliceChanged(sliceId(), d);
+        return;
+    }
+
+    case cmd::kReadRepeaterOffset:
+    case cmd::kSetRepeaterOffset: {
+        const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+        if (!fm || !fm->hasDuplex) {
+            return;
+        }
+        const auto offsetHz = decodeRepeaterOffsetHz(frame.data);
+        if (!offsetHz) {
+            return;
+        }
+        m_repeaterOffsetHz = *offsetHz;
+        const double offsetMhz = static_cast<double>(*offsetHz) / 1.0e6;
+        SliceDelta d;
+        d.fmRepeaterOffsetFreq = offsetMhz;
+        if (m_repeaterOffsetDirection) {
+            d.txOffsetFreq = *m_repeaterOffsetDirection == RepeaterOffsetDirection::Down
+                ? -offsetMhz
+                : *m_repeaterOffsetDirection == RepeaterOffsetDirection::Up
+                ? offsetMhz : 0.0;
+        }
+        emit sliceChanged(sliceId(), d);
+        return;
+    }
+
+    case cmd::kTone: {
+        const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+        if (!fm || !fm->hasTxCtcss) {
+            return;
+        }
+        if (!frame.hasSub || frame.sub != 0x00) {
+            return;
+        }
+        const auto toneHz = decodeRepeaterToneHz(frame.data);
+        if (!toneHz) {
+            return;
+        }
+        m_repeaterToneHz = *toneHz;
+        SliceDelta d;
+        d.fmToneValue = *toneHz;
+        emit sliceChanged(sliceId(), d);
         return;
     }
 
@@ -1333,6 +1777,19 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         // one point ahead of the front panel for roughly half their range.
         const int pct = levelRawToPercent(*raw);
         switch (frame.sub) {
+        // TWIN PBT — RAW, NOT A PERCENTAGE. Every other 0..255 level on this
+        // radio is a magnitude that maps onto 0..100 sensibly; these two are a
+        // SIGNED POSITION about 128, and how many Hz a step is worth depends on
+        // the width in circuit. Rounding them through levelRawToPercent first
+        // would quantise the centre away — 128 becomes 50%, and 50% back is
+        // 127 — so the passband would drift one step every time it was
+        // round-tripped.
+        case level::kPbtInner:
+        case level::kPbtOuter: {
+            (frame.sub == level::kPbtInner ? m_pbtInner : m_pbtOuter) = *raw;
+            publishPassband();
+            return;
+        }
         case level::kRfPower: {
             m_txPowerPercent = pct;
             TransmitDelta t; t.rfPower = pct;
@@ -1405,6 +1862,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             emit transmitChanged(t);
             return;
         }
+        case level::kCwPitch: {
+            TransmitDelta t;
+            t.cwPitch = 300 + std::lround(static_cast<double>(*raw) * 600.0 / 255.0);
+            emit transmitChanged(t);
+            return;
+        }
+        case level::kKeySpeed: {
+            TransmitDelta t;
+            t.cwSpeed = 6 + std::lround(static_cast<double>(*raw) * 42.0 / 255.0);
+            emit transmitChanged(t);
+            return;
+        }
         default:
             return;
         }
@@ -1415,6 +1884,23 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
         const int v = frame.data[0];
         switch (frame.sub) {
+        // WHICH OF THE THREE TRANSMIT PASSBANDS IS IN CIRCUIT. Not a passband
+        // itself — it names the SET item that holds one, so the only useful
+        // thing to do with it is go and read that item.
+        case func::kTxBandwidth: {
+            if (v > 2)
+                return;   // 00 WIDE, 01 MID, 02 NAR; anything else is not this reply
+            if (m_txBandwidthSlot == v)
+                return;
+            m_txBandwidthSlot = v;
+            const int item = activeTxBandwidthItem();
+            if (item >= 0 && m_session) {
+                const auto read = cmdReadSetting(m_session->civAddress(), item);
+                queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Maintenance);
+                pumpCiv(nowMs());
+            }
+            return;
+        }
         case func::kNoiseReduce: {
             m_nrEnableSent = v ? 1 : 0;   // adopt, so we do not re-send it
             SliceDelta d; d.nr = (v != 0);
@@ -1430,6 +1916,18 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         case func::kAutoNotch: {
             m_anfEnableSent = v ? 1 : 0;
             SliceDelta d; d.anf = (v != 0);
+            emit sliceChanged(sliceId(), d);
+            return;
+        }
+        case func::kRepeaterTone: {
+            const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+            if (!fm || !fm->hasTxCtcss) {
+                return;
+            }
+            m_repeaterToneOn = v != 0;
+            SliceDelta d;
+            d.fmToneMode = v != 0 ? QStringLiteral("ctcss_tx")
+                                  : QStringLiteral("off");
             emit sliceChanged(sliceId(), d);
             return;
         }
@@ -1461,6 +1959,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         case func::kCompressor: {
             m_compEnable = (v != 0);
             TransmitDelta t; t.speechProcEnable = (v != 0);
+            emit transmitChanged(t);
+            return;
+        }
+        case func::kBreakIn: {
+            if (v == 1 || v == 2) {
+                m_cwBreakInMode = v;
+            }
+            TransmitDelta t;
+            t.cwBreakIn = v != 0;
             emit transmitChanged(t);
             return;
         }
@@ -1533,6 +2040,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         const auto st = decodeVfoMode(frame.data);
         if (!st)
             return;
+        const bool previousData = m_dataMode;
         m_mode = st->mode;
         m_dataMode = st->dataMode;
         // Zero means the radio named a slot outside 1..3 — see VfoModeState.
@@ -1541,15 +2049,97 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
         if (st->filter != 0)
             m_filter = st->filter;
         publishModeState();
+        // THE WIDTH AND BOTH PBTs ARE PER MODE AND PER SLOT, and the radio
+        // swaps all three without announcing any of them. A width read once at
+        // connect is right until the operator's first mode or filter change and
+        // quietly stale afterwards — which is the exact failure this whole
+        // change exists to remove, reintroduced one level up.
+        //
+        // The DATA flag counts too: USB and USB-D are different filter contexts
+        // on the radio and hold different widths.
+        //
+        // ASKED BY CONTEXT, NOT BY CHANGE. Comparing the reply against our own
+        // state cannot see a move the optimistic setters have already applied —
+        // that is what left every mode drawing AM's width on real hardware.
+        if (!passbandWidthIsCurrent())
+            requestPassbandState();
+        // A TRANSMIT slot change rides on the same edge, because which TBW item
+        // is live depends on m_dataMode.
+        if (previousData != m_dataMode) {
+            const int item = activeTxBandwidthItem();
+            if (item >= 0 && m_session) {
+                const auto read = cmdReadSetting(m_session->civAddress(), item);
+                queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Maintenance);
+                pumpCiv(nowMs());
+            }
+        }
         checkModInput();
         return;
     }
 
     case cmd::kSetting: {
+        if (!frame.hasSub)
+            return;
+        // 1A 03 <bcd code> — THE IF WIDTH IN CIRCUIT. One byte, BCD, and its
+        // meaning depends on the mode: code 40 is 3.6 kHz in SSB, out of range
+        // in RTTY, and 8.2 kHz in AM. Decoding it against the mode the radio is
+        // actually in is what stops a stale reply from a mode change still in
+        // flight being adopted as this mode's width.
+        if (frame.sub == settingSub::kFilterWidth) {
+            if (frame.data.empty())
+                return;
+            const auto hz = filterWidthHzFromCode(currentLadderMode().toStdString(),
+                                                  static_cast<std::uint8_t>(
+                                                      decodeBcdByte(frame.data[0])));
+            // A code this mode's table does not define is a reply we have
+            // mis-attributed, not a narrow filter. Keep the previous width
+            // rather than publishing a passband from a byte we cannot read.
+            if (!hz)
+                return;
+            m_ifWidthHz = *hz;
+            // STAMP WHAT THIS ANSWER IS ABOUT, at the only place that knows:
+            // the decode. Anywhere else runs ahead of the radio.
+            m_ifWidthMode = m_mode;
+            m_ifWidthData = m_dataMode;
+            m_ifWidthSlot = m_filter;
+            publishCapabilities();
+            publishPassband();
+            return;
+        }
         // 1A 05 <item hi> <item lo> <value>
-        if (!frame.hasSub || frame.sub != 0x05 || frame.data.size() < 3)
+        if (frame.sub != settingSub::kMenu || frame.data.size() < 3)
             return;
         const int item = decodeBcdByte(frame.data[0]) * 100 + decodeBcdByte(frame.data[1]);
+
+        // TRANSMIT PASSBAND EDGES, which are a different shape from every other
+        // SET item: one packed BCD byte whose high digit indexes this model's
+        // low-edge table and whose low digit indexes the high-edge table.
+        //
+        // PUBLISHED FROM THE REPLY, never from the request. The tables are
+        // short and model-specific, so a Phone applet asking for 150 Hz on an
+        // IC-705 gets 100 or 200 — and showing 150 afterwards would put a
+        // number on screen that the transmitter cannot produce.
+        if (const auto profile = txBandwidthProfileFor(*m_model)) {
+            const bool isTbwItem = item == profile->wideItem || item == profile->midItem
+                                || item == profile->narrowItem || item == profile->dataItem;
+            if (isTbwItem) {
+                if (item != activeTxBandwidthItem())
+                    return;   // a slot the transmitter is not using
+                const int lowIdx  = (frame.data[2] >> 4) & 0x0f;
+                const int highIdx = frame.data[2] & 0x0f;
+                if (lowIdx >= static_cast<int>(profile->lowEdgesHz.size())
+                    || highIdx >= static_cast<int>(profile->highEdgesHz.size()))
+                    return;   // not the packed-nibble shape we expect; do not guess
+                m_txFilterLowHz  = profile->lowEdgesHz[static_cast<std::size_t>(lowIdx)];
+                m_txFilterHighHz = profile->highEdgesHz[static_cast<std::size_t>(highIdx)];
+                TransmitDelta t;
+                t.txFilterLow  = m_txFilterLowHz;
+                t.txFilterHigh = m_txFilterHighHz;
+                emit transmitChanged(t);
+                return;
+            }
+        }
+
         const auto mod = modulationProfileFor(*m_model);
         if (!mod)
             return;
@@ -1601,9 +2191,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
             return;
 
         m_meters.markAnswered(spec->id, nowMs());
-        const double value = meterValue(spec->id, *raw,
-                                        s9ReferenceFor(m_frequencyHz),
-                                        m_model ? m_model->civAddress : 0xA4);
+        const double value = meterValue(
+            spec->id, *raw, s9ReferenceFor(m_frequencyHz),
+            m_model ? profileFor(*m_model).meters.calibration
+                    : MeterCalibration::Uncalibrated);
 
         if (spec->id == MeterId::Overflow) {
             m_overflow = value > 0.5;
@@ -1703,6 +2294,24 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame)
                            : v == 0x01 ? QStringLiteral("TUNE_SUCCESSFUL")
                                        : QStringLiteral("TUNE_BYPASS");
             emit transmitChanged(t);
+        }
+        if (frame.hasSub && frame.sub == control::kXfc && !frame.data.empty()) {
+            if (!supportsTransmitFrequencyCheck(m_model)
+                && !m_xfcReleaseRequired && !m_transmitFrequencyCheck) {
+                return;
+            }
+            if (frame.data[0] != 0x00 && frame.data[0] != 0x01) {
+                qCWarning(lcIcomCiv) << "refusing invalid XFC state" << frame.data[0];
+                return;
+            }
+            const bool on = frame.data[0] == 0x01;
+            if (!on) {
+                m_xfcReleaseRequired = false;
+            }
+            if (on != m_transmitFrequencyCheck) {
+                m_transmitFrequencyCheck = on;
+                emit transmitFrequencyCheckChanged(on);
+            }
         }
         return;
     }
@@ -1900,6 +2509,12 @@ std::string IcomCivBackend::semanticKey(std::span<const std::uint8_t> frame) con
     case cmd::kSetMode:
     case cmd::kVfoMode:
         return "mode";
+    case cmd::kReadRepeaterOffset:
+    case cmd::kSetRepeaterOffset:
+        // Read and write use different opcodes but own one state value. Sharing
+        // a generation prevents an older poll from winning after an operator
+        // changes the offset.
+        return "repeater.offset";
     default:
         break;
     }
@@ -1909,6 +2524,9 @@ std::string IcomCivBackend::semanticKey(std::span<const std::uint8_t> frame) con
         }
         if (parsed->sub == control::kTuner) {
             return "tuner";
+        }
+        if (parsed->sub == control::kXfc) {
+            return "xfc";
         }
     }
     std::string key = "civ." + std::to_string(parsed->cmd);
@@ -1938,6 +2556,15 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         return cmdReadFrequency(addr);
     case cmd::kSetMode:
         return cmdReadMode(addr);
+    case cmd::kSetRepeaterOffset:
+        return cmdReadRepeaterOffset(addr);
+    case cmd::kDuplex:
+        return cmdReadRepeaterOffsetDirection(addr);
+    case cmd::kTone:
+        if (parsed->hasSub && parsed->sub == 0x00) {
+            return cmdReadRepeaterTone(addr);
+        }
+        break;
     case cmd::kVfoMode:
         return cmdReadVfoMode(addr);
     case cmd::kLevel:
@@ -1949,10 +2576,18 @@ IcomCivBackend::confirmationFor(std::span<const std::uint8_t> frame) const
         }
         break;
     case cmd::kSetting:
-        if (parsed->hasSub && parsed->sub == 0x05 && parsed->data.size() >= 3) {
+        if (parsed->hasSub && parsed->sub == settingSub::kMenu && parsed->data.size() >= 3) {
             const int item = decodeBcdByte(parsed->data[0]) * 100
                 + decodeBcdByte(parsed->data[1]);
             return cmdReadSetting(addr, item);
+        }
+        // A WIDTH WRITE IS INTENT; the read is what makes it state. The radio
+        // clamps a code the current mode does not reach — RTTY stops at 2.7 kHz
+        // where SSB goes to 3.6 — and answers with what it took, so echoing the
+        // requested width instead would draw a passband 900 Hz wider than the
+        // one in circuit.
+        if (parsed->hasSub && parsed->sub == settingSub::kFilterWidth) {
+            return cmdReadFilterWidth(addr);
         }
         break;
     case cmd::kAttenuator:
@@ -1987,7 +2622,8 @@ void IcomCivBackend::queueRead(const std::vector<std::uint8_t>& frame,
 void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
                                 const std::string& key,
                                 IcomCivScheduler::Priority priority,
-                                bool supersedes)
+                                bool supersedes,
+                                bool coalesce)
 {
     IcomCivScheduler::Request request;
     request.frame = frame;
@@ -1996,6 +2632,7 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
     request.expectsReply = true;
     request.acceptsGenericReply = true;
     request.supersedes = supersedes;
+    request.coalesce = coalesce;
     m_civScheduler.enqueue(std::move(request), nowMs());
 }
 
@@ -2065,6 +2702,10 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
     out.insert(QStringLiteral("replies"), static_cast<qulonglong>(stats.replies));
     out.insert(QStringLiteral("staleReplies"), static_cast<qulonglong>(stats.staleReplies));
     out.insert(QStringLiteral("timeouts"), static_cast<qulonglong>(stats.timeouts));
+    out.insert(QStringLiteral("cancelledRequests"),
+               static_cast<qulonglong>(m_schedulerCancelledRequests));
+    out.insert(QStringLiteral("failedRequests"),
+               static_cast<qulonglong>(m_schedulerFailedRequests));
     out.insert(QStringLiteral("pendingPttIntent"), m_pendingPttIntent.has_value());
     if (m_pendingPttIntent) {
         out.insert(QStringLiteral("pttIntent"), *m_pendingPttIntent);
@@ -2078,7 +2719,9 @@ QVariantMap IcomCivBackend::schedulerDiagnostics() const
     return out;
 }
 
-void IcomCivBackend::serviceSchedulerWaiters(qint64 nowMs)
+void IcomCivBackend::serviceSchedulerWaiters(
+    qint64 nowMs, std::optional<SchedulerWaiterOutcome> terminal,
+    std::optional<QVariantMap> diagnosticSnapshot)
 {
     // COLLECT, ERASE, THEN EMIT. extensionResult is a direct connection, so a
     // slot that registers another waiter would reallocate the vector under an
@@ -2086,7 +2729,7 @@ void IcomCivBackend::serviceSchedulerWaiters(qint64 nowMs)
     // re-entrant case merely queue more work instead of corrupting the walk.
     std::vector<quint64> ready;
     for (auto it = m_schedulerWaiters.begin(); it != m_schedulerWaiters.end();) {
-        if (!m_civScheduler.idle() && nowMs < it->deadlineMs) {
+        if (!terminal && !m_civScheduler.idle() && nowMs < it->deadlineMs) {
             ++it;
             continue;
         }
@@ -2095,10 +2738,49 @@ void IcomCivBackend::serviceSchedulerWaiters(qint64 nowMs)
     }
     if (ready.empty())
         return;
-    QVariantMap result = schedulerDiagnostics();
-    result.insert(QStringLiteral("timedOut"), !m_civScheduler.idle());
+    QVariantMap result = diagnosticSnapshot.value_or(schedulerDiagnostics());
+    SchedulerWaiterOutcome outcome = SchedulerWaiterOutcome::Completed;
+    if (terminal) {
+        outcome = *terminal;
+    } else if (!m_civScheduler.idle()) {
+        outcome = SchedulerWaiterOutcome::TimedOut;
+    }
+    const QString outcomeName = outcome == SchedulerWaiterOutcome::Completed
+        ? QStringLiteral("completed")
+        : outcome == SchedulerWaiterOutcome::TimedOut
+            ? QStringLiteral("timed-out")
+            : outcome == SchedulerWaiterOutcome::Failed
+                ? QStringLiteral("failed") : QStringLiteral("cancelled");
+    result.insert(QStringLiteral("outcome"), outcomeName);
+    result.insert(QStringLiteral("timedOut"), outcome == SchedulerWaiterOutcome::TimedOut);
+    result.insert(QStringLiteral("failed"), outcome == SchedulerWaiterOutcome::Failed);
+    result.insert(QStringLiteral("cancelled"), outcome == SchedulerWaiterOutcome::Cancelled);
     for (quint64 requestId : ready)
         emit extensionResult(requestId, result);
+}
+
+void IcomCivBackend::terminateScheduler(
+    IcomCivScheduler::TerminalOutcome requestOutcome,
+    SchedulerWaiterOutcome waiterOutcome)
+{
+    // Snapshot first, reset second, emit last. extensionResult is a direct
+    // connection: emitting before reset let a re-entrant observer queue fresh
+    // work that the following reset silently erased.
+    QVariantMap diagnostics = schedulerDiagnostics();
+    const IcomCivScheduler::ResetResult terminal =
+        m_civScheduler.reset(requestOutcome);
+    const quint64 requestCount = static_cast<quint64>(terminal.requests.size());
+    if (requestOutcome == IcomCivScheduler::TerminalOutcome::Failed) {
+        m_schedulerFailedRequests += requestCount;
+    } else {
+        m_schedulerCancelledRequests += requestCount;
+    }
+    diagnostics.insert(QStringLiteral("cancelledRequests"),
+                       static_cast<qulonglong>(m_schedulerCancelledRequests));
+    diagnostics.insert(QStringLiteral("failedRequests"),
+                       static_cast<qulonglong>(m_schedulerFailedRequests));
+    m_schedulerTimeoutsReported = 0;
+    serviceSchedulerWaiters(nowMs(), waiterOutcome, diagnostics);
 }
 
 void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
@@ -2127,10 +2809,42 @@ void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
 
 void IcomCivBackend::setSliceFrequency(int, double hz)
 {
-    if (hz <= 0.0)
+    if (!std::isfinite(hz) || hz <= 0.0
+        || hz > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
         return;
+    }
+    const std::uint64_t roundedHz = static_cast<std::uint64_t>(std::llround(hz));
+    // Only a model that DECLARES discontinuous bands gets this gate. Every
+    // other Icom keeps its existing command path — an empty table is the
+    // predicate, so the day another model's holes are documented, this site
+    // and setPanCenter() below light up together rather than one at a time.
+    if (!bandsFor(*m_model).empty() && !supportsFrequency(*m_model, roundedHz)) {
+        emit configurationWarning(
+            tr("%1 cannot tune %2 MHz; the request is outside its supported bands")
+                .arg(QString::fromUtf8(m_model->name.data(),
+                                       static_cast<int>(m_model->name.size())))
+                .arg(hz / 1.0e6, 0, 'f', 6));
+        // There is no radio-authoritative value to restore until the first
+        // frequency reply arrives. Refuse the command, but do not replace the
+        // optimistic display with the construction default of 0 MHz.
+        if (m_frequencyHz == 0) {
+            return;
+        }
+        // SliceModel has already accepted and announced the operator's request
+        // by the time this seam verb runs. Re-assert the radio's actual VFO on
+        // the next event-loop turn, after that optimistic announcement, so a
+        // refused gap tune cannot leave the display claiming a frequency the
+        // radio never entered. Same ordering contract as setSliceMode().
+        const double actualMhz = static_cast<double>(m_frequencyHz) / 1.0e6;
+        QTimer::singleShot(0, this, [this, actualMhz] {
+            SliceDelta delta;
+            delta.frequency = actualMhz;
+            emit sliceChanged(sliceId(), delta);
+        });
+        return;
+    }
     sendUserCommand(cmdSetFrequency(m_session ? m_session->civAddress() : 0xA4,
-                                    static_cast<std::uint64_t>(std::llround(hz))));
+                                    roundedHz));
 }
 
 void IcomCivBackend::setSliceMode(int, const QString& mode)
@@ -2201,7 +2915,7 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     // DATA on the radio, so mode-then-DATA is a sequence whose correctness
     // depends on both frames landing and landing in order; 26 states all three
     // at once and the radio applies or refuses them as a unit.
-    if (m_model->hasVfoModeCommand) {
+    if (profileFor(*m_model).supports(IcomFeature::VfoMode)) {
         m_dataMode = data;
         sendUserCommand(cmdSetVfoMode(addr, *civ, data, m_filter));
     } else {
@@ -2242,48 +2956,166 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
 
 void IcomCivBackend::setSliceFilter(int, int lowHz, int highHz)
 {
-    // The radio has three fixed IF filters, not a continuous passband, so this
-    // can only SNAP. What the radio actually took comes back on its own mode
-    // report — we must not echo the requested width as if it were applied.
-    const int width = std::abs(highHz - lowHz);
+    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     // The LADDER mode, not the neutral one: the two differ in RTTY, where the
     // radio's own widths are 2.4k/500/250 — see currentLadderMode().
-    const QString neutral = currentLadderMode();
-    // MODE-AWARE. Snapping against the SSB thresholds whatever the mode put
-    // every AM width on FIL1 and every CW width on FIL3 — three buttons and one
-    // filter, in both directions.
-    const int filter = filterForWidthHz(neutral.toStdString(), width);
-    m_filter = filter;
-    const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
-    // THE FILTER BUTTON MUST NOT DROP THE RADIO OUT OF DATA. Command 06 carries
-    // mode and slot with no DATA byte, and writing it is what clears DATA on
-    // the radio — so a filter change sent as 06 took an operator running FT8 in
-    // USB-D back to plain USB and their transmit audio back to the microphone,
-    // from a button that says nothing about the mode. 26 restates DATA with the
-    // new slot in the same frame.
+    const std::string ladder = currentLadderMode().toStdString();
+    const int width = std::abs(highHz - lowHz);
+
+    // ── Which control did the operator actually touch? ────────────────────
     //
-    // m_dataMode here is the RADIO's reported state, not a guess: it is read at
-    // connect, re-read after every front-panel mode change, and confirmed after
-    // every mode write, so this re-asserts what the radio said (Constitution
-    // II) rather than pushing a client belief over it.
-    if (m_model->hasVfoModeCommand)
-        sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
-    else
-        sendUserCommand(cmdSetMode(addr, m_mode, filter));
-    // A write is intent; the radio's own reply is state. sendUserCommand
-    // schedules that readback itself now (confirmationFor maps 26 -> read 26,
-    // 06 -> read 04), so it also corrects the optimistic passband below if the
-    // radio clamps or refuses the requested slot while CI-V Transceive is off.
+    // ONE SEAM VERB, TWO RADIO CONTROLS, and conflating them is how an Icom
+    // ends up with three filter buttons that all select the same width.
     //
-    // PUBLISH THE PASSBAND NOW, for the same reason setSliceMode does: the
-    // radio's mode report only comes back if CI-V Transceive is on, and the
-    // operator who just clicked a filter button is owed an immediate answer.
-    // If the radio disagrees its own report corrects this a few ms later.
+    //   * The FILTER BUTTONS emit one of the three widths this backend
+    //     published as rxFilterWidthsHz. On the radio that is a SLOT change —
+    //     FIL1/FIL2/FIL3 — and it must stay one, because the slots are the
+    //     operator's own three presets and clicking through them must not
+    //     redefine them.
+    //   * DRAGGING A PASSBAND EDGE emits anything at all. On the radio that is
+    //     a WIDTH change (1A 03) on the slot already selected, plus a PBT shift
+    //     if the window also moved — exactly what turning the radio's own
+    //     FILTER and PBT knobs does.
+    //
+    // An exact factory-ladder match is therefore read as a button press. A drag
+    // that lands on one is inherently ambiguous at this seam; preserve the
+    // operator's stored preset instead of silently redefining it.
+    const auto ladderWidths = filterWidthsForMode(ladder);
+    const bool isSlotPick = std::find(ladderWidths.begin(), ladderWidths.end(), width)
+                            != ladderWidths.end();
+    const FilterWidthLimits limits = filterWidthLimitsFor(ladder);
+
+    // FM, DV and WFM have no settable width at all, so the slot IS the only
+    // filter control the radio offers there and every request has to be a slot
+    // pick. Sending 1A 03 in FM writes a width into whichever mode the radio
+    // last had one for.
+    if (isSlotPick || limits.maxHz <= 0) {
+        // MODE-AWARE. Snapping against the SSB thresholds whatever the mode put
+        // every AM width on FIL1 and every CW width on FIL3 — three buttons and
+        // one filter, in both directions.
+        const int filter = filterForWidthHz(ladder, width);
+        m_filter = filter;
+        // THE FILTER BUTTON MUST NOT DROP THE RADIO OUT OF DATA. Command 06
+        // carries mode and slot with no DATA byte, and writing it is what
+        // clears DATA on the radio — so a filter change sent as 06 took an
+        // operator running FT8 in USB-D back to plain USB and their transmit
+        // audio back to the microphone, from a button that says nothing about
+        // the mode. 26 restates DATA with the new slot in the same frame.
+        //
+        // m_dataMode here is the RADIO's reported state, not a guess: it is
+        // read at connect, re-read after every front-panel mode change, and
+        // confirmed after every mode write, so this re-asserts what the radio
+        // said (Constitution II) rather than pushing a client belief over it.
+        if (profileFor(*m_model).supports(IcomFeature::VfoMode))
+            sendUserCommand(cmdSetVfoMode(addr, m_mode, m_dataMode, filter));
+        else
+            sendUserCommand(cmdSetMode(addr, m_mode, filter));
+
+        // THE NEW SLOT'S WIDTH IS A DIFFERENT NUMBER and only the radio knows
+        // it. Drop the width we hold for the old slot so the fallback ladder
+        // draws the window until 1A 03 answers, rather than leaving the
+        // previous slot's Hz on screen under a new slot's label.
+        m_ifWidthHz = 0;
+        // A write is intent; the radio's own reply is state. sendUserCommand
+        // schedules the mode readback itself (confirmationFor maps 26 -> read
+        // 26, 06 -> read 04), and that reply's handler asks for the width and
+        // PBT of whatever slot the radio actually landed on.
+        SliceDelta d;
+        const auto [low, high] = passbandForModeAndFilter(ladder, filter);
+        d.filterLow  = low;
+        d.filterHigh = high;
+        emit sliceChanged(sliceId(), d);
+        return;
+    }
+
+    // ── A resize, and/or a shift ──────────────────────────────────────────
+    //
+    // THE ICOM DECOMPOSITION. AetherSDR's seam carries two independent edges
+    // because that is what a Flex takes; an Icom has no such command. What it
+    // has is a WIDTH that opens and closes symmetrically about the mode's
+    // filter centre, and a PBT PAIR that slides the result. So two edges become
+    // one width plus one shift, and that is exactly reversible — which is why
+    // the drawn passband can be trusted afterwards.
+    const int requestedWidth = std::clamp(width, limits.minHz, limits.maxHz);
+    const auto code = filterWidthCodeFor(ladder, requestedWidth);
+    if (!code)
+        return;
+    const auto appliedWidth = filterWidthHzFromCode(ladder, *code);
+    if (!appliedWidth)
+        return;
+
+    // The shift is measured against where this mode PUTS its passband, not
+    // against zero: in USB the filter is centred at +1500 Hz, so a request for
+    // 300..2700 is a centred filter and needs no PBT at all. Measuring from
+    // zero instead would shove every SSB passband a whole 1500 Hz sideways.
+    const int requestedCentre = (lowHz + highHz) / 2;
+    const int shift = requestedCentre - passbandCentreHz(ladder, *appliedWidth);
+    const int pbtCode = pbtCodeForShiftHz(shift, *appliedWidth);
+
+    sendUserCommand(cmdSetFilterWidth(addr, *code));
+    // BOTH PBTs TO THE SAME CODE. Apart they narrow the passband from the
+    // inside, and the width command has already set the width — so moving them
+    // apart here would subtract from a window that is already the right size,
+    // and the operator's drag would come out narrower than they drew it.
+    sendUserCommand(cmdSetLevel(addr, level::kPbtInner, pbtCode));
+    sendUserCommand(cmdSetLevel(addr, level::kPbtOuter, pbtCode));
+
+    // Optimistic, and corrected by the read-backs sendUserCommand queues. Same
+    // reason setSliceMode publishes early: the radio's own report only arrives
+    // unprompted when CI-V Transceive is on, and the operator dragging an edge
+    // is owed an answer now.
+    m_ifWidthHz = *appliedWidth;
+    m_ifWidthMode = m_mode;
+    m_ifWidthData = m_dataMode;
+    m_ifWidthSlot = m_filter;
+    m_pbtInner = pbtCode;
+    m_pbtOuter = pbtCode;
+    publishCapabilities();
+    const auto edges = passbandFromWidthAndPbt(passbandCentreHz(ladder, m_ifWidthHz),
+                                                m_ifWidthHz,
+                                                m_pbtInner, m_pbtOuter);
     SliceDelta d;
-    const auto [low, high] = passbandForModeAndFilter(neutral.toStdString(), filter);
-    d.filterLow  = low;
-    d.filterHigh = high;
+    d.filterLow  = edges.lowHz;
+    d.filterHigh = edges.highHz;
     emit sliceChanged(sliceId(), d);
+}
+
+void IcomCivBackend::setTxFilter(int lowHz, int highHz)
+{
+    // NO PROFILE, NO WRITE. The SET-menu item numbers that hold the transmit
+    // passband are model-specific and this backend only has them for radios
+    // whose own guide has been read. Borrowing another model's numbers would
+    // put a passband into whatever setting happens to live there — a silent
+    // misconfiguration of the transmitter, which is worse in every way than a
+    // control that declines.
+    const auto profile = txBandwidthProfileFor(*m_model);
+    if (!profile || !m_session)
+        return;
+    const int item = activeTxBandwidthItem();
+    if (item < 0) {
+        qCWarning(lcIcomTx) << "declining TX filter write before 16 58 reports the active slot";
+        return;   // 16 58 has not answered; reshaping a guessed slot is not a fix
+    }
+
+    // SNAP BOTH EDGES to what this model can actually reach. The IC-7300MK2
+    // has six low edges (it added 120 and 150 Hz); the IC-705 has four. Nothing
+    // between them exists, and the read-back this write triggers is what puts
+    // the snapped pair on screen instead of the requested one.
+    const int lowIdx  = edgeIndexFor(profile->lowEdgesHz, lowHz);
+    const int highIdx = edgeIndexFor(profile->highEdgesHz, highHz);
+
+    // ONE PACKED BCD BYTE: high digit indexes the low-edge table, low digit the
+    // high-edge table. Both tables are shorter than ten entries, so each index
+    // is a single BCD digit and the pair fits one byte — which is how the guide
+    // draws it (two Xs, one per digit, exactly as the four-X RX HPF/LPF item
+    // carries two two-digit values).
+    const auto packed = static_cast<std::uint8_t>((lowIdx << 4) | highIdx);
+    sendUserCommand(cmdWriteSetting(m_session->civAddress(), item, packed));
+    // No optimistic publish. Unlike the receive passband, the operator cannot
+    // hear this one, so there is nothing to be owed an instant answer about —
+    // and the whole point of snapping is that the number they asked for is not
+    // the number they get. confirmationFor() reads the item straight back and
+    // the decode publishes the pair the radio actually holds.
 }
 
 void IcomCivBackend::setSliceAgc(int, const QString& mode, int)
@@ -2361,9 +3193,17 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
         return;
     }
 
+    double tuneHz = requestedHz;
+    if (!bandsFor(*m_model).empty() && std::isfinite(requestedHz)
+        && requestedHz > 0.0
+        && requestedHz <= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+        const std::uint64_t roundedHz = static_cast<std::uint64_t>(std::llround(requestedHz));
+        tuneHz = static_cast<double>(nearestSupportedFrequency(*m_model, roundedHz));
+    }
     qCDebug(lcIcomPan) << "pan drag retunes:" << m_scopeCentreHz << "Hz ->"
-                       << requestedHz << "Hz (delta" << deltaHz << ")";
-    setSliceFrequency(sliceId(), requestedHz);
+                       << tuneHz << "Hz (asked" << requestedHz << "Hz, delta"
+                       << deltaHz << ")";
+    setSliceFrequency(sliceId(), tuneHz);
 }
 
 void IcomCivBackend::setPanBandwidth(const QString&, double hz)
@@ -2455,7 +3295,8 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
 
 void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)
 {
-    if (!m_model || m_model->civAddress != 0xB6)
+    if (!m_model || !profileFor(*m_model).rxAntenna
+        || !profileFor(*m_model).rxAntenna->selectable)
         return;
     const bool external = antenna.compare(QStringLiteral("RX-ANT"),
                                           Qt::CaseInsensitive) == 0;
@@ -2476,6 +3317,16 @@ void IcomCivBackend::setSpeechProcessor(bool on, int level)
     // enable is what left AetherSDR's PROC disagreeing with a front panel that
     // plainly showed the compressor on.
     sendUserCommand(cmdSetFunction(addr, func::kCompressor, on ? 1 : 0));
+    // 16 58 is conditional on compressor state: toggling COMP can change which
+    // WIDE/MID/NAR/SSB-D slot is active. Re-read it after the function write so
+    // the displayed edges and the target of the next write converge on radio
+    // truth instead of retaining the slot from the previous COMP state.
+    if (txBandwidthProfileFor(*m_model)) {
+        const auto read = cmdReadFunction(addr, func::kTxBandwidth);
+        queueRead(read, semanticKey(read), IcomCivScheduler::Priority::Operator,
+                  nowMs() + 60);
+        pumpCiv(nowMs());
+    }
     if (!on)
         return;   // the level is meaningless while the compressor is bypassed
 
@@ -2640,6 +3491,95 @@ void IcomCivBackend::setSliceSquelch(int, bool on, int level)
                                 level::kSquelch, on ? percentToLevelRaw(level) : 0));
 }
 
+void IcomCivBackend::setSliceFmToneMode(int, const QString& mode)
+{
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    if (!fm || !fm->hasTxCtcss) {
+        return;
+    }
+    const QString normalized = mode.trimmed().toLower();
+    if (normalized != QLatin1String("off") && normalized != QLatin1String("ctcss_tx")) {
+        qCWarning(lcIcomCiv) << "refusing unsupported FM tone mode" << mode;
+        return;
+    }
+    const bool on = normalized == QLatin1String("ctcss_tx");
+    m_repeaterToneOn = on;
+    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
+                                   func::kRepeaterTone, on ? 1 : 0));
+}
+
+void IcomCivBackend::setSliceFmToneValue(int, double hz)
+{
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    if (!fm || !fm->hasTxCtcss) {
+        return;
+    }
+    if (!std::isfinite(hz) || hz < 0.0 || hz > 299.9) {
+        qCWarning(lcIcomCiv) << "refusing invalid repeater tone frequency" << hz;
+        return;
+    }
+    m_repeaterToneHz = hz;
+    sendUserCommand(cmdSetRepeaterTone(m_session ? m_session->civAddress() : 0xA4,
+                                       hz));
+}
+
+void IcomCivBackend::setSliceRepeaterOffsetDir(int, const QString& direction)
+{
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    if (!fm || !fm->hasDuplex) {
+        return;
+    }
+    const QString normalized = direction.trimmed().toLower();
+    RepeaterOffsetDirection wireDirection = RepeaterOffsetDirection::Simplex;
+    if (normalized == QLatin1String("down")) {
+        wireDirection = RepeaterOffsetDirection::Down;
+    } else if (normalized == QLatin1String("up")) {
+        wireDirection = RepeaterOffsetDirection::Up;
+    } else if (normalized != QLatin1String("simplex")) {
+        qCWarning(lcIcomCiv) << "refusing invalid repeater offset direction" << direction;
+        return;
+    }
+    m_repeaterOffsetDirection = wireDirection;
+    sendUserCommand(cmdSetRepeaterOffsetDirection(
+        m_session ? m_session->civAddress() : 0xA4, wireDirection));
+}
+
+void IcomCivBackend::setSliceFmRepeaterOffset(int, double hz)
+{
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    if (!fm || !fm->hasDuplex) {
+        return;
+    }
+    if (!std::isfinite(hz) || hz < 0.0 || hz > 99'999'900.0) {
+        qCWarning(lcIcomCiv) << "refusing invalid repeater offset" << hz;
+        return;
+    }
+    const int roundedHz = static_cast<int>(std::lround(hz / 100.0) * 100.0);
+    m_repeaterOffsetHz = roundedHz;
+    sendUserCommand(cmdSetRepeaterOffset(m_session ? m_session->civAddress() : 0xA4,
+                                         roundedHz));
+}
+
+void IcomCivBackend::setTransmitFrequencyCheck(bool on)
+{
+    if (on && !supportsTransmitFrequencyCheck(m_model)) {
+        return;
+    }
+    if (!on && !supportsTransmitFrequencyCheck(m_model)
+        && !m_xfcReleaseRequired && !m_transmitFrequencyCheck) {
+        return;
+    }
+    if (on) {
+        m_xfcReleaseRequired = true;
+    }
+    // Do not deduplicate release. A mouse-up is a fail-safe edge: even if our
+    // mirror already says OFF, the radio may have missed the prior write, the
+    // front panel may have changed after the last poll, or authoritative model
+    // identity may have withdrawn the capability while ON was in flight.
+    sendUserCommand(cmdSetTransmitFrequencyCheck(
+        m_session ? m_session->civAddress() : 0xA4, on));
+}
+
 void IcomCivBackend::setRitEnabled(bool on)
 {
     m_ritOn = on;
@@ -2661,10 +3601,48 @@ void IcomCivBackend::setRitOffset(int hz)
     sendUserCommand(cmdTuneOffsetHz(m_session ? m_session->civAddress() : 0xA4, hz));
 }
 
+// The receive-only mode gate — the WIRE BACKSTOP, shared by every path here
+// that can start an emission.
+//
+// WFM is the case today (#5040): the IC-705 offers it to listen to FM broadcast,
+// 76-108 MHz, and its transmitter does not follow. Refused HERE rather than left
+// to the radio because "the radio will say no" is not a property the protocol
+// lets us verify — CI-V answers NG for a command it rejects, but a key request
+// that is simply IGNORED is indistinguishable from one that worked, right up
+// until the meters fail to move.
+//
+// SILENT ON PURPOSE, apart from the log line. This is the second of two gates:
+// RadioModel::refuseKeyInReceiveOnlyMode() runs first, off the receiveOnlyModes
+// capability published above, and it is the one that tells the operator and
+// rolls back the optimistic MOX/TUNE state. A backend cannot reach
+// TransmitModel, so anything it emitted here would be an indicator that never
+// cleared plus a second message for one refusal (#5106 review). What this gate
+// still buys is the guarantee no PTT frame leaves by ANY path, including one
+// that never passed through RadioModel.
+//
+// Returns true when the caller must not key.
+bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
+{
+    const QString neutral = currentNeutralMode();
+    if (!modeIsReceiveOnly(*m_model, neutral.toStdString()))
+        return false;
+
+    qCWarning(lcIcomTx) << "refusing to key: this radio receives only in" << neutral;
+    return true;
+}
+
 void IcomCivBackend::setKeying(bool key)
 {
     if (!m_model->hasTransmit)
         return;   // an unknown radio is not advertised as transmit-capable
+
+    // A RECEIVE-ONLY MODE DOES NOT KEY, and the refusal is ONE-DIRECTIONAL:
+    // gated on the KEY edge only, so an unkey always reaches the radio whatever
+    // mode it is in. A guard that could swallow an unkey would be a stuck
+    // transmitter, which is far worse than the emission it prevents.
+    if (key && refuseKeyingInReceiveOnlyMode())
+        return;
+
     m_pendingPttIntent = key;
     m_pendingPttUntilMs = nowMs() + 1000;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
@@ -2694,6 +3672,12 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
     // implementation needs is deliberately absent here rather than half-done —
     // see the design note.
     if (on) {
+        // BEFORE anything is borrowed. The gate lives in setKeying() too, but
+        // reaching it from here would already have moved the RF-power setpoint
+        // to the tune level and latched m_tuning — leaving the operator's drive
+        // overwritten by a carrier that was then refused.
+        if (refuseKeyingInReceiveOnlyMode())
+            return;
         if (!m_tuning)
             m_preTuneTxPowerPercent = m_txPowerPercent;
         if (tunePowerPercent >= 0)
@@ -2724,13 +3708,86 @@ void IcomCivBackend::setTxPower(int percent)
                                 level::kRfPower, percentToLevelRaw(m_txPowerPercent)));
 }
 
+QString IcomCivBackend::sendCwText(const QString& text)
+{
+    if (!m_session || !m_connected) {
+        return QStringLiteral("radio is not connected");
+    }
+    if (text.isEmpty()) {
+        return QStringLiteral("message is empty");
+    }
+    if (text.size() > 30) {
+        return QStringLiteral("CI-V text keyer messages are limited to 30 characters");
+    }
+
+    QByteArray ascii;
+    ascii.reserve(text.size());
+    static constexpr std::string_view allowed =
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz/'()?=+.\"-@^, :";
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        const char byte = ch.toLatin1();
+        if (byte == 0 || allowed.find(byte) == std::string_view::npos) {
+            return QStringLiteral("unsupported character at position %1").arg(i + 1);
+        }
+        ascii.append(byte);
+    }
+
+    const std::uint8_t addr = m_session->civAddress();
+    queueWrite(cmdSendCwMessage(
+                   addr,
+                   std::string_view(ascii.constData(),
+                                    static_cast<std::size_t>(ascii.size()))),
+               "cw.message", IcomCivScheduler::Priority::Operator,
+               false, false);
+    pumpCiv(nowMs());
+    return {};
+}
+
+void IcomCivBackend::abortCwText()
+{
+    if (!m_session || !m_connected) {
+        return;
+    }
+    queueWrite(cmdAbortCwMessage(m_session->civAddress()), "cw.message",
+               IcomCivScheduler::Priority::Emergency, true, true);
+    pumpCiv(nowMs());
+}
+
+void IcomCivBackend::setCwSpeed(int wpm)
+{
+    const int clamped = std::clamp(wpm, 6, 48);
+    const int raw = std::lround(static_cast<double>(clamped - 6) * 255.0 / 42.0);
+    sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
+                                level::kKeySpeed, raw));
+}
+
+void IcomCivBackend::setCwPitch(int hz)
+{
+    const int clamped = std::clamp(hz, 300, 900);
+    const int raw = std::lround(static_cast<double>(clamped - 300) * 255.0 / 600.0);
+    sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
+                                level::kCwPitch, raw));
+}
+
+void IcomCivBackend::setCwBreakIn(bool on)
+{
+    // The shared control is boolean, but the Icom register is Off/Semi/Full.
+    // Preserve the last radio-reported active value so an OFF -> ON round trip
+    // restores Full instead of silently demoting it to Semi.
+    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
+                                   func::kBreakIn, on ? m_cwBreakInMode : 0));
+}
+
 // EVERY registry row a frame belongs to, not the first.
 //
 // One CI-V frame can carry more than one operator control: 0x06 sets the mode
 // AND the filter slot in the same message, and both are real controls with their
 // own seam verbs. Returning the first match credited `mode` and left `filter`
 // looking unwired on a radio where they cannot be separated.
-static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
+static void forEachSpecForFrame(const IcomModel& model,
+                                const IcomModelProfile& profile,
+                                std::uint8_t cmd, std::uint8_t sub, bool hasSub,
                                 const std::function<void(const icom::ControlSpec&)>& fn)
 {
     // The SET address is the row's identity, but a radio answers a read with its
@@ -2740,6 +3797,7 @@ static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
     std::uint8_t setCmd = cmd;
     switch (cmd) {
     case cmd::kReadFreq:    case cmd::kSetFreqTrx: setCmd = cmd::kSetFreq; break;
+    case cmd::kReadRepeaterOffset: setCmd = cmd::kSetRepeaterOffset; break;
     case cmd::kReadMode:    case cmd::kSetModeTrx: setCmd = cmd::kSetMode; break;
     default: break;
     }
@@ -2751,6 +3809,9 @@ static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
     const bool alsoModeRows = cmd == cmd::kVfoMode && hasSub && sub == vfoMode::kSelected;
 
     for (const auto& c : icom::controlSpecs()) {
+        if (!controlSupported(model, profile, c)) {
+            continue;
+        }
         if (c.cmd != setCmd && !(alsoModeRows && c.cmd == cmd::kSetMode))
             continue;
         if (c.hasSub && (!hasSub || c.sub != sub))
@@ -2761,7 +3822,8 @@ static void forEachSpecForFrame(std::uint8_t cmd, std::uint8_t sub, bool hasSub,
 
 void IcomCivBackend::noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool hasSub)
 {
-    forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
+    forEachSpecForFrame(*m_model, profileFor(*m_model), cmd, sub, hasSub,
+                        [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsSent.insert(id);
         // We commanded it, so the mirror holds a real value from here on.
@@ -2772,7 +3834,8 @@ void IcomCivBackend::noteControlSent(std::uint8_t cmd, std::uint8_t sub, bool ha
 void IcomCivBackend::noteControlScheduled(std::uint8_t cmd, std::uint8_t sub,
                                           bool hasSub)
 {
-    forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
+    forEachSpecForFrame(*m_model, profileFor(*m_model), cmd, sub, hasSub,
+                        [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsScheduled.insert(id);
     });
@@ -2780,7 +3843,8 @@ void IcomCivBackend::noteControlScheduled(std::uint8_t cmd, std::uint8_t sub,
 
 void IcomCivBackend::noteControlSeen(std::uint8_t cmd, std::uint8_t sub, bool hasSub)
 {
-    forEachSpecForFrame(cmd, sub, hasSub, [this](const icom::ControlSpec& c) {
+    forEachSpecForFrame(*m_model, profileFor(*m_model), cmd, sub, hasSub,
+                        [this](const icom::ControlSpec& c) {
         const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
         m_controlsSeen.insert(id);
         // The radio answered for this row, so the decode above adopted its
@@ -2812,8 +3876,10 @@ QVariantList IcomCivBackend::controlMap() const
         diag.insert(QStringLiteral("controlsSent"), m_controlsSent.size());
         out.append(diag);
     }
+    const IcomModelProfile& profile = profileFor(*m_model);
     for (const auto& c : icom::controlSpecs()) {
         const QString id = sv(c.id);
+        const FeatureEvidence* evidence = profile.evidenceFor(c.requiredFeature);
         QVariantMap m;
         m.insert(QStringLiteral("id"), id);
         m.insert(QStringLiteral("label"), sv(c.label));
@@ -2835,8 +3901,16 @@ QVariantList IcomCivBackend::controlMap() const
         m.insert(QStringLiteral("seamVerb"), sv(c.seamVerb));
         m.insert(QStringLiteral("uiTarget"), sv(c.uiTarget));
         m.insert(QStringLiteral("readAtConnect"), c.readAtConnect);
-        if (!c.note.empty())
+        m.insert(QStringLiteral("supported"), controlSupported(*m_model, profile, c));
+        m.insert(QStringLiteral("profileFeature"), sv(featureName(c.requiredFeature)));
+        m.insert(QStringLiteral("profileEvidence"),
+                 sv(evidenceName(evidence ? evidence->evidence : EvidenceKind::None)));
+        if (evidence && !evidence->source.empty()) {
+            m.insert(QStringLiteral("profileSource"), sv(evidence->source));
+        }
+        if (!c.note.empty()) {
             m.insert(QStringLiteral("note"), sv(c.note));
+        }
 
         // OBSERVED, next to declared. The table says what the code intends; these
         // two say what this session has actually put on the wire and taken off
@@ -2848,17 +3922,80 @@ QVariantList IcomCivBackend::controlMap() const
         // The gap, named. Anything other than an empty string here is a finding
         // rather than a description, which is what lets a caller sort by it.
         QString gap;
-        if (c.wiring == icom::Wiring::Declared)
+        if (!controlSupported(*m_model, profile, c)) {
+            gap = QStringLiteral("unsupported by the active model profile");
+        } else if (c.wiring == icom::Wiring::Declared) {
             gap = QStringLiteral("no code path at all — the constant exists and nothing uses it");
-        else if (c.wiring == icom::Wiring::DecodeOnly && c.seamVerb.empty())
+        } else if (c.wiring == icom::Wiring::DecodeOnly && c.seamVerb.empty()) {
             gap = QStringLiteral("readable but not settable — no seam verb reaches this register");
-        else if (c.wiring == icom::Wiring::SendOnly)
+        } else if (c.wiring == icom::Wiring::SendOnly) {
             gap = QStringLiteral("settable but never read back — the control opens at our default, not the radio's");
-        else if (!c.uiTarget.empty() && c.wiring == icom::Wiring::DecodeOnly)
+        } else if (!c.uiTarget.empty() && c.wiring == icom::Wiring::DecodeOnly) {
             gap = QStringLiteral("the UI control exists and reaches no register");
+        }
         m.insert(QStringLiteral("gap"), gap);
         out.append(m);
     }
+    return out;
+}
+
+QVariantMap IcomCivBackend::profileMap() const
+{
+    const auto sv = [](std::string_view v) {
+        return QString::fromUtf8(v.data(), static_cast<int>(v.size()));
+    };
+    const IcomModelProfile& profile = profileFor(*m_model);
+    QVariantMap out;
+    out.insert(QStringLiteral("model"), sv(m_model->name));
+    out.insert(QStringLiteral("civAddress"),
+               QStringLiteral("0x%1").arg(m_model->civAddress, 2, 16, QLatin1Char('0')));
+    out.insert(QStringLiteral("supportedBringup"), profile.supportedBringup);
+    out.insert(QStringLiteral("guideRevision"), sv(profile.guideRevision));
+    out.insert(QStringLiteral("voxDelaySetItem"), profile.setMenu.voxDelayItem);
+    out.insert(QStringLiteral("civTransceiveSetItem"), profile.setMenu.civTransceiveItem);
+    QVariantList features;
+    for (const FeatureEvidence& feature : profile.features) {
+        QVariantMap row;
+        row.insert(QStringLiteral("feature"), sv(featureName(feature.feature)));
+        row.insert(QStringLiteral("supported"), feature.evidence != EvidenceKind::None);
+        row.insert(QStringLiteral("evidence"), sv(evidenceName(feature.evidence)));
+        row.insert(QStringLiteral("source"), sv(feature.source));
+        features.append(row);
+    }
+    out.insert(QStringLiteral("features"), features);
+    if (profile.fmRepeater) {
+        QVariantMap fm;
+        fm.insert(QStringLiteral("dialect"),
+                  profile.fmRepeater->dialect == FmRepeaterDialect::Extended
+                      ? QStringLiteral("extended") : QStringLiteral("basic"));
+        fm.insert(QStringLiteral("duplex"), profile.fmRepeater->hasDuplex);
+        fm.insert(QStringLiteral("txCtcss"), profile.fmRepeater->hasTxCtcss);
+        fm.insert(QStringLiteral("rxCtcss"), profile.fmRepeater->hasRxCtcss);
+        fm.insert(QStringLiteral("dtcs"), profile.fmRepeater->hasDtcs);
+        fm.insert(QStringLiteral("xfc"), profile.fmRepeater->hasXfc);
+        fm.insert(QStringLiteral("txFrequencyReadback"),
+                  profile.fmRepeater->hasTxFrequencyReadback);
+        QStringList accessModes;
+        for (const std::string_view mode : profile.fmRepeater->accessModes) {
+            accessModes.append(sv(mode));
+        }
+        fm.insert(QStringLiteral("accessModes"), accessModes);
+        out.insert(QStringLiteral("fmRepeater"), fm);
+    }
+    if (profile.rxAntenna) {
+        QVariantMap rxAntenna;
+        rxAntenna.insert(QStringLiteral("selectable"), profile.rxAntenna->selectable);
+        rxAntenna.insert(QStringLiteral("readbackAvailable"),
+                         profile.rxAntenna->readbackAvailable);
+        out.insert(QStringLiteral("rxAntenna"), rxAntenna);
+    }
+    QVariantMap scope;
+    scope.insert(QStringLiteral("center"), profile.scope.center);
+    scope.insert(QStringLiteral("fixed"), profile.scope.fixed);
+    scope.insert(QStringLiteral("scrollCenter"), profile.scope.scrollCenter);
+    scope.insert(QStringLiteral("scrollFixed"), profile.scope.scrollFixed);
+    scope.insert(QStringLiteral("sweepSpeed"), profile.scope.hasSweepSpeed);
+    out.insert(QStringLiteral("scope"), scope);
     return out;
 }
 
@@ -2878,15 +4015,33 @@ QVariantList IcomCivBackend::meterMap() const
         return QString::fromUtf8(v.data(), static_cast<int>(v.size()));
     };
     const qint64 now = nowMs();
+    const IcomModelProfile& profile = profileFor(*m_model);
 
     QVariantList out;
     for (const auto& m : meterSpecs()) {
+        if ((m.id == MeterId::Vd || m.id == MeterId::Id)
+            && profile.meters.calibration == MeterCalibration::Uncalibrated) {
+            continue;
+        }
         QVariantMap r;
         r.insert(QStringLiteral("id"), QStringLiteral("%1:%2").arg(sv(m.source), sv(m.name)));
         r.insert(QStringLiteral("civ"),
                  QStringLiteral("15 %1").arg(m.sub, 2, 16, QLatin1Char('0')));
-        r.insert(QStringLiteral("unit"), sv(m.unit));
-        r.insert(QStringLiteral("range"), QStringLiteral("%1..%2").arg(m.low).arg(m.high));
+        QString unit = sv(m.unit);
+        double high = m.high;
+        if (m.id == MeterId::Power) {
+            const std::span<const CurvePoint> curve = profile.meters.powerCurve;
+            if (curve.empty()) {
+                unit = QStringLiteral("Percent");
+                high = 100.0;
+            } else {
+                high = curve.back().value;
+            }
+        } else if (m.id == MeterId::Id) {
+            high = profile.meters.currentFullScaleAmps;
+        }
+        r.insert(QStringLiteral("unit"), unit);
+        r.insert(QStringLiteral("range"), QStringLiteral("%1..%2").arg(m.low).arg(high));
         r.insert(QStringLiteral("pollMs"), m.intervalMs);
         r.insert(QStringLiteral("when"),
                  m.when == MeterWhen::RxOnly   ? QStringLiteral("rx-only")
@@ -2932,6 +4087,9 @@ QVariantMap IcomCivBackend::controlScrub(const QString& filter)
     QVariantList rows;
     int checked = 0, reached = 0, skipped = 0;
     for (const auto& c : icom::controlSpecs()) {
+        if (!controlSupported(*m_model, profileFor(*m_model), c)) {
+            continue;
+        }
         const QString id = sv(c.id);
         if (kNeverScrub.contains(id))
             continue;
@@ -3086,6 +4244,40 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     if (id == QLatin1String("rit.enable")) { setRitEnabled(m_ritOn); return true; }
     if (id == QLatin1String("xit.enable")) { setXitEnabled(m_xitOn); return true; }
     if (id == QLatin1String("rit.offset")) { setRitOffset(m_ritOffsetHz); return true; }
+    if (id == QLatin1String("repeater.tone")) {
+        if (!m_repeaterToneOn) {
+            return false;
+        }
+        setSliceFmToneMode(slice, *m_repeaterToneOn
+                                     ? QStringLiteral("ctcss_tx")
+                                     : QStringLiteral("off"));
+        return true;
+    }
+    if (id == QLatin1String("repeater.tone.frequency")) {
+        if (!m_repeaterToneHz) {
+            return false;
+        }
+        setSliceFmToneValue(slice, *m_repeaterToneHz);
+        return true;
+    }
+    if (id == QLatin1String("repeater.shift")) {
+        if (!m_repeaterOffsetDirection) {
+            return false;
+        }
+        const QString direction = *m_repeaterOffsetDirection == RepeaterOffsetDirection::Down
+            ? QStringLiteral("down")
+            : *m_repeaterOffsetDirection == RepeaterOffsetDirection::Up
+            ? QStringLiteral("up") : QStringLiteral("simplex");
+        setSliceRepeaterOffsetDir(slice, direction);
+        return true;
+    }
+    if (id == QLatin1String("repeater.offset")) {
+        if (!m_repeaterOffsetHz) {
+            return false;
+        }
+        setSliceFmRepeaterOffset(slice, *m_repeaterOffsetHz);
+        return true;
+    }
 
     if (id == QLatin1String("nr") || id == QLatin1String("nr.level")) {
         // UNKNOWN IS NOT OFF, and this is the guard that says so.
@@ -3160,7 +4352,8 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     }
     // No verified 0x26 means there is no frame that can carry data.mode. Report
     // NOT-TESTED, not MISSING after driving an unrelated bare 0x06 mode write.
-    if (id == QLatin1String("data.mode") && !m_model->hasVfoModeCommand)
+    if (id == QLatin1String("data.mode")
+        && !profileFor(*m_model).supports(IcomFeature::VfoMode))
         return false;
     if (id == QLatin1String("mode") || id == QLatin1String("filter")
         || id == QLatin1String("data.mode")) {
@@ -3419,6 +4612,10 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, controlMap());
         return;
     }
+    if (verb == QLatin1String("profile.show")) {
+        emit extensionResult(requestId, profileMap());
+        return;
+    }
     if (verb == QLatin1String("controls.meters")) {
         emit extensionResult(requestId, meterMap());
         return;
@@ -3516,12 +4713,41 @@ void IcomCivBackend::setMeterVisible(MeterId id, bool visible)
     m_meters.setVisible(id, visible);
 }
 
+void IcomCivBackend::publishModeList()
+{
+    // ALWAYS ENGAGED, even when the span is empty. SliceModel change-gates the
+    // apply, so a repeat costs nothing — and the empty case has to travel, or
+    // the slice would go on holding a withdrawn radio's vocabulary after the
+    // ambiguous-bus revert gave that identity back.
+    SliceDelta d;
+    QStringList modes;
+    for (const std::string_view m : modeListFor(*m_model))
+        modes << QString::fromUtf8(m.data(), static_cast<int>(m.size()));
+    d.modeList = modes;
+    emit sliceChanged(sliceId(), d);
+}
+
 void IcomCivBackend::publishMeterDefs()
 {
-    int index = 0;
+    const bool calibrated = profileFor(*m_model).meters.calibration
+        != MeterCalibration::Uncalibrated;
+    // Poll eligibility follows the active profile too. This runs both for the
+    // handshake name and for an authoritative 0x19 identity correction.
+    m_meters.setVisible(MeterId::Vd, calibrated);
+    m_meters.setVisible(MeterId::Id, calibrated);
+
     for (const MeterSpec& s : meterSpecs()) {
+        const int index = static_cast<int>(s.id);
+        if ((s.id == MeterId::Vd || s.id == MeterId::Id) && !calibrated) {
+            // Meter indices are stable identities, not positions in the
+            // currently visible subset. Withdraw old definitions explicitly
+            // so a calibrated handshake name corrected to another model cannot
+            // leave Vd/Id cached or alias OVF onto the former Vd index.
+            emit meterRemoved(index);
+            continue;
+        }
         MeterDef d;
-        d.index = index++;
+        d.index = index;
         d.source = QString::fromUtf8(s.source.data(), static_cast<int>(s.source.size()));
         d.name = QString::fromUtf8(s.name.data(), static_cast<int>(s.name.size()));
         d.unit = QString::fromUtf8(s.unit.data(), static_cast<int>(s.unit.size()));
@@ -3537,8 +4763,8 @@ void IcomCivBackend::publishMeterDefs()
             } else {
                 d.high = curve.back().value;
             }
-        } else if (s.id == MeterId::Id && m_model->civAddress == 0xB6) {
-            d.high = 25.0;
+        } else if (s.id == MeterId::Id) {
+            d.high = profileFor(*m_model).meters.currentFullScaleAmps;
         }
         emit meterDefined(d);
     }
@@ -3564,6 +4790,10 @@ void IcomCivBackend::onMeterTick()
         const auto frame = buildFrameSub(m_session->civAddress(), cmd::kControl,
                                          control::kPtt);
         queueRead(frame, "ptt", IcomCivScheduler::Priority::Ptt);
+        if (supportsTransmitFrequencyCheck(m_model)) {
+            const auto xfc = cmdReadTransmitFrequencyCheck(m_session->civAddress());
+            queueRead(xfc, "xfc", IcomCivScheduler::Priority::Control);
+        }
     }
 
     for (MeterId id : m_meters.due(now)) {
@@ -3626,6 +4856,48 @@ void IcomCivBackend::onLinkTick()
     if (!m_connected)
         return;
     const qint64 now = nowMs();
+    const IcomModelProfile& activeProfile = profileFor(*m_model);
+    const std::optional<CivRecoveryProfile>& recovery = activeProfile.civRecovery;
+
+    if (m_civRecoveryStartedAtMs > 0) {
+        // A recovery can exist only under the model profile that started it.
+        // If authoritative identity ever withdraws that capability, stop the
+        // model-specific state machine without changing the new model's
+        // connection, scheduler, or timer policy.
+        if (!activeProfile.supports(IcomFeature::CivDataRestart) || !recovery) {
+            m_civRecoveryStartedAtMs = 0;
+            m_lastCivRecoveryAttemptAtMs = 0;
+            m_civRecoveryAttempts = 0;
+            return;
+        }
+        if (now - m_lastCivRecoveryAttemptAtMs < recovery->retryIntervalMs) {
+            return;
+        }
+        // Retire the previous unanswered probe before queuing the next one;
+        // otherwise semantic coalescing would correctly suppress the retry.
+        pumpCiv(now);
+        if (m_civRecoveryAttempts < recovery->maxAttempts
+            && m_session->reopenCivPipe()) {
+            ++m_civRecoveryAttempts;
+            m_lastCivRecoveryAttemptAtMs = now;
+            const std::vector<std::uint8_t> probe =
+                cmdReadFrequency(m_session->civAddress());
+            queueRead(probe, semanticKey(probe),
+                      IcomCivScheduler::Priority::Maintenance);
+            pumpCiv(now);
+            qCWarning(lcIcomLink) << "CI-V data restart attempt"
+                                  << m_civRecoveryAttempts << "of"
+                                  << recovery->maxAttempts;
+            return;
+        }
+        qCWarning(lcIcomLink)
+            << "CI-V data restarts produced no command reply; reconnecting session";
+        const QString reason = QStringLiteral(
+            "Icom CI-V stream stopped responding; reconnecting the radio session");
+        disconnectRadio();
+        emit connectionError(reason);
+        return;
+    }
 
     // CI-V Transceive is a low-latency hint, not a subscription. Queue bounded
     // reconciliation groups; the scheduler turns them into one paced stream,
@@ -3642,11 +4914,22 @@ void IcomCivBackend::onLinkTick()
                             func::kNoiseReduce, func::kNoiseBlanker}) {
         queueControl(cmdReadFunction(addr, fn));
     }
+    const FmRepeaterProfile* fm = basicFmProfileFor(m_model);
+    if (fm && fm->hasTxCtcss) {
+        queueControl(cmdReadFunction(addr, func::kRepeaterTone));
+    }
 
     if (phase % 2 == 0) {
         queueControl(cmdReadFrequency(addr));
-        queueControl(m_model->hasVfoModeCommand ? cmdReadVfoMode(addr)
-                                                : cmdReadMode(addr));
+        queueControl(profileFor(*m_model).supports(IcomFeature::VfoMode)
+                         ? cmdReadVfoMode(addr) : cmdReadMode(addr));
+        if (fm && fm->hasDuplex) {
+            queueControl(cmdReadRepeaterOffsetDirection(addr));
+            queueControl(cmdReadRepeaterOffset(addr));
+        }
+        if (fm && fm->hasTxCtcss) {
+            queueControl(cmdReadRepeaterTone(addr));
+        }
         for (std::uint8_t fn : {func::kMonitorFn, func::kVox}) {
             queueControl(cmdReadFunction(addr, fn));
         }
@@ -3708,6 +4991,31 @@ void IcomCivBackend::onLinkTick()
         << "The transport is still up (rxPackets" << out.rxPackets
         << "), so this is the command plane alone."
         << "Read `civ trace all` for the frames either side of it.";
+
+    // The 0x04 data-pipe restart, scheduler termination, and retry timer are a
+    // single model capability.  Profiles without it retain main's warn-only
+    // stall behavior byte-for-byte: no scheduler reset, no refresh command,
+    // no recovery timer, and no connection replacement.
+    if (activeProfile.supports(IcomFeature::CivDataRestart) && recovery
+        && m_session->reopenCivPipe()) {
+        terminateScheduler(IcomCivScheduler::TerminalOutcome::Failed,
+                           SchedulerWaiterOutcome::Failed);
+        m_civRecoveryStartedAtMs = now;
+        m_lastCivRecoveryAttemptAtMs = now;
+        m_civRecoveryAttempts = 1;
+        const std::vector<std::uint8_t> probe =
+            cmdReadFrequency(m_session->civAddress());
+        queueRead(probe, semanticKey(probe),
+                  IcomCivScheduler::Priority::Maintenance);
+        pumpCiv(now);
+        qCWarning(lcIcomLink) << "CI-V data restart attempt 1 of"
+                              << recovery->maxAttempts;
+        return;
+    }
+
+    // This is intentionally not a family-wide reconnect. Before #5119, a
+    // non-9700 stall was diagnostic only; preserve that shipping contract for
+    // IC-705, IC-7300MK2 and unknown models.
 }
 
 IRadioBackend::HealthSnapshot IcomCivBackend::healthSnapshot() const

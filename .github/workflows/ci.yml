@@ -258,6 +258,18 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build -R "^map_wrap_test$" --output-on-failure
 
+      # PSK Reporter query scope, parser bounds, rate-limit backoff, path
+      # unwrapping, and solar-position math. Pure Core test with no network.
+      - name: Test PSK Reporter map behavior
+        run: ctest --test-dir build -R "^psk_reporter_map_behavior_test$" --output-on-failure
+
+      # Async marker/path/terminator cache replacement must retain visible
+      # content and cancel superseded work. Offscreen GUI test, no network.
+      - name: Test PSK Reporter map live updates
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "^map_live_update_test$" --output-on-failure
+
       # The demo RX engine's worker-thread contract (#4878): affinity, 24 kHz
       # pacing on a coarse timer, keyed-mute, stallscope. This is the fix for
       # the demo making the GUI thread carry a 333 Hz precise timer plus the
@@ -301,37 +313,17 @@ jobs:
       - name: Test Green Heron antenna switch
         run: ctest --test-dir build -R "^green_heron_(protocol|model|applet)_test$" --output-on-failure
 
-      # hl2_am_dcblock_test is deliberately NOT on this gate, and re-adding it
-      # needs a measurement first. #4774 added it here on the "milliseconds
-      # against an already-linked target" rationale every other step above
-      # earns its slot with, but that rationale was never measured: the step
-      # ran 188-190 s here, dead flat across runs. That is NOT the test's own
-      # work, and the flatness is the tell: the same binary runs in 2.5 s with
-      # a warm FFTW wisdom cache and 178 s with a cold one (measured locally,
-      # RelWithDebInfo, by pointing XDG_CACHE_HOME at an empty dir). The cost
-      # is WDSP's first OpenChannel measuring FFTW PATIENT plans, which
-      # WdspChannel::open() caches to $XDG_CACHE_HOME/aethersdr/wdsp-fftw-wisdom
-      # — and a CI container starts without that file every single run. Six
-      # 4 s bursts of 48 kHz audio through the real chain is the 2.5 s part.
-      #
-      # So the slot is recoverable, and cheaply: cache wdsp-fftw-wisdom the way
-      # ccache is cached above (or prime it in the CI image) and this step is
-      # ~3 s, not 190. Anything else that opens a WDSP channel on this gate
-      # pays the same 190 s once until that lands, so it is worth doing before
-      # the next WDSP test wants a slot rather than after.
-      #
-      # Until then coverage sits on the weekly sanitizers job, which runs the
-      # full ctest suite unfiltered — the same place the rest of the HL2 suite
-      # (hl2_backend_test and friends, tens of seconds apiece against timers
-      # and sockets) already lives. Read that as a weaker backstop than it
-      # sounds: sanitizers.yml has concluded failure on every run since
-      # 2026-06-08, its TSan entry has run zero tests since 2026-07-13
-      # (#4360), and ASan failures append to a sticky issue that is already
-      # open — so a reintroduced pedestal arrives as one more comment on a red
-      # job rather than as a new signal. hl2_am_dcblock_test has also never
-      # actually run there (it landed 2026-08-05, after the last weekly run),
-      # and CMakeLists sets no TIMEOUT for it against ctest's 1500 s default
-      # at -O0 + ASan.
+      # NR2's AGC recovery and settings migration claims are deterministic,
+      # headless, and already built by the Linux `all` target. Run them on PRs
+      # so a compiled-but-unexecuted regression cannot merge unnoticed.
+      - name: Test NR2 DSP and settings migration
+        run: ctest --test-dir build -R "^(spectral_nr|nr2_settings_model)_test$" --output-on-failure
+
+      # Restored after #4877 bounded FFTW planning for every test. This step was
+      # previously 188-190 s on a cold runner; it now measures ~3 s while still
+      # exercising six four-second AM/SAM audio bursts through the real HL2 DSP.
+      - name: Test HL2 AM/SAM DC blocker
+        run: ctest --test-dir build -R "^hl2_am_dcblock_test$" --output-on-failure
 
       # ulanzi_mapping_migration_test was on this gate (added by #4834) and is
       # not any more. Unlike hl2_am_dcblock_test above it was not costing
@@ -362,6 +354,24 @@ jobs:
       # a deadline, so a loaded runner makes it slower rather than red.
       - name: Test TCI protocol parsing and malformed-input rejection
         run: ctest --test-dir build -R "^tci_protocol_test$" --output-on-failure
+
+      # The TX capture path joins the gate for the reason stated above the TCI
+      # step: its defects are the invisible kind. Capture negotiation has no UI
+      # and no error -- a mic opened on the wrong rung, or a channel/format
+      # canonicalization that slips the interleave, produces audio that sounds
+      # like a DSP fault or like nothing at all, on someone else's operating
+      # system. That is the whole reason AudioFormatNegotiator takes the target
+      # OS as DATA rather than an #ifdef (#3306): a Linux runner proves the
+      # Windows and macOS ladders too.
+      #
+      # These three targets were added by #5017 and, until this step, nothing
+      # on a pull request selected any of them -- the full unfiltered suite runs
+      # only on the weekly sanitizers job, so a regression here had a week to
+      # reach main. They are pure arithmetic over injected inputs -- no widgets,
+      # no audio device, no event loop, no wall clock -- and run in well under a
+      # second against targets the Build step already linked.
+      - name: Test TX capture format negotiation and voice-strip framing
+        run: ctest --test-dir build -R "^(audio_format_negotiation_test|tx_mic_channel_normalizer_test|tx_voice_processor_test)$" --output-on-failure
 
       # THE CI-V MODE MAP IS INVISIBLE FROM THE UI. A missing arm in
       # modeFromNeutral() does not throw, does not log, and does not fail to

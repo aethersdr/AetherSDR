@@ -126,6 +126,7 @@ MeterApplet::MeterApplet(QWidget* parent)
     // ── PA Temp gauge ─────────────────────────────────────────────────────────
     m_paTempGauge = new HGauge(0.0f, 120.0f, 70.0f, "PA Temp", "",
         kCelsiusTicks, this, 55.0f);
+    m_paTempGauge->setObjectName(QStringLiteral("mtrPaTempGauge"));
     m_paTempGauge->setAccessibleName(tr("PA temperature"));
     vbox->addWidget(m_paTempGauge);
 
@@ -170,6 +171,23 @@ void MeterApplet::setMeterModel(MeterModel* model)
             this, &MeterApplet::onMeterUpdated);
 
     resolveIndices();
+}
+
+void MeterApplet::setPaTemperatureTelemetryState(bool connected, bool available)
+{
+    // A reading belongs to one radio session. Do not let a capable radio's
+    // final temperature survive a disconnect or reappear after an intervening
+    // radio that has no PA-temperature telemetry.
+    if (!connected || !available) {
+        m_paTemp = 0.0f;
+        m_hasPaTemp = false;
+        m_paTempGauge->setValueImmediate(m_tempFahrenheit ? 32.0f : 0.0f);
+        m_paTempGauge->setLabel(QStringLiteral("PA Temp"));
+    }
+
+    const bool visible = !connected || available;
+    m_paTempGauge->setVisible(visible);
+    m_tempUnitBtn->setVisible(visible);
 }
 
 void MeterApplet::resolveIndices()

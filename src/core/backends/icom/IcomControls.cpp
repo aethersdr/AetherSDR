@@ -47,14 +47,75 @@ constexpr std::array kSpecs = {
                 "behind. Written on every mode and filter change, confirmed by a "
                 "read, and adopted from the radio at connect and after every "
                 "front-panel mode change. Unselected VFO (26 01) is split, which "
-                "this backend does not yet model."},
+                "this backend does not yet model.", IcomFeature::VfoMode},
     ControlSpec{"filter", 0x06, 0, false, "IF filter slot",
                 Plane::Slice, Encoding::ModeFilter, Wiring::Both,
                 1, 3, "slot", 1, 3,
                 "setSliceFilter", "vfoFilterBtn", true,
-                "THREE slots whose widths change with the mode: SSB 3.0/2.4/1.8k, "
+                "THE SLOT, NOT THE WIDTH — see if.width for the difference. Three "
+                "slots whose FACTORY widths change with the mode: SSB 3.0/2.4/1.8k, "
                 "CW 1.2k/500/250, RTTY 2.4k/500/250, AM+SAM 9/6/3k, FM 15/10/7k, "
-                "WFM one fixed filter. Published per mode as rxFilterWidthsHz."},
+                "WFM one fixed filter. Published per mode as rxFilterWidthsHz, and "
+                "those labels are DEFAULTS: an operator who redefined a slot gets a "
+                "button whose label is stale, which is why the drawn passband comes "
+                "from 1A 03 instead. A seam request that matches a published width "
+                "exactly is taken as a slot pick; anything else is a width change."},
+    ControlSpec{"if.width", 0x1A, 0x03, true, "IF filter width (actual)",
+                Plane::Slice, Encoding::BcdByte, Wiring::Both,
+                0, 49, "Hz", 50, 10000,
+                "setSliceFilter", "spectrumPassbandEdge", true,
+                "THE HZ THE SELECTED SLOT IS ACTUALLY DEFINED AS, which the slot "
+                "number cannot tell you. Mode-dependent code table, identical on "
+                "IC-705 and IC-7300MK2: SSB/CW 00-09 = 50-500 Hz in 50 Hz and "
+                "10-40 = 600-3600 Hz in 100 Hz; RTTY the same but capped at code 31 "
+                "(2.7 kHz); AM 00-49 = 200 Hz-10 kHz in 200 Hz. NOTE THE GAP — 550 Hz "
+                "does not exist. FM/DV/WFM have NO settable width and this command "
+                "does not apply there. Re-read after every mode, DATA and slot change, "
+                "because the radio stores a separate width for each combination and "
+                "announces none of them. A write REDEFINES the selected slot, which "
+                "is exactly what the radio's own FILTER knob does."},
+    ControlSpec{"pbt.inner", 0x14, 0x07, true, "Twin PBT inner",
+                Plane::Slice, Encoding::Level255, Wiring::Both,
+                0, 255, "Hz", -3600, 3600,
+                "setSliceFilter", "spectrumPassbandEdge", true,
+                "A SIGNED POSITION about 0128, not a magnitude — do NOT put it "
+                "through the 0-255-to-percent conversion every other level uses, or "
+                "the centre quantises away and the passband walks one step per "
+                "round trip. Hz per step SCALES WITH THE WIDTH in circuit: full "
+                "deflection is one whole filter width, so the same code is 3.6 kHz in "
+                "wide SSB and 250 Hz in narrow CW. Written together with pbt.outer to "
+                "SLIDE the passband; the pair moving apart is what narrows it from "
+                "the inside, and is the only way an Icom produces an asymmetric "
+                "response."},
+    ControlSpec{"pbt.outer", 0x14, 0x08, true, "Twin PBT outer",
+                Plane::Slice, Encoding::Level255, Wiring::Both,
+                0, 255, "Hz", -3600, 3600,
+                "setSliceFilter", "spectrumPassbandEdge", true,
+                "The other end of the pair — see pbt.inner. setSliceFilter writes "
+                "both to the SAME code, because 1A 03 has already set the width and "
+                "separating them would subtract from a window that is already the "
+                "right size."},
+    ControlSpec{"repeater.shift", 0x0F, 0, false, "Repeater shift direction",
+                Plane::Slice, Encoding::Enum, Wiring::Both,
+                0x10, 0x12, "enum", 0, 2,
+                "setSliceRepeaterOffsetDir", "vfoFmDuplexContainer", true,
+                "10 simplex, 11 DUP-, 12 DUP+. Polled because CI-V Transceive "
+                "does not reliably announce every front-panel change.",
+                IcomFeature::FmRepeaterBasic},
+    ControlSpec{"repeater.offset", 0x0D, 0, false, "Repeater offset",
+                Plane::Slice, Encoding::Bcd6, Wiring::Both,
+                0, 999999, "Hz", 0, 99999900,
+                "setSliceFmRepeaterOffset", "vfoFmDuplexContainer", true,
+                "Read with 0x0C and written with 0x0D. Three little-endian BCD "
+                "bytes in 100 Hz units.", IcomFeature::FmRepeaterBasic},
+    ControlSpec{"repeater.tone.frequency", 0x1B, 0x00, true,
+                "Repeater CTCSS frequency",
+                Plane::Slice, Encoding::Bcd6, Wiring::Both,
+                0, 2999, "Hz", 0, 299,
+                "setSliceFmToneValue", "vfoFmToneContainer", true,
+                "Three big-endian BCD bytes in tenths of a hertz. This is the "
+                "tone parameter; 16 42 is the independent enable.",
+                IcomFeature::FmRepeaterBasic},
 
     // ---- Levels (0x14) --------------------------------------------------
     ControlSpec{"af.gain", 0x14, 0x01, true, "AF gain",
@@ -84,12 +145,10 @@ constexpr std::array kSpecs = {
                 "Only pushed while NR is enabled: the register survives the "
                 "function being switched off."},
     ControlSpec{"cw.pitch", 0x14, 0x09, true, "CW pitch",
-                Plane::Slice, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "Hz", 300, 900,
-                "", "", false,
-                "NOT WANTED. AetherSDR decodes CW itself, so the radio's pitch is not "
-                "ours to set; the CW passband we draw assumes the radio's default "
-                "and that is the correct division of labour."},
+                "setCwPitch", "cwPitchSlider", true,
+                "Shared by the Icom text keyer and the existing CW sidebar."},
     ControlSpec{"tx.power", 0x14, 0x0A, true, "RF power",
                 Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
@@ -99,11 +158,10 @@ constexpr std::array kSpecs = {
                 0, 255, "%", 0, 100,
                 "setMicGain", "phoneMicSlider", true, ""},
     ControlSpec{"cw.speed", 0x14, 0x0C, true, "Keyer speed",
-                Plane::Transmit, Encoding::Level255, Wiring::Declared,
+                Plane::Transmit, Encoding::Level255, Wiring::Both,
                 0, 255, "wpm", 6, 48,
-                "", "", false,
-                "NOT WANTED. The radio owns its keyer and AetherSDR has its own CW "
-                "engine — operator decision, not a gap."},
+                "setCwSpeed", "cwSpeedSlider", true,
+                "Shared by the Icom text keyer and the existing CW sidebar."},
     ControlSpec{"notch.pos", 0x14, 0x0D, true, "Manual notch position",
                 Plane::Slice, Encoding::Level255, Wiring::Both,
                 0, 255, "%", 0, 100,
@@ -155,6 +213,13 @@ constexpr std::array kSpecs = {
                 "setSliceAutoNotch", "dspANFBtn", true,
                 "A REAL Icom feature, not a Flex one — it finds its own tone, "
                 "unlike the manual notch."},
+    ControlSpec{"repeater.tone", 0x16, 0x42, true, "Repeater tone enable",
+                Plane::Slice, Encoding::OnOff, Wiring::Both,
+                0, 1, "on/off", 0, 1,
+                "setSliceFmToneMode", "vfoFmToneContainer", true,
+                "CTCSS transmit tone only. Written last during memory recall "
+                "because an IC-705 frequency change can clear the enable.",
+                IcomFeature::FmRepeaterBasic},
     ControlSpec{"comp", 0x16, 0x44, true, "Speech compressor",
                 Plane::Transmit, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -180,10 +245,11 @@ constexpr std::array kSpecs = {
                 "The trigger threshold. An operator slider change is pushed even "
                 "while VOX is off because the register defines the next enable."},
     ControlSpec{"break.in", 0x16, 0x47, true, "Break-in",
-                Plane::Transmit, Encoding::Enum, Wiring::Declared,
+                Plane::Transmit, Encoding::Enum, Wiring::Both,
                 0, 2, "step", 0, 2,
-                "", "", false,
-                "STUB: 00 off, 01 semi, 02 full. Declared, never used."},
+                "setCwBreakIn", "cwBreakInBtn", true,
+                "The existing boolean control selects OFF or semi break-in. "
+                "Full break-in needs a future three-state UI."},
     ControlSpec{"notch", 0x16, 0x48, true, "Manual notch",
                 Plane::Slice, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
@@ -216,7 +282,8 @@ constexpr std::array kSpecs = {
                 "IC-7300MK2-specific: 00 uses ANT1 for receive; 01 selects the "
                 "RX-ANT input. Live B6 firmware returns bare FB to the official "
                 "read form. The operator command is therefore optimistic for "
-                "this session only; reconnect does not invent or replay state."},
+                "this session only; reconnect does not invent or replay state.",
+                IcomFeature::RxAntenna},
 
     // ---- Control (0x1C) --------------------------------------------------
     ControlSpec{"ptt", 0x1C, 0x00, true, "PTT",
@@ -235,9 +302,15 @@ constexpr std::array kSpecs = {
                 "button is honest about the OUTCOME (00 none / 01 matched / 02 "
                 "tuning) rather than about the hardware."},
     ControlSpec{"xfc", 0x1C, 0x02, true, "Transmit frequency monitor",
-                Plane::Radio, Encoding::OnOff, Wiring::Declared,
+                Plane::Radio, Encoding::OnOff, Wiring::Both,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "STUB: declared, never used."},
+                "setTransmitFrequencyCheck",
+                "vfoFmReverseButton / rxFmReverseButton", false,
+                "Momentary press-and-hold, not persistent REV. The active model "
+                "profile attests 1C 02 01 while held and 00 on release; "
+                "polled so front-panel XFC updates both repeater-control surfaces. "
+                "Excluded from scrub because asserting it changes the receive "
+                "frequency during the check.", IcomFeature::TxFrequencyCheck},
 
     // ---- RIT / XIT (0x21) ------------------------------------------------
     ControlSpec{"rit.offset", 0x21, 0x00, true, "RIT / XIT offset",
@@ -264,13 +337,14 @@ constexpr std::array kSpecs = {
                 "invokeExtension icom/audio.pc", "pcAudioBtn", true,
                 "MODEL-SPECIFIC: item 0118 and WLAN=03 on IC-705; item 0084 "
                 "and LAN=05 on IC-7300MK2. PC Audio writes only this voice-mode "
-                "selection and confirms it by readback."},
+                "selection and confirms it by readback.", IcomFeature::ModulationInput},
     ControlSpec{"mod.input.data", 0x1A, 0x05, true, "DATA MOD input",
                 Plane::Radio, Encoding::Bcd4, Wiring::DecodeOnly,
                 0, 5, "enum", 0, 5,
                 "", "", true,
                 "MODEL-SPECIFIC: item 0119 on IC-705 and 0085 on IC-7300MK2. "
-                "Radio-authoritative and deliberately never written by PC Audio."},
+                "Radio-authoritative and deliberately never written by PC Audio.",
+                IcomFeature::ModulationInput},
 
     // ---- Scope (0x27) ----------------------------------------------------
     ControlSpec{"scope.onoff", 0x27, 0x10, true, "Scope on/off",
@@ -279,30 +353,62 @@ constexpr std::array kSpecs = {
                 "", "", false,
                 "Pushed at connect. BOTH this and scope.output are needed — "
                 "enabling only this turns the scope on the radio's own screen and "
-                "sends us nothing, the number-one black-panadapter cause."},
+                "sends us nothing, the number-one black-panadapter cause.",
+                IcomFeature::Scope},
     ControlSpec{"scope.output", 0x27, 0x11, true, "Scope data output",
                 Plane::Pan, Encoding::OnOff, Wiring::SendOnly,
                 0, 1, "on/off", 0, 1,
-                "", "", false, "Pushed at connect; see scope.onoff."},
+                "", "", false, "Pushed at connect; see scope.onoff.", IcomFeature::Scope},
     ControlSpec{"scope.span", 0x27, 0x15, true, "Scope span",
                 Plane::Pan, Encoding::Bcd4, Wiring::Both,
                 2500, 500000, "Hz", 5000, 1000000,
                 "setPanBandwidth", "", false,
                 "A HALF-width on the wire and a TOTAL width at the seam. Snaps to "
                 "one of eight values; a zoom request that resolves to the current "
-                "span moves one detent in the requested direction instead."},
+                "span moves one detent in the requested direction instead.", IcomFeature::Scope},
     ControlSpec{"scope.reference", 0x27, 0x19, true, "Scope reference level",
                 Plane::Pan, Encoding::Bcd4, Wiring::SendOnly,
                 -20, 20, "dB", -20, 20,
                 "invokeExtension icom/scope.reference", "", false,
-                "Signed magnitude with a separate sign byte. Extension-only; no UI."},
+                "Signed magnitude with a separate sign byte. Extension-only; no UI.",
+                IcomFeature::Scope},
     ControlSpec{"scope.fixededge", 0x27, 0x1E, true, "Scope fixed edges",
                 Plane::Pan, Encoding::Bcd4, Wiring::Declared,
                 1, 3, "preset", 1, 3,
                 "", "", false,
                 "STUB, and deliberately: FIXED mode's edges are three saved presets "
                 "per band, so following a pan drag would overwrite the operator's "
-                "own stored scope edges thirty times a second."},
+                "own stored scope edges thirty times a second.", IcomFeature::Scope},
+
+    // ---- Transmit passband ------------------------------------------------
+    ControlSpec{"tx.bandwidth.slot", 0x16, 0x58, true, "SSB TX bandwidth slot",
+                Plane::Transmit, Encoding::Enum, Wiring::DecodeOnly,
+                0, 2, "enum", 0, 2,
+                "", "", true,
+                "00 WIDE, 01 MID, 02 NAR. NAMES A SLOT, IS NOT A PASSBAND: the edges "
+                "live in the SET item the slot points at (tx.bandwidth.edges), and "
+                "the radio also swaps slots on its own with the speech compressor. "
+                "DECODE-ONLY deliberately — AetherSDR's seam carries Hz, not a preset "
+                "name, so a write here would be a control with no operator intent "
+                "behind it. Read at connect and used to route the edge read/write to "
+                "the slot actually in circuit.", IcomFeature::TxBandwidth},
+    ControlSpec{"tx.bandwidth.edges", 0x1A, 0x05, true, "SSB TX passband edges",
+                Plane::Transmit, Encoding::Enum, Wiring::Both,
+                0, 0x53, "Hz", 100, 2900,
+                "setTxFilter", "TX low cut frequency", true,
+                "MODEL-SPECIFIC ITEM NUMBERS: IC-7300MK2 00 14/15/16/17 and IC-705 "
+                "0019/0020/0021/0022 for WIDE/MID/NAR/SSB-D. ONE PACKED BCD BYTE — "
+                "high digit indexes the low-edge table, low digit the high-edge "
+                "table. The tables differ: IC-7300MK2 low edges are 100/120/150/200/"
+                "300/500 Hz and the IC-705's are 100/200/300/500; both share high "
+                "edges 2500/2700/2800/2900. NOTHING BETWEEN THEM EXISTS, so a seam "
+                "request SNAPS and the applet must show the read-back, never the "
+                "request. UNVERIFIED ON THE IC-705: its own guide cites 0017/0018/0019 "
+                "in the 16 58 note, which collides with the SSB TX Tone levels — the "
+                "0019-0022 run is the consistent reading and the read-back is what "
+                "settles it. A model with no profile gets NO write and an empty "
+                "txFilterLowEdgesHz, so the UI and the backend decline together.",
+                IcomFeature::TxBandwidth},
 
     // ---- Identity / power ------------------------------------------------
     ControlSpec{"id", 0x19, 0x00, true, "Transceiver ID",
@@ -325,6 +431,18 @@ constexpr std::array kSpecs = {
 
 std::span<const ControlSpec> controlSpecs() { return kSpecs; }
 
+bool controlSupported(const IcomModel& model, const IcomModelProfile& profile,
+                      const ControlSpec& spec) noexcept
+{
+    if (spec.requiredFeature == IcomFeature::Scope) {
+        // Scope startup and status handling have always followed identity
+        // geometry. Keep the registry aligned with that real wire behavior;
+        // profile evidence remains a separate diagnostic field.
+        return model.hasScope;
+    }
+    return profile.supports(spec.requiredFeature);
+}
+
 std::string_view encodingName(Encoding e)
 {
     switch (e) {
@@ -336,6 +454,7 @@ std::string_view encodingName(Encoding e)
     case Encoding::BcdFreq:    return "bcd-freq";
     case Encoding::ModeFilter: return "mode+filter";
     case Encoding::Bcd4:       return "bcd4";
+    case Encoding::Bcd6:       return "bcd6";
     }
     return "?";
 }

@@ -1,6 +1,10 @@
 #include "MapView.h"
+#include "MapMarkerBatchItem.h"
 #include "MapMarkerItem.h"
-#include "MapPathItem.h"
+#include "MapHoverPathSelection.h"
+#include "MapPathBatchItem.h"
+#include "MapTerminatorItem.h"
+#include "core/ThemeManager.h"
 
 #include <QGeoView/QGVCamera.h>
 #include <QGeoView/QGVLayer.h>
@@ -12,8 +16,11 @@
 #include <QGeoView/QGVWidgetText.h>
 
 #include <QCoreApplication>
+#include <QAbstractAnimation>
+#include <QDateTime>
 #include <QCursor>
 #include <QDir>
+#include <QEasingCurve>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -110,6 +117,19 @@ MapView::MapView(QWidget* parent)
     osmLayer->setHorizontalWrapEnabled(true);
     m_map->addItem(osmLayer);
     m_map->geoView()->setHorizontalWrapEnabled(true);
+    m_map->geoView()->setVerticalBoundsEnabled(true);
+
+    m_terminatorLayer = new QGVLayer();
+    m_terminatorLayer->setName(QStringLiteral("Day/night terminator"));
+    m_map->addItem(m_terminatorLayer);
+    m_terminatorItem = new MapTerminatorItem();
+    m_terminatorLayer->addItem(m_terminatorItem);
+    m_terminatorItem->setVisible(false);
+    m_terminatorTimer = new QTimer(this);
+    m_terminatorTimer->setInterval(60 * 1000);
+    connect(m_terminatorTimer, &QTimer::timeout, this, [this] {
+        m_terminatorItem->setDateTime(QDateTime::currentDateTimeUtc());
+    });
 
     m_markerLayer = new QGVLayer();
     m_markerLayer->setName(QStringLiteral("Markers"));
@@ -123,10 +143,13 @@ MapView::MapView(QWidget* parent)
     m_map->addWidget(new QGVWidgetScale());
 
     m_zoomInBtn = makeOverlayButton(QStringLiteral("+"), tr("Zoom in"));
+    m_zoomInBtn->setObjectName(QStringLiteral("mapZoomInButton"));
     connect(m_zoomInBtn, &QToolButton::clicked, this, &MapView::zoomIn);
     m_zoomOutBtn = makeOverlayButton(QStringLiteral("−"), tr("Zoom out"));
+    m_zoomOutBtn->setObjectName(QStringLiteral("mapZoomOutButton"));
     connect(m_zoomOutBtn, &QToolButton::clicked, this, &MapView::zoomOut);
     m_homeBtn = makeOverlayButton(QStringLiteral("⌂"), tr("Reset to my location (Home)"));
+    m_homeBtn->setObjectName(QStringLiteral("mapHomeButton"));
     connect(m_homeBtn, &QToolButton::clicked, this, &MapView::resetToHome);
 
     // Sonar pulse on the station marker, every 3 s. The animation timer
@@ -161,13 +184,15 @@ MapView::MapView(QWidget* parent)
     // has focus — it would otherwise consume the arrows for scrolling.
     m_map->geoView()->setFocusProxy(this);
 
-    connect(m_map, &QGVMap::itemClicked, this,
-            [this](QGVItem* item, QPointF) {
-                auto* marker = dynamic_cast<MapMarkerItem*>(item);
-                if (marker != nullptr) {
-                    emit markerClicked(marker->marker());
-                }
-            });
+    connect(m_map, &QGVMap::mapMousePress, this, [this](QPointF projPos) {
+        if (m_markerBatch == nullptr) {
+            return;
+        }
+        const int index = m_markerBatch->markerAt(projPos);
+        if (index >= 0) {
+            emit markerClicked(m_markerBatch->marker(index));
+        }
+    });
     // Double-click anywhere: zoom in anchored on the clicked point.
     connect(m_map, &QGVMap::mapMouseDoubleClicked, this,
             [this](QPointF projPos) {
@@ -208,15 +233,17 @@ bool MapView::eventFilter(QObject* watched, QEvent* event)
         if (event->type() == QEvent::MouseMove) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (me->buttons() != Qt::NoButton) {
-                m_hoverMarker = nullptr;
+                m_hoverMarkerIndex = -1;
                 m_hoverCard->hide();
+                clearHoverPath();
                 return QWidget::eventFilter(watched, event);
             }
             // Viewport pixels → scene/projection coordinates for the hit test.
             showHoverTooltip(m_map->geoView()->mapToScene(me->pos()));
         } else if (event->type() == QEvent::Leave) {
-            m_hoverMarker = nullptr;
+            m_hoverMarkerIndex = -1;
             m_hoverCard->hide();
+            clearHoverPath();
         }
     }
     return QWidget::eventFilter(watched, event);
@@ -224,22 +251,18 @@ bool MapView::eventFilter(QObject* watched, QEvent* event)
 
 void MapView::showHoverTooltip(const QPointF& projPos)
 {
-    MapMarkerItem* hit = nullptr;
-    for (QGVDrawItem* item : m_map->search(projPos)) {
-        auto* marker = dynamic_cast<MapMarkerItem*>(item);
-        if (marker != nullptr && !marker->marker().tooltip.isEmpty()) {
-            hit = marker;
-            break;
-        }
-    }
-    if (hit == nullptr) {
-        m_hoverMarker = nullptr;
+    const int hit = m_markerBatch != nullptr
+        ? m_markerBatch->markerAt(projPos) : -1;
+    if (hit < 0 || m_markerBatch->marker(hit).tooltip.isEmpty()) {
+        m_hoverMarkerIndex = -1;
         m_hoverCard->hide();
+        clearHoverPath();
         return;
     }
-    if (hit != m_hoverMarker) {
-        m_hoverMarker = hit;
-        m_hoverCard->setText(hit->marker().tooltip);
+    updateHoverPath(hit);
+    if (hit != m_hoverMarkerIndex) {
+        m_hoverMarkerIndex = hit;
+        m_hoverCard->setText(m_markerBatch->marker(hit).tooltip);
         m_hoverCard->adjustSize();
     }
     // Position near the cursor, clamped to stay fully inside the widget.
@@ -291,16 +314,20 @@ void MapView::setHomeSpanDegrees(double spanDegrees)
 
 void MapView::setMarkers(const QVector<Marker>& markers)
 {
-    clearMarkers();
+    clearHoverPath();
+    m_hoverMarkerIndex = -1;
+    m_hoverCard->hide();
     m_markerData = markers;
-    m_markers.reserve(markers.size() * (2 * m_worldCopyRange + 1));
-    for (const Marker& m : markers) {
-        for (int relativeCopy = -m_worldCopyRange;
-             relativeCopy <= m_worldCopyRange; ++relativeCopy) {
-            auto* item = new MapMarkerItem(m, relativeCopy);
-            m_markers.append(item);
-            m_markerLayer->addItem(item);
-        }
+    if (markers.isEmpty()) {
+        clearMarkers();
+    } else if (m_markerBatch == nullptr) {
+        m_markerBatch = new MapMarkerBatchItem(
+            markers,
+            ThemeManager::instance().color("color.text.primary"),
+            ThemeManager::instance().color("color.background.0"));
+        m_markerLayer->addItem(m_markerBatch);
+    } else {
+        m_markerBatch->setMarkers(markers);
     }
     rebuildPaths();
 }
@@ -311,28 +338,92 @@ void MapView::setPathsVisible(bool visible)
         return;
     }
     m_pathsVisible = visible;
-    rebuildPaths();
+    if (visible) {
+        clearHoverPath();
+    }
+    if (m_pathBatch != nullptr) {
+        m_pathBatch->setDisplayVisible(visible);
+    } else if (visible) {
+        rebuildPaths();
+    }
+}
+
+void MapView::updateHoverPath(int markerIndex)
+{
+    if (m_pathsVisible || markerIndex < 0
+        || markerIndex >= m_markerData.size()) {
+        clearHoverPath();
+        return;
+    }
+    if (m_hoverPathBatch != nullptr
+        && m_hoverPathMarkerIndex == markerIndex) {
+        return;
+    }
+    clearHoverPath();
+    m_hoverPathMarkerIndex = markerIndex;
+    const QVector<Marker> hoverMarkers =
+        MapHoverPathSelection::pathsForMarker(m_markerData, markerIndex);
+    if (hoverMarkers.isEmpty()) {
+        return;
+    }
+    m_hoverPathBatch = new MapPathBatchItem(
+        hoverMarkers, m_hasHome, m_homeLat, m_homeLon);
+    m_markerLayer->addItem(m_hoverPathBatch);
+}
+
+void MapView::clearHoverPath()
+{
+    m_hoverPathMarkerIndex = -1;
+    if (m_hoverPathBatch == nullptr) {
+        return;
+    }
+    m_markerLayer->removeItem(m_hoverPathBatch);
+    delete m_hoverPathBatch;
+    m_hoverPathBatch = nullptr;
+}
+
+void MapView::setDayNightTerminatorVisible(bool visible)
+{
+    if (m_terminatorItem == nullptr) {
+        return;
+    }
+    m_terminatorItem->setVisible(visible);
+    if (visible) {
+        m_terminatorItem->setDateTime(QDateTime::currentDateTimeUtc());
+        m_terminatorTimer->start();
+    } else {
+        m_terminatorTimer->stop();
+    }
+}
+
+bool MapView::dayNightTerminatorVisible() const
+{
+    return m_terminatorItem != nullptr && m_terminatorItem->isVisible();
 }
 
 void MapView::rebuildPaths()
 {
-    for (MapPathItem* path : std::as_const(m_paths)) {
-        m_markerLayer->removeItem(path);
-        delete path;
-    }
-    m_paths.clear();
-    if (!m_pathsVisible || !m_hasHome) {
+    if (!m_pathsVisible) {
+        if (m_pathBatch != nullptr) {
+            m_markerLayer->removeItem(m_pathBatch);
+            delete m_pathBatch;
+            m_pathBatch = nullptr;
+        }
         return;
     }
-    m_paths.reserve(m_markerData.size() * (2 * m_worldCopyRange + 1));
-    for (const Marker& m : std::as_const(m_markerData)) {
-        for (int relativeCopy = -m_worldCopyRange;
-             relativeCopy <= m_worldCopyRange; ++relativeCopy) {
-            auto* path = new MapPathItem(m_homeLat, m_homeLon,
-                                         m.lat, m.lon, m.color, relativeCopy);
-            m_paths.append(path);
-            m_markerLayer->addItem(path);
+    if (m_markerData.isEmpty()) {
+        if (m_pathBatch != nullptr) {
+            m_markerLayer->removeItem(m_pathBatch);
+            delete m_pathBatch;
+            m_pathBatch = nullptr;
         }
+    } else if (m_pathBatch == nullptr) {
+        m_pathBatch = new MapPathBatchItem(
+            m_markerData, m_hasHome, m_homeLat, m_homeLon);
+        m_markerLayer->addItem(m_pathBatch);
+    } else {
+        m_pathBatch->setMarkers(
+            m_markerData, m_hasHome, m_homeLat, m_homeLon);
     }
 }
 
@@ -367,21 +458,22 @@ void MapView::setLegend(const QVector<QPair<QString, QColor>>& entries)
 
 void MapView::clearMarkers()
 {
-    m_hoverMarker = nullptr;
+    clearHoverPath();
+    m_hoverMarkerIndex = -1;
     if (m_hoverCard != nullptr) {
         m_hoverCard->hide();
     }
-    for (MapMarkerItem* item : std::as_const(m_markers)) {
-        m_markerLayer->removeItem(item);
-        delete item;
+    if (m_markerBatch != nullptr) {
+        m_markerLayer->removeItem(m_markerBatch);
+        delete m_markerBatch;
+        m_markerBatch = nullptr;
     }
-    m_markers.clear();
     m_markerData.clear();
-    for (MapPathItem* path : std::as_const(m_paths)) {
-        m_markerLayer->removeItem(path);
-        delete path;
+    if (m_pathBatch != nullptr) {
+        m_markerLayer->removeItem(m_pathBatch);
+        delete m_pathBatch;
+        m_pathBatch = nullptr;
     }
-    m_paths.clear();
 }
 
 void MapView::resetToHome()
@@ -406,12 +498,25 @@ void MapView::resetToHome()
 
 void MapView::zoomIn()
 {
-    m_map->cameraTo(QGVCameraActions(m_map).scaleBy(kZoomStep), true);
+    animateZoom(kZoomStep);
 }
 
 void MapView::zoomOut()
 {
-    m_map->cameraTo(QGVCameraActions(m_map).scaleBy(1.0 / kZoomStep), true);
+    animateZoom(1.0 / kZoomStep);
+}
+
+void MapView::animateZoom(double factor)
+{
+    if (m_zoomAnimation != nullptr) {
+        m_zoomAnimation->stop();
+    }
+    auto* animation = new QGVCameraSimpleAnimation(
+        QGVCameraActions(m_map).scaleBy(factor), m_map);
+    animation->setDuration(250);
+    animation->setEasingCurve(QEasingCurve::OutCubic);
+    m_zoomAnimation = animation;
+    animation->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void MapView::pan(double dxFraction, double dyFraction)

@@ -1157,10 +1157,10 @@ int main(int argc, char** argv)
     const int startIndex = greeting.indexOf(QStringLiteral("start"));
     const int channelsIndex = greeting.indexOf(QStringLiteral("channels_count:2"));
     if (readyIndex < 0 || iqRateIndex < 0 || startIndex < 0 || channelsIndex < 0
-        || iqRateIndex >= readyIndex || readyIndex >= startIndex) {
+        || iqRateIndex >= readyIndex || startIndex >= readyIndex) {
         std::fprintf(stderr,
             "TCI greeting must advertise two channels and order "
-            "iq_samplerate before ready before start\n");
+            "iq_samplerate before start before ready (#5007)\n");
         return 1;
     }
 
@@ -1172,6 +1172,20 @@ int main(int argc, char** argv)
                          command.toUtf8().constData());
             return 1;
         }
+    }
+
+    // A client-issued START/STOP is a bidirectional device-state
+    // notification and must be confirmed, not answered with silence (#5007):
+    // WSJT-X's TCITransceiver blocks on the echo.
+    if (protocol.handleCommand(QStringLiteral("start"))
+            != QStringLiteral("start;")) {
+        std::fprintf(stderr, "start; must be echoed back to the client\n");
+        return 1;
+    }
+    if (protocol.handleCommand(QStringLiteral("stop"))
+            != QStringLiteral("stop;")) {
+        std::fprintf(stderr, "stop; must be echoed back to the client\n");
+        return 1;
     }
 
     if (!testRoutingPolicy() || !testStaleRouteFailsSafe()

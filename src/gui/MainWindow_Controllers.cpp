@@ -283,6 +283,16 @@ void MainWindow::showFlexControlDialog()
                 m_flexControlDialog->setPhysicalReady(false);
 #endif
         });
+#ifdef HAVE_SERIALPORT
+        connect(m_flexControlDialog, &FlexControlDialog::configureRequested,
+                this, [this] {
+            // Same deep-link pattern as Settings → USB Cables… (#4940), but
+            // scrolled onto the FlexControl Tuning Knob group itself rather
+            // than just landing on top of the page (PR #5157 review).
+            if (RadioSetupDialog* dlg = openRadioSetupPage())
+                dlg->revealFlexControlSettings();
+        });
+#endif
         connect(m_flexControlDialog, &FlexControlDialog::physicalDisconnectRequested,
                 this, [this] {
 #ifdef HAVE_SERIALPORT
@@ -511,9 +521,10 @@ void MainWindow::handleFlexControlButton(int button, int action)
         // `cwx send` into a backend with no such verb is the "silently does
         // nothing" report, not a working control. The action stays assignable —
         // the binding is operator-scoped and outlives any one radio.
-        if (!m_radioModel.hasRadioSideCwKeyer()) {
+        if (!m_radioModel.hasRadioSideCwKeyer()
+            || !m_radioModel.hasCwTextStoredMacros()) {
             qCDebug(lcCw) << "CWX macro action" << actionName
-                          << "ignored: radio has no radio-side CW keyer";
+                          << "ignored: radio has no stored text-keyer macros";
         } else {
             bool ok = false;
             const int idx = actionName.mid(4).toInt(&ok);

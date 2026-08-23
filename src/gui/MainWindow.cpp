@@ -1652,7 +1652,16 @@ MainWindow::MainWindow(QWidget* parent)
     // no demo audio, no ANF/NB, no legacy-NR2 geometry). One event, one signal.
     wireBackendSeam(m_radioModel.backend());
     connect(&m_radioModel, &RadioModel::backendRebuilt, this,
-            [this] { wireBackendSeam(m_radioModel.backend()); });
+            [this] {
+        // A family switch can destroy an HL2 backend while its uncancellable
+        // DSP build is still running. That backend then cannot emit
+        // dspSetupFinished(), so cancel its delayed dialog before wiring the
+        // replacement backend. Otherwise the overdue timer can mistake the
+        // replacement connection animation for the original HL2 connect and
+        // show a stale application-modal dialog over Flex/Icom.
+        dismissWdspSetupDialog();
+        wireBackendSeam(m_radioModel.backend());
+    });
     connect(m_audio, &AudioEngine::receivePresentationOutputAudioReady,
             this, [this](const QString& source, const QString& sourceId,
                          const QByteArray& pcm, int sampleRate) {
@@ -3210,6 +3219,21 @@ void MainWindow::publishRadioStateMqtt()
 }
 #endif
 
+RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
+{
+    const QString prevComp = m_radioModel.audioCompressionParam();
+    const bool wasFresh = !m_radioSetupDialog;
+    showOrRaisePersistent(m_radioSetupDialog,
+                          &m_radioModel, m_audio,
+                          &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
+    if (wasFresh && m_radioSetupDialog)
+        wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
+    if (m_radioSetupDialog && !page.isEmpty())
+        m_radioSetupDialog->selectTab(page);
+    return m_radioSetupDialog;
+}
+
 void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp)
 {
     if (!dlg) return;
@@ -3275,6 +3299,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         if (m_dialBackend &&
             s.value("UlanziDialEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
+                                      Qt::QueuedConnection);
+        } else if (m_dialBackend) {
+            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
                                       Qt::QueuedConnection);
         }
 #ifdef HAVE_HIDAPI
@@ -3679,6 +3706,15 @@ void MainWindow::changeEvent(QEvent* event)
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     ShutdownTrace closeEventTrace("main_window.close_event");
+#ifdef Q_OS_MAC
+    // Shared Ulanzi access temporarily remaps only the dial's system key
+    // events. Restore that mapping while the macOS HID event system and Qt
+    // event loop are still live; ~MainWindow runs only after app.exec().
+    if (m_dialBackend) {
+        ShutdownTrace trace("controllers.dial.stop");
+        m_dialBackend->stop();
+    }
+#endif
     // Release the TGXL/PGXL native control sockets explicitly so the radio
     // can resume polling them on behalf of other clients (e.g. Maestro).
     // The radio-disconnect handler does this via a queued connection on
@@ -6444,6 +6480,16 @@ void MainWindow::setPanadapterConnectionAnimation(bool visible, const QString& l
     m_waitingForFirstPanadapterFrame = visible;
     m_panadapterConnectionAnimationLabel = visible ? nextLabel : QString();
 
+    // The connect is over (connected, failed, cancelled, or the operator hit
+    // Disconnect) — so the HL2 setup dialog, which only ever explains a connect,
+    // goes with it. This is the safety net that matters: dspSetupFinished is
+    // emitted on every path OUT of finishDspSetup, but a backend destroyed
+    // mid-build (a family switch) takes its QPointer with it and emits nothing
+    // at all. Without this an application-modal window with no Cancel button
+    // would be left on screen with nothing able to close it. (#5052)
+    if (!visible)
+        dismissWdspSetupDialog();
+
     if (!m_panStack)
         return;
 
@@ -6452,6 +6498,150 @@ void MainWindow::setPanadapterConnectionAnimation(bool visible, const QString& l
             continue;
         if (auto* spectrumWidget = applet->spectrumWidget())
             spectrumWidget->setConnectionAnimationVisible(visible, nextLabel);
+    }
+}
+
+// ── HL2 first-connect WDSP setup dialog (#5052) ─────────────────────────────
+//
+// Gated on ELAPSED TIME, not on "a connect started". With a warm FFTW wisdom
+// cache the whole DSP build is ~0.5 s, and a dialog that appeared on every
+// connect would flash for half a second every single time — worse than the
+// silence it replaces, and invisible to anyone testing on a developer machine
+// because their cache is always warm. So arm a delay on the first progress
+// signal and only build the dialog if the build is STILL running when it fires.
+// A cold connect (~20 s) crosses that line; a warm one never does.
+//
+// Time is also the honest signal here, and deliberately preferred to a
+// cold-cache predicate. WdspChannel exposes none, and one could not be exact
+// anyway: a cache that imports cleanly may still lack plans for these
+// particular geometries, so it would report "warm" and the open would measure
+// regardless. Elapsed time measures the thing the operator actually experiences.
+static constexpr int kWdspSetupDialogDelayMs = 1500;
+
+void MainWindow::armWdspSetupDialog()
+{
+    // CONNECT WINDOW ONLY. A mid-session rebuild opens WDSP channels too — a
+    // span change that crosses a sample-rate boundary rebuilds every receiver —
+    // and throwing an application-modal window over a radio the operator is
+    // working would be far worse than saying nothing. This flag is precisely
+    // "a connect is in progress": set before connectToRadio(), cleared when the
+    // radio reports connected or the attempt ends.
+    if (!m_panadapterConnectionAnimationVisible)
+        return;
+    if (m_wdspSetupDialog)
+        return;   // already up
+    if (!m_wdspSetupDelayTimer) {
+        m_wdspSetupDelayTimer = new QTimer(this);
+        m_wdspSetupDelayTimer->setSingleShot(true);
+        connect(m_wdspSetupDelayTimer, &QTimer::timeout,
+                this, &MainWindow::showWdspSetupDialog);
+    }
+    if (m_wdspSetupDelayTimer->isActive())
+        return;   // dspSetupProgress fires once per receiver; arm on the first
+    m_wdspSetupDelayTimer->start(kWdspSetupDialogDelayMs);
+}
+
+void MainWindow::showWdspSetupDialog()
+{
+    // Re-checked, not assumed: 1500 ms is plenty of time for the connect to have
+    // failed or been cancelled out from under the timer.
+    if (!m_panadapterConnectionAnimationVisible || m_wdspSetupDialog)
+        return;
+
+    const bool frameless = framelessWindowEnabled();
+    auto* dlg = new QDialog(this);
+    // Stable handle for the automation bridge. Without it a bridge test has to
+    // find this window by its localized title text, which breaks on any copy
+    // change and in every non-English locale.
+    dlg->setObjectName(QStringLiteral("wdspSetupDialog"));
+    dlg->setWindowTitle(tr("Setting Up Your Radio"));
+    dlg->setWindowFlag(Qt::FramelessWindowHint, frameless);
+    // APPLICATION-MODAL, and this is the whole point of the fix. The NR2 wisdom
+    // dialog next door is deliberately NonModal + Qt::Tool +
+    // WA_ShowWithoutActivating; copying those three lines here would reproduce
+    // #5052 exactly, because a non-activating tool window is not guaranteed to
+    // sit above a parented Qt::Dialog like ConnectionPanel.
+    //
+    // Modality is also correct here in a way it is not for NR2: NR2 runs against
+    // a WORKING radio and locking the operator out of it for minutes was the
+    // worse trade. Here nothing has connected yet — there is no radio to
+    // operate, and the connect panel behind this is inert.
+    dlg->setWindowModality(Qt::ApplicationModal);
+    dlg->setMinimumWidth(460);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(dlg,
+        "QDialog { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; }"
+        "QLabel { color: {{color.text.secondary}}; background: transparent; }"
+        "QLabel#wdspSetupTitle { color: {{color.text.primary}}; font-size: 15px; font-weight: bold; }"
+        "QProgressBar { text-align: center; font-size: 12px; max-height: 6px;"
+        " background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
+        "QProgressBar::chunk { background: {{color.accent}}; border-radius: 3px; }");
+
+    auto* root = new QVBoxLayout(dlg);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    auto* titleBar = new FramelessWindowTitleBar(tr("Setting Up Your Radio"), dlg);
+    titleBar->setObjectName(QStringLiteral("framelessWindowTitleBar"));
+    titleBar->setVisible(frameless);
+    root->addWidget(titleBar);
+
+    auto* content = new QWidget(dlg);
+    auto* body = new QVBoxLayout(content);
+    body->setContentsMargins(20, frameless ? 16 : 18, 20, 18);
+    body->setSpacing(10);
+
+    auto* title = new QLabel(tr("Your radio is connected"), content);
+    title->setObjectName(QStringLiteral("wdspSetupTitle"));
+    body->addWidget(title);
+
+    // "Once" is the load-bearing sentence. The cost is genuinely per machine,
+    // not per connect (#4775 measured one ~19 s open and 40-175 ms for every
+    // rate afterwards), and saying so is what turns a bad first impression into
+    // an acceptable one.
+    auto* detail = new QLabel(
+        // "Up to a minute", not a point estimate. #4775 measured ~19 s on
+        // Linux/x86_64; a 4-receiver cold connect on macOS/arm64 measured 47 s.
+        // Promising 20 s and taking 47 is how this earns a second "it hung"
+        // report — the number has to cover the slow end, not the fast one.
+        tr("AetherSDR is tuning its signal processing for this computer. "
+           "This takes up to a minute and happens only once — future "
+           "connections will be immediate."),
+        content);
+    detail->setWordWrap(true);
+    body->addWidget(detail);
+
+    // INDETERMINATE. dspSetupProgress does carry an (n of m) receiver count, but
+    // presenting it as progress would be a lie: #4775 measured 18865 ms for the
+    // first receiver and 100/71/39 ms for the rest, so the bar would sit at 1/4
+    // for the entire wait and then fill in a tenth of a second. A determinate
+    // bar needs a time estimate we do not have.
+    auto* progress = new QProgressBar(content);
+    progress->setRange(0, 0);
+    progress->setTextVisible(false);
+    body->addWidget(progress);
+
+    root->addWidget(content);
+
+    // No Cancel button: WDSP's OpenChannel cannot be aborted, so a button that
+    // claimed to stop this would be lying. Esc/close still dismiss the window —
+    // that only hides the explanation, which beats trapping the operator.
+    m_wdspSetupDialog = dlg;
+    connect(dlg, &QDialog::finished, this, [this, dlg](int) {
+        if (m_wdspSetupDialog == dlg)
+            m_wdspSetupDialog = nullptr;
+        dlg->deleteLater();
+    });
+    dlg->show();
+}
+
+void MainWindow::dismissWdspSetupDialog()
+{
+    if (m_wdspSetupDelayTimer)
+        m_wdspSetupDelayTimer->stop();
+    if (m_wdspSetupDialog) {
+        // accept() runs the finished() handler above, which clears the pointer
+        // and schedules deletion.
+        m_wdspSetupDialog->accept();
     }
 }
 
@@ -6495,9 +6685,18 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
 
     // HL2 only, and deliberately: the client-side WDSP chains are this family's
     // alone. Opening them measures FFTW plans, which on a machine with no cached
-    // wisdom takes tens of seconds — long enough that a silent connect animation
-    // reads as a hung application. Say what is happening in the label that is
-    // already on screen rather than adding a dialog for it.
+    // wisdom takes ~20 s — long enough that a silent connect reads as a hung
+    // application.
+    //
+    // This used to write the explanation into the panadapter connection
+    // animation. It was never visible (#5052): ConnectionPanel is a top-level
+    // Qt::Dialog PARENTED to this window, so the window manager keeps it above
+    // us unconditionally, showConnectionDialog() anchors its 760x660 frame over
+    // the lower-centre of the panadapter — exactly where the animation draws —
+    // and it is not hidden until onConnectionStateChanged(connected), which is
+    // AFTER this whole window. So for all ~20 s the operator saw a panel reading
+    // "Connecting…" and nothing else, which is the "the client has hung" report
+    // that #4775 set out to answer in the first place.
     if (auto* hl2Backend = dynamic_cast<hl2::Hl2Backend*>(backend)) {
         // Disconnected first, like every other lambda connect in this function:
         // the helper promises to be idempotent for the same live backend, and
@@ -6505,24 +6704,9 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
         disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this, nullptr);
         disconnect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this, nullptr);
         connect(hl2Backend, &hl2::Hl2Backend::dspSetupProgress, this,
-                [this](const QString& stage, int done, int total) {
-            // Only while the connect animation is up. A DSP rebuild can happen
-            // mid-session (a span change), and hijacking the panadapter with a
-            // connect label for it would be a worse lie than saying nothing.
-            if (!m_panadapterConnectionAnimationVisible)
-                return;
-            const QString label = total > 1
-                ? tr("%1 (%2 of %3)").arg(stage).arg(done + 1).arg(total)
-                : stage;
-            setPanadapterConnectionAnimation(true, label);
-        });
-        // Put the label back to the generic one, so what remains of the connect
-        // — the wire coming up, the first EP6 packet — is not still described as
-        // DSP setup.
-        connect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this, [this] {
-            if (m_panadapterConnectionAnimationVisible)
-                setPanadapterConnectionAnimation(true, tr("Connecting to radio…"));
-        });
+                [this](const QString&, int, int) { armWdspSetupDialog(); });
+        connect(hl2Backend, &hl2::Hl2Backend::dspSetupFinished, this,
+                [this] { dismissWdspSetupDialog(); });
     }
 
     // The demo delivers native 128-sample frames, which the improved 1024/4 NR2
@@ -6929,6 +7113,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
+        m_appletPanel->meterApplet()->setPaTemperatureTelemetryState(
+            connected, caps.hasPaTemperatureTelemetry);
         // The mic-level gauge follows the METER, not the capability: a Flex
         // does not let a client pick its input either and still publishes
         // MICPEAK. Absence of the meter is the only thing that means the face
@@ -6937,6 +7123,14 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // than stranding them on the last radio's three filters.
         m_appletPanel->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                       : QList<int>{});
+        // Same contract for the TRANSMIT passband, and the same restore-on-
+        // disconnect: an Icom's four-to-six discrete low cuts must not outlive
+        // the session and leave a Flex's continuous control stepping through
+        // another radio's list.
+        if (auto* phone = m_appletPanel->phoneApplet()) {
+            phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
+                                    connected ? caps.txFilterHighEdgesHz : QList<int>{});
+        }
         m_appletPanel->setMicLevelMeterAvailable(
             !connected || m_radioModel.meterModel().hasMicPeakMeter());
     }
@@ -7124,7 +7318,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         updateStatusBarMinimumWidth();
     }
 
-    // ── The status-bar CWX / DVK / FDX toggles ──────────────────────────────
+    // ── The status-bar CWX/CWK / DVK / FDX toggles ──────────────────────────
     //
     // HIDDEN, not disabled. Each of these three is a verb the radio's firmware
     // executes — `cwx …`, `dvk …`, `radio set full_duplex_enabled=` — and on a
@@ -7153,8 +7347,22 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     const bool dvk = !connected || caps.hasVoiceKeyer;
     const bool fdx = !connected || caps.hasFullDuplex;
 
+    const QString cwKeyerName = connected ? caps.cwTextKeyerName
+                                          : QStringLiteral("CWX");
     if (m_cwxIndicator) {
+        // CWX is FlexRadio's name. Icom exposes the same shared panel through
+        // its CI-V text keyer, so call that surface CWK rather than implying
+        // that the radio implements Flex's CWX protocol.
+        m_cwxIndicator->setText(cwKeyerName);
         m_cwxIndicator->setVisible(cwx);
+    }
+    if (m_cwxPanel) {
+        m_cwxPanel->configureTextKeyer(
+            cwKeyerName,
+            connected ? caps.cwTextMinWpm : 5,
+            connected ? caps.cwTextMaxWpm : 100,
+            !connected || caps.cwTextSupportsLive,
+            !connected || caps.cwTextHasStoredMacros);
     }
     if (!cwx && m_cwxPanel) {
         m_cwxPanel->hide();
@@ -7407,15 +7615,14 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
         return BandStackPreselectResult::NotNeeded;
 
     const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-    const auto stackKeyResult =
-        XvtrPolicy::resolveBandStackKey(targetBand, xvtrs, m_radioModel.capabilities());
-    if (!stackKeyResult.isSupported()) {
-        QString unsupportedReason = stackKeyResult.unsupportedReason;
-        if (mhz > 54.0 && xvtrs.isEmpty()) {
-            unsupportedReason =
-                QString("Band %1 requires a configured XVTR before Aether can tune it.")
-                    .arg(targetBand);
-        }
+    const RadioCapabilities backendCaps = m_radioModel.backendCapabilities();
+    const auto admissibility =
+        XvtrPolicy::evaluateBandTune(m_radioModel.usesFlexCommandPlane(), targetBand, mhz,
+                                     backendCaps.tuningMinHz, backendCaps.tuningMaxHz,
+                                     xvtrs, m_radioModel.capabilities());
+    if (!admissibility.supported) {
+        const QString unsupportedReason =
+            bandTuneRefusalText(admissibility, targetBand);
         qCWarning(lcProtocol).noquote().nospace()
             << "MainWindow: direct tune cannot preselect band stack source="
             << (source ? source : "(unknown)")
@@ -7429,13 +7636,28 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
         return BandStackPreselectResult::Unsupported;
     }
 
+    // Everything below is Flex band-stack machinery — it ends in
+    // `display pan set <pan> band=<key>`, a command plane an Icom or an HL2
+    // does not have. The band was admissible, so let the ordinary tune-and-
+    // recenter path carry it (#5041).
+    if (admissibility.bandStackKey.isEmpty()) {
+        // But the band DID change, and the two things that follow from that on
+        // a radio with no stack are the same two the band buttons already do
+        // (MainWindow_Wiring.cpp). Dropping them here would have let a finished
+        // SWR plot from the old band survive a cross-band typed tune and stay
+        // on screen describing an antenna the radio is no longer pointed at.
+        clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
+        m_bandSettings.setCurrentBand(targetBand);
+        return BandStackPreselectResult::NotNeeded;
+    }
+
     qCDebug(lcProtocol).noquote().nospace()
         << "MainWindow: direct tune preselecting band stack source="
         << (source ? source : "(unknown)")
         << " pan=" << slice->panId()
         << " from_band=" << currentBand
         << " to_band=" << targetBand
-        << " key=" << stackKeyResult.key;
+        << " key=" << admissibility.bandStackKey;
     emit bandStackRestoreStarting(slice->panId());
     clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
     m_bandSettings.setCurrentBand(targetBand);
@@ -7444,7 +7666,7 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     // band= write is silently destroyed, so the slice lands outside the pan.
     // requestPanBand defers the band-stack swap and replays it band-first; the
     // dispatch signal starts the reconstruction guard at replay.
-    m_radioModel.requestPanBand(slice->panId(), stackKeyResult.key);
+    m_radioModel.requestPanBand(slice->panId(), admissibility.bandStackKey);
     QTimer::singleShot(300, this, [this, panId = slice->panId()]() {
         reassertUnmutedSliceAudioForPan(panId);
     });
@@ -9391,7 +9613,10 @@ void MainWindow::updateKeyerAvailability()
                               && (dvkBlocker == DvkIndicatorBlocker::None);
     const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
 
-    if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(txIsCw);
+    if (m_cwxPanel) {
+        m_cwxPanel->setShortcutsEnabled(txIsCw
+                                        && m_radioModel.hasCwTextStoredMacros());
+    }
     if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable);
 
     // Only auto-hide an open panel when a TX slice *exists* and is in the wrong
@@ -9609,9 +9834,8 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
     auto* popup = new DspParamPopup(this);
     Nr2SettingsModel& model = Nr2SettingsModel::instance();
     const Nr2SettingsModel::Config initial = model.config();
-    const bool thresholdAvailable = initial.gainMethod == 2
-        || (!initial.legacyGeometryAndGainMapping
-            && initial.gainMethod == 0);
+    const bool thresholdAvailable = initial.gainMethod == 0
+        || initial.gainMethod == 2;
 
     const DspParamPopup::SliderControl reduction = popup->addSlider(
         "Reduction", 50, 200,
@@ -9666,19 +9890,8 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
             QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
         });
 
-    QCheckBox* legacy = popup->addCheckbox(
-        "Original NR2 (geometry + gain mapping)",
-        initial.legacyGeometryAndGainMapping,
-        [this](bool useOriginal) {
-            Nr2SettingsModel::instance()
-                .setLegacyGeometryAndGainMapping(useOriginal);
-            QMetaObject::invokeMethod(m_audio, [this, useOriginal]() {
-                m_audio->setNr2UseOriginalGeometry(useOriginal);
-            });
-        });
-
     connect(&model, &Nr2SettingsModel::configChanged, popup,
-            [reduction, naturalness, smoothing, threshold, aeFilter, legacy]() {
+            [reduction, naturalness, smoothing, threshold, aeFilter]() {
         const Nr2SettingsModel::Config config =
             Nr2SettingsModel::instance().config();
         reduction.slider->setValue(static_cast<int>(
@@ -9690,11 +9903,9 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
         threshold.slider->setValue(static_cast<int>(
             std::lround(config.qspp * 100.0f)));
         aeFilter->setChecked(config.aeFilter);
-        legacy->setChecked(config.legacyGeometryAndGainMapping);
 
-        const bool available = config.gainMethod == 2
-            || (!config.legacyGeometryAndGainMapping
-                && config.gainMethod == 0);
+        const bool available = config.gainMethod == 0
+            || config.gainMethod == 2;
         threshold.setEnabled(available);
         threshold.setToolTip(available
             ? QStringLiteral(
@@ -9823,17 +10034,32 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     if (!m_radioModel.isConnected()) return;
 
     const int needed = panCountForLayoutId(layoutId);
-    const int existing = m_panStack->count();
+    const bool canvasLayout = m_workspaceController
+        && m_workspaceController->isEnabled();
+    const QStringList canvasPanIds = canvasLayout
+        ? m_workspaceController->activeMainPanIdsForLayout() : QStringList{};
+    const int existing = canvasLayout ? canvasPanIds.size() : m_panStack->count();
+    if (!canvasLayout) {
+        ++m_canvasPanLayoutGeneration;
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+    }
 
     if (needed < existing) {
         qDebug() << "applyPanLayout: reducing from" << existing << "to" << needed << "pans";
 
         // Close extra pans from the end (keep the first N)
-        auto allApplets = m_panStack->allApplets();
+        QStringList removalCandidates;
+        if (canvasLayout) {
+            removalCandidates = canvasPanIds;
+        } else {
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                removalCandidates.append(applet->panId());
+            }
+        }
         int toRemove = existing - needed;
-        for (int i = allApplets.size() - 1; i >= 0 && toRemove > 0; --i) {
-            auto* applet = allApplets[i];
-            QString panId = applet->panId();
+        for (int i = removalCandidates.size() - 1; i >= 0 && toRemove > 0; --i) {
+            const QString panId = removalCandidates.at(i);
             if (panId == "default") continue;
             qDebug() << "applyPanLayout: closing pan" << panId;
             // Route through removePanadapter so a layout-shrink tears down the
@@ -9845,27 +10071,35 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             --toRemove;
         }
 
+        // Pan removal and slot rekeying arrive asynchronously. Reflow now and
+        // after each settling turn so the final survivors, rather than a pan
+        // that is still waiting to disappear, receive the canonical cells.
+        startCanvasPanLayoutSettle(layoutId, needed);
+
         // Rearrange remaining pans after a short delay for radio to process
         QTimer::singleShot(500, this, [this, layoutId]() {
-            m_panStack->rearrangeLayout(layoutId);
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
         });
         return;
     }
     if (needed == existing) {
         // Same count, just rearrange
-        m_panStack->rearrangeLayout(layoutId);
+        if (!canvasLayout) {
+            m_panStack->rearrangeLayout(layoutId);
+        }
+        startCanvasPanLayoutSettle(layoutId, needed);
         return;
     }
 
     // Create additional pans to reach the needed count.
     // Keep existing pan(s) alive — no tear-down, no dangling signals.
-    const int currentSliceCount = static_cast<int>(m_radioModel.slices().size());
-    if (currentSliceCount >= m_radioModel.maxSlices()) {
+    const int toCreate = needed - existing;
+    if (m_panStack->count() + toCreate > m_radioModel.maxPanadapters()) {
         showPanadapterSliceCapacityMessage();
         return;
     }
-
-    const int toCreate = needed - existing;
     auto panIds = std::make_shared<QStringList>();
 
     // Collect existing pan IDs first (they'll be part of the layout)
@@ -9875,7 +10109,72 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     qDebug() << "applyPanLayout: have" << existing << "pans, creating"
              << toCreate << "more for layout" << layoutId;
 
+    if (canvasLayout) {
+        startCanvasPanLayoutSettle(layoutId, needed);
+    }
     createPansSequentially(layoutId, toCreate, panIds, 0);
+}
+
+void MainWindow::startCanvasPanLayoutSettle(const QString& layoutId,
+                                            int expectedPanCount)
+{
+    if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+        return;
+    }
+    m_pendingCanvasPanLayoutId = layoutId;
+    m_pendingCanvasPanLayoutTarget = expectedPanCount;
+    const quint64 generation = ++m_canvasPanLayoutGeneration;
+    settleCanvasPanLayout(layoutId, expectedPanCount, 25, generation);
+}
+
+void MainWindow::settleCanvasPanLayout(const QString& layoutId,
+                                       int expectedPanCount,
+                                       int attemptsRemaining,
+                                       quint64 generation)
+{
+    if (m_shuttingDown || !m_panStack || generation != m_canvasPanLayoutGeneration) {
+        return;
+    }
+
+    if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+        if (attemptsRemaining > 0) {
+            QTimer::singleShot(200, this,
+                               [this, layoutId, expectedPanCount,
+                                attemptsRemaining, generation]() {
+                settleCanvasPanLayout(layoutId, expectedPanCount,
+                                      attemptsRemaining - 1, generation);
+            });
+        }
+        return;
+    }
+
+    m_workspaceController->applyPanLayout(layoutId);
+    const int actualPanCount =
+        m_workspaceController->activeMainPanIdsForLayout().size();
+    if (actualPanCount == expectedPanCount) {
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+        return;
+    }
+    if (attemptsRemaining <= 0) {
+        qWarning() << "applyPanLayout: canvas settle expired for" << layoutId
+                   << "expected" << expectedPanCount << "pans, found"
+                   << actualPanCount;
+        // Expiry is terminal. Only the disabled-canvas path above represents
+        // a suspended selection that may resume when canvas mode returns.
+        // Leaving an expired selection pending would let a later enable
+        // overwrite geometry the operator arranged in the meantime.
+        m_pendingCanvasPanLayoutId.clear();
+        m_pendingCanvasPanLayoutTarget = -1;
+        return;
+    }
+
+    QTimer::singleShot(200, this,
+                       [this, layoutId, expectedPanCount, attemptsRemaining,
+                        generation]() {
+        settleCanvasPanLayout(layoutId, expectedPanCount,
+                              attemptsRemaining - 1, generation);
+    });
 }
 
 void MainWindow::createPansSequentially(const QString& layoutId, int total,
@@ -9899,7 +10198,10 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
             }
 
             // Rearrange splitter structure for the selected layout
-            m_panStack->rearrangeLayout(layoutId);
+            if (!m_workspaceController || !m_workspaceController->isEnabled()) {
+                m_panStack->rearrangeLayout(layoutId);
+            }
+            startCanvasPanLayoutSettle(layoutId, panCountForLayoutId(layoutId));
 
             m_panApplet = m_panStack->activeApplet();
 
@@ -10006,12 +10308,12 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
 
 void MainWindow::showPanadapterSliceCapacityMessage()
 {
-    const int limit = m_radioModel.maxSlices();
+    const int limit = m_radioModel.maxPanadapters();
     const QString model = m_radioModel.model().isEmpty()
         ? QStringLiteral("This radio")
         : m_radioModel.model();
     statusBar()->showMessage(
-        QStringLiteral("Slice capacity is full; cannot add another panadapter (%1 supports %2 slice%3)")
+        QStringLiteral("Panadapter capacity is full (%1 supports %2 panadapter%3)")
             .arg(model)
             .arg(limit)
             .arg(limit == 1 ? QString() : QStringLiteral("s")),

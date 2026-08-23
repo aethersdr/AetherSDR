@@ -38,6 +38,7 @@
 #include "core/IambicKeyer.h"
 #include "core/PerfTelemetry.h"
 #if defined(Q_OS_MAC)
+#include "core/UlanziDialMacOSManager.h"
 #include "core/VirtualAudioBridge.h"
 #elif defined(HAVE_PIPEWIRE)
 #include "core/PipeWireAudioBridge.h"
@@ -1131,6 +1132,11 @@ void MainWindow::wireRadioModel()
         m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
             // Lock-free atomic gate; safe to call directly from the keyer
             // thread, matching the iambic keyer's gate path below.
+            // CWX: same fix pending (#4890).  This keyer runs the same
+            // absolute-grid schedule (#3644) and knows each edge's instant
+            // (m_epoch + m_nextEdgeMs), but still takes the 1-arg callback,
+            // so its sidetone renders wake rhythm while the iambic path
+            // below renders scheduled rhythm.
             if (m_audio)
                 m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
         });
@@ -1149,12 +1155,17 @@ void MainWindow::wireRadioModel()
         // as HL2 turns them into shaped IQ. Keeping the timing here avoids
         // radio-round-trip jitter in both the sidetone and the RF pattern.
         m_iambicKeyer = std::make_unique<IambicKeyer>();
-        m_iambicKeyer->setOnKeyDownChange([this](bool down) {
+        m_iambicKeyer->setOnKeyDownChange([this](bool down,
+                                                 std::chrono::steady_clock::time_point when) {
             // Drive the local sidetone gate (lock-free atomic on the audio
             // thread) and the radio's per-element key edge in parallel.
             // The backend sees key-down/key-up matching our element timing.
+            // `when` is the edge's scheduled grid instant (#4890): the
+            // sidetone renders to it, and the trace logs it as schedMs so
+            // scheduled rhythm and thread-wake latency (t − schedMs) are
+            // separately observable in one line.
             if (m_audio)
-                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
+                m_audio->setCwKeyDown(down, when);   // keys audible + recorder sidetone
             const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
             const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
             if (lcCw().isDebugEnabled()) {
@@ -1163,13 +1174,14 @@ void MainWindow::wireRadioModel()
                     << "CW iambic key-edge trace=" << traceId
                     << " t=" << now << "ms"
                     << " sinceSourceMs=" << (sourceMs ? static_cast<qint64>(now - sourceMs) : -1)
-                    << " down=" << down;
+                    << " down=" << down
+                    << " schedMs=" << cwTraceMsAt(when);
             }
-            QMetaObject::invokeMethod(this, [this, down]() {
+            QMetaObject::invokeMethod(this, [this, down, when]() {
                 const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
                 const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
                 m_radioModel.sendCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                           traceId, sourceMs);
+                                           traceId, sourceMs, when);
             }, Qt::QueuedConnection);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
@@ -2540,6 +2552,46 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             };
         }
         return tciServer()->routingSnapshot();
+    });
+    m_automation->setDeviceDiagnosticsHandler([this](const QString& diagnostic) {
+        if (diagnostic != QLatin1String("ulanzi")
+            && diagnostic != QLatin1String("ulanzi-start")
+            && diagnostic != QLatin1String("ulanzi-stop")) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("unknown device diagnostic")},
+            };
+        }
+#ifdef Q_OS_MAC
+        if (!m_dialBackend) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable")},
+            };
+        }
+        if (diagnostic == QLatin1String("ulanzi-start")) {
+            m_dialBackend->start();
+        } else if (diagnostic == QLatin1String("ulanzi-stop")) {
+            m_dialBackend->stop();
+        }
+        QJsonObject snapshot = m_dialBackend->diagnostics();
+        snapshot[QStringLiteral("operation")] = diagnostic;
+        snapshot[QStringLiteral("enabled")] =
+            AppSettings::instance()
+                    .value(QStringLiteral("UlanziDialEnabled"),
+                           QStringLiteral("False"))
+                    .toString()
+            == QLatin1String("True");
+        return snapshot;
+#else
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
+            {QStringLiteral("supported"), false},
+            {QStringLiteral("message"),
+             QStringLiteral("Ulanzi HID diagnostics are currently macOS-only")},
+        };
+#endif
     });
 
     // The access token lives in the OS secret store (QtKeychain), which reads

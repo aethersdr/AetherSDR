@@ -17,6 +17,7 @@
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
+#include <chrono>
 #include <optional>
 #include "SliceModel.h"
 #include "MeterModel.h"
@@ -176,6 +177,8 @@ public:
     bool isConnectAttemptInFlight() const { return m_connectAttemptActive; }
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
+    bool transmitFrequencyCheck() const { return m_transmitFrequencyCheck; }
+    void setTransmitFrequencyCheck(bool on);
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
@@ -363,7 +366,7 @@ public:
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
     // reasoning as hasManualNotch(): it can only add the NB button.
     bool hasHostNoiseBlanker() const;
-    // The filter widths the radio declares, widest first, or an EMPTY list
+    // The filter widths the radio declares, narrowest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a
     // fixed IF ladder wants and what a disconnected app should show.
@@ -394,6 +397,11 @@ public:
     // still transmits CW from a key, a paddle or the host keying path; what it
     // lacks is a text buffer.
     bool hasRadioSideCwKeyer() const;
+    bool hasCwTextProgress() const;
+    bool hasCwTextStoredMacros() const;
+    int cwTextMinWpm() const;
+    int cwTextMaxWpm() const;
+    QString cwTextValidationError(const QString& text) const;
     bool hasVoiceKeyer() const;
     // Whether this radio has DAX audio/IQ channels. Same permissive
     // disconnected rule as hasRadioSideDsp(): with nothing attached there is
@@ -765,8 +773,15 @@ public:
     // squeeze while key transitions on each element boundary.
     void sendCwPtt(bool on, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+    // `scheduledAt` (#4890): the edge's scheduled instant on the producer's
+    // element grid, when one exists.  The netcw `time=` field is derived
+    // from it instead of the send wall-clock, so the radio's timing
+    // reconstruction input carries the intended rhythm rather than
+    // worker-wake plus queued-hop jitter.  Default (epoch zero) = no
+    // schedule; send-time stamping is unchanged.
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
-                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+                       quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
+                       std::chrono::steady_clock::time_point scheduledAt = {});
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
     void addSlice();           // Create a new slice on the active panadapter
@@ -945,6 +960,7 @@ signals:
     // lacks this" from "there is no radio" — the latter restores the permissive
     // value (see MainWindow::applyCapabilitiesToUi).
     void capabilitiesChanged(bool connected, const RadioCapabilities& caps);
+    void transmitFrequencyCheckChanged(bool on);
     // Emitted whenever the backend instance is (re)built — including the
     // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
     // m_backend is already destroyed and m_backend now points at the new one.
@@ -1438,6 +1454,9 @@ private:
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
     void publishCapabilities(bool connected);
+    // Apply a backend's band-dependent PA ceiling to TransmitModel. Backends
+    // without per-band data leave the existing radio-reported limit alone.
+    void refreshTxPowerLimit();
     // Bind the one producer for rxDemodAudioReady. Idempotent; call after
     // m_backend and m_panStream are both settled for the new family.
     void wireRxDemodAudioBus();
@@ -1451,6 +1470,9 @@ private:
     // decide whether a connect needs a different backend.
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    QVector<TxPowerBand> m_txPowerBands;
+    double m_activeTxPowerBandLowHz = 0.0;
+    double m_activeTxPowerBandHighHz = 0.0;
     // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
     // simulator) instead of a FlexBackend. Selected per-connection from the target
     // — see connectToRadio(). Also generalizes to future non-Flex backends (HL2).
@@ -1574,7 +1596,8 @@ private:
     QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
     qint64   m_netCwLastSendMs{-1};
     void sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
-                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
+                          quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
+                          std::chrono::steady_clock::time_point scheduledAt = {});
     QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
@@ -1755,6 +1778,14 @@ private:
     // keying may proceed; on refusal it rolls back the optimistic transmit state
     // and notifies, so no raw-TX edge is ever published for a refused key.
     bool refuseKeyOnTransmitIncapableBackend();
+    // The same guard, for the radio that transmits everywhere EXCEPT the mode
+    // it is currently in (WFM on an IC-705, #5040). True when keying may
+    // proceed. See the definition for why the refusal has to happen on this
+    // side of the seam and not in the backend.
+    bool refuseKeyInReceiveOnlyMode();
+    // The refusal both of the above perform: raise the interlock notification
+    // and roll back TransmitModel's optimistic transmit state. Always false.
+    bool refuseKeyWithInterlock(const QString& message, const QString& key);
     // Apply the same capability + receive-only-pan preflight to a non-Flex CW
     // carrier edge before it crosses the backend seam. Key-up always passes so
     // an inhibit arriving mid-element can never strand RF on.
@@ -1891,6 +1922,7 @@ private:
     int                m_automationSliceFixtureBaselineMaxSlices{4};
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
+    bool               m_transmitFrequencyCheck{false};
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
     qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};

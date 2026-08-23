@@ -134,6 +134,7 @@ LogManager::LogManager()
         {"aether.icom.pan",     "Icom Scope",    "Icom spectrum scope: sweep frames, division reassembly, bounds"},
         {"aether.icom.link",    "Icom Link",     "Icom backend link state: connect/disconnect, model resolution, capability publication"},
         {"aether.icom.cred",    "Icom Credentials", "Icom credential storage and retrieval (no secret values are logged)"},
+        {"aether.sysinfo",    "System Info",  "Startup hardware/capability inventory: OS, CPU model + SIMD features, RAM, and the speech-engine ISA baseline check (#4986). A few lines once per launch"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
@@ -399,7 +400,7 @@ void LogManager::loadSettings()
     // Default Discovery, Commands, and Status to on
     static const QStringList defaultOn = {
         "aether.discovery", "aether.connection", "aether.protocol",
-        "aether.audio.summary", "aether.kiwisdr"
+        "aether.audio.summary", "aether.kiwisdr", "aether.sysinfo"
     };
     for (auto& c : m_categories) {
         QString def = defaultOn.contains(c.id) ? "True" : "False";

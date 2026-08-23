@@ -500,20 +500,25 @@ QString TciProtocol::generateInitBurst()
     burst += QStringLiteral("tx_stream_audio_buffering:50;");
     burst += QStringLiteral("iq_samplerate:48000;");
 
+    // START is a bidirectional device-state notification and belongs in the
+    // state dump, not after it: WSJT-X's TCITransceiver gates its
+    // frequency/PTT path on a "SDR switched on" flag fed only by START, and
+    // evaluates that flag at READY time. Emitting START after READY (as
+    // before) leaves the flag false when WSJT-X checks it (#5007). Real
+    // ExpertSDR3 emits START as part of the dump, before READY closes it.
+    // This does not disturb the argument-less audio_start/iq_start
+    // avoidance from #3913 (stream lifecycle commands are still never
+    // emitted here) or the READY-after-iq_samplerate ordering SDC/CW
+    // Skimmer need (#3498/#3502) — only START's position relative to READY
+    // changes.
+    burst += QStringLiteral("start;");
+
     // READY terminates the settings dump — it must follow EVERY setting
-    // (in particular iq_samplerate), because SDC / CW Skimmer reads its
-    // cached settings the moment READY arrives.  Matches real
+    // (in particular iq_samplerate and start), because SDC / CW Skimmer
+    // reads its cached settings the moment READY arrives.  Matches real
     // ExpertSDR3 behavior and the spec's READY definition ("sent after
     // the initialization commands").  Reported by Yuri UT4LW.
     burst += QStringLiteral("ready;");
-
-    // START is a bidirectional device-state notification. Stream lifecycle
-    // commands are client-owned: AUDIO_START and IQ_START require a receiver
-    // argument and are sent by the client after READY. Emitting the old
-    // argument-less audio_start primer here wedged SDC before it processed
-    // START, so its TCI connection never became active and it never requested
-    // the IQ stream used by the CW skimmer (#3913 test-build finding).
-    burst += QStringLiteral("start;");
 
     return burst;
 }
@@ -662,13 +667,13 @@ std::optional<TciProtocol::TrxRequest> TciProtocol::takeTrxRequest()
 QString TciProtocol::cmdStart()
 {
     m_started = true;
-    return {};
+    return QStringLiteral("start;");
 }
 
 QString TciProtocol::cmdStop()
 {
     m_started = false;
-    return {};
+    return QStringLiteral("stop;");
 }
 
 // ── VFO: get/set frequency ─────────────────────────────────────────────────
@@ -1117,10 +1122,11 @@ QString TciProtocol::cmdCwMacrosSpeed(const QStringList& args, bool /*isSet*/)
     if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
-    if (wpm < 5 || wpm > 100) return {};
-    QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-        model->sendCmdPublic(cmd, nullptr);
+    if (wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) {
+        return {};
+    }
+    QMetaObject::invokeMethod(m_model, [model = m_model, wpm]() {
+        model->transmitModel().setCwSpeed(wpm);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("cw_macros_speed:%1;").arg(wpm);
@@ -1133,8 +1139,7 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
     // cw_msg:text — send CW macro text
     QString text = args.join(',');  // rejoin in case text had commas
     if (text.isEmpty()) return {};
-    QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         // Capability check runs HERE, on the model's thread, not in the caller:
         // this method is driven by the TCI client socket and RadioModel state is
         // not ours to read from it.
@@ -1143,7 +1148,12 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
                                 "CW keyer";
             return;
         }
-        model->sendCmdPublic(cmd, nullptr);
+        const QString rejection = model->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcCat) << "TCI: cw_msg ignored:" << rejection;
+            return;
+        }
+        model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1617,14 +1627,18 @@ QString TciProtocol::cmdCwMacros(const QStringList& args)
     if (!m_model || args.isEmpty()) return {};
     QString text = args.join(',');
     if (text.isEmpty()) return {};
-    QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
         if (!model->hasRadioSideCwKeyer()) {
             qCWarning(lcCat) << "TCI: cw_macros ignored \u2014 radio has no "
                                 "radio-side CW keyer";
             return;
         }
-        model->sendCmdPublic(cmd, nullptr);
+        const QString rejection = model->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcCat) << "TCI: cw_macros ignored:" << rejection;
+            return;
+        }
+        model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1633,8 +1647,10 @@ QString TciProtocol::cmdCwMacrosStop()
 {
     if (!m_model) return {};
     QMetaObject::invokeMethod(m_model, [model = m_model]() {
-        if (!model->hasRadioSideCwKeyer()) return;
-        model->sendCmdPublic("cwx clear", nullptr);
+        if (!model->hasRadioSideCwKeyer()) {
+            return;
+        }
+        model->cwxModel().clearBuffer();
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1762,10 +1778,9 @@ QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool /*isSet*/)
     if (!m_model) return {};
     int wpm = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, wpm)) return {};
-    if (wpm < 5 || wpm > 100) return {};
-    QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
-        model->sendCmdPublic(cmd, nullptr);
+    if (wpm < m_model->cwTextMinWpm() || wpm > m_model->cwTextMaxWpm()) return {};
+    QMetaObject::invokeMethod(m_model, [model = m_model, wpm]() {
+        model->transmitModel().setCwSpeed(wpm);
     }, Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("cw_keyer_speed:%1;").arg(wpm);
     return {};

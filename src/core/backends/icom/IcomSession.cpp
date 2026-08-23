@@ -750,6 +750,17 @@ void IcomSession::sendCiv(std::span<const std::uint8_t> frame)
                                           frame));
 }
 
+bool IcomSession::reopenCivPipe()
+{
+    if (!m_serial || !m_serial->isReady()) {
+        return false;
+    }
+    m_serial->sendTracked(buildSerialRestart(m_serial->localSessionId(),
+                                             m_serial->remoteSessionId(),
+                                             m_serialSendSeq++));
+    return true;
+}
+
 void IcomSession::sendAudio(std::span<const float> mono)
 {
     if (!m_params.enableTx)

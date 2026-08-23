@@ -1372,6 +1372,7 @@ Hl2Backend::~Hl2Backend()
 RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
+    c.txPowerBands = {};
     c.family = QStringLiteral("hl2");
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
@@ -1404,6 +1405,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
+    // The HL2 modulates on this host, so it transmits in whatever mode WDSP is
+    // told to build — there is no mode it receives and cannot send. The transmit
+    // gate (m_txAllowed) is the only thing that stops it, and that is
+    // canTransmit above.
+    c.receiveOnlyModes = {};
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
@@ -1416,6 +1422,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
     c.hasManualNotch = false;
+    c.hasTransmitFrequencyCheck = false;
     // The one member of the noise family that is NOT moot here. WDSP's ANB runs
     // on this host, on the raw IQ, ahead of the demodulator — the same
     // arrangement as the manual notch and for the same reason (oracle addendum
@@ -1486,6 +1493,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    c.hasPaTemperatureTelemetry = true;
     // The HL2 persists NOTHING across power cycles — "the radio reports no
     // VFO, so the app is authoritative and must push" (pushInitialState).
     // These are the domains the client owns as the radio's memory

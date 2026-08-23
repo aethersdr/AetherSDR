@@ -14,6 +14,8 @@
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/icom/IcomModels.h"
 #include "core/backends/icom/CivCodec.h"
+#include "models/BandDefs.h"
+#include "models/DeclaredBands.h"
 #include "gui/ExperimentalRadioSupport.h"
 
 #include <QCoreApplication>
@@ -113,6 +115,54 @@ int main(int argc, char** argv)
     // distinction so the old false warning cannot quietly come back.
     check(!AetherSDR::icom::modelForCivAddress(0xA2)->hasWifi,
           "the IC-9700 has no Wi-Fi — so no WLAN MOD Input to demand");
+    check(!AetherSDR::icom::profileFor(
+              *AetherSDR::icom::modelForCivAddress(0xA2))
+               .meters.hasPaTemperatureTelemetry,
+          "the IC-9700 profile does not declare PA-temperature telemetry");
+
+    // ── TX bandwidth: the models genuinely differ ─────────────────────────
+    {
+        const auto ic705Tbw = icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xA4));
+        const auto mk2Tbw   = icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xB6));
+        check(ic705Tbw && ic705Tbw->wideItem == 19 && ic705Tbw->midItem == 20
+                  && ic705Tbw->narrowItem == 21 && ic705Tbw->dataItem == 22,
+              "IC-705 TX bandwidth lives at SET 0019/0020/0021/0022");
+        check(mk2Tbw && mk2Tbw->wideItem == 14 && mk2Tbw->midItem == 15
+                  && mk2Tbw->narrowItem == 16 && mk2Tbw->dataItem == 17,
+              "IC-7300MK2 TX bandwidth lives at SET 0014/0015/0016/0017");
+
+        // THE MK2 ADDED TWO LOW EDGES the IC-705 has not got. This is the whole
+        // reason the tables are per-model rather than one shared constant, so
+        // it is pinned rather than left as a comment.
+        check(ic705Tbw && ic705Tbw->lowEdgesHz.size() == 4,
+              "the IC-705 offers four TX low edges");
+        check(mk2Tbw && mk2Tbw->lowEdgesHz.size() == 6,
+              "the IC-7300MK2 offers six — it added 120 and 150 Hz");
+        check(mk2Tbw && mk2Tbw->lowEdgesHz[1] == 120 && mk2Tbw->lowEdgesHz[2] == 150,
+              "and those two are where the guide puts them");
+        check(ic705Tbw && mk2Tbw
+                  && ic705Tbw->highEdgesHz.size() == 4 && mk2Tbw->highEdgesHz.size() == 4,
+              "both share the same four high edges");
+
+        // SNAPPING is what makes the seam's continuous Hz honest. A request the
+        // radio cannot reach must land on one it can, per model.
+        check(mk2Tbw && icom::nearestEdgeHz(mk2Tbw->lowEdgesHz, 130) == 120,
+              "an IC-7300MK2 reaches 120 Hz");
+        check(ic705Tbw && icom::nearestEdgeHz(ic705Tbw->lowEdgesHz, 130) == 100,
+              "an IC-705 asked for the same lands on 100 — it has no 120");
+        check(ic705Tbw && icom::nearestEdgeHz(ic705Tbw->highEdgesHz, 3300) == 2900,
+              "a 3.3 kHz high cut clamps to the 2.9 kHz ceiling");
+        check(mk2Tbw && icom::edgeIndexFor(mk2Tbw->lowEdgesHz, 500) == 5
+                  && icom::edgeIndexFor(mk2Tbw->highEdgesHz, 2500) == 0,
+              "edge indices are what goes in the packed BCD nibbles");
+
+        // AN UNREAD MODEL GETS NOTHING, so setTxFilter() declines rather than
+        // writing a passband into whatever SET item happens to share the number.
+        check(!icom::txBandwidthProfileFor(*icom::modelForCivAddress(0xA2)),
+              "the IC-9700 has no TBW profile and must not borrow one");
+        check(!icom::txBandwidthProfileFor(icom::unknownModel()),
+              "and neither does an unrecognised radio");
+    }
     check(AetherSDR::icom::modelForCivAddress(0xA4)->hasWifi,
           "the IC-705 does — the one model the WLAN check is legitimate for");
 
@@ -214,7 +264,92 @@ int main(int argc, char** argv)
             const icom::IcomModel* byName = icom::modelForName(m.name);
             check(byName != nullptr && byName->civAddress == m.civAddress,
                   "and its own name resolves back to it");
+
+            // ---- the declared band set (#5041) ---------------------------
+            //
+            // Two invariants, because a band declaration is the ONE row field
+            // that renders straight into a button the operator presses.
+            //
+            // (1) EVERY token survives parseDeclaredBands(). That function
+            //     silently drops anything outside BandDefs, which is the right
+            //     boundary behaviour for a hostile gateway and exactly the
+            //     wrong failure for a typo in this table: the band simply has
+            //     no button and nothing anywhere says why. Comparing the
+            //     surviving count against the tokens written turns that silence
+            //     into a red test.
+            //
+            // (2) Every declared band lies INSIDE this row's own tuning range.
+            //     The range already disables unreachable band buttons, so a
+            //     declaration reaching past it renders a button that is drawn
+            //     and then greyed out — the row contradicting itself, in the
+            //     UI. Containment keeps the two statements one statement.
+            const QString raw = QString::fromUtf8(
+                m.bands.data(), static_cast<int>(m.bands.size()));
+            const QStringList declared = parseDeclaredBands(raw);
+            const int tokens = raw.split(',', Qt::SkipEmptyParts).size();
+            check(declared.size() == tokens,
+                  "every declared band name is a real BandDefs band - a token "
+                  "dropped here is a band button that silently never appears");
+            for (const QString& name : declared) {
+                for (const auto& def : kBands) {
+                    if (name != QLatin1String(def.name))
+                        continue;
+                    check(def.lowMhz * 1e6 >= static_cast<double>(m.tuningMinHz)
+                              && def.highMhz * 1e6
+                                     <= static_cast<double>(m.tuningMaxHz),
+                          "and lies inside the tuning range the same row "
+                          "declares");
+                    break;
+                }
+            }
         }
+    }
+
+    // ---- the bands an IC-705 actually gets --------------------------------
+    //
+    // The reported bug: an IC-705 reaches 2 m and 70 cm natively, and had no
+    // band button for either, because the band menu falls back to FlexLib's
+    // ModelCapabilities table when nothing is declared and no Flex covers UHF.
+    // These pin the declaration that closes it — the whole chain from this row
+    // to a rendered button is table -> parseDeclaredBands -> band grid.
+    {
+        const icom::IcomModel* ic705 = icom::modelForName("IC-705");
+        check(ic705 != nullptr, "the IC-705 is in the table");
+        const QStringList bands = parseDeclaredBands(
+            QString::fromUtf8(ic705->bands.data(),
+                              static_cast<int>(ic705->bands.size())));
+        check(bands.contains(QStringLiteral("2m")),
+              "the IC-705 declares 2m, so the band menu offers it");
+        check(bands.contains(QStringLiteral("440")),
+              "and 440 - the band that had no entry in the built-in grid at all");
+        check(bands.contains(QStringLiteral("20m")) && bands.contains(QStringLiteral("6m")),
+              "and still every HF band plus 6m, which the declaration REPLACES "
+              "the built-in grid with rather than adding to");
+        check(!bands.contains(QStringLiteral("2200m"))
+                  && !bands.contains(QStringLiteral("630m")),
+              "but not the LF/MF utility rows, which are not declarable");
+
+        // The tri-bander, whose HF grid was entirely unpressable before.
+        const icom::IcomModel* ic9700 = icom::modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 is in the table");
+        check(parseDeclaredBands(
+                  QString::fromUtf8(ic9700->bands.data(),
+                                    static_cast<int>(ic9700->bands.size())))
+                  == QStringList({QStringLiteral("2m"), QStringLiteral("440"),
+                                  QStringLiteral("23cm")}),
+              "the IC-9700 declares exactly its three bands");
+
+        // AND THE HF-ONLY ROWS DECLARE NOTHING. Empty is a decision here, not
+        // an omission: it keeps the built-in HF grid, which is already right for
+        // them. A declaration added to one of these would REPLACE that grid, so
+        // this is the guard against a well-meant edit doing it by halves.
+        for (std::uint8_t addr : {0x98, 0x8E, 0x94, 0xB6}) {   // 7610, 785x, 7300, 7300MK2
+            const icom::IcomModel* m = icom::modelForCivAddress(addr);
+            check(m != nullptr && m->bands.empty(),
+                  "an HF-only row declares no bands and keeps the built-in grid");
+        }
+        check(icom::unknownModel().bands.empty(),
+              "and an unidentified radio declares nothing at all");
     }
 
     // ---- hasNetwork is what the Connect-by-IP chooser filters on ----------

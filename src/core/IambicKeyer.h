@@ -32,8 +32,15 @@ namespace AetherSDR {
 // Output
 // ──────
 // Two callbacks set at construction:
-//   - onKeyDownChange(bool down) — flips the sidetone gate.  Called
-//     directly from the worker thread; the receiver MUST be lock-free
+//   - onKeyDownChange(bool down, when) — flips the sidetone gate.
+//     `when` is the edge's SCHEDULED instant on the element grid, not
+//     the emission wall-clock: the callback itself runs when the worker
+//     wakes (0–5 ms past the deadline on macOS, #4890), but the grid
+//     deadline is exact and known before the edge fires, so consumers
+//     that place the edge in time (sidetone sample mapping, trace log,
+//     radio timestamps) use `when` and turn wake latency from rhythm
+//     error into plain latency.  Called directly from the worker
+//     thread; the receiver MUST be lock-free
 //     (e.g. CwSidetoneGenerator::setKeyDown which is std::atomic).
 //   - onPaddleEvent(bool dit, bool dah) — reports raw paddle transitions for
 //     diagnostics and any backend-specific observer. Timed RF key edges come
@@ -45,7 +52,8 @@ public:
         IambicB = 1,   // squeeze: like A, plus one extra element if released during second-to-last element
     };
 
-    using KeyDownCallback    = std::function<void(bool down)>;
+    using KeyDownCallback    = std::function<void(bool down,
+                                   std::chrono::steady_clock::time_point when)>;
     using PaddleEventCallback = std::function<void(bool dit, bool dah)>;
 
     IambicKeyer();
@@ -92,7 +100,7 @@ private:
     void workerLoop();
     std::chrono::nanoseconds unitNs() const noexcept;  // 1.2e9 ns / WPM, clamped
     Element nextElementChoice(bool ditWanted, bool dahWanted, Element justSent) const noexcept;
-    void emitKeyDown(bool down);
+    void emitKeyDown(bool down, std::chrono::steady_clock::time_point when);
     void emitPaddleEvent(bool dit, bool dah);
 
     std::thread             m_thread;

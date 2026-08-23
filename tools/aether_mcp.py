@@ -25,9 +25,12 @@ AETHER_AUTOMATION_ALLOW_TX — that gate lives in the app, not here, so
 no MCP client can key a live radio by accident.
 
 Auth: if the operator set an access token in Radio Setup → Network, the
-bridge rejects every verb (except ping) without a matching token. Put
-that token in AETHER_MCP_TOKEN and this server attaches it to every
-request. Without the right token the app cannot be driven — that's what
+bridge rejects every verb (except ping) without a matching token. This
+process inherits AETHER_MCP_TOKEN from the environment that launched your
+assistant. Set it only for the current session using a secret-safe input
+method; do not put the literal token in a shell profile or command history.
+Nothing here reads an "env" block from an MCP config file, so no file needs
+to carry it. Without the right token the app cannot be driven — that's what
 stops a random local agent from touching the radio.
 
 Env:
@@ -732,7 +735,8 @@ TOOLS = [
             "Raw escape hatch for the verbs without a dedicated tool — "
             "send any JSON request object ({\"cmd\": ...}) straight to "
             "the bridge and get the raw response. Reaches: the low-level "
-            "widget verbs (hover, tooltip, hitTest, clickAt, rightClick, "
+            "widget verbs (hover, tooltip, hitTest, clickAt, doubleClick, "
+            "doubleClickAt, rightClick, "
             "contextMenu, close, scrollTo, drag, showMenu), the "
             "transmit-keying verbs (key, txtest, atu, cwx, testtone, "
             "txwaterfall — gated by AETHER_AUTOMATION_ALLOW_TX), and the "
@@ -998,8 +1002,11 @@ def handle_tool(name, args):
                 status["hint"] = ("This bridge requires a token, but "
                                   "AETHER_MCP_TOKEN is not set for this server. "
                                   "Copy the token from Radio Setup → Network → "
-                                  "Access Token and set it in this MCP server's "
-                                  "env config.")
+                                  "Access Token, then set AETHER_MCP_TOKEN only for "
+                                  "the current shell session using secret-safe input "
+                                  "that does not record it in history. Do not put the "
+                                  "literal token in a shell profile or MCP config; "
+                                  "this process inherits the session environment.")
             if status.get("bridge_read_only"):
                 status["read_only_note"] = (
                     "This bridge is observe-only. Read verbs work; every "

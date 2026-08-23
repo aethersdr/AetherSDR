@@ -2559,7 +2559,7 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
         QStringLiteral("grab"),     QStringLiteral("get"),
         QStringLiteral("floors"),   QStringLiteral("hitTest"),
         // Reads backend telemetry; keys nothing and sets nothing.
-        QStringLiteral("health"),
+        QStringLiteral("health"),   QStringLiteral("devices"),
     };
     if (kSafe.contains(name)) {
         return true;
@@ -2901,6 +2901,32 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doHitTest(a.target, a.value);
             });
 
+        add("doubleClick", {QStringLiteral("doubleclick"), QStringLiteral("dblClick")},
+            "doubleClick <target> [x y] — double-click a widget (centre by default)",
+            parseTargetXY,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doDoubleClick(a.target, a.value);
+            });
+
+        add("doubleClickAt", {QStringLiteral("doubleclickat"), QStringLiteral("dblClickAt")},
+            "doubleClickAt <x> <y> | doubleClickAt <target> <x> <y> — coordinate double-click",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                // Same overload rule as clickAt: a numeric first token means
+                // the global form, anything else names a target.
+                bool firstIsNumber = false;
+                vtok(p, 1).toInt(&firstIsNumber);
+                if (firstIsNumber) {
+                    a.value = vtok(p, 1) + QLatin1Char(' ') + vtok(p, 2);
+                } else {
+                    a.target = vtok(p, 1);
+                    a.value = vtok(p, 2) + QLatin1Char(' ') + vtok(p, 3);
+                }
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doClickAt(a.target, a.value, ClickKind::Double);
+            });
+
         add("clickAt", {QStringLiteral("clickat")},
             "clickAt <x> <y> | clickAt <target> <x> <y> — TX-guarded coordinate click",
             [](const QList<QByteArray>& p, A& a) -> QJsonObject {
@@ -3106,7 +3132,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
 
         add("workspace", {},
             "workspace <status|enable|disable|edit|place|list|switch|create|"
-            "bind|import-floats|palette|window|move|add> — the canvas, its "
+            "bind|import-floats|pan-layout|palette|window|move|add> — the canvas, its "
             "workspaces and its extra windows as data; arg shapes in "
             "docs/automation-bridge.md (#4887 ph4/ph6/ph7)",
             parseActionRest,
@@ -3114,7 +3140,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 Q_UNUSED(s);
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "workspace requires an action (status|enable|disable|place)"));
+                        "workspace requires an action (status|enable|disable|place|pan-layout)"));
                 QWidget* mw = primaryTopLevelWindow();
                 if (!mw)
                     return err(QStringLiteral("no main window"));
@@ -3211,6 +3237,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doStreams(a.action);
+            });
+
+        add("devices", {},
+            "devices <list|ulanzi|ulanzi-start|ulanzi-stop> — external-device diagnostics and lifecycle control",
+            parseActionOnly,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doDeviceDiagnostics(a.action);
             });
 
         add("modem", {"aethermodem"},
@@ -3517,21 +3550,43 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                 }
             }
         }
-        // clickAt accepts numeric x/y fields directly (dumpTree geometry is
-        // global), folded into `value` as "x y" so both request forms share one
-        // code path. Explicit `value` still wins if supplied. Fold ONLY when
-        // both fields are present and JSON-numeric: toInt() coerces a missing
-        // field or a string-typed number to 0, which would turn a malformed
-        // request into a real click at the screen edge (or (0,0)) instead of
-        // an error — leave value empty so doClickAt rejects it. Match both
-        // alias spellings, like the registry does.
-        if ((cmd == QLatin1String("clickAt") || cmd == QLatin1String("clickat"))
-            && a.value.isEmpty()
-            && obj.value(QStringLiteral("x")).isDouble()
-            && obj.value(QStringLiteral("y")).isDouble()) {
-            a.value = QString::number(obj.value(QStringLiteral("x")).toInt())
-                      + QLatin1Char(' ')
-                      + QString::number(obj.value(QStringLiteral("y")).toInt());
+        // The coordinate-bearing click verbs accept numeric x/y fields
+        // directly (dumpTree geometry is global), folded into `value` as "x y"
+        // so both request forms share one code path. Explicit `value` still
+        // wins if supplied. Once either coordinate key is present, require both
+        // fields to be JSON-numeric: toInt() coerces a missing field or a
+        // string-typed number to 0, which would turn malformed input into a
+        // real click. This must be rejected here because doubleClick treats no
+        // coordinates as an intentional request for the widget centre.
+        //
+        // Resolve the CANONICAL verb through the registry rather than matching
+        // the request string (#5069 review). Spelling out `clickAt || clickat`
+        // duplicated the alias table, and it silently excluded every verb added
+        // afterwards: `doubleClickAt` was rejected with "clickAt needs both x
+        // and y", its `doubleclickat` / `dblClickAt` aliases with it, and
+        // `doubleClick` ignored the fields and clicked the widget centre. MCP's
+        // `bridge_command` forwards this JSON unchanged, so for those verbs that
+        // was the entire coordinate surface.
+        const VerbSpec* coordinateSpec = findVerb(cmd);
+        const bool coordinateVerb =
+            coordinateSpec
+            && (coordinateSpec->name == QLatin1String("clickAt")
+                || coordinateSpec->name == QLatin1String("doubleClickAt")
+                || coordinateSpec->name == QLatin1String("doubleClick"));
+        if (coordinateVerb && a.value.isEmpty()) {
+            const bool hasX = obj.contains(QStringLiteral("x"));
+            const bool hasY = obj.contains(QStringLiteral("y"));
+            if (hasX || hasY) {
+                const QJsonValue x = obj.value(QStringLiteral("x"));
+                const QJsonValue y = obj.value(QStringLiteral("y"));
+                if (!x.isDouble() || !y.isDouble()) {
+                    return err(QStringLiteral("%1 JSON coordinates require numeric x and y")
+                                   .arg(coordinateSpec->name));
+                }
+                a.value = QString::number(x.toInt())
+                          + QLatin1Char(' ')
+                          + QString::number(y.toInt());
+            }
         }
     } else {
         // Bare line: positional tokens, parsed by the verb's registry entry
@@ -4319,8 +4374,6 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             {QStringLiteral("gainMethod"), nr2.gainMethod},
             {QStringLiteral("npeMethod"), nr2.npeMethod},
             {QStringLiteral("aeFilter"), nr2.aeFilter},
-            {QStringLiteral("legacyGeometryAndGainMapping"),
-                nr2.legacyGeometryAndGainMapping},
         };
         tuning[QStringLiteral("nr4")] = QJsonObject{
             {QStringLiteral("reductionDb"),  s.value("NR4ReductionAmount", "100").toFloat()},
@@ -7857,8 +7910,12 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
 
     if (a == QLatin1String("speed") || a == QLatin1String("wpm")) {
         bool ok = false; const int wpm = arg.trimmed().toInt(&ok);
-        if (!ok || wpm < 5 || wpm > 100)
-            return err(QStringLiteral("cwx speed requires wpm in 5..100"));
+        if (!ok || wpm < m_radioModel->cwTextMinWpm()
+            || wpm > m_radioModel->cwTextMaxWpm()) {
+            return err(QStringLiteral("cwx speed requires wpm in %1..%2")
+                           .arg(m_radioModel->cwTextMinWpm())
+                           .arg(m_radioModel->cwTextMaxWpm()));
+        }
         cwx.setSpeed(wpm);
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("speed")},
                            {QStringLiteral("wpm"), wpm}};
@@ -7871,11 +7928,17 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
     }
     if (a == QLatin1String("send")) {
         const QString text = arg.trimmed();
-        if (text.isEmpty())
+        if (text.isEmpty()) {
             return err(QStringLiteral("cwx send requires text"));
-        if (!m_txAllowed)
+        }
+        const QString rejection = m_radioModel->cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            return err(QStringLiteral("cwx send rejected: ") + rejection);
+        }
+        if (!m_txAllowed) {
             return err(QStringLiteral("blocked: cwx send keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        }
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog
         m_txBridgeInitiated = true;   // cwx keys the transmitter — the watchdog must police it
         cwx.send(text);
@@ -9201,6 +9264,30 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
 // panadapter menu is position-sensitive and lives behind a real right-button
 // press, so QContextMenuEvent does not reach it. Post a right-button press onto
 // the GUI loop and leave the menu's nested event loop to dumpTree/invoke.
+QJsonObject AutomationServer::doDoubleClick(const QString& target,
+                                           const QString& value)
+{
+    if (target.isEmpty())
+        return err(QStringLiteral("doubleClick requires a target widget"));
+
+    // Coordinates are optional here (unlike clickAt, whose contract requires
+    // them): a double-click is aimed at a control, and its centre is the
+    // point a person would hit. Resolve it so the shared clickAt path still
+    // receives explicit coordinates and applies every guard it normally does.
+    QString coords = value.trimmed();
+    if (coords.isEmpty()) {
+        QWidget* w = resolveWidget(target);
+        if (!w)
+            return err(QStringLiteral("widget not found: ") + target);
+        if (!w->isVisible())
+            return err(QStringLiteral("refused: '") + target
+                       + QStringLiteral("' is not visible"));
+        const QPoint c = w->rect().center();
+        coords = QString::number(c.x()) + QLatin1Char(' ') + QString::number(c.y());
+    }
+    return doClickAt(target, coords, ClickKind::Double);
+}
+
 QJsonObject AutomationServer::doRightClick(const QString& target,
                                            const QString& value) const
 {
@@ -9289,7 +9376,8 @@ QJsonObject AutomationServer::doHitTest(const QString& target,
 // menu/dialog the click raises runs on a normal stack, mirroring the invoke()
 // re-entrancy fix.
 QJsonObject AutomationServer::doClickAt(const QString& target,
-                                        const QString& value)
+                                        const QString& value,
+                                        ClickKind kind)
 {
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (parts.size() < 2)
@@ -9403,7 +9491,8 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     if (transmitControl) {
         markTxBridgeInitiated();
     }
-    QTimer::singleShot(0, qApp, [wp, win, local, global]() {
+    const bool wantDouble = (kind == ClickKind::Double);
+    QTimer::singleShot(0, qApp, [wp, win, local, global, wantDouble]() {
         if (!wp)
             return;
         raiseWindowForPopup(win);  // valid active window for any popup it raises
@@ -9417,6 +9506,21 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
         QMouseEvent release(QEvent::MouseButtonRelease, lf, lf, gf,
                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QCoreApplication::sendEvent(wp, &release);
+        if (!wantDouble || !wp)
+            return;
+        // The second half of a real double-click. Qt's own sequence is
+        // Press, Release, DblClick, Release — the window system sends the
+        // DblClick INSTEAD of a second Press, and a widget that overrides
+        // mouseDoubleClickEvent only ever sees that type. Sending another
+        // Press here would drive the single-click path twice instead.
+        QMouseEvent dbl(QEvent::MouseButtonDblClick, lf, lf, gf,
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &dbl);
+        if (!wp)
+            return;
+        QMouseEvent release2(QEvent::MouseButtonRelease, lf, lf, gf,
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &release2);
     });
 
     return QJsonObject{
@@ -11145,6 +11249,33 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("readOnly"), m_readOnly},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };
+}
+
+QJsonObject AutomationServer::doDeviceDiagnostics(const QString& action) const
+{
+    const QString normalized = action.trimmed().toLower();
+    if (normalized.isEmpty() || normalized == QLatin1String("list")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("diagnostics"),
+             QJsonArray{QStringLiteral("ulanzi")}},
+            {QStringLiteral("providerAvailable"),
+             static_cast<bool>(m_deviceDiagnosticsHandler)},
+        };
+    }
+    const bool lifecycle = normalized == QLatin1String("ulanzi-start")
+        || normalized == QLatin1String("ulanzi-stop");
+    if (normalized != QLatin1String("ulanzi") && !lifecycle) {
+        return err(QStringLiteral(
+            "devices requires list|ulanzi|ulanzi-start|ulanzi-stop"));
+    }
+    if (!m_deviceDiagnosticsHandler) {
+        return err(QStringLiteral("Ulanzi device diagnostics unavailable"));
+    }
+    if (lifecycle && m_readOnly) {
+        return err(QStringLiteral("device lifecycle control is unavailable in read-only mode"));
+    }
+    return m_deviceDiagnosticsHandler(normalized);
 }
 
 // ---------------------------------------------------------------------------

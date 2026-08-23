@@ -55,9 +55,29 @@ public:
 
     // Profile management (~/.config/AetherSDR/midi/<name>.xml)
     QStringList availableProfiles() const;
-    void saveProfile(const QString& name, const QVector<MidiBinding>& bindings);
+    // Returns false when the name is refused or the file could not be
+    // written, so a caller can report the outcome instead of assuming it. (#5077)
+    bool saveProfile(const QString& name, const QVector<MidiBinding>& bindings);
     QVector<MidiBinding> loadProfile(const QString& name) const;
     void deleteProfile(const QString& name);
+
+    // A profile name is a name, not a path: the store concatenates it into
+    // profileDir(), so all three operations above refuse a name this predicate
+    // rejects (separators, a leading dot — hidden-file semantics that would
+    // drop the file from the listing — and empty). Public so the GUI can
+    // validate against the same rule it will be held to.
+    static bool isValidProfileName(const QString& name);
+
+    // Where the named profiles live. Public so the GUI can name the location
+    // in a failed-write message. (#5077)
+    static QString profileDir();
+
+    // Whether a profile of this name is already on disk — answered by the
+    // filesystem, not by a string compare, so it agrees with what saveProfile()
+    // is about to do on every platform (case-insensitive APFS/NTFS overwrite
+    // "foo" when asked for "Foo"; case-sensitive ext4 creates a second file).
+    // Refused names are never "existing". (#5077)
+    static bool profileExists(const QString& name);
 
     // Import a profile file into the store. Accepts the native <MidiProfile>
     // XML or a SmartSDR iOS/Mac ".map" (auto-detected by content). The store
@@ -77,11 +97,10 @@ public:
 private:
     MidiSettings() = default;
     QString settingsFilePath() const;
-    QString profileDir() const;
 
     static QVector<MidiBinding> parseBindingsFromXml(const QString& filePath);
-    static void writeBindingsToXml(const QString& filePath,
-                                    const QVector<MidiBinding>& bindings);
+    static bool writeBindingsToXml(const QString& filePath,
+                                   const QVector<MidiBinding>& bindings);
 
     QString m_lastDevice;
     bool    m_autoConnect{true};

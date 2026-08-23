@@ -9,6 +9,10 @@
 
 #include <iostream>
 
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
+
 using namespace AetherSDR;
 
 namespace {
@@ -155,7 +159,7 @@ int main(int argc, char** argv)
     const auto r1 = settings.importProfile(mapPath, validator);
     ok &= expect(r1.ok(), "map import succeeds");
     ok &= expect(r1.importedCount == 6, "map import count (freq, cwspeed, paddles, nr, ptt)");
-    ok &= expect(r1.profileName == "CTR2-Test_v1_0", "map import names profile from file name");
+    ok &= expect(r1.profileName == "CTR2-Test_v1.0", "map import names profile from file name");
     ok &= expect(r1.skippedUnknownParam.contains("bwset")
                      && r1.skippedUnknownParam.contains("openft8"),
                  "unknown map functions are skipped by name");
@@ -177,7 +181,7 @@ int main(int argc, char** argv)
     }
 
     const auto r2 = settings.importProfile(mapPath, validator);
-    ok &= expect(r2.ok() && r2.profileName == "CTR2-Test_v1_0 (2)",
+    ok &= expect(r2.ok() && r2.profileName == "CTR2-Test_v1.0 (2)",
                  "a name collision gets a suffix, never an overwrite");
 
     // Sections we never bind from carry the vendor's own key dialect. Judging
@@ -262,11 +266,11 @@ int main(int argc, char** argv)
     {
         // Native XML round trip: the profile the map import just stored.
         const auto r4 = settings.importProfile(
-            configRoot + "/AetherSDR/midi/CTR2-Test_v1_0.xml", validator);
+            configRoot + "/AetherSDR/midi/CTR2-Test_v1.0.xml", validator);
         ok &= expect(r4.ok() && r4.importedCount == 6, "native XML profile re-imports");
-        ok &= expect(r4.profileName == "CTR2-Test_v1_0 (3)", "XML re-import takes the next suffix");
+        ok &= expect(r4.profileName == "CTR2-Test_v1.0 (3)", "XML re-import takes the next suffix");
         const auto again = settings.loadProfile(r4.profileName);
-        const auto first = settings.loadProfile("CTR2-Test_v1_0");
+        const auto first = settings.loadProfile("CTR2-Test_v1.0");
         bool same = again.size() == first.size();
         for (int i = 0; same && i < again.size(); ++i)
             same = sameBinding(again[i], first[i]);
@@ -419,14 +423,14 @@ int main(int argc, char** argv)
 
     // Export → Import round trip through the user-facing export path.
     const auto exported = settings.exportProfile(
-        fakeHome.path() + "/exported.xml", settings.loadProfile("CTR2-Test_v1_0"));
+        fakeHome.path() + "/exported.xml", settings.loadProfile("CTR2-Test_v1.0"));
     ok &= expect(exported.ok() && exported.exportedCount == 6,
                  "export writes the current profile");
     const auto r8 = settings.importProfile(fakeHome.path() + "/exported.xml", validator);
     ok &= expect(r8.ok() && r8.importedCount == 6, "exported file re-imports cleanly");
     const auto exportFail = settings.exportProfile(
         fakeHome.path() + "/no-such-dir/out.xml",
-        settings.loadProfile("CTR2-Test_v1_0"));
+        settings.loadProfile("CTR2-Test_v1.0"));
     ok &= expect(!exportFail.ok(), "export to an unwritable path reports an error");
 
     // An empty set must not report success: it serializes to a childless
@@ -661,6 +665,169 @@ int main(int argc, char** argv)
     ok &= expect(rPitch.skippedBadType.size() == 1
                      && rPitch.skippedBadType.first().contains("number"),
                  "XML: the out-of-range Pitch Bend row is named");
+
+    // ── Profile store: dotted names list + round-trip (#4974) ───────────────
+
+    settings.saveProfile("CTR2 v1.0", saved);
+    ok &= expect(settings.availableProfiles().contains("CTR2 v1.0"),
+                 "profile store: dotted name lists untruncated");
+    ok &= expect(settings.loadProfile("CTR2 v1.0").size() == saved.size(),
+                 "profile store: dotted name loads what was saved");
+    settings.deleteProfile("CTR2 v1.0");
+    ok &= expect(!settings.availableProfiles().contains("CTR2 v1.0"),
+                 "profile store: dotted name deletes its own file");
+
+    // ── Profile store: names are names, not paths (#4975) ───────────────────
+
+    ok &= expect(MidiSettings::isValidProfileName("CTR2 v1.0"),
+                 "name guard: ordinary dotted name accepted");
+    ok &= expect(MidiSettings::isValidProfileName("Tenerife contest ÉÑ"),
+                 "name guard: non-ASCII name accepted");
+    ok &= expect(!MidiSettings::isValidProfileName("a/b"),
+                 "name guard: forward separator rejected");
+    ok &= expect(!MidiSettings::isValidProfileName("a\\b"),
+                 "name guard: backslash separator rejected");
+    ok &= expect(!MidiSettings::isValidProfileName("."),
+                 "name guard: '.' rejected");
+    ok &= expect(!MidiSettings::isValidProfileName(".."),
+                 "name guard: '..' rejected");
+    ok &= expect(!MidiSettings::isValidProfileName(".hidden"),
+                 "name guard: leading-dot (hidden-file) name rejected");
+    ok &= expect(!MidiSettings::isValidProfileName("   "),
+                 "name guard: whitespace-only rejected");
+
+    // The guards hold at the filesystem, not only in the predicate.
+    const QString appConfigDir = configRoot + "/AetherSDR";
+    settings.saveProfile("../escape", saved);
+    ok &= expect(!QFile::exists(appConfigDir + "/escape.xml"),
+                 "profile store: save with ../ writes nothing outside the store");
+    settings.saveProfile("a/b", saved);
+    ok &= expect(!QDir(appConfigDir + "/midi/a").exists(),
+                 "profile store: save with a separator creates no directory chain");
+    // A leading dot is the Unix hidden-file convention: the listing's
+    // QDir::Files scan omits ".hidden.xml", so an accepted save would
+    // succeed and then vanish from availableProfiles() (#5083 review).
+    // The guard refuses the name before a file exists to hide.
+    settings.saveProfile(".hidden", saved);
+    ok &= expect(!QFile::exists(appConfigDir + "/midi/.hidden.xml"),
+                 "profile store: leading-dot name writes no hidden file");
+    ok &= expect(settings.loadProfile(".hidden").isEmpty(),
+                 "profile store: leading-dot name loads nothing");
+
+    {
+        QFile planted(appConfigDir + "/planted.xml");
+        if (planted.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            planted.write("<MidiProfile version=\"1\">"
+                          "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\""
+                          " number=\"7\" inverted=\"False\"/></MidiProfile>\n");
+            planted.close();
+        }
+    }
+    ok &= expect(settings.loadProfile("../planted").isEmpty(),
+                 "profile store: load with ../ reads nothing outside the store");
+    settings.deleteProfile("../planted");
+    ok &= expect(QFile::exists(appConfigDir + "/planted.xml"),
+                 "profile store: delete with ../ removes nothing outside the store");
+    QFile::remove(appConfigDir + "/planted.xml");
+
+    // A legacy file whose name the guard refuses (backslash is a legal Unix
+    // filename character, and the pre-guard GUI could create it) must not
+    // list: the list may only hand out names load/delete will serve. The
+    // file itself stays on disk.
+#ifndef Q_OS_WIN
+    {
+        QFile legacy(appConfigDir + "/midi/back\\slash.xml");
+        QDir().mkpath(appConfigDir + "/midi");
+        if (legacy.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            legacy.write("<MidiProfile version=\"1\">"
+                         "<Binding param=\"rx.afGain\" channel=\"0\" type=\"0\""
+                         " number=\"7\" inverted=\"False\"/></MidiProfile>\n");
+            legacy.close();
+        }
+    }
+    ok &= expect(!settings.availableProfiles().contains("back\\slash"),
+                 "profile store: a legacy separator-named file does not list");
+    ok &= expect(QFile::exists(appConfigDir + "/midi/back\\slash.xml"),
+                 "profile store: the unlisted legacy file stays on disk");
+    QFile::remove(appConfigDir + "/midi/back\\slash.xml");
+#endif
+
+    // An import whose file name derives a refused store name ("...map" ->
+    // "..") falls back to the default name instead of surfacing a
+    // misleading write error.
+    const auto rDotsName = settings.importProfile(
+        writeImportFile("...map", mapContent), validator);
+    ok &= expect(rDotsName.ok()
+                     && rDotsName.profileName.startsWith("Imported profile"),
+                 "import: a refused derived name falls back to the default");
+
+    // ── Profile store: the write reports its outcome (#5077) ────────────────
+
+    ok &= expect(settings.saveProfile("Outcome", saved),
+                 "profile store: a successful save returns true");
+    ok &= expect(settings.saveProfile("Outcome", saved),
+                 "profile store: overwriting an existing profile returns true");
+    ok &= expect(!settings.saveProfile("a/b", saved),
+                 "profile store: a refused name returns false");
+    // Existence is the filesystem's answer: on a case-insensitive volume
+    // "outcome" names the same file as "Outcome", on a case-sensitive one it
+    // does not — either way it must agree with the path the store writes.
+    ok &= expect(MidiSettings::profileExists("Outcome"),
+                 "profile store: a saved profile exists");
+    // Compared against what the store itself hands back for that spelling:
+    // on a case-insensitive volume "outcome" loads "Outcome", on a
+    // case-sensitive one it loads nothing — existence must agree either way.
+    ok &= expect(MidiSettings::profileExists("outcome")
+                     == !settings.loadProfile("outcome").isEmpty(),
+                 "profile store: existence check agrees with loadProfile on case");
+    ok &= expect(!MidiSettings::profileExists("a/b"),
+                 "profile store: a refused name never exists");
+    // An empty set is refused (as exportProfile refuses it) and, refused,
+    // leaves the existing profile untouched — Clear All → Save must not
+    // replace a profile with nothing.
+    ok &= expect(!settings.saveProfile("Outcome", QVector<MidiBinding>{}),
+                 "profile store: saving an empty binding set returns false");
+    ok &= expect(settings.loadProfile("Outcome").size() == saved.size(),
+                 "profile store: the refused empty save left the profile intact");
+    settings.deleteProfile("Outcome");
+    ok &= expect(!MidiSettings::profileExists("Outcome"),
+                 "profile store: a deleted profile no longer exists");
+    // Block the store directory with a plain file so mkpath and open both
+    // fail: the failure must reach the caller instead of being swallowed.
+    QDir(appConfigDir + "/midi").removeRecursively();
+    {
+        QFile blocker(appConfigDir + "/midi");
+        if (blocker.open(QIODevice::WriteOnly)) {
+            blocker.write("not a directory");
+            blocker.close();
+        }
+    }
+    ok &= expect(!settings.saveProfile("Blocked", saved),
+                 "profile store: an unwritable store returns false");
+    QFile::remove(appConfigDir + "/midi");
+    // A failed overwrite leaves the previous profile intact: write one, make
+    // the store read-only, try to overwrite it, and read the original back.
+#ifndef Q_OS_WIN
+    // Directory permissions do not bind root (CI containers may run as root)
+    // and are not honoured the same way on Windows, so this arm is POSIX
+    // non-root only; the bool contract itself is covered above on every OS.
+    if (::geteuid() != 0) {
+    ok &= expect(settings.saveProfile("Keep", saved), "profile store: original written");
+    QFile::setPermissions(appConfigDir + "/midi",
+                          QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    QVector<MidiBinding> bigger = saved;
+    bigger.append(saved.first());
+    const bool overwriteFailed = !settings.saveProfile("Keep", bigger);
+    QFile::setPermissions(appConfigDir + "/midi",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    ok &= expect(overwriteFailed, "profile store: overwrite into a read-only store returns false");
+    ok &= expect(settings.loadProfile("Keep").size() == saved.size(),
+                 "profile store: the failed overwrite left the original profile intact");
+    settings.deleteProfile("Keep");
+    } else {
+        std::cout << "[SKIP] profile store: read-only store arm (running as root)\n";
+    }
+#endif
 
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();
