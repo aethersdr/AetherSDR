@@ -84,6 +84,7 @@ private:
     QLabel*             m_dxLabel{nullptr};
     QLabel*             m_connLabel{nullptr};
     QCheckBox*          m_pathsCheck{nullptr};
+    QCheckBox*          m_globeCheck{nullptr};
     QCheckBox*          m_allCallsignsCheck{nullptr};
     QCheckBox*          m_activeMonitorsCheck{nullptr};
     QCheckBox*          m_terminatorCheck{nullptr};

@@ -94,9 +94,7 @@ private:
                     const QMatrix4x4& viewProjection);
     void paintMarkers(QPainter& painter, const QMatrix4x4& model,
                       const QMatrix4x4& viewProjection);
-    void paintPathForMarker(QPainter& painter, const Marker& marker,
-                            const QMatrix4x4& model,
-                            const QMatrix4x4& viewProjection);
+    void paintVectorOverlay(QPainter& painter);
     bool projectPoint(const QVector3D& point, const QMatrix4x4& model,
                       const QMatrix4x4& viewProjection,
                       QPointF* screenPoint) const;
@@ -119,11 +117,11 @@ private:
     QVector<QPair<int, int>> m_pendingTiles;
     int m_activeTileRequests{0};
     QTimer m_atlasUploadTimer;
+    QTimer m_terminatorTimer;
     bool m_atlasDirty{false};
 
     QVector<Marker> m_markers;
     QVector<ProjectedMarker> m_projectedMarkers;
-    QVector<QPair<QString, QColor>> m_legendEntries;
     int m_hoverMarker{-1};
     bool m_pathsVisible{true};
     bool m_terminatorVisible{true};
@@ -136,14 +134,14 @@ private:
     bool m_homeMarkerShown{false};
 
     QQuaternion m_rotation;
-    float m_cameraDistance{3.1F};
+    float m_cameraDistance{3.8F};
     QPointF m_lastPointerPosition;
     bool m_dragging{false};
     bool m_hasMovedDuringDrag{false};
-    qreal m_nativeGestureStartDistance{0.0};
     std::unique_ptr<QVariantAnimation> m_zoomAnimation;
 
     QLabel* m_attribution{nullptr};
+    QWidget* m_vectorOverlay{nullptr};
     QLabel* m_legend{nullptr};
     QLabel* m_hoverCard{nullptr};
     QToolButton* m_zoomInButton{nullptr};
@@ -152,6 +150,9 @@ private:
     QColor m_backgroundColor;
     QColor m_nightColor;
     QColor m_textColor;
+    QMatrix4x4 m_overlayModel;
+    QMatrix4x4 m_overlayViewProjection;
+    bool m_overlayMatricesValid{false};
 };
 
 } // namespace AetherSDR

@@ -9,7 +9,7 @@
 #include <QDateTime>
 #include <QEasingCurve>
 #include <QGestureEvent>
-#include <QImageReader>
+#include <QHash>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -20,6 +20,7 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLTexture>
 #include <QPainter>
+#include <QPaintEvent>
 #include <QPainterPath>
 #include <QPinchGesture>
 #include <QResizeEvent>
@@ -30,6 +31,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -44,9 +46,33 @@ constexpr int kMaximumConcurrentTileRequests = 4;
 constexpr qint64 kMaximumTileBytes = 1024 * 1024;
 constexpr float kMinimumCameraDistance = 1.55F;
 constexpr float kMaximumCameraDistance = 6.0F;
-constexpr float kDefaultCameraDistance = 3.1F;
+constexpr float kDefaultCameraDistance = 3.8F;
 constexpr float kZoomFactor = 0.78F;
 constexpr int kGreatCircleSegments = 48;
+
+class GlobeVectorOverlay final : public QWidget {
+public:
+    GlobeVectorOverlay(std::function<void(QPainter&)> paintFunction,
+                       QWidget* parent)
+        : QWidget(parent)
+        , m_paintFunction(std::move(paintFunction))
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAutoFillBackground(false);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        m_paintFunction(painter);
+    }
+
+private:
+    std::function<void(QPainter&)> m_paintFunction;
+};
 
 QVector3D geoVector(double latitudeDegrees, double longitudeDegrees)
 {
@@ -94,6 +120,9 @@ GlobeMapView::GlobeMapView(QWidget* parent)
         m_atlasDirty = true;
         update();
     });
+    m_terminatorTimer.setInterval(60 * 1000);
+    connect(&m_terminatorTimer, &QTimer::timeout,
+            this, [this] { update(); });
 
     m_attribution = new QLabel(
         QStringLiteral("© OpenStreetMap contributors"), this);
@@ -108,6 +137,8 @@ GlobeMapView::GlobeMapView(QWidget* parent)
     m_hoverCard->setWordWrap(false);
     m_hoverCard->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_hoverCard->hide();
+    m_vectorOverlay = new GlobeVectorOverlay(
+        [this](QPainter& painter) { paintVectorOverlay(painter); }, this);
 
     m_zoomInButton = makeOverlayButton(QStringLiteral("+"), tr("Zoom in"));
     m_zoomInButton->setObjectName(QStringLiteral("globeZoomInButton"));
@@ -283,6 +314,9 @@ void GlobeMapView::paintGL()
     model.rotate(m_rotation);
     const QMatrix4x4 viewProjection = projection * view;
     const QMatrix4x4 matrix = viewProjection * model;
+    m_overlayModel = model;
+    m_overlayViewProjection = viewProjection;
+    m_overlayMatricesValid = true;
 
     m_program->bind();
     m_program->setUniformValue("matrix", matrix);
@@ -315,14 +349,16 @@ void GlobeMapView::paintGL()
     m_vertexBuffer.release();
     m_texture->release();
     m_program->release();
+    m_vectorOverlay->update();
+}
 
-    glDisable(GL_DEPTH_TEST);
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    paintPaths(painter, model, viewProjection);
-    paintMarkers(painter, model, viewProjection);
-    painter.end();
-    glEnable(GL_DEPTH_TEST);
+void GlobeMapView::paintVectorOverlay(QPainter& painter)
+{
+    if (!m_overlayMatricesValid) {
+        return;
+    }
+    paintPaths(painter, m_overlayModel, m_overlayViewProjection);
+    paintMarkers(painter, m_overlayModel, m_overlayViewProjection);
 }
 
 void GlobeMapView::uploadAtlas()
@@ -418,7 +454,11 @@ bool GlobeMapView::projectPoint(const QVector3D& point,
                                 QPointF* screenPoint) const
 {
     const QVector3D rotated = model.mapVector(point);
-    if (rotated.z() <= 0.015F) {
+    // Perspective visibility ends at the camera/sphere tangent plane, not at
+    // the geometric front hemisphere. For a unit sphere and camera at +Z,
+    // dot(normal, camera - point) > 0 reduces to z > 1 / distance.
+    // Culling there keeps far-side markers and path segments inside the limb.
+    if (rotated.z() <= 1.0F / m_cameraDistance + 0.002F) {
         return false;
     }
     const QVector4D clip = viewProjection * QVector4D(rotated, 1.0F);
@@ -441,43 +481,44 @@ void GlobeMapView::paintPaths(QPainter& painter, const QMatrix4x4& model,
         paths = MapHoverPathSelection::pathsForMarker(m_markers,
                                                        m_hoverMarker);
     }
+    QHash<QRgb, QPainterPath> pathsByColor;
     for (const Marker& marker : std::as_const(paths)) {
-        if (marker.pathEnabled) {
-            paintPathForMarker(painter, marker, model, viewProjection);
+        if (!marker.pathEnabled
+            || (!marker.hasPathOrigin && !m_hasHome)) {
+            continue;
+        }
+        const QVector3D from = marker.hasPathOrigin
+            ? geoPoint(marker.pathFromLat, marker.pathFromLon)
+            : geoPoint(m_homeLat, m_homeLon);
+        const QVector3D to = geoPoint(marker.lat, marker.lon);
+        QColor pathColor = marker.color;
+        pathColor.setAlpha(185);
+        QPainterPath& path = pathsByColor[pathColor.rgba()];
+        bool previousVisible = false;
+        for (int segment = 0; segment <= kGreatCircleSegments; ++segment) {
+            const float amount = static_cast<float>(segment)
+                / kGreatCircleSegments;
+            QPointF point;
+            const bool visible = projectPoint(
+                greatCirclePoint(from, to, amount), model, viewProjection,
+                &point);
+            if (visible) {
+                if (previousVisible) {
+                    path.lineTo(point);
+                } else {
+                    path.moveTo(point);
+                }
+            }
+            previousVisible = visible;
         }
     }
-}
-
-void GlobeMapView::paintPathForMarker(QPainter& painter, const Marker& marker,
-                                      const QMatrix4x4& model,
-                                      const QMatrix4x4& viewProjection)
-{
-    if (!marker.hasPathOrigin && !m_hasHome) {
-        return;
-    }
-    const QVector3D from = marker.hasPathOrigin
-        ? geoPoint(marker.pathFromLat, marker.pathFromLon)
-        : geoPoint(m_homeLat, m_homeLon);
-    const QVector3D to = geoPoint(marker.lat, marker.lon);
-    QColor pathColor = marker.color;
-    pathColor.setAlpha(185);
-    QPen pen(pathColor, m_pathsVisible ? 1.25 : 2.4,
-             Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-    painter.setPen(pen);
-
-    QPointF previous;
-    bool previousVisible = false;
-    for (int segment = 0; segment <= kGreatCircleSegments; ++segment) {
-        const float amount = static_cast<float>(segment)
-            / kGreatCircleSegments;
-        QPointF point;
-        const bool visible = projectPoint(
-            greatCirclePoint(from, to, amount), model, viewProjection, &point);
-        if (visible && previousVisible) {
-            painter.drawLine(previous, point);
-        }
-        previous = point;
-        previousVisible = visible;
+    for (auto iterator = pathsByColor.cbegin();
+         iterator != pathsByColor.cend(); ++iterator) {
+        painter.setPen(QPen(QColor::fromRgba(iterator.key()),
+                            m_pathsVisible ? 1.25 : 2.4,
+                            Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(iterator.value());
     }
 }
 
@@ -485,6 +526,7 @@ void GlobeMapView::paintMarkers(QPainter& painter, const QMatrix4x4& model,
                                 const QMatrix4x4& viewProjection)
 {
     m_projectedMarkers.resize(m_markers.size());
+    QHash<quint64, QPainterPath> markerBatches;
     for (int index = 0; index < m_markers.size(); ++index) {
         const Marker& marker = m_markers.at(index);
         QPointF point;
@@ -495,9 +537,26 @@ void GlobeMapView::paintMarkers(QPainter& painter, const QMatrix4x4& model,
             continue;
         }
         const qreal radius = marker.isMonitor ? 5.0 : 4.0;
+        const quint64 batchKey = static_cast<quint64>(marker.color.rgba())
+            | (static_cast<quint64>(marker.isMonitor) << 32);
+        markerBatches[batchKey].addEllipse(point, radius, radius);
+    }
+    for (auto iterator = markerBatches.cbegin();
+         iterator != markerBatches.cend(); ++iterator) {
         painter.setPen(QPen(m_backgroundColor, 1.2));
-        painter.setBrush(marker.color);
-        painter.drawEllipse(point, radius, radius);
+        painter.setBrush(QColor::fromRgba(
+            static_cast<QRgb>(iterator.key() & 0xffffffffULL)));
+        painter.drawPath(iterator.value());
+    }
+
+    for (int index = 0; index < m_markers.size(); ++index) {
+        const Marker& marker = m_markers.at(index);
+        const ProjectedMarker& projected = m_projectedMarkers.at(index);
+        if (!projected.visible) {
+            continue;
+        }
+        const QPointF point = projected.point;
+        const qreal radius = marker.isMonitor ? 5.0 : 4.0;
         if (marker.isHome) {
             painter.setBrush(Qt::NoBrush);
             painter.setPen(QPen(marker.color, 2.0));
@@ -580,17 +639,18 @@ void GlobeMapView::setPathsVisible(bool visible)
 
 void GlobeMapView::setDayNightTerminatorVisible(bool visible)
 {
-    if (m_terminatorVisible == visible) {
-        return;
-    }
     m_terminatorVisible = visible;
+    if (visible) {
+        m_terminatorTimer.start();
+    } else {
+        m_terminatorTimer.stop();
+    }
     update();
 }
 
 void GlobeMapView::setLegend(
     const QVector<QPair<QString, QColor>>& entries)
 {
-    m_legendEntries = entries;
     if (entries.isEmpty()) {
         m_legend->hide();
         return;
@@ -612,8 +672,14 @@ void GlobeMapView::setLegend(
 void GlobeMapView::resetToHome()
 {
     if (m_hasHome) {
-        const QVector3D home = geoPoint(m_homeLat, m_homeLon);
-        m_rotation = QQuaternion::rotationTo(home, { 0.0F, 0.0F, 1.0F });
+        // Apply longitude first, then latitude. Unlike rotationTo(), this
+        // constrains roll: north remains at the top and the equator starts
+        // level while the home station is centered on the visible hemisphere.
+        const QQuaternion longitude = QQuaternion::fromAxisAndAngle(
+            { 0.0F, 1.0F, 0.0F }, static_cast<float>(-m_homeLon));
+        const QQuaternion latitude = QQuaternion::fromAxisAndAngle(
+            { 1.0F, 0.0F, 0.0F }, static_cast<float>(m_homeLat));
+        m_rotation = latitude * longitude;
     } else {
         m_rotation = QQuaternion();
     }
@@ -906,6 +972,8 @@ void GlobeMapView::layoutOverlays()
 {
     constexpr int margin = 8;
     constexpr int gap = 6;
+    m_vectorOverlay->setGeometry(rect());
+    m_vectorOverlay->raise();
     int y = margin;
     for (QToolButton* button : { m_zoomInButton, m_zoomOutButton,
                                  m_homeButton }) {

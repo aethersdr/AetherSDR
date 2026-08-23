@@ -56,10 +56,22 @@ public slots:
     void zoomOut();
 
 private:
+    void ensureGlobeView();
+
     QStackedLayout* m_stack{nullptr};
     MapView* m_flatView{nullptr};
     GlobeMapView* m_globeView{nullptr};
     ProjectionMode m_projectionMode{ProjectionMode::Flat};
+    QVector<Marker> m_markers;
+    QVector<QPair<QString, QColor>> m_legendEntries;
+    double m_homeLat{0.0};
+    double m_homeLon{0.0};
+    double m_homeSpanDegrees{30.0};
+    QString m_homeLabel;
+    bool m_hasHome{false};
+    bool m_showHomeMarker{true};
+    bool m_pathsVisible{true};
+    bool m_terminatorVisible{false};
 };
 
 } // namespace AetherSDR

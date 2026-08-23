@@ -347,6 +347,15 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     topBar->addSpacing(6);
     topBar->addWidget(new QLabel(tr("Map:"), reportsBox));
 
+    m_globeCheck = new QCheckBox(tr("Globe"), reportsBox);
+    m_globeCheck->setObjectName(QStringLiteral("pskReporterGlobeToggle"));
+    m_globeCheck->setAccessibleName(tr("Show PSK Reporter as a globe"));
+    m_globeCheck->setToolTip(
+        tr("Switch between the flat world map and an interactive globe"));
+    m_globeCheck->setChecked(
+        pskSettings().value("showGlobe").toBool(false));
+    topBar->addWidget(m_globeCheck);
+
     m_pathsCheck = new QCheckBox(tr("Paths"), reportsBox);
     m_pathsCheck->setObjectName(QStringLiteral("pskReporterPaths"));
     m_pathsCheck->setToolTip(
@@ -499,6 +508,9 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_mapView = new MapDisplayWidget(bodyWidget());
     m_mapView->setObjectName(QStringLiteral("pskReporterMap"));
     m_mapView->setAccessibleName(tr("PSK Reporter map"));
+    m_mapView->setProjectionMode(m_globeCheck->isChecked()
+        ? MapDisplayWidget::ProjectionMode::Globe
+        : MapDisplayWidget::ProjectionMode::Flat);
     m_mapView->setPathsVisible(m_pathsCheck->isChecked());
     m_mapView->setDayNightTerminatorVisible(m_terminatorCheck->isChecked());
     {
@@ -515,6 +527,12 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_pathsCheck, &QCheckBox::toggled, this, [this](bool on) {
         writePskSetting("showPaths", on);
         m_mapView->setPathsVisible(on);
+    });
+    connect(m_globeCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showGlobe", on);
+        m_mapView->setProjectionMode(on
+            ? MapDisplayWidget::ProjectionMode::Globe
+            : MapDisplayWidget::ProjectionMode::Flat);
     });
     connect(m_allCallsignsCheck, &QCheckBox::toggled, this, [this](bool on) {
         writePskSetting("showAllCallsigns", on);
