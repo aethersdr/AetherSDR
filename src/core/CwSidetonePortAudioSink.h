@@ -47,6 +47,11 @@ private:
 
     PaStream*                          m_stream{nullptr};
     std::atomic<CwSidetoneGenerator*>  m_generator{nullptr};
+    // Diagnostics: callback liveness + the loudest sample rendered, so a
+    // "started but silent" report can distinguish a dead callback from a
+    // generator that renders silence. Logged by stop().
+    std::atomic<quint64>               m_cbCount{0};
+    std::atomic<quint32>               m_cbPeakMicro{0};   // |sample| * 1e6
     int                                m_actualRate{0};
     QString                            m_deviceDescription;
     bool                               m_fallbackOccurred{false};

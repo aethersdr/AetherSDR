@@ -7,6 +7,11 @@
 #if defined(Q_OS_LINUX) && __has_include(<pa_jack.h>)
 #  include <pa_jack.h>  // PaJack_SetClientName — name the PipeWire/JACK node
 #endif
+#ifdef Q_OS_WIN
+#  include <pa_win_wasapi.h>   // PaWasapi_GetIMMDevice — endpoint-identity match
+#  include <mmdeviceapi.h>
+#  include <combaseapi.h>
+#endif
 
 #include <QString>
 
@@ -15,6 +20,30 @@
 namespace AetherSDR {
 
 namespace {
+
+#ifdef Q_OS_WIN
+// The WASAPI endpoint ID string for a PortAudio device, empty when the
+// device is not WASAPI (or anything fails). Windows friendly names are NOT
+// unique — an NVIDIA HDMI card exposes several identically-named outputs,
+// one per connector, so name matching can land on a live-but-unwired port
+// that accepts a stream and plays it into nothing (#5200). The endpoint ID
+// is the identity Qt's QAudioDevice::id() carries, so comparing IDs pins
+// the exact endpoint the user selected.
+QString wasapiEndpointId(PaDeviceIndex idx)
+{
+    void* raw = nullptr;
+    if (PaWasapi_GetIMMDevice(idx, &raw) != paNoError || !raw)
+        return {};
+    auto* dev = static_cast<IMMDevice*>(raw);   // borrowed — do not Release
+    LPWSTR id = nullptr;
+    QString out;
+    if (SUCCEEDED(dev->GetId(&id)) && id) {
+        out = QString::fromWCharArray(id);
+        CoTaskMemFree(id);
+    }
+    return out;
+}
+#endif
 
 // Resolve the operator's explicit Qt output selection to a PortAudio device.
 // The name rule lives in CwSidetoneDeviceMatch.h so it is testable without
@@ -35,12 +64,39 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
         return paNoDevice;
     }
 
+#ifdef Q_OS_WIN
+    // Identity first, names second: find the WASAPI device whose endpoint ID
+    // equals the Qt device's id. Friendly names are non-unique on Windows
+    // (multi-connector HDMI), so this is the only selection that provably
+    // lands on the endpoint the user picked (#5200).
+    const QString qtId = QString::fromUtf8(device.id()).toCaseFolded();
+    if (!qtId.isEmpty()) {
+        for (PaDeviceIndex i = 0; i < count; ++i) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+            if (!info || info->maxOutputChannels <= 0)
+                continue;
+            const QString endpointId = wasapiEndpointId(i).toCaseFolded();
+            if (!endpointId.isEmpty() && endpointId == qtId) {
+                qCInfo(lcAudio) << "CwSidetonePortAudioSink: selected Qt output"
+                                << device.description()
+                                << "matched WASAPI endpoint by ID"
+                                << endpointId;
+                return i;
+            }
+        }
+        qCInfo(lcAudio) << "CwSidetonePortAudioSink: no WASAPI endpoint-ID match for"
+                        << device.description() << "id=" << qtId
+                        << "- falling back to name matching";
+    }
+#endif
+
     // Collect all partial-match candidates. On Windows a single physical
     // device appears under multiple host APIs (MME, DirectSound, WASAPI);
     // the candidate list lets us prefer WASAPI instead of giving up when
     // more than one partial match is found. (#3193)
     struct Candidate { PaDeviceIndex idx; QString rawName; PaHostApiTypeId apiType; };
     QList<Candidate> partials;
+    QList<Candidate> exacts;
 
     for (PaDeviceIndex i = 0; i < count; ++i) {
         const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
@@ -49,17 +105,45 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
 
         const QString rawName = QString::fromUtf8(info->name);
         const DeviceNameMatch kind = classifyDeviceNameMatch(rawName, device.description());
-        if (kind == DeviceNameMatch::Exact)
-            return i;
+        if (kind == DeviceNameMatch::None)
+            continue;
 
-        if (kind == DeviceNameMatch::Partial) {
-            // paInDevelopment (0) is used as a safe "unknown" sentinel when
-            // Pa_GetHostApiInfo returns null — it will never equal paWASAPI.
-            PaHostApiTypeId apiType = paInDevelopment;
-            if (const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi))
-                apiType = api->type;
+        // paInDevelopment (0) is used as a safe "unknown" sentinel when
+        // Pa_GetHostApiInfo returns null — it will never equal paWASAPI.
+        PaHostApiTypeId apiType = paInDevelopment;
+        if (const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi))
+            apiType = api->type;
+
+        // Do NOT return on the first exact match: on Windows the same
+        // endpoint enumerates under several host APIs with the identical
+        // friendly name, and enumeration order puts DirectSound before
+        // WASAPI — returning early hands the sidetone to DirectSound,
+        // which mangles small-buffer callback audio into garbage (#5200).
+        // Collect all exacts and resolve by host-API preference below.
+        if (kind == DeviceNameMatch::Exact)
+            exacts.append({i, rawName, apiType});
+        else
             partials.append({i, rawName, apiType});
+    }
+
+    if (!exacts.isEmpty()) {
+#ifdef Q_OS_WIN
+        // Prefer WASAPI (~10 ms shared-mode) over MME/DirectSound
+        // (50–150 ms, and DS garbles the tiny-buffer stream this sink
+        // opens). Same preference #3193 applies to partial matches. (#5200)
+        for (const Candidate& c : exacts) {
+            if (c.apiType == paWASAPI) {
+                qCInfo(lcAudio) << "CwSidetonePortAudioSink: exact match for"
+                                << device.description()
+                                << "resolved to WASAPI output"
+                                << c.rawName
+                                << "(preferred over" << exacts.size() - 1
+                                << "other exact host-API match(es))";
+                return c.idx;
+            }
         }
+#endif
+        return exacts[0].idx;
     }
 
     if (partials.isEmpty()) {
@@ -262,7 +346,15 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
     outParams.hostApiSpecificStreamInfo = nullptr;
 
     double sampleRate = desiredRateHz > 0 ? desiredRateHz : 48000;
+#ifdef Q_OS_WIN
+    // 0.0 makes DirectSound/MME build a buffer ring far below what they can
+    // service — the stream runs but the audio comes out garbled (#5200).
+    // Ask for the device's own default-low latency instead; on WASAPI shared
+    // mode that is the ~10 ms engine period.
+    outParams.suggestedLatency = devInfo->defaultLowOutputLatency;
+#else
     outParams.suggestedLatency = 0.0;  // ask for smallest the host can deliver
+#endif
     if (Pa_IsFormatSupported(nullptr, &outParams, sampleRate) != paFormatIsSupported) {
         sampleRate = devInfo->defaultSampleRate > 0
             ? devInfo->defaultSampleRate
@@ -315,9 +407,13 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
 
     m_actualRate = static_cast<int>(sampleRate);
 
+    m_cbCount.store(0, std::memory_order_relaxed);
+    m_cbPeakMicro.store(0, std::memory_order_relaxed);
     const PaStreamInfo* streamInfo = Pa_GetStreamInfo(m_stream);
+    const PaHostApiInfo* hostApi = Pa_GetHostApiInfo(devInfo->hostApi);
     qCInfo(lcAudio) << "CwSidetonePortAudioSink: started"
                     << "device=" << devInfo->name
+                    << "hostApi=" << (hostApi && hostApi->name ? hostApi->name : "?")
                     << "rate=" << m_actualRate << "Hz"
                     << "outputLatency=" << (streamInfo ? streamInfo->outputLatency * 1000.0 : 0.0)
                     << "ms";
@@ -341,12 +437,27 @@ int CwSidetonePortAudioSink::paCallback(const void* /*input*/,
     auto* gen = self->m_generator.load(std::memory_order_acquire);
     if (gen) gen->process(dst, static_cast<int>(frameCount));
 
+    self->m_cbCount.fetch_add(1, std::memory_order_relaxed);
+    float peak = 0.0f;
+    for (unsigned long i = 0; i < frameCount * 2; ++i) {
+        const float a = dst[i] < 0 ? -dst[i] : dst[i];
+        if (a > peak) peak = a;
+    }
+    const auto peakMicro = static_cast<quint32>(peak * 1e6f);
+    quint32 prev = self->m_cbPeakMicro.load(std::memory_order_relaxed);
+    while (peakMicro > prev
+           && !self->m_cbPeakMicro.compare_exchange_weak(
+                  prev, peakMicro, std::memory_order_relaxed)) {}
+
     return paContinue;
 }
 
 void CwSidetonePortAudioSink::stop()
 {
     if (m_stream) {
+        qCInfo(lcAudio) << "CwSidetonePortAudioSink: stopping —"
+                        << "callbacks=" << m_cbCount.load(std::memory_order_relaxed)
+                        << "peak=" << (m_cbPeakMicro.load(std::memory_order_relaxed) / 1e6);
         // Halt the callback before clearing the generator pointer so we
         // don't race with paCallback dereferencing a torn-down generator.
         Pa_StopStream(m_stream);
