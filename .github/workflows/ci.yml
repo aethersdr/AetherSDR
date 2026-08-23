@@ -356,6 +356,15 @@ jobs:
         shell: pwsh
         run: .\scripts\setup\setup-hidapi.ps1
 
+      - name: Setup PortAudio (CW sidetone callback sink)
+        # Without this, HAVE_PORTAUDIO is undefined and
+        # CwSidetonePortAudioSink never compiles on Windows — the CW
+        # sidetone silently takes the push-model QAudioSink path and CI
+        # would miss real compile errors in the PortAudio sink (#5200).
+        # Runs after msvc-dev-cmd for cl.exe + link.exe on PATH.
+        shell: pwsh
+        run: .\scripts\setup\setup-portaudio.ps1
+
       # zlib is bundled under third_party/zlib (1.3.1) — no vcpkg install
       # needed; CMake builds zlibstatic from source.  (#2651)
 
