@@ -9,7 +9,7 @@
 #include "core/PskReporterClient.h"
 #include "core/TxKeyingMarker.h"
 #include "core/WsprBeacon.h"
-#include "map/MapView.h"
+#include "map/MapDisplayWidget.h"
 #include "models/EqualizerModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -496,7 +496,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     beaconRow->addWidget(m_beaconStatus, 1);
     root->addWidget(beaconBox);
 
-    m_mapView = new MapView(bodyWidget());
+    m_mapView = new MapDisplayWidget(bodyWidget());
     m_mapView->setObjectName(QStringLiteral("pskReporterMap"));
     m_mapView->setAccessibleName(tr("PSK Reporter map"));
     m_mapView->setPathsVisible(m_pathsCheck->isChecked());
@@ -550,7 +550,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_queryCallsign, &QLineEdit::textEdited, this, [this] {
         m_mapCallsignUserEdited = true;
     });
-    connect(m_mapView, &MapView::markerClicked, this,
+    connect(m_mapView, &MapDisplayWidget::markerClicked, this,
             [](const MapView::Marker& marker) {
                 if (!marker.clickInfo.isEmpty()) {
                     QToolTip::showText(QCursor::pos(), marker.clickInfo);
