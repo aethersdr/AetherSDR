@@ -147,6 +147,17 @@ struct RadioCapabilities {
     // inclusive and expressed in Hz, matching the tuning fields above.
     QVector<TxPowerBand> txPowerBands;
 
+    // Whether forward-power telemetry needs client-side attack/decay
+    // ballistics. True preserves the established Flex presentation. A backend
+    // whose telemetry already carries a stable indicated value can disable the
+    // second response layer so consumers reflect each authoritative sample.
+    bool forwardPowerRequiresSmoothing = true;
+
+    // Whether a sub-100 W active-band rating should reshape the desktop
+    // forward-power face. False preserves the established barefoot face for
+    // Flex and every backend that has not explicitly adopted band-rated UI.
+    bool forwardPowerScaleFollowsBandRating = false;
+
     [[nodiscard]] double txPowerMaxWattsAt(double frequencyHz) const noexcept
     {
         for (const TxPowerBand& band : txPowerBands) {

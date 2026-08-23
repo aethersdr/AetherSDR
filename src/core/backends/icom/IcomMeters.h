@@ -61,7 +61,12 @@ struct CurvePoint {
 // The IC-705's published curves. Each is documented at its definition with the
 // source it came from.
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc705();   // raw -> watts
+[[nodiscard]] std::span<const CurvePoint> powerCurveIc9700(); // raw -> relative percent
 [[nodiscard]] std::span<const CurvePoint> powerCurveIc7300Mk2(); // raw -> watts
+// DERIVED watt estimate from a relative Po indication and the active RF deck's
+// published rating. This is not a calibrated directional power measurement.
+[[nodiscard]] double derivedPowerWatts(double relativePercent,
+                                       double bandRatedWatts);
 [[nodiscard]] std::span<const CurvePoint> swrCurve();          // raw -> SWR
 [[nodiscard]] std::span<const CurvePoint> compCurve();         // raw -> dB
 [[nodiscard]] std::span<const CurvePoint> vdCurve();           // raw -> volts

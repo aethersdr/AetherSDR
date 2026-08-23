@@ -234,6 +234,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
                                           static_cast<double>(band.highHz),
                                           band.maxWatts});
     }
+    c.forwardPowerRequiresSmoothing = profile.meters.powerConversion
+        != MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating;
+    c.forwardPowerScaleFollowsBandRating = profile.meters.powerConversion
+        == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating;
 
     // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
     // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
@@ -2360,16 +2364,44 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
 
         const qint64 answeredAtMs = nowMs();
         m_meters.markAnswered(spec->id, answeredAtMs);
+        const MeterCalibrationProfile meterProfile = m_model
+            ? profileFor(*m_model).meters : MeterCalibrationProfile{};
+        // An IC-9700 Po reply may already be on the wire when the authoritative
+        // PTT-OFF report arrives. Do not let that late relative-power sample
+        // repopulate the model after the idle reset below. Keep this exception
+        // model-profile-shaped: native-watt Icom radios retain their existing
+        // meter timing and every non-power TX meter remains untouched.
+        if (spec->id == MeterId::Power && !m_keyed
+            && meterProfile.powerConversion
+                == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating) {
+            return;
+        }
         const bool holdIsolatedMinimums = m_model
             && profileFor(*m_model).meters.holdIsolatedTxMinimums;
         if (!m_meters.shouldPublish(spec->id, *raw, answeredAtMs,
                                     holdIsolatedMinimums)) {
             return;
         }
-        const double value = meterValue(
-            spec->id, *raw, s9ReferenceFor(m_frequencyHz),
-            m_model ? profileFor(*m_model).meters.calibration
-                    : MeterCalibration::Uncalibrated);
+        const std::span<const CurvePoint> powerCurve = m_model
+            ? powerCurveFor(*m_model) : std::span<const CurvePoint>{};
+        double value = spec->id == MeterId::Power && !powerCurve.empty()
+            ? interpolateCurve(powerCurve, *raw)
+            : meterValue(spec->id, *raw, s9ReferenceFor(m_frequencyHz),
+                         meterProfile.calibration);
+        if (spec->id == MeterId::Power
+            && meterProfile.powerConversion
+                == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating) {
+            const std::optional<double> ratedWatts = m_model
+                ? bandRatedPowerWatts(*m_model, m_frequencyHz)
+                : std::nullopt;
+            if (!ratedWatts) {
+                // Do not borrow an adjacent deck's rating while frequency state
+                // is absent or between supported bands. No reading is safer
+                // than a derived watt estimate with the wrong denominator.
+                return;
+            }
+            value = derivedPowerWatts(value, *ratedWatts);
+        }
 
         if (spec->id == MeterId::Overflow) {
             m_overflow = value > 0.5;
@@ -2450,6 +2482,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             m_meters.setTransmitting(m_keyed);
             if (!keyed && m_session) {
                 m_session->flushTxAudio();
+            }
+            if (!m_keyed && m_model
+                && profileFor(*m_model).meters.powerConversion
+                    == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating) {
+                // CI-V stops Po polling at this edge. Clear only the derived
+                // IC-9700 forward-power estimate; do not alter the established
+                // idle behavior of native-watt Icom radios or other TX meters.
+                emit meterUpdate(QStringLiteral("TX:FWDPWR"), 0.0);
             }
             TransmitDelta t;
             t.mox = m_keyed;
@@ -4365,6 +4405,12 @@ QVariantList IcomCivBackend::meterMap() const
             } else {
                 high = curve.back().value;
             }
+            if (profile.meters.powerConversion
+                == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating) {
+                high = bandRatedPowerWatts(*m_model, m_frequencyHz).value_or(0.0);
+                r.insert(QStringLiteral("basis"),
+                         QStringLiteral("derived: relative Po percent x active-band rated watts"));
+            }
         } else if (m.id == MeterId::Id) {
             high = profile.meters.currentFullScaleAmps;
         }
@@ -5088,10 +5134,11 @@ void IcomCivBackend::publishMeterDefs()
         d.unit = QString::fromUtf8(s.unit.data(), static_cast<int>(s.unit.size()));
         d.low = s.low;
         d.high = s.high;
-        // The Po meter's high depends on the model's measured curve, and a
-        // model we have no curve for must NOT claim watts — see powerCurveFor.
+        // The Po meter's high depends on the model profile's curve. IC-9700's
+        // curve is relative but is converted below the seam to derived watts;
+        // its highest RF-deck rating is 100 W, matching the curve's high.
         if (s.id == MeterId::Power) {
-            const auto curve = powerCurveFor(*m_model);
+            const std::span<const CurvePoint> curve = powerCurveFor(*m_model);
             if (curve.empty()) {
                 d.unit = QStringLiteral("Percent");
                 d.high = 100.0;

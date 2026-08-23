@@ -387,6 +387,16 @@ static void testModelTable()
             check(band.maxWatts > 0.0,
                   "every declared IC-9700 band carries a PA rating");
         }
+        check(bandRatedPowerWatts(*ic9700, 144'000'000ULL) == 100.0
+                  && bandRatedPowerWatts(*ic9700, 148'000'000ULL) == 100.0
+                  && bandRatedPowerWatts(*ic9700, 430'000'000ULL) == 75.0
+                  && bandRatedPowerWatts(*ic9700, 450'000'000ULL) == 75.0
+                  && bandRatedPowerWatts(*ic9700, 1'240'000'000ULL) == 10.0
+                  && bandRatedPowerWatts(*ic9700, 1'300'000'000ULL) == 10.0,
+              "IC-9700 band edges select the correct 100/75/10 W rating");
+        check(!bandRatedPowerWatts(*ic9700, 200'000'000ULL)
+                  && !bandRatedPowerWatts(*ic9700, 900'000'000ULL),
+              "a frequency between IC-9700 RF decks borrows no rating");
         // The other half of the same claim: a continuous model has no table,
         // and that emptiness is what keeps its tune path untouched. #5116
         // names both of these as non-goals.
@@ -556,12 +566,38 @@ static void testPowerCurveIsNotShared()
 {
     const IcomModel* ic705 = modelForCivAddress(0xA4);
     const IcomModel* ic9700 = modelForCivAddress(0xA2);
+    const IcomModel* ic7300mk2 = modelForCivAddress(0xB6);
     check(ic705 && !powerCurveFor(*ic705).empty(), "the IC-705 has a measured watts curve");
     // Handing back the IC-705's curve for another radio would produce a watts
-    // figure an operator would act on, derived from a different PA. Empty means
-    // "report percent", which is honest.
-    check(ic9700 && powerCurveFor(*ic9700).empty(),
-          "another model gets NO curve rather than the IC-705's");
+    // figure an operator would act on, derived from a different PA. The 9700
+    // instead owns a relative-percent curve from its own Po scale.
+    check(ic9700 && !powerCurveFor(*ic9700).empty(),
+          "the IC-9700 gets its own relative Po curve, not the IC-705 watts curve");
+    if (ic9700) {
+        const auto curve = powerCurveFor(*ic9700);
+        const auto bands = bandsFor(*ic9700);
+        check(bands.size() == 3, "the IC-9700 exposes three rated RF decks");
+        for (const IcomBand& band : bands) {
+            check(near(derivedPowerWatts(interpolateCurve(curve, 0),
+                                         band.maxWatts), 0.0),
+                  "zero Po maps to zero derived watts on every IC-9700 band");
+            check(near(derivedPowerWatts(interpolateCurve(curve, 143),
+                                         band.maxWatts), band.maxWatts * 0.5),
+                  "50 percent Po maps to half the active IC-9700 deck rating");
+            check(near(derivedPowerWatts(interpolateCurve(curve, 213),
+                                         band.maxWatts), band.maxWatts),
+                  "100 percent Po maps to the active IC-9700 deck rating");
+        }
+    }
+    check(near(interpolateCurve(powerCurveFor(*ic705), 143), 5.0)
+              && near(interpolateCurve(powerCurveFor(*ic705), 213), 10.0),
+          "the IC-705 retains its native measured-watts curve");
+    check(ic7300mk2
+              && near(interpolateCurve(powerCurveFor(*ic7300mk2), 143), 50.0)
+              && near(interpolateCurve(powerCurveFor(*ic7300mk2), 213), 100.0)
+              && profileFor(*ic7300mk2).meters.powerConversion
+                  == MeterCalibrationProfile::PowerConversion::NativeWatts,
+          "the IC-7300MK2 retains its native watts profile");
     check(powerCurveFor(unknownModel()).empty(), "and nor does an unknown radio");
     check(powerCurveForCalibration(MeterCalibration::Ic7300Mk2).data()
               == powerCurveIc7300Mk2().data(),

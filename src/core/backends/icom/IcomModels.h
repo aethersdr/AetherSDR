@@ -249,6 +249,11 @@ struct IcomBand {
 // holes to refuse, so continuous models keep their untouched command path.
 [[nodiscard]] std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept;
 
+// Rated PA ceiling for the RF deck containing hz. Empty when the model has no
+// per-band ratings or hz is outside every documented deck.
+[[nodiscard]] std::optional<double> bandRatedPowerWatts(
+    const IcomModel& model, std::uint64_t hz) noexcept;
+
 // True when hz lies in a band this model can tune. Unknown models remain
 // permissive because they have no verified range to enforce.
 [[nodiscard]] bool supportsFrequency(const IcomModel& model,
@@ -268,12 +273,12 @@ struct IcomBand {
 // not model-dependent — see sMeterDbm().
 [[nodiscard]] double s9ReferenceFor(std::uint64_t hz) noexcept;
 
-// raw -> watts for this model's Po meter.
+// Model-owned curve for the Po meter. The output domain is declared by the
+// profile's MeterCalibrationProfile::powerConversion: normally native watts;
+// IC-9700 uniquely supplies relative percent for a below-seam derived estimate.
 //
-// EMPTY means we have no measured curve for this model, and the caller must
-// report PERCENT rather than inventing watts. That distinction is the whole
-// point: a power meter showing "50 W" derived from another radio's curve is a
-// number an operator will act on.
+// EMPTY means no evidence-backed curve exists and the caller must report the
+// generic relative indication rather than borrowing another radio's curve.
 [[nodiscard]] std::span<const CurvePoint> powerCurveFor(const IcomModel& model);
 
 // The front-end stages this model offers, in register order (index 0 is OFF).
@@ -376,8 +381,14 @@ struct RxAntennaProfile {
 };
 
 struct MeterCalibrationProfile {
+    enum class PowerConversion : std::uint8_t {
+        NativeWatts,
+        RelativePercentOfBandRating,
+    };
+
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     double currentFullScaleAmps = 4.0;
+    PowerConversion powerConversion = PowerConversion::NativeWatts;
     // Live IC-705 and IC-7300MK2 evidence: SWR/ALC can return an isolated
     // minimum between real keyed samples. Never lend that interpretation to a
     // model whose own meter stream has not demonstrated it.

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace AetherSDR::icom {
 namespace {
@@ -30,6 +31,14 @@ constexpr std::array<CurvePoint, 13> kPowerIc705{{
 // headroom above the 100 percent point rather than pinning a hot final.
 constexpr std::array<CurvePoint, 4> kPowerIc7300Mk2{{
     {0, 0.0}, {143, 50.0}, {213, 100.0}, {255, 130.0},
+}};
+
+// IC-9700 Po meter, raw -> RELATIVE PERCENT. The CI-V guide defines an
+// indicated Po scale, not a calibrated wattmeter. The backend combines this
+// with the active RF deck's documented 100/75/10 W rating to produce an
+// explicitly DERIVED watt estimate for existing watt-based consumers.
+constexpr std::array<CurvePoint, 3> kPowerIc9700Relative{{
+    {0, 0.0}, {143, 50.0}, {213, 100.0},
 }};
 
 // SWR. Icom's guide: 0 = 1.0, 48 = 1.5, 80 = 2.0, 120 = 3.0.
@@ -136,7 +145,17 @@ double interpolateCurve(std::span<const CurvePoint> curve, int raw)
 }
 
 std::span<const CurvePoint> powerCurveIc705() { return kPowerIc705; }
+std::span<const CurvePoint> powerCurveIc9700() { return kPowerIc9700Relative; }
 std::span<const CurvePoint> powerCurveIc7300Mk2() { return kPowerIc7300Mk2; }
+double derivedPowerWatts(double relativePercent, double bandRatedWatts)
+{
+    if (!std::isfinite(relativePercent) || !std::isfinite(bandRatedWatts)
+        || bandRatedWatts <= 0.0) {
+        return 0.0;
+    }
+    return std::clamp(relativePercent, 0.0, 100.0)
+        * bandRatedWatts / 100.0;
+}
 std::span<const CurvePoint> swrCurve()        { return kSwr; }
 std::span<const CurvePoint> compCurve()       { return kComp; }
 std::span<const CurvePoint> vdCurve()         { return kVd; }

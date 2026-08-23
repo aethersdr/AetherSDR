@@ -348,6 +348,19 @@ std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept
     return profileFor(model).bands;
 }
 
+std::optional<double> bandRatedPowerWatts(const IcomModel& model,
+                                          std::uint64_t hz) noexcept
+{
+    const std::span<const IcomBand> bands = bandsFor(model);
+    const auto active = std::ranges::find_if(bands, [hz](const IcomBand& band) {
+        return hz >= band.lowHz && hz <= band.highHz;
+    });
+    if (active == bands.end()) {
+        return std::nullopt;
+    }
+    return active->maxWatts;
+}
+
 bool supportsFrequency(const IcomModel& model, std::uint64_t hz) noexcept
 {
     if (const std::span<const IcomBand> bands = bandsFor(model); !bands.empty()) {
@@ -441,7 +454,12 @@ std::optional<std::uint8_t> parseModelIdReply(const CivFrame& frame)
 
 std::span<const CurvePoint> powerCurveFor(const IcomModel& model)
 {
-    return powerCurveForCalibration(profileFor(model).meters.calibration);
+    const MeterCalibrationProfile& meters = profileFor(model).meters;
+    if (meters.powerConversion
+        == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating) {
+        return powerCurveIc9700();
+    }
+    return powerCurveForCalibration(meters.calibration);
 }
 
 std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
@@ -571,6 +589,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .meters = MeterCalibrationProfile{
             .calibration = MeterCalibration::Ic9700Voltage,
             .currentFullScaleAmps = 0.0,
+            .powerConversion = MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
         },
         .civRecovery = CivRecoveryProfile{1000, 3},
         .preampLabels = kIc9700PreampLabels,
