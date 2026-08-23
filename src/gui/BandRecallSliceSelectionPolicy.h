@@ -12,14 +12,15 @@ namespace AetherSDR {
 enum class RadioSliceSelectionSource {
     ActiveStatus,
     TopologyFallback,
-    // The first slice to arrive when the client has no active slice (on connect or
-    // after all slices are removed), selected only so the UI has a target before
-    // the enumeration finishes. It is arrival ORDER, not the operator's choice — slice 0 is simply enumerated first — so it must never
-    // write active=1 back. During connect the status burst / enumeration order
-    // can leave a different slice active (often the last one created). Asserting
-    // a selection here overwrites that live status before later slices have even
-    // been created client-side, so the first-enumerated slice always won and
-    // the operator's slice B silently became slice A on every launch.
+    // The first slice to arrive during connect enumeration when the client has no
+    // active slice, selected only so the UI has a target before the enumeration
+    // finishes. It is arrival ORDER, not the operator's choice — slice 0 is simply
+    // enumerated first — so it must never write active=1 back. During connect the
+    // status burst / enumeration order can leave a different slice active (often
+    // the last one created). Asserting a selection here overwrites that live
+    // status before later slices have even been created client-side, so the
+    // first-enumerated slice always won and the operator's slice B silently became
+    // slice A on every launch.
     InitialEnumeration,
 };
 

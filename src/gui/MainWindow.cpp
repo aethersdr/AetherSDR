@@ -5854,6 +5854,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // one place so the count cannot leak across sessions.
     noteAutoConnectFinished(connected);
 
+    if (!connected) {
+        m_initialSliceEnumeration = true;
+    }
+
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 

@@ -1654,18 +1654,23 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // First slice — wire everything up
     if (firstSlice) {
-        // Bootstrap only: give the UI a selection. Do NOT write active=1 —
-        // this is the first slice ENUMERATED, not the slice that should own
-        // the UI. A FLEX does not persist the operator's active-slice choice
-        // across a restart; during connect the status burst / enumeration
-        // order may end with a different slice active (often last-created),
+        // Bootstrap only: give the UI a selection. Do NOT write active=1 during
+        // initial connect enumeration — this is the first slice ENUMERATED, not
+        // the slice that should own the UI. A FLEX does not persist the operator's
+        // active-slice choice across a restart; during connect the status burst /
+        // enumeration order may end with a different slice active (often last-created),
         // and that slice may not exist client-side yet (it arrives in a later
         // status frame). Asserting here would clobber that live status and
         // make first-enumerated always win. The adoption check later in
         // onSliceAdded() reads s->isActive() as subsequent slices arrive, so the
         // client converges on the radio-authoritative active slice.
-        selectSliceFromRadioState(
-            s, RadioSliceSelectionSource::InitialEnumeration);
+        // Mid-session creation into an empty list (after initial enumeration is done)
+        // routes through TopologyFallback to assert the selection as needed.
+        const RadioSliceSelectionSource source = m_initialSliceEnumeration
+            ? RadioSliceSelectionSource::InitialEnumeration
+            : RadioSliceSelectionSource::TopologyFallback;
+        m_initialSliceEnumeration = false;
+        selectSliceFromRadioState(s, source);
 
         // Detect initial band from radio's frequency
         if (m_bandSettings.currentBand().isEmpty())

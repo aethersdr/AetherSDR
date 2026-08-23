@@ -1498,6 +1498,7 @@ private:
 
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};
+    bool m_initialSliceEnumeration{true};
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};

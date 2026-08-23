@@ -1190,6 +1190,14 @@ target_include_directories(band_recall_slice_selection_policy_test PRIVATE src)
 add_test(NAME band_recall_slice_selection_policy_test
     COMMAND band_recall_slice_selection_policy_test)
 
+# Pins RadioModel slice status connect-enumeration adoption and ensures zero active=1 commands are sent.
+add_executable(radiomodel_slice_connect_enumeration_test
+    tests/radiomodel_slice_connect_enumeration_test.cpp
+)
+target_link_libraries(radiomodel_slice_connect_enumeration_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_slice_connect_enumeration_test
+    COMMAND radiomodel_slice_connect_enumeration_test)
+
 # When that policy applies — the window opened by an actually-dispatched
 # `display pan set <pan> band=` write. Header-only.
 add_executable(band_recall_selection_guard_test

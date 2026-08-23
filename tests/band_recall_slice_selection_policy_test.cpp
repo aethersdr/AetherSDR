@@ -74,11 +74,12 @@ int main()
           "ordinary topology fallback: existing reveal and activation remain");
 
     // The connect-time bootstrap of the first ENUMERATED slice must never
-    // assert active=1. The radio emits active=1 status for slices as they
-    // enumerate (the last-created slice becomes active in the status stream);
-    // asserting active=1 on the first slice during enumeration overwrote the
-    // radio's active status before the remaining slices were created client-side,
-    // so an operator who left slice B active came back to slice A on every launch.
+    // assert active=1. The radio emits status for each slice as it enumerates
+    // with its actual live state (active=0 on inactive slices, active=1 on the
+    // active slice); asserting active=1 on the first slice during enumeration
+    // overwrote the radio's active status before the remaining slices were
+    // created client-side, so an operator who left slice B active came back to
+    // slice A on every launch.
     const RadioSliceSelectionDecision initialEnumeration =
         radioSliceSelectionDecision(
             false, RadioSliceSelectionSource::InitialEnumeration);

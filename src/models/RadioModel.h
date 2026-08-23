@@ -1535,6 +1535,10 @@ public:
         return backendPanIdFor(modelPanId);
     }
     static QString neutralPanIdStringForTest(int panIdx);
+    void handleSliceStatusForTest(int id, const QMap<QString, QString>& kvs, bool removed = false)
+    {
+        handleSliceStatus(id, kvs, removed);
+    }
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
