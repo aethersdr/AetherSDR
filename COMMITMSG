@@ -1,0 +1,7 @@
+fix: Stale comment in ensureDaxForTci() names the mixed speaker feed as the
+
+- src\models\RadioModel.h
+
+Fixes #4957
+
+Signed-off-by: Vedant Madane <6527493+VedantMadane@users.noreply.github.com>
