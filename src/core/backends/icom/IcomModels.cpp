@@ -207,6 +207,12 @@ constexpr std::array<ModulationInputChoice, 6> kIc7300Mk2ModInputs{{
 
 constexpr std::array<std::string_view, 3> kHfPreampLabels{
     "OFF", "P.AMP1", "P.AMP2"};
+// Publish only the IC-9700's internal preamp through the shared front-end
+// control. External P.AMP is separately enabled per band in SET menu items
+// 0093..0095; treating those persistent settings as ordinary preamp steps
+// makes the radio reject the request and restore its authoritative state.
+constexpr std::array<std::string_view, 2> kIc9700PreampLabels{
+    "OFF", "P.AMP INT"};
 constexpr std::array<AttenStep, 2> kHfAttenuatorSteps{{
     {"OFF", 0}, {"20 dB", 20}}};
 constexpr std::array<std::string_view, 10> kIc705Modes{
@@ -548,6 +554,7 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .scope = ScopeCommandProfile{true, false, false, false, false},
         .meters = MeterCalibrationProfile{MeterCalibration::Uncalibrated, {}, 0.0},
         .civRecovery = CivRecoveryProfile{1000, 3},
+        .preampLabels = kIc9700PreampLabels,
     };
     static const IcomModelProfile kIc7300Mk2Profile{
         .supportedBringup = true,

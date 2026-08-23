@@ -378,6 +378,8 @@ public:
     bool wnbActive()   const { return m_wnbActive; }
     bool wnbUpdating() const { return m_wnbUpdating; }
     int  rfGainValue() const { return m_rfGainValue; }
+    QString rfGainUnitSuffix() const { return m_rfGainUnitSuffix; }
+    QString preampIndicator() const { return m_preampIndicator; }
     bool wideActive()  const { return m_wideActive; }
     void setWnbActive(bool on) { syncWnbState(on, 0, false); }
     void syncWnbState(bool on, int level, bool updating) {
@@ -394,6 +396,19 @@ public:
             reacquireNoiseFloorLock();
         }
         markOverlayDirty();
+    }
+    void setRfGainUnitSuffix(const QString& suffix) {
+        const QString normalized = suffix.trimmed();
+        if (!normalized.isEmpty() && m_rfGainUnitSuffix != normalized) {
+            m_rfGainUnitSuffix = normalized;
+            markOverlayDirty();
+        }
+    }
+    void setPreampIndicator(const QString& text) {
+        if (m_preampIndicator != text) {
+            m_preampIndicator = text;
+            markOverlayDirty();
+        }
     }
     void setWideActive(bool on) {
         if (m_wideActive != on) {
@@ -1741,6 +1756,8 @@ private:
     bool m_wnbActive{false};
     bool m_wnbUpdating{false};
     int  m_rfGainValue{0};
+    QString m_rfGainUnitSuffix{QStringLiteral("dB")};
+    QString m_preampIndicator;
     bool m_wideActive{false};
 
     // HF propagation forecast overlay

@@ -334,6 +334,12 @@ int main(int argc, char** argv)
                   == QStringList({QStringLiteral("2m"), QStringLiteral("440"),
                                   QStringLiteral("23cm")}),
               "the IC-9700 declares exactly its three bands");
+        const auto ic9700Preamp = icom::preampLabelsFor(*ic9700);
+        check(ic9700Preamp.size() == 2
+                  && ic9700Preamp[0] == "OFF"
+                  && ic9700Preamp[1] == "P.AMP INT",
+              "the IC-9700 publishes only its internal preamp through the "
+              "shared front-end control");
 
         // AND THE HF-ONLY ROWS DECLARE NOTHING. Empty is a decision here, not
         // an omission: it keeps the built-in HF grid, which is already right for

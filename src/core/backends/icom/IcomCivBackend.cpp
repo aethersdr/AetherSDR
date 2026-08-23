@@ -1984,7 +1984,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // The PREAMP control, not the RF-gain slider. It used to publish
             // into SliceDelta::rfGain, which is what made a three-position
             // switch look like a gain reading.
-            m_preampStep = std::clamp(v, 0, 2);
+            const int maxStep = std::max(
+                0, static_cast<int>(preampLabelsFor(*m_model).size()) - 1);
+            m_preampStep = std::clamp(v, 0, maxStep);
             emit panPreampChanged(panId(), m_preampStep);
             return;
         }
@@ -3266,7 +3268,10 @@ void IcomCivBackend::setPanRfGain(const QString&, int gainDb)
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
     // Clamp, never refuse — the seam's rule for every stepped control.
-    const int wanted = std::clamp(step, 0, 2);
+    const int maxStep = m_model
+        ? std::max(0, static_cast<int>(preampLabelsFor(*m_model).size()) - 1)
+        : 0;
+    const int wanted = std::clamp(step, 0, maxStep);
     m_preampStep = wanted;
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
                                    func::kPreamp, wanted));
