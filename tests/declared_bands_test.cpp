@@ -4,6 +4,7 @@
 // empty/absent -> empty-list real-Flex path.
 
 #include "models/DeclaredBands.h"
+#include "models/BandDefs.h"
 
 #include <QCoreApplication>
 #include <QStringList>
@@ -35,6 +36,23 @@ bool eq(const QStringList& got, const QStringList& want)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    report("declared 2m button label is 144",
+           declaredBandButtonLabel("2m") == "144");
+    report("declared 440 button label is 430",
+           declaredBandButtonLabel("440") == "430");
+    report("declared 23cm button label is 1240",
+           declaredBandButtonLabel("23cm") == "1240");
+    report("other declared labels retain their canonical name",
+           declaredBandButtonLabel("20m") == "20m");
+    report("IC-9700 range excludes WWV/GEN/LF utility targets",
+           !declaredBandUtilityTargetAvailable(10.0, 144.0, 1300.0)
+               && !declaredBandUtilityTargetAvailable(0.5, 144.0, 1300.0)
+               && !declaredBandUtilityTargetAvailable(0.1375, 144.0, 1300.0)
+               && !declaredBandUtilityTargetAvailable(0.475, 144.0, 1300.0));
+    report("a wide-range declared radio retains reachable utility targets",
+           declaredBandUtilityTargetAvailable(10.0, 0.03, 470.0)
+               && declaredBandUtilityTargetAvailable(0.1375, 0.03, 470.0));
 
     // Absent / empty -> empty list (real Flex radios never send the key; the
     // band UI must be unchanged, which relies on this being empty).

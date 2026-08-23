@@ -3031,7 +3031,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         // from the declaration in BandDefs order instead of the HF layout
         // + model capability flags: the radio said what it can do, so the
         // menu offers exactly that (an IC-9700 gets 2m/440/23cm, not an
-        // HF grid it can't tune).  Utility and XVTR rows are unaffected.
+        // HF grid it can't tune).
         // NB buttons are built from BandDefs here, not via makeBandBtn():
         // BAND_GRID only carries the curated HF-menu entries, so declared
         // VHF/UHF names (440, 23cm, ...) have no BAND_GRID row to reuse.
@@ -3040,7 +3040,10 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             const QString bandName = QString::fromLatin1(def.name);
             if (!m_declaredBands.contains(bandName))
                 continue;
-            auto* btn = new QPushButton(bandName, m_bandPanel);
+            const std::string_view label = declaredBandButtonLabel(def.name);
+            auto* btn = new QPushButton(
+                QString::fromLatin1(label.data(), static_cast<qsizetype>(label.size())),
+                m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
             btn->setStyleSheet(bandBtnStyle);
             const double  freq = def.defaultFreqMhz;
@@ -3082,7 +3085,9 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
 
     // XVTR bands (inserted between HF and utility)
     m_xvtrBandBtns.clear();
-    for (int i = 0; i < bands.size(); ++i) {
+    const bool radioDeclaredBandSet = !m_declaredBands.isEmpty();
+    const int xvtrBandCount = radioDeclaredBandSet ? 0 : bands.size();
+    for (int i = 0; i < xvtrBandCount; ++i) {
         auto* btn = new QPushButton(bands[i].name, m_bandPanel);
         btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
         btn->setStyleSheet(xvtrBtnStyle);
@@ -3096,8 +3101,9 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         grid->addWidget(btn, row + i / 3, i % 3);
         m_xvtrBandBtns.append(btn);
     }
-    if (!bands.isEmpty())
-        row += (bands.size() + 2) / 3;  // advance past XVTR rows
+    if (xvtrBandCount > 0) {
+        row += (xvtrBandCount + 2) / 3;  // advance past XVTR rows
+    }
 
     // Utility buttons: WWV, GEN, 2200, 630, XVTR config
     constexpr int utilLayout[][3] = {
@@ -3108,6 +3114,19 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         for (int col = 0; col < 3; ++col) {
             int idx = utilLayout[r][col];
             if (idx < 0) continue;
+            // A declared set belongs to a backend that owns its band surface.
+            // Retain only utility targets proven reachable by its reported
+            // tuning range, and never expose the Flex XVTR setup entry.
+            if (radioDeclaredBandSet) {
+                if (idx == 15) {
+                    continue;
+                }
+                const double targetMhz = BAND_GRID[idx].freqMhz;
+                if (!declaredBandUtilityTargetAvailable(
+                        targetMhz, m_tuningMinMhz, m_tuningMaxMhz)) {
+                    continue;
+                }
+            }
             auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
             btn->setStyleSheet(bandBtnStyle);
@@ -3232,6 +3251,12 @@ void SpectrumOverlayMenu::setTuningRangeMhz(double minMhz, double maxMhz)
         return;
     m_tuningMinMhz = minMhz;
     m_tuningMaxMhz = maxMhz;
+    if (!m_declaredBands.isEmpty()) {
+        // Utility rows are presence-gated by this range, so a new radio needs
+        // a full rebuild rather than only an enabled-state refresh.
+        setXvtrBands(m_lastXvtrBands);
+        return;
+    }
     applyTuningRangeToBandButtons();
 }
 

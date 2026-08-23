@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <string_view>
 
 namespace AetherSDR {
 
@@ -54,6 +55,31 @@ inline constexpr BandDef kBands[] = {
 };
 
 inline constexpr int kBandCount = static_cast<int>(std::size(kBands));
+
+// Compact presentation labels for radio-declared VHF/UHF bands. Canonical
+// names remain the settings and protocol keys; these labels are display-only.
+constexpr std::string_view declaredBandButtonLabel(std::string_view bandName)
+{
+    if (bandName == "2m") {
+        return "144";
+    }
+    if (bandName == "440") {
+        return "430";
+    }
+    if (bandName == "23cm") {
+        return "1240";
+    }
+    return bandName;
+}
+
+constexpr bool declaredBandUtilityTargetAvailable(double targetMhz,
+                                                  double tuningMinMhz,
+                                                  double tuningMaxMhz)
+{
+    return tuningMaxMhz > tuningMinMhz
+           && targetMhz >= tuningMinMhz
+           && targetMhz <= tuningMaxMhz;
+}
 
 // Special bands — not auto-detected from frequency
 inline constexpr BandDef kWwvBand = {"WWV", 0.0, 0.0, 10.000, "AM"};
