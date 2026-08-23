@@ -1,4 +1,5 @@
 #include "MapDisplayWidget.h"
+#include "GlobeMapView.h"
 
 #include <QStackedLayout>
 
@@ -8,10 +9,14 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
     : QWidget(parent)
     , m_stack(new QStackedLayout(this))
     , m_flatView(new MapView(this))
+    , m_globeView(new GlobeMapView(this))
 {
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->addWidget(m_flatView);
+    m_stack->addWidget(m_globeView);
     connect(m_flatView, &MapView::markerClicked,
+            this, &MapDisplayWidget::markerClicked);
+    connect(m_globeView, &GlobeMapView::markerClicked,
             this, &MapDisplayWidget::markerClicked);
 }
 
@@ -19,11 +24,13 @@ void MapDisplayWidget::setHomePosition(double lat, double lon,
                                        const QString& label, bool showMarker)
 {
     m_flatView->setHomePosition(lat, lon, label, showMarker);
+    m_globeView->setHomePosition(lat, lon, label, showMarker);
 }
 
 void MapDisplayWidget::setHomeSpanDegrees(double spanDegrees)
 {
     m_flatView->setHomeSpanDegrees(spanDegrees);
+    m_globeView->setHomeSpanDegrees(spanDegrees);
 }
 
 bool MapDisplayWidget::hasHomePosition() const
@@ -44,16 +51,19 @@ double MapDisplayWidget::homeLon() const
 void MapDisplayWidget::setMarkers(const QVector<Marker>& markers)
 {
     m_flatView->setMarkers(markers);
+    m_globeView->setMarkers(markers);
 }
 
 void MapDisplayWidget::clearMarkers()
 {
     m_flatView->clearMarkers();
+    m_globeView->clearMarkers();
 }
 
 void MapDisplayWidget::setPathsVisible(bool visible)
 {
     m_flatView->setPathsVisible(visible);
+    m_globeView->setPathsVisible(visible);
 }
 
 bool MapDisplayWidget::pathsVisible() const
@@ -64,6 +74,7 @@ bool MapDisplayWidget::pathsVisible() const
 void MapDisplayWidget::setDayNightTerminatorVisible(bool visible)
 {
     m_flatView->setDayNightTerminatorVisible(visible);
+    m_globeView->setDayNightTerminatorVisible(visible);
 }
 
 bool MapDisplayWidget::dayNightTerminatorVisible() const
@@ -75,38 +86,51 @@ void MapDisplayWidget::setLegend(
     const QVector<QPair<QString, QColor>>& entries)
 {
     m_flatView->setLegend(entries);
+    m_globeView->setLegend(entries);
 }
 
 void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
 {
-    // Globe construction lands in the next staged commit. Until then this
-    // facade deliberately preserves the shipping flat behavior.
-    if (mode != ProjectionMode::Flat || m_projectionMode == mode) {
+    if (m_projectionMode == mode) {
         return;
     }
     m_projectionMode = mode;
-    m_stack->setCurrentWidget(m_flatView);
+    m_stack->setCurrentWidget(mode == ProjectionMode::Globe
+                                  ? static_cast<QWidget*>(m_globeView)
+                                  : static_cast<QWidget*>(m_flatView));
     emit projectionModeChanged(mode);
 }
 
 bool MapDisplayWidget::globeAvailable() const
 {
-    return false;
+    return true;
 }
 
 void MapDisplayWidget::resetToHome()
 {
-    m_flatView->resetToHome();
+    if (m_projectionMode == ProjectionMode::Globe) {
+        m_globeView->resetToHome();
+    } else {
+        m_flatView->resetToHome();
+    }
 }
 
 void MapDisplayWidget::zoomIn()
 {
-    m_flatView->zoomIn();
+    if (m_projectionMode == ProjectionMode::Globe) {
+        m_globeView->zoomIn();
+    } else {
+        m_flatView->zoomIn();
+    }
 }
 
 void MapDisplayWidget::zoomOut()
 {
-    m_flatView->zoomOut();
+    if (m_projectionMode == ProjectionMode::Globe) {
+        m_globeView->zoomOut();
+    } else {
+        m_flatView->zoomOut();
+    }
 }
 
 } // namespace AetherSDR

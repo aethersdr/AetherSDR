@@ -8,6 +8,8 @@ class QStackedLayout;
 
 namespace AetherSDR {
 
+class GlobeMapView;
+
 // Projection-neutral facade for map consumers that can switch renderers.
 // The GPS dialog continues to use MapView directly; PSK Reporter uses this
 // facade so its data/filter logic remains independent of the selected map
@@ -56,6 +58,7 @@ public slots:
 private:
     QStackedLayout* m_stack{nullptr};
     MapView* m_flatView{nullptr};
+    GlobeMapView* m_globeView{nullptr};
     ProjectionMode m_projectionMode{ProjectionMode::Flat};
 };
 
