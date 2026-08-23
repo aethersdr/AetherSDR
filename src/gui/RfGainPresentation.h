@@ -23,6 +23,17 @@ inline QString formatRfGainIndicator(int value, QStringView unitSuffix)
                : valueText;
 }
 
+inline QString normalizedRfGainUnitSuffix(QStringView unitSuffix)
+{
+    const QString normalized = unitSuffix.trimmed().toString();
+    return normalized.isEmpty() ? QStringLiteral("dB") : normalized;
+}
+
+inline bool shouldShowRfGainIndicator(int value, int neutralValue)
+{
+    return value != neutralValue;
+}
+
 inline QString formatPreampIndicator(const QStringList& labels, int step)
 {
     if (step <= 0 || step >= labels.size()) {

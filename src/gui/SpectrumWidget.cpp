@@ -13949,7 +13949,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     && m_propKIndex >= 0
                     && m_propAIndex >= 0
                     && m_propSfi > 0;
-                if (m_wnbActive || m_rfGainValue != 0 || !m_preampIndicator.isEmpty()
+                const bool showRfGain = shouldShowRfGainIndicator(
+                    m_rfGainValue, m_rfGainNeutralValue);
+                if (m_wnbActive || showRfGain || !m_preampIndicator.isEmpty()
                     || showProp || m_wideActive) {
                     QFont indFont(p.font().family(), 14, QFont::Bold);
                     p.setFont(indFont);
@@ -13975,7 +13977,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     if (!m_preampIndicator.isEmpty()) {
                         drawSegment(m_preampIndicator, indicatorColor);
                     }
-                    if (m_rfGainValue != 0) {
+                    if (showRfGain) {
                         drawSegment(formatRfGainIndicator(
                                         m_rfGainValue, m_rfGainUnitSuffix),
                                     indicatorColor);
@@ -15098,7 +15100,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             && m_propKIndex >= 0
             && m_propAIndex >= 0
             && m_propSfi > 0;
-        if (m_wnbActive || m_rfGainValue != 0 || !m_preampIndicator.isEmpty()
+        const bool showRfGain = shouldShowRfGainIndicator(
+            m_rfGainValue, m_rfGainNeutralValue);
+        if (m_wnbActive || showRfGain || !m_preampIndicator.isEmpty()
             || showProp || m_wideActive) {
             QFont indFont = p.font();
             indFont.setPointSize(18);
@@ -15133,7 +15137,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             }
 
             // RF Gain (to the left of WIDE)
-            if (m_rfGainValue != 0) {
+            if (showRfGain) {
                 drawSegment(formatRfGainIndicator(
                                 m_rfGainValue, m_rfGainUnitSuffix),
                             indicatorColor);

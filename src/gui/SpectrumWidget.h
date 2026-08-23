@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutoBlackMode.h"
+#include "RfGainPresentation.h"
 
 #include <limits>
 #include <algorithm>
@@ -378,8 +379,6 @@ public:
     bool wnbActive()   const { return m_wnbActive; }
     bool wnbUpdating() const { return m_wnbUpdating; }
     int  rfGainValue() const { return m_rfGainValue; }
-    QString rfGainUnitSuffix() const { return m_rfGainUnitSuffix; }
-    QString preampIndicator() const { return m_preampIndicator; }
     bool wideActive()  const { return m_wideActive; }
     void setWnbActive(bool on) { syncWnbState(on, 0, false); }
     void syncWnbState(bool on, int level, bool updating) {
@@ -397,10 +396,12 @@ public:
         }
         markOverlayDirty();
     }
-    void setRfGainUnitSuffix(const QString& suffix) {
-        const QString normalized = suffix.trimmed();
-        if (!normalized.isEmpty() && m_rfGainUnitSuffix != normalized) {
+    void setRfGainPresentation(const QString& suffix, int neutralValue) {
+        const QString normalized = normalizedRfGainUnitSuffix(suffix);
+        if (m_rfGainUnitSuffix != normalized
+            || m_rfGainNeutralValue != neutralValue) {
             m_rfGainUnitSuffix = normalized;
+            m_rfGainNeutralValue = neutralValue;
             markOverlayDirty();
         }
     }
@@ -1757,6 +1758,7 @@ private:
     bool m_wnbUpdating{false};
     int  m_rfGainValue{0};
     QString m_rfGainUnitSuffix{QStringLiteral("dB")};
+    int m_rfGainNeutralValue = 0;
     QString m_preampIndicator;
     bool m_wideActive{false};
 

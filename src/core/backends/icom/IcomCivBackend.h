@@ -172,6 +172,7 @@ private:
     // path cannot make that queued-delivery race deterministic.
     friend struct IcomCivBackendTestAccess;
 
+    void reassertPanPreampWireStep(int step);
     void publishCapabilities();
     // Publish WHAT THIS RADIO IS: the model name, and the band set that follows
     // from it. One call rather than two because they are the same answer — a

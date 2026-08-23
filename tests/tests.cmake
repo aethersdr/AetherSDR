@@ -1634,6 +1634,8 @@ add_executable(rf_gain_presentation_test
 )
 target_include_directories(rf_gain_presentation_test PRIVATE src)
 target_link_libraries(rf_gain_presentation_test PRIVATE Qt6::Core)
+target_compile_definitions(rf_gain_presentation_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME rf_gain_presentation_test COMMAND rf_gain_presentation_test)
 
 # Floating-panadapter crash-loop guard (#4617) — pins that a session which died

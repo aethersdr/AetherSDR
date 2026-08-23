@@ -1783,8 +1783,10 @@ void MainWindow::wirePanLifecycle()
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setRfGainRange);
         connect(pan, &PanadapterModel::rfGainInfoChanged,
-                this, [applet](int, int, int, const QString& unitSuffix) {
-            applet->spectrumWidget()->setRfGainUnitSuffix(unitSuffix);
+                this, [applet](int, int high, int, const QString& unitSuffix) {
+            const int neutral = normalizedRfGainUnitSuffix(unitSuffix)
+                                    == QLatin1String("%") ? high : 0;
+            applet->spectrumWidget()->setRfGainPresentation(unitSuffix, neutral);
         });
         connect(pan, &PanadapterModel::rfGainChanged,
                 this, [applet](int gain) {
@@ -1834,7 +1836,11 @@ void MainWindow::wirePanLifecycle()
         applet->spectrumWidget()->overlayMenu()->setRfGainRange(
             pan->rfGainLow(), pan->rfGainHigh(), pan->rfGainStep(),
             pan->rfGainUnitSuffix());
-        applet->spectrumWidget()->setRfGainUnitSuffix(pan->rfGainUnitSuffix());
+        const int rfGainNeutral = normalizedRfGainUnitSuffix(pan->rfGainUnitSuffix())
+                                      == QLatin1String("%")
+                                    ? pan->rfGainHigh() : 0;
+        applet->spectrumWidget()->setRfGainPresentation(
+            pan->rfGainUnitSuffix(), rfGainNeutral);
         applet->spectrumWidget()->overlayMenu()->setPreampLabels(pan->preampLabels());
         applet->spectrumWidget()->overlayMenu()->setPreampStep(pan->preampStep());
         syncPreampIndicator();

@@ -137,6 +137,21 @@ struct IcomCivBackendTestAccess {
         const auto recovery = profileFor(*backend.m_model).civRecovery;
         return recovery ? recovery->maxAttempts : 0;
     }
+
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+
+    static int preampStep(const IcomCivBackend& backend)
+    {
+        return backend.m_preampStep;
+    }
+
+    static void reassertPreamp(IcomCivBackend& backend)
+    {
+        backend.reassertPanPreampWireStep(backend.m_preampStep);
+    }
 };
 
 }  // namespace AetherSDR::icom
@@ -281,6 +296,37 @@ static void testStaleSessionFrameIsDropped()
 
 }
 
+static void testPreampWireStateRemainsAuthoritative()
+{
+    IcomCivBackend backend;
+    const IcomModel* ic9700 = modelForName("IC-9700");
+    check(ic9700 != nullptr, "IC-9700 preamp test resolves its model");
+    if (!ic9700) {
+        return;
+    }
+    IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+    IcomCivBackendTestAccess::prepareGeneration(backend, 1);
+
+    CivFrame reported;
+    reported.to = kControllerAddress;
+    reported.from = 0xA2;
+    reported.cmd = cmd::kFunction;
+    reported.hasSub = true;
+    reported.sub = func::kPreamp;
+    reported.data = {0x02};
+    IcomCivBackendTestAccess::deliver(backend, reported, 1);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 2,
+          "IC-9700 wire state 02 is mirrored without being renamed P.AMP INT");
+
+    IcomCivBackendTestAccess::reassertPreamp(backend);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 2,
+          "diagnostic reassert preserves the radio-adopted wire state");
+
+    backend.setPanPreamp(QStringLiteral("0"), 2);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 1,
+          "operator intent remains bounded to OFF/P.AMP INT on the IC-9700");
+}
+
 static void testDestructorCancelsWaiter(QCoreApplication& app)
 {
     auto backend = std::make_unique<IcomCivBackend>();
@@ -347,6 +393,7 @@ int main(int argc, char** argv)
     qRegisterMetaType<AetherSDR::MeterDef>("MeterDef");
 
     testStaleSessionFrameIsDropped();
+    testPreampWireStateRemainsAuthoritative();
     testDestructorCancelsWaiter(app);
     testTerminalWaiterReentrySurvivesReset(app);
 
