@@ -48,7 +48,6 @@ constexpr float kMinimumCameraDistance = 1.55F;
 constexpr float kMaximumCameraDistance = 6.0F;
 constexpr float kDefaultCameraDistance = 3.8F;
 constexpr float kZoomFactor = 0.78F;
-constexpr int kGreatCircleSegments = 48;
 
 class GlobeVectorOverlay final : public QWidget {
 public:
@@ -85,21 +84,16 @@ QVector3D geoVector(double latitudeDegrees, double longitudeDegrees)
              latitudeCosine * std::cos(longitude) };
 }
 
-QVector3D greatCirclePoint(const QVector3D& from, const QVector3D& to,
-                           float amount)
+QVector3D greatCircleAxis(const QVector3D& from, const QVector3D& to)
 {
-    const float dot = std::clamp(QVector3D::dotProduct(from, to),
-                                 -1.0F, 1.0F);
-    const float angle = std::acos(dot);
-    if (angle < 0.0001F) {
-        return from;
+    QVector3D axis = QVector3D::crossProduct(from, to);
+    if (axis.lengthSquared() < 0.000001F) {
+        axis = QVector3D::crossProduct(from, { 0.0F, 1.0F, 0.0F });
     }
-    const float sine = std::sin(angle);
-    if (std::abs(sine) < 0.0001F) {
-        return (from * (1.0F - amount) + to * amount).normalized();
+    if (axis.lengthSquared() < 0.000001F) {
+        axis = QVector3D::crossProduct(from, { 1.0F, 0.0F, 0.0F });
     }
-    return (from * (std::sin((1.0F - amount) * angle) / sine)
-            + to * (std::sin(amount * angle) / sine)).normalized();
+    return axis.normalized();
 }
 }
 
@@ -483,8 +477,11 @@ void GlobeMapView::paintPaths(QPainter& painter, const QMatrix4x4& model,
         : QVector<Marker>{};
     const QVector<Marker>& paths = m_pathsVisible ? m_markers : hoverPaths;
     const bool interactionPreview = useInteractionPreview();
+    const bool densePathLayer = m_pathsVisible && paths.size() > 500;
     const int previewStride = interactionPreview
-        ? qMax(1, (paths.size() + 599) / 600) : 1;
+        ? qMax(1, (paths.size() + 119) / 120) : 1;
+    const int segmentCount = interactionPreview ? 12
+                           : densePathLayer ? 24 : 48;
     QHash<QRgb, QPainterPath> pathsByColor;
     for (int index = 0; index < paths.size(); index += previewStride) {
         const Marker& marker = paths.at(index);
@@ -499,14 +496,18 @@ void GlobeMapView::paintPaths(QPainter& painter, const QMatrix4x4& model,
         QColor pathColor = marker.color;
         pathColor.setAlpha(185);
         QPainterPath& path = pathsByColor[pathColor.rgba()];
+        QVector3D pointOnGlobe = from;
+        const QVector3D rotationAxis = greatCircleAxis(from, to);
+        const float angle = std::acos(std::clamp(
+            QVector3D::dotProduct(from, to), -1.0F, 1.0F));
+        const float stepAngle = angle / segmentCount;
+        const float stepCosine = std::cos(stepAngle);
+        const float stepSine = std::sin(stepAngle);
         bool previousVisible = false;
-        for (int segment = 0; segment <= kGreatCircleSegments; ++segment) {
-            const float amount = static_cast<float>(segment)
-                / kGreatCircleSegments;
+        for (int segment = 0; segment <= segmentCount; ++segment) {
             QPointF point;
             const bool visible = projectPoint(
-                greatCirclePoint(from, to, amount), model, viewProjection,
-                &point);
+                pointOnGlobe, model, viewProjection, &point);
             if (visible) {
                 if (previousVisible) {
                     path.lineTo(point);
@@ -515,7 +516,20 @@ void GlobeMapView::paintPaths(QPainter& painter, const QMatrix4x4& model,
                 }
             }
             previousVisible = visible;
+            // Rotate by one fixed great-circle step. Computing the axis and
+            // trigonometric terms once per path avoids doing acos/sin for
+            // every one of thousands of path segments on every frame.
+            pointOnGlobe = pointOnGlobe * stepCosine
+                + QVector3D::crossProduct(rotationAxis, pointOnGlobe)
+                    * stepSine;
         }
+    }
+    // Thousands of overlapping global paths make QPainter's CPU antialiasing
+    // dominate the GUI thread. At this density its subpixel treatment is not
+    // perceptible. Keep it for targeted and hover paths, where line quality
+    // remains visible.
+    if (densePathLayer) {
+        painter.setRenderHint(QPainter::Antialiasing, false);
     }
     for (auto iterator = pathsByColor.cbegin();
          iterator != pathsByColor.cend(); ++iterator) {
@@ -525,6 +539,7 @@ void GlobeMapView::paintPaths(QPainter& painter, const QMatrix4x4& model,
         painter.setBrush(Qt::NoBrush);
         painter.drawPath(iterator.value());
     }
+    painter.setRenderHint(QPainter::Antialiasing, true);
 }
 
 void GlobeMapView::paintMarkers(QPainter& painter, const QMatrix4x4& model,
@@ -767,6 +782,14 @@ void GlobeMapView::applyDragDelta(const QPointF& delta)
     m_rotation.normalize();
 }
 
+void GlobeMapView::applyRollDelta(float degrees)
+{
+    const QQuaternion roll = QQuaternion::fromAxisAndAngle(
+        { 0.0F, 0.0F, 1.0F }, degrees);
+    m_rotation = roll * m_rotation;
+    m_rotation.normalize();
+}
+
 void GlobeMapView::mouseMoveEvent(QMouseEvent* event)
 {
     if (m_dragging) {
@@ -847,12 +870,25 @@ bool GlobeMapView::event(QEvent* event)
                                           kMaximumCameraDistance);
             update();
             return true;
+        } else if (gesture->gestureType() == Qt::RotateNativeGesture) {
+            const float degrees = static_cast<float>(gesture->value());
+            if (!qFuzzyIsNull(degrees)) {
+                beginTransientInteraction();
+                applyRollDelta(degrees);
+                update();
+            }
+            return true;
         }
     } else if (event->type() == QEvent::Gesture) {
         auto* gestureEvent = static_cast<QGestureEvent*>(event);
         if (auto* pinch = static_cast<QPinchGesture*>(
                 gestureEvent->gesture(Qt::PinchGesture))) {
             const qreal scale = pinch->scaleFactor();
+            if (pinch->changeFlags().testFlag(
+                    QPinchGesture::RotationAngleChanged)) {
+                applyRollDelta(static_cast<float>(
+                    pinch->rotationAngle() - pinch->lastRotationAngle()));
+            }
             if (scale > 0.0) {
                 beginTransientInteraction();
                 m_cameraDistance = std::clamp(

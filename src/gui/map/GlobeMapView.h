@@ -103,6 +103,7 @@ private:
     void showHoverCard(int markerIndex, const QPointF& position);
     void animateZoomTo(float distance);
     void applyDragDelta(const QPointF& delta);
+    void applyRollDelta(float degrees);
     void beginTransientInteraction();
     bool useInteractionPreview() const;
     void layoutOverlays();
