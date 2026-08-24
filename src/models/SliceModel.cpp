@@ -3,6 +3,8 @@
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
 
+#include <cmath>
+
 namespace AetherSDR {
 
 // Note: antenna-list splitting now lives in FlexBackend::decodeSliceStatus
@@ -824,6 +826,14 @@ void SliceModel::applyRecalledFmRepeater(const QString& direction, double offset
     }
     emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
                                        toneMode, toneHz);
+}
+
+double SliceModel::txOffsetForDirection(const QString& dir, double magnitudeMhz)
+{
+    const double magnitude = std::abs(magnitudeMhz);
+    if (dir == QLatin1String("up"))   return  magnitude;
+    if (dir == QLatin1String("down")) return -magnitude;
+    return 0.0;   // simplex, and anything not a duplex direction
 }
 
 void SliceModel::setTxOffsetFreq(double mhz)

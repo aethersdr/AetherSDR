@@ -154,6 +154,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
 
+    const std::span<const IcomBand> bands = bandsFor(m);
+    c.declaredBandRanges.reserve(static_cast<int>(bands.size()));
+    for (const IcomBand& band : bands) {
+        c.declaredBandRanges.append(DeclaredBandRange{
+            QString::fromUtf8(band.name.data(), static_cast<int>(band.name.size())),
+            static_cast<double>(band.lowHz),
+            static_cast<double>(band.highHz)});
+    }
+
     c.canTransmit = m.hasTransmit;
     c.txPowerMaxWatts = m.txPowerMaxWatts;
     // Official CI-V guides for both network targets define command 17 text
@@ -177,7 +186,6 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // empty, which is what RadioModel reads as "txPowerMaxWatts applies
     // everywhere" — the prior behaviour, unchanged.
     c.txPowerBands = {};
-    const std::span<const IcomBand> bands = bandsFor(m);
     c.txPowerBands.reserve(static_cast<int>(bands.size()));
     for (const IcomBand& band : bands) {
         c.txPowerBands.append(TxPowerBand{static_cast<double>(band.lowHz),
@@ -251,7 +259,12 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.hasGpsLocation = false;
 
     c.hasSupplyVoltageTelemetry =
-        profile.meters.calibration != MeterCalibration::Uncalibrated;
+        hasVoltageCalibration(profile.meters.calibration);
+    c.hasPaTemperatureTelemetry = profile.meters.hasPaTemperatureTelemetry;
+    // No supported Icom model currently publishes fan-speed telemetry. Keep
+    // this family-wide and fail closed until the backend implements a real
+    // CI-V fan meter; do not add speculative per-model profile surface.
+    c.hasMainFanTelemetry = false;
 
     // THE ATU BUTTON IS REACHABLE AGAIN.
     //
@@ -272,6 +285,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // > DATA MOD, which must be WLAN for us to be heard at all). A client
     // cannot pick MIC / BAL / LINE / ACC, so the Phone applet collapses to PC.
     c.hasSelectableMicInputs = false;
+
+    // No active Icom profile has a complete, evidenced DEXP SET/read-back
+    // path. In particular, the IC-9700 must not inherit Flex's compander
+    // surface merely because both radios perform other DSP on-radio.
+    c.hasDownwardExpander = false;
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single
@@ -304,8 +322,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // and, correctly, unwired: setTxFilter() declines there too, so the two
     // agree rather than the UI promising what the backend refuses.
     if (const auto tbw = txBandwidthProfileFor(*m_model)) {
+        c.hasTxFilterControls = true;
         c.txFilterLowEdgesHz  = QList<int>(tbw->lowEdgesHz.begin(), tbw->lowEdgesHz.end());
         c.txFilterHighEdgesHz = QList<int>(tbw->highEdgesHz.begin(), tbw->highEdgesHz.end());
+    } else {
+        c.hasTxFilterControls = false;
     }
 
     c.hasProfiles = false;
@@ -1990,6 +2011,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // The PREAMP control, not the RF-gain slider. It used to publish
             // into SliceDelta::rfGain, which is what made a three-position
             // switch look like a gain reading.
+            // Preserve the radio's wire state independently of the labels the
+            // UI is allowed to offer. 16 02 carries 00/01/02 even when a
+            // model's verified presentation ladder names fewer positions.
             m_preampStep = std::clamp(v, 0, 2);
             emit panPreampChanged(panId(), m_preampStep);
             return;
@@ -3271,12 +3295,24 @@ void IcomCivBackend::setPanRfGain(const QString&, int gainDb)
 // none at all.
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
-    // Clamp, never refuse — the seam's rule for every stepped control.
-    const int wanted = std::clamp(step, 0, 2);
+    // Operator intent is bounded by the model's verified presentation ladder.
+    // This deliberately prevents the IC-9700 UI from requesting External
+    // P.AMP states while still allowing radio-originated state 02 to be
+    // mirrored and reasserted unchanged by the diagnostic scrub path below.
+    const int maxStep = std::max(
+        0, static_cast<int>(preampLabelsFor(*m_model).size()) - 1);
+    const int wanted = std::clamp(step, 0, maxStep);
     m_preampStep = wanted;
     sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
                                    func::kPreamp, wanted));
     emit panPreampChanged(panId(), wanted);
+}
+
+void IcomCivBackend::reassertPanPreampWireStep(int step)
+{
+    const int wireStep = std::clamp(step, 0, 2);
+    sendUserCommand(cmdSetFunction(m_session ? m_session->civAddress() : 0xA4,
+                                   func::kPreamp, wireStep));
 }
 
 void IcomCivBackend::setPanAttenuator(const QString&, int step)
@@ -4024,8 +4060,10 @@ QVariantList IcomCivBackend::meterMap() const
 
     QVariantList out;
     for (const auto& m : meterSpecs()) {
-        if ((m.id == MeterId::Vd || m.id == MeterId::Id)
-            && profile.meters.calibration == MeterCalibration::Uncalibrated) {
+        if ((m.id == MeterId::Vd
+             && !hasVoltageCalibration(profile.meters.calibration))
+            || (m.id == MeterId::Id
+                && !hasCurrentCalibration(profile.meters.calibration))) {
             continue;
         }
         QVariantMap r;
@@ -4035,7 +4073,7 @@ QVariantList IcomCivBackend::meterMap() const
         QString unit = sv(m.unit);
         double high = m.high;
         if (m.id == MeterId::Power) {
-            const std::span<const CurvePoint> curve = profile.meters.powerCurve;
+            const std::span<const CurvePoint> curve = powerCurveFor(*m_model);
             if (curve.empty()) {
                 unit = QStringLiteral("Percent");
                 high = 100.0;
@@ -4206,7 +4244,7 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
         return false;
 
     if (id == QLatin1String("rf.gain"))  { setPanRfGain(pan, m_rfGainPercent); return true; }
-    if (id == QLatin1String("preamp"))   { setPanPreamp(pan, m_preampStep); return true; }
+    if (id == QLatin1String("preamp"))   { reassertPanPreampWireStep(m_preampStep); return true; }
     if (id == QLatin1String("atten"))    { setPanAttenuator(pan, m_attenStep); return true; }
     if (id == QLatin1String("rx.antenna")) {
         setSliceRxAntenna(slice, m_rxAntennaExternal
@@ -4734,16 +4772,19 @@ void IcomCivBackend::publishModeList()
 
 void IcomCivBackend::publishMeterDefs()
 {
-    const bool calibrated = profileFor(*m_model).meters.calibration
-        != MeterCalibration::Uncalibrated;
+    const MeterCalibration calibration =
+        profileFor(*m_model).meters.calibration;
+    const bool hasVoltage = hasVoltageCalibration(calibration);
+    const bool hasCurrent = hasCurrentCalibration(calibration);
     // Poll eligibility follows the active profile too. This runs both for the
     // handshake name and for an authoritative 0x19 identity correction.
-    m_meters.setVisible(MeterId::Vd, calibrated);
-    m_meters.setVisible(MeterId::Id, calibrated);
+    m_meters.setVisible(MeterId::Vd, hasVoltage);
+    m_meters.setVisible(MeterId::Id, hasCurrent);
 
     for (const MeterSpec& s : meterSpecs()) {
         const int index = static_cast<int>(s.id);
-        if ((s.id == MeterId::Vd || s.id == MeterId::Id) && !calibrated) {
+        if ((s.id == MeterId::Vd && !hasVoltage)
+            || (s.id == MeterId::Id && !hasCurrent)) {
             // Meter indices are stable identities, not positions in the
             // currently visible subset. Withdraw old definitions explicitly
             // so a calibrated handshake name corrected to another model cannot

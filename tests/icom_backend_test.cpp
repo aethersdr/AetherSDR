@@ -137,6 +137,21 @@ struct IcomCivBackendTestAccess {
         const auto recovery = profileFor(*backend.m_model).civRecovery;
         return recovery ? recovery->maxAttempts : 0;
     }
+
+    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
+    {
+        backend.m_model = &model;
+    }
+
+    static int preampStep(const IcomCivBackend& backend)
+    {
+        return backend.m_preampStep;
+    }
+
+    static void reassertPreamp(IcomCivBackend& backend)
+    {
+        backend.reassertPanPreampWireStep(backend.m_preampStep);
+    }
 };
 
 }  // namespace AetherSDR::icom
@@ -281,6 +296,37 @@ static void testStaleSessionFrameIsDropped()
 
 }
 
+static void testPreampWireStateRemainsAuthoritative()
+{
+    IcomCivBackend backend;
+    const IcomModel* ic9700 = modelForName("IC-9700");
+    check(ic9700 != nullptr, "IC-9700 preamp test resolves its model");
+    if (!ic9700) {
+        return;
+    }
+    IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+    IcomCivBackendTestAccess::prepareGeneration(backend, 1);
+
+    CivFrame reported;
+    reported.to = kControllerAddress;
+    reported.from = 0xA2;
+    reported.cmd = cmd::kFunction;
+    reported.hasSub = true;
+    reported.sub = func::kPreamp;
+    reported.data = {0x02};
+    IcomCivBackendTestAccess::deliver(backend, reported, 1);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 2,
+          "IC-9700 wire state 02 is mirrored without being renamed P.AMP INT");
+
+    IcomCivBackendTestAccess::reassertPreamp(backend);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 2,
+          "diagnostic reassert preserves the radio-adopted wire state");
+
+    backend.setPanPreamp(QStringLiteral("0"), 2);
+    check(IcomCivBackendTestAccess::preampStep(backend) == 1,
+          "operator intent remains bounded to OFF/P.AMP INT on the IC-9700");
+}
+
 static void testDestructorCancelsWaiter(QCoreApplication& app)
 {
     auto backend = std::make_unique<IcomCivBackend>();
@@ -347,6 +393,7 @@ int main(int argc, char** argv)
     qRegisterMetaType<AetherSDR::MeterDef>("MeterDef");
 
     testStaleSessionFrameIsDropped();
+    testPreampWireStateRemainsAuthoritative();
     testDestructorCancelsWaiter(app);
     testTerminalWaiterReentrySurvivesReset(app);
 
@@ -2174,10 +2221,10 @@ int main(int argc, char** argv)
     };
 
     // A user-visible Network Radio Name is only a handshake hint. The 0x19
-    // reply is authoritative and can move the session from a calibrated
-    // profile to an uncalibrated one. Meter definitions must be replaced by
-    // stable identity, not compacted into new indices, or OVF takes the old Vd
-    // slot and the status bar reads an overflow flag as supply voltage.
+    // reply is authoritative and can replace the hinted model's meter set —
+    // here IC-705 Vd+Id becomes IC-9700 Vd-only. Definitions must be replaced
+    // by stable identity, not compacted into new indices, or OVF takes a former
+    // meter slot and the status bar reads an overflow flag as telemetry.
     {
         CivCase c(0xA2, "IC-705");
         QMap<int, MeterDef> activeMeters;
@@ -2202,24 +2249,30 @@ int main(int argc, char** argv)
         const int vdIndex = static_cast<int>(MeterId::Vd);
         const int idIndex = static_cast<int>(MeterId::Id);
         const int overflowIndex = static_cast<int>(MeterId::Overflow);
-        check(removedMeters.contains(vdIndex) && removedMeters.contains(idIndex),
-              "identity correction: withdrawn Vd and Id definitions are removed explicitly");
-        check(!activeMeters.contains(vdIndex) && !activeMeters.contains(idIndex),
-              "identity correction: uncalibrated Vd and Id do not remain cached");
+        check(!removedMeters.contains(vdIndex) && removedMeters.contains(idIndex),
+              "identity correction: IC-9700 retains Vd and withdraws unsupported Id");
+        check(activeMeters.contains(vdIndex) && !activeMeters.contains(idIndex),
+              "identity correction: IC-9700 publishes voltage without claiming current");
         check(activeMeters.contains(overflowIndex)
                   && activeMeters.value(overflowIndex).name == QStringLiteral("OVF"),
               "identity correction: OVF retains its stable meter identity");
-        check(activeMeters.size() == 6,
-              "identity correction: only calibrated-independent meters remain");
+        check(activeMeters.size() == 7,
+              "identity correction: calibrated-independent meters plus Vd remain");
 
         c.radio.clearCivLog();
-        check(waitFor([&] { return !c.radio.civCommands().empty(); }, 1500),
-              "identity correction: scheduler continues after profile correction");
+        check(waitFor([&] {
+                  return std::ranges::any_of(
+                      c.radio.civCommands(), [](const CivFrame& frame) {
+                          return frame.cmd == cmd::kMeter && frame.hasSub
+                              && frame.sub == meter::kVd;
+                      });
+              }, 2500),
+              "identity correction: IC-9700 schedules its supported Vd poll");
         check(std::ranges::none_of(c.radio.civCommands(), [](const CivFrame& frame) {
                   return frame.cmd == cmd::kMeter && frame.hasSub
-                      && (frame.sub == meter::kVd || frame.sub == meter::kId);
+                      && frame.sub == meter::kId;
               }),
-              "identity correction: uncalibrated Vd and Id are no longer polled");
+              "identity correction: IC-9700 does not poll unsupported Id");
 
         c.backend.disconnectRadio();
     }

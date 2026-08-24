@@ -229,6 +229,7 @@ txBandwidthProfileFor(const IcomModel& model);
 // A model needs this only when its tunable range is NOT the single continuous
 // interval [tuningMinHz, tuningMaxHz] — which, today, means the IC-9700 alone.
 struct IcomBand {
+    std::string_view name;
     std::uint64_t lowHz = 0;
     std::uint64_t highHz = 0;
     double maxWatts = 0.0;
@@ -374,8 +375,11 @@ struct RxAntennaProfile {
 
 struct MeterCalibrationProfile {
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
-    std::span<const CurvePoint> powerCurve;
     double currentFullScaleAmps = 4.0;
+    // True only after this model profile both documents and implements a PA
+    // temperature meter. Kept model-specific so one Icom cannot lend an
+    // unverified instrument to another merely because they share CI-V.
+    bool hasPaTemperatureTelemetry = false;
 };
 
 // Recovery policy is model capability, not shared Icom scheduler policy.  The

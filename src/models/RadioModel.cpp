@@ -1088,11 +1088,14 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
             [this](int index) {
         const bool hadMicPeak = m_meterModel.hasMicPeakMeter();
+        const bool hadSupplyVoltage = m_meterModel.hasSupplyVoltage();
         m_meterModel.removeMeter(index);
         // Symmetric on purpose: a meter that goes away must hide the face
         // again, or a radio swap leaves a dead gauge on screen.
-        if (hadMicPeak != m_meterModel.hasMicPeakMeter())
+        if (hadMicPeak != m_meterModel.hasMicPeakMeter()
+            || hadSupplyVoltage != m_meterModel.hasSupplyVoltage()) {
             publishCapabilities(isConnected());
+        }
     });
 
     // A backend may revise its own capabilities mid-session (SimBackend does so
@@ -6927,6 +6930,7 @@ void RadioModel::onDisconnected()
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
     m_region.clear();
+    m_declaredBands.clear();
     m_rxAudio = {};
     m_netCwStreamId = 0;
     m_netCwIndex = 1;

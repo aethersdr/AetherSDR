@@ -9,6 +9,10 @@
 
 #include <iostream>
 
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
+
 using namespace AetherSDR;
 
 namespace {
@@ -756,6 +760,74 @@ int main(int argc, char** argv)
     ok &= expect(rDotsName.ok()
                      && rDotsName.profileName.startsWith("Imported profile"),
                  "import: a refused derived name falls back to the default");
+
+    // ── Profile store: the write reports its outcome (#5077) ────────────────
+
+    ok &= expect(settings.saveProfile("Outcome", saved),
+                 "profile store: a successful save returns true");
+    ok &= expect(settings.saveProfile("Outcome", saved),
+                 "profile store: overwriting an existing profile returns true");
+    ok &= expect(!settings.saveProfile("a/b", saved),
+                 "profile store: a refused name returns false");
+    // Existence is the filesystem's answer: on a case-insensitive volume
+    // "outcome" names the same file as "Outcome", on a case-sensitive one it
+    // does not — either way it must agree with the path the store writes.
+    ok &= expect(MidiSettings::profileExists("Outcome"),
+                 "profile store: a saved profile exists");
+    // Compared against what the store itself hands back for that spelling:
+    // on a case-insensitive volume "outcome" loads "Outcome", on a
+    // case-sensitive one it loads nothing — existence must agree either way.
+    ok &= expect(MidiSettings::profileExists("outcome")
+                     == !settings.loadProfile("outcome").isEmpty(),
+                 "profile store: existence check agrees with loadProfile on case");
+    ok &= expect(!MidiSettings::profileExists("a/b"),
+                 "profile store: a refused name never exists");
+    // An empty set is refused (as exportProfile refuses it) and, refused,
+    // leaves the existing profile untouched — Clear All → Save must not
+    // replace a profile with nothing.
+    ok &= expect(!settings.saveProfile("Outcome", QVector<MidiBinding>{}),
+                 "profile store: saving an empty binding set returns false");
+    ok &= expect(settings.loadProfile("Outcome").size() == saved.size(),
+                 "profile store: the refused empty save left the profile intact");
+    settings.deleteProfile("Outcome");
+    ok &= expect(!MidiSettings::profileExists("Outcome"),
+                 "profile store: a deleted profile no longer exists");
+    // Block the store directory with a plain file so mkpath and open both
+    // fail: the failure must reach the caller instead of being swallowed.
+    QDir(appConfigDir + "/midi").removeRecursively();
+    {
+        QFile blocker(appConfigDir + "/midi");
+        if (blocker.open(QIODevice::WriteOnly)) {
+            blocker.write("not a directory");
+            blocker.close();
+        }
+    }
+    ok &= expect(!settings.saveProfile("Blocked", saved),
+                 "profile store: an unwritable store returns false");
+    QFile::remove(appConfigDir + "/midi");
+    // A failed overwrite leaves the previous profile intact: write one, make
+    // the store read-only, try to overwrite it, and read the original back.
+#ifndef Q_OS_WIN
+    // Directory permissions do not bind root (CI containers may run as root)
+    // and are not honoured the same way on Windows, so this arm is POSIX
+    // non-root only; the bool contract itself is covered above on every OS.
+    if (::geteuid() != 0) {
+    ok &= expect(settings.saveProfile("Keep", saved), "profile store: original written");
+    QFile::setPermissions(appConfigDir + "/midi",
+                          QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    QVector<MidiBinding> bigger = saved;
+    bigger.append(saved.first());
+    const bool overwriteFailed = !settings.saveProfile("Keep", bigger);
+    QFile::setPermissions(appConfigDir + "/midi",
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    ok &= expect(overwriteFailed, "profile store: overwrite into a read-only store returns false");
+    ok &= expect(settings.loadProfile("Keep").size() == saved.size(),
+                 "profile store: the failed overwrite left the original profile intact");
+    settings.deleteProfile("Keep");
+    } else {
+        std::cout << "[SKIP] profile store: read-only store arm (running as root)\n";
+    }
+#endif
 
     QFile::remove(configRoot + "/AetherSDR/midi.settings");
     QDir(configRoot + "/AetherSDR").removeRecursively();

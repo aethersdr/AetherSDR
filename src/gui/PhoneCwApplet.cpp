@@ -93,6 +93,7 @@ static constexpr const char* kInsetEditStyle =
     "QLineEdit:focus { border: 1px solid #00b4d8; }";
 
 static constexpr float kAlcGaugeFloorDbfs = -20.0f;
+static constexpr float kLevelGaugeFloorDbfs = -40.0f;
 
 // Mouse-over readout formatter for the ALC gauges — one decimal of dBFS so a
 // transmitting operator can read the exact SSB-peak level off the bar rather
@@ -178,13 +179,29 @@ void PhoneCwApplet::setSelectableMicInputs(bool selectable)
                          "Its own input selection is made on the radio."));
 }
 
-void PhoneCwApplet::setMicLevelMeterAvailable(bool available)
+void PhoneCwApplet::setMicLevelMeterState(MicMeterSessionState session,
+                                          bool available)
 {
-    if (m_micLevelMeterAvailable == available)
-        return;   // idempotent: this rides capabilitiesChanged, which repeats
+    const bool stateChanged = session != m_micLevelMeterSession
+                              || available != m_micLevelMeterAvailable;
+    m_micLevelMeterSession = session;
     m_micLevelMeterAvailable = available;
-    if (m_levelGauge)
-        m_levelGauge->setVisible(available);
+    if (!m_levelGauge) {
+        return;
+    }
+
+    const bool connected = session == MicMeterSessionState::Connected;
+
+    // A meter reading belongs to one radio session. MeterModel::clear()
+    // resets its cached values on disconnect but emits no mic-meter update, so
+    // explicitly discard the prior radio's fill and peak at the lifecycle
+    // boundary. An unsupported connected radio gets the same reset before the
+    // gauge is hidden. Reset only on a state edge: repeated capability
+    // publications while disconnected must not erase live PC-mic telemetry.
+    if (stateChanged && (!connected || !available)) {
+        resetLevelMeter();
+    }
+    m_levelGauge->setVisible(!connected || available);
 }
 
 void PhoneCwApplet::setDaxVisible(bool visible)
@@ -206,9 +223,11 @@ void PhoneCwApplet::buildPhonePanel()
     vbox->setSpacing(2);
 
     // ── Level gauge (mic peak, dBFS: -40 to +10) ────────────────────────
-    m_levelGauge = new HGauge(-40.0f, 10.0f, 0.0f, "Level", "dB",
+    m_levelGauge = new HGauge(kLevelGaugeFloorDbfs, 10.0f, 0.0f, "Level", "dB",
         {{-40, "-40dB"}, {-30, "-30"}, {-20, "-20"}, {-10, "-10"}, {0, "0"}, {5, "+5"}, {10, "+10"}},
         nullptr, -10.0f);
+    m_levelGauge->setObjectName(QStringLiteral("phoneMicLevelGauge"));
+    resetLevelMeter();
     m_levelGauge->setAccessibleName("Microphone level gauge");
     m_levelGauge->setAccessibleDescription("Microphone input level in dBFS");
     // Mouse-over readout: exact mic peak in dB. (#3936)
@@ -949,6 +968,12 @@ void PhoneCwApplet::applyLevelMeterReceiveGate()
         m_levelGauge->setValue(-150.0f);
         m_levelGauge->setPeakValue(-150.0f);
     }
+}
+
+void PhoneCwApplet::resetLevelMeter()
+{
+    m_levelGauge->setValueImmediate(kLevelGaugeFloorDbfs);
+    m_levelGauge->clearPeak();
 }
 
 void PhoneCwApplet::updateCompression(float compPeak)

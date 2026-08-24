@@ -8,6 +8,131 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.8.4] — 2026-08-22
+
+### Evidence-backed Icom · client-timed HL2 CW · faster PSK Reporter maps · steadier audio, MIDI and TCI
+
+48 commits since v26.8.3. **Icom support now grows by model and evidence, not
+assumption:** typed profiles for the IC-705, IC-7300MK2 and IC-9700 gate the
+radio's actual controls, calibration and RF decks; unknown models fail closed.
+That foundation brings radio-authoritative repeater tone/duplex/XFC, real
+IF-width/PBT and TX-cut readback, the network radio name, CW text keying, WFM,
+correct VHF/UHF limits and bounded IC-9700 CI-V recovery.
+
+The **Hermes-Lite 2 gains client-timed CW transmit and persistence**, scheduled
+key edges now drive sidetone/trace/netcw consistently, and the default PortAudio
+sidetone path works. PSK Reporter renders more coverage with less overhead and
+smooth pinch-to-zoom; NR2, the float32 microphone path, MIDI profile handling,
+TCI, Workspace Canvas and several controller/UI seams receive focused fixes.
+
+### Networked Icom
+
+- **Evidence-backed model capability profiles (#5151).** IC-705, IC-7300MK2
+  and IC-9700 behavior is described by independently attested facets instead of
+  scattered address checks. Unknown and unprofiled radios hide unsupported
+  controls and telemetry instead of borrowing another model's commands or
+  calibration.
+- **Real RX filters, twin PBT and TX cuts (#5076).** The app reads the radio's
+  actual IF width, keeps filter slot/width/shift separate, writes only
+  model-supported TX edges and publishes the radio's readback.
+- **FM repeater tone, duplex, offset and momentary XFC (#5140).** State is
+  read-first and profile-gated, recalled in radio-safe order, and XFC always
+  releases on hide, deactivation, capability change or disconnect.
+- **Network Radio Name in the status bar (#5148).** A custom RS-BA1 radio name
+  is kept distinct from canonical model, hostname and callsign.
+- **CI-V CW text keying as CWK (#5113)** and a focus fix that prevents incoming
+  CWK updates from stealing the VFO editor (#5134).
+- **The radio's own mode vocabulary reaches the UI (#5106),** making WFM
+  selectable where the model advertises it.
+- **Correct RF decks and tune guards:** 2 m/70 cm are admitted on the IC-705
+  (#5108), and IC-9700 band power limits are modelled explicitly (#5117).
+- **Hardened lifecycle and IC-9700 recovery (#5145).** Cancelled scheduler work
+  receives terminal outcomes, stale-session frames cannot publish state, and a
+  confirmed IC-9700 CI-V stall gets bounded serial-stream recovery before a
+  full reconnect.
+- Icom logging now registers its categories and records every CI-V frame
+  (#4965); the scheduler-safe trace regression was fixed (#5046).
+
+### CW and Hermes-Lite 2
+
+- **Client-timed HL2 CW transmit and persistence (#5061).** Host-scheduled key
+  edges drive Protocol 1 CW safely, and client-owned CW operating state returns
+  after restart.
+- First-connect setup is presented reliably and test FFTW planning is bounded
+  (#5062).
+- Scheduled key instants now flow to sidetone, trace and netcw (#4942), and late
+  edges shift the sidetone anchor forward rather than being clamped (#4934).
+- PortAudio's real default-device path is reachable for the default sidetone
+  selection (#5085), and CWX macro rows remain readable at minimum window
+  height (#5125).
+
+### Audio and noise reduction
+
+- Microphone capture stays float32 through the 48 kHz voice strip (#5017).
+- TX-accumulator clears are serialized on the AudioEngine thread (#5095).
+- NR2 recovers from residual noise when AGC-T changes (#5045), and RN2 frame
+  accumulation is unified (#5039).
+- Automation proof modes now exercise RN2 more completely (#5043).
+
+### PSK Reporter and the panadapter
+
+- PSK Reporter map coverage and responsiveness improve through batched marker
+  and path rendering, wrapped-map geometry and live-update work (#5110).
+- Smooth trackpad pinch-to-zoom reaches the map (#5103).
+- DIGL is no longer misclassified as RTTY, restoring the normal carrier marker
+  and removing meaningless mark/space cues (#5167).
+- Duplicate pan wiring callbacks are removed (#5038).
+
+### Controllers, MIDI and TCI
+
+- macOS Ulanzi input no longer seizes unrelated trackpads (#5147).
+- AetherControl gains a direct Settings link for FlexControl configuration
+  (#5157).
+- MIDI profile Save reports its real outcome (#5127); dotted profile names and
+  paths round-trip safely (#5083); the app's own Pitch Bend export re-imports
+  (#5054); and SmartSDR `.map` files translate direct band/mode selection
+  (#5053).
+- TCI starts only after readiness, echoes start/stop correctly (#5082), and no
+  longer double-broadcasts `vfo:` on channel 0 (#5088).
+
+### App workflow and automation
+
+- Workspace Canvas pan layouts reflow correctly after surface changes (#5152).
+- Slider hover events no longer leave stale pixels at fractional UI scale
+  (#4923).
+- MainWindow disconnects the global focus-change signal before member teardown
+  (#4927).
+- PHONE low/high TX cuts accept exact typed values while preserving radio
+  readback (#5064).
+- The automation bridge gains `doubleClick` and `doubleClickAt` (#5069).
+- Accessibility announcement tests skip only where the platform has no
+  accessibility backend (#4949).
+
+### Diagnostics, documentation and CI
+
+- Startup logs and support bundles record CPU SIMD, RAM and GPU capability
+  inventory (#4988).
+- MCP token guidance keeps `AETHER_MCP_TOKEN` out of persistent configuration
+  (#5158).
+- HL2 documentation and tools move into their maintained repository homes
+  (#5035).
+- The Linux gate runs `midi_settings_test` (#5025); digital-voice ASan opt-in no
+  longer breaks TSan (#4947); and release signing archives the tag build rather
+  than `main` (#5029).
+
+### Contributors
+
+Big thanks to **@jensenpat** (10 commits), **@skerker** (9), **@rfoust** (8),
+**@fklassen** (3), **@nigelfenton** (3), **@Ozy311** (3), **@M7HNF-Ian**
+(2), **@ten9876** (maintainer, 2), **@w5jwp** (2), **@aethersdr-agent**
+(the AetherClaude orchestrator, 2), **@chibondking** (1), **@K5PTB** (1),
+**@NF0T** (1), and **@tropo1234** (1).
+
+We are excited to welcome our first-time contributors this cycle:
+**@fklassen** and **@tropo1234**.
+
+73, Pat KI6BCJ & Codex (AI dev partner)
+
 ## [v26.8.3] — 2026-08-16
 
 ### The workspace canvas · a command scheduler for Icom · HL2 gains a noise blanker and a real BFO · VK3AMP amplifiers · the TX voice chain moves to 48 kHz float
