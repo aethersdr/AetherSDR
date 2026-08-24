@@ -2450,6 +2450,16 @@ QString SpectrumWidget::settingsKey(const QString& base) const
     return QString("%1_%2").arg(base).arg(m_panIndex);
 }
 
+void SpectrumWidget::setPanIndex(int idx)
+{
+    m_panIndex = idx;
+    // Let the overlay menu (the +RX/+TNF/Band/ANT/Display/Memory/DAX button
+    // rail) key its persisted collapsed/expanded state to this slot.
+    if (m_overlayMenu) {
+        m_overlayMenu->setPanSlotIndex(idx);
+    }
+}
+
 void SpectrumWidget::loadSettings()
 {
     auto& s = AppSettings::instance();

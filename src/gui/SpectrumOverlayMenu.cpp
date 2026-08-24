@@ -989,6 +989,29 @@ void SpectrumOverlayMenu::setPanId(const QString& id)
     refreshAntennaCombo();
 }
 
+void SpectrumOverlayMenu::setPanSlotIndex(int idx)
+{
+    if (m_panSlotIndex == idx)
+        return;
+    m_panSlotIndex = idx;
+
+    // Restore this slot's saved collapsed/expanded state (client-side UI
+    // preference — same per-slot persistence pattern as VfoWidget's
+    // SliceFlagCollapsed_<sliceId>, keyed here by the client-assigned pan
+    // slot rather than a radio-side id).
+    if (m_panSlotIndex < 0)
+        return;
+    auto& s = AppSettings::instance();
+    const bool savedExpanded = s.value(
+        QString("PanMenuExpanded_%1").arg(m_panSlotIndex), "True").toString() == "True";
+    if (savedExpanded != m_expanded) {
+        m_expanded = savedExpanded;
+        if (!m_expanded)
+            hideAllSubPanels();
+        updateLayout();
+    }
+}
+
 void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
 {
     if (m_radioModel)
@@ -1395,6 +1418,14 @@ void SpectrumOverlayMenu::toggle()
     if (!m_expanded)
         hideAllSubPanels();
     updateLayout();
+
+    // Persist per-slot so each panadapter remembers its own collapsed state
+    // across restarts (see setPanSlotIndex()).
+    if (m_panSlotIndex >= 0) {
+        AppSettings::instance().setValue(
+            QString("PanMenuExpanded_%1").arg(m_panSlotIndex),
+            m_expanded ? "True" : "False");
+    }
 }
 
 void SpectrumOverlayMenu::updateLayout()
