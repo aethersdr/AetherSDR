@@ -488,7 +488,10 @@ static void testCapabilityProfiles()
           "IC-705 owns VOX delay 0359 and CI-V Transceive 0131");
     check(pMk2.setMenu.voxDelayItem == 267 && pMk2.setMenu.civTransceiveItem == 89,
           "IC-7300MK2 owns the distinct VOX delay 0267 and Transceive 0089");
-    check(!p9700.modulation && !p9700.txBandwidth,
+    check(p9700.modulation && p9700.modulation->phoneLevelFollowsNetworkInput,
+          "IC-9700 owns its verified LAN modulation-level profile");
+    check(p9700.setMenu.voxDelayItem < 0 && p9700.setMenu.civTransceiveItem < 0
+              && !p9700.txBandwidth,
           "IC-9700 borrows no unverified SET-menu or TX-bandwidth map");
 
     check(p705.fmRepeater && p705.fmRepeater->dialect == FmRepeaterDialect::Extended
