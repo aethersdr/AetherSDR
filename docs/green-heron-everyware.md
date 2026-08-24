@@ -91,10 +91,46 @@ loop of command-measure-command does not converge; it sits at three or four
 degrees of error issuing commands the rotator ignores. Nudge by eye instead.
 
 The row disappears when the rotator stops reporting — see *Presence is reported
-only by silence* below. The reference GTK client draws a full Cairo compass
-rose here; a recognisable rose would cost most of a 260 px tile's height for
-one number, so what is ported is the dial's information and its safety model,
-not its pixels.
+only by silence* below.
+
+**The compass rose is drawn only when the tile is floating.** The reference GTK
+client draws a full Cairo rose in its main window. In the docked rail — 248 px
+of usable width — it is still refused: a recognisable rose would cost most of
+the tile's height to restate one number the readout already gives. Popped out,
+the operator has sized the window themselves, and the dial goes under the Turn
+row:
+
+```
+Rotor                             57.4°
+[ degrees      ]          [ Turn ]
+              ╭───N───╮
+              │   ╎   │      ╎  asked
+              │   ↑   │      ↑  reported
+              W   ●   E
+              ╰───S───╯
+```
+
+It is a second view of the readout, not a second source for it: the needle is
+the **reported** heading and the dashed tick, when this session has commanded
+one, is the **asked** heading. There is no arrival state, no "on target"
+colour, and no tolerance ring, for the reasons measured above. Neither mark
+uses an accent colour — success and warning tokens would editorialise about a
+difference the protocol gives no way to judge — so the needle is the primary
+text colour and the ghost the label colour, both resolved through
+`ThemeManager::color()` rather than as hardcoded hex.
+
+**The rose is read-only, and that is the first invariant above rather than an
+omission.** A compass rose's natural affordance is click-to-point, which is
+exactly the single gesture that may not transmit. `RotorCompass` has no mouse
+handlers at all and must not acquire one — not even to fill the heading field,
+which is one Enter away from a rotation that cannot be recalled.
+
+The compass lives *inside* the rotator section, so it inherits that section's
+gate: it appears with the first `POINT` and goes away with the silence timeout,
+rather than being left pointing at a stale heading after the controller is
+switched off. The floating window resizes itself around it — measured, 346 px
+to 538 px the moment the section appeared — so no default float size is
+declared for the tile.
 
 ## Where the code lives
 

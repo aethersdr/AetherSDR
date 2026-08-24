@@ -11,11 +11,16 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QtMath>
+
+#include <cmath>
 
 #include <iterator>
 
@@ -90,6 +95,151 @@ const QString kFieldStyle =
                    "padding: 2px 4px; color: {{color.text.primary}}; font-size: 10px;");
 
 } // namespace
+
+// ── RotorCompass ────────────────────────────────────────────────────────────
+
+namespace {
+
+// Heading 0 is north and grows clockwise, which is the rotator's convention
+// and not Qt's. Screen y grows downward, so a heading maps to a point as
+// (sin, -cos) rather than the usual (cos, sin).
+QPointF headingPoint(const QPointF& centre, double radius, double headingDeg)
+{
+    const double rad = qDegreesToRadians(headingDeg);
+    return {centre.x() + radius * std::sin(rad),
+            centre.y() - radius * std::cos(rad)};
+}
+
+constexpr int kCompassPreferredPx = 190;
+constexpr int kCompassMinimumPx   = 120;
+
+} // namespace
+
+RotorCompass::RotorCompass(QWidget* parent) : QWidget(parent)
+{
+    setAccessibleName(tr("Rotator compass"));
+    // The dial restates the readout; a screen reader that has just been given
+    // the heading in text does not need it again as a graphic.
+    setAccessibleDescription(
+        tr("A dial repeating the rotator heading shown beside it."));
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+}
+
+QSize RotorCompass::sizeHint() const
+{
+    return {kCompassPreferredPx, kCompassPreferredPx};
+}
+
+QSize RotorCompass::minimumSizeHint() const
+{
+    return {kCompassMinimumPx, kCompassMinimumPx};
+}
+
+void RotorCompass::setHeading(double reported, bool hasAsked, double asked)
+{
+    // An absolute epsilon, NOT qFuzzyCompare: that compares relative to
+    // magnitude and is documented as unusable against zero, which is due
+    // north and therefore a heading this widget will genuinely be handed.
+    // Well below kHeadingDecimals, so the guard can never swallow a change
+    // the readout beside it is showing.
+    constexpr double kSame = 1e-6;
+    const auto same = [](double a, double b) { return std::abs(a - b) < kSame; };
+
+    if (same(m_reported, reported) && m_hasAsked == hasAsked
+        && (!hasAsked || same(m_asked, asked))) {
+        return;
+    }
+    m_reported = reported;
+    m_hasAsked = hasAsked;
+    m_asked    = asked;
+    // update() only. NOT QAccessible::updateAccessibility(): POINT lands at
+    // ~0.97 s and dithers at rest, and the readout label already owns the one
+    // announcement channel this tile has (see m_lastRotorAnnouncement).
+    update();
+}
+
+void RotorCompass::paintEvent(QPaintEvent* /*ev*/)
+{
+    auto& theme = ThemeManager::instance();
+    const QColor ringColour   = theme.color(this, QStringLiteral("color.text.disabled"));
+    const QColor labelColour  = theme.color(this, QStringLiteral("color.text.label"));
+    const QColor needleColour = theme.color(this, QStringLiteral("color.text.primary"));
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF box = rect();
+    const double side = std::min(box.width(), box.height());
+    const QPointF centre = box.center();
+    // Room for the cardinal letters outside the ring.
+    const double radius = side / 2.0 - 14.0;
+    if (radius <= 4.0) {
+        return;
+    }
+
+    p.setPen(QPen(ringColour, 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(centre, radius, radius);
+
+    // Ticks every 30°, the cardinals longer and lettered.
+    QFont tickFont = font();
+    tickFont.setPointSizeF(std::max(7.0, tickFont.pointSizeF() - 1.0));
+    p.setFont(tickFont);
+    const QFontMetricsF fm(tickFont);
+
+    for (int deg = 0; deg < 360; deg += 30) {
+        const bool cardinal = (deg % 90) == 0;
+        const double inner = radius - (cardinal ? 8.0 : 4.0);
+        p.setPen(QPen(cardinal ? labelColour : ringColour, cardinal ? 1.4 : 1.0));
+        p.drawLine(headingPoint(centre, inner, deg),
+                   headingPoint(centre, radius, deg));
+
+        if (!cardinal) {
+            continue;
+        }
+        const QString letter = deg == 0   ? tr("N")
+                             : deg == 90  ? tr("E")
+                             : deg == 180 ? tr("S")
+                                          : tr("W");
+        const QPointF at = headingPoint(centre, radius + 8.0, deg);
+        const QRectF glyph(at.x() - fm.horizontalAdvance(letter) / 2.0,
+                           at.y() - fm.height() / 2.0,
+                           fm.horizontalAdvance(letter), fm.height());
+        p.setPen(labelColour);
+        p.drawText(glyph, Qt::AlignCenter, letter);
+    }
+
+    // The commanded heading, when there is one: an open tick outside the
+    // ring, deliberately unlike the needle so the two are never confused for
+    // one reading. Drawn first so the needle wins any overlap — the reported
+    // heading is the fact and the asked one is only context.
+    if (m_hasAsked) {
+        QPen ghost(labelColour, 1.4, Qt::DashLine);
+        p.setPen(ghost);
+        p.drawLine(headingPoint(centre, radius - 6.0, m_asked),
+                   headingPoint(centre, radius + 4.0, m_asked));
+    }
+
+    // The needle: reported heading, always.
+    const QPointF tip  = headingPoint(centre, radius - 6.0, m_reported);
+    const QPointF left = headingPoint(centre, 5.0, m_reported - 90.0);
+    const QPointF rght = headingPoint(centre, 5.0, m_reported + 90.0);
+
+    QPainterPath needle;
+    needle.moveTo(tip);
+    needle.lineTo(left);
+    needle.lineTo(rght);
+    needle.closeSubpath();
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(needleColour);
+    p.drawPath(needle);
+
+    // Hub, so the pivot reads as a pivot at small sizes.
+    p.setBrush(needleColour);
+    p.drawEllipse(centre, 2.5, 2.5);
+}
+
 
 GreenHeronApplet::GreenHeronApplet(QWidget* parent)
     : QWidget(parent)
@@ -361,6 +511,16 @@ void GreenHeronApplet::buildUI()
         turnRow->addWidget(m_turnBtn);
 
         section->addLayout(turnRow);
+
+        // Inside the section, so the POINT gate and the silence teardown
+        // cover it without a second copy of either rule.
+        m_compass = new RotorCompass;
+        m_compass->setObjectName(QStringLiteral("greenHeronRotorCompass"));
+        // Explicit, and load-bearing: without it the compass is merely an
+        // un-hidden child, and the first time a rotator appears in the DOCKED
+        // tile Qt would show it along with the rest of the section.
+        m_compass->hide();
+        section->addWidget(m_compass);
 
         m_rotorSection->hide();
         outer->addWidget(m_rotorSection);
@@ -675,6 +835,12 @@ void GreenHeronApplet::syncRotorFromModel()
                           .arg(name, reported, askedText, deltaText);
     }
 
+    // The same two numbers the readout just rendered — the compass is a second
+    // view of that line, never a second source for it.
+    m_compass->setHeading(rotor.heading,
+                          asked != m_commanded.constEnd(),
+                          asked != m_commanded.constEnd() ? *asked : 0.0);
+
     m_rotorReadout->setText(readout);
     m_rotorReadout->setAccessibleName(tr("Rotator heading"));
     m_rotorReadout->setAccessibleDescription(description);
@@ -695,6 +861,17 @@ void GreenHeronApplet::syncRotorFromModel()
     // means a POINT arrived on this very socket.
     m_headingEdit->setEnabled(true);
     m_turnBtn->setEnabled(true);
+}
+
+void GreenHeronApplet::setFloating(bool on)
+{
+    if (m_floating == on) {
+        return;
+    }
+    m_floating = on;
+    // Visibility only — the compass keeps its heading either way, so docking
+    // and floating again does not blank the dial until the next POINT.
+    m_compass->setVisible(on);
 }
 
 void GreenHeronApplet::sendTurn()

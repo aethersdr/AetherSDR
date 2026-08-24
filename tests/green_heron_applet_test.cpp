@@ -662,6 +662,116 @@ void testAHeadingTypedWithACommaStillReachesTheWireAsADot()
 // provoked by sending anything, because the signal is the absence of a record,
 // and a timeout a test may shorten is a timeout the test is no longer
 // measuring. So the wait is shared instead of shortened.
+void testTheCompassIsFloatingOnly()
+{
+    // The rose was refused in the docked rail — 248px of width spent restating
+    // one number — and admitted only where the operator sized the window
+    // themselves. So "is it visible" is a question about the dock mode, not
+    // just about the rotator.
+    FakeDevice device;
+    GreenHeronApplet applet;
+    applet.show();
+    bringUp(applet, device);
+
+    auto* compass =
+        applet.findChild<QWidget*>(QStringLiteral("greenHeronRotorCompass"));
+    report("the tile has a compass", compass != nullptr);
+    report("no compass before any rotator reports",
+           compass != nullptr && !compass->isVisible());
+
+    device.send(kRotorPoint);
+    waitFor([&]() { return !applet.selectedRotor().isEmpty(); });
+    auto* section =
+        applet.findChild<QWidget*>(QStringLiteral("greenHeronRotorSection"));
+    report("a POINT brings the rotator row up", section != nullptr
+                                                    && section->isVisible());
+    // The discriminating one: the row is up, the rotator is live, and the
+    // compass is still deliberately absent because the tile is docked.
+    report("and the DOCKED tile still shows no compass", !compass->isVisible());
+
+    applet.setFloating(true);
+    report("floating brings the compass up", compass->isVisible());
+    auto* readout =
+        applet.findChild<QLabel*>(QStringLiteral("greenHeronRotorReadout"));
+    report("the text readout is still there beside it — the dial adds, it does "
+           "not replace",
+           readout != nullptr && readout->isVisible()
+               && readout->text() == QStringLiteral("50.4°"),
+           readout != nullptr ? readout->text().toStdString() : "missing");
+
+    applet.setFloating(false);
+    report("docking it again puts the compass away", !compass->isVisible());
+}
+
+void testTheCompassTracksDueNorth()
+{
+    // Due north is heading 0.0, and 0.0 is exactly the value a change guard
+    // written with qFuzzyCompare cannot distinguish from "unset" — Qt compares
+    // relative to magnitude and documents it as unusable against zero. A
+    // rotator pointing north is an ordinary thing for this widget to be handed.
+    FakeDevice device;
+    GreenHeronApplet applet;
+    applet.show();
+    bringUp(applet, device);
+    applet.setFloating(true);
+
+    device.send(point("Rotor", "180.0"));
+    waitFor([&]() { return !applet.selectedRotor().isEmpty(); });
+    const auto* compass = applet.compass();
+    report("the dial follows a southward heading",
+           compass != nullptr && compass->reportedHeading() > 179.9
+               && compass->reportedHeading() < 180.1,
+           compass != nullptr ? std::to_string(compass->reportedHeading()) : "missing");
+
+    device.send(point("Rotor", "0"));
+    const bool north = waitFor([&]() {
+        return compass != nullptr && compass->reportedHeading() < 0.05;
+    });
+    report("and swings to due north rather than sticking at the last heading",
+           north,
+           compass != nullptr ? std::to_string(compass->reportedHeading()) : "missing");
+    report("with nothing commanded, so no ghost tick is drawn",
+           compass != nullptr && !compass->hasAskedHeading());
+}
+
+void testTheCompassCannotAimTheRotator()
+{
+    // The reason this test exists: a compass rose's natural affordance IS
+    // click-to-point, and this protocol has no stop or park verb, so a
+    // rotation that starts cannot be recalled. Clicking the dial must neither
+    // transmit nor load the field that Turn reads — the latter would be one
+    // Enter away from the former.
+    FakeDevice device;
+    GreenHeronApplet applet;
+    applet.show();
+    bringUp(applet, device);
+    device.send(kRotorPoint);
+    waitFor([&]() { return !applet.selectedRotor().isEmpty(); });
+    applet.setFloating(true);
+
+    auto* compass =
+        applet.findChild<QWidget*>(QStringLiteral("greenHeronRotorCompass"));
+    auto* heading =
+        applet.findChild<QLineEdit*>(QStringLiteral("greenHeronHeading"));
+    // A click needs real geometry, and the layout pass has not run yet.
+    waitFor([&]() { return compass != nullptr && compass->width() > 20; }, 2000);
+    report("the compass is up and laid out",
+           compass != nullptr && compass->isVisible() && compass->width() > 20);
+
+    // Due east of the hub — where a click-to-point dial would read 90° and
+    // send TURN␟Rotor␟90.0␍.
+    QTest::mouseClick(compass, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(compass->width() - 4, compass->height() / 2));
+    waitFor([]() { return false; }, 200);
+
+    report("clicking the dial transmits nothing",
+           !device.received().contains(QByteArrayLiteral("TURN")),
+           device.received().toHex(' ').toStdString());
+    report("and does not even propose a heading",
+           heading != nullptr && heading->text().isEmpty(),
+           heading != nullptr ? heading->text().toStdString() : "missing");
+}
+
 void testWhatHappensWhenARotatorGoesQuiet()
 {
     // ── (a) one rotator, none chosen: the row and its controls go away, and
@@ -675,6 +785,16 @@ void testWhatHappensWhenARotatorGoesQuiet()
     auto* sectionA =
         appletA.findChild<QWidget*>(QStringLiteral("greenHeronRotorSection"));
     report("(a) the rotator row is up to begin with", sectionA->isVisible());
+    // Floated, so the compass is up too and this case covers it on the SAME
+    // wait — the dial must not survive the rotator it is drawing. A needle
+    // left pointing at a stale heading after the controller is switched off is
+    // the exact failure the section's gate exists to prevent, and it is
+    // invisible to every other test here.
+    appletA.setFloating(true);
+    auto* compassA =
+        appletA.findChild<QWidget*>(QStringLiteral("greenHeronRotorCompass"));
+    report("(a) and so is the compass, the tile being floated",
+           compassA != nullptr && compassA->isVisible());
 
     // ── (b) two rotators, the operator picks the second: when only THAT one
     //        goes quiet the tile must not fall back to the other. The switch
@@ -727,6 +847,8 @@ void testWhatHappensWhenARotatorGoesQuiet()
     }
 
     report("(a) the row goes away when the headings stop", !sectionA->isVisible());
+    report("(a) and the compass goes with it, not left on a stale heading",
+           compassA != nullptr && !compassA->isVisible());
     report("(a) and nothing still names a rotator",
            appletA.selectedRotor().isEmpty(), appletA.selectedRotor().toStdString());
     report("(a) the antenna list is untouched — a different half of the device",
@@ -808,6 +930,9 @@ int main(int argc, char** argv)
     testChoosingAHeadingDoesNotSendIt();
     testTheReadoutNeverShowsWhatWasAskedFor();
     testAHeadingTypedWithACommaStillReachesTheWireAsADot();
+    testTheCompassIsFloatingOnly();
+    testTheCompassCannotAimTheRotator();
+    testTheCompassTracksDueNorth();
     testWhatHappensWhenARotatorGoesQuiet();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);

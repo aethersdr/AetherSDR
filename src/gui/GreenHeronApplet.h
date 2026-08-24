@@ -54,11 +54,26 @@
 //      and the error it tested would be smaller than the measurement. Hence
 //      "62.9° · asked 64.3° · Δ1.4°" and no verdict.
 //
-// The reference GTK client draws a full Cairo compass rose for this. A
-// recognisable rose would cost most of this tile's height for one number, and
-// its colours would arrive as hardcoded hex in a repo that ratchets against
-// exactly that — so what is ported is the dial's information and its safety
-// model, not its pixels.
+// The reference GTK client draws a full Cairo compass rose for this. In the
+// DOCKED tile it is still refused: a recognisable rose would cost most of a
+// 248px-wide rail's height to restate one number the readout already gives.
+//
+// It is drawn only when the tile is FLOATING, where the operator has sized
+// the window themselves and the height is theirs to spend — see RotorCompass
+// below, and the dockModeChanged wiring on the GHE entry in AppletPanel. The
+// floating window resizes itself around the dial as the rotator comes and
+// goes, so no default float size is declared for it. The other half of the
+// original objection, that a rose's
+// colours arrive as hardcoded hex in a repo that ratchets against exactly
+// that, is answered by painting from ThemeManager::color() tokens rather
+// than by not painting.
+//
+// The rose is READ-ONLY, and that is invariant 1 above rather than an
+// oversight. A compass rose's natural affordance is click-to-point, which is
+// precisely the single gesture that may not transmit; RotorCompass therefore
+// has no mouse handlers at all, and must not acquire one — not even to fill
+// the heading field, which is one Enter away from a rotation that cannot be
+// recalled.
 
 #include <QHash>
 #include <QStringList>
@@ -76,6 +91,53 @@ namespace AetherSDR {
 
 class GreenHeronModel;
 
+// The rotator dial. Shown only while the GHE tile is floating.
+//
+// It renders exactly what the readout renders and claims nothing more: a
+// needle at the REPORTED heading, and — when this session has commanded one —
+// a dimmer ghost tick at the heading that was asked for. The two marks simply
+// sit where they sit. There is deliberately no arrival state, no "on target"
+// colour and no tolerance ring: the hardware stops ~2° short along its
+// direction of travel and wanders ±3.8° while mechanically stationary, so any
+// such threshold would flicker and would be testing an error smaller than the
+// measurement.
+//
+// Neither mark is drawn in an accent colour for the same reason. Success and
+// warning tokens would editorialise about a difference the protocol offers no
+// way to judge, so the needle is simply the primary text colour and the ghost
+// the label colour.
+class RotorCompass : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit RotorCompass(QWidget* parent = nullptr);
+
+    // `reported` is what POINT last said. `asked` is drawn only when
+    // `hasAsked`, and is never used to move the needle.
+    void setHeading(double reported, bool hasAsked, double asked);
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+    // For tests: what the dial is currently drawing. Due north is 0.0, which
+    // is why the change guard in setHeading() cannot use qFuzzyCompare.
+    double reportedHeading() const { return m_reported; }
+    bool   hasAskedHeading() const { return m_hasAsked; }
+    double askedHeading() const { return m_asked; }
+
+protected:
+    void paintEvent(QPaintEvent* ev) override;
+
+    // NOTE: no mousePressEvent / mouseMoveEvent, by design. See the header
+    // comment above — a click on this widget must not be able to aim a
+    // rotator, directly or by filling the field that Turn reads.
+
+private:
+    double m_reported{0.0};
+    double m_asked{0.0};
+    bool   m_hasAsked{false};
+};
+
 class GreenHeronApplet : public QWidget {
     Q_OBJECT
 
@@ -92,6 +154,16 @@ public:
     // The rotator whose heading is on screen, or empty when the device is not
     // reporting one. Exposed for tests and the automation bridge.
     QString selectedRotor() const;
+
+    // Docked vs floating. Drives the compass and nothing else: every control
+    // in the tile is present and behaves identically either way, so a tile
+    // that is never floated loses nothing. Wired to
+    // ContainerWidget::dockModeChanged where the GHE entry is built.
+    void setFloating(bool on);
+
+    // Exposed for tests: the compass exists in both modes and is hidden in
+    // the docked one, so its visibility is the thing worth asserting.
+    const RotorCompass* compass() const { return m_compass; }
 
 private:
     void buildUI();
@@ -135,6 +207,18 @@ private:
     QLabel*      m_rotorReadout{nullptr};
     QLineEdit*   m_headingEdit{nullptr};
     QPushButton* m_turnBtn{nullptr};
+
+    // Lives INSIDE m_rotorSection rather than beside it, so it inherits that
+    // section's gate for free: the section is shown only while a rotator is
+    // reporting and is torn down after kRotorSilentAfterMs of silence. A
+    // compass parented anywhere else would need its own copy of that rule,
+    // and getting it wrong leaves a needle frozen at a stale heading after
+    // the controller is switched off — the exact failure the gate exists for.
+    RotorCompass* m_compass{nullptr};
+
+    // Explicitly hidden at build time, so that showing m_rotorSection in the
+    // docked tile does not bring the compass up with it.
+    bool m_floating{false};
 
     // port name → its button. Rebuilt whenever the shown switch's roster
     // changes.

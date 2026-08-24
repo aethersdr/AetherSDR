@@ -1014,8 +1014,28 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // if the tile is hidden until the device is found.  Same shape as KSDR:
     // always in the bar, closed until opened.
     m_greenHeronApplet = new GreenHeronApplet;
-    m_appletOrder.append(makeEntry("GHE", "Green Heron", m_greenHeronApplet, false,
-                                   m_drawer, m_drawerLayout));
+    {
+        AppletEntry gheEntry = makeEntry("GHE", "Green Heron", m_greenHeronApplet,
+                                         false, m_drawer, m_drawerLayout);
+        if (auto* c = qobject_cast<ContainerWidget*>(gheEntry.widget)) {
+            // Deliberately NO setDefaultFloatingSize(). The compass is inside
+            // the rotor section, so it enters and leaves the layout with the
+            // rotator itself, and the floating window follows: measured on a
+            // real RT-21, the window went 346 -> 538 px the moment the section
+            // appeared, saved geometry notwithstanding. A fixed default would
+            // only bind in the other case — a first float with no rotator
+            // reporting — where it would open a tall window mostly empty of
+            // the dial it was reserving room for.
+            connect(c, &ContainerWidget::dockModeChanged, m_greenHeronApplet,
+                    [this](ContainerWidget::DockMode mode) {
+                        // Canvas counts as floating: like the CAT tile above,
+                        // the operator sized that rect themselves.
+                        m_greenHeronApplet->setFloating(
+                            mode != ContainerWidget::DockMode::PanelDocked);
+                    });
+        }
+        m_appletOrder.append(gheEntry);
+    }
 
 #ifdef HAVE_MQTT
     m_mqttApplet = new MqttApplet;
