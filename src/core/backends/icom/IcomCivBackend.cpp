@@ -2364,6 +2364,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         m_meters.markAnswered(spec->id, answeredAtMs);
         const MeterCalibrationProfile meterProfile = m_model
             ? profileFor(*m_model).meters : MeterCalibrationProfile{};
+        const std::span<const CurvePoint> powerCurve = m_model
+            ? powerCurveFor(*m_model) : std::span<const CurvePoint>{};
         // An IC-9700 Po reply may already be on the wire when the authoritative
         // PTT-OFF report arrives. Do not let that late relative-power sample
         // repopulate the model after the idle reset below. Keep this exception
@@ -2380,8 +2382,6 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                                     holdIsolatedMinimums)) {
             return;
         }
-        const std::span<const CurvePoint> powerCurve = m_model
-            ? powerCurveFor(*m_model) : std::span<const CurvePoint>{};
         double value = spec->id == MeterId::Power && !powerCurve.empty()
             ? interpolateCurve(powerCurve, *raw)
             : meterValue(spec->id, *raw, s9ReferenceFor(m_frequencyHz),

@@ -574,6 +574,11 @@ static void testPowerCurveIsNotShared()
     check(ic9700 && !powerCurveFor(*ic9700).empty(),
           "the IC-9700 gets its own relative Po curve, not the IC-705 watts curve");
     if (ic9700) {
+        check(profileFor(*ic9700).meters.calibration
+                      == MeterCalibration::Ic9700Voltage
+                  && profileFor(*ic9700).meters.powerConversion
+                      == MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating,
+              "the IC-9700 retains voltage calibration alongside relative Po conversion");
         const auto curve = powerCurveFor(*ic9700);
         const auto bands = bandsFor(*ic9700);
         check(bands.size() == 3, "the IC-9700 exposes three rated RF decks");
