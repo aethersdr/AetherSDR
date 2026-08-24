@@ -103,6 +103,8 @@ private:
     void showHoverCard(int markerIndex, const QPointF& position);
     void animateZoomTo(float distance);
     void applyDragDelta(const QPointF& delta);
+    void beginTransientInteraction();
+    bool useInteractionPreview() const;
     void layoutOverlays();
     QToolButton* makeOverlayButton(const QString& text, const QString& tip);
     void updateTheme();
@@ -118,6 +120,7 @@ private:
     int m_activeTileRequests{0};
     QTimer m_atlasUploadTimer;
     QTimer m_terminatorTimer;
+    QTimer m_interactionSettleTimer;
     bool m_atlasDirty{false};
 
     QVector<Marker> m_markers;

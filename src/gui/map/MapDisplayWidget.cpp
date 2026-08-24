@@ -24,18 +24,24 @@ void MapDisplayWidget::setHomePosition(double lat, double lon,
     m_homeLon = lon;
     m_homeLabel = label;
     m_showHomeMarker = showMarker;
-    m_flatView->setHomePosition(lat, lon, label, showMarker);
-    if (m_globeView != nullptr) {
+    if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setHomePosition(lat, lon, label, showMarker);
+        m_flatViewDirty = true;
+    } else {
+        m_flatView->setHomePosition(lat, lon, label, showMarker);
+        m_globeViewDirty = m_globeView != nullptr;
     }
 }
 
 void MapDisplayWidget::setHomeSpanDegrees(double spanDegrees)
 {
     m_homeSpanDegrees = spanDegrees;
-    m_flatView->setHomeSpanDegrees(spanDegrees);
-    if (m_globeView != nullptr) {
+    if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setHomeSpanDegrees(spanDegrees);
+        m_flatViewDirty = true;
+    } else {
+        m_flatView->setHomeSpanDegrees(spanDegrees);
+        m_globeViewDirty = m_globeView != nullptr;
     }
 }
 
@@ -57,27 +63,36 @@ double MapDisplayWidget::homeLon() const
 void MapDisplayWidget::setMarkers(const QVector<Marker>& markers)
 {
     m_markers = markers;
-    m_flatView->setMarkers(markers);
-    if (m_globeView != nullptr) {
+    if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setMarkers(markers);
+        m_flatViewDirty = true;
+    } else {
+        m_flatView->setMarkers(markers);
+        m_globeViewDirty = m_globeView != nullptr;
     }
 }
 
 void MapDisplayWidget::clearMarkers()
 {
     m_markers.clear();
-    m_flatView->clearMarkers();
-    if (m_globeView != nullptr) {
+    if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->clearMarkers();
+        m_flatViewDirty = true;
+    } else {
+        m_flatView->clearMarkers();
+        m_globeViewDirty = m_globeView != nullptr;
     }
 }
 
 void MapDisplayWidget::setPathsVisible(bool visible)
 {
     m_pathsVisible = visible;
-    m_flatView->setPathsVisible(visible);
-    if (m_globeView != nullptr) {
+    if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setPathsVisible(visible);
+        m_flatViewDirty = true;
+    } else {
+        m_flatView->setPathsVisible(visible);
+        m_globeViewDirty = m_globeView != nullptr;
     }
 }
 
@@ -89,9 +104,12 @@ bool MapDisplayWidget::pathsVisible() const
 void MapDisplayWidget::setDayNightTerminatorVisible(bool visible)
 {
     m_terminatorVisible = visible;
-    m_flatView->setDayNightTerminatorVisible(visible);
-    if (m_globeView != nullptr) {
+    if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setDayNightTerminatorVisible(visible);
+        m_flatViewDirty = true;
+    } else {
+        m_flatView->setDayNightTerminatorVisible(visible);
+        m_globeViewDirty = m_globeView != nullptr;
     }
 }
 
@@ -104,9 +122,12 @@ void MapDisplayWidget::setLegend(
     const QVector<QPair<QString, QColor>>& entries)
 {
     m_legendEntries = entries;
-    m_flatView->setLegend(entries);
-    if (m_globeView != nullptr) {
+    if (m_projectionMode == ProjectionMode::Globe) {
         m_globeView->setLegend(entries);
+        m_flatViewDirty = true;
+    } else {
+        m_flatView->setLegend(entries);
+        m_globeViewDirty = m_globeView != nullptr;
     }
 }
 
@@ -128,6 +149,46 @@ void MapDisplayWidget::ensureGlobeView()
     m_globeView->setDayNightTerminatorVisible(m_terminatorVisible);
     m_globeView->setLegend(m_legendEntries);
     m_globeView->setMarkers(m_markers);
+    m_globeViewDirty = false;
+}
+
+void MapDisplayWidget::synchronizeFlatView()
+{
+    if (!m_flatViewDirty) {
+        return;
+    }
+    // Synchronization happens while this renderer is hidden. Disable paths
+    // first so applying home and marker changes cannot rebuild an obsolete
+    // path batch before the final visibility state is restored.
+    m_flatView->setPathsVisible(false);
+    m_flatView->setHomeSpanDegrees(m_homeSpanDegrees);
+    if (m_hasHome) {
+        m_flatView->setHomePosition(m_homeLat, m_homeLon, m_homeLabel,
+                                    m_showHomeMarker);
+    }
+    m_flatView->setDayNightTerminatorVisible(m_terminatorVisible);
+    m_flatView->setLegend(m_legendEntries);
+    m_flatView->setMarkers(m_markers);
+    m_flatView->setPathsVisible(m_pathsVisible);
+    m_flatViewDirty = false;
+}
+
+void MapDisplayWidget::synchronizeGlobeView()
+{
+    ensureGlobeView();
+    if (!m_globeViewDirty) {
+        return;
+    }
+    m_globeView->setHomeSpanDegrees(m_homeSpanDegrees);
+    if (m_hasHome) {
+        m_globeView->setHomePosition(m_homeLat, m_homeLon, m_homeLabel,
+                                     m_showHomeMarker);
+    }
+    m_globeView->setPathsVisible(m_pathsVisible);
+    m_globeView->setDayNightTerminatorVisible(m_terminatorVisible);
+    m_globeView->setLegend(m_legendEntries);
+    m_globeView->setMarkers(m_markers);
+    m_globeViewDirty = false;
 }
 
 void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
@@ -136,7 +197,9 @@ void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
         return;
     }
     if (mode == ProjectionMode::Globe) {
-        ensureGlobeView();
+        synchronizeGlobeView();
+    } else {
+        synchronizeFlatView();
     }
     m_projectionMode = mode;
     m_stack->setCurrentWidget(mode == ProjectionMode::Globe

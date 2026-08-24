@@ -123,6 +123,10 @@ GlobeMapView::GlobeMapView(QWidget* parent)
     m_terminatorTimer.setInterval(60 * 1000);
     connect(&m_terminatorTimer, &QTimer::timeout,
             this, [this] { update(); });
+    m_interactionSettleTimer.setSingleShot(true);
+    m_interactionSettleTimer.setInterval(120);
+    connect(&m_interactionSettleTimer, &QTimer::timeout,
+            this, [this] { update(); });
 
     m_attribution = new QLabel(
         QStringLiteral("© OpenStreetMap contributors"), this);
@@ -474,15 +478,16 @@ bool GlobeMapView::projectPoint(const QVector3D& point,
 void GlobeMapView::paintPaths(QPainter& painter, const QMatrix4x4& model,
                               const QMatrix4x4& viewProjection)
 {
-    QVector<Marker> paths;
-    if (m_pathsVisible) {
-        paths = m_markers;
-    } else if (m_hoverMarker >= 0) {
-        paths = MapHoverPathSelection::pathsForMarker(m_markers,
-                                                       m_hoverMarker);
-    }
+    const QVector<Marker> hoverPaths = !m_pathsVisible && m_hoverMarker >= 0
+        ? MapHoverPathSelection::pathsForMarker(m_markers, m_hoverMarker)
+        : QVector<Marker>{};
+    const QVector<Marker>& paths = m_pathsVisible ? m_markers : hoverPaths;
+    const bool interactionPreview = useInteractionPreview();
+    const int previewStride = interactionPreview
+        ? qMax(1, (paths.size() + 599) / 600) : 1;
     QHash<QRgb, QPainterPath> pathsByColor;
-    for (const Marker& marker : std::as_const(paths)) {
+    for (int index = 0; index < paths.size(); index += previewStride) {
+        const Marker& marker = paths.at(index);
         if (!marker.pathEnabled
             || (!marker.hasPathOrigin && !m_hasHome)) {
             continue;
@@ -526,9 +531,17 @@ void GlobeMapView::paintMarkers(QPainter& painter, const QMatrix4x4& model,
                                 const QMatrix4x4& viewProjection)
 {
     m_projectedMarkers.resize(m_markers.size());
+    const bool interactionPreview = useInteractionPreview();
+    const int previewStride = interactionPreview
+        ? qMax(1, (m_markers.size() + 799) / 800) : 1;
     QHash<quint64, QPainterPath> markerBatches;
     for (int index = 0; index < m_markers.size(); ++index) {
         const Marker& marker = m_markers.at(index);
+        if (previewStride > 1 && index % previewStride != 0
+            && marker.label.isEmpty() && !marker.isHome) {
+            m_projectedMarkers[index] = {};
+            continue;
+        }
         QPointF point;
         const bool visible = projectPoint(geoPoint(marker.lat, marker.lon),
                                           model, viewProjection, &point);
@@ -711,7 +724,21 @@ void GlobeMapView::animateZoomTo(float distance)
                 m_cameraDistance = value.toFloat();
                 update();
             });
+    connect(m_zoomAnimation.get(), &QVariantAnimation::finished,
+            this, [this] { update(); });
     m_zoomAnimation->start();
+}
+
+void GlobeMapView::beginTransientInteraction()
+{
+    m_interactionSettleTimer.start();
+}
+
+bool GlobeMapView::useInteractionPreview() const
+{
+    return m_dragging || m_interactionSettleTimer.isActive()
+        || (m_zoomAnimation != nullptr
+            && m_zoomAnimation->state() == QAbstractAnimation::Running);
 }
 
 void GlobeMapView::mousePressEvent(QMouseEvent* event)
@@ -769,6 +796,8 @@ void GlobeMapView::mouseReleaseEvent(QMouseEvent* event)
             if (m_hoverMarker >= 0 && m_hoverMarker < m_markers.size()) {
                 emit markerClicked(m_markers.at(m_hoverMarker));
             }
+        } else {
+            update();
         }
         event->accept();
         return;
@@ -793,6 +822,7 @@ void GlobeMapView::wheelEvent(QWheelEvent* event)
     const qreal delta = !pixelDelta.isNull()
         ? pixelDelta.y() : angleDelta.y() / 8.0;
     if (!qFuzzyIsNull(delta)) {
+        beginTransientInteraction();
         const float factor = std::exp(static_cast<float>(-delta) * 0.004F);
         m_cameraDistance = std::clamp(m_cameraDistance * factor,
                                       kMinimumCameraDistance,
@@ -809,6 +839,7 @@ bool GlobeMapView::event(QEvent* event)
     if (event->type() == QEvent::NativeGesture) {
         auto* gesture = static_cast<QNativeGestureEvent*>(event);
         if (gesture->gestureType() == Qt::ZoomNativeGesture) {
+            beginTransientInteraction();
             const float factor = std::exp(
                 static_cast<float>(-gesture->value()) * 1.5F);
             m_cameraDistance = std::clamp(m_cameraDistance * factor,
@@ -823,6 +854,7 @@ bool GlobeMapView::event(QEvent* event)
                 gestureEvent->gesture(Qt::PinchGesture))) {
             const qreal scale = pinch->scaleFactor();
             if (scale > 0.0) {
+                beginTransientInteraction();
                 m_cameraDistance = std::clamp(
                     m_cameraDistance / static_cast<float>(scale),
                     kMinimumCameraDistance, kMaximumCameraDistance);

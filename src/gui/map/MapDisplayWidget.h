@@ -57,6 +57,8 @@ public slots:
 
 private:
     void ensureGlobeView();
+    void synchronizeFlatView();
+    void synchronizeGlobeView();
 
     QStackedLayout* m_stack{nullptr};
     MapView* m_flatView{nullptr};
@@ -72,6 +74,8 @@ private:
     bool m_showHomeMarker{true};
     bool m_pathsVisible{true};
     bool m_terminatorVisible{false};
+    bool m_flatViewDirty{false};
+    bool m_globeViewDirty{false};
 };
 
 } // namespace AetherSDR
