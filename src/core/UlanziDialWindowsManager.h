@@ -42,11 +42,22 @@ public:
 
     bool isConnected() const { return !m_devices.isEmpty(); }
     QString deviceName() const { return m_deviceName; }
+    // Non-empty while an unsupported OEM variant is the only dial present —
+    // lets a dialog that opens after start() recover the state the one-shot
+    // unsupportedVariantDetected signal already reported. (#3485)
+    QString unsupportedVariantName() const { return m_variantSeen; }
 
 signals:
     void tuneSteps(int steps);
     void buttonEvent(const QString& signature, int action);
     void connectionChanged(bool connected, const QString& name);
+    // A known Ulanzi OEM variant is present whose firmware cannot be driven
+    // over this HID backend at all (vendor collection silent outside Ulanzi
+    // Studio; keyboard/mouse collections OS-captured) — e.g. the KEHWIN
+    // "Dial_Lite" D100H or the Zkswe D200. Consumers should point the user
+    // at the bundled Ulanzi Studio plugin instead of showing a bare
+    // "Disconnected". (#3485)
+    void unsupportedVariantDetected(const QString& name);
 
 private slots:
     void poll();
@@ -61,6 +72,7 @@ private:
     };
 
     bool rescan();                      // returns true if at least one device is open
+    void notifyVariantIfSeen();         // emit unsupportedVariantDetected once per variant
     void closeAll();
     void handleReport(OpenDevice& dev, const unsigned char* data, int len);
 
@@ -70,6 +82,8 @@ private:
 
     QVector<OpenDevice> m_devices;
     QString m_deviceName;
+    QString m_variantSeen;          // OEM-variant display name from the last rescan
+    QString m_variantNotified;      // last variant we emitted for, to avoid re-spamming
     QTimer* m_pollTimer{nullptr};
     QTimer* m_hotplugTimer{nullptr};
 

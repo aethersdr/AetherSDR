@@ -235,7 +235,19 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
         connect(m_manager, &UlanziDialBackend::accessRequired,
                 this, &UlanziDialMapperDialog::onAccessRequired);
 #endif
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+        connect(m_manager, &UlanziDialBackend::unsupportedVariantDetected,
+                this, &UlanziDialMapperDialog::onUnsupportedVariant);
+#endif
         onConnectionChanged(m_manager->isConnected(), m_manager->deviceName());
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+        // The manager started long before this dialog existed, so the
+        // one-shot variant signal has already fired — recover the state.
+        if (!m_manager->isConnected()
+            && !m_manager->unsupportedVariantName().isEmpty()) {
+            onUnsupportedVariant(m_manager->unsupportedVariantName());
+        }
+#endif
     } else {
         m_statusLabel->setText(tr("Manager unavailable (Linux build only)"));
     }
@@ -756,6 +768,22 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
                          kScript, QStringLiteral("aethersdr"), kRule});
 }
 #endif  // Q_OS_LINUX
+
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+void UlanziDialMapperDialog::onUnsupportedVariant(const QString& deviceName)
+{
+    if (!m_statusLabel) return;
+    // Don't downgrade a live connection — this state only applies while
+    // nothing supported is open.
+    if (m_manager && m_manager->isConnected()) return;
+    m_statusLabel->setText(
+        tr("%1 detected — this variant can't be driven over HID. "
+           "Use the bundled Ulanzi Studio plugin instead (see "
+           "plugins/ulanzi-aethersdr in the AetherSDR install/repo).")
+            .arg(deviceName));
+    m_statusLabel->setStyleSheet("QLabel { color: #e0a030; }");
+}
+#endif  // Q_OS_WIN && HAVE_HIDAPI
 
 } // namespace AetherSDR
 

@@ -89,6 +89,11 @@ private slots:
     void onAccessRequired(const QString& deviceName);
     void onGrantAccessClicked();
 #endif
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+    // A known OEM variant (KEHWIN D100H / Zkswe D200) is present but cannot
+    // be driven over HID — point the user at the Ulanzi Studio plugin. (#3485)
+    void onUnsupportedVariant(const QString& deviceName);
+#endif
 
 private:
     struct Pill {

@@ -45,6 +45,24 @@ int hidKbdToLinuxKey(unsigned char keycode)
 
 constexpr const wchar_t* kProductMatch = L"Ulanzi Dial";
 
+// Known Ulanzi OEM variants that enumerate over HID but CANNOT be driven by
+// this backend: their vendor collection is silent unless the Ulanzi Studio
+// app performs its activation handshake, and their keyboard/mouse
+// collections are OS-captured on Windows. Match them so the mapper can say
+// so, instead of sitting on "Disconnected" forever. Note the trap that
+// stalled #3485: the Windows PnP FriendlyName for these units IS
+// "Ulanzi Dial" (the BLE GAP name), but hidapi reports the HID string
+// descriptor, which is the OEM product string below. (#3485)
+struct KnownVariant {
+    unsigned short vid;
+    unsigned short pid;             // 0 = any
+    const wchar_t* displayName;
+};
+constexpr KnownVariant kUnsupportedVariants[] = {
+    {0xFFF1, 0x0000, L"Ulanzi D100H (KEHWIN \"Dial_Lite\", BLE)"},
+    {0x2207, 0x0019, L"Ulanzi D200 (Zkswe \"ulanzi\", USB)"},
+};
+
 } // namespace
 
 UlanziDialWindowsManager::UlanziDialWindowsManager(QObject* parent)
@@ -72,8 +90,20 @@ void UlanziDialWindowsManager::start()
     if (rescan()) {
         m_pollTimer->start();
         emit connectionChanged(true, m_deviceName);
+    } else {
+        notifyVariantIfSeen();
     }
     m_hotplugTimer->start();
+}
+
+void UlanziDialWindowsManager::notifyVariantIfSeen()
+{
+    // Only while no supported device is open, and only once per variant —
+    // hotplugCheck() re-runs rescan() every few seconds. (#3485)
+    if (m_variantSeen.isEmpty() || m_variantSeen == m_variantNotified)
+        return;
+    m_variantNotified = m_variantSeen;
+    emit unsupportedVariantDetected(m_variantSeen);
 }
 
 void UlanziDialWindowsManager::stop()
@@ -86,10 +116,20 @@ void UlanziDialWindowsManager::stop()
 bool UlanziDialWindowsManager::rescan()
 {
     closeAll();
+    m_variantSeen.clear();
     struct hid_device_info* infos = hid_enumerate(0, 0);
     for (auto* info = infos; info; info = info->next) {
         if (!info->product_string) continue;
-        if (wcsstr(info->product_string, kProductMatch) == nullptr) continue;
+        if (wcsstr(info->product_string, kProductMatch) == nullptr) {
+            for (const KnownVariant& v : kUnsupportedVariants) {
+                if (info->vendor_id == v.vid
+                    && (v.pid == 0 || info->product_id == v.pid)) {
+                    m_variantSeen = QString::fromWCharArray(v.displayName);
+                    break;
+                }
+            }
+            continue;
+        }
         hid_device* h = hid_open_path(info->path);
         if (!h) continue;
         hid_set_nonblocking(h, 1);
@@ -128,7 +168,10 @@ void UlanziDialWindowsManager::hotplugCheck()
     if (!m_devices.isEmpty()) return;
     if (rescan()) {
         m_pollTimer->start();
+        m_variantNotified.clear();
         emit connectionChanged(true, m_deviceName);
+    } else {
+        notifyVariantIfSeen();
     }
 }
 
