@@ -296,6 +296,52 @@ static void testStaleSessionFrameIsDropped()
 
 }
 
+static void testTxMeterMinimumHoldAtBackendSeam()
+{
+    const IcomModel* ic705 = modelForName("IC-705");
+    check(ic705 != nullptr, "TX meter hold test resolves the IC-705 profile");
+    if (!ic705) {
+        return;
+    }
+
+    IcomCivBackend backend;
+    IcomCivBackendTestAccess::selectModel(backend, *ic705);
+    IcomCivBackendTestAccess::prepareGeneration(backend, 1);
+
+    CivFrame ptt;
+    ptt.to = kControllerAddress;
+    ptt.from = kIc705Addr;
+    ptt.cmd = cmd::kControl;
+    ptt.hasSub = true;
+    ptt.sub = control::kPtt;
+    ptt.data = {0x01};
+    IcomCivBackendTestAccess::expectPttConfirmation(backend, true);
+    IcomCivBackendTestAccess::deliver(backend, ptt, 1);
+
+    CivFrame swr;
+    swr.to = kControllerAddress;
+    swr.from = kIc705Addr;
+    swr.cmd = cmd::kMeter;
+    swr.hasSub = true;
+    swr.sub = meter::kSwr;
+    swr.data = {0x00, 0x80};
+
+    QSignalSpy meterSpy(&backend, &IRadioBackend::meterUpdate);
+    IcomCivBackendTestAccess::deliver(backend, swr, 1);
+    check(meterSpy.count() == 1,
+          "a real keyed IC-705 SWR reply crosses the backend seam");
+
+    swr.data = {0x00, 0x00};
+    IcomCivBackendTestAccess::deliver(backend, swr, 1);
+    check(meterSpy.count() == 1,
+          "an isolated keyed IC-705 SWR minimum is held below the shared meter seam");
+
+    swr.data = {0x00, 0x82};
+    IcomCivBackendTestAccess::deliver(backend, swr, 1);
+    check(meterSpy.count() == 2,
+          "the next real IC-705 SWR reply publishes without UI-side smoothing changes");
+}
+
 static void testPreampWireStateRemainsAuthoritative()
 {
     IcomCivBackend backend;
@@ -393,6 +439,7 @@ int main(int argc, char** argv)
     qRegisterMetaType<AetherSDR::MeterDef>("MeterDef");
 
     testStaleSessionFrameIsDropped();
+    testTxMeterMinimumHoldAtBackendSeam();
     testPreampWireStateRemainsAuthoritative();
     testDestructorCancelsWaiter(app);
     testTerminalWaiterReentrySurvivesReset(app);

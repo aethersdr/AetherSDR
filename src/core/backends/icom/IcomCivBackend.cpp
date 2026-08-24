@@ -2213,7 +2213,14 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (!raw)
             return;
 
-        m_meters.markAnswered(spec->id, nowMs());
+        const qint64 answeredAtMs = nowMs();
+        m_meters.markAnswered(spec->id, answeredAtMs);
+        const bool holdIsolatedMinimums = m_model
+            && profileFor(*m_model).meters.holdIsolatedTxMinimums;
+        if (!m_meters.shouldPublish(spec->id, *raw, answeredAtMs,
+                                    holdIsolatedMinimums)) {
+            return;
+        }
         const double value = meterValue(
             spec->id, *raw, s9ReferenceFor(m_frequencyHz),
             m_model ? profileFor(*m_model).meters.calibration

@@ -536,7 +536,11 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .cwTextKeyer = CwTextKeyerProfile{},
         .setMenu = SetMenuProfile{359, 131},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic705, 4.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic705,
+            .currentFullScaleAmps = 4.0,
+            .holdIsolatedTxMinimums = true,
+        },
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
         .modes = kIc705Modes,
@@ -551,7 +555,10 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
                                        kExtendedFmAccessModes,
                                        true, true, true, true, true, true},
         .scope = ScopeCommandProfile{true, false, false, false, false},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic9700Voltage, 0.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic9700Voltage,
+            .currentFullScaleAmps = 0.0,
+        },
         .civRecovery = CivRecoveryProfile{1000, 3},
         .preampLabels = kIc9700PreampLabels,
     };
@@ -570,7 +577,11 @@ const IcomModelProfile& profileFor(const IcomModel& model) noexcept
         .rxAntenna = RxAntennaProfile{true, false},
         .setMenu = SetMenuProfile{267, 89},
         .scope = ScopeCommandProfile{true, true, true, true, true},
-        .meters = MeterCalibrationProfile{MeterCalibration::Ic7300Mk2, 25.0},
+        .meters = MeterCalibrationProfile{
+            .calibration = MeterCalibration::Ic7300Mk2,
+            .currentFullScaleAmps = 25.0,
+            .holdIsolatedTxMinimums = true,
+        },
         .preampLabels = kHfPreampLabels,
         .attenuatorSteps = kHfAttenuatorSteps,
     };

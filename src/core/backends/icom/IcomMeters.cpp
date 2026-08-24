@@ -274,6 +274,58 @@ void MeterPoller::setVisible(MeterId id, bool visible)
 
 bool MeterPoller::isVisible(MeterId id) const { return stateFor(id).visible; }
 
+void MeterPoller::setTransmitting(bool tx) noexcept
+{
+    if (m_transmitting == tx) {
+        return;
+    }
+    m_transmitting = tx;
+    // A held sample belongs to one keyed interval only. In particular, the
+    // first minimum of a new transmission must not reuse a non-minimum sample
+    // from the previous one.
+    resetMinimumHolds();
+}
+
+bool MeterPoller::shouldPublish(MeterId id, int raw, std::int64_t nowMs,
+                                bool holdIsolatedMinimums)
+{
+    State& state = stateFor(id);
+    const bool minimumHoldMeter = id == MeterId::Swr || id == MeterId::Alc;
+    if (!holdIsolatedMinimums || !m_transmitting || !minimumHoldMeter) {
+        state.hasNonMinimumReading = false;
+        state.minimumCandidateSinceMs = -1;
+        return true;
+    }
+
+    if (raw > 0) {
+        state.hasNonMinimumReading = true;
+        state.minimumCandidateSinceMs = -1;
+        return true;
+    }
+
+    // Before this keyed interval has produced a real sample, minimum is the
+    // honest rest value. There is nothing older to hold.
+    if (!state.hasNonMinimumReading) {
+        return true;
+    }
+
+    if (state.minimumCandidateSinceMs < 0) {
+        state.minimumCandidateSinceMs = nowMs;
+        return false;
+    }
+
+    if (nowMs - state.minimumCandidateSinceMs < kMinimumConfirmationMs) {
+        return false;
+    }
+
+    // The radio has reported minimum continuously for a complete sample
+    // interval. Publish it and stop treating later minimum replies as gaps
+    // until a new non-minimum reading arrives.
+    state.hasNonMinimumReading = false;
+    state.minimumCandidateSinceMs = -1;
+    return true;
+}
+
 std::vector<MeterId> MeterPoller::due(std::int64_t nowMs)
 {
     std::vector<MeterId> out;
@@ -332,6 +384,14 @@ void MeterPoller::reset() noexcept
         s = State{};
     m_transmitting = false;
     m_quietUntilMs = 0;
+}
+
+void MeterPoller::resetMinimumHolds() noexcept
+{
+    for (State& state : m_state) {
+        state.hasNonMinimumReading = false;
+        state.minimumCandidateSinceMs = -1;
+    }
 }
 
 }  // namespace AetherSDR::icom

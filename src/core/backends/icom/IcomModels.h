@@ -376,6 +376,10 @@ struct RxAntennaProfile {
 struct MeterCalibrationProfile {
     MeterCalibration calibration = MeterCalibration::Uncalibrated;
     double currentFullScaleAmps = 4.0;
+    // Live IC-705 and IC-7300MK2 evidence: SWR/ALC can return an isolated
+    // minimum between real keyed samples. Never lend that interpretation to a
+    // model whose own meter stream has not demonstrated it.
+    bool holdIsolatedTxMinimums = false;
     // True only after this model profile both documents and implements a PA
     // temperature meter. Kept model-specific so one Icom cannot lend an
     // unverified instrument to another merely because they share CI-V.
