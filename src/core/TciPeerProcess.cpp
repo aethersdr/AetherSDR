@@ -25,6 +25,7 @@
 #include <windows.h>
 #include <iphlpapi.h>
 #include <QFileInfo>
+#include <QStringList>
 #include <vector>
 #endif
 
@@ -302,6 +303,14 @@ QString fileVersionString(const QString& exePath)
     // lives (WSJT-X: "3.0.1 c04dd8"). The numeric VS_FIXEDFILEINFO quad is
     // only a fallback for exes with no string table; its 4-part shape is
     // masked by the log sanitizer's IPv4 rule, authored strings are not.
+    // Candidate string-table blocks: the declared Translation pairs, then the
+    // standard en-US and language-neutral Unicode blocks.  The fallbacks are
+    // load-bearing: real exes ship a Translation entry that does not match
+    // their actual block — measured live, WSJT-X 3.0.1 declares 0409004b but
+    // stores its strings under 040904B0 (the block lookup itself is
+    // case-insensitive, also measured).  .NET's FileVersionInfo carries the
+    // same fallback list for the same reason.
+    QStringList blocks;
     struct LangCodePage { WORD lang; WORD codePage; };
     LangCodePage* translations = nullptr;
     UINT tLen = 0;
@@ -309,22 +318,24 @@ QString fileVersionString(const QString& exePath)
                        reinterpret_cast<LPVOID*>(&translations), &tLen)
         && translations && tLen >= sizeof(LangCodePage)) {
         const UINT count = tLen / sizeof(LangCodePage);
-        for (const auto* key : {L"ProductVersion", L"FileVersion"}) {
-            for (UINT i = 0; i < count; ++i) {
-                const QString subKey =
-                    QStringLiteral("\\StringFileInfo\\%1%2\\%3")
-                        .arg(translations[i].lang, 4, 16, QLatin1Char('0'))
-                        .arg(translations[i].codePage, 4, 16, QLatin1Char('0'))
-                        .arg(QString::fromWCharArray(key));
-                wchar_t* value = nullptr;
-                UINT vLen = 0;
-                if (VerQueryValueW(buf.data(), subKey.toStdWString().c_str(),
-                                   reinterpret_cast<LPVOID*>(&value), &vLen)
-                    && value && vLen > 0) {
-                    const QString s = QString::fromWCharArray(value).trimmed();
-                    if (!s.isEmpty())
-                        return s;
-                }
+        for (UINT i = 0; i < count; ++i)
+            blocks << QStringLiteral("%1%2")
+                          .arg(translations[i].lang, 4, 16, QLatin1Char('0'))
+                          .arg(translations[i].codePage, 4, 16, QLatin1Char('0'));
+    }
+    blocks << QStringLiteral("040904b0") << QStringLiteral("000004b0");
+    for (const auto* key : {L"ProductVersion", L"FileVersion"}) {
+        for (const QString& block : blocks) {
+            const QString subKey = QStringLiteral("\\StringFileInfo\\") + block
+                                   + QLatin1Char('\\') + QString::fromWCharArray(key);
+            wchar_t* value = nullptr;
+            UINT vLen = 0;
+            if (VerQueryValueW(buf.data(), subKey.toStdWString().c_str(),
+                               reinterpret_cast<LPVOID*>(&value), &vLen)
+                && value && vLen > 0) {
+                const QString s = QString::fromWCharArray(value).trimmed();
+                if (!s.isEmpty())
+                    return s;
             }
         }
     }
